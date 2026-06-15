@@ -90,15 +90,15 @@ Installed PyPI users start the local Workbench with the packaged frontend:
 seektalent workbench
 ```
 
-The command starts the backend and serves the built Svelte Workbench from the same loopback origin. It defaults the Workbench to CTS + Liepin, with Liepin using OpenCLI through the user's local browser. No extra SeekTalent env configuration is required beyond the three keys above. SeekTalent downloads and pins its managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` on first use when needed. The user still installs and connects the OpenCLI Chrome plugin in their own Chrome profile. The packaged frontend does not require Bun, Vite, or a repository checkout on the user's machine.
+The command starts the backend and serves the built React Workbench from the same loopback origin. It defaults the Workbench to CTS + Liepin, with Liepin using OpenCLI through the user's local browser. No extra SeekTalent env configuration is required beyond the three keys above. SeekTalent downloads and pins its managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` on first use when needed. The user still installs and connects the OpenCLI Chrome plugin in their own Chrome profile. The packaged frontend does not require pnpm, Vite, or a repository checkout on the user's machine.
 
-For source checkout development, use the repo-local OpenCLI/Svelte launcher:
+For source checkout development, use the repo-local OpenCLI/React launcher:
 
 ```bash
 scripts/start-dev-workbench.sh
 ```
 
-The development launcher installs Svelte dependencies with Bun when needed, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at `apps/web-svelte/node_modules/.bin/opencli`, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` plus `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, then starts the backend on `127.0.0.1:8012` and the Svelte Workbench on `127.0.0.1:5178`. The user still installs and connects the OpenCLI Chrome extension in their own Chrome profile. When OpenCLI is selected and ready, Liepin behavior is real local browser behavior, not fixture data.
+The development launcher installs React dependencies with pnpm when needed, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at `apps/web-react/node_modules/.bin/opencli`, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` plus `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, then starts the backend on `127.0.0.1:8012` and the React Workbench on `127.0.0.1:5178`. The user still installs and connects the OpenCLI Chrome extension in their own Chrome profile. When OpenCLI is selected and ready, Liepin behavior is real local browser behavior, not fixture data.
 
 `doctor`, `inspect --json`, cleanup, and Workbench startup do not upload local databases, provider cookies, browser sessions, raw resumes, or configured secrets. Runtime network calls are limited to the configured LLM provider and CTS provider. Remote eval logging through W&B/Weave is off by default and requires explicit configuration.
 
@@ -285,13 +285,13 @@ Installed users start the packaged local Workbench with:
 seektalent workbench
 ```
 
-Source-checkout development uses the repo-local Svelte/OpenCLI launcher:
+Source-checkout development uses the repo-local React/OpenCLI launcher:
 
 ```bash
 scripts/start-dev-workbench.sh
 ```
 
-See [docs/ui.md](docs/ui.md) for lower-level backend/frontend commands and Workbench verification.
+See [docs/development.md](docs/development.md) for lower-level backend/frontend commands and Workbench verification. The React UI design contract lives in [apps/web-react/DESIGN.md](apps/web-react/DESIGN.md).
 
 ## Outputs
 

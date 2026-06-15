@@ -1,0 +1,40 @@
+.st-dialog-backdrop {
+  align-items: center;
+  background: oklch(0.22 0.04 260 / 0.22);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  padding: var(--st-space-4);
+  position: fixed;
+  z-index: 40;
+}
+
+.st-dialog {
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  box-shadow: var(--st-shadow-tight);
+  color: var(--st-ink);
+  display: grid;
+  gap: var(--st-space-3);
+  max-width: min(520px, 100%);
+  padding: var(--st-space-4);
+  width: 100%;
+}
+
+.st-dialog__header {
+  align-items: center;
+  display: flex;
+  gap: var(--st-space-3);
+  justify-content: space-between;
+}
+
+.st-dialog__header h2 {
+  font-size: 18px;
+  margin: 0;
+}
+
+.st-dialog__body {
+  color: var(--st-muted);
+  line-height: 1.5;
+}

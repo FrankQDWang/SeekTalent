@@ -26,7 +26,7 @@ entrypoints -> runtime -> sources -> providers -> clients / worker
              -> requirements/controller/scoring/reflection/finalize
 
 seektalent_ui -> runtime and providers bootstrap
-apps/web-svelte -> seektalent_ui HTTP/OpenAPI boundary
+apps/web-react -> seektalent_ui Agent Workbench BFF/OpenAPI boundary
 ```
 
 The important negative rules are:
@@ -50,9 +50,9 @@ Use this map to orient AI coding sessions before moving code. Directory placemen
 | `src/seektalent/sources/liepin/` | Liepin source-lane bridge, runtime Liepin context normalization, safe public reason-code mapping, Liepin smoke entrypoint | Playwright/browser server implementation or Workbench login UI |
 | `src/seektalent/opencli_browser/` | Generic OpenCLI browser command/session automation, command-shape validation, subprocess execution, Chrome window helpers, and generic `opencli_*` internal reason codes | provider page semantics, Liepin URLs, Liepin public reason-code mapping, source/runtime orchestration, or UI behavior |
 | `src/seektalent/providers/` | Provider registry and provider-owned integration code | runtime DTO imports or Workbench response projection |
-| `src/seektalent/providers/liepin/` | Liepin provider transport, worker client/runtime launch, provider DTOs, mapping, filters, safety, detail grants, Liepin site adapter, Liepin site config, Liepin OpenCLI public reason mapping, Liepin Chrome tab reuse fragments, and local drift classification | generic OpenCLI command/session automation, source-neutral runtime orchestration, cloud drift scheduling, or Svelte UI |
+| `src/seektalent/providers/liepin/` | Liepin provider transport, worker client/runtime launch, provider DTOs, mapping, filters, safety, detail grants, Liepin site adapter, Liepin site config, Liepin OpenCLI public reason mapping, Liepin Chrome tab reuse fragments, and local drift classification | generic OpenCLI command/session automation, source-neutral runtime orchestration, cloud drift scheduling, or React UI |
 | `src/seektalent_ui/` | Local Workbench BFF/API, persistence, auth, source-connection routes, frontend response projection, packaged frontend serving | core backend model normalization or provider internals that belong under `src/seektalent/providers/` |
-| `apps/web-svelte/` | Browser UI, API adapter calls, generated OpenAPI TypeScript types, frontend state/query/event handling | Python backend imports or backend business logic |
+| `apps/web-react/` | React Agent Workbench UI, API adapter calls, generated OpenAPI TypeScript types, frontend state/query/event handling | Python backend imports, core runtime/provider payloads, or backend business logic |
 | `apps/liepin-worker/` | Bun/TypeScript/Playwright Liepin worker process: loopback internal API, browser session lifecycle, card search, detail open, login relay, fixture redaction | Python runtime/source adapter rules or Workbench BFF routes |
 
 For AI-heavy work, prefer this document as the lookup table and keep `AGENTS.md` focused on behavior rules. If a change needs new ownership guidance, update this table or the focused source-contract docs rather than adding broad instructions to every agent prompt.

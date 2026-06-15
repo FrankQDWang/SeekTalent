@@ -6,7 +6,8 @@ This project is optimized for local iteration, small diffs, and readable Python.
 
 - Python `3.12+`
 - `uv`
-- Optional: Bun for the web UI
+- Node `>=24.16`
+- pnpm `11.6.0`
 
 Install development dependencies:
 
@@ -87,7 +88,7 @@ Pull requests and `main` pushes publish the same protected status-check names:
 - `workbench-contract`
 - `pr-governance`
 
-`quality-python` is an aggregate required check over separate Python architecture, Ruff, ty, pytest, and Workbench schema jobs. `workbench-contract` runs the Svelte/BFF contract only when Workbench-relevant paths changed on a PR, while `main` and merge queue events run it conservatively. `pr-governance` runs only for PR and merge queue contexts because its checks are based on PR diffs and labels.
+`quality-python` is an aggregate required check over separate Python architecture, Ruff, ty, pytest, and Workbench schema jobs. `workbench-contract` runs the React/BFF contract only when Workbench-relevant paths changed on a PR, while `main` and merge queue events run it conservatively. `pr-governance` runs only for PR and merge queue contexts because its checks are based on PR diffs and labels.
 
 CodeQL runs in its own workflow for Python and JavaScript/TypeScript and should be configured as a required branch-protection check in GitHub settings.
 
@@ -117,19 +118,19 @@ Run the UI API help:
 uv run seektalent-ui-api --help
 ```
 
-Start the local Svelte workbench with the repo-local OpenCLI browser helper:
+Start the local React workbench with the repo-local OpenCLI browser helper:
 
 ```bash
 scripts/start-dev-workbench.sh
 ```
 
-This launcher is the product development preset for the CTS + Liepin local Workbench. It installs Svelte dependencies when needed, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` and `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at the repo-local dependency, and then starts both the backend and Svelte frontend. A plain low-level `seektalent-ui-api` command only reads its explicit configuration and does not silently enable Liepin when `SEEKTALENT_LIEPIN_WORKER_MODE=disabled`.
+This launcher is the product development preset for the CTS + Liepin local Workbench. It installs React dependencies with pnpm when needed, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` and `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at the repo-local dependency, and then starts both the backend and React frontend. A plain low-level `seektalent-ui-api` command only reads its explicit configuration and does not silently enable Liepin when `SEEKTALENT_LIEPIN_WORKER_MODE=disabled`.
 
 For local Liepin browser readiness, run the Workbench launcher and check the OpenCLI browser helper directly:
 
 ```bash
 scripts/start-dev-workbench.sh
-apps/web-svelte/node_modules/.bin/opencli daemon status
+apps/web-react/node_modules/.bin/opencli daemon status
 ```
 
 Automated tests do not run live Liepin website e2e. Use targeted smoke checks only when a human operator has prepared a local Chrome/OpenCLI session.
@@ -137,8 +138,8 @@ Automated tests do not run live Liepin website e2e. Use targeted smoke checks on
 Run frontend tests:
 
 ```bash
-cd apps/web-svelte
-bun run test
+cd apps/web-react
+pnpm test
 ```
 
 Build packaged Workbench assets before building release distributions:
@@ -202,7 +203,7 @@ Key directories:
 
 - `src/seektalent/` for the main Agent implementation and CLI
 - `src/seektalent_ui/` for the minimal backend API used by the web UI
-- `apps/web-svelte/` for the frontend
+- `apps/web-react/` for the frontend
 - `tests/` for Python tests
 - `docs/v-*` for versioned historical design notes
 
@@ -234,7 +235,7 @@ scripts/verify-red-zone.sh
 
 `scripts/verify-red-zone.sh` is the focused smoke command for runtime, provider, prompt, config, CI, tools, and Workbench persistence changes. It does not replace the full PR gate; it gives red-zone reviewers a fast signal before broader CI finishes.
 
-For Workbench, BFF, OpenAPI, or Svelte changes:
+For Workbench, BFF, OpenAPI, or React changes:
 
 ```bash
 scripts/verify-dev-workbench.sh
@@ -249,7 +250,7 @@ The public entry points for users are:
 - `README.md`
 - `docs/configuration.md`
 - `docs/cli.md`
-- `docs/ui.md`
+- `apps/web-react/DESIGN.md`
 - `docs/architecture.md`
 - `docs/outputs.md`
 

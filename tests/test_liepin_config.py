@@ -116,13 +116,13 @@ def test_liepin_opencli_command_resolves_from_code_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = tmp_path / "workspace"
-    binary = workspace / "apps/web-svelte/node_modules/.bin/opencli"
+    binary = workspace / "apps/web-react/node_modules/.bin/opencli"
     binary.parent.mkdir(parents=True)
     binary.write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setenv("SEEKTALENT_CODE_ROOT", str(workspace))
     monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", "disabled")
     monkeypatch.setenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", "opencli")
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", "apps/web-svelte/node_modules/.bin/opencli")
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", "apps/web-react/node_modules/.bin/opencli")
 
     settings = AppSettings(_env_file=None)
 

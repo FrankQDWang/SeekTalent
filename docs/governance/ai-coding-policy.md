@@ -31,7 +31,7 @@ Yellow-zone paths may be delegated, but require contract tests and Workbench ver
 - `src/seektalent_ui/models.py`
 - `src/seektalent_ui/job_runner.py`
 - `src/seektalent_ui/*projection*.py`
-- `apps/web-svelte/src/lib/api/schema.d.ts`
+- `apps/web-react/src/lib/api/schema.d.ts`
 - Workbench graph, note, candidate, and source-card projections
 
 Green-zone paths are lower-risk display, docs, fixtures, and black-box test changes.

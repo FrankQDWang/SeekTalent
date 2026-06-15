@@ -146,7 +146,7 @@ def test_blocks_sensitive_frontend_storage() -> None:
     findings = check_added_lines(
         [
             _line(
-                "apps/web-react/src/routes/ConversationRoute.tsx",
+                "apps/web-react/src/routes/conversation.tsx",
                 "localStorage.setItem('provider_payload', JSON.stringify(payload));",
             )
         ]
@@ -159,7 +159,7 @@ def test_frontend_sensitive_storage_does_not_emit_agent_session_finding() -> Non
     findings = check_added_lines(
         [
             _line(
-                "apps/web-react/src/routes/ConversationRoute.tsx",
+                "apps/web-react/src/routes/conversation.tsx",
                 "sessionStorage.setItem('token', token);",
             )
         ]

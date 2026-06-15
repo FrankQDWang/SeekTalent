@@ -2,20 +2,29 @@
   "schema_version": "seektalent.major_refactor_goal.v1",
   "goal_id": "react-agent-workbench-rebuild-2026-06",
   "change_type": "major_refactor",
-  "summary": "Add the typed BFF contract and durable stream projection for the React Agent Workbench rebuild.",
-  "rationale": "The React workbench must consume a stable BFF contract instead of runtime/provider payloads. This slice intentionally touches BFF routes, projection, durable stream storage, and the minimum conversation-agent store/model fields required for replay, ordering, and lifecycle pairing.",
+  "summary": "Cut production Workbench over to React/TypeScript/pnpm.",
+  "rationale": "The approved rebuild is a breaking-change replacement of the retired legacy UI. This slice intentionally deletes the retired frontend app, adds the React Agent Workbench, packages the React build for FastAPI static serving, and wires Storybook, visual regression, cutover gates, and CI checks around the new frontend contract.",
   "touched_layers": [
     "bff",
+    "dependencies",
+    "docs",
+    "frontend",
+    "governance",
     "other"
   ],
   "red_files": [
-    "src/seektalent_conversation_agent/models.py",
-    "src/seektalent_conversation_agent/store.py"
+    ".env.example",
+    ".github/dependabot.yml",
+    "scripts/verify-dev-workbench.sh",
+    "tools/check_react_workbench_cutover.py",
+    "tools/check_react_workbench_design_acceptance.py",
+    "tools/ci_change_scope.py"
   ],
-  "line_count_exemptions": [
-    "tests/test_workbench_api.py"
+  "dependency_files": [
+    "apps/web-react/package.json",
+    "apps/web-react/pnpm-lock.yaml"
   ],
-  "line_count_rationale": "The pre-existing Workbench API regression file is already over the test-file budget. This PR adds four focused assertions for BFF contract behavior without splitting unrelated historical coverage in the same contract slice.",
+  "dependency_rationale": "The production frontend toolchain changes to React/TypeScript/pnpm. The new React dependency files must be reviewed with the retired frontend deletion because this PR intentionally removes the old runtime path.",
   "verification": [
     "scripts/verify-dev-workbench.sh",
     "uv run python scripts/build_packaged_workbench.py",
@@ -25,13 +34,15 @@
     "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run"
   ],
   "deletion_targets": [
-    "Frontend access to runtime/provider/raw payloads",
-    "Snapshot-derived SSE replay ordering",
-    "Unpaired tool/runtime lifecycle events in the public workbench stream"
+    "retired production UI and old frontend toolchain",
+    "docs/ui.md and stale active UI references",
+    "legacy packaged workbench static assets",
+    "old node detail panel UI contract"
   ],
   "risks": [
-    "BFF DTOs must stay explicit and must not add object/list[object]/unknown payload sinks.",
-    "Durable stream replay must preserve stable sequence ordering across reconnects.",
-    "Conversation-agent model/store additions must remain minimal backend facts, not UI presentation fields."
+    "React production code must not import Storybook/test fixtures.",
+    "The packaged static app must come from the React build and must not retain retired runtime assets.",
+    "Storybook visual baselines are generated review inputs and must not be treated as handwritten source.",
+    "CI cutover gates must reject stale active legacy UI references, including archive material."
   ]
 }

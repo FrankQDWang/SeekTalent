@@ -1,0 +1,3 @@
+allowBuilds:
+  "@jackwener/opencli": true
+  esbuild: true

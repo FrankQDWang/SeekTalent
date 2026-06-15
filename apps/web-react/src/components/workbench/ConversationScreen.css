@@ -1,0 +1,198 @@
+.conversation-view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.conversation-view__workspace {
+  display: grid;
+  flex: 1;
+  gap: var(--st-space-4);
+  grid-template-columns: minmax(360px, 0.58fr) minmax(320px, 0.42fr);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--st-space-4);
+}
+
+.conversation-view__tabs {
+  display: none;
+}
+
+.conversation-view__tab {
+  background: transparent;
+  border: 0;
+  border-radius: var(--st-radius-sm);
+  color: var(--st-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.88rem;
+  min-height: 36px;
+  padding: 0 var(--st-space-3);
+}
+
+.conversation-view__tab[aria-selected="true"] {
+  background: var(--st-surface);
+  box-shadow: inset 0 0 0 1px var(--st-border);
+  color: var(--st-ink);
+}
+
+.conversation-view__panel {
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.conversation-view__panel--candidates,
+.conversation-view__panel--final {
+  display: none;
+}
+
+.conversation-view__panel .strategy-graph,
+.conversation-view__panel .transcript {
+  border: 0;
+  border-radius: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+.conversation-view__panel--graph .strategy-graph {
+  min-height: 420px;
+}
+
+.conversation-view__panel .transcript {
+  overflow: auto;
+}
+
+.conversation-view__final-panel {
+  display: grid;
+  gap: var(--st-space-4);
+  padding: var(--st-space-4);
+}
+
+.conversation-view__final-summary,
+.conversation-view__artifact {
+  display: grid;
+  gap: var(--st-space-2);
+}
+
+.conversation-view__final-summary strong,
+.conversation-view__artifact strong {
+  color: var(--st-ink);
+  font-size: 0.94rem;
+}
+
+.conversation-view__final-summary p,
+.conversation-view__artifact p,
+.conversation-view__artifacts span {
+  color: var(--st-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.conversation-view__artifacts {
+  display: grid;
+  gap: var(--st-space-3);
+}
+
+.conversation-view__state {
+  align-items: center;
+  color: var(--st-muted);
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  min-height: 320px;
+  padding: var(--st-space-6);
+}
+
+.conversation-view__notice {
+  align-items: center;
+  border-bottom: 1px solid var(--st-border);
+  display: grid;
+  gap: var(--st-space-1);
+  min-height: 72px;
+  padding: var(--st-space-4);
+}
+
+.conversation-view__notice strong {
+  color: var(--st-ink);
+  font-size: 0.92rem;
+}
+
+.conversation-view__notice span {
+  color: var(--st-muted);
+  font-size: 0.9rem;
+}
+
+.conversation-view__notice[data-tone="warning"] {
+  background: color-mix(in oklch, var(--st-warning) 16%, var(--st-surface));
+}
+
+.conversation-view__notice[data-tone="success"] {
+  background: color-mix(in oklch, var(--st-success) 14%, var(--st-surface));
+}
+
+.conversation-view__notice[data-tone="info"] {
+  background: var(--st-panel);
+}
+
+@media (max-width: 1080px) {
+  .conversation-view__tabs {
+    background: var(--st-panel);
+    border-bottom: 1px solid var(--st-border);
+    display: grid;
+    gap: var(--st-space-1);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    padding: var(--st-space-2);
+  }
+
+  .conversation-view__workspace {
+    display: block;
+    padding: var(--st-space-3);
+  }
+
+  .conversation-view__panel {
+    display: none;
+    min-height: 560px;
+  }
+
+  .conversation-view__panel--graph {
+    height: 560px;
+  }
+
+  .conversation-view__panel--graph .strategy-graph {
+    height: 100%;
+    min-height: 100%;
+  }
+
+  .conversation-view__workspace[data-active-panel="chat"]
+    .conversation-view__panel--chat,
+  .conversation-view__workspace[data-active-panel="graph"]
+    .conversation-view__panel--graph,
+  .conversation-view__workspace[data-active-panel="candidates"]
+    .conversation-view__panel--candidates,
+  .conversation-view__workspace[data-active-panel="final"]
+    .conversation-view__panel--final {
+    display: flex;
+  }
+}
+
+@media (max-width: 560px) {
+  .conversation-view__tab {
+    font-size: 0.8rem;
+    min-width: 0;
+    padding: 0 var(--st-space-2);
+  }
+
+  .conversation-view__panel {
+    min-height: 500px;
+  }
+
+  .conversation-view__panel--graph {
+    height: 500px;
+  }
+}

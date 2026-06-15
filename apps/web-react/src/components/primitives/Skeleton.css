@@ -1,0 +1,39 @@
+.st-skeleton {
+  display: grid;
+  gap: var(--st-space-2);
+  width: 100%;
+}
+
+.st-skeleton__line {
+  background: linear-gradient(
+    90deg,
+    var(--st-surface-raised),
+    oklch(0.92 0.018 262),
+    var(--st-surface-raised)
+  );
+  border-radius: var(--st-radius-sm);
+  display: block;
+  height: 12px;
+  overflow: hidden;
+}
+
+.st-skeleton__line[data-last="true"] {
+  width: 68%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .st-skeleton__line {
+    animation: st-skeleton-pulse 1.3s ease-in-out infinite;
+    background-size: 220% 100%;
+  }
+}
+
+@keyframes st-skeleton-pulse {
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
+}

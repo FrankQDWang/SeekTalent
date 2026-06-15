@@ -12,13 +12,10 @@ Primary sources:
 
 Not source material:
 
-- `docs/ui.md`
-- `docs/archive/legacy-ui-design.md`
-- `docs/v-0.1/design.md`
-- `docs/v-0.2/design.md`
-- `apps/web-svelte` visual behavior
+- retired legacy UI documents
+- deleted legacy frontend visual behavior
 
-Those files may help identify old references that must be removed during cutover, but they must not override this design contract.
+Those retired materials may help identify stale references that must be removed during cutover, but they must not override this design contract.
 
 ## Product Shape
 
@@ -93,25 +90,25 @@ Mobile shell:
 
 ## Visual Acceptance Map
 
-| Asset | Owner route/component | Storybook owner | Playwright screenshot |
-| --- | --- | --- | --- |
-| `figma/thumbnail.png` | `WorkbenchShell` macro layout | `WorkbenchShell/FigmaThumbnailReference` | `workbench-shell-figma-reference` |
-| `wts/首页初始状态.png` | `/agent-workbench`, `HomeStartPanel` | `HomeStartPanel/Initial` | `workbench-home-initial` |
-| `wts/首页输入文字状态.png` | `Composer`, `RequirementDraftPanel` | `Composer/RequirementDraft` | `workbench-home-draft` |
-| `wts/需求确认.png` | `RequirementReviewPanel` | `RequirementReviewPanel/NeedsConfirmation` | `workbench-requirement-review` |
-| `wts/检索策略图.png` | `StrategyGraphCanvas`, `StrategyGraphLayout` | `StrategyGraphCanvas/SearchStrategy` | `workbench-strategy-graph` |
-| `wts/思考过程.png` | `ThinkingProcessRail` with `候选人 / 思考过程` tabs | `ThinkingProcessRail/RoundTimeline` | `workbench-thinking-process` |
-| `wts/候选人列表空状态.png` | `CandidateQueueEmpty` | `CandidateQueue/Empty` | `workbench-candidates-empty` |
-| `wts/候选人列表页面.png` | `CandidateQueue` | `CandidateQueue/Populated` | `workbench-candidates-list` |
-| `wts/候选人详情侧边栏.png` | `CandidateDetailDrawer` | `CandidateDetailDrawer/Summary` | `workbench-candidate-detail` |
-| `wts/简历详情完整内容.png` | `ResumeEvidencePanel` | `ResumeEvidencePanel/FullContent` | `workbench-resume-full` |
-| `transcript/codex-transcript-01-full-collapsed.png` | `Transcript`, collapsed run group | `Transcript/CollapsedRunGroup` | `workbench-transcript-collapsed` |
-| `transcript/codex-transcript-02-full-expanded.png` | `Transcript`, expanded run group | `Transcript/ExpandedRunGroup` | `workbench-transcript-expanded` |
-| `transcript/codex-transcript-03-toolread-detail.png` | `TranscriptToolEvent`, expanded details | `Transcript/ToolReadDetails` | `workbench-transcript-tool-detail` |
-| `transcript/codex-transcript-04-web-search-running.png` | `TranscriptToolEvent`, running web/source row | `Transcript/WebSearchRunning` | `workbench-transcript-web-running` |
-| `transcript/codex-transcript-05-file-search-complete.png` | `TranscriptToolEvent`, completed source/file search | `Transcript/FileSearchComplete` | `workbench-transcript-file-complete` |
-| `transcript/codex-transcript-06-file-read-running.png` | `TranscriptToolEvent`, running file/source read | `Transcript/FileReadRunning` | `workbench-transcript-file-running` |
-| `transcript/codex-transcript-07-guided-followup.png` | `Transcript`, guided follow-up and composer boundary | `Transcript/GuidedFollowup` | `workbench-transcript-guided-followup` |
+| Asset                                                     | Owner route/component                                | Storybook owner                            | Playwright screenshot                  |
+| --------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------ | -------------------------------------- |
+| `figma/thumbnail.png`                                     | `WorkbenchShell` macro layout                        | `WorkbenchShell/FigmaThumbnailReference`   | `workbench-shell-figma-reference`      |
+| `wts/首页初始状态.png`                                    | `/agent-workbench`, `HomeStartPanel`                 | `HomeStartPanel/Initial`                   | `workbench-home-initial`               |
+| `wts/首页输入文字状态.png`                                | `Composer`                                           | `Composer/RequirementDraft`                | `workbench-home-draft`                 |
+| `wts/需求确认.png`                                        | `RequirementReviewPanel`                             | `RequirementReviewPanel/NeedsConfirmation` | `workbench-requirement-review`         |
+| `wts/检索策略图.png`                                      | `StrategyGraphCanvas`                                | `StrategyGraphCanvas/SearchStrategy`       | `workbench-strategy-graph`             |
+| `wts/思考过程.png`                                        | `ThinkingProcessRail` with 候选人 / 思考过程 tabs    | `ThinkingProcessRail/RoundTimeline`        | `workbench-thinking-process`           |
+| `wts/候选人列表空状态.png`                                | `CandidateQueue`                                     | `CandidateQueue/Empty`                     | `workbench-candidates-empty`           |
+| `wts/候选人列表页面.png`                                  | `CandidateQueue`                                     | `CandidateQueue/Populated`                 | `workbench-candidates-list`            |
+| `wts/候选人详情侧边栏.png`                                | `CandidateDetailDrawer`                              | `CandidateDetailDrawer/Summary`            | `workbench-candidate-detail`           |
+| `wts/简历详情完整内容.png`                                | `ResumeEvidencePanel`                                | `ResumeEvidencePanel/FullContent`          | `workbench-resume-full`                |
+| `transcript/codex-transcript-01-full-collapsed.png`       | `Transcript`, collapsed run group                    | `Transcript/CollapsedRunGroup`             | `workbench-transcript-collapsed`       |
+| `transcript/codex-transcript-02-full-expanded.png`        | `Transcript`, expanded run group                     | `Transcript/ExpandedRunGroup`              | `workbench-transcript-expanded`        |
+| `transcript/codex-transcript-03-toolread-detail.png`      | `TranscriptToolEvent`, expanded details              | `Transcript/ToolReadDetails`               | `workbench-transcript-tool-detail`     |
+| `transcript/codex-transcript-04-web-search-running.png`   | `TranscriptToolEvent`, running web/source row        | `Transcript/WebSearchRunning`              | `workbench-transcript-web-running`     |
+| `transcript/codex-transcript-05-file-search-complete.png` | `TranscriptToolEvent`, completed source/file search  | `Transcript/FileSearchComplete`            | `workbench-transcript-file-complete`   |
+| `transcript/codex-transcript-06-file-read-running.png`    | `TranscriptToolEvent`, running file/source read      | `Transcript/FileReadRunning`               | `workbench-transcript-file-running`    |
+| `transcript/codex-transcript-07-guided-followup.png`      | `Transcript`, guided follow-up and composer boundary | `Transcript/GuidedFollowup`                | `workbench-transcript-guided-followup` |
 
 Every manifest row must map to one owner above. Unowned design assets fail the design gate.
 
@@ -138,39 +135,39 @@ Every manifest row must map to one owner above. Unowned design assets fail the d
 
 ## State Ownership
 
-| State | Owner | React responsibility |
-| --- | --- | --- |
-| active conversation/run identity | BFF snapshot and route params | select and render |
-| composer draft before submit | React local | edit, validate basic emptiness, send |
-| requirement draft/review | BFF | render and submit typed actions |
-| transcript groups/events | BFF snapshot and durable stream | render, animate, preserve local collapse state |
-| transcript collapse/expand | React local | store by stable `groupId` and `eventId` |
-| active stream cursor | BFF stream ledger | send Last-Event-ID, hold gap state without advancing cursor |
-| tool/source/command lifecycle | BFF semantic events | render status and details, no raw payload parsing |
-| strategy graph nodes/edges | BFF projection | layout and viewport controls only |
-| thinking process | BFF `thinkingProcess` model | render round cards, no runtime payload parsing |
-| candidate queue | BFF | render, sort/filter locally only when BFF allows |
-| detail approval | BFF | render pending/accepted/rejected/applied state |
-| source connection | BFF | render status and reconnect affordance |
-| final shortlist | BFF | render and export using BFF artifact refs |
-| archived/completed run status | BFF | render as read-only when locked |
+| State                            | Owner                           | React responsibility                                        |
+| -------------------------------- | ------------------------------- | ----------------------------------------------------------- |
+| active conversation/run identity | BFF snapshot and route params   | select and render                                           |
+| composer draft before submit     | React local                     | edit, validate basic emptiness, send                        |
+| requirement draft/review         | BFF                             | render and submit typed actions                             |
+| transcript groups/events         | BFF snapshot and durable stream | render, animate, preserve local collapse state              |
+| transcript collapse/expand       | React local                     | store by stable `groupId` and `eventId`                     |
+| active stream cursor             | BFF stream ledger               | send Last-Event-ID, hold gap state without advancing cursor |
+| tool/source/command lifecycle    | BFF semantic events             | render status and details, no raw payload parsing           |
+| strategy graph nodes/edges       | BFF projection                  | layout and viewport controls only                           |
+| thinking process                 | BFF `thinkingProcess` model     | render round cards, no runtime payload parsing              |
+| candidate queue                  | BFF                             | render, sort/filter locally only when BFF allows            |
+| detail approval                  | BFF                             | render pending/accepted/rejected/applied state              |
+| source connection                | BFF                             | render status and reconnect affordance                      |
+| final shortlist                  | BFF                             | render and export using BFF artifact refs                   |
+| archived/completed run status    | BFF                             | render as read-only when locked                             |
 
 ## State Matrix
 
-| State | Required behavior |
-| --- | --- |
-| loading | skeletons in persistent regions; no layout jump when data arrives |
-| empty | show usable requirement start state from `首页初始状态.png` |
-| drafting | composer and requirement draft reflect `首页输入文字状态.png` |
-| needs confirmation | requirement review panel matches `需求确认.png`; pending action visible |
-| running | transcript active group updates in place; graph and thinking process can update independently |
-| partial stream | completed rows stay committed; active row mutates; do not reorder committed cells |
-| disconnected | show recoverable stream banner; retain snapshot; do not advance cursor |
-| stream gap | show explicit gap recovery state and request snapshot/replay; do not fabricate events |
-| permission denied | show source or approval-specific denial; do not expose raw provider payload |
-| failed | failed group/tool/candidate action remains inspectable with reason code |
-| completed | final shortlist and review artifacts become primary; composer enters follow-up mode if BFF permits |
-| archived | read-only transcript, graph, candidates, and final artifacts |
+| State              | Required behavior                                                                                  |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| loading            | skeletons in persistent regions; no layout jump when data arrives                                  |
+| empty              | show usable requirement start state from `首页初始状态.png`                                        |
+| drafting           | composer and requirement draft reflect `首页输入文字状态.png`                                      |
+| needs confirmation | requirement review panel matches `需求确认.png`; pending action visible                            |
+| running            | transcript active group updates in place; graph and thinking process can update independently      |
+| partial stream     | completed rows stay committed; active row mutates; do not reorder committed cells                  |
+| disconnected       | show recoverable stream banner; retain snapshot; do not advance cursor                             |
+| stream gap         | show explicit gap recovery state and request snapshot/replay; do not fabricate events              |
+| permission denied  | show source or approval-specific denial; do not expose raw provider payload                        |
+| failed             | failed group/tool/candidate action remains inspectable with reason code                            |
+| completed          | final shortlist and review artifacts become primary; composer enters follow-up mode if BFF permits |
+| archived           | read-only transcript, graph, candidates, and final artifacts                                       |
 
 ## Strategy Graph And Thinking Process
 
@@ -180,10 +177,10 @@ Every manifest row must map to one owner above. Unowned design assets fail the d
 
 Required thinking-process card mapping:
 
-| Card | BFF source facts |
-| --- | --- |
-| `关键词` | runtime round progress `query_terms`, `keyword_query`, and `executed_queries` |
-| `observation` | scoring/search facts plus post-scoring LLM `resume_quality_comment` and counts |
+| Card               | BFF source facts                                                                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `关键词`           | runtime round progress `query_terms`, `keyword_query`, and `executed_queries`                                                                    |
+| `observation`      | scoring/search facts plus post-scoring LLM `resume_quality_comment` and counts                                                                   |
 | `反思和下一轮变更` | `reflection_summary`, `reflection_rationale`, `suggestedActivateTerms`, `suggestedKeepTerms`, `suggestedDeprioritizeTerms`, `suggestedDropTerms` |
 
 React must not inspect raw `RuntimeControlEvent.payload` to build these cards. The BFF projects them into typed round timeline items.
@@ -217,26 +214,26 @@ If transcript lifecycle, active-cell behavior, grouping, details, or stream repl
 
 ## BFF Event Profile Summary
 
-| Source fact | BFF event kind | Frontend cell/surface | Durable |
-| --- | --- | --- | --- |
-| user message | `message.created`, `message.completed` | transcript message cell | yes |
-| assistant token | `message.delta` | active transcript message | live optional |
-| assistant completion | `message.completed` | committed transcript message | yes |
-| activity lifecycle | `activity.upserted` | tool/activity row | yes |
-| tool lifecycle | `tool.started`, `tool.outputDelta`, `tool.completed`, `tool.failed` | tool row and details | yes |
-| source search | `sourceSearch.started`, `sourceSearch.completed`, `sourceSearch.failed` | source/tool row | yes |
-| web search reference | `webSearch.started`, `webSearch.completed` | web/source row | yes |
-| command lifecycle | `command.started`, `command.outputDelta`, `command.completed`, `command.failed` | command row and bounded output | yes |
-| runtime stage | `runtime.stageChanged` | graph and activity state | yes |
-| strategy graph | `strategyGraph.changed` | React Flow canvas | yes |
-| thinking process | `thinkingProcess.changed` | right rail timeline | yes |
-| candidate | `candidate.upserted` | candidate queue/detail | yes |
-| detail approval | `detailApproval.changed` | approval panel | yes |
-| pending action | `pendingAction.changed` | banner/control slot | yes |
-| source connection | `sourceConnection.changed` | source status | yes |
-| final summary | `finalSummary.updated` | final shortlist panel | yes |
-| context compaction | `context.compacted` | transcript divider | yes |
-| replay gap | `stream.gap` | recoverable stream state | yes |
+| Source fact          | BFF event kind                                                                  | Frontend cell/surface          | Durable       |
+| -------------------- | ------------------------------------------------------------------------------- | ------------------------------ | ------------- |
+| user message         | `message.created`, `message.completed`                                          | transcript message cell        | yes           |
+| assistant token      | `message.delta`                                                                 | active transcript message      | live optional |
+| assistant completion | `message.completed`                                                             | committed transcript message   | yes           |
+| activity lifecycle   | `activity.upserted`                                                             | tool/activity row              | yes           |
+| tool lifecycle       | `tool.started`, `tool.outputDelta`, `tool.completed`, `tool.failed`             | tool row and details           | yes           |
+| source search        | `sourceSearch.started`, `sourceSearch.completed`, `sourceSearch.failed`         | source/tool row                | yes           |
+| web search reference | `webSearch.started`, `webSearch.completed`                                      | web/source row                 | yes           |
+| command lifecycle    | `command.started`, `command.outputDelta`, `command.completed`, `command.failed` | command row and bounded output | yes           |
+| runtime stage        | `runtime.stageChanged`                                                          | graph and activity state       | yes           |
+| strategy graph       | `strategyGraph.changed`                                                         | React Flow canvas              | yes           |
+| thinking process     | `thinkingProcess.changed`                                                       | right rail timeline            | yes           |
+| candidate            | `candidate.upserted`                                                            | candidate queue/detail         | yes           |
+| detail approval      | `detailApproval.changed`                                                        | approval panel                 | yes           |
+| pending action       | `pendingAction.changed`                                                         | banner/control slot            | yes           |
+| source connection    | `sourceConnection.changed`                                                      | source status                  | yes           |
+| final summary        | `finalSummary.updated`                                                          | final shortlist panel          | yes           |
+| context compaction   | `context.compacted`                                                             | transcript divider             | yes           |
+| replay gap           | `stream.gap`                                                                    | recoverable stream state       | yes           |
 
 ## Layout And Interaction Details
 
@@ -282,6 +279,9 @@ Acceptance:
 - Production code must not import fixtures.
 - Storybook and visual tests may use fixtures to cover known states.
 - Fixtures must represent the BFF contract shape closely enough to catch design drift: transcript groups, stream cursor, thinking process, strategy graph, candidates, pending actions, source connection, detail approval, and final summary.
+- Page/screen stories must cover `ConversationScreen/Initial`, `ConversationScreen/RequirementReview`, `ConversationScreen/RunningWithStream`, `ConversationScreen/SourceExpired`, `ConversationScreen/PermissionDenied`, `ConversationScreen/Failed`, `ConversationScreen/Completed`, and `ConversationScreen/Archived`.
+- Storybook interaction tests must cover transcript group collapse/expand, tool detail expansion, thinking-process tab switching, and composer submit behavior.
+- Storybook visual tests must assert the Playwright screenshot owners listed in the Visual Acceptance Map across the required responsive viewport checks.
 
 ## Visual Regression Source List
 
@@ -308,3 +308,7 @@ The required visual regression owners are:
 - `Transcript/GuidedFollowup`
 
 The build gate fails if a registered visual reference lacks a route, component, story, or Playwright screenshot owner.
+
+Supplemental non-asset regression coverage:
+
+- `StrategyGraphCanvas/LargeSearchStrategy` exercises a dense React Flow graph with requirement, source search, source_result, scoring, reflection, detail_approval, and final_summary coverage. Playwright owner: `workbench-strategy-graph-large`.

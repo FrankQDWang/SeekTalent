@@ -8,7 +8,7 @@ from seektalent.config import AppSettings, classify_local_data_root, evaluate_lo
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PRODUCT_DOCS = (
     "README.md",
-    "docs/ui.md",
+    "apps/web-react/DESIGN.md",
     "docs/cli.md",
     "docs/configuration.md",
 )

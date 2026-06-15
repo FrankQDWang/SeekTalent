@@ -1,0 +1,133 @@
+.strategy-graph-node {
+  --strategy-node-accent: var(--st-subtle);
+  --strategy-node-tint: var(--st-surface-raised);
+  background: var(--st-surface);
+  border: 1px solid
+    color-mix(in oklch, var(--strategy-node-accent) 48%, var(--st-border));
+  border-radius: var(--st-radius-md);
+  box-shadow: var(--st-shadow-tight);
+  color: var(--st-ink);
+  display: grid;
+  gap: 7px;
+  min-height: 96px;
+  padding: 12px;
+  width: 232px;
+}
+
+.strategy-graph-node[data-selected="true"],
+.react-flow__node:focus-visible .strategy-graph-node {
+  border-color: var(--st-action);
+  outline: 2px solid color-mix(in oklch, var(--st-action) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.strategy-graph-node[data-status="completed"],
+.strategy-graph-node[data-status="succeeded"] {
+  --strategy-node-accent: var(--st-success);
+  --strategy-node-tint: oklch(0.94 0.035 152);
+}
+
+.strategy-graph-node[data-status="running"] {
+  --strategy-node-accent: var(--st-action);
+  --strategy-node-tint: oklch(0.94 0.04 268);
+}
+
+.strategy-graph-node[data-status="waiting-for-user"],
+.strategy-graph-node[data-status="waiting_for_user"] {
+  --strategy-node-accent: var(--st-warning);
+  --strategy-node-tint: oklch(0.95 0.05 82);
+}
+
+.strategy-graph-node[data-status="blocked"],
+.strategy-graph-node[data-status="cancelled"],
+.strategy-graph-node[data-status="superseded"] {
+  --strategy-node-accent: var(--st-muted);
+  --strategy-node-tint: var(--st-surface-raised);
+}
+
+.strategy-graph-node[data-status="failed"] {
+  --strategy-node-accent: var(--st-danger);
+  --strategy-node-tint: oklch(0.95 0.04 28);
+}
+
+.strategy-graph-node__heading {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.strategy-graph-node__heading strong {
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy-graph-node__kind {
+  align-items: center;
+  background: var(--strategy-node-tint);
+  border: 1px solid
+    color-mix(in oklch, var(--strategy-node-accent) 36%, transparent);
+  border-radius: var(--st-radius-sm);
+  color: var(--strategy-node-accent);
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.strategy-graph-node p {
+  color: var(--st-muted);
+  display: -webkit-box;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.strategy-graph-node__meta {
+  align-items: center;
+  color: var(--st-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 11px;
+  font-weight: 680;
+  gap: 6px;
+}
+
+.strategy-graph-node__meta span {
+  align-items: center;
+  background: var(--st-surface-raised);
+  border-radius: 999px;
+  display: inline-flex;
+  gap: 4px;
+  min-height: 20px;
+  padding: 0 7px;
+}
+
+.strategy-graph-node__status {
+  color: color-mix(in oklch, var(--strategy-node-accent) 72%, var(--st-ink));
+}
+
+.strategy-graph-node__handle {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .strategy-graph-node {
+    transition:
+      border-color 160ms ease-out,
+      outline-color 160ms ease-out,
+      transform 160ms ease-out;
+  }
+
+  .strategy-graph-node[data-selected="true"] {
+    transform: translateY(-1px);
+  }
+}

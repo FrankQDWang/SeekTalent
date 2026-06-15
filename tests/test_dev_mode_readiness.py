@@ -13,7 +13,7 @@ from tests.settings_factory import make_settings
 
 
 def _write_opencli_binary(root: Path) -> Path:
-    opencli_bin = root / "apps" / "web-svelte" / "node_modules" / ".bin" / "opencli"
+    opencli_bin = root / "apps" / "web-react" / "node_modules" / ".bin" / "opencli"
     opencli_bin.parent.mkdir(parents=True, exist_ok=True)
     opencli_bin.write_text("#!/usr/bin/env node\n", encoding="utf-8")
     opencli_bin.chmod(0o755)
@@ -209,7 +209,7 @@ def test_dev_server_startup_does_not_bootstrap_project_browser_config(tmp_path: 
 
     create_app(settings=settings)
 
-    assert not (tmp_path / "apps" / "web-svelte" / "node_modules" / ".bin" / "opencli").exists()
+    assert not (tmp_path / "apps" / "web-react" / "node_modules" / ".bin" / "opencli").exists()
 
 
 def test_dev_server_startup_keeps_disabled_liepin_mode_explicit(tmp_path: Path) -> None:
