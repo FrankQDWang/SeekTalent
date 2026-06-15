@@ -15,6 +15,7 @@
   "red_files": [
     ".env.example",
     ".github/dependabot.yml",
+    ".github/workflows/workbench-contract.yml",
     "scripts/verify-dev-workbench.sh",
     "tools/check_react_workbench_cutover.py",
     "tools/check_react_workbench_design_acceptance.py",
