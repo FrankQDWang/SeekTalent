@@ -1,0 +1,32 @@
+.st-toast {
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-left: 4px solid var(--st-info);
+  border-radius: var(--st-radius-md);
+  color: var(--st-ink);
+  display: grid;
+  gap: 3px;
+  line-height: 1.35;
+  padding: var(--st-space-3);
+}
+
+.st-toast[data-tone="success"] {
+  border-left-color: var(--st-success);
+}
+
+.st-toast[data-tone="warning"] {
+  border-left-color: var(--st-warning);
+}
+
+.st-toast[data-tone="danger"] {
+  border-left-color: var(--st-danger);
+}
+
+.st-toast strong {
+  font-size: 13px;
+}
+
+.st-toast span {
+  color: var(--st-muted);
+  font-size: 12px;
+}

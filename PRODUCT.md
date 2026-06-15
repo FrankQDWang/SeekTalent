@@ -27,7 +27,7 @@ The product should feel precise, calm, operational, and trustworthy. It is not a
 
 ## Non-Goals
 
-- No backwards compatibility with the old Svelte UI.
+- No backwards compatibility with the retired legacy UI.
 - No old UI docs as design source material.
 - No decorative AI landing page, hero marketing page, gradient-orb theme, or generic assistant shell.
 - No raw runtime, provider, shell, source, or resume payload exposure in React.

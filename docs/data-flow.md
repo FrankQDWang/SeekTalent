@@ -1,6 +1,6 @@
 # Data Flow
 
-SeekTalent has one runtime path and multiple product surfaces. CLI, Python API, and Workbench requests all converge on `WorkflowRuntime`; the Workbench BFF stores and projects runtime-owned facts for the Svelte UI.
+SeekTalent has one runtime path and multiple product surfaces. CLI, Python API, and Workbench requests all converge on `WorkflowRuntime`; the Workbench BFF stores and projects runtime-owned facts for the React UI.
 
 ## Run Flow
 
@@ -19,7 +19,7 @@ The local Workbench API in `src/seektalent_ui` is a BFF over runtime facts:
 1. Session routes persist job input, source settings, source-run state, review items, final candidates, runtime events, and graph projections in SQLite.
 2. Runtime execution writes session state and public event rows through Workbench persistence helpers.
 3. BFF routes project frontend response shapes from persisted runtime facts.
-4. `apps/web-svelte` calls API adapter functions in `src/lib/api`, consumes query keys from `src/lib/query/keys.ts`, and renders frontend/workbench view models.
+4. `apps/web-react` calls BFF API adapter functions in `src/lib/api`, consumes query keys from `src/lib/query/keys.ts`, and renders typed Agent Workbench view models.
 
 Initial Workbench loading is intentionally split:
 
@@ -46,4 +46,4 @@ The event page itself is not refetched from page zero on every stream update.
 
 ## Frontend Boundary
 
-Generated OpenAPI schema types stay behind API/workbench adapter modules. Svelte components should consume types and view models from `$lib/workbench` and data from Svelte Query, not import `$lib/api/schema` directly.
+Generated OpenAPI schema types stay behind React API/workbench adapter modules. Production React components consume explicit Agent Workbench DTO aliases and TanStack Query hooks from the BFF adapter layer, not generated schema internals, runtime/provider payloads, or fixture data.

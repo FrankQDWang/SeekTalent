@@ -13,6 +13,7 @@ FULL_RUN_EVENTS = {"push", "merge_group", "schedule", "workflow_dispatch"}
 PYTHON_PREFIXES = (
     ".github/workflows/",
     "src/seektalent/",
+    "src/seektalent_conversation_agent/",
     "src/seektalent_ui/",
     "src/seektalent_runtime_control/",
     "tests/",
@@ -29,6 +30,7 @@ PYTHON_FILES = (
 
 WORKBENCH_PREFIXES = (
     "apps/web-react/",
+    "src/seektalent_conversation_agent/",
     "src/seektalent_ui/",
     "src/seektalent_runtime_control/",
     "tests/test_workbench",
@@ -41,6 +43,10 @@ WORKBENCH_FILES = (
     "scripts/start-dev-workbench.sh",
     "scripts/build_packaged_workbench.py",
     "tools/check_workbench_schema_modes.py",
+    "tools/check_react_workbench_cutover.py",
+    "tools/check_react_workbench_design_acceptance.py",
+    "tests/test_agent_workbench_contract.py",
+    "tests/test_react_workbench_cutover_gate.py",
     "src/seektalent/workbench_internal_secrets.py",
     ".github/workflows/workbench-contract.yml",
 )

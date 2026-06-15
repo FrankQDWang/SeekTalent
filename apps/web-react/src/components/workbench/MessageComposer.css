@@ -1,0 +1,24 @@
+.message-composer {
+  align-items: end;
+  background: var(--st-surface);
+  border-top: 1px solid var(--st-border);
+  display: grid;
+  gap: var(--st-space-3);
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: var(--st-space-4);
+}
+
+.message-composer .st-field__control--textarea {
+  min-height: 74px;
+  resize: vertical;
+}
+
+.message-composer .st-field {
+  min-width: 0;
+}
+
+@media (max-width: 720px) {
+  .message-composer {
+    grid-template-columns: 1fr;
+  }
+}

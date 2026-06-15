@@ -24,7 +24,7 @@ def test_pull_request_python_change_runs_python_quality_only() -> None:
 
 
 def test_pull_request_workbench_frontend_change_runs_workbench_contract() -> None:
-    scope = classify_paths(["apps/web-react/src/lib/stream/agentStream.ts"], event_name="pull_request")
+    scope = classify_paths(["apps/web-react/src/components/workbench/CandidateQueue.tsx"], event_name="pull_request")
 
     assert not scope.python_quality
     assert scope.workbench_contract
@@ -39,6 +39,26 @@ def test_pull_request_workbench_backend_change_runs_workbench_contract() -> None
 
 def test_pull_request_runtime_control_change_runs_workbench_contract() -> None:
     scope = classify_paths(["src/seektalent_runtime_control/store.py"], event_name="pull_request")
+
+    assert scope.python_quality
+    assert scope.workbench_contract
+
+
+def test_pull_request_conversation_agent_change_runs_workbench_contract() -> None:
+    scope = classify_paths(["src/seektalent_conversation_agent/store.py"], event_name="pull_request")
+
+    assert scope.python_quality
+    assert scope.workbench_contract
+
+
+def test_pull_request_react_workbench_gate_change_runs_workbench_contract() -> None:
+    scope = classify_paths(
+        [
+            "tools/check_react_workbench_cutover.py",
+            "tests/test_react_workbench_cutover_gate.py",
+        ],
+        event_name="pull_request",
+    )
 
     assert scope.python_quality
     assert scope.workbench_contract

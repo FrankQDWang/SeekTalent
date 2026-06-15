@@ -253,7 +253,7 @@ Local Liepin retrieval uses deterministic OpenCLI browser actions by default in 
 | --- | --- |
 | `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` | Use the deterministic OpenCLI Liepin retriever. |
 | `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli` | Enable the local browser action backend used by the OpenCLI retriever. |
-| `SEEKTALENT_LIEPIN_OPENCLI_COMMAND=apps/web-svelte/node_modules/.bin/opencli` | OpenCLI command resolved from the code root when relative. |
+| `SEEKTALENT_LIEPIN_OPENCLI_COMMAND=apps/web-react/node_modules/.bin/opencli` | OpenCLI command resolved from the code root when relative. |
 | `SEEKTALENT_LIEPIN_OPENCLI_SESSION=seektalent-liepin` | Local OpenCLI browser session name. |
 | `SEEKTALENT_LIEPIN_DEFAULT_DAILY_DETAIL_BUDGET=20` | Daily detail-open budget. This is a safety cap, not a per-query target. |
 | `SEEKTALENT_LIEPIN_EXPLOIT_DETAIL_TARGET=2` | Maximum detail-backed resumes opened per exploit query. |

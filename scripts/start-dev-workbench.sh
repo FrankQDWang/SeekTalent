@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-WEB_DIR="$ROOT/apps/web-svelte"
+WEB_DIR="$ROOT/apps/web-react"
 OPENCLI_BIN="$WEB_DIR/node_modules/.bin/opencli"
 BACKEND_HOST="${SEEKTALENT_DEV_BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${SEEKTALENT_DEV_BACKEND_PORT:-8012}"
@@ -11,18 +11,22 @@ FRONTEND_PORT="${SEEKTALENT_DEV_FRONTEND_PORT:-5178}"
 
 cd "$ROOT"
 
-command -v bun >/dev/null 2>&1 || {
-  echo "bun is required for the Svelte workbench dev server." >&2
+command -v pnpm >/dev/null 2>&1 || {
+  echo "pnpm is required for the React workbench dev server." >&2
   exit 1
 }
 
 if [[ ! -x "$OPENCLI_BIN" ]]; then
-  echo "Installing Svelte workspace dependencies, including the repo-local OpenCLI browser helper..." >&2
-  (cd "$WEB_DIR" && bun install)
+  echo "Installing React workspace dependencies, including the repo-local OpenCLI browser helper..." >&2
+  if [[ -f "$WEB_DIR/pnpm-lock.yaml" ]]; then
+    (cd "$WEB_DIR" && pnpm install --frozen-lockfile)
+  else
+    (cd "$WEB_DIR" && pnpm install)
+  fi
 fi
 
 if [[ ! -x "$OPENCLI_BIN" ]]; then
-  echo "Repo-local OpenCLI browser helper is missing after dependency install: apps/web-svelte/node_modules/.bin/opencli" >&2
+  echo "Repo-local OpenCLI browser helper is missing after dependency install: apps/web-react/node_modules/.bin/opencli" >&2
   exit 1
 fi
 
@@ -144,10 +148,10 @@ env \
 backend_pid=$!
 
 echo "SeekTalent backend: http://$BACKEND_HOST:$BACKEND_PORT" >&2
-echo "SeekTalent Svelte workbench: http://$FRONTEND_HOST:$FRONTEND_PORT" >&2
+echo "SeekTalent React workbench: http://$FRONTEND_HOST:$FRONTEND_PORT" >&2
 echo "Liepin worker mode: opencli via deterministic local browser retrieval" >&2
 
 (
   cd "$WEB_DIR"
-  ./node_modules/.bin/vite --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
+  pnpm exec vite --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
 )
