@@ -37,7 +37,6 @@ WORKBENCH_REQUIRED_TABLES = frozenset(
         "detail_open_ledger",
         "detail_open_requests",
         "external_write_intents",
-        "login_attempts",
         "runtime_source_lane_latest_state",
         "runtime_candidate_identity_snapshots",
         "runtime_finalization_revisions",
@@ -51,7 +50,6 @@ WORKBENCH_REQUIRED_TABLES = frozenset(
         "source_run_policies",
         "source_runs",
         "tenants",
-        "user_sessions",
         "users",
         "workbench_note_writer_leases",
         "workspace_memberships",
@@ -278,7 +276,6 @@ WORKBENCH_REQUIRED_INDEXES = frozenset(
         "idx_detail_open_requests_queue",
         "idx_external_write_intents_idempotency",
         "idx_external_write_intents_pending",
-        "idx_login_attempts_email_created",
         "idx_security_audit_events_action",
         "idx_security_audit_events_scope",
         "idx_session_events_global",
@@ -302,7 +299,6 @@ WORKBENCH_REQUIRED_INDEXES = frozenset(
         "idx_source_runs_session",
         "idx_source_runs_source_card",
         "idx_source_runs_status",
-        "idx_user_sessions_user_workspace",
         "idx_workbench_note_writer_leases_expires",
     }
 )

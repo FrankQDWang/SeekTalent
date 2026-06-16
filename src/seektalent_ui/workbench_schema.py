@@ -37,36 +37,6 @@ CREATE TABLE IF NOT EXISTS workspace_memberships (
     FOREIGN KEY (user_id) REFERENCES users(user_id)
 );
 
-CREATE TABLE IF NOT EXISTS user_sessions (
-    session_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    workspace_id TEXT NOT NULL,
-    csrf_token_digest TEXT NOT NULL,
-    issued_at TEXT NOT NULL,
-    expires_at TEXT NOT NULL,
-    revoked_at TEXT,
-    last_seen_at TEXT NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(user_id),
-    FOREIGN KEY (workspace_id) REFERENCES workspaces(workspace_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_user_sessions_user_workspace
-ON user_sessions(user_id, workspace_id, revoked_at);
-
-CREATE TABLE IF NOT EXISTS login_attempts (
-    attempt_id TEXT PRIMARY KEY,
-    email TEXT NOT NULL,
-    success INTEGER NOT NULL CHECK(success IN (0, 1)),
-    reason TEXT NOT NULL,
-    user_id TEXT,
-    ip_address TEXT,
-    user_agent TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_login_attempts_email_created
-ON login_attempts(email, created_at);
-
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
     tenant_id TEXT NOT NULL,
@@ -574,7 +544,6 @@ ON external_write_intents(tenant_id, workspace_id, status, updated_at, intent_id
 
 def initialize_workbench_schema(conn: sqlite3.Connection, *, now: str) -> None:
     conn.executescript(SCHEMA_SQL)
-    ensure_column(conn, "user_sessions", "csrf_token_digest", "TEXT")
     ensure_column(conn, "source_run_jobs", "idempotency_key", "TEXT")
     ensure_column(conn, "source_connections", "provider_account_hash", "TEXT")
     ensure_column(conn, "source_connections", "compliance_gate_ref", "TEXT")

@@ -58,11 +58,7 @@ def _store(tmp_path: Path) -> WorkbenchStore:
 
 def _user_and_session(tmp_path: Path, *, notes: str = "Prefer retrieval experience."):
     store = _store(tmp_path)
-    user, _workspace = store.bootstrap_admin(
-        email="admin@example.com",
-        display_name="Admin User",
-        password_hash="hash",
-    )
+    user = store.ensure_local_actor()
     session = store.create_workbench_session(
         user=user,
         job_title="Python Engineer",

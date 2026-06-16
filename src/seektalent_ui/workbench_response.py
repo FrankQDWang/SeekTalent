@@ -32,8 +32,6 @@ from seektalent_ui.models import (
     WorkbenchSourceRunPolicyResponse,
     WorkbenchSourceRunResponse,
     WorkbenchSourceStatus,
-    WorkbenchUserResponse,
-    WorkbenchWorkspaceResponse,
 )
 from seektalent_ui.workbench_store import (
     LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
@@ -55,8 +53,6 @@ from seektalent_ui.workbench_store import (
     WorkbenchSourceConnection,
     WorkbenchSourceRun,
     WorkbenchSourceRunPolicy,
-    WorkbenchUser,
-    WorkbenchWorkspace,
 )
 
 
@@ -69,20 +65,6 @@ SOURCE_CARD_STATUSES: dict[str, WorkbenchSourceStatus] = {
     "blocked": "blocked",
     "cancelled": "cancelled",
 }
-
-
-def user_response(user: WorkbenchUser) -> WorkbenchUserResponse:
-    return WorkbenchUserResponse(
-        userId=user.user_id,
-        email=user.email,
-        displayName=user.display_name,
-        role=user.role,
-        workspaceId=user.workspace_id,
-    )
-
-
-def workspace_response(workspace: WorkbenchWorkspace) -> WorkbenchWorkspaceResponse:
-    return WorkbenchWorkspaceResponse(id=workspace.workspace_id, name=workspace.name)
 
 
 def session_response(

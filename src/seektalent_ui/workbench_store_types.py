@@ -9,13 +9,8 @@ from seektalent.models import RequirementSheet
 DEFAULT_TENANT_ID = "local"
 DEFAULT_WORKSPACE_ID = "default"
 DEFAULT_WORKSPACE_NAME = "Default Workspace"
-SESSION_TTL_HOURS = 12
-LOGIN_LOCKOUT_FAILURE_LIMIT = 5
-LOGIN_LOCKOUT_WINDOW_SECONDS = 300
-LOGIN_ATTEMPT_EMAIL_MAX = 254
-LOGIN_ATTEMPT_REASON_MAX = 64
-LOGIN_ATTEMPT_IP_MAX = 64
-LOGIN_ATTEMPT_USER_AGENT_MAX = 512
+SECURITY_AUDIT_IP_MAX = 64
+SECURITY_AUDIT_USER_AGENT_MAX = 512
 SOURCE_CONNECTION_WARNING_MAX = 500
 DETAIL_OPEN_LEASE_SECONDS = 600
 LIEPIN_DAILY_DETAIL_OPEN_LIMIT = 100
@@ -29,10 +24,6 @@ LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE = "浏览器检索通道暂不可用，
 LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE = "当前 Chrome 中的猎聘账号与此工作台绑定不一致，请切换账号后重试。"
 
 
-class BootstrapAlreadyCompleteError(RuntimeError):
-    pass
-
-
 @dataclass(frozen=True)
 class WorkbenchUser:
     user_id: str
@@ -40,12 +31,6 @@ class WorkbenchUser:
     display_name: str
     role: Literal["admin", "member"]
     workspace_id: str
-
-
-@dataclass(frozen=True)
-class WorkbenchWorkspace:
-    workspace_id: str
-    name: str
 
 
 @dataclass(frozen=True)
@@ -367,9 +352,3 @@ class WorkbenchLiepinDetailOpenJobContext:
     runtime_run_id: str | None
     session: WorkbenchSession
     requirement_review: WorkbenchRequirementReview
-
-
-@dataclass(frozen=True)
-class UserSessionTokens:
-    session_token: str
-    csrf_token: str

@@ -122,11 +122,7 @@ def _user() -> WorkbenchUser:
 
 
 def _approved_source_session(store: WorkbenchStore, *, source_kinds: list[str]):
-    user, _workspace = store.bootstrap_admin(
-        email="qa@example.com",
-        display_name="QA",
-        password_hash="test-hash",
-    )
+    user = store.ensure_local_actor()
     connection, _created = store.get_or_create_liepin_source_connection(user=user)
     connected = store.mark_liepin_connection_connected(
         user=user,
@@ -357,11 +353,7 @@ def test_runtime_bridge_runs_only_unblocked_sources_for_partially_blocked_job(tm
 
 def test_runtime_bridge_does_not_seed_requirement_cache(tmp_path: Path) -> None:
     store = WorkbenchStore(tmp_path / "workbench.sqlite3")
-    user, _workspace = store.bootstrap_admin(
-        email="qa@example.com",
-        display_name="QA",
-        password_hash="test-hash",
-    )
+    user = store.ensure_local_actor()
     connection, _created = store.get_or_create_liepin_source_connection(user=user)
     connected = store.mark_liepin_connection_connected(
         user=user,

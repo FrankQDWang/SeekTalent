@@ -119,16 +119,15 @@ def create_app(
             return JSONResponse(status_code=403, content={"detail": "Origin is not allowed."})
         if request.method == "OPTIONS":
             response = Response(status_code=204)
-        elif not app_settings.workbench_enabled and request.url.path.startswith(("/api/auth", "/api/workbench", "/api/agent")):
+        elif not app_settings.workbench_enabled and request.url.path.startswith(("/api/workbench", "/api/agent")):
             response = JSONResponse(status_code=503, content={"detail": "Workbench is disabled by feature gate."})
         else:
             response = await call_next(request)
         if origin is not None:
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type, X-CSRF-Token"
+            response.headers["Access-Control-Allow-Headers"] = "Content-Type"
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, OPTIONS"
-            response.headers["Access-Control-Expose-Headers"] = "X-CSRF-Token"
             response.headers["Vary"] = "Origin"
         return response
 

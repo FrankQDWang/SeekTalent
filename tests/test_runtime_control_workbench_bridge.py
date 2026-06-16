@@ -122,9 +122,5 @@ def _workbench_store_with_user(tmp_path: Path):
     from seektalent_ui.workbench_store import WorkbenchStore
 
     store = WorkbenchStore(tmp_path / "workbench.sqlite3")
-    user, _workspace = store.bootstrap_admin(
-        email="admin@example.com",
-        display_name="Admin",
-        password_hash="hash",
-    )
+    user = store.ensure_local_actor()
     return store, user

@@ -18,7 +18,6 @@ from seektalent_ui.workbench_store_helpers import (
     now_iso as _now_iso,
 )
 from seektalent_ui.workbench_store_types import (
-    BootstrapAlreadyCompleteError,
     CandidateEvidenceLevel,
     CandidateReviewStatus,
     DEFAULT_TENANT_ID,
@@ -38,18 +37,10 @@ from seektalent_ui.workbench_store_types import (
     LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE,
     LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
     LIEPIN_DAILY_DETAIL_OPEN_LIMIT,
-    LOGIN_ATTEMPT_EMAIL_MAX,
-    LOGIN_ATTEMPT_IP_MAX,
-    LOGIN_ATTEMPT_REASON_MAX,
-    LOGIN_ATTEMPT_USER_AGENT_MAX,
-    LOGIN_LOCKOUT_FAILURE_LIMIT,
-    LOGIN_LOCKOUT_WINDOW_SECONDS,
     RuntimeLinkRepairStatus,
     RuntimeSourceCountProjection,
-    SESSION_TTL_HOURS,
     SOURCE_CONNECTION_WARNING_MAX,
     SourceConnectionStatus,
-    UserSessionTokens,
     WorkbenchCandidateEvidence,
     WorkbenchCandidateReviewItem,
     WorkbenchDetailOpenCandidateSnapshot,
@@ -73,12 +64,10 @@ from seektalent_ui.workbench_store_types import (
     WorkbenchSourceRunPolicy,
     WorkbenchSourceRunRuntimeLink,
     WorkbenchUser,
-    WorkbenchWorkspace,
 )
 
 
 __all__ = [
-    "BootstrapAlreadyCompleteError",
     "CandidateEvidenceLevel",
     "CandidateReviewStatus",
     "DEFAULT_TENANT_ID",
@@ -98,18 +87,10 @@ __all__ = [
     "LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE",
     "LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE",
     "LIEPIN_DAILY_DETAIL_OPEN_LIMIT",
-    "LOGIN_ATTEMPT_EMAIL_MAX",
-    "LOGIN_ATTEMPT_IP_MAX",
-    "LOGIN_ATTEMPT_REASON_MAX",
-    "LOGIN_ATTEMPT_USER_AGENT_MAX",
-    "LOGIN_LOCKOUT_FAILURE_LIMIT",
-    "LOGIN_LOCKOUT_WINDOW_SECONDS",
     "RuntimeLinkRepairStatus",
     "RuntimeSourceCountProjection",
-    "SESSION_TTL_HOURS",
     "SOURCE_CONNECTION_WARNING_MAX",
     "SourceConnectionStatus",
-    "UserSessionTokens",
     "WorkbenchCandidateEvidence",
     "WorkbenchCandidateReviewItem",
     "WorkbenchDetailOpenCandidateSnapshot",
@@ -134,7 +115,6 @@ __all__ = [
     "WorkbenchSourceRunRuntimeLink",
     "WorkbenchStore",
     "WorkbenchUser",
-    "WorkbenchWorkspace",
 ]
 
 
@@ -154,7 +134,6 @@ NOTE_KINDS: set[WorkbenchNoteKind] = {"progress", "waiting", "human_action", "te
 class WorkbenchStore:
     def __init__(self, db_path: str | Path) -> None:
         from seektalent_ui.workbench_actor_store import WorkbenchActorStore
-        from seektalent_ui.workbench_auth_store import WorkbenchAuthStore
         from seektalent_ui.workbench_candidate_store import WorkbenchCandidateStore
         from seektalent_ui.workbench_connection_store import WorkbenchConnectionStore
         from seektalent_ui.workbench_detail_open_store import WorkbenchDetailOpenStore
@@ -248,65 +227,8 @@ class WorkbenchStore:
             persist_runtime_final_candidate_results_conn=self._candidates.persist_runtime_final_candidate_results_conn,
             persist_cts_candidate_results_conn=self._candidates.persist_cts_candidate_results_conn,
         )
-        self._auth = WorkbenchAuthStore(
-            connect=self._connect,
-            initialize=self._initialize,
-            user_from_row=_user_from_row,
-            append_security_audit_event=_append_security_audit_event_conn,
-        )
-
     def ensure_local_actor(self) -> WorkbenchUser:
         return self._actor.ensure_local_actor()
-
-    def bootstrap_admin(
-        self,
-        *,
-        email: str,
-        display_name: str,
-        password_hash: str,
-    ) -> tuple[WorkbenchUser, WorkbenchWorkspace]:
-        return self._auth.bootstrap_admin(
-            email=email,
-            display_name=display_name,
-            password_hash=password_hash,
-        )
-
-    def get_user_for_login(self, *, email: str) -> tuple[WorkbenchUser, str, bool] | None:
-        return self._auth.get_user_for_login(email=email)
-
-    def record_login_attempt(
-        self,
-        *,
-        email: str,
-        success: bool,
-        reason: str,
-        user_id: str | None,
-        ip_address: str | None,
-        user_agent: str | None,
-    ) -> None:
-        self._auth.record_login_attempt(
-            email=email,
-            success=success,
-            reason=reason,
-            user_id=user_id,
-            ip_address=ip_address,
-            user_agent=user_agent,
-        )
-
-    def is_login_locked(self, *, email: str, ip_address: str | None) -> bool:
-        return self._auth.is_login_locked(email=email, ip_address=ip_address)
-
-    def create_user_session(self, *, user_id: str, workspace_id: str) -> UserSessionTokens:
-        return self._auth.create_user_session(user_id=user_id, workspace_id=workspace_id)
-
-    def get_user_by_session(self, *, session_digest: str | None) -> WorkbenchUser | None:
-        return self._auth.get_user_by_session(session_digest=session_digest)
-
-    def get_user_by_session_readonly(self, *, session_digest: str | None) -> WorkbenchUser | None:
-        return self._auth.get_user_by_session_readonly(session_digest=session_digest)
-
-    def revoke_user_session(self, *, session_digest: str | None, user: WorkbenchUser | None = None) -> None:
-        self._auth.revoke_user_session(session_digest=session_digest, user=user)
 
     def record_security_audit_event(
         self,
@@ -343,12 +265,6 @@ class WorkbenchStore:
         limit: int = 200,
     ) -> list[WorkbenchSecurityAuditEvent]:
         return self._security_audit.list_security_audit_events_for_user(user=user, limit=limit)
-
-    def rotate_session_csrf(self, *, session_digest: str) -> str:
-        return self._auth.rotate_session_csrf(session_digest=session_digest)
-
-    def verify_session_csrf(self, *, session_digest: str, csrf_token: str | None) -> bool:
-        return self._auth.verify_session_csrf(session_digest=session_digest, csrf_token=csrf_token)
 
     def create_workbench_session(
         self,

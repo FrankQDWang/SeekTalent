@@ -25,9 +25,6 @@ from seektalent_ui.maintenance import (
 from seektalent_ui.workbench_store import DEFAULT_TENANT_ID, WorkbenchSession, WorkbenchStore, WorkbenchUser
 
 
-ADMIN_EMAIL = "admin@example.com"
-
-
 def _db_path(workspace_root: Path) -> Path:
     return workspace_root / ".seektalent" / "workbench.sqlite3"
 
@@ -44,7 +41,7 @@ def test_workbench_store_connect_closes_after_context(tmp_path: Path) -> None:
 
 def _create_workbench_fixture(workspace_root: Path, *, job_title: str) -> tuple[WorkbenchStore, WorkbenchUser, WorkbenchSession]:
     store = WorkbenchStore(_db_path(workspace_root))
-    user, _ = store.bootstrap_admin(email=ADMIN_EMAIL, display_name="Admin", password_hash="hash")
+    user = store.ensure_local_actor()
     session = store.create_workbench_session(
         user=user,
         job_title=job_title,
@@ -146,9 +143,7 @@ def _insert_liepin_card_candidate(database_path: Path, *, user: WorkbenchUser, s
 
 def _snapshot(workspace_root: Path) -> dict[str, object]:
     store = WorkbenchStore(_db_path(workspace_root))
-    login = store.get_user_for_login(email=ADMIN_EMAIL)
-    assert login is not None
-    user = login[0]
+    user = store.ensure_local_actor()
     sessions = store.list_workbench_sessions(user=user)
     assert len(sessions) == 1
     session = sessions[0]
