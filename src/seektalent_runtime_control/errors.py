@@ -12,3 +12,7 @@ class RuntimeControlError(RuntimeError):
         self.reason_code = reason_code
         self.payload = payload or {}
         super().__init__(message or reason_code)
+
+
+class RuntimeControlLookupError(RuntimeControlError, LookupError):
+    """Raised when a runtime-control entity is absent."""

@@ -2,22 +2,31 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
-from typing import Annotated
+from collections.abc import AsyncIterator, Mapping
+from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sse_starlette import EventSourceResponse
 
 from seektalent.source_adapters import public_source_reason_code
 from seektalent_ui.auth import get_session_cookie, get_workbench_store, require_current_user_readonly, session_token_digest
-from seektalent_ui.models import WorkbenchEventListResponse, WorkbenchEventResponse, WorkbenchNoteCreatedPayload
+from seektalent_ui.models import (
+    SourceKind,
+    WorkbenchEventNestedReasonResponse,
+    WorkbenchEventListResponse,
+    WorkbenchEventPayloadResponse,
+    WorkbenchEventWarningResponse,
+    WorkbenchEventResponse,
+    WorkbenchNoteCreatedPayload,
+    WorkbenchRuntimePublicCountsResponse,
+)
 from seektalent_ui.workbench_store import WorkbenchEvent, WorkbenchStore, WorkbenchUser
 
 
 router = APIRouter()
 
 
-@router.get("/api/workbench/events", response_model=WorkbenchEventListResponse)
+@router.get("/api/workbench/events", response_model=WorkbenchEventListResponse, response_model_exclude_none=True)
 def list_events(
     request: Request,
     after_seq: int = Query(default=0, ge=0),
@@ -30,7 +39,11 @@ def list_events(
     )
 
 
-@router.get("/api/workbench/sessions/{session_id}/events", response_model=WorkbenchEventListResponse)
+@router.get(
+    "/api/workbench/sessions/{session_id}/events",
+    response_model=WorkbenchEventListResponse,
+    response_model_exclude_none=True,
+)
 def list_session_events(
     session_id: str,
     request: Request,
@@ -190,6 +203,7 @@ def _event_response(event: WorkbenchEvent) -> WorkbenchEventResponse:
 
 
 def _event_data(event: WorkbenchEvent) -> dict[str, object]:
+    payload = _project_event_payload(event)
     return {
         "globalSeq": event.global_seq,
         "sessionSeq": event.session_seq,
@@ -199,19 +213,106 @@ def _event_data(event: WorkbenchEvent) -> dict[str, object]:
         "eventName": event.event_name,
         "schemaVersion": event.schema_version,
         "idempotencyKey": event.idempotency_key,
-        "payload": _project_event_payload(event),
+        "payload": payload.model_dump(exclude_none=True),
         "occurredAt": event.occurred_at,
         "createdAt": event.created_at,
     }
 
 
-def _project_event_payload(event: WorkbenchEvent) -> dict[str, object]:
+def _project_event_payload(event: WorkbenchEvent) -> WorkbenchNoteCreatedPayload | WorkbenchEventPayloadResponse:
     if event.event_name == "workbench_note_created":
-        return _note_created_payload(event).model_dump()
+        return _note_created_payload(event)
     projected = _drop_broad_runtime_fields(event.payload)
-    if isinstance(projected, dict):
-        return {str(key): item for key, item in projected.items()}
-    return {"value": projected}
+    return _event_payload_response(projected)
+
+
+def _event_payload_response(value: object) -> WorkbenchEventPayloadResponse:
+    if not isinstance(value, Mapping):
+        return WorkbenchEventPayloadResponse(value=str(value))
+    mapping = cast(Mapping[object, object], value)
+    payload: dict[str, object] = {}
+    _copy_event_payload_fields(payload, mapping)
+    nested_payload = mapping.get("payload")
+    if isinstance(nested_payload, Mapping):
+        _copy_event_payload_fields(payload, cast(Mapping[object, object], nested_payload))
+    return WorkbenchEventPayloadResponse.model_validate(payload)
+
+
+def _copy_event_payload_fields(target: dict[str, object], source: Mapping[object, object]) -> None:
+    for field in WorkbenchEventPayloadResponse.model_fields:
+        if field in target or field not in source:
+            continue
+        item = source[field]
+        if item is None:
+            continue
+        if field == "sourceKinds":
+            source_kinds = _source_kind_list(item)
+            if source_kinds:
+                target[field] = source_kinds
+            continue
+        if field == "counts":
+            counts = _runtime_public_counts(item)
+            if counts is not None:
+                target[field] = counts
+            continue
+        if field == "nested":
+            nested = _nested_reason_response(item)
+            if nested is not None:
+                target[field] = nested
+            continue
+        if isinstance(item, str | int | float | bool):
+            target[field] = item
+
+
+def _source_kind_list(value: object) -> list[SourceKind]:
+    if not isinstance(value, list | tuple):
+        return []
+    source_kinds: list[SourceKind] = []
+    for item in value:
+        if item == "cts" or item == "liepin":
+            source_kinds.append(cast(SourceKind, item))
+    return source_kinds
+
+
+def _runtime_public_counts(value: object) -> WorkbenchRuntimePublicCountsResponse | None:
+    if not isinstance(value, Mapping):
+        return None
+    mapping = cast(Mapping[object, object], value)
+    payload: dict[str, int] = {}
+    for field in WorkbenchRuntimePublicCountsResponse.model_fields:
+        item = mapping.get(field)
+        if isinstance(item, bool):
+            continue
+        if isinstance(item, int):
+            payload[field] = item
+    if not payload:
+        return None
+    return WorkbenchRuntimePublicCountsResponse.model_validate(payload)
+
+
+def _nested_reason_response(value: object) -> WorkbenchEventNestedReasonResponse | None:
+    if not isinstance(value, Mapping):
+        return None
+    mapping = cast(Mapping[object, object], value)
+    payload: dict[str, object] = {}
+    blocked_reason_code = mapping.get("blocked_reason_code")
+    if isinstance(blocked_reason_code, str):
+        payload["blocked_reason_code"] = blocked_reason_code
+    events = mapping.get("events")
+    if isinstance(events, list | tuple):
+        warnings = []
+        for event in events:
+            if not isinstance(event, Mapping):
+                continue
+            event_mapping = cast(Mapping[object, object], event)
+            warning_code = event_mapping.get("warningCode")
+            if isinstance(warning_code, str):
+                warnings.append(WorkbenchEventWarningResponse(warningCode=warning_code))
+        if warnings:
+            payload["events"] = warnings
+    if not payload:
+        return None
+    return WorkbenchEventNestedReasonResponse.model_validate(payload)
 
 
 def _note_created_payload(event: WorkbenchEvent) -> WorkbenchNoteCreatedPayload:
