@@ -183,14 +183,16 @@ def test_workbench_public_event_and_audit_schemas_are_closed(tmp_path: Path) -> 
     assert "additionalProperties" not in serialized_audit_metadata
 
 
-def test_workbench_feature_gate_disables_auth_and_workbench_routes(tmp_path: Path) -> None:
+def test_workbench_feature_gate_disables_workbench_routes_and_auth_routes_stay_removed(tmp_path: Path) -> None:
     client = _client(tmp_path, workbench_enabled=False)
 
-    auth = client.get("/api/auth/me")
+    workbench = client.get("/api/workbench/settings")
+    removed_auth = client.get("/api/auth/me")
     non_workbench = client.post("/api/liepin/compliance-gates")
 
-    assert auth.status_code == 503
-    assert auth.json()["detail"] == "Workbench is disabled by feature gate."
+    assert workbench.status_code == 503
+    assert workbench.json()["detail"] == "Workbench is disabled by feature gate."
+    assert removed_auth.status_code == 404
     assert non_workbench.status_code != 503
     actions = _audit_actions(tmp_path)
     assert "workbench_feature_gate_evaluated" in actions

@@ -76,51 +76,6 @@ class LiepinLoginUrlResponse(BaseModel):
     handoffState: Literal["ready_for_browser_login"]
 
 
-class WorkbenchBootstrapRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=8, max_length=1024)
-    displayName: str = Field(min_length=1, max_length=128)
-
-
-class WorkbenchLoginRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    email: str = Field(min_length=3, max_length=254)
-    password: str = Field(min_length=1, max_length=1024)
-
-
-class WorkbenchUserResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    userId: str
-    email: str
-    displayName: str
-    role: Literal["admin", "member"]
-    workspaceId: str
-
-
-class WorkbenchWorkspaceResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    name: str
-
-
-class WorkbenchBootstrapResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    user: WorkbenchUserResponse
-    workspace: WorkbenchWorkspaceResponse
-
-
-class WorkbenchMeResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    user: WorkbenchUserResponse
-
-
 SourceKind = Literal["cts", "liepin"]
 WorkbenchSourceStatus = Literal["queued", "blocked", "running", "completed", "partial", "failed", "cancelled"]
 WorkbenchAuthState = Literal["not_required", "login_required"]

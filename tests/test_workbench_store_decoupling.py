@@ -10,8 +10,6 @@ REQUIRED_TABLES = {
     "workspaces",
     "users",
     "workspace_memberships",
-    "user_sessions",
-    "login_attempts",
     "sessions",
     "session_requirement_reviews",
     "source_runs",
@@ -56,7 +54,6 @@ def test_workbench_store_types_are_importable_from_dedicated_module() -> None:
     from seektalent_ui.workbench_store_types import (
         DEFAULT_TENANT_ID,
         DEFAULT_WORKSPACE_ID,
-        UserSessionTokens,
         WorkbenchSecurityAuditEvent,
         WorkbenchUser,
     )
@@ -70,7 +67,6 @@ def test_workbench_store_types_are_importable_from_dedicated_module() -> None:
         role="admin",
         workspace_id="default",
     ).workspace_id == "default"
-    assert UserSessionTokens(session_token="session", csrf_token="csrf").csrf_token == "csrf"
     assert WorkbenchSecurityAuditEvent(
         audit_id=1,
         actor_user_id="user_1",
@@ -86,14 +82,6 @@ def test_workbench_store_types_are_importable_from_dedicated_module() -> None:
         metadata={},
         created_at="2026-06-11T00:00:00+00:00",
     ).action == "login"
-
-
-def test_auth_modules_do_not_import_workbench_store_facade() -> None:
-    for relative_path in (
-        "src/seektalent_ui/workbench_auth_store.py",
-        "src/seektalent_ui/workbench_auth_service.py",
-    ):
-        _assert_no_workbench_store_import(relative_path)
 
 
 def test_security_audit_store_preserves_redaction_and_facade(tmp_path: Path) -> None:
@@ -121,25 +109,6 @@ def test_security_audit_store_preserves_redaction_and_facade(tmp_path: Path) -> 
 
 def test_security_audit_module_does_not_import_workbench_store_facade() -> None:
     _assert_no_workbench_store_import("src/seektalent_ui/workbench_security_audit_store.py")
-
-
-def test_auth_store_preserves_readonly_lookup_and_logout(tmp_path: Path) -> None:
-    from seektalent_ui.auth import hash_password, session_token_digest
-
-    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
-    user, workspace = store.bootstrap_admin(
-        email="admin@example.com",
-        display_name="Admin User",
-        password_hash=hash_password("correct horse"),
-    )
-    tokens = store.create_user_session(user_id=user.user_id, workspace_id=workspace.workspace_id)
-    digest = session_token_digest(tokens.session_token)
-
-    assert store.get_user_by_session_readonly(session_digest=digest) == user
-    store.revoke_user_session(session_digest=digest, user=user)
-
-    assert store.get_user_by_session_readonly(session_digest=digest) is None
-    assert store.get_user_by_session(session_digest=digest) is None
 
 
 def test_session_connection_job_stores_do_not_import_workbench_store_facade() -> None:
@@ -195,81 +164,3 @@ def test_workbench_schema_module_creates_required_indexes(tmp_path: Path) -> Non
         }
 
     assert "idx_external_write_intents_pending" in indexes
-
-
-def test_workbench_store_public_facade_keeps_auth_methods(tmp_path: Path) -> None:
-    from seektalent_ui.auth import hash_password, session_token_digest
-
-    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
-    user, workspace = store.bootstrap_admin(
-        email="admin@example.com",
-        display_name="Admin User",
-        password_hash=hash_password("correct horse"),
-    )
-    login_row = store.get_user_for_login(email="admin@example.com")
-    assert login_row is not None
-    tokens = store.create_user_session(user_id=user.user_id, workspace_id=workspace.workspace_id)
-
-    recovered = store.get_user_by_session(session_digest=session_token_digest(tokens.session_token))
-
-    assert recovered == user
-    assert store.verify_session_csrf(
-        session_digest=session_token_digest(tokens.session_token),
-        csrf_token=tokens.csrf_token,
-    )
-
-
-def test_schema_extraction_preserves_legacy_user_sessions_csrf_column(tmp_path: Path) -> None:
-    from seektalent_ui.workbench_db import connect_workbench_db
-    from seektalent_ui.workbench_schema import initialize_workbench_schema
-
-    db_path = tmp_path / "workbench.sqlite3"
-    with connect_workbench_db(db_path) as conn:
-        conn.execute(
-            """
-            CREATE TABLE user_sessions (
-                session_id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                workspace_id TEXT NOT NULL,
-                issued_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                revoked_at TEXT,
-                last_seen_at TEXT NOT NULL
-            )
-            """
-        )
-        initialize_workbench_schema(conn, now="2026-06-11T00:00:00+00:00")
-        columns = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(user_sessions)").fetchall()
-        }
-
-    assert "csrf_token_digest" in columns
-
-
-def test_auth_service_records_failed_login_without_creating_session(tmp_path: Path) -> None:
-    from seektalent_ui.auth import hash_password
-    from seektalent_ui.workbench_auth_service import WorkbenchAuthService, WorkbenchLoginInput
-
-    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
-    store.bootstrap_admin(
-        email="admin@example.com",
-        display_name="Admin User",
-        password_hash=hash_password("correct horse"),
-    )
-    service = WorkbenchAuthService(store=store)
-
-    result = service.login(
-        WorkbenchLoginInput(
-            email="admin@example.com",
-            password="wrong password",
-            ip_address="127.0.0.1",
-            user_agent="pytest",
-        )
-    )
-
-    assert result.status == "invalid_credentials"
-    assert result.session_tokens is None
-    audit_actions = [event.action for event in store.list_security_audit_events()]
-    assert audit_actions == ["bootstrap_admin_created", "login"]
-    assert store.get_user_by_session(session_digest=None) is None

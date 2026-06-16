@@ -5730,7 +5730,7 @@ def test_sse_stream_without_cursor_starts_after_existing_events(tmp_path: Path) 
     )
 
 
-def test_event_reads_do_not_create_workbench_user_sessions(tmp_path: Path) -> None:
+def test_event_reads_do_not_create_legacy_workbench_user_sessions_table(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
     session = _create_session(client)
@@ -5740,8 +5740,8 @@ def test_event_reads_do_not_create_workbench_user_sessions(tmp_path: Path) -> No
     assert recovered.json()["events"][0]["sessionId"] == session["sessionId"]
 
     with sqlite3.connect(_db_path(tmp_path)) as conn:
-        session_count = conn.execute("SELECT COUNT(*) FROM user_sessions").fetchone()[0]
-    assert session_count == 0
+        table_count = conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name = 'user_sessions'").fetchone()[0]
+    assert table_count == 0
 
 
 def test_expired_running_job_is_reconciled_on_app_startup(tmp_path: Path) -> None:

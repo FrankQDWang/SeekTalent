@@ -1,0 +1,15 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Remove the Workbench admin/password auth facade from the red-zone WorkbenchStore boundary.",
+  "rationale": "WorkbenchStore is the BFF persistence facade. This PR removes the obsolete admin login/session methods after the Workbench routes have moved to the local actor model, without adding fallback auth behavior.",
+  "red_files": [
+    "src/seektalent_ui/workbench_store.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_api.py -k legacy_workbench_user_sessions_table -q",
+    "uv run --group dev python tools/check_pr_governance.py --base codex/use-local-actor-and-unmount-workbench-auth",
+    "git diff --check"
+  ]
+}

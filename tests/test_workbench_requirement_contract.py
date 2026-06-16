@@ -27,12 +27,7 @@ def _store(tmp_path: Path) -> WorkbenchStore:
 
 
 def _user(store: WorkbenchStore):
-    user, _created = store.bootstrap_admin(
-        email="admin@example.com",
-        display_name="Admin",
-        password_hash="hash",
-    )
-    return user
+    return store.ensure_local_actor()
 
 
 def test_workbench_requirement_review_stores_requirement_sheet(tmp_path: Path) -> None:
