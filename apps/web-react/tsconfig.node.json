@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    ".storybook/**/*.ts",
+    "eslint.config.mjs",
+    "playwright.config.ts",
+    "playwright.storybook-visual.config.ts",
+    "playwright.storybook.config.ts",
+    "src/vite-env.d.ts",
+    "tests/**/*.ts",
+    "vite.config.ts"
+  ]
+}

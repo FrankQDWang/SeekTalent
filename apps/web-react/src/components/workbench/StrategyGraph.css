@@ -1,0 +1,76 @@
+.strategy-graph {
+  background: var(--st-canvas);
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  height: min(62vh, 680px);
+  min-height: 420px;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.strategy-graph .react-flow {
+  background: transparent;
+}
+
+.strategy-graph .react-flow__background {
+  opacity: 0.34;
+}
+
+.strategy-graph .react-flow__edge-path {
+  stroke: oklch(0.66 0.14 268);
+  stroke-width: 1.6;
+}
+
+.strategy-graph .react-flow__edge.selected .react-flow__edge-path,
+.strategy-graph .react-flow__edge:focus-visible .react-flow__edge-path {
+  stroke: var(--st-action);
+  stroke-width: 2.2;
+}
+
+.strategy-graph .react-flow__controls {
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  box-shadow: none;
+  overflow: hidden;
+}
+
+.strategy-graph .react-flow__controls-button {
+  background: var(--st-surface);
+  border-bottom-color: var(--st-border);
+  color: var(--st-ink);
+  height: 30px;
+  width: 30px;
+}
+
+.strategy-graph .react-flow__controls-button:hover {
+  background: var(--st-surface-raised);
+}
+
+.strategy-graph__empty,
+.strategy-graph__error {
+  align-items: center;
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  color: var(--st-muted);
+  display: inline-flex;
+  font-weight: 680;
+  left: var(--st-space-4);
+  min-height: 34px;
+  padding: 0 var(--st-space-3);
+  position: absolute;
+  top: var(--st-space-4);
+  z-index: 2;
+}
+
+.strategy-graph__error {
+  color: var(--st-danger);
+}
+
+@media (max-width: 760px) {
+  .strategy-graph {
+    height: 520px;
+    min-height: 360px;
+  }
+}

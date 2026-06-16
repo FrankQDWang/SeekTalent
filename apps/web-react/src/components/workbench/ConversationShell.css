@@ -1,0 +1,52 @@
+.conversation-shell {
+  background: var(--st-canvas);
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(
+      300px,
+      380px
+    );
+  min-height: 0;
+}
+
+.conversation-shell__rail,
+.conversation-shell__side {
+  min-height: 0;
+  overflow: auto;
+}
+
+.conversation-shell__rail {
+  background: var(--st-panel);
+  border-right: 1px solid var(--st-border);
+}
+
+.conversation-shell__main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 1080px) {
+  .conversation-shell {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+
+  .conversation-shell__main {
+    flex: 0 0 auto;
+    min-height: 760px;
+    order: 1;
+    overflow: visible;
+  }
+
+  .conversation-shell__side {
+    display: none;
+  }
+
+  .conversation-shell__rail {
+    display: none;
+  }
+}

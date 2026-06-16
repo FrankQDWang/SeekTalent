@@ -7,7 +7,7 @@ from seektalent.dev_mode import build_dev_mode_env_diagnostics
 
 
 def _write_opencli_binary(root: Path) -> Path:
-    opencli_bin = root / "apps" / "web-svelte" / "node_modules" / ".bin" / "opencli"
+    opencli_bin = root / "apps" / "web-react" / "node_modules" / ".bin" / "opencli"
     opencli_bin.parent.mkdir(parents=True, exist_ok=True)
     opencli_bin.write_text("#!/usr/bin/env node\n", encoding="utf-8")
     opencli_bin.chmod(0o755)

@@ -1217,7 +1217,7 @@ def test_liepin_source_connection_routes_are_scoped_and_csrf_protected(tmp_path:
 
 
 def test_liepin_source_connection_list_auto_binds_ready_unbound_opencli_status(tmp_path: Path) -> None:
-    opencli_bin = tmp_path / "apps" / "web-svelte" / "node_modules" / ".bin" / "opencli"
+    opencli_bin = tmp_path / "apps" / "web-react" / "node_modules" / ".bin" / "opencli"
     opencli_bin.parent.mkdir(parents=True, exist_ok=True)
     opencli_bin.write_text("ok\n", encoding="utf-8")
     opencli_bin.chmod(0o755)

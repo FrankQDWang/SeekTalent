@@ -1,0 +1,80 @@
+.st-button {
+  align-items: center;
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  cursor: pointer;
+  display: inline-flex;
+  font-weight: 720;
+  gap: 7px;
+  justify-content: center;
+  min-height: 34px;
+  min-width: 34px;
+  padding: 0 12px;
+  transition:
+    background-color 160ms ease-out,
+    border-color 160ms ease-out,
+    color 160ms ease-out;
+  white-space: nowrap;
+}
+
+.st-button svg {
+  flex: 0 0 auto;
+}
+
+.st-button[data-tone="primary"] {
+  background: var(--st-action);
+  border-color: var(--st-action);
+  color: var(--st-action-ink);
+}
+
+.st-button[data-tone="secondary"] {
+  background: var(--st-surface);
+  color: var(--st-ink);
+}
+
+.st-button[data-tone="danger"] {
+  background: var(--st-danger);
+  border-color: var(--st-danger);
+  color: var(--st-danger-ink);
+}
+
+.st-button:not(:disabled):hover {
+  border-color: var(--st-border-strong);
+}
+
+.st-button[data-tone="primary"]:not(:disabled):hover {
+  background: oklch(0.42 0.18 268);
+}
+
+.st-button[data-tone="secondary"]:not(:disabled):hover {
+  background: var(--st-surface-raised);
+}
+
+.st-button[data-tone="danger"]:not(:disabled):hover {
+  background: oklch(0.5 0.18 28);
+}
+
+.st-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.st-button-spinner {
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 999px;
+  height: 14px;
+  width: 14px;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .st-button-spinner {
+    animation: st-button-spin 800ms linear infinite;
+  }
+}
+
+@keyframes st-button-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

@@ -4,85 +4,124 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-uv run pytest \
-  tests/test_dev_mode_readiness.py \
-  tests/test_workbench_api.py \
-  tests/test_workbench_semantic_guardrails.py \
-  tests/test_workbench_dual_source_dev_mode.py \
-  tests/test_runtime_source_lanes.py \
-  tests/test_liepin_runtime_source_lane.py \
-  tests/test_liepin_config.py \
-  -q
+if [[ "${SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT:-0}" != "1" ]]; then
+  uv run --group dev python -m pytest \
+    tests/test_dev_mode_readiness.py \
+    tests/test_workbench_api.py \
+    tests/test_workbench_semantic_guardrails.py \
+    tests/test_workbench_dual_source_dev_mode.py \
+    tests/test_runtime_source_lanes.py \
+    tests/test_liepin_runtime_source_lane.py \
+    tests/test_liepin_config.py \
+    tests/test_agent_workbench_contract.py \
+    tests/test_react_workbench_cutover_gate.py \
+    tests/test_workbench_contract_ci_optimization.py \
+    -q
 
-uv run ruff check \
-  src/seektalent/dev_mode.py \
-  src/seektalent_ui/final_top_candidates.py \
-  src/seektalent_ui/models.py \
-  src/seektalent_ui/workbench_routes.py \
-  src/seektalent_ui/server.py \
-  src/seektalent_ui/workbench_store.py \
-  tests/test_dev_mode_readiness.py \
-  tests/test_workbench_api.py \
-  tests/test_workbench_semantic_guardrails.py \
-  tests/test_workbench_dual_source_dev_mode.py
+  uv run --group dev python -m ruff check \
+    src/seektalent/dev_mode.py \
+    src/seektalent_ui/final_top_candidates.py \
+    src/seektalent_ui/event_routes.py \
+    src/seektalent_ui/models.py \
+    src/seektalent_ui/workbench_response.py \
+    src/seektalent_ui/workbench_routes.py \
+    src/seektalent_ui/agent_route_deps.py \
+    src/seektalent_ui/agent_routes.py \
+    src/seektalent_ui/agent_workbench_models.py \
+    src/seektalent_ui/agent_workbench_projection.py \
+    src/seektalent_ui/agent_workbench_response.py \
+    src/seektalent_ui/agent_workbench_routes.py \
+    src/seektalent_ui/agent_workbench_stream.py \
+    src/seektalent_ui/agent_workbench_stream_projection.py \
+    src/seektalent_ui/agent_workbench_stream_store.py \
+    src/seektalent_ui/agent_workbench_transcript.py \
+    src/seektalent_ui/server.py \
+    src/seektalent_ui/workbench_store.py \
+    tests/test_dev_mode_readiness.py \
+    tests/test_agent_workbench_contract.py \
+    tests/test_workbench_api.py \
+    tests/test_workbench_semantic_guardrails.py \
+    tests/test_workbench_dual_source_dev_mode.py \
+    tests/test_react_workbench_cutover_gate.py \
+    tests/test_workbench_contract_ci_optimization.py \
+    tools/check_react_workbench_cutover.py \
+    tools/check_react_workbench_design_acceptance.py
+
+  uv run python tools/check_react_workbench_cutover.py
+  uv run python tools/check_react_workbench_design_acceptance.py
+fi
 
 if [[ "${SEEKTALENT_VERIFY_PYTHON_ONLY:-0}" == "1" ]]; then
-  echo "SEEKTALENT_VERIFY_PYTHON_ONLY=1; skipped Svelte verification" >&2
+  echo "SEEKTALENT_VERIFY_PYTHON_ONLY=1; skipped React verification" >&2
   exit 0
 fi
 
-command -v bun >/dev/null 2>&1 || {
-  echo "bun not found; rerun with SEEKTALENT_VERIFY_PYTHON_ONLY=1 only for Python-only local checks" >&2
+command -v pnpm >/dev/null 2>&1 || {
+  echo "pnpm not found; rerun with SEEKTALENT_VERIFY_PYTHON_ONLY=1 only for Python-only local checks" >&2
   exit 1
 }
 
 tmp_root="$(mktemp -d)"
 cookie_jar="$tmp_root/cookies.txt"
 api_pid=""
-api_owned=0
 cleanup() {
-  if [[ "$api_owned" == "1" && -n "$api_pid" ]]; then
+  if [[ -n "$api_pid" ]]; then
     kill "$api_pid" 2>/dev/null || true
   fi
   rm -rf "$tmp_root"
 }
 trap cleanup EXIT
 
-if curl -fsS http://127.0.0.1:8012/openapi.json >/dev/null 2>&1; then
-  echo "Using existing backend on 127.0.0.1:8012 for OpenAPI generation." >&2
-else
-  env SEEKTALENT_WORKSPACE_ROOT="$tmp_root" SEEKTALENT_WORKBENCH_ENABLED=true uv run seektalent-ui-api --host 127.0.0.1 --port 8012 &
-  api_pid=$!
-  api_owned=1
+api_port="${SEEKTALENT_VERIFY_API_PORT:-}"
+if [[ -z "$api_port" ]]; then
+  api_port="$(
+    uv run python - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+  )"
 fi
+api_base_url="http://127.0.0.1:$api_port"
+env SEEKTALENT_WORKSPACE_ROOT="$tmp_root" SEEKTALENT_WORKBENCH_ENABLED=true uv run seektalent-ui-api --host 127.0.0.1 --port "$api_port" &
+api_pid=$!
 for _ in {1..150}; do
-  if curl -fsS http://127.0.0.1:8012/openapi.json >/dev/null; then
+  if curl -fsS "$api_base_url/openapi.json" >/dev/null; then
     break
   fi
   sleep 0.2
 done
-curl -fsS http://127.0.0.1:8012/openapi.json >/dev/null
+curl -fsS "$api_base_url/openapi.json" >/dev/null
 
-schema_path="apps/web-svelte/src/lib/api/schema.d.ts"
+schema_path="apps/web-react/src/lib/api/schema.d.ts"
 schema_before="$(shasum "$schema_path" | awk '{print $1}')"
 
 (
-  cd apps/web-svelte
-  bun run api:gen
+  cd apps/web-react
+  SEEKTALENT_OPENAPI_URL="$api_base_url/openapi.json" pnpm api:gen
 )
 
 schema_after="$(shasum "$schema_path" | awk '{print $1}')"
 if [[ "$schema_before" != "$schema_after" ]]; then
-  echo "Generated OpenAPI schema changed; run bun run api:gen and review the result." >&2
+  echo "Generated OpenAPI schema changed; run pnpm api:gen in apps/web-react and review the result." >&2
   exit 1
 fi
 
-handwritten_svelte_paths=(
-  "apps/web-svelte/src/routes"
-  "apps/web-svelte/src/lib/components"
-  "apps/web-svelte/src/lib/workbench"
-  "apps/web-svelte/src/lib/api/workbench.ts"
+handwritten_react_paths=(
+  "apps/web-react/src/routes"
+  "apps/web-react/src/components"
+  "apps/web-react/src/lib/api/agentWorkbench.ts"
+  "apps/web-react/src/lib/api/client.ts"
+  "apps/web-react/src/lib/query"
+  "apps/web-react/src/lib/strategy-graph"
+  "apps/web-react/src/lib/stream"
 )
+
+grep_react_source() {
+  git grep --untracked -n -i -F -e "$1" -- "${handwritten_react_paths[@]}"
+}
 
 for forbidden in \
   login-relay \
@@ -96,75 +135,74 @@ for forbidden in \
   'fallback browser' \
   'managed browser login' \
   'direct browser fallback'; do
-  if rg -n -i "$forbidden" "${handwritten_svelte_paths[@]}"; then
-    echo "Forbidden legacy Liepin browser fallback reference found in Svelte milestone wiring: $forbidden" >&2
+  if grep_react_source "$forbidden"; then
+    echo "Forbidden legacy Liepin browser fallback reference found in React workbench wiring: $forbidden" >&2
     exit 1
   fi
 done
 
-for forbidden_copy in 'Svelte 5 Workbench Spike' 'Dev mode BYOK' 'data-root' 'data root' dataRoots 'readiness dashboard'; do
-  if rg -n -i "$forbidden_copy" "${handwritten_svelte_paths[@]}"; then
-    echo "Forbidden spike/dev-mode primary UI copy found in Svelte parity source: $forbidden_copy" >&2
+for forbidden_copy in 'Workbench Spike' 'Dev mode BYOK' 'data-root' 'data root' dataRoots 'readiness dashboard'; do
+  if grep_react_source "$forbidden_copy"; then
+    echo "Forbidden spike/dev-mode primary UI copy found in React workbench source: $forbidden_copy" >&2
     exit 1
   fi
 done
 
 (
-  cd apps/web-svelte
-  bun run check
-  bun run lint
-  bun run test
-  bun run build
-  bun run test:e2e -- workbench-parity.spec.ts
+  cd apps/web-react
+  pnpm check
+  pnpm lint
+  pnpm test
+  pnpm build
+  pnpm storybook:build
+  pnpm storybook:a11y
+  pnpm storybook:interactions
+  pnpm storybook:visual
+  pnpm test:e2e
 )
 
-if [[ "$api_owned" == "1" ]]; then
-  curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
-    -H 'Content-Type: application/json' \
-    -X POST \
-    --data '{"email":"admin@example.com","password":"correct horse","displayName":"Admin User"}' \
-    http://127.0.0.1:8012/api/auth/bootstrap >/dev/null
+curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
+  -H 'Content-Type: application/json' \
+  -X POST \
+  --data '{"email":"admin@example.com","password":"correct horse","displayName":"Admin User"}' \
+  "$api_base_url/api/auth/bootstrap" >/dev/null
 
-  curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
-    -H 'Content-Type: application/json' \
-    -X POST \
-    --data '{"email":"admin@example.com","password":"correct horse"}' \
-    http://127.0.0.1:8012/api/auth/login >/dev/null
+curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
+  -H 'Content-Type: application/json' \
+  -X POST \
+  --data '{"email":"admin@example.com","password":"correct horse"}' \
+  "$api_base_url/api/auth/login" >/dev/null
 
-  csrf_token="$(awk '$6 == "seektalent_workbench_csrf" { print $7 }' "$cookie_jar" | tail -1)"
-  if [[ -z "$csrf_token" ]]; then
-    echo "Could not read CSRF cookie from real-backend smoke login." >&2
-    exit 1
-  fi
+csrf_token="$(awk '$6 == "seektalent_workbench_csrf" { print $7 }' "$cookie_jar" | tail -1)"
+if [[ -z "$csrf_token" ]]; then
+  echo "Could not read CSRF cookie from real-backend smoke login." >&2
+  exit 1
+fi
 
-  session_json="$tmp_root/session.json"
-  curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
-    -H 'Content-Type: application/json' \
-    -H "X-CSRF-Token: $csrf_token" \
-    -X POST \
-    --data '{"jobTitle":"Python Engineer","jdText":"Build Python agents and ranking systems.","notes":"Prefer retrieval experience.","sourceKinds":["cts","liepin"]}' \
-    http://127.0.0.1:8012/api/workbench/sessions > "$session_json"
+conversation_json="$tmp_root/conversation.json"
+curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
+  -H 'Content-Type: application/json' \
+  -H "X-CSRF-Token: $csrf_token" \
+  -X POST \
+  --data '{"title":"Python Agent Engineer"}' \
+  "$api_base_url/api/agent/conversations" > "$conversation_json"
 
-  session_id="$(
-    SESSION_JSON="$session_json" uv run python - <<'PY'
+conversation_id="$(
+  CONVERSATION_JSON="$conversation_json" uv run python - <<'PY'
 import json
 import os
 
-with open(os.environ["SESSION_JSON"], encoding="utf-8") as handle:
-    print(json.load(handle)["sessionId"])
+with open(os.environ["CONVERSATION_JSON"], encoding="utf-8") as handle:
+    print(json.load(handle)["conversation"]["conversationId"])
 PY
-  )"
+)"
 
-  curl -fsS -c "$cookie_jar" -b "$cookie_jar" http://127.0.0.1:8012/api/workbench/sessions >/dev/null
-  curl -fsS -c "$cookie_jar" -b "$cookie_jar" "http://127.0.0.1:8012/api/workbench/sessions/$session_id" >/dev/null
-  curl -fsS -c "$cookie_jar" -b "$cookie_jar" "http://127.0.0.1:8012/api/workbench/sessions/$session_id/final-top10" >/dev/null
-  curl -fsS -c "$cookie_jar" -b "$cookie_jar" http://127.0.0.1:8012/api/workbench/source-connections >/dev/null
-  curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
-    -H "X-CSRF-Token: $csrf_token" \
-    -X POST \
-    http://127.0.0.1:8012/api/workbench/source-connections/liepin >/dev/null
-else
-  echo "Skipped real-backend mutable smoke because 127.0.0.1:8012 was already owned by another process." >&2
-fi
+curl -fsS -c "$cookie_jar" -b "$cookie_jar" "$api_base_url/api/agent/workbench/conversations" >/dev/null
+curl -fsS -c "$cookie_jar" -b "$cookie_jar" "$api_base_url/api/agent/workbench/conversations/$conversation_id" >/dev/null
+curl -fsS -c "$cookie_jar" -b "$cookie_jar" "$api_base_url/api/workbench/source-connections" >/dev/null
+curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
+  -H "X-CSRF-Token: $csrf_token" \
+  -X POST \
+  "$api_base_url/api/workbench/source-connections/liepin" >/dev/null
 
 git diff --check

@@ -161,7 +161,7 @@ seektalent init
 seektalent workbench
 ```
 
-该命令启动 FastAPI 后端，并从同一个 loopback origin 提供已经打包的 Svelte Workbench。用户电脑不需要 Bun、Node、Vite，也不需要源码仓库。
+该命令启动 FastAPI 后端，并从同一个 loopback origin 提供已经打包的 React Workbench。用户电脑不需要 pnpm、Node、Vite，也不需要源码仓库。
 
 ## 失败行为
 

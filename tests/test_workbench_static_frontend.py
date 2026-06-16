@@ -23,7 +23,7 @@ def test_package_frontend_paths_resolve_inside_seektalent_ui_package() -> None:
     assert package_frontend_fallback_file() == frontend_dir / "200.html"
 
 
-def test_frontend_available_requires_fallback_and_svelte_app(tmp_path: Path) -> None:
+def test_frontend_available_requires_fallback_and_built_react_app(tmp_path: Path) -> None:
     root = tmp_path / "workbench"
     assert frontend_available(root) is False
 
@@ -117,7 +117,7 @@ def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatc
     (tmp_path / ".env").write_text(
         "\n".join(
             [
-                "SEEKTALENT_LIEPIN_OPENCLI_COMMAND=apps/web-svelte/node_modules/.bin/opencli",
+                "SEEKTALENT_LIEPIN_OPENCLI_COMMAND=apps/web-react/node_modules/.bin/opencli",
                 "SEEKTALENT_LIEPIN_OPENCLI_SESSION=dev-liepin-session",
             ]
         )

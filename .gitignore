@@ -13,9 +13,12 @@ wheels/
 .obsidian/
 .pi/
 .qoder/
+.external
 .external/
 .worktrees/
 architecture-research/
+WTS/
+*.fig
 
 # Run artifacts
 runs/

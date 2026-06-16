@@ -1,0 +1,33 @@
+.requirement-review-panel {
+  align-items: center;
+  background: oklch(0.96 0.04 82);
+  border-bottom: 1px solid var(--st-border);
+  display: flex;
+  gap: var(--st-space-3);
+  justify-content: space-between;
+  padding: var(--st-space-3) var(--st-space-4);
+}
+
+.requirement-review-panel > div {
+  align-items: center;
+  display: grid;
+  gap: var(--st-space-2);
+  grid-template-columns: auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.requirement-review-panel span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.requirement-review-panel strong,
+.requirement-review-panel em {
+  overflow-wrap: anywhere;
+}
+
+.requirement-review-panel em {
+  color: var(--st-muted);
+  font-style: normal;
+}

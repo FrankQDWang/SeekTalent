@@ -1,1 +1,0 @@
-<p>Harness ready</p>

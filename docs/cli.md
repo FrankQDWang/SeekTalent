@@ -161,7 +161,7 @@ seektalent init
 seektalent workbench
 ```
 
-The command starts the FastAPI backend and serves the packaged Svelte Workbench from the same loopback origin. It does not require Bun, Node, Vite, or a repository checkout on the user's machine.
+The command starts the FastAPI backend and serves the packaged React Workbench from the same loopback origin. It does not require pnpm, Node, Vite, or a repository checkout on the user's machine.
 
 ## Failure Behavior
 
