@@ -77,7 +77,7 @@ def test_workbench_store_ensures_local_actor_once(tmp_path: Path) -> None:
     assert first.role == "admin"
 
 
-def test_workbench_store_does_not_reuse_legacy_bootstrap_admin(tmp_path: Path) -> None:
+def test_workbench_store_does_not_reuse_legacy_admin_user(tmp_path: Path) -> None:
     from seektalent_ui.workbench_store import WorkbenchStore
 
     db_path = tmp_path / "workbench.sqlite3"
