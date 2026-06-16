@@ -121,10 +121,6 @@ def sha256_text(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def session_digest(session_token: str) -> str:
-    return "sha256$" + hashlib.sha256(session_token.encode("utf-8")).hexdigest()
-
-
 def now() -> datetime:
     return datetime.now(UTC)
 
