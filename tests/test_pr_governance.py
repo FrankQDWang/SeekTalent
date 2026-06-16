@@ -10,6 +10,7 @@ from tools.check_pr_governance import (
     LineCountChange,
     classify_path,
     evaluate_changed_files,
+    is_active_dependency_control_file,
     is_dependency_control_file,
     layer_for_path,
     line_limit_for_path,
@@ -69,7 +70,7 @@ def _major_refactor_goal_payload(
         "scripts/verify-red-zone.sh",
         "scripts/verify-dev-workbench.sh",
         "uv run pytest",
-        "cd apps/web-svelte && bun run test",
+        "cd apps/web-react && pnpm test",
         "cd apps/liepin-worker && bun test",
     ]
     bootstrap_verification = [
@@ -90,6 +91,24 @@ def _major_refactor_goal_payload(
         "uv run python tools/check_source_boundaries.py",
         "uv run pytest",
     ]
+    react_workbench_verification = [
+        "scripts/verify-dev-workbench.sh",
+        "uv run python scripts/build_packaged_workbench.py",
+        (
+            "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest "
+            "tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py "
+            "-q -p no:cacheprovider"
+        ),
+        (
+            "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest "
+            "tests/test_agent_workbench_contract.py -q -p no:cacheprovider"
+        ),
+        "pnpm --dir apps/web-react check",
+        (
+            "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts "
+            "src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run"
+        ),
+    ]
     default_verification = (
         bootstrap_verification
         if goal_id == "governance-bootstrap-2026-06"
@@ -97,6 +116,8 @@ def _major_refactor_goal_payload(
         if goal_id == "goal-2-agent-safety-gate-2026-06"
         else runtime_control_verification
         if goal_id == "runtime-control-plane-2026-06"
+        else react_workbench_verification
+        if goal_id == "react-agent-workbench-rebuild-2026-06"
         else source_verification
     )
     payload: dict[str, object] = {
@@ -181,16 +202,26 @@ def test_gitignore_is_governance_layer() -> None:
 
 def test_dependency_control_files_are_dependency_layer() -> None:
     assert layer_for_path("pyproject.toml") == "dependencies"
-    assert layer_for_path("apps/web-svelte/package.json") == "dependencies"
+    assert layer_for_path("apps/web-react/package.json") == "dependencies"
     assert is_dependency_control_file("apps/liepin-worker/bun.lock")
     assert is_dependency_control_file("requirements-dev.txt")
+
+
+def test_deleted_app_dependency_control_files_are_not_active_dependency_changes(tmp_path: Path) -> None:
+    assert not is_active_dependency_control_file("apps/retired-workbench/package.json", project_root=tmp_path)
+
+    active_package = tmp_path / "apps" / "web-react" / "package.json"
+    active_package.parent.mkdir(parents=True)
+    active_package.write_text('{"private": true}\n', encoding="utf-8")
+
+    assert is_active_dependency_control_file("apps/web-react/package.json", project_root=tmp_path)
 
 
 def test_evaluate_changed_files_fails_cross_layer_runtime_and_frontend() -> None:
     result = evaluate_changed_files(
         [
             "src/seektalent/runtime/orchestrator.py",
-            "apps/web-svelte/src/lib/components/SourceCard.svelte",
+            "apps/web-react/src/components/workbench/CandidateQueue.tsx",
         ],
         max_files=15,
         max_layers=1,
@@ -222,7 +253,7 @@ def test_evaluate_changed_files_blocks_architecture_radar_with_frontend() -> Non
             "tach.toml",
             "tools/tach_baseline.json",
             "src/seektalent/runtime/orchestrator.py",
-            "apps/web-svelte/src/lib/components/SourceCard.svelte",
+            "apps/web-react/src/components/workbench/CandidateQueue.tsx",
         ],
         max_files=15,
         max_layers=1,
@@ -275,21 +306,29 @@ def test_evaluate_changed_files_blocks_red_zone() -> None:
     assert "red-zone files touched" in result.messages[0]
 
 
-def test_evaluate_changed_files_blocks_dependency_control_changes() -> None:
+def test_evaluate_changed_files_blocks_dependency_control_changes(tmp_path: Path) -> None:
+    for path in (
+        tmp_path / "apps" / "web-react" / "package.json",
+        tmp_path / "apps" / "web-react" / "pnpm-lock.yaml",
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+
     result = evaluate_changed_files(
         [
             "pyproject.toml",
             "uv.lock",
-            "apps/web-svelte/package.json",
-            "apps/web-svelte/bun.lock",
+            "apps/web-react/package.json",
+            "apps/web-react/pnpm-lock.yaml",
         ],
         max_files=15,
         max_layers=1,
+        project_root=tmp_path,
     )
 
     assert not result.ok
     assert (
-        "dependency control files touched: apps/web-svelte/bun.lock, apps/web-svelte/package.json, "
+        "dependency control files touched: apps/web-react/package.json, apps/web-react/pnpm-lock.yaml, "
         "pyproject.toml, uv.lock"
     ) in result.messages
 
@@ -641,8 +680,8 @@ def test_evaluate_changed_files_allows_source_decoupling_major_refactor_manifest
             "tach.toml",
             "src/seektalent/sources/contracts.py",
             "src/seektalent_ui/workbench_routes.py",
-            "apps/web-svelte/src/lib/workbench/viewModels.ts",
-            "apps/web-svelte/src/lib/components/SourceCard.svelte",
+            "apps/web-react/src/lib/stream/agentStream.ts",
+            "apps/web-react/src/components/workbench/CandidateQueue.tsx",
             "docs/architecture.md",
             "docs/source-contracts.md",
             "tests/test_source_boundaries.py",
@@ -656,6 +695,56 @@ def test_evaluate_changed_files_allows_source_decoupling_major_refactor_manifest
     )
 
     assert result.ok
+
+
+def test_evaluate_changed_files_blocks_missing_major_refactor_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/deleted-major-refactor-2026-06.json"
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "docs/governance/workbench-playbook.md",
+        ],
+        max_files=15,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert f"major refactor goal manifest missing: {manifest_path}" in result.messages
+
+
+def test_evaluate_changed_files_allows_deleted_stale_major_refactor_manifests_when_active_goal_exists(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/react-agent-workbench-rebuild-2026-06.json"
+    deleted_manifest_path = "docs/governance/agent-goals/source-decoupling-2026-06.json"
+    red_files = ["tools/check_pr_governance.py"]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="react-agent-workbench-rebuild-2026-06",
+            red_files=red_files,
+            touched_layers=["frontend", "governance", "docs"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            deleted_manifest_path,
+            *red_files,
+            "apps/web-react/src/workbench/file_1.tsx",
+            "docs/old-goal-pack.md",
+        ],
+        deleted_paths=[deleted_manifest_path],
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+    assert not any("major refactor goal manifest missing" in message for message in result.messages)
+    assert not any("only one major refactor goal manifest is allowed" in message for message in result.messages)
 
 
 def test_evaluate_changed_files_blocks_major_refactor_manifest_missing_source_verification(
@@ -1006,9 +1095,35 @@ def test_evaluate_changed_files_blocks_major_refactor_over_soft_file_budget(tmp_
     assert any("major refactor changes too many non-generated files: 61 > 60" in message for message in result.messages)
 
 
+def test_evaluate_changed_files_allows_react_workbench_major_refactor_file_budget(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/react-agent-workbench-rebuild-2026-06.json"
+    red_files = ["tools/check_pr_governance.py"]
+    extra_files = [f"apps/web-react/src/workbench/file_{index}.tsx" for index in range(499)]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="react-agent-workbench-rebuild-2026-06",
+            red_files=red_files,
+            touched_layers=["frontend", "governance"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+            *extra_files,
+        ],
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
 def test_evaluate_changed_files_ignores_generated_schema() -> None:
     result = evaluate_changed_files(
-        ["apps/web-svelte/src/lib/api/schema.d.ts"],
+        ["apps/web-react/src/lib/api/schema.d.ts"],
         max_files=0,
         max_layers=0,
     )
@@ -1079,7 +1194,7 @@ def test_evaluate_changed_files_ignores_generated_file_line_counts() -> None:
 
 def test_evaluate_changed_files_does_not_exempt_schema_suffixes() -> None:
     result = evaluate_changed_files(
-        ["apps/web-svelte/src/lib/api/schema.d.ts.tmp"],
+        ["apps/web-react/src/lib/api/schema.d.ts.tmp"],
         max_files=0,
         max_layers=0,
     )
@@ -1116,9 +1231,10 @@ def test_publish_pypi_workflow_pins_actions_to_commit_shas() -> None:
 def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
     workflow = (PROJECT_ROOT / ".github/workflows/governance.yml").read_text(encoding="utf-8")
 
-    assert "git show \"$base_ref:tools/check_pr_governance.py\"" in workflow
-    assert "git show \"$base_ref:tools/check_privacy_gate.py\"" in workflow
-    assert "git show \"$base_ref:tools/check_ai_bad_smells.py\"" in workflow
+    assert "PULL_REQUEST_BASE_SHA" in workflow
+    assert "git show \"$BASE_REF:tools/check_pr_governance.py\"" in workflow
+    assert "git show \"$BASE_REF:tools/check_privacy_gate.py\"" in workflow
+    assert "git show \"$BASE_REF:tools/check_ai_bad_smells.py\"" in workflow
     assert "python /tmp/seektalent-pr-gates/check_pr_governance.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_privacy_gate.py" in workflow
     assert "python /tmp/seektalent-pr-gates/check_ai_bad_smells.py" in workflow
@@ -1127,7 +1243,7 @@ def test_ci_pr_governance_runs_base_branch_gate_scripts() -> None:
 def test_ci_pr_governance_runs_agent_safety_gate() -> None:
     workflow = (PROJECT_ROOT / ".github/workflows/governance.yml").read_text(encoding="utf-8")
 
-    assert "git show \"$base_ref:tools/check_agent_safety_gate.py\"" in workflow
+    assert "git show \"$BASE_REF:tools/check_agent_safety_gate.py\"" in workflow
     assert "AGENT_SAFETY_GATE=$gate_dir/check_agent_safety_gate.py" in workflow
     assert "AGENT_SAFETY_GATE=tools/check_agent_safety_gate.py" in workflow
     assert "Run Agent safety gate" in workflow
@@ -1141,6 +1257,20 @@ def test_ci_pr_governance_bootstrap_requires_label_and_proposed_gate() -> None:
     assert "Base governance failed; validating proposed governance gate." in workflow
     assert "python tools/check_pr_governance.py --base" in workflow
     assert "Release\\ *" not in workflow
+
+
+def test_ci_workflows_resolve_merge_group_base_before_pull_request_base() -> None:
+    for workflow_path in (
+        ".github/workflows/governance.yml",
+        ".github/workflows/workbench-contract.yml",
+        ".github/workflows/python-quality.yml",
+    ):
+        workflow = (PROJECT_ROOT / workflow_path).read_text(encoding="utf-8")
+
+        assert (
+            'for candidate in "$MERGE_GROUP_BASE_SHA" "$PULL_REQUEST_BASE_SHA" '
+            '"origin/${GITHUB_BASE_REF:-main}" "origin/main"; do'
+        ) in workflow
 
 
 def test_ci_ty_check_covers_governance_tools() -> None:

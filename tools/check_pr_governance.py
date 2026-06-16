@@ -34,24 +34,26 @@ RED_FILES = {
 
 YELLOW_PREFIXES = (
     "src/seektalent_ui/",
-    "apps/web-svelte/src/lib/api/",
+    "apps/web-react/src/lib/api/",
 )
 
 GREEN_PREFIXES = (
     "docs/",
     "tests/",
-    "apps/web-svelte/src/",
-    "apps/web-svelte/tests/",
+    "apps/web-react/src/",
+    "apps/web-react/tests/",
 )
 
 GENERATED_DIR_PREFIXES = (
     "artifacts/",
     "docs/superpowers/",
+    "apps/web-react/tests/storybook-visual.spec.ts-snapshots/",
+    "src/seektalent_ui/static/workbench/",
     "src/seektalent_ui/resources/workbench/",
 )
 
 GENERATED_FILES = {
-    "apps/web-svelte/src/lib/api/schema.d.ts",
+    "apps/web-react/src/lib/api/schema.d.ts",
 }
 
 ARCHITECTURE_RADAR_FILES = {
@@ -144,7 +146,6 @@ MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
         "scripts/verify-red-zone.sh",
         "scripts/verify-dev-workbench.sh",
         "uv run pytest",
-        "cd apps/web-svelte && bun run test",
         "cd apps/liepin-worker && bun test",
     ),
     "governance-bootstrap-2026-06": (
@@ -165,6 +166,17 @@ MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
         "uv run python tools/check_source_boundaries.py",
         "uv run pytest",
     ),
+    "react-agent-workbench-rebuild-2026-06": (
+        "scripts/verify-dev-workbench.sh",
+        "uv run python scripts/build_packaged_workbench.py",
+        "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+        "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+        "pnpm --dir apps/web-react check",
+        "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+    ),
+}
+MAJOR_REFACTOR_FILE_BUDGET_BY_GOAL_ID = {
+    "react-agent-workbench-rebuild-2026-06": 500,
 }
 
 CODE_EXTENSIONS = {
@@ -173,7 +185,6 @@ CODE_EXTENSIONS = {
     ".jsx",
     ".mjs",
     ".py",
-    ".svelte",
     ".ts",
     ".tsx",
 }
@@ -226,7 +237,7 @@ def layer_for_path(path: str) -> str:
         return "provider"
     if path.startswith("src/seektalent_ui/"):
         return "bff"
-    if path.startswith("apps/web-svelte/"):
+    if path.startswith("apps/web-react/"):
         return "frontend"
     if path == ".gitignore" or path.startswith(".github/") or path.startswith("tools/") or path.startswith("scripts/"):
         return "governance"
@@ -244,6 +255,14 @@ def is_generated(path: str) -> bool:
 def is_dependency_control_file(path: str) -> bool:
     name = Path(path.replace("\\", "/")).name
     return name in DEPENDENCY_CONTROL_FILE_NAMES or REQUIREMENTS_FILE_RE.fullmatch(name) is not None
+
+
+def is_active_dependency_control_file(path: str, *, project_root: Path) -> bool:
+    if not is_dependency_control_file(path):
+        return False
+    if path.startswith("apps/") and not (project_root / path).exists():
+        return False
+    return True
 
 
 def is_prompt_file(path: str) -> bool:
@@ -306,6 +325,10 @@ def major_refactor_goal_manifest_paths(paths: Sequence[str]) -> list[str]:
         for path in paths
         if path.startswith(MAJOR_REFACTOR_GOAL_PREFIX) and path.endswith(MAJOR_REFACTOR_GOAL_SUFFIX)
     )
+
+
+def active_major_refactor_goal_manifest_paths(paths: Sequence[str], *, project_root: Path) -> list[str]:
+    return [path for path in major_refactor_goal_manifest_paths(paths) if (project_root / path).is_file()]
 
 
 def _string_list(value: object) -> list[str]:
@@ -463,13 +486,22 @@ def validate_major_refactor_goal_manifests(
     red_files: Sequence[str],
     layers: Sequence[str],
     dependency_files: Sequence[str],
+    deleted_paths: Sequence[str] = (),
     project_root: Path,
 ) -> tuple[bool, list[str]]:
-    manifest_paths = major_refactor_goal_manifest_paths(paths)
-    if not manifest_paths:
+    manifest_paths = active_major_refactor_goal_manifest_paths(paths, project_root=project_root)
+    deleted_path_set = set(deleted_paths)
+    missing_manifest_paths = sorted(
+        path
+        for path in major_refactor_goal_manifest_paths(paths)
+        if path not in deleted_path_set and not (project_root / path).is_file()
+    )
+    if not manifest_paths and not missing_manifest_paths:
         return False, []
 
     messages: list[str] = []
+    for manifest_path in missing_manifest_paths:
+        messages.append(f"major refactor goal manifest missing: {manifest_path}")
     if len(manifest_paths) > 1:
         messages.append("only one major refactor goal manifest is allowed")
 
@@ -481,9 +513,6 @@ def validate_major_refactor_goal_manifests(
 
     for manifest_path in manifest_paths:
         file_path = project_root / manifest_path
-        if not file_path.is_file():
-            messages.append(f"major refactor goal manifest missing: {manifest_path}")
-            continue
         try:
             raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
@@ -577,7 +606,7 @@ def validate_major_refactor_config_behavior_reviews(
     behavior_files: Sequence[str],
     project_root: Path,
 ) -> tuple[bool, list[str]]:
-    manifest_paths = major_refactor_goal_manifest_paths(paths)
+    manifest_paths = active_major_refactor_goal_manifest_paths(paths, project_root=project_root)
     if not manifest_paths or not config_env_files or not behavior_files:
         return False, []
 
@@ -627,7 +656,7 @@ def major_refactor_line_count_exemptions(
     *,
     project_root: Path,
 ) -> tuple[set[str], list[str]]:
-    manifest_paths = major_refactor_goal_manifest_paths(paths)
+    manifest_paths = active_major_refactor_goal_manifest_paths(paths, project_root=project_root)
     if not manifest_paths:
         return set(), []
 
@@ -658,6 +687,24 @@ def major_refactor_line_count_exemptions(
                 + ", ".join(stale_exemptions)
             )
     return exemptions, messages
+
+
+def major_refactor_file_budget(paths: Sequence[str], *, project_root: Path, default_budget: int) -> int:
+    budget = default_budget
+    for manifest_path in active_major_refactor_goal_manifest_paths(paths, project_root=project_root):
+        file_path = project_root / manifest_path
+        if not file_path.is_file():
+            continue
+        try:
+            raw_payload = json.loads(file_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            raw_payload = None
+        if not isinstance(raw_payload, Mapping):
+            continue
+        goal_id = _mapping_value(raw_payload, "goal_id")
+        if isinstance(goal_id, str):
+            budget = max(budget, MAJOR_REFACTOR_FILE_BUDGET_BY_GOAL_ID.get(goal_id, default_budget))
+    return budget
 
 
 def evaluate_line_counts(
@@ -692,6 +739,7 @@ def evaluate_line_counts(
 def evaluate_changed_files(
     paths: Sequence[str],
     *,
+    deleted_paths: Sequence[str] = (),
     max_files: int = DEFAULT_MAX_FILES,
     max_major_refactor_files: int = DEFAULT_MAX_MAJOR_REFACTOR_FILES,
     max_layers: int = 1,
@@ -700,6 +748,7 @@ def evaluate_changed_files(
     max_test_file_lines: int = DEFAULT_MAX_TEST_FILE_LINES,
     project_root: Path | None = None,
 ) -> GovernanceResult:
+    root = project_root or Path.cwd()
     non_generated = sorted(path for path in paths if path and not is_generated(path))
     layers = sorted(
         {
@@ -709,7 +758,9 @@ def evaluate_changed_files(
         }
     )
     red_files = sorted(path for path in non_generated if classify_path(path) == "red")
-    dependency_files = sorted(path for path in non_generated if is_dependency_control_file(path))
+    dependency_files = sorted(
+        path for path in non_generated if is_active_dependency_control_file(path, project_root=root)
+    )
     prompt_runtime_files = sorted(
         path for path in non_generated if is_prompt_file(path) or is_runtime_file(path)
     )
@@ -717,37 +768,43 @@ def evaluate_changed_files(
     behavior_files = sorted(path for path in non_generated if is_behavior_file(path))
     manifest_paths = security_remediation_manifest_paths(non_generated)
     red_zone_manifest_paths = red_zone_review_manifest_paths(non_generated)
-    major_refactor_manifest_paths = major_refactor_goal_manifest_paths(non_generated)
+    major_refactor_manifest_paths = active_major_refactor_goal_manifest_paths(non_generated, project_root=root)
     security_remediation, security_remediation_messages = validate_security_remediation_manifests(
         non_generated,
         red_files=red_files,
         layers=layers,
-        project_root=project_root or Path.cwd(),
+        project_root=root,
     )
     red_zone_review, red_zone_review_messages = validate_red_zone_review_manifests(
         non_generated,
         red_files=red_files,
         layers=layers,
-        project_root=project_root or Path.cwd(),
+        project_root=root,
     )
     major_refactor_goal, major_refactor_messages = validate_major_refactor_goal_manifests(
         non_generated,
         red_files=red_files,
         layers=layers,
         dependency_files=dependency_files,
-        project_root=project_root or Path.cwd(),
+        deleted_paths=deleted_paths,
+        project_root=root,
     )
     major_refactor_config_behavior_review, major_refactor_config_behavior_messages = (
         validate_major_refactor_config_behavior_reviews(
             non_generated,
             config_env_files=config_env_files,
             behavior_files=behavior_files,
-            project_root=project_root or Path.cwd(),
+            project_root=root,
         )
     )
     line_count_exemptions, line_count_exemption_messages = major_refactor_line_count_exemptions(
         non_generated,
-        project_root=project_root or Path.cwd(),
+        project_root=root,
+    )
+    major_refactor_budget = major_refactor_file_budget(
+        non_generated,
+        project_root=root,
+        default_budget=max_major_refactor_files,
     )
     messages: list[str] = []
 
@@ -760,10 +817,10 @@ def evaluate_changed_files(
     ]
     if len(file_budget_paths) > max_files:
         messages.append(f"too many non-generated files changed: {len(file_budget_paths)} > {max_files}")
-    if major_refactor_goal and len(file_budget_paths) > max_major_refactor_files:
+    if major_refactor_goal and len(file_budget_paths) > major_refactor_budget:
         messages.append(
             f"major refactor changes too many non-generated files: "
-            f"{len(file_budget_paths)} > {max_major_refactor_files}"
+            f"{len(file_budget_paths)} > {major_refactor_budget}"
         )
     if (
         len(layers) > max_layers
@@ -845,6 +902,27 @@ def changed_files(base: str) -> list[str]:
     )
 
 
+def deleted_changed_files(base: str) -> list[str]:
+    merge_base = subprocess.check_output(["git", "merge-base", base, "HEAD"], text=True).strip()
+    committed = subprocess.check_output(["git", "diff", "--name-status", f"{merge_base}...HEAD"], text=True)
+    unstaged = subprocess.check_output(["git", "diff", "--name-status"], text=True)
+    staged = subprocess.check_output(["git", "diff", "--cached", "--name-status"], text=True)
+    return merge_changed_file_sets(
+        _deleted_paths(committed.splitlines()),
+        _deleted_paths(unstaged.splitlines()),
+        _deleted_paths(staged.splitlines()),
+    )
+
+
+def _deleted_paths(lines: Sequence[str]) -> list[str]:
+    deleted: list[str] = []
+    for line in lines:
+        parts = line.split("\t")
+        if len(parts) >= 2 and parts[0] == "D":
+            deleted.append(parts[1])
+    return deleted
+
+
 def count_lines_in_bytes(content: bytes) -> int:
     if not content:
         return 0
@@ -892,8 +970,10 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = changed_files(args.base)
+    deleted_paths = deleted_changed_files(args.base)
     result = evaluate_changed_files(
         paths,
+        deleted_paths=deleted_paths,
         max_files=args.max_files,
         max_major_refactor_files=args.max_major_refactor_files,
         max_layers=args.max_layers,

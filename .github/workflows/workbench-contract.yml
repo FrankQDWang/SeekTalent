@@ -15,14 +15,28 @@ concurrency:
 
 jobs:
   workbench-contract:
-    runs-on: ubuntu-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+      - name: Resolve PR base
+        id: base
+        env:
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha || '' }}
+        run: |
+          for candidate in "$MERGE_GROUP_BASE_SHA" "$PULL_REQUEST_BASE_SHA" "origin/${GITHUB_BASE_REF:-main}" "origin/main"; do
+            if [ -n "$candidate" ] && git rev-parse --verify "$candidate^{commit}" >/dev/null 2>&1; then
+              echo "ref=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "Could not resolve base ref." >&2
+          exit 1
       - name: Check change scope
         id: scope
-        run: python3 tools/ci_change_scope.py --event "$GITHUB_EVENT_NAME" --base "origin/${GITHUB_BASE_REF:-main}"
+        run: python3 tools/ci_change_scope.py --event "$GITHUB_EVENT_NAME" --base "${{ steps.base.outputs.ref }}"
       - name: Skip Workbench contract
         if: steps.scope.outputs.workbench_contract != 'true'
         run: 'echo "Workbench contract skipped for change scope: ${{ steps.scope.outputs.reason }}"'
@@ -36,21 +50,27 @@ jobs:
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v6
         if: steps.scope.outputs.workbench_contract == 'true'
         with:
-          bun-version: "1.3.13"
+          node-version: "24.16.0"
+      - name: Enable pnpm
+        if: steps.scope.outputs.workbench_contract == 'true' && hashFiles('apps/web-react/package.json') != ''
+        run: corepack enable && corepack prepare pnpm@11.6.0 --activate
       - name: Install Python dependencies
         if: steps.scope.outputs.workbench_contract == 'true'
         run: uv sync --locked --group dev
-      - name: Install Svelte dependencies
-        if: steps.scope.outputs.workbench_contract == 'true'
-        run: cd apps/web-svelte && bun install --frozen-lockfile
+      - name: Run BFF contract
+        if: steps.scope.outputs.workbench_contract == 'true' && hashFiles('tests/test_agent_workbench_contract.py') != ''
+        run: PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider
+      - name: Install React dependencies
+        if: steps.scope.outputs.workbench_contract == 'true' && hashFiles('apps/web-react/package.json') != ''
+        run: cd apps/web-react && pnpm install --frozen-lockfile
       - name: Install Playwright browsers
-        if: steps.scope.outputs.workbench_contract == 'true'
-        run: cd apps/web-svelte && bunx playwright install --with-deps chromium
-      - name: Run Workbench contract
-        if: steps.scope.outputs.workbench_contract == 'true'
+        if: steps.scope.outputs.workbench_contract == 'true' && hashFiles('apps/web-react/package.json') != ''
+        run: cd apps/web-react && pnpm exec playwright install chromium
+      - name: Run React Workbench contract
+        if: steps.scope.outputs.workbench_contract == 'true' && hashFiles('apps/web-react/package.json') != ''
         run: scripts/verify-dev-workbench.sh
       - name: Minimize uv cache
         if: always() && steps.scope.outputs.workbench_contract == 'true'

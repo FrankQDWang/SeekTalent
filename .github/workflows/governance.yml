@@ -28,15 +28,30 @@ jobs:
           cache-dependency-glob: uv.lock
       - name: Install dependencies
         run: uv sync --locked --group dev
-      - name: Prepare base branch PR gates
+      - name: Resolve PR base
+        id: base
+        env:
+          PULL_REQUEST_BASE_SHA: ${{ github.event.pull_request.base.sha || '' }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha || '' }}
         run: |
-          base_ref="origin/${GITHUB_BASE_REF:-main}"
+          for candidate in "$MERGE_GROUP_BASE_SHA" "$PULL_REQUEST_BASE_SHA" "origin/${GITHUB_BASE_REF:-main}" "origin/main"; do
+            if [ -n "$candidate" ] && git rev-parse --verify "$candidate^{commit}" >/dev/null 2>&1; then
+              echo "ref=$candidate" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "Could not resolve base ref." >&2
+          exit 1
+      - name: Prepare base branch PR gates
+        env:
+          BASE_REF: ${{ steps.base.outputs.ref }}
+        run: |
           gate_dir="/tmp/seektalent-pr-gates"
           mkdir -p "$gate_dir"
-          git show "$base_ref:tools/check_pr_governance.py" > "$gate_dir/check_pr_governance.py"
-          git show "$base_ref:tools/check_privacy_gate.py" > "$gate_dir/check_privacy_gate.py"
-          git show "$base_ref:tools/check_ai_bad_smells.py" > "$gate_dir/check_ai_bad_smells.py"
-          if git show "$base_ref:tools/check_agent_safety_gate.py" > "$gate_dir/check_agent_safety_gate.py"; then
+          git show "$BASE_REF:tools/check_pr_governance.py" > "$gate_dir/check_pr_governance.py"
+          git show "$BASE_REF:tools/check_privacy_gate.py" > "$gate_dir/check_privacy_gate.py"
+          git show "$BASE_REF:tools/check_ai_bad_smells.py" > "$gate_dir/check_ai_bad_smells.py"
+          if git show "$BASE_REF:tools/check_agent_safety_gate.py" > "$gate_dir/check_agent_safety_gate.py"; then
             echo "AGENT_SAFETY_GATE=$gate_dir/check_agent_safety_gate.py" >> "$GITHUB_ENV"
           else
             echo "AGENT_SAFETY_GATE=tools/check_agent_safety_gate.py" >> "$GITHUB_ENV"
@@ -44,8 +59,9 @@ jobs:
       - name: Run PR governance
         env:
           GOVERNANCE_BOOTSTRAP: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'governance-bootstrap') }}
+          BASE_REF: ${{ steps.base.outputs.ref }}
         run: |
-          base_arg="origin/${GITHUB_BASE_REF:-main}"
+          base_arg="$BASE_REF"
           if uv run --group dev python /tmp/seektalent-pr-gates/check_pr_governance.py --base "$base_arg"; then
             exit 0
           fi
@@ -56,8 +72,8 @@ jobs:
           fi
           exit 1
       - name: Run privacy gate
-        run: uv run --group dev python /tmp/seektalent-pr-gates/check_privacy_gate.py --base "origin/${GITHUB_BASE_REF:-main}"
+        run: uv run --group dev python /tmp/seektalent-pr-gates/check_privacy_gate.py --base "${{ steps.base.outputs.ref }}"
       - name: Run AI bad-smell gate
-        run: uv run --group dev python /tmp/seektalent-pr-gates/check_ai_bad_smells.py --base "origin/${GITHUB_BASE_REF:-main}"
+        run: uv run --group dev python /tmp/seektalent-pr-gates/check_ai_bad_smells.py --base "${{ steps.base.outputs.ref }}"
       - name: Run Agent safety gate
-        run: uv run --group dev python "$AGENT_SAFETY_GATE" --base "origin/${GITHUB_BASE_REF:-main}"
+        run: uv run --group dev python "$AGENT_SAFETY_GATE" --base "${{ steps.base.outputs.ref }}"
