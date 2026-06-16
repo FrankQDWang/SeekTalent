@@ -12,9 +12,6 @@ from tests.conversation_agent_test_support import sample_requirement_sheet, save
 from tests.settings_factory import make_settings
 
 
-CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
-
-
 class DeterministicRouteRuntime:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
@@ -52,12 +49,11 @@ class CapturingRouteAgentRunner:
 
 def test_agent_conversation_routes_create_list_reopen_and_submit_jd(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     created = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     )
     assert created.status_code == 201, created.text
     conversation_id = created.json()["conversation"]["conversationId"]
@@ -76,7 +72,6 @@ def test_agent_conversation_routes_create_list_reopen_and_submit_jd(tmp_path: Pa
             "sourceIds": ["cts"],
             "idempotencyKey": "submit-jd-1",
         },
-        headers=_csrf_header(client),
     )
     assert message.status_code == 200, message.text
     payload = message.json()
@@ -97,8 +92,8 @@ def test_agent_conversation_routes_create_list_reopen_and_submit_jd(tmp_path: Pa
 
 def test_agent_message_user_text_route_uses_memory_recall_before_agent_run(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = bootstrap["user"]
+    actor_payload = _ensure_local_actor(client)
+    user = actor_payload["user"]
     runner = CapturingRouteAgentRunner()
     client.app.state.agent_conversation_service.agent_runner = runner
     client.app.state.agent_memory_service.store.save_summary(
@@ -112,7 +107,6 @@ def test_agent_message_user_text_route_uses_memory_recall_before_agent_run(tmp_p
     conversation_id = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
 
     message = client.post(
@@ -122,7 +116,6 @@ def test_agent_message_user_text_route_uses_memory_recall_before_agent_run(tmp_p
             "text": "请帮我组织下一步。",
             "idempotencyKey": "user-text-1",
         },
-        headers=_csrf_header(client),
     )
 
     assert message.status_code == 200, message.text
@@ -134,13 +127,12 @@ def test_agent_message_user_text_route_uses_memory_recall_before_agent_run(tmp_p
 
 def test_agent_message_user_text_idempotency_replays_without_second_model_run(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     runner = CapturingRouteAgentRunner()
     client.app.state.agent_conversation_service.agent_runner = runner
     conversation_id = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
     request_body = {
         "messageType": "userText",
@@ -151,12 +143,10 @@ def test_agent_message_user_text_idempotency_replays_without_second_model_run(tm
     first = client.post(
         f"/api/agent/conversations/{conversation_id}/messages",
         json=request_body,
-        headers=_csrf_header(client),
     )
     second = client.post(
         f"/api/agent/conversations/{conversation_id}/messages",
         json=request_body,
-        headers=_csrf_header(client),
     )
 
     assert first.status_code == 200, first.text
@@ -168,21 +158,19 @@ def test_agent_message_user_text_idempotency_replays_without_second_model_run(tm
 
 def test_agent_metadata_routes_rename_archive_and_unarchive(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     conversation_id = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
 
     renamed = client.patch(
         f"/api/agent/conversations/{conversation_id}/title",
         json={"title": "Python 平台负责人"},
-        headers=_csrf_header(client),
     )
-    archived = client.post(f"/api/agent/conversations/{conversation_id}/archive", headers=_csrf_header(client))
+    archived = client.post(f"/api/agent/conversations/{conversation_id}/archive")
     listed = client.get("/api/agent/conversations")
-    unarchived = client.post(f"/api/agent/conversations/{conversation_id}/unarchive", headers=_csrf_header(client))
+    unarchived = client.post(f"/api/agent/conversations/{conversation_id}/unarchive")
 
     assert renamed.status_code == 200, renamed.text
     assert renamed.json()["conversation"]["title"] == "Python 平台负责人"
@@ -194,11 +182,10 @@ def test_agent_metadata_routes_rename_archive_and_unarchive(tmp_path: Path) -> N
 
 def test_workflow_events_route_returns_ui_ready_activity_lifecycle(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     conversation_id = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
     service = client.app.state.agent_conversation_service
     runtime_store = service.tool_adapter.runtime_store
@@ -281,18 +268,14 @@ def _client(tmp_path: Path) -> TestClient:
     )
 
 
-def _bootstrap_and_login(client: TestClient) -> dict:
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={"email": "admin@example.com", "password": "correct horse", "displayName": "Admin User"},
-    )
-    assert bootstrap.status_code == 201, bootstrap.text
-    login = client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct horse"})
-    assert login.status_code == 204, login.text
-    return bootstrap.json()
-
-
-def _csrf_header(client: TestClient) -> dict[str, str]:
-    token = client.cookies.get(CSRF_COOKIE_NAME)
-    assert token is not None
-    return {"X-CSRF-Token": token}
+def _ensure_local_actor(client: TestClient) -> dict:
+    user = client.app.state.workbench_store.ensure_local_actor()
+    return {
+        "user": {
+            "userId": user.user_id,
+            "email": user.email,
+            "displayName": user.display_name,
+            "role": user.role,
+            "workspaceId": user.workspace_id,
+        }
+    }

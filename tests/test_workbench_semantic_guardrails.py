@@ -12,20 +12,12 @@ from seektalent_ui.workbench_store import WorkbenchStore, WorkbenchUser
 from tests.settings_factory import make_settings
 
 
-CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
-
-
 def _store(tmp_path: Path) -> WorkbenchStore:
     return WorkbenchStore(tmp_path / ".seektalent" / "workbench.sqlite3")
 
 
 def _user(store: WorkbenchStore) -> WorkbenchUser:
-    user, _created = store.bootstrap_admin(
-        email="admin@example.com",
-        display_name="Admin",
-        password_hash="hash",
-    )
-    return user
+    return store.ensure_local_actor()
 
 
 def _client(tmp_path: Path) -> TestClient:
@@ -37,20 +29,8 @@ def _client(tmp_path: Path) -> TestClient:
     )
 
 
-def _bootstrap_and_login(client: TestClient) -> None:
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={"email": "admin@example.com", "password": "correct horse", "displayName": "Admin"},
-    )
-    assert bootstrap.status_code == 201, bootstrap.text
-    login = client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct horse"})
-    assert login.status_code == 204, login.text
-
-
-def _csrf_header(client: TestClient) -> dict[str, str]:
-    token = client.cookies.get(CSRF_COOKIE_NAME)
-    assert token is not None
-    return {"X-CSRF-Token": token}
+def _ensure_local_actor(client: TestClient) -> None:
+    client.app.state.workbench_store.ensure_local_actor()
 
 
 def _create_api_session(client: TestClient, *, source_kinds: list[str] | None = None) -> dict:
@@ -61,7 +41,7 @@ def _create_api_session(client: TestClient, *, source_kinds: list[str] | None = 
     }
     if source_kinds is not None:
         payload["sourceKinds"] = source_kinds
-    response = client.post("/api/workbench/sessions", headers=_csrf_header(client), json=payload)
+    response = client.post("/api/workbench/sessions", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -122,12 +102,11 @@ def test_backend_rejects_blank_requirement_review_approval(tmp_path: Path) -> No
 
 def test_http_rejects_blank_requirement_review_approval(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_api_session(client, source_kinds=["cts"])
 
     blank = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/requirements/approve",
-        headers=_csrf_header(client),
     )
 
     assert blank.status_code == 409
@@ -135,13 +114,11 @@ def test_http_rejects_blank_requirement_review_approval(tmp_path: Path) -> None:
 
     update = client.put(
         f"/api/workbench/sessions/{session['sessionId']}/requirements",
-        headers=_csrf_header(client),
         json={"requirement_sheet": _requirement_sheet().model_dump(mode="json")},
     )
     assert update.status_code == 200, update.text
     approved = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/requirements/approve",
-        headers=_csrf_header(client),
     )
     assert approved.status_code == 200, approved.text
 
@@ -224,10 +201,10 @@ def test_review_items_expose_precise_source_badges(tmp_path: Path) -> None:
 
 def test_final_top10_groups_candidates_by_runtime_identity_id(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_api_session(client, source_kinds=["cts", "liepin"])
     store: WorkbenchStore = client.app.state.workbench_store
-    user = store.get_user_by_session(session_digest=_session_digest(client))
+    user = store.ensure_local_actor()
     assert user is not None
     source_runs = store.get_workbench_session(user=user, session_id=session["sessionId"]).source_runs
     cts_run = next(run for run in source_runs if run.source_kind == "cts")
@@ -486,14 +463,6 @@ def test_final_top10_does_not_merge_cross_source_provider_hash_collision(tmp_pat
 
     assert len(final_items) == 2
     assert {item.displayName for item in final_items} == {"Alice Chen", "Bob Wang"}
-
-
-def _session_digest(client: TestClient) -> str:
-    from seektalent_ui.auth import session_token_digest
-
-    token = client.cookies.get("seektalent_workbench_session")
-    assert token is not None
-    return session_token_digest(token)
 
 
 def _insert_review_item(

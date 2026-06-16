@@ -7,6 +7,7 @@ cd "$ROOT"
 if [[ "${SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT:-0}" != "1" ]]; then
   uv run --group dev python -m pytest \
     tests/test_dev_mode_readiness.py \
+    tests/test_workbench_local_actor.py \
     tests/test_workbench_api.py \
     tests/test_workbench_semantic_guardrails.py \
     tests/test_workbench_dual_source_dev_mode.py \
@@ -36,8 +37,11 @@ if [[ "${SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT:-0}" != "1" ]]; then
     src/seektalent_ui/agent_workbench_stream_store.py \
     src/seektalent_ui/agent_workbench_transcript.py \
     src/seektalent_ui/server.py \
+    src/seektalent_ui/workbench_actor_store.py \
+    src/seektalent_ui/workbench_local_actor.py \
     src/seektalent_ui/workbench_store.py \
     tests/test_dev_mode_readiness.py \
+    tests/test_workbench_local_actor.py \
     tests/test_agent_workbench_contract.py \
     tests/test_workbench_api.py \
     tests/test_workbench_semantic_guardrails.py \
@@ -62,7 +66,6 @@ command -v pnpm >/dev/null 2>&1 || {
 }
 
 tmp_root="$(mktemp -d)"
-cookie_jar="$tmp_root/cookies.txt"
 api_pid=""
 cleanup() {
   if [[ -n "$api_pid" ]]; then
@@ -161,28 +164,9 @@ done
   pnpm test:e2e
 )
 
-curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
-  -H 'Content-Type: application/json' \
-  -X POST \
-  --data '{"email":"admin@example.com","password":"correct horse","displayName":"Admin User"}' \
-  "$api_base_url/api/auth/bootstrap" >/dev/null
-
-curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
-  -H 'Content-Type: application/json' \
-  -X POST \
-  --data '{"email":"admin@example.com","password":"correct horse"}' \
-  "$api_base_url/api/auth/login" >/dev/null
-
-csrf_token="$(awk '$6 == "seektalent_workbench_csrf" { print $7 }' "$cookie_jar" | tail -1)"
-if [[ -z "$csrf_token" ]]; then
-  echo "Could not read CSRF cookie from real-backend smoke login." >&2
-  exit 1
-fi
-
 conversation_json="$tmp_root/conversation.json"
-curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
+curl -fsS \
   -H 'Content-Type: application/json' \
-  -H "X-CSRF-Token: $csrf_token" \
   -X POST \
   --data '{"title":"Python Agent Engineer"}' \
   "$api_base_url/api/agent/conversations" > "$conversation_json"
@@ -197,11 +181,10 @@ with open(os.environ["CONVERSATION_JSON"], encoding="utf-8") as handle:
 PY
 )"
 
-curl -fsS -c "$cookie_jar" -b "$cookie_jar" "$api_base_url/api/agent/workbench/conversations" >/dev/null
-curl -fsS -c "$cookie_jar" -b "$cookie_jar" "$api_base_url/api/agent/workbench/conversations/$conversation_id" >/dev/null
-curl -fsS -c "$cookie_jar" -b "$cookie_jar" "$api_base_url/api/workbench/source-connections" >/dev/null
-curl -fsS -c "$cookie_jar" -b "$cookie_jar" \
-  -H "X-CSRF-Token: $csrf_token" \
+curl -fsS "$api_base_url/api/agent/workbench/conversations" >/dev/null
+curl -fsS "$api_base_url/api/agent/workbench/conversations/$conversation_id" >/dev/null
+curl -fsS "$api_base_url/api/workbench/source-connections" >/dev/null
+curl -fsS \
   -X POST \
   "$api_base_url/api/workbench/source-connections/liepin" >/dev/null
 

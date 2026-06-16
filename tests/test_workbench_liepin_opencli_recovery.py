@@ -7,12 +7,11 @@ from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 
 from tests.test_workbench_api import (
     _approve_requirement_review,
-    _bootstrap_and_login,
+    _ensure_local_actor,
     _client,
     _create_session,
-    _csrf_header,
-    _db_path,
-    _workbench_user_from_bootstrap,
+        _db_path,
+    _workbench_user_from_actor_payload,
 )
 from tests.test_workbench_liepin_browser_session_probe import (
     ProbeLiepinWorker,
@@ -27,8 +26,8 @@ from tests.test_workbench_liepin_browser_session_probe import (
 
 def test_get_session_recovers_opencli_channel_block_after_connection_ready(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         store = client.app.state.workbench_store
         connection, _created = store.get_or_create_liepin_source_connection(user=user)
         provider_account_hash = _bind_workbench_liepin_account(client, user=user, connection=connection)
@@ -48,7 +47,6 @@ def test_get_session_recovers_opencli_channel_block_after_connection_ready(tmp_p
 
         blocked = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         assert blocked.status_code == 202, blocked.text
         assert blocked.json()["blockedSources"] == [
@@ -62,7 +60,6 @@ def test_get_session_recovers_opencli_channel_block_after_connection_ready(tmp_p
         worker.readiness_error = None
         recovered = client.get(
             f"/api/workbench/sessions/{session['sessionId']}",
-            headers=_csrf_header(client),
         )
 
         assert recovered.status_code == 200, recovered.text
@@ -77,7 +74,7 @@ def test_get_session_recovers_opencli_channel_block_after_connection_ready(tmp_p
 
 def test_get_session_recovers_unbound_opencli_login_required_after_session_ready(tmp_path: Path) -> None:
     with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
         _install_probe_worker(client, worker)
 
@@ -93,7 +90,6 @@ def test_get_session_recovers_unbound_opencli_login_required_after_session_ready
         _reset_probe_worker(worker)
         recovered = client.get(
             f"/api/workbench/sessions/{session['sessionId']}",
-            headers=_csrf_header(client),
         )
 
         assert recovered.status_code == 200, recovered.text
@@ -115,8 +111,8 @@ def test_get_session_recovers_unbound_opencli_login_required_after_session_ready
 
 def test_get_session_recovers_only_current_opencli_channel_block(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         store = client.app.state.workbench_store
         connection, _created = store.get_or_create_liepin_source_connection(user=user)
         provider_account_hash = _bind_workbench_liepin_account(client, user=user, connection=connection)
@@ -139,7 +135,6 @@ def test_get_session_recovers_only_current_opencli_channel_block(tmp_path: Path)
         for session in (first, second):
             blocked = client.post(
                 f"/api/workbench/sessions/{session['sessionId']}/start",
-                headers=_csrf_header(client),
             )
             assert blocked.status_code == 202, blocked.text
             assert blocked.json()["blockedSources"] == [
@@ -153,7 +148,6 @@ def test_get_session_recovers_only_current_opencli_channel_block(tmp_path: Path)
         worker.readiness_error = None
         recovered = client.get(
             f"/api/workbench/sessions/{first['sessionId']}",
-            headers=_csrf_header(client),
         )
 
         assert recovered.status_code == 200, recovered.text
@@ -179,8 +173,8 @@ def test_get_session_recovers_only_current_opencli_channel_block(tmp_path: Path)
 
 def test_get_session_does_not_recover_liepin_account_mismatch_block(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         store = client.app.state.workbench_store
         connection, _created = store.get_or_create_liepin_source_connection(user=user)
         provider_account_hash = _bind_workbench_liepin_account(client, user=user, connection=connection)
@@ -205,7 +199,6 @@ def test_get_session_does_not_recover_liepin_account_mismatch_block(tmp_path: Pa
 
         response = client.get(
             f"/api/workbench/sessions/{session['sessionId']}",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 200, response.text

@@ -4,10 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse
 
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
-from seektalent_ui.auth import (
+from seektalent_ui.workbench_local_actor import (
     get_workbench_store,
-    require_csrf_user,
-    require_current_user,
+    local_workbench_user,
+    local_workbench_write_user,
 )
 from seektalent_ui.liepin_account_binding import (
     bind_observed_liepin_account,
@@ -59,7 +59,7 @@ RECOVERABLE_LIEPIN_BROWSER_CHANNEL_CODES = frozenset(
 @router.get("/api/workbench/source-connections", response_model=WorkbenchSourceConnectionListResponse)
 async def list_source_connections(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchSourceConnectionListResponse:
     store = get_workbench_store(request)
     await refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
@@ -76,7 +76,7 @@ async def list_source_connections(
 async def create_liepin_source_connection(
     request: Request,
     response: Response,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchSourceConnectionResponse:
     store = get_workbench_store(request)
     connection, created = store.get_or_create_liepin_source_connection(user=user)
@@ -93,7 +93,7 @@ async def create_liepin_source_connection(
 def get_source_connection(
     connection_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchSourceConnectionResponse:
     store = get_workbench_store(request)
     connection = store.get_source_connection(user=user, connection_id=connection_id)
@@ -109,7 +109,7 @@ def get_source_connection(
 async def start_liepin_connection_login(
     connection_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchLiepinLoginHandoffResponse:
     require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)
@@ -163,7 +163,7 @@ async def start_liepin_connection_login(
 def liepin_connection_login_frame(
     connection_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> HTMLResponse:
     require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)
@@ -177,7 +177,7 @@ def liepin_connection_login_frame(
 async def liepin_connection_login_snapshot(
     connection_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> dict[str, object]:
     require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)
@@ -204,7 +204,7 @@ async def liepin_connection_login_input(
     connection_id: str,
     input_request: WorkbenchLiepinLoginRelayInputRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)
@@ -232,7 +232,7 @@ async def liepin_connection_login_input(
 async def complete_liepin_connection_login(
     connection_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchSourceConnectionResponse:
     require_legacy_liepin_login_relay_enabled(request)
     store = get_workbench_store(request)

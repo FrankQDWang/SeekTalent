@@ -38,9 +38,6 @@ from seektalent_ui.workbench_store import WorkbenchUser
 from tests.settings_factory import make_settings
 
 
-CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
-
-
 def test_resume_snapshot_status_contract_matches_returned_states() -> None:
     assert set(get_args(WorkbenchResumeSnapshotStatus)) == {"ready", "snapshot_forbidden", "snapshot_not_found"}
 
@@ -57,7 +54,7 @@ def test_legacy_graph_node_parser_does_not_claim_runtime_graph_node_ids() -> Non
 
 def test_dev_mode_status_route_returns_safe_payload(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     response = client.get("/api/workbench/dev-mode/status")
 
@@ -302,26 +299,20 @@ def _corpus_path(tmp_path: Path) -> Path:
     return tmp_path / ".seektalent" / "corpus.sqlite3"
 
 
-def _session_digest(client: TestClient) -> str:
-    from seektalent_ui.auth import session_token_digest
-
-    token = client.cookies.get("seektalent_workbench_session")
-    assert token is not None
-    return session_token_digest(token)
-
-
-def _bootstrap_and_login(client: TestClient, *, email: str = "admin@example.com", password: str = "correct horse"):
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={"email": email, "password": password, "displayName": "Admin User"},
-    )
-    assert bootstrap.status_code == 201, bootstrap.text
-    login = client.post("/api/auth/login", json={"email": email, "password": password})
-    assert login.status_code == 204, login.text
-    return bootstrap.json()
+def _ensure_local_actor(client: TestClient):
+    user = client.app.state.workbench_store.ensure_local_actor()
+    return {
+        "user": {
+            "userId": user.user_id,
+            "email": user.email,
+            "displayName": user.display_name,
+            "role": user.role,
+            "workspaceId": user.workspace_id,
+        }
+    }
 
 
-def _workbench_user_from_bootstrap(payload: dict) -> WorkbenchUser:
+def _workbench_user_from_actor_payload(payload: dict) -> WorkbenchUser:
     user = payload["user"]
     return WorkbenchUser(
         user_id=user["userId"],
@@ -330,12 +321,6 @@ def _workbench_user_from_bootstrap(payload: dict) -> WorkbenchUser:
         role=user["role"],
         workspace_id=user["workspaceId"],
     )
-
-
-def _csrf_header(client: TestClient) -> dict[str, str]:
-    token = client.cookies.get(CSRF_COOKIE_NAME)
-    assert token is not None
-    return {"X-CSRF-Token": token}
 
 
 def _create_session(client: TestClient, *, source_kinds: list[str] | None = None) -> dict:
@@ -348,7 +333,6 @@ def _create_session(client: TestClient, *, source_kinds: list[str] | None = None
         payload["sourceKinds"] = source_kinds
     response = client.post(
         "/api/workbench/sessions",
-        headers=_csrf_header(client),
         json=payload,
     )
     assert response.status_code == 201, response.text
@@ -358,7 +342,6 @@ def _create_session(client: TestClient, *, source_kinds: list[str] | None = None
 def _start_session(client: TestClient, session_id: str):
     return client.post(
         f"/api/workbench/sessions/{session_id}/start",
-        headers=_csrf_header(client),
     )
 
 
@@ -395,13 +378,11 @@ def _approve_requirement_review(client: TestClient, session_id: str) -> dict:
         job_title = session_response.json()["jobTitle"]
         update = client.put(
             f"/api/workbench/sessions/{session_id}/requirements",
-            headers=_csrf_header(client),
             json={"requirement_sheet": _requirement_sheet_payload(job_title=job_title)},
         )
         assert update.status_code == 200, update.text
     response = client.post(
         f"/api/workbench/sessions/{session_id}/requirements/approve",
-        headers=_csrf_header(client),
     )
     assert response.status_code == 200, response.text
     return response.json()
@@ -474,7 +455,7 @@ def _insert_cts_graph_candidate_fixture(
     count: int = 3,
 ) -> None:
     store = client.app.state.workbench_store
-    user = store.get_user_by_session(session_digest=_session_digest(client))
+    user = store.ensure_local_actor()
     assert user is not None
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         conn.execute(
@@ -692,7 +673,7 @@ def _insert_review_candidate(
     source_round: int | None = None,
 ) -> None:
     store = client.app.state.workbench_store
-    user = store.get_user_by_session(session_digest=_session_digest(client))
+    user = store.ensure_local_actor()
     assert user is not None
     now = "2026-01-01T00:00:00+00:00"
     primary_evidence_id = str(evidence[0]["evidence_id"])
@@ -793,7 +774,7 @@ def _append_runtime_graph_event(
     details: dict[str, object] | None = None,
 ) -> None:
     store = client.app.state.workbench_store
-    user = store.get_user_by_session(session_digest=_session_digest(client))
+    user = store.ensure_local_actor()
     assert user is not None
     del tmp_path
     event = make_runtime_public_event(
@@ -817,7 +798,7 @@ def _append_runtime_graph_event(
     )
 
 
-def _insert_user(tmp_path: Path, *, email: str, password_hash: str) -> str:
+def _insert_user(tmp_path: Path, *, email: str) -> str:
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         user_id = "user-b"
         conn.execute(
@@ -825,7 +806,7 @@ def _insert_user(tmp_path: Path, *, email: str, password_hash: str) -> str:
             INSERT INTO users (user_id, email, display_name, password_hash, disabled_at, created_at)
             VALUES (?, ?, ?, ?, NULL, '2026-01-01T00:00:00+00:00')
             """,
-            (user_id, email, "User B", password_hash),
+            (user_id, email, "User B", "legacy-login-removed"),
         )
         conn.execute(
             """
@@ -835,6 +816,33 @@ def _insert_user(tmp_path: Path, *, email: str, password_hash: str) -> str:
             (user_id,),
         )
     return user_id
+
+
+def _insert_foreign_session(tmp_path: Path, *, user_id: str = "user-b") -> str:
+    session_id = "foreign-session"
+    now = "2026-01-01T00:00:00+00:00"
+    with sqlite3.connect(_db_path(tmp_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO sessions (
+                session_id, tenant_id, workspace_id, user_id, job_title, jd_text, notes,
+                status, created_at, updated_at
+            )
+            VALUES (?, 'local', 'default', ?, 'Foreign Engineer', 'Foreign JD', '', 'draft', ?, ?)
+            """,
+            (session_id, user_id, now, now),
+        )
+        conn.execute(
+            """
+            INSERT INTO session_requirement_reviews (
+                session_id, tenant_id, workspace_id, user_id, status,
+                requirement_sheet_json, created_at, updated_at, approved_at
+            )
+            VALUES (?, 'local', 'default', ?, 'draft', NULL, ?, ?, NULL)
+            """,
+            (session_id, user_id, now, now),
+        )
+    return session_id
 
 
 def test_workbench_session_routes_are_exposed_by_router_module(tmp_path: Path) -> None:
@@ -849,18 +857,19 @@ def test_workbench_session_routes_are_exposed_by_router_module(tmp_path: Path) -
     assert "/api/workbench/settings" in paths
 
 
-def test_unauthenticated_requests_cannot_list_workbench_sessions(tmp_path: Path) -> None:
+def test_fresh_workbench_can_list_sessions_without_login(tmp_path: Path) -> None:
     client = _client(tmp_path)
 
     response = client.get("/api/workbench/sessions")
 
-    assert response.status_code == 401
+    assert response.status_code == 200
+    assert response.json()["sessions"] == []
 
 
 def test_authenticated_session_creation_returns_default_source_cards(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     payload = _create_session(client)
     assert payload["jobTitle"] == "Python Engineer"
@@ -897,9 +906,9 @@ def test_authenticated_session_creation_returns_default_source_cards(tmp_path: P
 
 def test_session_creation_uses_existing_connected_liepin_connection(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
-    connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
+    connection_response = client.post("/api/workbench/source-connections/liepin")
     assert connection_response.status_code == 201, connection_response.text
     connected = client.app.state.workbench_store.mark_liepin_connection_connected(
         user=user,
@@ -926,7 +935,7 @@ def test_session_creation_uses_login_prompt_without_removed_setup_path(tmp_path:
             "liepin_account_binding_secret": "account-binding-secret",
         },
     )
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     payload = _create_session(client)
     cards = {card["sourceKind"]: card for card in payload["sourceCards"]}
@@ -938,7 +947,7 @@ def test_session_creation_uses_login_prompt_without_removed_setup_path(tmp_path:
 
 def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     payload = _create_session(client)
     session_id = payload["sessionId"]
@@ -1049,11 +1058,10 @@ def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path:
 
 def test_authenticated_session_creation_can_request_cts_only(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     response = client.post(
         "/api/workbench/sessions",
-        headers=_csrf_header(client),
         json={
             "jobTitle": "Python Engineer",
             "jdText": "Build Python agents and ranking systems.",
@@ -1070,11 +1078,10 @@ def test_authenticated_session_creation_can_request_cts_only(tmp_path: Path) -> 
 
 def test_authenticated_session_creation_rejects_duplicate_source_kinds(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     response = client.post(
         "/api/workbench/sessions",
-        headers=_csrf_header(client),
         json={
             "jobTitle": "Python Engineer",
             "jdText": "Build Python agents and ranking systems.",
@@ -1087,38 +1094,32 @@ def test_authenticated_session_creation_rejects_duplicate_source_kinds(tmp_path:
 
 
 def test_user_cannot_read_another_users_sessions(tmp_path: Path) -> None:
-    from seektalent_ui.auth import hash_password
-
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
-    _insert_user(tmp_path, email="user-b@example.com", password_hash=hash_password("correct horse"))
+    _ensure_local_actor(client)
+    _insert_user(tmp_path, email="user-b@example.com")
 
     created = client.post(
         "/api/workbench/sessions",
-        headers=_csrf_header(client),
         json={"jobTitle": "Backend Engineer", "jdText": "Own APIs and data stores."},
     )
     assert created.status_code == 201
     session_id = created.json()["sessionId"]
+    foreign_session_id = _insert_foreign_session(tmp_path)
 
-    login_b = client.post("/api/auth/login", json={"email": "user-b@example.com", "password": "correct horse"})
-    assert login_b.status_code == 204
+    listed = client.get("/api/workbench/sessions")
+    assert listed.status_code == 200
+    assert [session["sessionId"] for session in listed.json()["sessions"]] == [session_id]
 
-    list_b = client.get("/api/workbench/sessions")
-    assert list_b.status_code == 200
-    assert list_b.json()["sessions"] == []
-
-    read_b = client.get(f"/api/workbench/sessions/{session_id}")
-    assert read_b.status_code == 404
+    foreign_read = client.get(f"/api/workbench/sessions/{foreign_session_id}")
+    assert foreign_read.status_code == 404
 
 
 def test_session_creation_rejects_empty_and_oversized_jd_text(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     empty = client.post(
         "/api/workbench/sessions",
-        headers=_csrf_header(client),
         json={"jobTitle": "Engineer", "jdText": "   "},
     )
     assert empty.status_code == 400
@@ -1126,7 +1127,6 @@ def test_session_creation_rejects_empty_and_oversized_jd_text(tmp_path: Path) ->
 
     oversized = client.post(
         "/api/workbench/sessions",
-        headers=_csrf_header(client),
         json={"jobTitle": "Engineer", "jdText": "x" * 20001},
     )
     assert oversized.status_code == 400
@@ -1135,54 +1135,42 @@ def test_session_creation_rejects_empty_and_oversized_jd_text(tmp_path: Path) ->
 
 def test_session_creation_rejects_oversized_job_title_and_notes(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     oversized_title = client.post(
         "/api/workbench/sessions",
-        headers=_csrf_header(client),
         json={"jobTitle": "x" * 257, "jdText": "Own APIs and data stores."},
     )
     assert oversized_title.status_code == 400
 
     oversized_notes = client.post(
         "/api/workbench/sessions",
-        headers=_csrf_header(client),
         json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores.", "notes": "x" * 5001},
     )
     assert oversized_notes.status_code == 400
 
 
-def test_session_creation_requires_session_bound_csrf_token(tmp_path: Path) -> None:
+def test_session_creation_does_not_require_csrf_token(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
-    missing = client.post(
+    without_csrf = client.post(
         "/api/workbench/sessions",
         json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
     )
-    assert missing.status_code == 403
+    assert without_csrf.status_code == 201
 
-    wrong = client.post(
+    ignored_csrf = client.post(
         "/api/workbench/sessions",
         headers={"X-CSRF-Token": "wrong-token"},
         json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
     )
-    assert wrong.status_code == 403
-
-    valid = client.post(
-        "/api/workbench/sessions",
-        headers=_csrf_header(client),
-        json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
-    )
-    assert valid.status_code == 201
+    assert ignored_csrf.status_code == 201
 
 
-def test_settings_entry_requires_auth_and_returns_sources(tmp_path: Path) -> None:
+def test_settings_entry_returns_sources_without_login(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    unauthenticated = client.get("/api/workbench/settings")
-    assert unauthenticated.status_code == 401
 
-    _bootstrap_and_login(client)
     response = client.get("/api/workbench/settings")
 
     assert response.status_code == 200
@@ -1191,23 +1179,18 @@ def test_settings_entry_requires_auth_and_returns_sources(tmp_path: Path) -> Non
     assert {source["sourceKind"] for source in payload["sources"]} == {"cts", "liepin"}
 
 
-def test_liepin_source_connection_routes_are_scoped_and_csrf_protected(tmp_path: Path) -> None:
+def test_liepin_source_connection_routes_are_scoped_without_workbench_auth(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    unauthenticated = client.get("/api/workbench/source-connections")
-    assert unauthenticated.status_code == 401
+    _ensure_local_actor(client)
 
-    _bootstrap_and_login(client)
-    missing_csrf = client.post("/api/workbench/source-connections/liepin")
-    assert missing_csrf.status_code == 403
-
-    created = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    created = client.post("/api/workbench/source-connections/liepin")
     assert created.status_code == 201, created.text
     connection = created.json()
     assert connection["sourceKind"] == "liepin"
     assert connection["status"] == "login_required"
     assert connection["connectionId"].startswith("conn_")
 
-    duplicate = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    duplicate = client.post("/api/workbench/source-connections/liepin")
     assert duplicate.status_code == 200
     assert duplicate.json()["connectionId"] == connection["connectionId"]
 
@@ -1230,8 +1213,8 @@ def test_liepin_source_connection_list_auto_binds_ready_unbound_opencli_status(t
             "liepin_opencli_command": str(opencli_bin),
         },
     )
-    _bootstrap_and_login(client)
-    created = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    _ensure_local_actor(client)
+    created = client.post("/api/workbench/source-connections/liepin")
     assert created.status_code == 201, created.text
     assert created.json()["status"] == "login_required"
     fake_worker = FakeReadyOpenCliLiepinClient()
@@ -1259,19 +1242,13 @@ def test_liepin_login_handoff_is_safe_and_updates_source_card_state(tmp_path: Pa
         tmp_path,
         settings_overrides={"workbench_legacy_liepin_login_relay_enabled": True},
     )
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["liepin"])
 
-    connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    connection_response = client.post("/api/workbench/source-connections/liepin")
     connection_id = connection_response.json()["connectionId"]
 
-    missing_csrf = client.post(f"/api/workbench/source-connections/{connection_id}/login")
-    assert missing_csrf.status_code == 403
-
-    handoff = client.post(
-        f"/api/workbench/source-connections/{connection_id}/login",
-        headers=_csrf_header(client),
-    )
+    handoff = client.post(f"/api/workbench/source-connections/{connection_id}/login")
     assert handoff.status_code == 200, handoff.text
     payload = handoff.json()
     assert payload["connectionId"] == connection_id
@@ -1410,11 +1387,10 @@ def test_liepin_login_handoff_rejects_unknown_connection_before_worker_call(tmp_
     )
     fake_worker = FakeLiepinLoginRelayClient()
     client.app.state.liepin_worker_client = fake_worker
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     response = client.post(
         "/api/workbench/source-connections/conn_missing/login",
-        headers=_csrf_header(client),
     )
 
     assert response.status_code == 404
@@ -1428,15 +1404,14 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
     )
     fake_worker = FakeLiepinLoginRelayClient()
     client.app.state.liepin_worker_client = fake_worker
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client, source_kinds=["liepin"])
-    connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    connection_response = client.post("/api/workbench/source-connections/liepin")
     connection_id = connection_response.json()["connectionId"]
 
     handoff = client.post(
         f"/api/workbench/source-connections/{connection_id}/login",
-        headers=_csrf_header(client),
     )
 
     assert handoff.status_code == 200, handoff.text
@@ -1468,6 +1443,8 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
     frame = client.get(payload["safeFrameUrl"])
     assert frame.status_code == 200, frame.text
     assert f"/api/workbench/source-connections/{connection_id}/login/snapshot" in frame.text
+    assert "seektalent_workbench_csrf" not in frame.text
+    assert "X-CSRF-Token" not in frame.text
 
     snapshot = client.get(f"/api/workbench/source-connections/{connection_id}/login/snapshot")
     assert snapshot.status_code == 200, snapshot.text
@@ -1481,15 +1458,8 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
         "updatedAt": "2026-01-01T00:00:01+00:00",
     }
 
-    missing_csrf = client.post(
-        f"/api/workbench/source-connections/{connection_id}/login/input",
-        json={"action": "click", "x": 42, "y": 24},
-    )
-    assert missing_csrf.status_code == 403
-
     accepted = client.post(
         f"/api/workbench/source-connections/{connection_id}/login/input",
-        headers=_csrf_header(client),
         json={"action": "click", "x": 42, "y": 24},
     )
     assert accepted.status_code == 200, accepted.text
@@ -1498,10 +1468,7 @@ def test_liepin_login_relay_exposes_safe_frame_and_marks_connection_connected(tm
         {"connection_id": connection_id, "action": "click", "x": 42.0, "y": 24.0, "text": None, "key": None}
     ]
 
-    complete = client.post(
-        f"/api/workbench/source-connections/{connection_id}/login/complete",
-        headers=_csrf_header(client),
-    )
+    complete = client.post(f"/api/workbench/source-connections/{connection_id}/login/complete")
     assert complete.status_code == 200, complete.text
     assert complete.json()["status"] == "connected"
     assert complete.json()["warningCode"] is None
@@ -1535,19 +1502,17 @@ def test_liepin_login_relay_complete_keeps_connection_unconnected_when_worker_ca
         setup_status="login_not_verified",
     )
     client.app.state.liepin_worker_client = fake_worker
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["liepin"])
-    connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    connection_response = client.post("/api/workbench/source-connections/liepin")
     connection_id = connection_response.json()["connectionId"]
     handoff = client.post(
         f"/api/workbench/source-connections/{connection_id}/login",
-        headers=_csrf_header(client),
     )
     assert handoff.status_code == 200, handoff.text
 
     complete = client.post(
         f"/api/workbench/source-connections/{connection_id}/login/complete",
-        headers=_csrf_header(client),
     )
 
     assert complete.status_code == 409
@@ -1592,9 +1557,9 @@ def _create_liepin_candidate_queue(
 ) -> tuple[TestClient, dict, list[dict]]:
     client = _client(tmp_path)
     client.app.state.workbench_job_runner = None
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
-    connection_response = client.post("/api/workbench/source-connections/liepin", headers=_csrf_header(client))
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
+    connection_response = client.post("/api/workbench/source-connections/liepin")
     connection_id = connection_response.json()["connectionId"]
     connected = client.app.state.workbench_store.mark_liepin_connection_connected(
         user=user,
@@ -1640,7 +1605,6 @@ def test_liepin_detail_open_request_requires_human_approval_before_lease(tmp_pat
 
     created = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "detail-1"},
     )
 
@@ -1660,7 +1624,6 @@ def test_liepin_detail_open_request_requires_human_approval_before_lease(tmp_pat
 
     approved = client.post(
         f"/api/workbench/detail-open-requests/{request_payload['requestId']}/approve",
-        headers=_csrf_header(client),
     )
 
     assert approved.status_code == 200, approved.text
@@ -1689,7 +1652,6 @@ def test_liepin_detail_approval_graph_candidates_are_read_from_detail_requests(t
     item = items[0]
     created = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "graph-detail-approval"},
     )
     assert created.status_code == 202, created.text
@@ -1710,7 +1672,7 @@ def test_liepin_detail_approval_graph_candidates_are_read_from_detail_requests(t
 
 def test_final_shortlist_graph_candidates_include_all_review_sources(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
     cts_identity_id = "identity-cts-final"
@@ -1766,7 +1728,7 @@ def test_final_shortlist_graph_candidates_include_all_review_sources(tmp_path: P
 
 def test_final_shortlist_graph_candidates_limit_to_top_10(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     identity_ids = [f"identity-final-{index}" for index in range(12)]
@@ -1805,7 +1767,7 @@ def test_final_shortlist_graph_candidates_limit_to_top_10(tmp_path: Path) -> Non
 
 def test_final_shortlist_cts_candidate_can_expand_original_resume(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     identity_id = "identity-cts-final-expand"
@@ -1897,7 +1859,7 @@ def test_final_shortlist_cts_candidate_can_expand_original_resume(tmp_path: Path
 
 def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["liepin"])
     liepin_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "liepin")
     identity_id = "identity-liepin-final-expand"
@@ -2051,7 +2013,7 @@ def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: P
 
 def test_liepin_graph_candidates_use_liepin_evidence_even_when_not_first(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
     _insert_review_candidate(
@@ -2104,7 +2066,6 @@ def test_liepin_detail_open_rejection_does_not_consume_budget_or_later_approve(t
     item = items[0]
     created = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "detail-reject"},
     )
     assert created.status_code == 202, created.text
@@ -2112,7 +2073,6 @@ def test_liepin_detail_open_rejection_does_not_consume_budget_or_later_approve(t
 
     rejected = client.post(
         f"/api/workbench/detail-open-requests/{request_id}/reject",
-        headers=_csrf_header(client),
         json={"reason": "Not enough must-have evidence."},
     )
 
@@ -2121,7 +2081,6 @@ def test_liepin_detail_open_rejection_does_not_consume_budget_or_later_approve(t
     assert rejected.json()["ledger"] is None
     approved_after_reject = client.post(
         f"/api/workbench/detail-open-requests/{request_id}/approve",
-        headers=_csrf_header(client),
     )
     assert approved_after_reject.status_code == 409
     listed = client.get("/api/workbench/detail-open-requests")
@@ -2134,7 +2093,6 @@ def test_liepin_bypass_mode_skips_confirmation_but_keeps_single_active_lease(tmp
     client, session, items = _create_liepin_candidate_queue(tmp_path, candidate_count=2)
     policy = client.put(
         f"/api/workbench/sessions/{session['sessionId']}/source-runs/liepin/policy",
-        headers=_csrf_header(client),
         json={"detailOpenMode": "bypass_confirm"},
     )
     assert policy.status_code == 200, policy.text
@@ -2145,12 +2103,10 @@ def test_liepin_bypass_mode_skips_confirmation_but_keeps_single_active_lease(tmp
 
     first = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{items[0]['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "detail-bypass-1"},
     )
     second = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{items[1]['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "detail-bypass-2"},
     )
 
@@ -2168,7 +2124,6 @@ def test_liepin_detail_open_blocks_when_daily_budget_is_exhausted(tmp_path: Path
     client, session, items = _create_liepin_candidate_queue(tmp_path)
     policy = client.put(
         f"/api/workbench/sessions/{session['sessionId']}/source-runs/liepin/policy",
-        headers=_csrf_header(client),
         json={"detailOpenMode": "bypass_confirm"},
     )
     assert policy.status_code == 200, policy.text
@@ -2210,7 +2165,6 @@ def test_liepin_detail_open_blocks_when_daily_budget_is_exhausted(tmp_path: Path
 
     blocked = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{items[0]['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "budget-exhausted"},
     )
 
@@ -2230,12 +2184,10 @@ def test_liepin_detail_open_idempotency_prevents_double_budget_count(tmp_path: P
 
     first = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "same-detail-open"},
     )
     duplicate = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "same-detail-open"},
     )
     assert first.status_code == 202, first.text
@@ -2245,11 +2197,9 @@ def test_liepin_detail_open_idempotency_prevents_double_budget_count(tmp_path: P
 
     approved = client.post(
         f"/api/workbench/detail-open-requests/{first.json()['requestId']}/approve",
-        headers=_csrf_header(client),
     )
     duplicate_after_approval = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "same-detail-open"},
     )
 
@@ -2264,13 +2214,11 @@ def test_liepin_expired_detail_open_lease_reconciles_and_no_longer_blocks_next_l
     client, session, items = _create_liepin_candidate_queue(tmp_path, candidate_count=2)
     policy = client.put(
         f"/api/workbench/sessions/{session['sessionId']}/source-runs/liepin/policy",
-        headers=_csrf_header(client),
         json={"detailOpenMode": "bypass_confirm"},
     )
     assert policy.status_code == 200, policy.text
     first = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{items[0]['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "stale-lease-1"},
     )
     assert first.status_code == 202, first.text
@@ -2288,7 +2236,6 @@ def test_liepin_expired_detail_open_lease_reconciles_and_no_longer_blocks_next_l
     listed = client.get("/api/workbench/detail-open-requests")
     second = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{items[1]['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "stale-lease-2"},
     )
 
@@ -2312,11 +2259,9 @@ def test_liepin_prompt_text_cannot_bypass_detail_approval_or_card_only_provider_
 
     action = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}/provider-actions/open",
-        headers=_csrf_header(client),
     )
     created = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "prompt-cannot-bypass"},
     )
 
@@ -2337,19 +2282,16 @@ def test_liepin_provider_action_uses_existing_ledger_or_detail_evidence(tmp_path
 
     created = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item_with_ledger['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "action-after-ledger"},
     )
     assert created.status_code == 202, created.text
     approved = client.post(
         f"/api/workbench/detail-open-requests/{created.json()['requestId']}/approve",
-        headers=_csrf_header(client),
     )
     assert approved.status_code == 200, approved.text
 
     action_after_ledger = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item_with_ledger['reviewItemId']}/provider-actions/open",
-        headers=_csrf_header(client),
     )
     assert action_after_ledger.status_code == 200, action_after_ledger.text
     assert action_after_ledger.json()["budgetImpact"] == "reserved"
@@ -2365,7 +2307,6 @@ def test_liepin_provider_action_uses_existing_ledger_or_detail_evidence(tmp_path
         )
     action_with_detail_evidence = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item_with_detail_evidence['reviewItemId']}/provider-actions/open",
-        headers=_csrf_header(client),
     )
     assert action_with_detail_evidence.status_code == 200, action_with_detail_evidence.text
     assert action_with_detail_evidence.json()["budgetImpact"] == "none"
@@ -2373,7 +2314,6 @@ def test_liepin_provider_action_uses_existing_ledger_or_detail_evidence(tmp_path
 
     redundant_detail_request = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item_with_detail_evidence['reviewItemId']}/detail-open-requests",
-        headers=_csrf_header(client),
         json={"idempotencyKey": "already-has-detail"},
     )
     assert redundant_detail_request.status_code == 409
@@ -2396,24 +2336,17 @@ def test_liepin_provider_action_uses_existing_ledger_or_detail_evidence(tmp_path
     assert ledger_count == 0
 
 
-def test_requirement_review_update_and_approve_are_scoped_and_csrf_protected(tmp_path: Path) -> None:
+def test_requirement_review_update_and_approve_are_scoped_without_workbench_auth(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     session_id = session["sessionId"]
-
-    missing_csrf = client.put(
-        f"/api/workbench/sessions/{session_id}/requirements",
-        json={"requirement_sheet": _requirement_sheet_payload()},
-    )
-    assert missing_csrf.status_code == 403
 
     sheet_payload = _requirement_sheet_payload()
     sheet_payload["must_have_capabilities"] = ["Python", "<script>plain text</script>"]
     sheet_payload["preferred_capabilities"] = ["retrieval"]
     updated = client.put(
         f"/api/workbench/sessions/{session_id}/requirements",
-        headers=_csrf_header(client),
         json={"requirement_sheet": sheet_payload},
     )
     assert updated.status_code == 200, updated.text
@@ -2423,10 +2356,9 @@ def test_requirement_review_update_and_approve_are_scoped_and_csrf_protected(tmp
     assert "niceToHaves" not in updated.json()
     assert "generatedQueryHints" not in updated.json()
 
-    approve_missing_csrf = client.post(f"/api/workbench/sessions/{session_id}/requirements/approve")
-    assert approve_missing_csrf.status_code == 403
-
-    approved = _approve_requirement_review(client, session_id)
+    approved_response = client.post(f"/api/workbench/sessions/{session_id}/requirements/approve")
+    assert approved_response.status_code == 200, approved_response.text
+    approved = approved_response.json()
     assert approved["status"] == "approved"
     assert approved["requirement_sheet"]["must_have_capabilities"] == ["Python", "<script>plain text</script>"]
 
@@ -2438,13 +2370,12 @@ def test_requirement_review_update_and_approve_are_scoped_and_csrf_protected(tmp
 def test_prepare_requirement_review_extracts_agent_criteria_without_starting_sources(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
 
     started_at = time.time()
     response = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
-        headers=_csrf_header(client),
     )
     elapsed = time.time() - started_at
 
@@ -2492,12 +2423,11 @@ def test_prepare_requirement_review_returns_before_slow_extraction_finishes(tmp_
     BlockingRequirementRuntime.started = threading.Event()
     BlockingRequirementRuntime.release = threading.Event()
     client = _client(tmp_path, runtime_factory=BlockingRequirementRuntime)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
 
     response = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
-        headers=_csrf_header(client),
     )
 
     assert response.status_code == 200, response.text
@@ -2511,7 +2441,6 @@ def test_prepare_requirement_review_returns_before_slow_extraction_finishes(tmp_
 
     duplicate = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
-        headers=_csrf_header(client),
     )
     assert duplicate.status_code == 200, duplicate.text
 
@@ -2536,7 +2465,7 @@ def test_prepare_requirement_review_heartbeats_note_writer_with_requirement_cont
     BlockingRequirementRuntime.started = threading.Event()
     BlockingRequirementRuntime.release = threading.Event()
     client = _client(tmp_path, runtime_factory=BlockingRequirementRuntime)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     runner = client.app.state.workbench_job_runner
     runner.note_writer_heartbeat_interval_seconds = 0.02
@@ -2544,7 +2473,6 @@ def test_prepare_requirement_review_heartbeats_note_writer_with_requirement_cont
 
     response = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
-        headers=_csrf_header(client),
     )
 
     assert response.status_code == 200, response.text
@@ -2571,12 +2499,11 @@ def test_prepare_requirement_review_heartbeats_note_writer_with_requirement_cont
 
 def test_prepare_requirement_review_does_not_return_raw_runtime_exception(tmp_path: Path) -> None:
     client = _client(tmp_path, runtime_factory=ExplodingRequirementRuntime)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
 
     response = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
-        headers=_csrf_header(client),
     )
 
     assert response.status_code == 200, response.text
@@ -2605,7 +2532,7 @@ def test_prepare_requirement_review_does_not_return_raw_runtime_exception(tmp_pa
 def test_session_start_requires_approved_requirement_review_and_blocks_unconnected_liepin(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
 
@@ -2643,7 +2570,7 @@ def test_session_start_requires_approved_requirement_review_and_blocks_unconnect
 def test_cts_session_start_creates_job_and_completes_with_events(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(session_id=session["sessionId"], client=client)
@@ -2690,7 +2617,7 @@ def test_cts_runtime_run_id_is_attached_before_completion_without_exposing_runti
     FakeWorkbenchRuntime.runtime_run_id = runtime_run_id
     FakeWorkbenchRuntime.artifacts = _candidate_artifacts(run_id=runtime_run_id)
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(session_id=session["sessionId"], client=client)
@@ -2749,7 +2676,7 @@ def test_cts_completion_attaches_runtime_run_id_when_start_callback_was_missing(
     FakeWorkbenchRuntime.runtime_run_id = None
     FakeWorkbenchRuntime.artifacts = _candidate_artifacts(run_id=runtime_run_id)
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(session_id=session["sessionId"], client=client)
@@ -2778,8 +2705,8 @@ def test_cts_completion_attaches_runtime_run_id_when_start_callback_was_missing(
 def test_cts_runtime_link_repair_is_idempotent_for_missing_source_run_link(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     store = client.app.state.workbench_store
@@ -2836,7 +2763,7 @@ def test_cts_runtime_link_repair_is_idempotent_for_missing_source_run_link(tmp_p
 
 def test_cts_graph_candidates_are_read_from_flywheel_for_round_nodes(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -2909,7 +2836,7 @@ def test_cts_graph_candidates_are_read_from_flywheel_for_round_nodes(tmp_path: P
 
 def test_runtime_graph_source_nodes_are_accepted_by_graph_candidates_api(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -2997,7 +2924,7 @@ def test_runtime_graph_source_nodes_are_accepted_by_graph_candidates_api(tmp_pat
 
 def test_runtime_graph_cts_source_node_reads_raw_recall_candidates_without_review_items(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3044,7 +2971,7 @@ def test_runtime_graph_cts_source_node_reads_raw_recall_candidates_without_revie
 
 def test_runtime_graph_cts_source_node_reads_review_backed_runtime_candidates(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_review_candidate(
@@ -3093,7 +3020,7 @@ def test_runtime_graph_cts_source_node_reads_review_backed_runtime_candidates(tm
 def test_runtime_graph_endpoint_returns_backend_authored_nodes(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     _approve_requirement_review(session_id=session["sessionId"], client=client)
 
@@ -3114,7 +3041,7 @@ def test_runtime_graph_endpoint_returns_backend_authored_nodes(tmp_path: Path) -
 
 def test_runtime_graph_feedback_node_preserves_public_reflection_details(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     _append_runtime_graph_event(
         tmp_path,
@@ -3153,7 +3080,7 @@ def test_runtime_graph_feedback_node_preserves_public_reflection_details(tmp_pat
 
 def test_runtime_round_score_graph_candidates_include_cts_and_liepin_review_items(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
     _append_runtime_graph_event(
@@ -3259,7 +3186,7 @@ def test_runtime_round_score_graph_candidates_include_cts_and_liepin_review_item
 
 def test_runtime_graph_and_candidates_include_events_after_first_store_page(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
 
@@ -3321,7 +3248,7 @@ def test_runtime_graph_and_candidates_include_events_after_first_store_page(tmp_
 
 def test_runtime_liepin_source_graph_candidates_filter_to_selected_round(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
     for round_no in (1, 2):
@@ -3371,7 +3298,7 @@ def test_runtime_liepin_source_graph_candidates_filter_to_selected_round(tmp_pat
 
 def test_runtime_graph_non_candidate_node_returns_recoverable_empty(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     _approve_requirement_review(client=client, session_id=session["sessionId"])
 
@@ -3386,7 +3313,7 @@ def test_runtime_graph_non_candidate_node_returns_recoverable_empty(tmp_path: Pa
 
 def test_runtime_round_score_candidate_snapshot_resolves_from_new_scope(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3453,7 +3380,7 @@ def test_runtime_round_score_candidate_snapshot_resolves_from_new_scope(tmp_path
 
 def test_runtime_merge_candidate_snapshot_resolves_from_runtime_identity(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     runtime_run_id = "runtime-run-secret-graph"
@@ -3553,7 +3480,7 @@ def test_runtime_merge_candidate_snapshot_resolves_from_runtime_identity(tmp_pat
 
 def test_runtime_final_candidate_snapshot_resolves_from_corpus_resume_key(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     runtime_run_id = "runtime-run-secret-graph"
@@ -3628,7 +3555,7 @@ def test_runtime_final_candidate_snapshot_resolves_from_corpus_resume_key(tmp_pa
 
 def test_runtime_cts_graph_candidate_snapshots_resolve_from_runtime_node_ids(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3683,7 +3610,7 @@ def test_runtime_cts_graph_candidate_snapshots_resolve_from_runtime_node_ids(tmp
 
 def test_cts_recall_graph_candidates_preserve_query_rank_order(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3711,7 +3638,7 @@ def test_cts_recall_graph_candidates_preserve_query_rank_order(tmp_path: Path) -
 
 def test_cts_graph_candidates_deduplicate_repeated_query_hits(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3770,7 +3697,7 @@ def test_cts_graph_candidates_deduplicate_repeated_query_hits(tmp_path: Path) ->
 
 def test_cts_scoring_graph_candidates_exclude_unscored_hits(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3812,7 +3739,7 @@ def test_cts_scoring_graph_candidates_exclude_unscored_hits(tmp_path: Path) -> N
 
 def test_cts_graph_candidates_keep_rows_when_corpus_document_is_missing(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3855,7 +3782,7 @@ def test_cts_graph_candidates_keep_rows_when_corpus_document_is_missing(tmp_path
 
 def test_cts_graph_candidates_do_not_show_hash_placeholder_as_name(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3887,7 +3814,7 @@ def test_cts_graph_candidates_do_not_show_hash_placeholder_as_name(tmp_path: Pat
 
 def test_cts_graph_candidates_fallback_to_normalized_text_when_sections_are_empty(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3933,11 +3860,9 @@ def test_cts_graph_candidates_fallback_to_normalized_text_when_sections_are_empt
 
 
 def test_graph_candidate_ids_are_opaque_and_scoped_to_session_node(tmp_path: Path) -> None:
-    from seektalent_ui.auth import hash_password
-
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
-    _insert_user(tmp_path, email="user-b@example.com", password_hash=hash_password("correct horse"))
+    _ensure_local_actor(client)
+    _insert_user(tmp_path, email="user-b@example.com")
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -3976,19 +3901,18 @@ def test_graph_candidate_ids_are_opaque_and_scoped_to_session_node(tmp_path: Pat
         f"/api/workbench/sessions/{other_session['sessionId']}/graph-candidates/{graph_candidate_id}/resume-snapshot"
     ).status_code == 404
 
-    login_b = client.post("/api/auth/login", json={"email": "user-b@example.com", "password": "correct horse"})
-    assert login_b.status_code == 204
+    foreign_session_id = _insert_foreign_session(tmp_path)
     assert client.get(
-        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates?node_id=cts-round-1-result"
+        f"/api/workbench/sessions/{foreign_session_id}/graph-candidates?node_id=cts-round-1-result"
     ).status_code == 404
     assert client.get(
-        f"/api/workbench/sessions/{session['sessionId']}/graph-candidates/{graph_candidate_id}/resume-snapshot"
+        f"/api/workbench/sessions/{foreign_session_id}/graph-candidates/{graph_candidate_id}/resume-snapshot"
     ).status_code == 404
 
 
 def test_graph_candidate_list_is_paginated_and_stably_ordered(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -4034,7 +3958,7 @@ def test_graph_candidate_list_is_paginated_and_stably_ordered(tmp_path: Path) ->
 
 def test_graph_candidate_resume_snapshot_is_scoped_and_allowlisted(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -4084,7 +4008,7 @@ def test_graph_candidate_resume_snapshot_is_scoped_and_allowlisted(tmp_path: Pat
 
 def test_graph_candidate_resume_snapshot_projects_cts_raw_resume_payload(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -4227,7 +4151,7 @@ def test_graph_candidate_resume_snapshot_policy_denies_single_forbidden_flags(
     value: object,
 ) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -4273,7 +4197,7 @@ def test_graph_candidate_resume_snapshot_policy_denies_single_forbidden_flags(
 
 def test_graph_candidate_list_redacts_identity_when_snapshot_policy_forbids_materialization(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -4305,7 +4229,7 @@ def test_graph_candidate_list_redacts_identity_when_snapshot_policy_forbids_mate
 
 def test_graph_candidate_list_sanitizes_contaminated_projected_fields(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _insert_cts_graph_candidate_fixture(
@@ -4368,11 +4292,10 @@ def test_graph_candidate_list_sanitizes_contaminated_projected_fields(tmp_path: 
 def test_cts_source_runs_can_execute_in_parallel(tmp_path: Path) -> None:
     _reset_parallel_probe_runtime()
     client = _client(tmp_path, runtime_factory=ParallelProbeRuntime)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     first_session = _create_session(client, source_kinds=["cts"])
     second_session = client.post(
         "/api/workbench/sessions",
-        headers=_csrf_header(client),
         json={"jobTitle": "Search Engineer", "jdText": "Build retrieval systems.", "notes": "", "sourceKinds": ["cts"]},
     ).json()
     _approve_requirement_review(client, first_session["sessionId"])
@@ -4395,19 +4318,17 @@ def test_cts_source_runs_can_execute_in_parallel(tmp_path: Path) -> None:
 def test_session_start_is_idempotent_for_active_source_runs_and_legacy_start_routes_are_removed(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
 
     old_by_kind = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/source-runs",
-        headers=_csrf_header(client),
         json={"sourceKind": "cts"},
     )
     old_by_id = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/source-runs/{cts_run['sourceRunId']}/start",
-        headers=_csrf_header(client),
     )
     assert old_by_kind.status_code == 404
     assert old_by_id.status_code == 404
@@ -4432,7 +4353,7 @@ def test_runtime_failure_messages_are_redacted_outside_events(tmp_path: Path) ->
         "Candidate Alice Zhang alice@example.com +1 415 555 0134 resume says: shipped payroll systems"
     )
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -4481,7 +4402,7 @@ def test_runtime_progress_callback_persists_redacted_workbench_event(tmp_path: P
         )
     ]
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -4569,7 +4490,7 @@ def test_runtime_public_events_are_persisted_by_contract_and_deduped(tmp_path: P
         ),
     ]
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -4626,7 +4547,7 @@ def test_runtime_public_event_artifact_reconciliation_backfills_missing_progress
         run_state=None,
     )
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -4646,8 +4567,8 @@ def test_runtime_public_event_artifact_reconciliation_backfills_missing_progress
 
 def test_source_cards_prefer_runtime_public_source_cumulative_counts(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client, source_kinds=["cts"])
     store = client.app.state.workbench_store
     store.append_runtime_public_event_by_ids(
@@ -4708,8 +4629,8 @@ def test_source_cards_prefer_runtime_public_source_cumulative_counts(tmp_path: P
 
 def test_runtime_public_source_results_drive_runtime_source_state_after_job_failure(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client, source_kinds=["cts", "liepin"])
     store = client.app.state.workbench_store
     for source_kind, status, reason, returned, identities in [
@@ -4777,8 +4698,8 @@ def test_runtime_public_source_results_drive_runtime_source_state_after_job_fail
 
 def test_source_cards_preserve_runtime_partial_source_status(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client, source_kinds=["cts"])
     store = client.app.state.workbench_store
     store.append_runtime_public_event_by_ids(
@@ -4819,8 +4740,8 @@ def test_source_cards_preserve_runtime_partial_source_status(tmp_path: Path) -> 
 
 def test_runtime_public_event_store_rejects_unknown_stage(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client, source_kinds=["cts"])
     store = client.app.state.workbench_store
 
@@ -4849,8 +4770,8 @@ def test_runtime_public_event_store_rejects_unknown_stage(tmp_path: Path) -> Non
 
 def test_runtime_public_event_idempotency_is_enforced_by_database(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client, source_kinds=["cts"])
     store = client.app.state.workbench_store
     event_id = "run_public_unique:1:source_result:cts"
@@ -4909,7 +4830,7 @@ def test_cts_runtime_results_create_candidate_review_queue_without_raw_payload(t
         source_resume_id="provider-external-id-123",
     )
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -4958,7 +4879,7 @@ def test_final_top10_exposes_runtime_final_candidate_fields_directly(tmp_path: P
     _reset_fake_runtime()
     FakeWorkbenchRuntime.artifacts = _candidate_artifacts(run_id="runtime-final-contract")
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -4985,8 +4906,8 @@ def test_final_top10_exposes_runtime_final_candidate_fields_directly(tmp_path: P
 
 def test_final_top10_does_not_project_review_items_while_runtime_job_is_active(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -5027,8 +4948,8 @@ def test_final_top10_does_not_project_review_items_while_runtime_job_is_active(t
 
 def test_final_top10_does_not_project_review_items_after_runtime_job_failed(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -5076,11 +4997,11 @@ def test_final_top10_does_not_project_review_items_after_runtime_job_failed(tmp_
     assert graph_response.json()["completionText"] is None
 
 
-def test_candidate_review_action_and_note_persist_with_csrf(tmp_path: Path) -> None:
+def test_candidate_review_action_and_note_persist_without_workbench_auth(tmp_path: Path) -> None:
     _reset_fake_runtime()
     FakeWorkbenchRuntime.artifacts = _candidate_artifacts()
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -5091,22 +5012,14 @@ def test_candidate_review_action_and_note_persist_with_csrf(tmp_path: Path) -> N
     _wait_for_source_status(client, session["sessionId"], cts_run["sourceRunId"], "completed")
     item = client.get(f"/api/workbench/sessions/{session['sessionId']}/candidates").json()["items"][0]
 
-    rejected = client.put(
-        f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}",
-        json={"status": "promising", "note": "Call this person first."},
-    )
-    assert rejected.status_code == 403
-
     empty_update = client.put(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}",
-        headers=_csrf_header(client),
         json={},
     )
     assert empty_update.status_code == 400
 
     updated = client.put(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}",
-        headers=_csrf_header(client),
         json={"status": "promising", "note": "Call this person first."},
     )
 
@@ -5116,7 +5029,6 @@ def test_candidate_review_action_and_note_persist_with_csrf(tmp_path: Path) -> N
     events_after_update = client.get("/api/workbench/events?after_seq=0").json()["events"]
     repeated = client.put(
         f"/api/workbench/sessions/{session['sessionId']}/candidates/{item['reviewItemId']}",
-        headers=_csrf_header(client),
         json={"status": "promising", "note": "Call this person first."},
     )
     assert repeated.status_code == 200
@@ -5129,7 +5041,7 @@ def test_candidate_review_action_and_note_persist_with_csrf(tmp_path: Path) -> N
 
 def test_workbench_events_after_seq_and_redaction(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     store = client.app.state.workbench_store
     first_seq = store.append_workbench_event(
@@ -5174,7 +5086,7 @@ def test_workbench_events_after_seq_and_redaction(tmp_path: Path) -> None:
 
 def test_workbench_event_schema_supports_versioned_replay_metadata(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     store = client.app.state.workbench_store
     event_record = store.append_workbench_event(
@@ -5214,7 +5126,7 @@ def test_workbench_event_schema_supports_versioned_replay_metadata(tmp_path: Pat
 
 def test_session_event_list_is_scoped_to_current_session(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     other_session = _create_session(client)
     store = client.app.state.workbench_store
@@ -5251,8 +5163,8 @@ def test_session_event_list_is_scoped_to_current_session(tmp_path: Path) -> None
 
 def test_workbench_note_created_idempotency_persists_single_event(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client)
     store = client.app.state.workbench_store
 
@@ -5297,7 +5209,7 @@ def test_workbench_note_created_idempotency_persists_single_event(tmp_path: Path
 
 def test_runtime_source_lane_event_idempotency_has_database_invariant(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     db_path = _db_path(tmp_path)
 
@@ -5346,7 +5258,7 @@ def test_runtime_source_lane_event_idempotency_has_database_invariant(tmp_path: 
 
 def test_runtime_source_lane_event_idempotency_keeps_latest_state_on_replay(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     first_payload = {
         "schema_version": "runtime_source_lane_event_v1",
@@ -5419,8 +5331,8 @@ def test_runtime_source_lane_event_idempotency_keeps_latest_state_on_replay(tmp_
 
 def test_workbench_note_writer_lease_claim_release_and_expired_claim(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client)
     store = client.app.state.workbench_store
 
@@ -5472,8 +5384,8 @@ def test_workbench_note_writer_lease_claim_release_and_expired_claim(tmp_path: P
 
 def test_workbench_note_writer_lease_compares_iso_offsets_as_datetimes(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client)
     store = client.app.state.workbench_store
 
@@ -5518,8 +5430,8 @@ def test_workbench_note_created_payload_excludes_audit_metadata_in_list_and_sse(
     from seektalent_ui.event_routes import _event_data
 
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = _workbench_user_from_bootstrap(bootstrap)
+    actor_payload = _ensure_local_actor(client)
+    user = _workbench_user_from_actor_payload(actor_payload)
     session = _create_session(client)
     store = client.app.state.workbench_store
     event = store.try_append_workbench_note(
@@ -5549,7 +5461,7 @@ def test_workbench_note_created_payload_excludes_audit_metadata_in_list_and_sse(
 
 def test_workbench_events_safe_projection_removes_broad_runtime_fields(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     store = client.app.state.workbench_store
     store.append_workbench_event(
@@ -5585,7 +5497,7 @@ def test_workbench_event_projection_maps_internal_source_reason_codes_for_list_a
     from seektalent_ui.event_routes import _event_data
 
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     store = client.app.state.workbench_store
     event = store.append_workbench_event(
@@ -5627,7 +5539,7 @@ def test_workbench_sse_stream_uses_event_stream_and_last_event_id(tmp_path: Path
     from seektalent_ui.event_routes import _sequence_from_header, stream_events
 
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     store = client.app.state.workbench_store
     first = store.append_workbench_event(
@@ -5656,10 +5568,7 @@ def test_workbench_sse_stream_uses_event_stream_and_last_event_id(tmp_path: Path
     assert _sequence_from_header(str(first.global_seq)) == first.global_seq
     sse_response = stream_events(
         request=SimpleNamespace(query_params={}, app=client.app),
-        user=client.app.state.workbench_store.get_user_by_session(
-            session_digest=_session_digest(client)
-        ),
-        session_id=client.cookies.get("seektalent_workbench_session"),
+        user=store.ensure_local_actor(),
         after_seq=0,
         last_event_id=str(first.global_seq),
     )
@@ -5669,7 +5578,63 @@ def test_workbench_sse_stream_uses_event_stream_and_last_event_id(tmp_path: Path
     assert [event["globalSeq"] for event in recovered.json()["events"]] == [second.global_seq]
 
 
-def test_sse_generator_stops_after_session_revoke(tmp_path: Path) -> None:
+def test_workbench_event_stream_does_not_require_session_cookie(tmp_path: Path) -> None:
+    from seektalent_ui.event_routes import stream_events
+
+    client = _client(tmp_path)
+    user = client.app.state.workbench_store.ensure_local_actor()
+
+    response = stream_events(
+        request=SimpleNamespace(query_params={}, app=client.app),
+        after_seq=0,
+        user=user,
+    )
+
+    assert response.media_type == "text/event-stream"
+
+
+def test_workbench_session_event_stream_does_not_require_session_cookie(tmp_path: Path) -> None:
+    from seektalent_ui.event_routes import stream_session_events
+
+    client = _client(tmp_path)
+    session_id = client.post(
+        "/api/workbench/sessions",
+        json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores.", "notes": ""},
+    ).json()["sessionId"]
+    user = client.app.state.workbench_store.ensure_local_actor()
+
+    response = stream_session_events(
+        workbench_session_id=session_id,
+        request=SimpleNamespace(query_params={}, app=client.app),
+        after_seq=0,
+        user=user,
+    )
+
+    assert response.media_type == "text/event-stream"
+
+
+def test_workbench_session_event_stream_keeps_owner_and_query_param_guards(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    missing = client.get("/api/workbench/sessions/missing/events/stream", params={"after_seq": "0"})
+    missing_token = client.get(
+        "/api/workbench/sessions/missing/events/stream",
+        params={"after_seq": "0", "authToken": "not-accepted"},
+    )
+    session_id = client.post(
+        "/api/workbench/sessions",
+        json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores.", "notes": ""},
+    ).json()["sessionId"]
+    token_query = client.get(
+        f"/api/workbench/sessions/{session_id}/events/stream",
+        params={"after_seq": "0", "authToken": "not-accepted"},
+    )
+
+    assert missing.status_code == 404
+    assert missing_token.status_code == 400
+    assert token_query.status_code == 400
+
+
+def test_sse_generator_reads_events_for_local_actor(tmp_path: Path) -> None:
     from seektalent_ui.event_routes import _event_generator
 
     class StreamingRequest:
@@ -5679,18 +5644,11 @@ def test_sse_generator_stops_after_session_revoke(tmp_path: Path) -> None:
         async def is_disconnected(self) -> bool:
             return False
 
-    async def next_or_closed(generator) -> dict[str, str] | None:
-        try:
-            return await asyncio.wait_for(anext(generator), timeout=0.5)
-        except StopAsyncIteration:
-            return None
-
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     store = client.app.state.workbench_store
-    session_digest = _session_digest(client)
-    user = store.get_user_by_session_readonly(session_digest=session_digest)
+    user = store.ensure_local_actor()
     assert user is not None
     first_event = store.append_workbench_event(
         tenant_id="local",
@@ -5706,44 +5664,28 @@ def test_sse_generator_stops_after_session_revoke(tmp_path: Path) -> None:
     generator = _event_generator(
         request=StreamingRequest(client.app),
         user=user,
-        session_digest=session_digest,
         after_seq=first_event.global_seq - 1,
     )
 
-    async def consume_until_revoked() -> tuple[dict[str, str] | None, dict[str, str] | None, dict[str, str] | None]:
-        first = await next_or_closed(generator)
-        first_custom = await next_or_closed(generator)
-        store.revoke_user_session(session_digest=session_digest)
-        store.append_workbench_event(
-            tenant_id="local",
-            workspace_id="default",
-            user_id=session["ownerUserId"],
-            session_id=session["sessionId"],
-            source_run_id=None,
-            source_kind=None,
-            event_name="second_event",
-            payload={"value": 2},
-        )
-        after_revoke = await next_or_closed(generator)
-        return first, first_custom, after_revoke
+    async def consume() -> tuple[dict[str, str], dict[str, str]]:
+        first = await asyncio.wait_for(anext(generator), timeout=0.5)
+        first_custom = await asyncio.wait_for(anext(generator), timeout=0.5)
+        await generator.aclose()
+        return first, first_custom
 
-    first, first_custom, after_revoke = asyncio.run(consume_until_revoked())
-    assert first is not None
+    first, first_custom = asyncio.run(consume())
     assert first["event"] == "workbench_event"
-    assert first_custom is not None
     assert first_custom["event"] == "first_event"
-
-    assert after_revoke is None
 
 
 def test_sse_stream_without_cursor_starts_after_existing_events(tmp_path: Path) -> None:
     from seektalent_ui.event_routes import _stream_start_sequence
 
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
     store = client.app.state.workbench_store
-    user = store.get_user_by_session(session_digest=_session_digest(client))
+    user = store.ensure_local_actor()
     assert user is not None
     existing_event = store.append_workbench_event(
         tenant_id="local",
@@ -5788,49 +5730,24 @@ def test_sse_stream_without_cursor_starts_after_existing_events(tmp_path: Path) 
     )
 
 
-def test_sse_stream_auth_does_not_update_last_seen_at(tmp_path: Path) -> None:
-    from seektalent_ui.auth import require_current_user_readonly
-
+def test_event_reads_do_not_create_workbench_user_sessions(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client)
-    session_digest = _session_digest(client)
-    old_last_seen = "2026-01-01T00:00:00+00:00"
-    with sqlite3.connect(_db_path(tmp_path)) as conn:
-        conn.execute(
-            "UPDATE user_sessions SET last_seen_at = ? WHERE session_id = ?",
-            (old_last_seen, session_digest),
-        )
-
-    user = require_current_user_readonly(
-        request=SimpleNamespace(app=client.app),
-        cookie_session_id=client.cookies.get("seektalent_workbench_session"),
-    )
-
-    assert user.email == "admin@example.com"
-    with sqlite3.connect(_db_path(tmp_path)) as conn:
-        current_last_seen = conn.execute(
-            "SELECT last_seen_at FROM user_sessions WHERE session_id = ?",
-            (session_digest,),
-        ).fetchone()[0]
-    assert current_last_seen == old_last_seen
 
     recovered = client.get("/api/workbench/events?after_seq=0")
     assert recovered.status_code == 200
     assert recovered.json()["events"][0]["sessionId"] == session["sessionId"]
 
     with sqlite3.connect(_db_path(tmp_path)) as conn:
-        current_last_seen = conn.execute(
-            "SELECT last_seen_at FROM user_sessions WHERE session_id = ?",
-            (session_digest,),
-        ).fetchone()[0]
-    assert current_last_seen == old_last_seen
+        session_count = conn.execute("SELECT COUNT(*) FROM user_sessions").fetchone()[0]
+    assert session_count == 0
 
 
 def test_expired_running_job_is_reconciled_on_app_startup(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -5863,7 +5780,7 @@ def test_expired_running_job_is_reconciled_on_app_startup(tmp_path: Path) -> Non
 def test_expired_running_job_is_reconciled_on_session_read_without_app_restart(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -5895,7 +5812,7 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
     _reset_fake_runtime()
     FakeWorkbenchRuntime.release_timeout_seconds = 10.0
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     cts_run = next(run for run in session["sourceRuns"] if run["sourceKind"] == "cts")
     _approve_requirement_review(client, session["sessionId"])
@@ -5935,25 +5852,19 @@ def test_active_running_job_lease_is_renewed_before_session_reconcile(tmp_path: 
 
 
 def test_user_cannot_operate_on_another_users_requirement_review_or_source_run(tmp_path: Path) -> None:
-    from seektalent_ui.auth import hash_password
-
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
-    _insert_user(tmp_path, email="user-b@example.com", password_hash=hash_password("correct horse"))
-    session = _create_session(client)
+    _ensure_local_actor(client)
+    _insert_user(tmp_path, email="user-b@example.com")
+    foreign_session_id = _insert_foreign_session(tmp_path)
 
-    login_b = client.post("/api/auth/login", json={"email": "user-b@example.com", "password": "correct horse"})
-    assert login_b.status_code == 204
-
-    review = client.get(f"/api/workbench/sessions/{session['sessionId']}/requirements")
+    review = client.get(f"/api/workbench/sessions/{foreign_session_id}/requirements")
     assert review.status_code == 404
 
     update = client.put(
-        f"/api/workbench/sessions/{session['sessionId']}/requirements",
-        headers=_csrf_header(client),
+        f"/api/workbench/sessions/{foreign_session_id}/requirements",
         json={"requirement_sheet": _requirement_sheet_payload()},
     )
     assert update.status_code == 404
 
-    start = _start_session(client, session["sessionId"])
+    start = _start_session(client, foreign_session_id)
     assert start.status_code == 404

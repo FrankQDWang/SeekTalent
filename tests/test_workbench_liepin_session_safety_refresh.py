@@ -14,11 +14,10 @@ from seektalent.providers.liepin.connection_safety import (
 from seektalent.providers.liepin.store import LiepinStore
 from tests.test_workbench_api import (
     _approve_requirement_review,
-    _bootstrap_and_login,
+    _ensure_local_actor,
     _client,
     _create_session,
-    _csrf_header,
-    _workbench_user_from_bootstrap,
+        _workbench_user_from_actor_payload,
 )
 from tests.test_workbench_liepin_browser_session_probe import (
     ProbeLiepinWorker,
@@ -32,8 +31,8 @@ def test_start_session_opencli_mode_refreshes_provider_session_safety_metadata(
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         store = client.app.state.workbench_store
         connection, _created = store.get_or_create_liepin_source_connection(user=user)
         provider_account_hash = _bind_workbench_liepin_account(
@@ -96,7 +95,6 @@ def test_start_session_opencli_mode_refreshes_provider_session_safety_metadata(
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text

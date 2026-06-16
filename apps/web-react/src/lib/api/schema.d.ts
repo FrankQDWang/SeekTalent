@@ -4,74 +4,6 @@
  */
 
 export interface paths {
-  "/api/auth/bootstrap": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /** Bootstrap Admin */
-    post: operations["bootstrap_admin_api_auth_bootstrap_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/auth/login": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /** Login */
-    post: operations["login_api_auth_login_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/auth/logout": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    get?: never;
-    put?: never;
-    /** Logout */
-    post: operations["logout_api_auth_logout_post"];
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
-  "/api/auth/me": {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    /** Me */
-    get: operations["me_api_auth_me_get"];
-    put?: never;
-    post?: never;
-    delete?: never;
-    options?: never;
-    head?: never;
-    patch?: never;
-    trace?: never;
-  };
   "/api/workbench/sessions": {
     parameters: {
       query?: never;
@@ -2516,20 +2448,6 @@ export interface components {
       /** Context */
       ctx?: Record<string, never>;
     };
-    /** WorkbenchBootstrapRequest */
-    WorkbenchBootstrapRequest: {
-      /** Email */
-      email: string;
-      /** Password */
-      password: string;
-      /** Displayname */
-      displayName: string;
-    };
-    /** WorkbenchBootstrapResponse */
-    WorkbenchBootstrapResponse: {
-      user: components["schemas"]["WorkbenchUserResponse"];
-      workspace: components["schemas"]["WorkbenchWorkspaceResponse"];
-    };
     /** WorkbenchCandidateEvidenceResponse */
     WorkbenchCandidateEvidenceResponse: {
       /** Evidenceid */
@@ -3266,17 +3184,6 @@ export interface components {
       text?: string | null;
       /** Key */
       key?: string | null;
-    };
-    /** WorkbenchLoginRequest */
-    WorkbenchLoginRequest: {
-      /** Email */
-      email: string;
-      /** Password */
-      password: string;
-    };
-    /** WorkbenchMeResponse */
-    WorkbenchMeResponse: {
-      user: components["schemas"]["WorkbenchUserResponse"];
     };
     /** WorkbenchNoteCreatedPayload */
     WorkbenchNoteCreatedPayload: {
@@ -4053,29 +3960,6 @@ export interface components {
        */
       detailOpenBlockedCount: number;
     };
-    /** WorkbenchUserResponse */
-    WorkbenchUserResponse: {
-      /** Userid */
-      userId: string;
-      /** Email */
-      email: string;
-      /** Displayname */
-      displayName: string;
-      /**
-       * Role
-       * @enum {string}
-       */
-      role: "admin" | "member";
-      /** Workspaceid */
-      workspaceId: string;
-    };
-    /** WorkbenchWorkspaceResponse */
-    WorkbenchWorkspaceResponse: {
-      /** Id */
-      id: string;
-      /** Name */
-      name: string;
-    };
     /** WorkflowCommandRequest */
     WorkflowCommandRequest: {
       /** Runtimerunid */
@@ -4112,140 +3996,12 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-  bootstrap_admin_api_auth_bootstrap_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["WorkbenchBootstrapRequest"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      201: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["WorkbenchBootstrapResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  login_api_auth_login_post: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: never;
-    };
-    requestBody: {
-      content: {
-        "application/json": components["schemas"]["WorkbenchLoginRequest"];
-      };
-    };
-    responses: {
-      /** @description Successful Response */
-      204: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  logout_api_auth_logout_post: {
-    parameters: {
-      query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
-      path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      204: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content?: never;
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
-  me_api_auth_me_get: {
-    parameters: {
-      query?: never;
-      header?: never;
-      path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
-    };
-    requestBody?: never;
-    responses: {
-      /** @description Successful Response */
-      200: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["WorkbenchMeResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
-    };
-  };
   list_sessions_api_workbench_sessions_get: {
     parameters: {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4258,27 +4014,14 @@ export interface operations {
           "application/json": components["schemas"]["WorkbenchSessionListResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
     };
   };
   create_session_api_workbench_sessions_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -4313,9 +4056,7 @@ export interface operations {
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4346,9 +4087,7 @@ export interface operations {
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4379,9 +4118,7 @@ export interface operations {
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4412,9 +4149,7 @@ export interface operations {
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4443,9 +4178,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4456,15 +4189,6 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["WorkbenchDevModeStatusResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -4480,9 +4204,7 @@ export interface operations {
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4514,9 +4236,7 @@ export interface operations {
         session_id: string;
         graph_candidate_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4545,9 +4265,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4560,27 +4278,14 @@ export interface operations {
           "application/json": components["schemas"]["WorkbenchSourceConnectionListResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
     };
   };
   create_liepin_source_connection_api_workbench_source_connections_liepin_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4593,15 +4298,6 @@ export interface operations {
           "application/json": components["schemas"]["WorkbenchSourceConnectionResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
     };
   };
   get_source_connection_api_workbench_source_connections__connection_id__get: {
@@ -4611,9 +4307,7 @@ export interface operations {
       path: {
         connection_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4640,15 +4334,11 @@ export interface operations {
   start_liepin_connection_login_api_workbench_source_connections__connection_id__login_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         connection_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4679,9 +4369,7 @@ export interface operations {
       path: {
         connection_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4712,9 +4400,7 @@ export interface operations {
       path: {
         connection_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4743,15 +4429,11 @@ export interface operations {
   liepin_connection_login_input_api_workbench_source_connections__connection_id__login_input_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         connection_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -4784,15 +4466,11 @@ export interface operations {
   complete_liepin_connection_login_api_workbench_source_connections__connection_id__login_complete_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         connection_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4819,16 +4497,12 @@ export interface operations {
   update_candidate_review_item_api_workbench_sessions__session_id__candidates__review_item_id__put: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         session_id: string;
         review_item_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -4859,16 +4533,12 @@ export interface operations {
   open_candidate_provider_action_api_workbench_sessions__session_id__candidates__review_item_id__provider_actions_open_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         session_id: string;
         review_item_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4895,16 +4565,12 @@ export interface operations {
   create_detail_open_request_api_workbench_sessions__session_id__candidates__review_item_id__detail_open_requests_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         session_id: string;
         review_item_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -4949,9 +4615,7 @@ export interface operations {
       };
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -4978,15 +4642,11 @@ export interface operations {
   approve_detail_open_request_api_workbench_detail_open_requests__request_id__approve_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         request_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5013,15 +4673,11 @@ export interface operations {
   reject_detail_open_request_api_workbench_detail_open_requests__request_id__reject_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         request_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5056,9 +4712,7 @@ export interface operations {
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5085,15 +4739,11 @@ export interface operations {
   update_requirement_review_api_workbench_sessions__session_id__requirements_put: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5124,15 +4774,11 @@ export interface operations {
   prepare_requirement_review_api_workbench_sessions__session_id__requirements_prepare_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5159,15 +4805,11 @@ export interface operations {
   approve_requirement_review_api_workbench_sessions__session_id__requirements_approve_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5194,15 +4836,11 @@ export interface operations {
   start_session_source_runs_api_workbench_sessions__session_id__start_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5233,9 +4871,7 @@ export interface operations {
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5262,15 +4898,11 @@ export interface operations {
   update_liepin_source_run_policy_api_workbench_sessions__session_id__source_runs_liepin_policy_put: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5303,9 +4935,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5318,15 +4948,6 @@ export interface operations {
           "application/json": components["schemas"]["WorkbenchSecurityAuditEventListResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
     };
   };
   settings_api_workbench_settings_get: {
@@ -5334,9 +4955,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5349,15 +4968,6 @@ export interface operations {
           "application/json": components["schemas"]["WorkbenchSettingsResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
     };
   };
   list_conversations_api_agent_conversations_get: {
@@ -5367,9 +4977,7 @@ export interface operations {
       };
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5398,13 +5006,9 @@ export interface operations {
   create_conversation_api_agent_conversations_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5441,9 +5045,7 @@ export interface operations {
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5472,15 +5074,11 @@ export interface operations {
   rename_conversation_api_agent_conversations__conversation_id__title_patch: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5513,15 +5111,11 @@ export interface operations {
   archive_conversation_api_agent_conversations__conversation_id__archive_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5550,15 +5144,11 @@ export interface operations {
   unarchive_conversation_api_agent_conversations__conversation_id__unarchive_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5587,15 +5177,11 @@ export interface operations {
   submit_message_api_agent_conversations__conversation_id__messages_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5628,15 +5214,11 @@ export interface operations {
   update_requirement_draft_api_agent_conversations__conversation_id__requirements_operations_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5669,15 +5251,11 @@ export interface operations {
   amend_requirement_from_text_api_agent_conversations__conversation_id__requirements_amend_from_text_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5710,15 +5288,11 @@ export interface operations {
   resolve_requirement_review_api_agent_conversations__conversation_id__requirements_resolve_review_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5751,15 +5325,11 @@ export interface operations {
   confirm_requirements_api_agent_conversations__conversation_id__requirements_confirm_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5792,15 +5362,11 @@ export interface operations {
   start_workflow_api_agent_conversations__conversation_id__workflow_start_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5833,15 +5399,11 @@ export interface operations {
   workflow_command_api_agent_conversations__conversation_id__workflow_commands_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -5881,9 +5443,7 @@ export interface operations {
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5918,9 +5478,7 @@ export interface operations {
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5960,9 +5518,7 @@ export interface operations {
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -5991,15 +5547,11 @@ export interface operations {
   final_summary_api_agent_conversations__conversation_id__final_summary_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -6034,9 +5586,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6051,27 +5601,14 @@ export interface operations {
           };
         };
       };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
     };
   };
   update_memory_settings_api_agent_memory_settings_put: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -6106,9 +5643,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6121,15 +5656,6 @@ export interface operations {
           "application/json": {
             [key: string]: unknown;
           };
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -6137,13 +5663,9 @@ export interface operations {
   run_memory_jobs_api_agent_memory_jobs_run_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6156,15 +5678,6 @@ export interface operations {
           "application/json": {
             [key: string]: unknown;
           };
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -6174,9 +5687,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6191,29 +5702,16 @@ export interface operations {
           };
         };
       };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
     };
   };
   accept_memory_candidate_api_agent_memory_candidates__candidate_id__accept_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         candidate_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -6246,15 +5744,11 @@ export interface operations {
   reject_memory_candidate_api_agent_memory_candidates__candidate_id__reject_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         candidate_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6285,9 +5779,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6300,15 +5792,6 @@ export interface operations {
           "application/json": {
             [key: string]: unknown;
           };
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -6318,9 +5801,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6333,15 +5814,6 @@ export interface operations {
           "application/json": {
             [key: string]: unknown;
           };
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -6351,9 +5823,7 @@ export interface operations {
       query?: never;
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6368,29 +5838,16 @@ export interface operations {
           };
         };
       };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
     };
   };
   delete_memory_fact_api_agent_memory_facts__fact_id__delete: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         fact_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6419,15 +5876,11 @@ export interface operations {
   update_memory_fact_api_agent_memory_facts__fact_id__patch: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path: {
         fact_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody: {
       content: {
@@ -6460,13 +5913,9 @@ export interface operations {
   clear_memory_api_agent_memory_clear_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6479,15 +5928,6 @@ export interface operations {
           "application/json": {
             [key: string]: unknown;
           };
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -6495,13 +5935,9 @@ export interface operations {
   run_memory_retention_cleanup_api_agent_memory_retention_run_post: {
     parameters: {
       query?: never;
-      header?: {
-        "X-CSRF-Token"?: string | null;
-      };
+      header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6514,15 +5950,6 @@ export interface operations {
           "application/json": {
             [key: string]: unknown;
           };
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -6534,9 +5961,7 @@ export interface operations {
       };
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6567,9 +5992,7 @@ export interface operations {
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6603,9 +6026,7 @@ export interface operations {
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6640,9 +6061,7 @@ export interface operations {
       path: {
         conversation_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6674,9 +6093,7 @@ export interface operations {
       };
       header?: never;
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6710,9 +6127,7 @@ export interface operations {
       path: {
         session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6745,9 +6160,7 @@ export interface operations {
         "Last-Event-ID"?: string | null;
       };
       path?: never;
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {
@@ -6782,9 +6195,7 @@ export interface operations {
       path: {
         workbench_session_id: string;
       };
-      cookie?: {
-        seektalent_workbench_session?: string | null;
-      };
+      cookie?: never;
     };
     requestBody?: never;
     responses: {

@@ -1,0 +1,34 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Cut the Workbench route and verification contract over to local actor ownership without admin/password login.",
+  "rationale": "This PR changes the Workbench BFF and the dev Workbench verification script together so the PR remains independently testable after the /api/auth routes are removed. The product contract is intentionally breaking: the host environment and LLM key provide access, not a Workbench admin/password session.",
+  "touched_layers": [
+    "bff",
+    "governance"
+  ],
+  "red_files": [
+    "scripts/verify-dev-workbench.sh"
+  ],
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+    "uv run --group dev python tools/check_pr_governance.py --base main",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "Workbench admin/password route dependency from the dev Workbench smoke path",
+    "Workbench session cookie and CSRF dependency from frontend-to-BFF requests",
+    "legacy auth security test coverage replaced by local actor route coverage"
+  ],
+  "risks": [
+    "Workbench BFF routes must remain owner-scoped to the local actor after session cookies are removed.",
+    "The dev Workbench verification script must exercise the real backend without reintroducing auth fallback.",
+    "Generated OpenAPI types must match the auth-free route contract."
+  ]
+}

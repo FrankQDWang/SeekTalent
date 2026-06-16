@@ -8,9 +8,6 @@ from seektalent_ui.server import create_app
 from tests.settings_factory import make_settings
 
 
-CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
-
-
 def _client(tmp_path, *, allowed_hosts: set[str]) -> TestClient:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     guard = build_network_guard(
@@ -46,7 +43,7 @@ def test_host_guard_rejects_unknown_hosts_for_workbench_routes(tmp_path) -> None
     assert rejected.status_code == 403
 
     allowed = client.get("/api/workbench/settings", headers={"Host": "recruiting.internal"})
-    assert allowed.status_code == 401
+    assert allowed.status_code == 200
 
     create_session = client.post(
         "/api/workbench/sessions",
@@ -99,11 +96,10 @@ def test_host_guard_rejects_unknown_hosts_for_packaged_frontend_routes(tmp_path,
     assert allowed_spa.status_code == 200
 
 
-def test_http_lan_login_cookie_can_authenticate_when_host_allowed(tmp_path) -> None:
+def test_http_lan_local_actor_can_use_workbench_when_host_allowed(tmp_path) -> None:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     guard = build_network_guard(bind_host="0.0.0.0", port=8011, lan_enabled=True, allowed_hosts={"recruiting.internal"})
     app = create_app(settings=settings, network_guard=guard)
-    local_client = TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000))
     remote_client = TestClient(
         app,
         base_url="http://recruiting.internal",
@@ -111,43 +107,29 @@ def test_http_lan_login_cookie_can_authenticate_when_host_allowed(tmp_path) -> N
         headers={"Host": "recruiting.internal"},
     )
 
-    bootstrap = local_client.post(
-        "/api/auth/bootstrap",
-        json={"email": "admin@example.com", "password": "correct horse", "displayName": "Admin User"},
+    created = remote_client.post(
+        "/api/workbench/sessions",
+        json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
     )
-    assert bootstrap.status_code == 201
 
-    login = remote_client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct horse"})
-    assert login.status_code == 204
-    assert "Secure" not in login.headers["set-cookie"]
-
-    me = remote_client.get("/api/auth/me")
-    assert me.status_code == 200
-    assert me.json()["user"]["email"] == "admin@example.com"
+    assert created.status_code == 201, created.text
+    assert "set-cookie" not in created.headers
 
 
 def test_origin_guard_rejects_unconfigured_origin_for_cookie_mutation(tmp_path) -> None:
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     guard = build_network_guard(bind_host="0.0.0.0", port=8011, lan_enabled=True, allowed_hosts={"recruiting.internal"})
     app = create_app(settings=settings, network_guard=guard)
-    local_client = TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000))
     remote_client = TestClient(
         app,
         base_url="http://recruiting.internal",
         client=("203.0.113.10", 50000),
         headers={"Host": "recruiting.internal"},
     )
-    assert local_client.post(
-        "/api/auth/bootstrap",
-        json={"email": "admin@example.com", "password": "correct horse", "displayName": "Admin User"},
-    ).status_code == 201
-    assert remote_client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct horse"}).status_code == 204
-    csrf_token = remote_client.cookies.get(CSRF_COOKIE_NAME)
-    assert csrf_token is not None
 
     rejected = remote_client.post(
         "/api/workbench/sessions",
-        headers={"Origin": "http://evil.example", "X-CSRF-Token": csrf_token},
+        headers={"Origin": "http://evil.example"},
         json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
     )
 
@@ -164,9 +146,9 @@ def test_loopback_guard_allows_default_vite_dev_origin(tmp_path) -> None:
     )
 
     response = client.post(
-        "/api/auth/bootstrap",
+        "/api/workbench/sessions",
         headers={"Origin": "http://127.0.0.1:5176"},
-        json={"email": "admin@example.com", "password": "correct horse", "displayName": "Admin User"},
+        json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
     )
 
     assert response.status_code == 201
@@ -184,24 +166,16 @@ def test_allowed_origin_gets_credentialed_cors_headers(tmp_path) -> None:
         allowed_origins={"http://ui.internal"},
     )
     app = create_app(settings=settings, network_guard=guard)
-    local_client = TestClient(app, base_url="http://localhost", client=("127.0.0.1", 50000))
     remote_client = TestClient(
         app,
         base_url="http://recruiting.internal",
         client=("203.0.113.10", 50000),
         headers={"Host": "recruiting.internal"},
     )
-    assert local_client.post(
-        "/api/auth/bootstrap",
-        json={"email": "admin@example.com", "password": "correct horse", "displayName": "Admin User"},
-    ).status_code == 201
-    assert remote_client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct horse"}).status_code == 204
-    csrf_token = remote_client.cookies.get(CSRF_COOKIE_NAME)
-    assert csrf_token is not None
 
     response = remote_client.post(
         "/api/workbench/sessions",
-        headers={"Origin": "http://ui.internal", "X-CSRF-Token": csrf_token},
+        headers={"Origin": "http://ui.internal"},
         json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
     )
 

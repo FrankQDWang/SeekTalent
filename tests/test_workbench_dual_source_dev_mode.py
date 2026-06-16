@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.test_workbench_api import _bootstrap_and_login, _client, _create_session
+from tests.test_workbench_api import _ensure_local_actor, _client, _create_session
 
 
 def test_dev_mode_dual_source_session_uses_cts_and_liepin_without_secret_payloads(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     session = _create_session(client, source_kinds=["cts", "liepin"])
     dev_mode = client.get("/api/workbench/dev-mode/status")
