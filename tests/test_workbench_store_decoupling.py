@@ -2,14 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-
-from seektalent_ui.server import create_app
 from seektalent_ui.workbench_store import WorkbenchStore
-from tests.settings_factory import make_settings
 
 
-CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
 REQUIRED_TABLES = {
     "tenants",
     "workspaces",
@@ -222,32 +217,6 @@ def test_workbench_store_public_facade_keeps_auth_methods(tmp_path: Path) -> Non
         session_digest=session_token_digest(tokens.session_token),
         csrf_token=tokens.csrf_token,
     )
-
-
-def test_auth_login_service_preserves_route_behavior(tmp_path: Path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
-    client = TestClient(
-        create_app(settings=settings),
-        base_url="http://localhost",
-        client=("127.0.0.1", 50000),
-    )
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={
-            "email": "admin@example.com",
-            "password": "correct horse",
-            "displayName": "Admin User",
-        },
-    )
-    assert bootstrap.status_code == 201, bootstrap.text
-
-    login = client.post(
-        "/api/auth/login",
-        json={"email": "admin@example.com", "password": "correct horse"},
-    )
-
-    assert login.status_code == 204, login.text
-    assert client.cookies.get(CSRF_COOKIE_NAME) is not None
 
 
 def test_schema_extraction_preserves_legacy_user_sessions_csrf_column(tmp_path: Path) -> None:

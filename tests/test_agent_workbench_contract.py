@@ -49,9 +49,6 @@ from tests.conversation_agent_test_support import sample_requirement_sheet
 from tests.settings_factory import make_settings
 
 
-CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
-
-
 class DeterministicRouteRuntime:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
@@ -665,7 +662,7 @@ def test_agent_http_error_maps_missing_conversation_to_404() -> None:
 
 def test_conversation_store_lists_context_compactions_without_raw_message_bodies(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     service = client.app.state.agent_conversation_service
     conversation = service.create_conversation(
         owner_user_id="user_admin_example_com",
@@ -701,11 +698,10 @@ def test_agent_workbench_routes_use_public_agent_route_deps() -> None:
 
 def test_agent_workbench_view_route_returns_typed_snapshot(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     conversation_id = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
 
     stream_store = client.app.state.agent_workbench_stream_store
@@ -725,11 +721,10 @@ def test_agent_workbench_view_route_returns_typed_snapshot(tmp_path: Path) -> No
 
 def test_agent_workbench_conversation_list_route_returns_typed_summaries(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     conversation_id = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
 
     response = client.get("/api/agent/workbench/conversations")
@@ -749,11 +744,10 @@ def test_agent_workbench_conversation_list_route_returns_typed_summaries(tmp_pat
 
 def test_agent_workbench_event_replay_route_returns_typed_envelopes(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     conversation_id = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
     client.app.state.agent_workbench_stream_store.append_event(
         conversation_id=conversation_id,
@@ -778,11 +772,10 @@ def test_agent_workbench_event_replay_route_returns_typed_envelopes(tmp_path: Pa
 
 def test_agent_workbench_event_replay_route_returns_live_message_delta(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     conversation_id = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
     client.app.state.agent_workbench_stream_store.append_event(
         conversation_id=conversation_id,
@@ -811,27 +804,39 @@ def test_agent_workbench_event_replay_route_returns_live_message_delta(tmp_path:
     }
 
 
-def test_agent_workbench_stream_route_requires_session_cookie_and_rejects_auth_query(tmp_path: Path) -> None:
+def test_agent_workbench_stream_route_rejects_auth_query_without_workbench_session(tmp_path: Path) -> None:
     client = _client(tmp_path)
-
-    missing_session = client.get("/api/agent/workbench/conversations/agent_conv_1/events/stream")
-    assert missing_session.status_code == 401
-
-    _bootstrap_and_login(client)
-    token_query = client.get("/api/agent/workbench/conversations/agent_conv_1/events/stream?authToken=abc")
+    conversation_id = client.post("/api/agent/conversations", json={"title": "Python Agent Engineer"}).json()["conversation"][
+        "conversationId"
+    ]
+    token_query = client.get(f"/api/agent/workbench/conversations/{conversation_id}/events/stream?authToken=abc")
     assert token_query.status_code == 400
 
 
-def test_agent_workbench_sse_generator_rechecks_session_and_emits_generic_event(tmp_path: Path) -> None:
-    from seektalent_ui.agent_workbench_routes import _event_generator
-    from seektalent_ui.auth import session_token_digest
+def test_agent_workbench_stream_does_not_require_session_cookie(tmp_path: Path) -> None:
+    from seektalent_ui.agent_workbench_routes import stream_agent_workbench_events
 
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
-    session_id = client.cookies.get("seektalent_workbench_session")
-    assert session_id is not None
-    digest = session_token_digest(session_id)
-    user = client.app.state.workbench_store.get_user_by_session_readonly(session_digest=digest)
+    created = client.post("/api/agent/conversations", json={"title": "Python Agent Engineer"})
+    conversation_id = created.json()["conversation"]["conversationId"]
+    user = client.app.state.workbench_store.ensure_local_actor()
+
+    response = stream_agent_workbench_events(
+        conversation_id=conversation_id,
+        request=StreamingRequest(app=client.app, query_params={}),
+        after_seq=0,
+        user=user,
+    )
+
+    assert response.media_type == "text/event-stream"
+
+
+def test_agent_workbench_sse_generator_emits_generic_event_for_local_actor(tmp_path: Path) -> None:
+    from seektalent_ui.agent_workbench_routes import _event_generator
+
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    user = client.app.state.workbench_store.ensure_local_actor()
     assert user is not None
     stream_store = client.app.state.agent_workbench_stream_store
     envelope = stream_store.append_event(
@@ -845,51 +850,37 @@ def test_agent_workbench_sse_generator_rechecks_session_and_emits_generic_event(
     generator = _event_generator(
         request=StreamingRequest(app=client.app),
         user=user,
-        session_digest=digest,
         stream_store=stream_store,
         conversation_id="agent_conv_1",
         after_seq=0,
     )
 
-    async def consume() -> tuple[dict[str, str] | None, dict[str, str] | None]:
+    async def consume() -> dict[str, str]:
         first = await asyncio.wait_for(anext(generator), timeout=0.5)
-        client.app.state.workbench_store.revoke_user_session(session_digest=digest)
-        second = None
-        try:
-            second = await asyncio.wait_for(anext(generator), timeout=0.5)
-        except StopAsyncIteration:
-            second = None
-        return first, second
+        await generator.aclose()
+        return first
 
-    first, second = asyncio.run(consume())
-    assert first is not None
+    first = asyncio.run(consume())
     assert first["id"] == str(envelope.seq)
     assert first["event"] == "agent_workbench_event"
     assert json.loads(first["data"])["kind"] == "message.completed"
-    assert second is None
 
 
 def test_agent_workbench_sse_generator_appends_projection_catchup_before_replay(tmp_path: Path) -> None:
     from seektalent_ui.agent_workbench_routes import _event_generator
-    from seektalent_ui.auth import session_token_digest
 
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     conversation_id = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     ).json()["conversation"]["conversationId"]
-    session_id = client.cookies.get("seektalent_workbench_session")
-    assert session_id is not None
-    digest = session_token_digest(session_id)
-    user = client.app.state.workbench_store.get_user_by_session_readonly(session_digest=digest)
+    user = client.app.state.workbench_store.ensure_local_actor()
     assert user is not None
 
     generator = _event_generator(
         request=StreamingRequest(app=client.app),
         user=user,
-        session_digest=digest,
         stream_store=client.app.state.agent_workbench_stream_store,
         conversation_id=conversation_id,
         after_seq=0,
@@ -906,20 +897,15 @@ def test_agent_workbench_sse_generator_emits_terminal_error_on_projection_failur
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     from seektalent_ui.agent_workbench_routes import _event_generator
-    from seektalent_ui.auth import session_token_digest
 
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
-    session_id = client.cookies.get("seektalent_workbench_session")
-    assert session_id is not None
-    digest = session_token_digest(session_id)
-    user = client.app.state.workbench_store.get_user_by_session_readonly(session_digest=digest)
+    _ensure_local_actor(client)
+    user = client.app.state.workbench_store.ensure_local_actor()
     assert user is not None
 
     generator = _event_generator(
         request=StreamingRequest(app=client.app),
         user=user,
-        session_digest=digest,
         stream_store=client.app.state.agent_workbench_stream_store,
         conversation_id="missing_conversation",
         after_seq=0,
@@ -1262,21 +1248,17 @@ def _client(tmp_path: Path) -> TestClient:
     )
 
 
-def _bootstrap_and_login(client: TestClient) -> dict:
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={"email": "admin@example.com", "password": "correct horse", "displayName": "Admin User"},
-    )
-    assert bootstrap.status_code == 201, bootstrap.text
-    login = client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct horse"})
-    assert login.status_code == 204, login.text
-    return bootstrap.json()
-
-
-def _csrf_header(client: TestClient) -> dict[str, str]:
-    token = client.cookies.get(CSRF_COOKIE_NAME)
-    assert token is not None
-    return {"X-CSRF-Token": token}
+def _ensure_local_actor(client: TestClient) -> dict:
+    user = client.app.state.workbench_store.ensure_local_actor()
+    return {
+        "user": {
+            "userId": user.user_id,
+            "email": user.email,
+            "displayName": user.display_name,
+            "role": user.role,
+            "workspaceId": user.workspace_id,
+        }
+    }
 
 
 def _now() -> str:

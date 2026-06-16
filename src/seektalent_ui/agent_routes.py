@@ -17,8 +17,8 @@ from seektalent_agent_memory.service import MemoryService
 from seektalent_agent_memory.store import MemoryStore
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.runtime import AgentRuntime
-from seektalent_ui.auth import require_csrf_user, require_current_user_readonly
 from seektalent_ui.agent_route_deps import AGENT_CONVERSATION_SCHEMA_VERSION, agent_http_error, get_agent_service
+from seektalent_ui.workbench_local_actor import local_workbench_read_user, local_workbench_write_user
 from seektalent_ui.workbench_store import WorkbenchUser
 
 
@@ -214,7 +214,7 @@ class MemoryAcceptRequest(BaseModel):
 def create_conversation(
     payload: ConversationCreateRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id="new")
     service = get_agent_service(request)
@@ -233,7 +233,7 @@ def create_conversation(
 def list_conversations(
     request: Request,
     includeArchived: bool = False,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_agent_service(request)
     conversations = service.list_conversations(
@@ -248,7 +248,7 @@ def list_conversations(
 def reopen_conversation(
     conversation_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_agent_service(request)
     try:
@@ -267,7 +267,7 @@ def rename_conversation(
     conversation_id: str,
     payload: ConversationTitleRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -287,7 +287,7 @@ def rename_conversation(
 def archive_conversation(
     conversation_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -306,7 +306,7 @@ def archive_conversation(
 def unarchive_conversation(
     conversation_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -326,7 +326,7 @@ async def submit_message(
     conversation_id: str,
     payload: AgentMessageRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -362,7 +362,7 @@ def update_requirement_draft(
     conversation_id: str,
     payload: RequirementOperationsRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -386,7 +386,7 @@ def amend_requirement_from_text(
     conversation_id: str,
     payload: RequirementAmendRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -411,7 +411,7 @@ def resolve_requirement_review(
     conversation_id: str,
     payload: RequirementReviewResolveRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -436,7 +436,7 @@ def confirm_requirements(
     conversation_id: str,
     payload: RequirementConfirmRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -459,7 +459,7 @@ def start_workflow(
     conversation_id: str,
     payload: WorkflowStartRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -483,7 +483,7 @@ def workflow_command(
     conversation_id: str,
     payload: WorkflowCommandRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -520,7 +520,7 @@ def workflow_events(
     runtimeRunId: str,
     request: Request,
     limit: int = 100,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_agent_service(request)
     try:
@@ -541,7 +541,7 @@ def workflow_snapshot(
     conversation_id: str,
     runtimeRunId: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_agent_service(request)
     try:
@@ -566,7 +566,7 @@ def workflow_detail(
     eventId: str | None = None,
     commandId: str | None = None,
     checkpointId: str | None = None,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_agent_service(request)
     try:
@@ -591,7 +591,7 @@ def final_summary(
     conversation_id: str,
     payload: FinalSummaryRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_write_rate(request, user=user, conversation_id=conversation_id)
     service = get_agent_service(request)
@@ -612,7 +612,7 @@ def final_summary(
 @router.get("/memory/settings")
 def get_memory_settings(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_memory_service(request)
     settings = service.get_settings(owner_user_id=user.user_id, workspace_id=user.workspace_id)
@@ -623,7 +623,7 @@ def get_memory_settings(
 def update_memory_settings(
     payload: MemorySettingsRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_memory_write_rate(request, user=user)
     service = get_memory_service(request)
@@ -644,7 +644,7 @@ def update_memory_settings(
 @router.get("/memory/jobs")
 def list_memory_jobs(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_memory_service(request)
     jobs = service.store.list_jobs(owner_user_id=user.user_id, workspace_id=user.workspace_id)
@@ -654,7 +654,7 @@ def list_memory_jobs(
 @router.post("/memory/jobs/run")
 async def run_memory_jobs(
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_memory_write_rate(request, user=user)
     memory_service = get_memory_service(request)
@@ -691,7 +691,7 @@ async def run_memory_jobs(
 @router.get("/memory/candidates")
 def list_memory_candidates(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_memory_service(request)
     candidates = service.store.list_candidates(owner_user_id=user.user_id, workspace_id=user.workspace_id)
@@ -703,7 +703,7 @@ def accept_memory_candidate(
     candidate_id: str,
     payload: MemoryAcceptRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_memory_write_rate(request, user=user)
     service = get_memory_service(request)
@@ -723,7 +723,7 @@ def accept_memory_candidate(
 def reject_memory_candidate(
     candidate_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_memory_write_rate(request, user=user)
     service = get_memory_service(request)
@@ -741,7 +741,7 @@ def reject_memory_candidate(
 @router.get("/memory/facts")
 def list_memory_facts(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_memory_service(request)
     facts = service.store.list_facts(owner_user_id=user.user_id, workspace_id=user.workspace_id)
@@ -751,7 +751,7 @@ def list_memory_facts(
 @router.get("/memory/summaries")
 def list_memory_summaries(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_memory_service(request)
     summaries = service.store.list_summaries(owner_user_id=user.user_id, workspace_id=user.workspace_id)
@@ -761,7 +761,7 @@ def list_memory_summaries(
 @router.get("/memory/usage")
 def list_memory_usage(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_memory_service(request)
     usage = service.store.list_usage(owner_user_id=user.user_id, workspace_id=user.workspace_id)
@@ -773,7 +773,7 @@ def update_memory_fact(
     fact_id: str,
     payload: MemoryTextRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_memory_write_rate(request, user=user)
     service = get_memory_service(request)
@@ -793,7 +793,7 @@ def update_memory_fact(
 def delete_memory_fact(
     fact_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_memory_write_rate(request, user=user)
     service = get_memory_service(request)
@@ -807,7 +807,7 @@ def delete_memory_fact(
 @router.post("/memory/clear")
 def clear_memory(
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_memory_write_rate(request, user=user)
     service = get_memory_service(request)
@@ -818,7 +818,7 @@ def clear_memory(
 @router.post("/memory/retention/run")
 def run_memory_retention_cleanup(
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> dict[str, object]:
     _check_memory_write_rate(request, user=user)
     service = get_memory_service(request)

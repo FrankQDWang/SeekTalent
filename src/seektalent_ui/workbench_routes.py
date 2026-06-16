@@ -3,11 +3,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from seektalent.dev_mode import build_dev_mode_status
-from seektalent_ui import workbench_auth_routes, workbench_liepin_recovery as liepin_recovery
-from seektalent_ui.auth import (
+from seektalent_ui import workbench_liepin_recovery as liepin_recovery
+from seektalent_ui.workbench_local_actor import (
     get_workbench_store,
-    require_csrf_user,
-    require_current_user,
+    local_workbench_user,
+    local_workbench_write_user,
 )
 from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.models import (
@@ -78,7 +78,6 @@ from seektalent_ui.workbench_store import (
 
 
 router = APIRouter()
-router.include_router(workbench_auth_routes.router)
 
 
 def _append_waiting_running_note(
@@ -102,7 +101,7 @@ def _append_waiting_running_note(
 @router.get("/api/workbench/sessions", response_model=WorkbenchSessionListResponse)
 async def list_sessions(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchSessionListResponse:
     store = get_workbench_store(request)
     await refresh_liepin_opencli_connection_if_ready(request=request, store=store, user=user)
@@ -131,7 +130,7 @@ async def list_sessions(
 async def create_session(
     request: WorkbenchSessionCreateRequest,
     http_request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchSessionResponse:
     job_title = request.jobTitle.strip()
     jd_text = request.jdText.strip()
@@ -180,7 +179,7 @@ async def create_session(
 async def get_session(
     session_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchSessionResponse:
     store = get_workbench_store(request)
     session = store.get_workbench_session(user=user, session_id=session_id)
@@ -209,7 +208,7 @@ async def get_session(
 def list_candidate_review_items(
     session_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchCandidateReviewQueueResponse:
     store = get_workbench_store(request)
     items = store.list_candidate_review_items(user=user, session_id=session_id)
@@ -228,7 +227,7 @@ def list_candidate_review_items(
 def list_final_top_candidates(
     session_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchFinalTopCandidateListResponse:
     store = get_workbench_store(request)
     session = store.get_workbench_session(user=user, session_id=session_id)
@@ -268,7 +267,7 @@ def list_final_top_candidates(
 def get_session_runtime_graph(
     session_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchRuntimeGraphResponse:
     store = get_workbench_store(request)
     session = store.get_workbench_session(user=user, session_id=session_id)
@@ -309,7 +308,7 @@ def _final_top_candidate_list_for_runtime_graph(
 @router.get("/api/workbench/dev-mode/status", response_model=WorkbenchDevModeStatusResponse)
 def get_dev_mode_status(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchDevModeStatusResponse:
     del user
     payload = getattr(request.app.state, "dev_mode_env_diagnostics", None)
@@ -328,7 +327,7 @@ def list_session_graph_candidates(
     request: Request,
     limit: int = DEFAULT_GRAPH_CANDIDATE_LIMIT,
     cursor: str | None = None,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchGraphCandidateListResponse:
     store = get_workbench_store(request)
     settings = getattr(request.app.state, "settings", None)
@@ -357,7 +356,7 @@ def get_graph_candidate_resume_snapshot(
     session_id: str,
     graph_candidate_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchGraphCandidateResumeSnapshotResponse:
     store = get_workbench_store(request)
     settings = getattr(request.app.state, "settings", None)
@@ -395,7 +394,7 @@ def update_candidate_review_item(
     review_item_id: str,
     update: WorkbenchCandidateReviewItemUpdateRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchCandidateReviewItemResponse:
     if update.status is None and update.note is None:
         raise HTTPException(status_code=400, detail="Candidate update must include status or note.")
@@ -420,7 +419,7 @@ def open_candidate_provider_action(
     session_id: str,
     review_item_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchProviderActionResponse:
     store = get_workbench_store(request)
     try:
@@ -446,7 +445,7 @@ def create_detail_open_request(
     review_item_id: str,
     create_request: WorkbenchDetailOpenRequestCreateRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchDetailOpenRequestResponse:
     store = get_workbench_store(request)
     try:
@@ -475,7 +474,7 @@ def list_detail_open_requests(
     request: Request,
     session_id: str | None = None,
     status: WorkbenchDetailOpenRequestStatus | None = None,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchDetailOpenRequestListResponse:
     store = get_workbench_store(request)
     return WorkbenchDetailOpenRequestListResponse(
@@ -497,7 +496,7 @@ def list_detail_open_requests(
 def approve_detail_open_request(
     request_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchDetailOpenRequestResponse:
     store = get_workbench_store(request)
     try:
@@ -521,7 +520,7 @@ def reject_detail_open_request(
     request_id: str,
     reject_request: WorkbenchDetailOpenRejectRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchDetailOpenRequestResponse:
     store = get_workbench_store(request)
     try:
@@ -544,7 +543,7 @@ def reject_detail_open_request(
 def get_requirement_review(
     session_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchRequirementReviewResponse:
     store = get_workbench_store(request)
     review = store.get_requirement_review(user=user, session_id=session_id)
@@ -561,7 +560,7 @@ def update_requirement_review(
     session_id: str,
     review_update: WorkbenchRequirementReviewUpdateRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchRequirementReviewResponse:
     store = get_workbench_store(request)
     try:
@@ -586,7 +585,7 @@ def update_requirement_review(
 def prepare_requirement_review(
     session_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchRequirementReviewResponse:
     store = get_workbench_store(request)
     session = store.get_workbench_session(user=user, session_id=session_id)
@@ -609,7 +608,7 @@ def prepare_requirement_review(
 def approve_requirement_review(
     session_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchRequirementReviewResponse:
     store = get_workbench_store(request)
     try:
@@ -631,7 +630,7 @@ def approve_requirement_review(
 async def start_session_source_runs(
     session_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchSessionStartResponse:
     store = get_workbench_store(request)
     session = store.get_workbench_session(user=user, session_id=session_id)
@@ -734,7 +733,7 @@ def update_liepin_source_run_policy(
     session_id: str,
     policy_update: WorkbenchSourceRunPolicyUpdateRequest,
     request: Request,
-    user: WorkbenchUser = Depends(require_csrf_user),
+    user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> WorkbenchSourceRunPolicyResponse:
     store = get_workbench_store(request)
     policy = store.update_liepin_source_run_policy(
@@ -754,7 +753,7 @@ def update_liepin_source_run_policy(
 def get_liepin_source_run_policy(
     session_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchSourceRunPolicyResponse:
     store = get_workbench_store(request)
     policy = store.get_liepin_source_run_policy(user=user, session_id=session_id)
@@ -770,7 +769,7 @@ def get_liepin_source_run_policy(
 )
 def list_security_audit_events(
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user),
+    user: WorkbenchUser = Depends(local_workbench_user),
 ) -> WorkbenchSecurityAuditEventListResponse:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin role required.")
@@ -781,7 +780,7 @@ def list_security_audit_events(
 
 
 @router.get("/api/workbench/settings", response_model=WorkbenchSettingsResponse)
-def settings(user: WorkbenchUser = Depends(require_current_user)) -> WorkbenchSettingsResponse:
+def settings(user: WorkbenchUser = Depends(local_workbench_user)) -> WorkbenchSettingsResponse:
     return WorkbenchSettingsResponse(
         workspaceId=user.workspace_id,
         sources=[

@@ -12,12 +12,11 @@ from seektalent_ui.liepin_account_binding import (
 
 from tests.test_workbench_api import (
     _approve_requirement_review,
-    _bootstrap_and_login,
+    _ensure_local_actor,
     _client,
     _create_session,
-    _csrf_header,
-    _db_path,
-    _workbench_user_from_bootstrap,
+        _db_path,
+    _workbench_user_from_actor_payload,
 )
 
 
@@ -156,7 +155,6 @@ def _opencli_settings() -> dict[str, object]:
 def _get_liepin_card(client, session_id: str) -> tuple[dict, dict]:
     session_response = client.get(
         f"/api/workbench/sessions/{session_id}",
-        headers=_csrf_header(client),
     )
     assert session_response.status_code == 200, session_response.text
     liepin_card = next(
@@ -207,14 +205,12 @@ def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
 def _assert_public_probe_surfaces_do_not_leak(client, session_id: str, *extra_forbidden: str) -> None:
     session_response = client.get(
         f"/api/workbench/sessions/{session_id}",
-        headers=_csrf_header(client),
     )
     session_events = client.get(
         f"/api/workbench/sessions/{session_id}/events",
-        headers=_csrf_header(client),
     )
-    global_events = client.get("/api/workbench/events", headers=_csrf_header(client))
-    security_events = client.get("/api/workbench/security-audit-events", headers=_csrf_header(client))
+    global_events = client.get("/api/workbench/events")
+    security_events = client.get("/api/workbench/security-audit-events")
 
     assert session_response.status_code == 200, session_response.text
     assert session_events.status_code == 200, session_events.text
@@ -228,7 +224,7 @@ def _assert_public_probe_surfaces_do_not_leak(client, session_id: str, *extra_fo
 
 def test_start_session_auto_probes_liepin_browser_session_and_starts_liepin(tmp_path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(status="ready", provider_account_hash="acct_hash_browser_ready")
         _install_probe_worker(client, worker)
 
@@ -238,7 +234,6 @@ def test_start_session_auto_probes_liepin_browser_session_and_starts_liepin(tmp_
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -256,7 +251,7 @@ def test_start_session_auto_probes_liepin_browser_session_and_starts_liepin(tmp_
 
 def test_ready_probe_does_not_unblock_liepin_runs_from_other_sessions(tmp_path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(status="ready", provider_account_hash="acct_hash_browser_ready")
         _install_probe_worker(client, worker)
 
@@ -267,7 +262,6 @@ def test_ready_probe_does_not_unblock_liepin_runs_from_other_sessions(tmp_path) 
 
         response = client.post(
             f"/api/workbench/sessions/{first_session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -282,7 +276,7 @@ def test_ready_probe_does_not_unblock_liepin_runs_from_other_sessions(tmp_path) 
 
 def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
         _install_probe_worker(client, worker)
 
@@ -292,7 +286,6 @@ def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_pat
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -323,7 +316,7 @@ def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_pat
 
 def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(
             status="ready",
             readiness_error=LiepinWorkerModeError(
@@ -339,7 +332,6 @@ def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_p
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         payload = response.json()
 
@@ -361,7 +353,7 @@ def test_start_session_blocks_liepin_when_readiness_missing_observed_tools(tmp_p
 
 def test_start_session_blocks_liepin_when_browser_backend_is_unavailable(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(
             status="ready",
             readiness_error=LiepinWorkerModeError(
@@ -377,7 +369,6 @@ def test_start_session_blocks_liepin_when_browser_backend_is_unavailable(tmp_pat
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         payload = response.json()
 
@@ -398,7 +389,7 @@ def test_start_session_blocks_liepin_when_browser_backend_is_unavailable(tmp_pat
 
 def test_start_session_opencli_mode_maps_readiness_error_to_safe_reason(tmp_path: Path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(
             status="ready",
             readiness_error=LiepinWorkerModeError(
@@ -417,7 +408,6 @@ def test_start_session_opencli_mode_maps_readiness_error_to_safe_reason(tmp_path
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         payload = response.json()
 
@@ -441,8 +431,8 @@ def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
         _install_probe_worker(client, worker)
 
@@ -454,7 +444,6 @@ def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -490,8 +479,8 @@ def test_create_session_opencli_mode_auto_binds_ready_local_browser_from_clean_d
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         worker = ProbeLiepinWorker(status="ready", provider_account_hash="observed-opencli-account")
         _install_probe_worker(client, worker)
 
@@ -533,8 +522,8 @@ def test_start_session_opencli_mode_auto_binds_ready_local_browser_from_clean_db
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
         _install_probe_worker(client, worker)
 
@@ -550,7 +539,6 @@ def test_start_session_opencli_mode_auto_binds_ready_local_browser_from_clean_db
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -593,8 +581,8 @@ def test_start_session_opencli_mode_queues_liepin_with_existing_bound_account(
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         store = client.app.state.workbench_store
         connection, _created = store.get_or_create_liepin_source_connection(user=user)
         provider_account_hash = _bind_workbench_liepin_account(
@@ -611,7 +599,6 @@ def test_start_session_opencli_mode_queues_liepin_with_existing_bound_account(
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -637,8 +624,8 @@ def test_start_session_opencli_mode_recovers_bound_account_after_provider_connec
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         store = client.app.state.workbench_store
         connection, _created = store.get_or_create_liepin_source_connection(user=user)
         provider_account_hash = _bind_workbench_liepin_account(
@@ -664,7 +651,6 @@ def test_start_session_opencli_mode_recovers_bound_account_after_provider_connec
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -698,8 +684,8 @@ def test_create_session_opencli_mode_keeps_liepin_blocked_when_unbound_probe_req
     tmp_path: Path,
 ) -> None:
     with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         worker = ProbeLiepinWorker(status="login_required", provider_account_hash=None)
         _install_probe_worker(client, worker)
         store = client.app.state.workbench_store
@@ -731,7 +717,7 @@ def test_create_session_opencli_mode_keeps_liepin_blocked_when_unbound_probe_req
 
 def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(
             status="login_required",
             error=LiepinWorkerModeError(
@@ -747,7 +733,6 @@ def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path)
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -769,7 +754,7 @@ def test_start_session_blocks_liepin_when_probe_backend_is_unavailable(tmp_path)
 
 def test_start_session_preserves_pi_setup_reason_without_blocking_cts(tmp_path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(
             status="login_required",
             error=LiepinWorkerModeError(
@@ -784,7 +769,6 @@ def test_start_session_preserves_pi_setup_reason_without_blocking_cts(tmp_path) 
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -813,7 +797,7 @@ def test_start_session_preserves_pi_setup_reason_without_blocking_cts(tmp_path) 
 
 def test_unexpected_probe_error_blocks_liepin_without_blocking_cts_or_leaking(tmp_path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(
             status="login_required",
             error=ValueError("raw provider cookie secret"),
@@ -827,7 +811,6 @@ def test_unexpected_probe_error_blocks_liepin_without_blocking_cts_or_leaking(tm
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -859,8 +842,8 @@ def test_unexpected_probe_error_blocks_liepin_without_blocking_cts_or_leaking(tm
 
 def test_start_session_blocks_liepin_when_browser_account_does_not_match_bound_account(tmp_path) -> None:
     with _client(tmp_path) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         store = client.app.state.workbench_store
         connection, _created = store.get_or_create_liepin_source_connection(user=user)
         store.mark_liepin_connection_connected(
@@ -881,7 +864,6 @@ def test_start_session_blocks_liepin_when_browser_account_does_not_match_bound_a
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -913,7 +895,7 @@ def test_start_session_blocks_liepin_when_browser_account_does_not_match_bound_a
 
 def test_repeated_start_does_not_reprobe_or_block_queued_liepin_run(tmp_path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(status="ready", provider_account_hash="acct_hash_browser_ready")
         _install_probe_worker(client, worker)
 
@@ -923,7 +905,6 @@ def test_repeated_start_does_not_reprobe_or_block_queued_liepin_run(tmp_path) ->
 
         first = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         assert first.status_code == 202, first.text
         assert first.json()["blockedSources"] == []
@@ -933,7 +914,6 @@ def test_repeated_start_does_not_reprobe_or_block_queued_liepin_run(tmp_path) ->
         worker.provider_account_hash = None
         second = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         assert second.status_code == 202, second.text
         assert second.json()["blockedSources"] == []
@@ -942,8 +922,8 @@ def test_repeated_start_does_not_reprobe_or_block_queued_liepin_run(tmp_path) ->
 
 def test_probe_race_does_not_downgrade_already_queued_liepin_run_or_connection(tmp_path) -> None:
     with _client(tmp_path) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         session = _create_session(client, source_kinds=["liepin"])
         _approve_requirement_review(client, session["sessionId"])
         source_run_id = _started_source(session, "liepin")["sourceRunId"]
@@ -958,7 +938,6 @@ def test_probe_race_does_not_downgrade_already_queued_liepin_run_or_connection(t
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -976,7 +955,7 @@ def test_probe_race_does_not_downgrade_already_queued_liepin_run_or_connection(t
 
 def test_repeated_start_wakes_runner_for_existing_queued_job(tmp_path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         session = _create_session(client, source_kinds=["cts"])
         _approve_requirement_review(client, session["sessionId"])
         wake_calls: list[str] = []
@@ -984,11 +963,9 @@ def test_repeated_start_wakes_runner_for_existing_queued_job(tmp_path) -> None:
 
         first = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         second = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert first.status_code == 202, first.text
@@ -1001,7 +978,7 @@ def test_repeated_start_wakes_runner_for_existing_queued_job(tmp_path) -> None:
 
 def test_repeated_start_ignores_liepin_run_that_reached_terminal_between_clicks(tmp_path) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(status="ready", provider_account_hash="acct_hash_browser_ready")
         _install_probe_worker(client, worker)
 
@@ -1012,7 +989,6 @@ def test_repeated_start_ignores_liepin_run_that_reached_terminal_between_clicks(
 
         first = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         assert first.status_code == 202, first.text
         assert first.json()["blockedSources"] == []
@@ -1028,7 +1004,6 @@ def test_repeated_start_ignores_liepin_run_that_reached_terminal_between_clicks(
         worker.provider_account_hash = None
         second = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         assert second.status_code == 202, second.text
         assert second.json()["blockedSources"] == []
@@ -1037,7 +1012,7 @@ def test_repeated_start_ignores_liepin_run_that_reached_terminal_between_clicks(
 
 def test_start_ignores_terminal_race_reported_by_job_start(tmp_path, monkeypatch) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(status="ready", provider_account_hash="acct_hash_browser_ready")
         _install_probe_worker(client, worker)
 
@@ -1052,7 +1027,6 @@ def test_start_ignores_terminal_race_reported_by_job_start(tmp_path, monkeypatch
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 202, response.text
@@ -1063,7 +1037,7 @@ def test_start_ignores_terminal_race_reported_by_job_start(tmp_path, monkeypatch
 
 def test_start_does_not_expose_unexpected_job_start_runtime_error(tmp_path, monkeypatch) -> None:
     with _client(tmp_path) as client:
-        _bootstrap_and_login(client)
+        _ensure_local_actor(client)
         worker = ProbeLiepinWorker(status="ready", provider_account_hash="acct_hash_browser_ready")
         _install_probe_worker(client, worker)
 
@@ -1078,7 +1052,6 @@ def test_start_does_not_expose_unexpected_job_start_runtime_error(tmp_path, monk
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
 
         assert response.status_code == 500, response.text
@@ -1089,25 +1062,22 @@ def test_start_does_not_expose_unexpected_job_start_runtime_error(tmp_path, monk
 
 def test_legacy_liepin_login_relay_routes_are_disabled_by_default(tmp_path) -> None:
     with _client(tmp_path) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         connection, _created = client.app.state.workbench_store.get_or_create_liepin_source_connection(user=user)
         connection_id = connection.connection_id
 
         start = client.post(
             f"/api/workbench/source-connections/{connection_id}/login",
-            headers=_csrf_header(client),
         )
         frame = client.get(f"/api/workbench/source-connections/{connection_id}/login/frame")
         snapshot = client.get(f"/api/workbench/source-connections/{connection_id}/login/snapshot")
         relay_input = client.post(
             f"/api/workbench/source-connections/{connection_id}/login/input",
-            headers=_csrf_header(client),
             json={"action": "click", "x": 0, "y": 0},
         )
         complete = client.post(
             f"/api/workbench/source-connections/{connection_id}/login/complete",
-            headers=_csrf_header(client),
         )
 
         assert start.status_code == 410

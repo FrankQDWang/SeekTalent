@@ -3,13 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from seektalent_ui.agent_routes import LocalAgentRateLimiter
-from tests.test_conversation_agent_routes import _bootstrap_and_login, _client, _csrf_header
+from tests.test_conversation_agent_routes import _ensure_local_actor, _client
 
 
 def test_memory_management_routes_return_ui_ready_dtos(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = bootstrap["user"]
+    actor_payload = _ensure_local_actor(client)
+    user = actor_payload["user"]
     service = client.app.state.agent_memory_service
     candidate = service.create_candidate(
         owner_user_id=user["userId"],
@@ -32,23 +32,20 @@ def test_memory_management_routes_return_ui_ready_dtos(tmp_path: Path) -> None:
             "rejectedRetentionDays": 3,
             "sourceExcerptRetentionDays": 2,
         },
-        headers=_csrf_header(client),
     )
     candidates = client.get("/api/agent/memory/candidates")
     accepted = client.post(
         f"/api/agent/memory/candidates/{candidate.candidate_id}/accept",
         json={"text": "偏好 toB SaaS 平台经验"},
-        headers=_csrf_header(client),
     )
     facts = client.get("/api/agent/memory/facts")
     fact_id = accepted.json()["fact"]["factId"]
     edited = client.patch(
         f"/api/agent/memory/facts/{fact_id}",
         json={"text": "偏好企业级 SaaS 平台经验"},
-        headers=_csrf_header(client),
     )
-    deleted = client.delete(f"/api/agent/memory/facts/{fact_id}", headers=_csrf_header(client))
-    cleared = client.post("/api/agent/memory/clear", headers=_csrf_header(client))
+    deleted = client.delete(f"/api/agent/memory/facts/{fact_id}")
+    cleared = client.post("/api/agent/memory/clear")
 
     assert settings.status_code == 200, settings.text
     assert settings.json()["schemaVersion"] == "agent.memory.v2"
@@ -68,8 +65,8 @@ def test_memory_management_routes_return_ui_ready_dtos(tmp_path: Path) -> None:
 
 def test_memory_candidate_reject_route_updates_review_state(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = bootstrap["user"]
+    actor_payload = _ensure_local_actor(client)
+    user = actor_payload["user"]
     service = client.app.state.agent_memory_service
     candidate = service.create_candidate(
         owner_user_id=user["userId"],
@@ -82,7 +79,6 @@ def test_memory_candidate_reject_route_updates_review_state(tmp_path: Path) -> N
 
     rejected = client.post(
         f"/api/agent/memory/candidates/{candidate.candidate_id}/reject",
-        headers=_csrf_header(client),
     )
 
     assert rejected.status_code == 200, rejected.text
@@ -91,8 +87,8 @@ def test_memory_candidate_reject_route_updates_review_state(tmp_path: Path) -> N
 
 def test_memory_candidate_accept_route_supports_accept_as_is(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = bootstrap["user"]
+    actor_payload = _ensure_local_actor(client)
+    user = actor_payload["user"]
     service = client.app.state.agent_memory_service
     candidate = service.create_candidate(
         owner_user_id=user["userId"],
@@ -106,7 +102,6 @@ def test_memory_candidate_accept_route_supports_accept_as_is(tmp_path: Path) -> 
     accepted = client.post(
         f"/api/agent/memory/candidates/{candidate.candidate_id}/accept",
         json={},
-        headers=_csrf_header(client),
     )
 
     assert accepted.status_code == 200, accepted.text
@@ -115,8 +110,8 @@ def test_memory_candidate_accept_route_supports_accept_as_is(tmp_path: Path) -> 
 
 def test_memory_job_summary_and_usage_routes_are_schema_versioned(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    bootstrap = _bootstrap_and_login(client)
-    user = bootstrap["user"]
+    actor_payload = _ensure_local_actor(client)
+    user = actor_payload["user"]
     service = client.app.state.agent_memory_service
     service.store.save_summary(
         summary_id="memsummary_1",
@@ -136,7 +131,7 @@ def test_memory_job_summary_and_usage_routes_are_schema_versioned(tmp_path: Path
     jobs = client.get("/api/agent/memory/jobs")
     summaries = client.get("/api/agent/memory/summaries")
     usage = client.get("/api/agent/memory/usage")
-    run = client.post("/api/agent/memory/jobs/run", headers=_csrf_header(client))
+    run = client.post("/api/agent/memory/jobs/run")
 
     assert jobs.status_code == 200, jobs.text
     assert summaries.status_code == 200, summaries.text
@@ -150,14 +145,13 @@ def test_memory_job_summary_and_usage_routes_are_schema_versioned(tmp_path: Path
 def test_memory_write_routes_are_rate_limited_with_memory_schema(tmp_path: Path) -> None:
     client = _client(tmp_path)
     client.app.state.agent_rate_limiter = LocalAgentRateLimiter(max_writes_per_minute=1)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     first = client.put(
         "/api/agent/memory/settings",
         json={"memoryEnabled": True, "generationEnabled": True, "recallEnabled": True, "reviewRequired": True},
-        headers=_csrf_header(client),
     )
-    second = client.post("/api/agent/memory/clear", headers=_csrf_header(client))
+    second = client.post("/api/agent/memory/clear")
 
     assert first.status_code == 200, first.text
     assert second.status_code == 429
@@ -167,12 +161,11 @@ def test_memory_write_routes_are_rate_limited_with_memory_schema(tmp_path: Path)
 
 def test_memory_missing_candidate_error_is_schema_versioned(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
     response = client.post(
         "/api/agent/memory/candidates/missing/accept",
         json={"text": "偏好企业级 SaaS 平台经验"},
-        headers=_csrf_header(client),
     )
 
     assert response.status_code == 400
@@ -182,9 +175,9 @@ def test_memory_missing_candidate_error_is_schema_versioned(tmp_path: Path) -> N
 
 def test_memory_retention_cleanup_route_returns_ui_ready_result(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
 
-    response = client.post("/api/agent/memory/retention/run", headers=_csrf_header(client))
+    response = client.post("/api/agent/memory/retention/run")
 
     assert response.status_code == 200, response.text
     assert response.json()["schemaVersion"] == "agent.memory.v2"

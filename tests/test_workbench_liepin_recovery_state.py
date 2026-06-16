@@ -4,7 +4,7 @@ from pathlib import Path
 
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 
-from tests.test_workbench_api import _approve_requirement_review, _bootstrap_and_login, _client, _create_session, _csrf_header, _workbench_user_from_bootstrap
+from tests.test_workbench_api import _approve_requirement_review, _ensure_local_actor, _client, _create_session, _workbench_user_from_actor_payload
 from tests.test_workbench_liepin_browser_session_probe import (
     ProbeLiepinWorker,
     _assert_runtime_start,
@@ -18,8 +18,8 @@ from tests.test_workbench_liepin_browser_session_probe import (
 
 def test_recovered_opencli_connection_does_not_requeue_liepin_after_runtime_job_started(tmp_path: Path) -> None:
     with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
-        bootstrap = _bootstrap_and_login(client)
-        user = _workbench_user_from_bootstrap(bootstrap)
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
         store = client.app.state.workbench_store
         connection, _created = store.get_or_create_liepin_source_connection(user=user)
         connected = store.mark_liepin_connection_connected(
@@ -44,7 +44,6 @@ def test_recovered_opencli_connection_does_not_requeue_liepin_after_runtime_job_
 
         response = client.post(
             f"/api/workbench/sessions/{session['sessionId']}/start",
-            headers=_csrf_header(client),
         )
         assert response.status_code == 202, response.text
         payload = response.json()

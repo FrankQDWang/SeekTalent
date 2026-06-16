@@ -28,7 +28,7 @@ from seektalent_ui.agent_workbench_response import project_agent_workbench_view
 from seektalent_ui.agent_workbench_stream import encode_sse_event, replay_stream_envelopes
 from seektalent_ui.agent_workbench_stream_projection import append_projected_stream_events
 from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
-from seektalent_ui.auth import get_session_cookie, get_workbench_store, require_current_user_readonly, session_token_digest
+from seektalent_ui.workbench_local_actor import get_workbench_store, local_workbench_read_user
 from seektalent_ui.workbench_store import WorkbenchUser
 
 
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 def list_agent_workbench_conversations(
     request: Request,
     includeArchived: bool = False,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> AgentWorkbenchConversationListResponse:
     conversations = get_agent_service(request).list_conversations(
         owner_user_id=user.user_id,
@@ -67,7 +67,7 @@ def list_agent_workbench_conversations(
 def get_agent_workbench_view(
     conversation_id: str,
     request: Request,
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> AgentWorkbenchConversationResponse:
     response = _build_agent_workbench_view(request=request, conversation_id=conversation_id, user=user)
     stream_store = get_agent_workbench_stream_store(request)
@@ -84,7 +84,7 @@ def list_agent_workbench_events(
     request: Request,
     after_seq: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
-    user: WorkbenchUser = Depends(require_current_user_readonly),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> AgentWorkbenchStreamReplayResponse:
     _ensure_conversation_access(request=request, conversation_id=conversation_id, user=user)
     stream_store = get_agent_workbench_stream_store(request)
@@ -138,12 +138,9 @@ def stream_agent_workbench_events(
     conversation_id: str,
     request: Request,
     after_seq: int | None = Query(default=None, ge=0),
-    user: WorkbenchUser = Depends(require_current_user_readonly),
-    session_id: str | None = Depends(get_session_cookie),
+    user: WorkbenchUser = Depends(local_workbench_read_user),
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> EventSourceResponse:
-    if session_id is None:
-        raise HTTPException(status_code=401, detail="Authentication required.")
     if any(_is_forbidden_query_param(name) for name in request.query_params):
         raise HTTPException(status_code=400, detail="Auth and token query parameters are not accepted.")
     _ensure_conversation_access(request=request, conversation_id=conversation_id, user=user)
@@ -153,7 +150,6 @@ def stream_agent_workbench_events(
         _event_generator(
             request=request,
             user=user,
-            session_digest=session_token_digest(session_id),
             stream_store=stream_store,
             conversation_id=conversation_id,
             after_seq=sequence,
@@ -189,21 +185,12 @@ async def _event_generator(
     *,
     request: Request,
     user: WorkbenchUser,
-    session_digest: str,
     stream_store: AgentWorkbenchStreamStore,
     conversation_id: str,
     after_seq: int,
 ) -> AsyncIterator[dict[str, str]]:
     sequence = after_seq
-    workbench_store = get_workbench_store(request)
     while not await request.is_disconnected():
-        current_user = workbench_store.get_user_by_session_readonly(session_digest=session_digest)
-        if (
-            current_user is None
-            or current_user.user_id != user.user_id
-            or current_user.workspace_id != user.workspace_id
-        ):
-            return
         emitted = False
         for event in replay_stream_envelopes(stream_store, conversation_id=conversation_id, after_seq=sequence):
             sequence = event.seq

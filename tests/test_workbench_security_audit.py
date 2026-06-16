@@ -11,9 +11,6 @@ from seektalent_ui.workbench_store import DEFAULT_TENANT_ID
 from tests.settings_factory import make_settings
 
 
-CSRF_COOKIE_NAME = "seektalent_workbench_csrf"
-
-
 def _app(tmp_path: Path, **settings_overrides):
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, **settings_overrides)
     return create_app(settings=settings)
@@ -27,17 +24,8 @@ def _db_path(tmp_path: Path) -> Path:
     return tmp_path / ".seektalent" / "workbench.sqlite3"
 
 
-def _bootstrap_and_login(client: TestClient) -> str:
-    bootstrap = client.post(
-        "/api/auth/bootstrap",
-        json={"email": "admin@example.com", "password": "correct horse", "displayName": "Admin User"},
-    )
-    assert bootstrap.status_code == 201, bootstrap.text
-    login = client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct horse"})
-    assert login.status_code == 204, login.text
-    token = client.cookies.get(CSRF_COOKIE_NAME)
-    assert token is not None
-    return token
+def _ensure_local_actor(client: TestClient) -> None:
+    client.app.state.workbench_store.ensure_local_actor()
 
 
 def _audit_actions(tmp_path: Path) -> list[str]:
@@ -46,32 +34,24 @@ def _audit_actions(tmp_path: Path) -> list[str]:
     return [row[0] for row in rows]
 
 
-def test_auth_and_source_actions_write_redacted_security_audit_events(tmp_path: Path) -> None:
+def test_source_actions_write_redacted_security_audit_events(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    csrf = _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = client.post(
         "/api/workbench/sessions",
-        headers={"X-CSRF-Token": csrf},
         json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
     ).json()
 
-    connection = client.post("/api/workbench/source-connections/liepin", headers={"X-CSRF-Token": csrf})
+    connection = client.post("/api/workbench/source-connections/liepin")
     assert connection.status_code == 201
     policy = client.put(
         f"/api/workbench/sessions/{session['sessionId']}/source-runs/liepin/policy",
-        headers={"X-CSRF-Token": csrf},
         json={"detailOpenMode": "bypass_confirm"},
     )
     assert policy.status_code == 200
-    logout = client.post("/api/auth/logout", headers={"X-CSRF-Token": csrf})
-    assert logout.status_code == 204
-
     actions = _audit_actions(tmp_path)
-    assert "bootstrap_admin_created" in actions
-    assert "login" in actions
     assert "source_connection_created" in actions
     assert "liepin_detail_policy_updated" in actions
-    assert "logout" in actions
 
     raw_audit = _db_path(tmp_path).read_text(encoding="utf-8", errors="ignore")
     assert "correct horse" not in raw_audit
@@ -81,9 +61,9 @@ def test_auth_and_source_actions_write_redacted_security_audit_events(tmp_path: 
 
 def test_security_audit_route_is_admin_scoped_and_redacts_metadata(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     store = client.app.state.workbench_store
-    user = store.get_user_for_login(email="admin@example.com")[0]
+    user = store.ensure_local_actor()
     store.record_security_audit_event(
         actor_user_id=user.user_id,
         actor_role=user.role,
@@ -150,14 +130,13 @@ def test_security_audit_route_is_admin_scoped_and_redacts_metadata(tmp_path: Pat
 
 def test_workbench_event_route_projects_payload_to_closed_profile(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    csrf = _bootstrap_and_login(client)
+    _ensure_local_actor(client)
     session = client.post(
         "/api/workbench/sessions",
-        headers={"X-CSRF-Token": csrf},
         json={"jobTitle": "Engineer", "jdText": "Own APIs and data stores."},
     ).json()
     store = client.app.state.workbench_store
-    user = store.get_user_for_login(email="admin@example.com")[0]
+    user = store.ensure_local_actor()
     store.append_workbench_event(
         tenant_id=DEFAULT_TENANT_ID,
         workspace_id=user.workspace_id,

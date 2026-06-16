@@ -114,15 +114,10 @@ def login_frame_html(connection_id: str) -> str:
     const state = document.getElementById("state");
     const text = document.getElementById("text");
 
-    function csrfHeader() {{
-      const row = document.cookie.split("; ").find((item) => item.startsWith("seektalent_workbench_csrf="));
-      return row ? decodeURIComponent(row.split("=")[1]) : "";
-    }}
-
     async function postJson(url, body) {{
       const response = await fetch(url, {{
         method: "POST",
-        headers: {{"Content-Type": "application/json", "X-CSRF-Token": csrfHeader()}},
+        headers: {{"Content-Type": "application/json"}},
         body: JSON.stringify(body),
       }});
       if (!response.ok) throw new Error("request failed");
@@ -166,7 +161,6 @@ def login_frame_html(connection_id: str) -> str:
       state.textContent = "确认中";
       const response = await fetch(completeUrl, {{
         method: "POST",
-        headers: {{"X-CSRF-Token": csrfHeader()}},
       }});
       state.textContent = response.ok ? "已连接，可以返回工作台" : "确认失败";
     }});

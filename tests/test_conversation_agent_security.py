@@ -7,23 +7,15 @@ from fastapi.testclient import TestClient
 from seektalent_ui.network_guard import build_network_guard
 from seektalent_ui.server import create_app
 from tests.settings_factory import make_settings
-from tests.test_conversation_agent_routes import DeterministicRouteRuntime, _bootstrap_and_login, _csrf_header
+from tests.test_conversation_agent_routes import DeterministicRouteRuntime
 
 
-def test_agent_write_routes_require_authenticated_csrf_session(tmp_path: Path) -> None:
+def test_agent_write_routes_use_local_actor_without_workbench_auth(tmp_path: Path) -> None:
     client = _client(tmp_path)
-
-    unauthenticated = client.post("/api/agent/conversations", json={"title": "资深 Python 后端"})
-    assert unauthenticated.status_code == 401
-
-    _bootstrap_and_login(client)
-    missing_csrf = client.post("/api/agent/conversations", json={"title": "资深 Python 后端"})
-    assert missing_csrf.status_code == 403
 
     created = client.post(
         "/api/agent/conversations",
         json={"title": "资深 Python 后端"},
-        headers=_csrf_header(client),
     )
     assert created.status_code == 201
 
