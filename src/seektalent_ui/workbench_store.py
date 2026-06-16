@@ -153,6 +153,7 @@ NOTE_KINDS: set[WorkbenchNoteKind] = {"progress", "waiting", "human_action", "te
 
 class WorkbenchStore:
     def __init__(self, db_path: str | Path) -> None:
+        from seektalent_ui.workbench_actor_store import WorkbenchActorStore
         from seektalent_ui.workbench_auth_store import WorkbenchAuthStore
         from seektalent_ui.workbench_candidate_store import WorkbenchCandidateStore
         from seektalent_ui.workbench_connection_store import WorkbenchConnectionStore
@@ -164,6 +165,11 @@ class WorkbenchStore:
 
         self.db_path = Path(db_path)
         self._initialized = False
+        self._actor = WorkbenchActorStore(
+            connect=self._connect,
+            initialize=self._initialize,
+            user_from_row=_user_from_row,
+        )
         self._security_audit = WorkbenchSecurityAuditStore(
             connect=self._connect,
             initialize=self._initialize,
@@ -248,6 +254,9 @@ class WorkbenchStore:
             user_from_row=_user_from_row,
             append_security_audit_event=_append_security_audit_event_conn,
         )
+
+    def ensure_local_actor(self) -> WorkbenchUser:
+        return self._actor.ensure_local_actor()
 
     def bootstrap_admin(
         self,

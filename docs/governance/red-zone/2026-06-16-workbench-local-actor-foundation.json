@@ -1,0 +1,15 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "refactor",
+  "summary": "Add the Workbench local actor facade and persistence foundation without changing route behavior.",
+  "rationale": "WorkbenchStore is a red-zone BFF persistence boundary. This PR preserves local owner scoping while preparing removal of Workbench admin/password login in staged steps.",
+  "red_files": [
+    "src/seektalent_ui/workbench_store.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run --group dev python -m pytest tests/test_workbench_local_actor.py::test_workbench_store_ensures_local_actor_once tests/test_workbench_store_decoupling.py tests/test_workbench_auth_security.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "git diff --check"
+  ]
+}
