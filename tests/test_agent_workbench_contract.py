@@ -901,7 +901,10 @@ def test_agent_workbench_sse_generator_appends_projection_catchup_before_replay(
     assert payload["kind"] in {"strategyGraph.changed", "pendingAction.changed", "message.completed"}
 
 
-def test_agent_workbench_sse_generator_emits_terminal_error_on_projection_failure(tmp_path: Path) -> None:
+def test_agent_workbench_sse_generator_emits_terminal_error_on_projection_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     from seektalent_ui.agent_workbench_routes import _event_generator
     from seektalent_ui.auth import session_token_digest
 
@@ -930,7 +933,8 @@ def test_agent_workbench_sse_generator_emits_terminal_error_on_projection_failur
             second = None
         return first, second
 
-    first, second = asyncio.run(consume())
+    with caplog.at_level("WARNING", logger="seektalent_ui.agent_workbench_routes"):
+        first, second = asyncio.run(consume())
     payload = json.loads(first["data"])
     assert first["event"] == "agent_workbench_error"
     assert payload == {
@@ -940,6 +944,13 @@ def test_agent_workbench_sse_generator_emits_terminal_error_on_projection_failur
         "statusCode": 404,
     }
     assert second is None
+    [record] = [
+        record
+        for record in caplog.records
+        if record.message == "Agent workbench SSE projection catch-up failed."
+    ]
+    assert record.conversation_ref == "redacted"
+    assert not hasattr(record, "conversation_id")
 
 
 class _FakeAgentService:

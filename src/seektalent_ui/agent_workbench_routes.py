@@ -221,7 +221,7 @@ async def _event_generator(
         except HTTPException as exc:
             logger.warning(
                 "Agent workbench SSE projection catch-up failed.",
-                extra={"conversation_id": conversation_id, "status_code": exc.status_code},
+                extra={"conversation_ref": "redacted", "status_code": exc.status_code},
             )
             yield _terminal_error_event(conversation_id=conversation_id, status_code=exc.status_code)
             return
