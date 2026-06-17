@@ -40,7 +40,7 @@ def test_submit_jd_persists_user_message_and_requirement_review(tmp_path: Path) 
 
 
 def test_requirement_edit_amend_review_resolution_confirm_and_workflow_start(tmp_path: Path) -> None:
-    service, _conversation_store, _runtime_store = build_service(tmp_path)
+    service, _conversation_store, runtime_store = build_service(tmp_path)
     conversation = service.create_conversation(
         owner_user_id="user_1",
         workspace_id="workspace_1",
@@ -116,4 +116,16 @@ def test_requirement_edit_amend_review_resolution_confirm_and_workflow_start(tmp
 
     assert confirmed.conversation_reopen_state.approved_requirement_revision_id.startswith("reqapproved_")
     assert started.conversation_reopen_state.runtime_run_id == "runtime_run_1"
-    assert started.conversation_reopen_state.status == "completed"
+    assert started.conversation_reopen_state.status == "running"
+    assert len(started.conversation_reopen_state.linked_runtime_runs) == 1
+    linked_run = started.conversation_reopen_state.linked_runtime_runs[0]
+    assert linked_run.runtime_run_id == "runtime_run_1"
+    assert linked_run.is_active is True
+    assert linked_run.run_kind == "primary"
+    assert linked_run.run_intent_id == (
+        f"workflow:{conversation.conversation_id}:"
+        f"{confirmed.conversation_reopen_state.approved_requirement_revision_id}:primary"
+    )
+    assert runtime_store.get_run("runtime_run_1").status == "queued"
+    events = runtime_store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
+    assert [event.event_type for event in events] == ["runtime_run_queued"]

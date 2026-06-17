@@ -1,11 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from seektalent.sqlite_migrations import (
+    SQLiteMigrationError,
+    SQLiteMigrationStep,
+    backup_sqlite_before_migration,
+    require_supported_version,
+    run_ordered_migrations,
+    run_sqlite_integrity_checks,
+)
 from seektalent_agent_memory.models import (
     MemoryCandidate,
     MemoryClearResult,
@@ -32,17 +42,33 @@ class MemoryStore:
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
-            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version > AGENT_MEMORY_SCHEMA_VERSION:
-                raise RuntimeError("agent_memory_schema_unsupported")
+            version = require_supported_version(
+                conn,
+                supported_version=AGENT_MEMORY_SCHEMA_VERSION,
+                store_name="agent-memory",
+            )
+            if version > 0 and version < AGENT_MEMORY_SCHEMA_VERSION:
+                backup_sqlite_before_migration(
+                    self.path,
+                    backup_root=self.path.parent / "migration_backups",
+                    store_name="agent-memory",
+                    now=_migration_now(),
+                )
             with conn:
                 if version == 0:
                     _create_schema(conn)
+                    conn.execute(f"PRAGMA user_version = {AGENT_MEMORY_SCHEMA_VERSION}")
                 elif version == 1:
-                    _migrate_v1_to_v2(conn)
+                    run_ordered_migrations(
+                        conn,
+                        from_version=version,
+                        to_version=AGENT_MEMORY_SCHEMA_VERSION,
+                        migrations={1: SQLiteMigrationStep(1, 2, _migrate_v1_to_v2)},
+                        store_name="agent-memory",
+                    )
                 else:
                     _ensure_v2_columns(conn)
-                conn.execute(f"PRAGMA user_version = {AGENT_MEMORY_SCHEMA_VERSION}")
+                run_sqlite_integrity_checks(conn, store_name="agent-memory", foreign_keys=True)
 
     def get_settings(self, *, owner_user_id: str, workspace_id: str, now: str) -> MemorySettings:
         with self._connect() as conn:
@@ -162,6 +188,15 @@ class MemoryStore:
             return MemoryJobClaim(status="skipped_up_to_date", reason_code="agent_memory_stage1_up_to_date")
         with self._connect_immediate() as conn:
             try:
+                if self._stage1_output_up_to_date(
+                    conversation_id=conversation_id,
+                    owner_user_id=owner_user_id,
+                    workspace_id=workspace_id,
+                    source_updated_at=source_updated_at,
+                    conn=conn,
+                ):
+                    conn.rollback()
+                    return MemoryJobClaim(status="skipped_up_to_date", reason_code="agent_memory_stage1_up_to_date")
                 row = _job_row(conn, "stage1", conversation_id, owner_user_id, workspace_id)
                 if row is not None:
                     claim = _claim_blocked_by_existing_job(row, now=now)
@@ -1170,17 +1205,30 @@ class MemoryStore:
             rows = conn.execute(sql, params).fetchall()
         return [_usage_from_row(row) for row in rows]
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+            yield conn
+            conn.commit()
+        except (sqlite3.Error, SQLiteMigrationError, RuntimeError, TypeError, ValueError):
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
-    def _connect_immediate(self) -> sqlite3.Connection:
-        conn = self._connect()
-        conn.execute("BEGIN IMMEDIATE")
-        return conn
+    @contextmanager
+    def _connect_immediate(self) -> Iterator[sqlite3.Connection]:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield conn
+            finally:
+                if conn.in_transaction:
+                    conn.rollback()
 
     def _stage1_output_up_to_date(
         self,
@@ -1189,15 +1237,41 @@ class MemoryStore:
         owner_user_id: str,
         workspace_id: str,
         source_updated_at: str,
+        conn: sqlite3.Connection | None = None,
     ) -> bool:
+        if conn is not None:
+            return self._stage1_output_up_to_date_in_conn(
+                conn,
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                source_updated_at=source_updated_at,
+            )
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT source_updated_at FROM agent_memory_stage1_outputs
-                WHERE conversation_id = ? AND owner_user_id = ? AND workspace_id = ?
-                """,
-                (conversation_id, owner_user_id, workspace_id),
-            ).fetchone()
+            return self._stage1_output_up_to_date_in_conn(
+                conn,
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                source_updated_at=source_updated_at,
+            )
+
+    def _stage1_output_up_to_date_in_conn(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        conversation_id: str,
+        owner_user_id: str,
+        workspace_id: str,
+        source_updated_at: str,
+    ) -> bool:
+        row = conn.execute(
+            """
+            SELECT source_updated_at FROM agent_memory_stage1_outputs
+            WHERE conversation_id = ? AND owner_user_id = ? AND workspace_id = ?
+            """,
+            (conversation_id, owner_user_id, workspace_id),
+        ).fetchone()
         return row is not None and str(row["source_updated_at"]) >= source_updated_at
 
     def _mark_job_terminal(
@@ -1236,6 +1310,10 @@ class MemoryStore:
                 ),
             )
         return cursor.rowcount == 1
+
+
+def _migration_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:

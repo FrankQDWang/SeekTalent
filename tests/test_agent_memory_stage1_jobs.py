@@ -74,6 +74,51 @@ def test_stage1_claim_skips_when_output_is_up_to_date(tmp_path: Path) -> None:
     assert claim.status == "skipped_up_to_date"
 
 
+def test_stage1_claim_rechecks_up_to_date_output_inside_claim_transaction(tmp_path: Path) -> None:
+    from seektalent_agent_memory.store import MemoryStore
+
+    store = MemoryStore(tmp_path / "agent_memory.sqlite3")
+    store.initialize()
+    original_check = store._stage1_output_up_to_date
+    calls = {"count": 0}
+
+    def racing_check(**kwargs: object) -> bool:
+        calls["count"] += 1
+        if calls["count"] == 1:
+            store.save_stage1_output(
+                conversation_id="agent_conv_1",
+                owner_user_id="user_1",
+                workspace_id="workspace_1",
+                source_updated_at="2026-06-10T01:00:00.000000Z",
+                raw_memory="用户偏好候选人总结先讲业务匹配。",
+                rollout_summary="summary style",
+                rollout_slug="summary-style",
+                generated_at="2026-06-10T08:00:00.000000Z",
+                privacy_review_json={},
+                source_message_ids=["m1"],
+                source_activity_ids=[],
+            )
+            return False
+        return original_check(**kwargs)
+
+    store._stage1_output_up_to_date = racing_check  # type: ignore[method-assign]
+
+    claim = store.try_claim_stage1_job(
+        conversation_id="agent_conv_1",
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        worker_id="worker_1",
+        source_updated_at="2026-06-10T01:00:00.000000Z",
+        now="2026-06-10T08:10:00.000000Z",
+        lease_seconds=120,
+        max_running_jobs=4,
+    )
+
+    assert claim.status == "skipped_up_to_date"
+    assert calls["count"] == 2
+    assert store.list_jobs(owner_user_id="user_1", workspace_id="workspace_1") == []
+
+
 def test_stage1_claim_is_scoped_and_stale_token_cannot_complete(tmp_path: Path) -> None:
     from seektalent_agent_memory.store import MemoryStore
 

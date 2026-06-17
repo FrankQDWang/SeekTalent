@@ -11,6 +11,7 @@ from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchConversationSummaryResponse,
     AgentWorkbenchGraphEdgeResponse,
     AgentWorkbenchGraphNodeResponse,
+    AgentWorkbenchLinkedRuntimeRunResponse,
     AgentWorkbenchMessagePayloadResponse,
     AgentWorkbenchMessageResponse,
     AgentWorkbenchPendingActionsResponse,
@@ -38,6 +39,25 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
             isArchived=state.is_archived,
             runtimeRunId=state.runtime_run_id,
             workbenchSessionId=state.workbench_session_id,
+            linkedRuntimeRuns=[
+                AgentWorkbenchLinkedRuntimeRunResponse(
+                    runtimeRunId=link.runtime_run_id,
+                    status=link.status,
+                    runKind=link.run_kind,
+                    workbenchSessionId=link.workbench_session_id,
+                    approvedRequirementRevisionId=link.approved_requirement_revision_id,
+                    runIntentId=link.run_intent_id,
+                    linkReason=link.link_reason,
+                    latestEventSeq=link.latest_event_seq,
+                    linkedAt=link.linked_at,
+                    updatedAt=link.updated_at,
+                    activeAt=link.active_at,
+                    supersededAt=link.superseded_at,
+                    completedAt=link.completed_at,
+                    isActive=link.is_active,
+                )
+                for link in state.linked_runtime_runs
+            ],
             updatedAt=state.last_opened_at,
         ),
         messages=[_message_response(message) for message in input.messages],

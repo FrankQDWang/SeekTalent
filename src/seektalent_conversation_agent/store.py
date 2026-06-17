@@ -1,10 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime, timezone
 import json
 import sqlite3
 from pathlib import Path
 from uuid import uuid4
 
+from seektalent.sqlite_migrations import (
+    SQLiteMigrationError,
+    SQLiteMigrationStep,
+    backup_sqlite_before_migration,
+    require_supported_version,
+    run_ordered_migrations,
+    run_sqlite_integrity_checks,
+)
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.models import (
     AgentToolCallRecord,
@@ -13,15 +24,17 @@ from seektalent_conversation_agent.models import (
     ContextSummaryRecord,
     ConversationRecord,
     ConversationReopenState,
+    ConversationRuntimeRunLink,
     ConversationThreadView,
     TranscriptActivityItem,
     TranscriptMessage,
 )
 
 
-CONVERSATION_AGENT_SCHEMA_VERSION = 3
+CONVERSATION_AGENT_SCHEMA_VERSION = 4
 
 _ACTIVE_ARCHIVE_BLOCKING_STATUSES = {"starting", "running"}
+_RUNTIME_RUN_KINDS = {"primary", "rerun", "fork"}
 
 
 class ConversationStore:
@@ -32,24 +45,45 @@ class ConversationStore:
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
-            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            if version > CONVERSATION_AGENT_SCHEMA_VERSION:
+            try:
+                version = require_supported_version(
+                    conn,
+                    supported_version=CONVERSATION_AGENT_SCHEMA_VERSION,
+                    store_name="conversation-agent",
+                )
+            except SQLiteMigrationError as exc:
                 raise ConversationAgentError(
                     "conversation_agent_schema_unsupported",
-                    f"conversation-agent schema version {version} is newer than supported version "
-                    f"{CONVERSATION_AGENT_SCHEMA_VERSION}",
-                )
+                    str(exc),
+                ) from exc
             if version == CONVERSATION_AGENT_SCHEMA_VERSION:
                 return
+            if version > 0:
+                backup_sqlite_before_migration(
+                    self.path,
+                    backup_root=self.path.parent / "migration_backups",
+                    store_name="conversation-agent",
+                    now=_migration_now(),
+                )
             if version == 0:
                 with conn:
                     _create_schema(conn)
                     conn.execute(f"PRAGMA user_version = {CONVERSATION_AGENT_SCHEMA_VERSION}")
+                    run_sqlite_integrity_checks(conn, store_name="conversation-agent", foreign_keys=True)
                 return
-            if version == 2:
+            if version in {2, 3}:
                 with conn:
-                    _migrate_v2_to_v3(conn)
-                    conn.execute(f"PRAGMA user_version = {CONVERSATION_AGENT_SCHEMA_VERSION}")
+                    run_ordered_migrations(
+                        conn,
+                        from_version=version,
+                        to_version=CONVERSATION_AGENT_SCHEMA_VERSION,
+                        migrations={
+                            2: SQLiteMigrationStep(2, 3, _migrate_v2_to_v3),
+                            3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
+                        },
+                        store_name="conversation-agent",
+                    )
+                    run_sqlite_integrity_checks(conn, store_name="conversation-agent", foreign_keys=True)
                 return
             raise ConversationAgentError(
                 "conversation_agent_schema_migration_required",
@@ -594,20 +628,151 @@ class ConversationStore:
         runtime_run_id: str,
         workbench_session_id: str | None,
         approved_requirement_revision_id: str,
+        run_intent_id: str | None = None,
+        run_kind: str = "primary",
+        link_reason: str = "start",
+        make_active: bool = True,
         linked_at: str,
     ) -> ConversationRecord:
+        if run_kind not in _RUNTIME_RUN_KINDS:
+            raise ConversationAgentError("conversation_runtime_run_kind_invalid")
+        if not approved_requirement_revision_id:
+            raise ConversationAgentError("conversation_runtime_requirement_required")
+        if not link_reason:
+            raise ConversationAgentError("conversation_runtime_link_reason_invalid")
         with self._connect() as conn, conn:
+            conversation = _conversation_row(conn, conversation_id)
+            if conversation is None:
+                raise ConversationAgentError("conversation_not_found")
+            existing_other_link = conn.execute(
+                """
+                SELECT conversation_id
+                FROM agent_runtime_links
+                WHERE runtime_run_id = ? AND conversation_id <> ?
+                LIMIT 1
+                """,
+                (runtime_run_id, conversation_id),
+            ).fetchone()
+            if existing_other_link is not None:
+                raise ConversationAgentError(
+                    "agent_runtime_run_already_linked",
+                    payload={"runtimeRunId": runtime_run_id},
+                )
+            status = "active" if make_active else "linked"
+            active_at = linked_at if make_active else None
+            if make_active:
+                conn.execute(
+                    """
+                    UPDATE agent_runtime_links
+                    SET status = 'superseded',
+                        superseded_at = COALESCE(superseded_at, ?),
+                        updated_at = ?
+                    WHERE conversation_id = ?
+                      AND runtime_run_id <> ?
+                      AND status = 'active'
+                    """,
+                    (linked_at, linked_at, conversation_id, runtime_run_id),
+                )
             conn.execute(
                 """
                 INSERT INTO agent_runtime_links (
-                    conversation_id, runtime_run_id, status, latest_event_seq, linked_at, updated_at
+                    conversation_id, runtime_run_id, status, run_kind, workbench_session_id,
+                    approved_requirement_revision_id, run_intent_id, link_reason, latest_event_seq,
+                    linked_at, updated_at, active_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(conversation_id, runtime_run_id) DO UPDATE SET
                     status = excluded.status,
+                    run_kind = excluded.run_kind,
+                    workbench_session_id = excluded.workbench_session_id,
+                    approved_requirement_revision_id = excluded.approved_requirement_revision_id,
+                    run_intent_id = excluded.run_intent_id,
+                    link_reason = excluded.link_reason,
+                    active_at = COALESCE(excluded.active_at, agent_runtime_links.active_at),
+                    superseded_at = CASE
+                        WHEN excluded.status = 'active' THEN NULL
+                        ELSE agent_runtime_links.superseded_at
+                    END,
                     updated_at = excluded.updated_at
                 """,
-                (conversation_id, runtime_run_id, "linked", 0, linked_at, linked_at),
+                (
+                    conversation_id,
+                    runtime_run_id,
+                    status,
+                    run_kind,
+                    workbench_session_id,
+                    approved_requirement_revision_id,
+                    run_intent_id,
+                    link_reason,
+                    0,
+                    linked_at,
+                    linked_at,
+                    active_at,
+                ),
+            )
+            if make_active:
+                conn.execute(
+                    """
+                    UPDATE agent_conversations
+                    SET runtime_run_id = ?, workbench_session_id = ?, approved_requirement_revision_id = ?,
+                        status = ?, updated_at = ?
+                    WHERE conversation_id = ?
+                    """,
+                    (
+                        runtime_run_id,
+                        workbench_session_id,
+                        approved_requirement_revision_id,
+                        "running",
+                        linked_at,
+                        conversation_id,
+                    ),
+                )
+            row = _conversation_row(conn, conversation_id)
+        return _conversation_from_row(row)
+
+    def activate_runtime_run(
+        self,
+        *,
+        conversation_id: str,
+        runtime_run_id: str,
+        activated_at: str,
+    ) -> ConversationRecord:
+        with self._connect() as conn, conn:
+            link = conn.execute(
+                """
+                SELECT *
+                FROM agent_runtime_links
+                WHERE conversation_id = ? AND runtime_run_id = ?
+                """,
+                (conversation_id, runtime_run_id),
+            ).fetchone()
+            if link is None:
+                raise ConversationAgentError(
+                    "agent_runtime_run_not_linked",
+                    payload={"runtimeRunId": runtime_run_id},
+                )
+            conn.execute(
+                """
+                UPDATE agent_runtime_links
+                SET status = 'superseded',
+                    superseded_at = COALESCE(superseded_at, ?),
+                    updated_at = ?
+                WHERE conversation_id = ?
+                  AND runtime_run_id <> ?
+                  AND status = 'active'
+                """,
+                (activated_at, activated_at, conversation_id, runtime_run_id),
+            )
+            conn.execute(
+                """
+                UPDATE agent_runtime_links
+                SET status = 'active',
+                    active_at = ?,
+                    superseded_at = NULL,
+                    updated_at = ?
+                WHERE conversation_id = ? AND runtime_run_id = ?
+                """,
+                (activated_at, activated_at, conversation_id, runtime_run_id),
             )
             conn.execute(
                 """
@@ -618,10 +783,10 @@ class ConversationStore:
                 """,
                 (
                     runtime_run_id,
-                    workbench_session_id,
-                    approved_requirement_revision_id,
+                    link["workbench_session_id"],
+                    link["approved_requirement_revision_id"],
                     "running",
-                    linked_at,
+                    activated_at,
                     conversation_id,
                 ),
             )
@@ -639,6 +804,23 @@ class ConversationStore:
                 (conversation_id, runtime_run_id),
             ).fetchone()
         return row is not None
+
+    def list_runtime_links(self, *, conversation_id: str) -> list[ConversationRuntimeRunLink]:
+        with self._connect() as conn:
+            conversation = _conversation_row(conn, conversation_id)
+            if conversation is None:
+                raise ConversationAgentError("conversation_not_found")
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM agent_runtime_links
+                WHERE conversation_id = ?
+                ORDER BY linked_at ASC, runtime_run_id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
+        active_runtime_run_id = conversation["runtime_run_id"]
+        return [_runtime_link_from_row(row, active_runtime_run_id=active_runtime_run_id) for row in rows]
 
     def update_rendered_runtime_cursor(
         self,
@@ -729,12 +911,25 @@ class ConversationStore:
                 """,
                 (conversation_id,),
             ).fetchall()
+            link_rows = conn.execute(
+                """
+                SELECT *
+                FROM agent_runtime_links
+                WHERE conversation_id = ?
+                ORDER BY linked_at ASC, runtime_run_id ASC
+                """,
+                (conversation_id,),
+            ).fetchall()
             summary_row = _latest_summary_row(conn, conversation_id)
         conversation = _conversation_from_row(updated)
+        runtime_links = [
+            _runtime_link_from_row(row, active_runtime_run_id=conversation.runtime_run_id) for row in link_rows
+        ]
         return ConversationThreadView(
             conversation_reopen_state=_reopen_state(
                 conversation,
                 opened_at=opened_at,
+                linked_runtime_runs=runtime_links,
                 compaction_summary_cursor=_summary_cursor(summary_row),
             ),
             messages=[_message_from_row(row) for row in message_rows],
@@ -888,12 +1083,24 @@ class ConversationStore:
             )
         return record
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.path)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms}")
+            yield conn
+            conn.commit()
+        except (sqlite3.Error, SQLiteMigrationError, ConversationAgentError, RuntimeError, TypeError, ValueError):
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def _migration_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -993,11 +1200,22 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             conversation_id TEXT NOT NULL REFERENCES agent_conversations(conversation_id) ON DELETE CASCADE,
             runtime_run_id TEXT NOT NULL,
             status TEXT NOT NULL,
+            run_kind TEXT NOT NULL DEFAULT 'primary',
+            workbench_session_id TEXT,
+            approved_requirement_revision_id TEXT NOT NULL,
+            run_intent_id TEXT,
+            link_reason TEXT NOT NULL DEFAULT 'start',
             latest_event_seq INTEGER NOT NULL DEFAULT 0,
             linked_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            active_at TEXT,
+            superseded_at TEXT,
+            completed_at TEXT,
             PRIMARY KEY(conversation_id, runtime_run_id)
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runtime_links_runtime_run
+            ON agent_runtime_links(runtime_run_id);
 
         CREATE TABLE IF NOT EXISTS agent_context_summaries (
             summary_id TEXT PRIMARY KEY,
@@ -1040,6 +1258,60 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
         CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_transcript_messages_idempotency
             ON agent_transcript_messages(conversation_id, idempotency_key)
             WHERE idempotency_key IS NOT NULL
+        """
+    )
+
+
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    _ensure_columns(
+        conn,
+        "agent_runtime_links",
+        {
+            "run_kind": "TEXT NOT NULL DEFAULT 'primary'",
+            "workbench_session_id": "TEXT",
+            "approved_requirement_revision_id": "TEXT NOT NULL DEFAULT ''",
+            "run_intent_id": "TEXT",
+            "link_reason": "TEXT NOT NULL DEFAULT 'start'",
+            "active_at": "TEXT",
+            "superseded_at": "TEXT",
+            "completed_at": "TEXT",
+        },
+    )
+    conn.execute(
+        """
+        UPDATE agent_runtime_links
+        SET workbench_session_id = (
+                SELECT agent_conversations.workbench_session_id
+                FROM agent_conversations
+                WHERE agent_conversations.conversation_id = agent_runtime_links.conversation_id
+            ),
+            approved_requirement_revision_id = COALESCE(NULLIF(approved_requirement_revision_id, ''), (
+                SELECT agent_conversations.approved_requirement_revision_id
+                FROM agent_conversations
+                WHERE agent_conversations.conversation_id = agent_runtime_links.conversation_id
+            ), ''),
+            status = CASE
+                WHEN runtime_run_id = (
+                    SELECT agent_conversations.runtime_run_id
+                    FROM agent_conversations
+                    WHERE agent_conversations.conversation_id = agent_runtime_links.conversation_id
+                ) THEN 'active'
+                ELSE status
+            END,
+            active_at = CASE
+                WHEN runtime_run_id = (
+                    SELECT agent_conversations.runtime_run_id
+                    FROM agent_conversations
+                    WHERE agent_conversations.conversation_id = agent_runtime_links.conversation_id
+                ) THEN COALESCE(active_at, linked_at)
+                ELSE active_at
+            END
+        """
+    )
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_runtime_links_runtime_run
+            ON agent_runtime_links(runtime_run_id)
         """
     )
 
@@ -1128,6 +1400,7 @@ def _reopen_state(
     conversation: ConversationRecord,
     *,
     opened_at: str,
+    linked_runtime_runs: list[ConversationRuntimeRunLink] | None = None,
     compaction_summary_cursor: CompactionSummaryCursor,
 ) -> ConversationReopenState:
     return ConversationReopenState(
@@ -1147,6 +1420,7 @@ def _reopen_state(
         pending_command_count=conversation.pending_command_count,
         pending_requirement_review_count=conversation.pending_requirement_review_count,
         pending_memory_review_count=conversation.pending_memory_review_count,
+        linked_runtime_runs=linked_runtime_runs or [],
         compaction_summary_cursor=compaction_summary_cursor,
         allowed_actions=_allowed_actions(conversation),
         last_opened_at=opened_at,
@@ -1210,6 +1484,27 @@ def _tool_call_from_row(row: sqlite3.Row) -> AgentToolCallRecord:
         reason_code=row["reason_code"],
         started_at=row["started_at"],
         completed_at=row["completed_at"],
+    )
+
+
+def _runtime_link_from_row(row: sqlite3.Row, *, active_runtime_run_id: str | None) -> ConversationRuntimeRunLink:
+    runtime_run_id = row["runtime_run_id"]
+    return ConversationRuntimeRunLink(
+        conversation_id=row["conversation_id"],
+        runtime_run_id=runtime_run_id,
+        status=row["status"],
+        run_kind=row["run_kind"],
+        workbench_session_id=row["workbench_session_id"],
+        approved_requirement_revision_id=row["approved_requirement_revision_id"],
+        run_intent_id=row["run_intent_id"],
+        link_reason=row["link_reason"],
+        latest_event_seq=int(row["latest_event_seq"] or 0),
+        linked_at=row["linked_at"],
+        updated_at=row["updated_at"],
+        active_at=row["active_at"],
+        superseded_at=row["superseded_at"],
+        completed_at=row["completed_at"],
+        is_active=runtime_run_id == active_runtime_run_id,
     )
 
 

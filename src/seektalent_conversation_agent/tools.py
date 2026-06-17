@@ -144,7 +144,7 @@ class AgentToolAdapter:
             idempotency_key=idempotency_key,
         )
 
-    async def start_workflow(
+    def start_workflow(
         self,
         *,
         conversation_id: str | None,
@@ -158,7 +158,7 @@ class AgentToolAdapter:
         executor = self.workflow_executor
         if executor is None:
             raise RuntimeControlError("runtime_workflow_executor_required")
-        return await executor.start_workflow(
+        return executor.enqueue_workflow_run(
             conversation_id=conversation_id,
             workbench_session_id=workbench_session_id,
             approved_requirement=approved_requirement,

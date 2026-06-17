@@ -19,6 +19,8 @@ from seektalent_runtime_control.store import RuntimeControlStore
 
 
 class RuntimeLikeAdapter:
+    supports_resume_context = False
+
     def __init__(self, runtime: object) -> None:
         self.runtime = runtime
 

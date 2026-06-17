@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -13,6 +14,8 @@ from tests.settings_factory import make_settings
 
 
 class DeterministicRouteRuntime:
+    workflow_calls: list[dict[str, object]] = []
+
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
 
@@ -32,8 +35,25 @@ class DeterministicRouteRuntime:
                     message="岗位需求解析完成。",
                     payload={"stage": "requirements"},
                 )
-            )
+        )
         return sample_requirement_sheet(job_title=job_title)
+
+    async def run_async(self, **kwargs: object) -> object:
+        type(self).workflow_calls.append(dict(kwargs))
+        runtime_start_callback = kwargs.get("runtime_start_callback")
+        if callable(runtime_start_callback):
+            runtime_start_callback("workflow_runtime_route_1")
+        progress_callback = kwargs.get("progress_callback")
+        if callable(progress_callback):
+            progress_callback(
+                ProgressEvent(
+                    type="source_result",
+                    message="CTS 返回 2 个候选人。",
+                    round_no=1,
+                    payload={"stage": "source", "sourceId": "cts", "candidateCount": 2},
+                )
+            )
+        return {"status": "completed"}
 
 
 class CapturingRouteAgentRunner:
@@ -88,6 +108,69 @@ def test_agent_conversation_routes_create_list_reopen_and_submit_jd(tmp_path: Pa
     reopened = client.get(f"/api/agent/conversations/{conversation_id}")
     assert reopened.status_code == 200, reopened.text
     assert reopened.json()["conversationReopenState"]["latestMessageSeq"] == 2
+
+
+def test_workflow_start_route_uses_app_factory_runtime_wrapper(tmp_path: Path) -> None:
+    DeterministicRouteRuntime.workflow_calls = []
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    submitted = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "jobTitle": "Python 平台负责人",
+            "text": "需要 Python API、平台工程和检索排序。",
+            "notes": "优先 toB SaaS",
+            "sourceIds": ["cts"],
+            "idempotencyKey": "submit-jd-wrapper-1",
+        },
+    )
+    draft_id = submitted.json()["requirementDraft"]["draftRevisionId"]
+    confirmed = client.post(
+        f"/api/agent/conversations/{conversation_id}/requirements/confirm",
+        json={"draftRevisionId": draft_id, "baseRevisionId": draft_id, "idempotencyKey": "confirm-wrapper-1"},
+    )
+    started = client.post(
+        f"/api/agent/conversations/{conversation_id}/workflow/start",
+        json={
+            "jobTitle": "Python 平台负责人",
+            "jdText": "需要 Python API、平台工程和检索排序。",
+            "notes": "优先 toB SaaS",
+            "sourceIds": ["cts"],
+        },
+    )
+
+    assert confirmed.status_code == 200, confirmed.text
+    assert started.status_code == 200, started.text
+    runtime_run_id = started.json()["conversationReopenState"]["runtimeRunId"]
+    runtime_store = client.app.state.agent_conversation_service.tool_adapter.runtime_store
+    executor = client.app.state.agent_conversation_service.tool_adapter.workflow_executor
+    claim = runtime_store.claim_next_runnable_run(
+        executor_id="route-wrapper-worker",
+        claimed_at="2026-06-09T00:01:00.000000Z",
+        lease_expires_at="2099-01-01T00:00:00.000000Z",
+        runtime_run_id=runtime_run_id,
+    )
+    assert claim is not None
+
+    asyncio.run(
+        executor.execute_claimed_run(
+            runtime_run_id=claim.runtime_run.runtime_run_id,
+            executor_id=claim.lease.executor_id,
+            attempt_no=claim.lease.attempt_no,
+        )
+    )
+
+    run = runtime_store.get_run(runtime_run_id)
+    events = runtime_store.list_events(runtime_run_id=runtime_run_id, after_seq=0, limit=20).events
+    assert run.status == "completed"
+    assert DeterministicRouteRuntime.workflow_calls
+    assert DeterministicRouteRuntime.workflow_calls[0]["job_title"] == "Python 平台负责人"
+    assert any(event.event_type == "runtime_source_result" for event in events)
 
 
 def test_agent_message_user_text_route_uses_memory_recall_before_agent_run(tmp_path: Path) -> None:
@@ -237,7 +320,7 @@ def test_workflow_events_route_returns_ui_ready_activity_lifecycle(tmp_path: Pat
 
     response = client.get(
         f"/api/agent/conversations/{conversation_id}/workflow/events",
-        params={"runtimeRunId": "runtime_run_route_1", "limit": 10},
+        params={"limit": 10},
     )
 
     assert response.status_code == 200, response.text
@@ -253,6 +336,14 @@ def test_workflow_events_route_returns_ui_ready_activity_lifecycle(tmp_path: Pat
     progress = [message for message in payload["messages"] if message["messageType"] == "runtime_progress"]
     assert progress[0]["sourceRuntimeRunId"] == "runtime_run_route_1"
     assert progress[0]["sourceRuntimeEventSeq"] == 1
+
+    command = client.post(
+        f"/api/agent/conversations/{conversation_id}/workflow/commands",
+        json={"commandType": "pause", "idempotencyKey": "pause-route-1"},
+    )
+
+    assert command.status_code == 200, command.text
+    assert command.json()["messages"][-1]["sourceRuntimeRunId"] == "runtime_run_route_1"
 
 
 def _client(tmp_path: Path) -> TestClient:

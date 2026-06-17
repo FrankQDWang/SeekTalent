@@ -225,6 +225,8 @@ class MemoryService:
             if candidate_output.category not in ALLOWED_MEMORY_CATEGORIES:
                 continue
             try:
+                candidate_status = "pending_review" if settings.review_required else "accepted"
+                reason_code = "agent_memory_review_required" if settings.review_required else "agent_memory_policy_accepted"
                 candidate = self.create_candidate(
                     owner_user_id=owner_user_id,
                     workspace_id=workspace_id,
@@ -234,16 +236,17 @@ class MemoryService:
                     source_message_ids=candidate_output.evidence_message_ids,
                     source_activity_ids=candidate_output.evidence_activity_ids,
                     confidence=candidate_output.confidence,
-                    status="accepted",
+                    status=candidate_status,
                     source_stage1_conversation_id=conversation_id,
-                    reason_code="agent_memory_policy_accepted",
+                    reason_code=reason_code,
                 )
-                self.accept_candidate(
-                    candidate_id=candidate.candidate_id,
-                    owner_user_id=owner_user_id,
-                    workspace_id=workspace_id,
-                    accepted_text=None,
-                )
+                if not settings.review_required:
+                    self.accept_candidate(
+                        candidate_id=candidate.candidate_id,
+                        owner_user_id=owner_user_id,
+                        workspace_id=workspace_id,
+                        accepted_text=None,
+                    )
             except MemoryPrivacyError as exc:
                 logger.info(
                     "Rejected stage-1 advisory memory candidate.",
