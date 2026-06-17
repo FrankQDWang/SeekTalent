@@ -78,6 +78,41 @@ def _track_sqlite_connect(monkeypatch: pytest.MonkeyPatch, module: ModuleType) -
     return tracker
 
 
+def test_runtime_control_store_closes_connections_and_sets_busy_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import seektalent_runtime_control.store as store_module
+    from seektalent_runtime_control.models import RuntimeRunRecord
+
+    tracker = _track_sqlite_connect(monkeypatch, store_module)
+    store = store_module.RuntimeControlStore(tmp_path / "runtime_control.sqlite3", busy_timeout_ms=1234)
+
+    store.initialize()
+    store.create_run(
+        RuntimeRunRecord(
+            runtime_run_id="runtime_run_1",
+            agent_conversation_id="agent_conv_1",
+            workbench_session_id=None,
+            approved_requirement_revision_id="reqapproved_1",
+            status="running",
+            current_stage="runtime",
+            current_round=1,
+            latest_checkpoint_id=None,
+            latest_event_seq=0,
+            source_ids=["source_1"],
+            stop_reason_code=None,
+            created_at="2026-06-17T00:00:00Z",
+            updated_at="2026-06-17T00:00:00Z",
+            completed_at=None,
+        )
+    )
+    assert store.get_run("runtime_run_1").runtime_run_id == "runtime_run_1"
+
+    tracker.assert_executed("PRAGMA busy_timeout = 1234")
+    tracker.assert_all_closed()
+
+
 def test_liepin_store_closes_connections_and_sets_busy_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

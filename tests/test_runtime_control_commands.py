@@ -63,6 +63,46 @@ def test_cancel_supersedes_pending_pause_and_blocks_later_lifecycle_commands(tmp
     ]
 
 
+def test_cancel_rejects_terminal_run_without_reopening_state(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+    from seektalent_runtime_control.errors import RuntimeControlError
+
+    store = _store_with_run(tmp_path, status="completed")
+    service = RuntimeCommandService(store=store, now=lambda: "2026-06-08T00:00:01.000000Z")
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        service.request_cancel(
+            runtime_run_id="runtime_run_1",
+            requested_by="agent",
+            idempotency_key="cancel-completed",
+        )
+
+    assert exc_info.value.reason_code == "runtime_command_conflict"
+    assert store.get_run("runtime_run_1").status == "completed"
+    assert store.list_commands(runtime_run_id="runtime_run_1") == []
+
+
+@pytest.mark.parametrize("status", ["queued", "paused"])
+def test_cancel_without_active_executor_applies_immediately(tmp_path: Path, status: str) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_run(tmp_path, status=status)
+    service = RuntimeCommandService(store=store, now=lambda: "2026-06-08T00:00:01.000000Z")
+
+    command = service.request_cancel(
+        runtime_run_id="runtime_run_1",
+        requested_by="agent",
+        idempotency_key=f"cancel-{status}",
+    )
+
+    assert command.status == "applied"
+    run = store.get_run("runtime_run_1")
+    assert run.status == "cancelled"
+    assert run.completed_at == "2026-06-08T00:00:01.000000Z"
+    events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
+    assert [event.event_type for event in events] == ["runtime_command_accepted", "runtime_run_cancelled"]
+
+
 def test_safe_boundary_applies_pause_with_checkpoint_and_resume_requires_paused_run(tmp_path: Path) -> None:
     from seektalent_runtime_control.commands import RuntimeCommandService
     from seektalent_runtime_control.errors import RuntimeControlError

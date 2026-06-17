@@ -166,6 +166,11 @@ def test_retention_deletes_old_terminal_checkpoints_and_final_summaries(tmp_path
         source_snapshot_event_seq=event.event_seq,
         idempotency_key="summary-old",
     )
+    store.release_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        released_at="2026-05-01T00:00:03.000000Z",
+    )
 
     result = RuntimeRetentionService(
         store=store,

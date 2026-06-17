@@ -1,0 +1,34 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add the runtime-control SQLite schema and core event contracts.",
+  "rationale": "This slice adds the canonical runtime-control database tables, event normalization, stage-output sanitization, candidate truth extraction, and command/status primitives. The store is intentionally larger in this PR because the schema and transaction surface must be reviewed together before execution and Workbench projection layers build on it.",
+  "touched_layers": [
+    "docs",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "RuntimeControlStore owns the initial SQLite schema, migrations, and transaction methods for the canonical local control plane. The file is created as the core storage boundary and is covered by event, command, FSM, candidate truth, and full pytest verification before later slices depend on it.",
+  "deletion_targets": [
+    "artifact-first progress state as the only runtime-control source of truth",
+    "unstructured runtime stage outputs without schema or sensitive-payload checks",
+    "candidate finalization state that cannot be deduplicated or projected from canonical runtime rows"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "risks": [
+    "Runtime-control schema changes must remain idempotent and migration-safe for existing local SQLite files.",
+    "Public event payloads must remain compact and free of provider payloads, raw resumes, prompts, cookies, and tokens.",
+    "Stage output storage must reject sensitive keys while preserving recruiter-visible summaries and developer-safe metadata."
+  ]
+}
