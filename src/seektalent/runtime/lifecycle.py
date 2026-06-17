@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from seektalent.config import AppSettings
+from seektalent.local_storage_lifecycle import LocalStorageLifecyclePolicy, cleanup_local_storage
 from seektalent.runtime.exact_llm_cache import clear_exact_llm_cache
 
 PROD_RUN_RETENTION_DAYS = 7
@@ -15,11 +16,12 @@ def cleanup_runtime_artifacts(settings: AppSettings, *, now: datetime | None = N
     if settings.runtime_mode != "prod":
         return
     current_time = now or datetime.now()
-    cleanup_old_artifact_collection(settings.artifacts_path / "runs", now=current_time, retention_days=PROD_RUN_RETENTION_DAYS)
-    cleanup_old_artifact_collection(
-        settings.artifacts_path / "benchmark-executions",
+    cleanup_local_storage(
+        settings,
         now=current_time,
-        retention_days=PROD_RUN_RETENTION_DAYS,
+        policy=LocalStorageLifecyclePolicy(debug_retention_days=PROD_RUN_RETENTION_DAYS),
+        apply=True,
+        cleanup_scope="runtime_artifacts",
     )
 
 
