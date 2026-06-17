@@ -46,7 +46,7 @@ jobs:
           python-version: "3.12"
       - name: Install uv
         if: steps.scope.outputs.workbench_contract == 'true'
-        uses: astral-sh/setup-uv@v8.1.0
+        uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
