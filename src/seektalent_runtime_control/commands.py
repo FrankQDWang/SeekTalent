@@ -85,6 +85,8 @@ class RuntimeCommandService:
         if existing is not None:
             return existing
         run = self.store.get_run(runtime_run_id)
+        if run.status in _TERMINAL_RUN_STATUSES:
+            raise RuntimeControlError("runtime_command_conflict")
         self._reject_if_terminal_cancel_pending(runtime_run_id=runtime_run_id, command_type="cancel")
         for command in self.store.list_commands(
             runtime_run_id=runtime_run_id,
@@ -111,6 +113,32 @@ class RuntimeCommandService:
             idempotency_key=idempotency_key,
             requested_at=self.now(),
         )
+        if run.status in {"queued", "paused"}:
+            self.store.update_command_status(
+                command_id=command.command_id,
+                status="applied",
+                applied_at=command.requested_at,
+            )
+            self.store.update_run_status(
+                runtime_run_id=runtime_run_id,
+                status="cancelled",
+                updated_at=command.requested_at,
+                completed_at=command.requested_at,
+            )
+            applied_command = self.store.get_command(command.command_id)
+            self._append_command_event(
+                run=self.store.get_run(runtime_run_id),
+                event_type="runtime_command_accepted",
+                command=applied_command,
+                created_at=command.requested_at,
+            )
+            self._append_command_event(
+                run=self.store.get_run(runtime_run_id),
+                event_type="runtime_run_cancelled",
+                command=applied_command,
+                created_at=command.requested_at,
+            )
+            return applied_command
         self.store.update_run_status(
             runtime_run_id=runtime_run_id,
             status="cancellation_requested",
@@ -140,6 +168,7 @@ class RuntimeCommandService:
         *,
         runtime_run_id: str,
         executor_id: str,
+        attempt_no: int | None = None,
         safe_boundary: str,
         checkpoint: RuntimeCheckpoint | None = None,
     ) -> RuntimeCommand | None:
@@ -153,7 +182,7 @@ class RuntimeCommandService:
             return None
         applied_at = self.now()
         if command.command_type in {"pause", "cancel"} and checkpoint is not None:
-            self.store.write_checkpoint(checkpoint, executor_id=executor_id)
+            self.store.write_checkpoint(checkpoint, executor_id=executor_id, attempt_no=attempt_no)
         self.store.update_command_status(command_id=command.command_id, status="applied", applied_at=applied_at)
         target_status = _applied_run_status(command.command_type)
         event = self.store.append_executor_event(
@@ -168,6 +197,7 @@ class RuntimeCommandService:
                 created_at=applied_at,
             ),
             executor_id=executor_id,
+            attempt_no=attempt_no,
             run_status=target_status,
             latest_checkpoint_id=checkpoint.checkpoint_id if checkpoint is not None else None,
         )
@@ -184,8 +214,16 @@ class RuntimeCommandService:
                     created_at=applied_at,
                 ),
                 executor_id=executor_id,
+                attempt_no=attempt_no,
                 run_status=target_status,
                 completed_at=applied_at if command.command_type == "cancel" else None,
+            )
+            self.store.release_executor_lease(
+                runtime_run_id=runtime_run_id,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+                released_at=applied_at,
+                reason_code=f"runtime_run_{target_status}",
             )
         return self.store.get_command(command.command_id)
 
@@ -399,6 +437,7 @@ class RuntimeCommandService:
         *,
         runtime_run_id: str,
         executor_id: str,
+        attempt_no: int | None = None,
         round_no: int,
     ) -> list[RequirementAmendment]:
         pending = self.store.list_runtime_requirement_amendments(
@@ -421,6 +460,7 @@ class RuntimeCommandService:
                     created_at=applied_at,
                 ),
                 executor_id=executor_id,
+                attempt_no=attempt_no,
                 run_status="running",
             )
             updated = self.store.update_requirement_amendment_status(
@@ -450,6 +490,7 @@ class RuntimeCommandService:
                         created_at=applied_at,
                     ),
                     executor_id=executor_id,
+                    attempt_no=attempt_no,
                     run_status="running",
                 )
             applied.append(updated)

@@ -128,6 +128,20 @@ def test_shared_migration_helper_rejects_future_and_missing_migration(tmp_path: 
     assert missing.value.reason_code == "sqlite_schema_migration_missing"
 
 
+def test_runtime_control_future_version_is_refused(tmp_path: Path) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+    from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION, RuntimeControlStore
+
+    runtime_db = tmp_path / "runtime_control.sqlite3"
+    with sqlite3.connect(runtime_db) as conn:
+        conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION + 1}")
+
+    with pytest.raises(RuntimeControlError) as runtime_exc:
+        RuntimeControlStore(runtime_db).initialize()
+
+    assert runtime_exc.value.reason_code == "runtime_control_schema_unsupported"
+
+
 def test_liepin_store_sets_schema_version_and_rejects_newer_db(tmp_path: Path) -> None:
     path = tmp_path / "liepin.sqlite3"
     LiepinStore(path)

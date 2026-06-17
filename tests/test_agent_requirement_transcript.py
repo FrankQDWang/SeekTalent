@@ -48,11 +48,6 @@ def test_command_and_next_round_requirement_transcript_is_grounded_in_runtime_co
         command_type="pause",
         idempotency_key="pause-1",
     )
-    runtime_store.update_run_status(
-        runtime_run_id="runtime_run_1",
-        status="running",
-        updated_at="2026-06-09T00:00:02.000000Z",
-    )
     next_round = service.submit_next_round_requirement(
         conversation_id=conversation.conversation_id,
         owner_user_id="user_1",
