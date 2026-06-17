@@ -241,6 +241,88 @@ def test_corpus_store_rejects_invalid_json_columns(tmp_path: Path) -> None:
         )
 
 
+def test_delete_expired_corpus_exports_preserves_artifact_refs_and_recent_exports(tmp_path: Path) -> None:
+    store = CorpusStore(tmp_path / "corpus.sqlite3")
+    tenant_id = "tenant-a"
+    workspace_id = "workspace"
+    collection_id = store.ensure_default_collection(tenant_id, workspace_id)
+    old_ref_id = store.record_artifact_ref(
+        artifact_kind="corpus",
+        artifact_id="corpus-old",
+        artifact_root=str(tmp_path / "artifacts"),
+        logical_name="corpus.export_manifest",
+        relative_path="corpus/old/export_manifest.json",
+        content_sha256="old-sha",
+        schema_version="v1",
+    )
+    recent_ref_id = store.record_artifact_ref(
+        artifact_kind="corpus",
+        artifact_id="corpus-recent",
+        artifact_root=str(tmp_path / "artifacts"),
+        logical_name="corpus.export_manifest",
+        relative_path="corpus/recent/export_manifest.json",
+        content_sha256="recent-sha",
+        schema_version="v1",
+    )
+    store.record_corpus_export(
+        corpus_export_id="corpus-old",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        corpus_collection_id=collection_id,
+        artifact_ref_id=old_ref_id,
+        builder_version="test",
+        builder_config={},
+        source_query="old",
+        source_run_ids=[],
+        row_count=0,
+        sha256_value="old-sha",
+    )
+    store.record_corpus_export(
+        corpus_export_id="corpus-recent",
+        tenant_id=tenant_id,
+        workspace_id=workspace_id,
+        corpus_collection_id=collection_id,
+        artifact_ref_id=recent_ref_id,
+        builder_version="test",
+        builder_config={},
+        source_query="recent",
+        source_run_ids=[],
+        row_count=0,
+        sha256_value="recent-sha",
+    )
+    store.connect().execute(
+        "UPDATE corpus_exports SET created_at = ? WHERE corpus_export_id = ?",
+        ("2026-05-01T00:00:00Z", "corpus-old"),
+    )
+    store.connect().execute(
+        "UPDATE corpus_exports SET created_at = ? WHERE corpus_export_id = ?",
+        ("2026-06-16T00:00:00Z", "corpus-recent"),
+    )
+    store.connect().commit()
+
+    dry_run = store.delete_expired_corpus_exports(
+        tenant_id,
+        workspace_id,
+        created_before="2026-06-01T00:00:00Z",
+        dry_run=True,
+    )
+    applied = store.delete_expired_corpus_exports(
+        tenant_id,
+        workspace_id,
+        created_before="2026-06-01T00:00:00Z",
+    )
+    export_ids = {
+        row["corpus_export_id"]
+        for row in store.rows_for_tenant("corpus_exports", tenant_id, workspace_id)
+    }
+
+    assert dry_run == 1
+    assert applied == 1
+    assert export_ids == {"corpus-recent"}
+    assert store.get_artifact_ref(old_ref_id) is not None
+    assert store.get_artifact_ref(recent_ref_id) is not None
+
+
 def test_corpus_store_batches_resume_observation_rows() -> None:
     source = Path("src/seektalent/corpus/store.py").read_text(encoding="utf-8")
     section = source.split("def record_resume_observations", 1)[1].split("def ensure_default_collection", 1)[0]

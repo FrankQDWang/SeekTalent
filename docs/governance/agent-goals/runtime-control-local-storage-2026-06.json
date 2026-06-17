@@ -1,0 +1,37 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add SQLite lifecycle primitives for the local runtime-control plane.",
+  "rationale": "This slice introduces shared SQLite migration, backup, local cleanup, and operator health behavior used by product databases. It intentionally touches config, provider storage, and runtime lifecycle together because the new local-storage policy must be wired at the storage roots and at runtime cleanup entrypoints in the same independently testable PR.",
+  "touched_layers": [
+    "other",
+    "provider",
+    "runtime",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent/config.py",
+    "src/seektalent/providers/liepin/store.py",
+    "src/seektalent/runtime/lifecycle.py"
+  ],
+  "config_env_files": [
+    "src/seektalent/config.py"
+  ],
+  "config_behavior_rationale": "The config paths and lifecycle policy values are consumed by the provider database migration code and runtime cleanup behavior added in this slice.",
+  "deletion_targets": [
+    "ad hoc SQLite backup behavior without consistent file permissions",
+    "provider stores managing schema lifecycle without shared migration checks",
+    "runtime cleanup that cannot inventory and bound local product database storage"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "risks": [
+    "SQLite backup and migration failures must fail closed instead of copying partial database files.",
+    "Provider store lifecycle changes must preserve existing Liepin and corpus persistence behavior.",
+    "Local cleanup must not remove active product database state."
+  ]
+}

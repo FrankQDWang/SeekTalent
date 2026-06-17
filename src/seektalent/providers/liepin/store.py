@@ -3,11 +3,19 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+from seektalent.sqlite_migrations import (
+    backup_sqlite_before_migration,
+    has_user_tables,
+    require_supported_version,
+    run_sqlite_integrity_checks,
+)
 from seektalent.providers.liepin.compliance import ComplianceGate
 from seektalent.providers.liepin.models import LiepinConnectionRow, LiepinEventRow, LiepinRunRow, SubjectType
 from seektalent.providers.liepin.security import hmac_provider_account_hash
@@ -88,6 +96,7 @@ DETAIL_ATTEMPT_STATES = {
     "unknown",
 }
 DETAIL_CONSUMPTION_STATES = {"not_consumed", "consumed", "possibly_consumed", "unknown"}
+LIEPIN_SCHEMA_VERSION = 1
 DETAIL_ALLOWED_TRANSITIONS = {
     "approved_not_started": {"started", "failed_before_consumption", "unknown"},
     "started": {
@@ -787,6 +796,50 @@ class LiepinStore:
             ).fetchone()
         return int(row["consumed_count"])
 
+    def delete_terminal_detail_attempts(
+        self,
+        *,
+        updated_before: str,
+        budget_date_before: str,
+        batch_size: int = 500,
+        dry_run: bool = False,
+    ) -> int:
+        safe_batch_size = max(1, min(batch_size, 5000))
+        terminal_states = (
+            "completed",
+            "blocked_by_risk_control",
+            "failed_before_consumption",
+            "failed_after_possible_consumption",
+            "unknown",
+        )
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT attempt_id
+                FROM liepin_detail_attempts
+                WHERE updated_at < ?
+                  AND budget_date < ?
+                  AND state IN ({", ".join("?" for _ in terminal_states)})
+                ORDER BY updated_at ASC, attempt_id ASC
+                LIMIT ?
+                """,
+                (updated_before, budget_date_before, *terminal_states, safe_batch_size),
+            ).fetchall()
+            attempt_ids = [str(row["attempt_id"]) for row in rows]
+            if dry_run or not attempt_ids:
+                return len(attempt_ids)
+            conn.execute("BEGIN IMMEDIATE")
+            conn.executemany(
+                "DELETE FROM liepin_detail_worker_responses WHERE attempt_id = ?",
+                [(attempt_id,) for attempt_id in attempt_ids],
+            )
+            conn.executemany(
+                "DELETE FROM liepin_detail_attempts WHERE attempt_id = ?",
+                [(attempt_id,) for attempt_id in attempt_ids],
+            )
+            conn.commit()
+        return len(attempt_ids)
+
     def append_event(
         self,
         *,
@@ -856,6 +909,18 @@ class LiepinStore:
 
     def _initialize(self) -> None:
         with self._connect() as conn:
+            version = require_supported_version(
+                conn,
+                supported_version=LIEPIN_SCHEMA_VERSION,
+                store_name="liepin",
+            )
+            if version == 0 and has_user_tables(conn):
+                backup_sqlite_before_migration(
+                    self.db_path,
+                    backup_root=self.db_path.parent / "migration_backups",
+                    store_name="liepin",
+                    now=_liepin_migration_now(),
+                )
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS liepin_compliance_gates (
@@ -1007,28 +1072,40 @@ class LiepinStore:
                 );
                 """
             )
-            _ensure_columns(
-                conn,
-                table_name="liepin_connections",
-                columns={
-                    "provider_account_hash": "TEXT",
-                    "observed_provider_account_subject": "TEXT",
-                    "session_store_key_id": "TEXT",
-                    "encrypted_state_sha256": "TEXT",
-                    "session_updated_at": "TEXT",
-                    "revoked_at": "TEXT",
-                },
-            )
-            _ensure_columns(
-                conn,
-                table_name="liepin_compliance_gates",
-                columns={"created_at": "TEXT NOT NULL DEFAULT ''"},
-            )
+            if version == 0:
+                _ensure_columns(
+                    conn,
+                    table_name="liepin_connections",
+                    columns={
+                        "provider_account_hash": "TEXT",
+                        "observed_provider_account_subject": "TEXT",
+                        "session_store_key_id": "TEXT",
+                        "encrypted_state_sha256": "TEXT",
+                        "session_updated_at": "TEXT",
+                        "revoked_at": "TEXT",
+                    },
+                )
+                _ensure_columns(
+                    conn,
+                    table_name="liepin_compliance_gates",
+                    columns={"created_at": "TEXT NOT NULL DEFAULT ''"},
+                )
+                _set_user_version(conn, LIEPIN_SCHEMA_VERSION)
+            run_sqlite_integrity_checks(conn, store_name="liepin", foreign_keys=False)
 
-    def _connect(self) -> sqlite3.Connection:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self.db_path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA busy_timeout = 10000")
+            yield conn
+            conn.commit()
+        except sqlite3.Error:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 def _gate_from_row(row: sqlite3.Row) -> ComplianceGate:
@@ -1387,6 +1464,14 @@ def _ensure_columns(conn: sqlite3.Connection, *, table_name: str, columns: dict[
     for column_name, column_type in columns.items():
         if column_name not in existing:
             conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+
+def _set_user_version(conn: sqlite3.Connection, version: int) -> None:
+    conn.execute(f"PRAGMA user_version = {version}")
+
+
+def _liepin_migration_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _now_iso() -> str:

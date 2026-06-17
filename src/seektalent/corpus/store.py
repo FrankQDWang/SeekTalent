@@ -5,9 +5,16 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+from seektalent.sqlite_migrations import (
+    SQLiteMigrationError,
+    read_user_version,
+    require_supported_version,
+    run_sqlite_integrity_checks,
+)
 from seektalent.storage.json import canonical_json, utc_now
 
 CORPUS_SCHEMA_VERSION = "corpus-schema-v2"
+CORPUS_SQLITE_USER_VERSION = 1
 DEFAULT_TENANT_ID = "local"
 DEFAULT_WORKSPACE_ID = "default"
 
@@ -323,9 +330,14 @@ class CorpusStore:
         if self._conn is None:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(self.path, timeout=5)
-            self._conn.row_factory = sqlite3.Row
-            self._configure(self._conn)
-            self._ensure_schema(self._conn)
+            try:
+                self._conn.row_factory = sqlite3.Row
+                self._configure(self._conn)
+                self._ensure_schema(self._conn)
+            except (sqlite3.Error, SQLiteMigrationError):
+                self._conn.close()
+                self._conn = None
+                raise
         return self._conn
 
     def close(self) -> None:
@@ -350,30 +362,50 @@ class CorpusStore:
         return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
     def _enforce_schema_version(self, conn: sqlite3.Connection) -> None:
+        sqlite_user_version = read_user_version(conn)
+        try:
+            require_supported_version(
+                conn,
+                supported_version=CORPUS_SQLITE_USER_VERSION,
+                store_name="Local corpus DB SQLite",
+            )
+        except SQLiteMigrationError as exc:
+            if exc.reason_code != "sqlite_schema_unsupported":
+                raise
+            raise SQLiteMigrationError(
+                "sqlite_schema_unsupported",
+                "Local corpus DB SQLite schema version "
+                f"{sqlite_user_version} is newer than supported version {CORPUS_SQLITE_USER_VERSION}. "
+                "Export any required corpus data with the newer SeekTalent version, then rebuild or recreate "
+                "the local corpus DB with this version."
+            ) from exc
         table_names = self._table_names(conn)
         if "schema_meta" in table_names:
             row = conn.execute("SELECT value FROM schema_meta WHERE key = 'schema_version'").fetchone()
             schema_version = row["value"] if row is not None else None
             if schema_version != CORPUS_SCHEMA_VERSION:
-                raise RuntimeError(
+                raise SQLiteMigrationError(
+                    "sqlite_schema_migration_required",
                     "Local corpus DB schema is stale; "
                     f"found {schema_version or 'missing schema_version'}, expected {CORPUS_SCHEMA_VERSION}. "
-                    "Recreate the local corpus DB."
+                    "Export any required corpus data before migration, then rebuild or recreate the local corpus DB."
                 )
             return
 
         existing_corpus_tables = sorted(table_names & _CORPUS_TABLE_NAMES)
         if existing_corpus_tables:
-            raise RuntimeError(
+            raise SQLiteMigrationError(
+                "sqlite_schema_migration_required",
                 "Local corpus DB has unversioned corpus schema tables "
-                f"({', '.join(existing_corpus_tables)}). Recreate the local corpus DB."
+                f"({', '.join(existing_corpus_tables)}). Export any required corpus data before migration, "
+                "then rebuild or recreate the local corpus DB."
             )
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
         if conn.execute("SELECT json_valid(?)", ("{}",)).fetchone()[0] != 1:
             raise RuntimeError("SQLite JSON1 support is required for CorpusStore")
         self._enforce_schema_version(conn)
-        conn.execute("PRAGMA user_version = 1")
+        conn.execute(f"PRAGMA user_version = {CORPUS_SQLITE_USER_VERSION}")
         strict_suffix = self._strict_suffix(conn)
         for statement in _SCHEMA_STATEMENTS:
             conn.execute(statement.format(strict=strict_suffix))
@@ -384,6 +416,7 @@ class CorpusStore:
             """,
             (CORPUS_SCHEMA_VERSION,),
         )
+        run_sqlite_integrity_checks(conn, store_name="corpus", foreign_keys=True)
         conn.commit()
 
     def _json_row(self, row: dict[str, Any], json_fields: set[str]) -> dict[str, Any]:
@@ -900,6 +933,39 @@ class CorpusStore:
             ),
         )
         self.connect().commit()
+
+    def delete_expired_corpus_exports(
+        self,
+        tenant_id: str,
+        workspace_id: str,
+        *,
+        created_before: str,
+        batch_size: int = 500,
+        dry_run: bool = False,
+    ) -> int:
+        conn = self.connect()
+        safe_batch_size = max(1, min(batch_size, 5000))
+        rows = conn.execute(
+            """
+            SELECT corpus_export_id
+            FROM corpus_exports
+            WHERE tenant_id = ?
+              AND workspace_id = ?
+              AND created_at < ?
+            ORDER BY created_at ASC, corpus_export_id ASC
+            LIMIT ?
+            """,
+            (tenant_id, workspace_id, created_before, safe_batch_size),
+        ).fetchall()
+        export_ids = [str(row["corpus_export_id"]) for row in rows]
+        if dry_run or not export_ids:
+            return len(export_ids)
+        conn.executemany(
+            "DELETE FROM corpus_exports WHERE tenant_id = ? AND workspace_id = ? AND corpus_export_id = ?",
+            [(tenant_id, workspace_id, export_id) for export_id in export_ids],
+        )
+        conn.commit()
+        return len(export_ids)
 
     def rows_for_tenant(self, table: str, tenant_id: str, workspace_id: str) -> list[dict[str, Any]]:
         order_by = _TENANT_TABLE_ORDER_BY.get(table)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -423,6 +424,96 @@ def test_valid_terminal_and_conservative_consumption_pairs_still_work(tmp_path: 
         )
         assert updated.state == state
         assert updated.consumption_state == consumption_state
+
+
+def test_delete_terminal_detail_attempts_preserves_active_and_current_budget_rows(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    old_terminal = _reserve(store, "candidate-old-terminal")
+    active = _reserve(store, "candidate-active")
+    current_budget = store.reserve_detail_attempt(
+        tenant_id=TENANT,
+        workspace_id=WORKSPACE,
+        actor_id=ACTOR,
+        provider_account_hash=ACCOUNT,
+        candidate_provider_id="candidate-current",
+        budget_date="2026-06-17",
+        provider_day_key="liepin:account-hash-a:2026-06-17",
+        timezone="Asia/Shanghai",
+        idempotency_key="open:candidate-current",
+    )
+    for attempt in [old_terminal, current_budget]:
+        store.transition_detail_attempt(
+            tenant_id=TENANT,
+            workspace_id=WORKSPACE,
+            actor_id=ACTOR,
+            attempt_id=attempt.attempt_id,
+            state="started",
+            consumption_state="not_consumed",
+            worker_command_id=f"cmd-{attempt.candidate_provider_id}",
+        )
+        store.apply_detail_worker_response(
+            tenant_id=TENANT,
+            workspace_id=WORKSPACE,
+            actor_id=ACTOR,
+            attempt_id=attempt.attempt_id,
+            worker_response_id=f"worker-{attempt.candidate_provider_id}",
+            state="completed",
+            consumption_state="consumed",
+            raw_evidence_ref=f"artifact:{attempt.candidate_provider_id}",
+        )
+    store.transition_detail_attempt(
+        tenant_id=TENANT,
+        workspace_id=WORKSPACE,
+        actor_id=ACTOR,
+        attempt_id=active.attempt_id,
+        state="started",
+        consumption_state="not_consumed",
+        worker_command_id="cmd-active",
+    )
+    with sqlite3.connect(store.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE liepin_detail_attempts
+            SET updated_at = '2026-05-01T00:00:00Z'
+            WHERE attempt_id IN (?, ?, ?)
+            """,
+            (old_terminal.attempt_id, active.attempt_id, current_budget.attempt_id),
+        )
+        conn.commit()
+
+    dry_run = store.delete_terminal_detail_attempts(
+        updated_before="2026-06-01T00:00:00Z",
+        budget_date_before="2026-06-01",
+        dry_run=True,
+    )
+    applied = store.delete_terminal_detail_attempts(
+        updated_before="2026-06-01T00:00:00Z",
+        budget_date_before="2026-06-01",
+    )
+
+    with sqlite3.connect(store.db_path) as conn:
+        remaining_attempt_ids = {
+            row[0] for row in conn.execute("SELECT attempt_id FROM liepin_detail_attempts").fetchall()
+        }
+        remaining_response_attempt_ids = {
+            row[0] for row in conn.execute("SELECT attempt_id FROM liepin_detail_worker_responses").fetchall()
+        }
+    assert dry_run == 1
+    assert applied == 1
+    assert old_terminal.attempt_id not in remaining_attempt_ids
+    assert old_terminal.attempt_id not in remaining_response_attempt_ids
+    assert active.attempt_id in remaining_attempt_ids
+    assert current_budget.attempt_id in remaining_attempt_ids
+    assert (
+        store.count_detail_budget_consumed(
+            tenant_id=TENANT,
+            workspace_id=WORKSPACE,
+            actor_id=ACTOR,
+            provider_account_hash=ACCOUNT,
+            provider_day_key="liepin:account-hash-a:2026-06-17",
+        )
+        == 1
+    )
 
 
 def _store(tmp_path: Path) -> LiepinStore:

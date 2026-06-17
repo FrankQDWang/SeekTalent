@@ -20,6 +20,7 @@ from seektalent.resources import (
     resolve_path_from_root,
     resolve_user_path,
 )
+from seektalent_runtime_control.artifact_policy import normalize_artifact_output_mode
 
 
 ReasoningEffort = Literal["off", "low", "medium", "high"]
@@ -451,7 +452,7 @@ class AppSettings(BaseSettings):
     workbench_enabled: bool = True
     workbench_legacy_liepin_login_relay_enabled: bool = False
     artifacts_dir: str | None = None
-    runtime_artifact_output_mode: str = "dev_full_local"
+    runtime_artifact_output_mode: str | None = None
     llm_cache_dir: str | None = None
     enable_flywheel: bool | None = None
     flywheel_db_path: str = ".seektalent/flywheel.sqlite3"
@@ -529,6 +530,13 @@ class AppSettings(BaseSettings):
             return None
         return value
 
+    @field_validator("runtime_artifact_output_mode", mode="before")
+    @classmethod
+    def normalize_runtime_artifact_output_mode(cls, value: object) -> str | None:
+        if value is None or value == "":
+            return None
+        return normalize_artifact_output_mode(value)
+
     @field_validator("liepin_browser_action_backend", mode="before")
     @classmethod
     def normalize_liepin_browser_action_backend(cls, value: str | None) -> str:
@@ -576,6 +584,10 @@ class AppSettings(BaseSettings):
             self.llm_cache_dir = PROD_LLM_CACHE_DIR if self.runtime_mode == "prod" else DEV_LLM_CACHE_DIR
             if "llm_cache_dir" not in provided_fields:
                 self.model_fields_set.discard("llm_cache_dir")
+        if self.runtime_artifact_output_mode is None:
+            self.runtime_artifact_output_mode = "prod" if self.runtime_mode == "prod" else "dev"
+            if "runtime_artifact_output_mode" not in provided_fields:
+                self.model_fields_set.discard("runtime_artifact_output_mode")
         if self.enable_flywheel is None:
             self.enable_flywheel = self.runtime_mode != "prod"
             if "enable_flywheel" not in provided_fields:
@@ -813,6 +825,10 @@ class AppSettings(BaseSettings):
         reset_runs_dir = "runs_dir" not in filtered and "runs_dir" not in self.model_fields_set
         reset_llm_cache_dir = "llm_cache_dir" not in filtered and "llm_cache_dir" not in self.model_fields_set
         reset_enable_flywheel = "enable_flywheel" not in filtered and "enable_flywheel" not in self.model_fields_set
+        reset_runtime_artifact_output_mode = (
+            "runtime_artifact_output_mode" not in filtered
+            and "runtime_artifact_output_mode" not in self.model_fields_set
+        )
         if reset_artifacts_dir:
             data["artifacts_dir"] = None
         if reset_runs_dir:
@@ -821,6 +837,8 @@ class AppSettings(BaseSettings):
             data["llm_cache_dir"] = None
         if reset_enable_flywheel:
             data["enable_flywheel"] = None
+        if reset_runtime_artifact_output_mode:
+            data["runtime_artifact_output_mode"] = None
         settings = type(self)(_env_file=None, **{**data, **filtered})
         if reset_artifacts_dir:
             settings.model_fields_set.discard("artifacts_dir")
@@ -830,4 +848,6 @@ class AppSettings(BaseSettings):
             settings.model_fields_set.discard("llm_cache_dir")
         if reset_enable_flywheel:
             settings.model_fields_set.discard("enable_flywheel")
+        if reset_runtime_artifact_output_mode:
+            settings.model_fields_set.discard("runtime_artifact_output_mode")
         return settings
