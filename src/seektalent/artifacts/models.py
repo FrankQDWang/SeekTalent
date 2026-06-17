@@ -53,5 +53,10 @@ class ArtifactManifest(BaseModel):
     git_sha: str | None = None
     status: ArtifactStatus
     failure_summary: str | None = None
+    retention_ttl_class: str = "debug_short"
+    max_bytes: int | None = None
+    delete_eligible: bool = True
+    safety_class: str = "artifact_debug"
+    support_bundle_only: bool = False
     child_artifacts: list[ChildArtifactRef] = Field(default_factory=list)
     logical_artifacts: dict[str, LogicalArtifactEntry] = Field(default_factory=dict)

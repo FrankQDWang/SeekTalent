@@ -33,6 +33,68 @@ def test_recovery_marks_expired_starting_lease_failed_without_silent_running(tmp
     assert events[-1].payload["reasonCode"] == "runtime_executor_start_timeout"
 
 
+def test_recovery_marks_expired_running_lease_as_crash_not_start_timeout(tmp_path: Path) -> None:
+    from seektalent_runtime_control.recovery import RuntimeRecoveryService
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    _create_run(store, status="running")
+    store.acquire_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        acquired_at="2026-06-08T00:00:00.000000Z",
+        lease_expires_at="2026-06-08T00:00:05.000000Z",
+    )
+
+    decisions = RuntimeRecoveryService(
+        store=store,
+        now=lambda: "2026-06-08T00:00:06.000000Z",
+    ).recover_start_timeouts()
+
+    assert [decision.reason_code for decision in decisions] == ["runtime_executor_crash_timeout"]
+    run = store.get_run("runtime_run_1")
+    assert run.status == "failed"
+    assert run.stop_reason_code == "runtime_executor_crash_timeout"
+    events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
+    assert [event.event_type for event in events] == [
+        "runtime_executor_lease_expired",
+        "runtime_executor_crashed",
+    ]
+    assert events[-1].payload["reasonCode"] == "runtime_executor_crash_timeout"
+
+
+def test_recovery_applies_pending_cancel_when_executor_disappears(tmp_path: Path) -> None:
+    from seektalent_runtime_control.recovery import RuntimeRecoveryService
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    _create_run(store, status="cancellation_requested")
+    store.acquire_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        acquired_at="2026-06-08T00:00:00.000000Z",
+        lease_expires_at="2026-06-08T00:00:05.000000Z",
+    )
+
+    decisions = RuntimeRecoveryService(
+        store=store,
+        now=lambda: "2026-06-08T00:00:06.000000Z",
+    ).recover_start_timeouts()
+
+    assert [decision.reason_code for decision in decisions] == ["runtime_cancel_after_executor_lost"]
+    run = store.get_run("runtime_run_1")
+    assert run.status == "cancelled"
+    assert run.stop_reason_code == "runtime_cancel_after_executor_lost"
+    assert run.completed_at == "2026-06-08T00:00:06.000000Z"
+    events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
+    assert [event.event_type for event in events] == [
+        "runtime_executor_lease_expired",
+        "runtime_run_cancelled",
+    ]
+
+
 def test_recovery_restores_latest_checkpoint_before_new_runtime_events(tmp_path: Path) -> None:
     from seektalent_runtime_control.models import RuntimeCheckpoint
     from seektalent_runtime_control.recovery import RuntimeRecoveryService

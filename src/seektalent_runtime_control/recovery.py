@@ -39,6 +39,36 @@ class RuntimeRecoveryService:
                     created_at=now,
                 )
             )
+            if run.status == "cancellation_requested":
+                self.store.append_event(
+                    _event(
+                        runtime_run_id=run.runtime_run_id,
+                        event_type="runtime_run_cancelled",
+                        stage=run.current_stage,
+                        round_no=run.current_round,
+                        status="completed",
+                        summary="run cancelled after executor lease expired",
+                        payload={
+                            "reasonCode": "runtime_cancel_after_executor_lost",
+                            "executorId": lease.executor_id,
+                        },
+                        created_at=now,
+                    )
+                )
+                self.store.update_run_status(
+                    runtime_run_id=run.runtime_run_id,
+                    status="cancelled",
+                    stop_reason_code="runtime_cancel_after_executor_lost",
+                    completed_at=now,
+                    updated_at=now,
+                )
+                decisions.append(
+                    RuntimeRecoveryDecision(
+                        runtime_run_id=run.runtime_run_id,
+                        reason_code="runtime_cancel_after_executor_lost",
+                    )
+                )
+                continue
             checkpoint = self.store.get_latest_recoverable_checkpoint(runtime_run_id=run.runtime_run_id)
             if isinstance(checkpoint, RuntimeCheckpointLoadFailure):
                 self.store.append_event(
@@ -99,29 +129,34 @@ class RuntimeRecoveryService:
                 )
                 continue
 
+            reason_code = _no_checkpoint_failure_reason(run.status)
             self.store.append_event(
                 _event(
                     runtime_run_id=run.runtime_run_id,
-                    event_type="runtime_executor_start_failed",
+                    event_type="runtime_executor_start_failed"
+                    if reason_code == "runtime_executor_start_timeout"
+                    else "runtime_executor_crashed",
                     stage=run.current_stage,
                     round_no=run.current_round,
                     status="failed",
-                    summary="executor did not acknowledge start before lease timeout",
-                    payload={"reasonCode": "runtime_executor_start_timeout", "executorId": lease.executor_id},
+                    summary="executor did not acknowledge start before lease timeout"
+                    if reason_code == "runtime_executor_start_timeout"
+                    else "executor lease expired without a recoverable checkpoint",
+                    payload={"reasonCode": reason_code, "executorId": lease.executor_id},
                     created_at=now,
                 )
             )
             self.store.update_run_status(
                 runtime_run_id=run.runtime_run_id,
                 status="failed",
-                stop_reason_code="runtime_executor_start_timeout",
+                stop_reason_code=reason_code,
                 completed_at=now,
                 updated_at=now,
             )
             decisions.append(
                 RuntimeRecoveryDecision(
                     runtime_run_id=run.runtime_run_id,
-                    reason_code="runtime_executor_start_timeout",
+                    reason_code=reason_code,
                 )
             )
         return decisions
@@ -151,6 +186,12 @@ def _event(
         workbench_event_global_seq=None,
         created_at=created_at,
     )
+
+
+def _no_checkpoint_failure_reason(run_status: str) -> str:
+    if run_status == "starting":
+        return "runtime_executor_start_timeout"
+    return "runtime_executor_crash_timeout"
 
 
 def _now() -> str:

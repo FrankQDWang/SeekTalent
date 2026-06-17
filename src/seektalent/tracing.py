@@ -290,7 +290,7 @@ class _SuppressedArtifactStore(ArtifactStore):
 
 
 class RunTracer:
-    def __init__(self, artifacts_root: Path, *, output_mode: object = "dev_full_local") -> None:
+    def __init__(self, artifacts_root: Path, *, output_mode: object = "dev") -> None:
         self.artifact_policy = RuntimeArtifactPolicy(normalize_artifact_output_mode(output_mode))
         if not self.artifact_policy.writes_local_debug_artifacts:
             self.store = _SuppressedArtifactStore(artifacts_root)
@@ -299,6 +299,7 @@ class RunTracer:
                 display_name="suppressed seek talent workflow run",
                 producer="WorkflowRuntime",
             )
+            _apply_manifest_retention_metadata(self.session.manifest, self.artifact_policy.retention_metadata)
             self.run_id = self.session.manifest.artifact_id
             self.run_dir = self.session.root
             self.trace_log_path, self._trace_handle = self.session.open_text_stream("runtime.trace_log")
@@ -311,6 +312,8 @@ class RunTracer:
             display_name="seek talent workflow run",
             producer="WorkflowRuntime",
         )
+        _apply_manifest_retention_metadata(self.session.manifest, self.artifact_policy.retention_metadata)
+        self.session._write_manifest()
         self.run_id = self.session.manifest.artifact_id
         self.run_dir = self.session.root
         self.trace_log_path, self._trace_handle = self.session.open_text_stream("runtime.trace_log")
@@ -439,9 +442,12 @@ class RunTracer:
         except KeyError:
             return self._append_legacy_jsonl(logical_name, row)
 
+    def append_runtime_public_event_mirror(self, row: object) -> Path:
+        if not self.artifact_policy.writes_runtime_public_event_mirror:
+            return self.run_dir / "runtime" / "public_events.jsonl"
+        return self.append_jsonl("runtime/public_events.jsonl", row)
+
     def write_text(self, logical_name: str, content: str) -> Path:
-        if self.artifact_policy.compacts_sensitive_payloads:
-            content = "[compact artifact suppressed]"
         if not self.artifact_policy.writes_local_debug_artifacts:
             return self._suppressed_path(logical_name, suffix=".txt")
         try:
@@ -514,3 +520,19 @@ def _legacy_entry_metadata(relative_path: str) -> tuple[str, str | None]:
     if suffix in {".log", ".txt"}:
         return "text/plain", None
     return "application/octet-stream", None
+
+
+def _apply_manifest_retention_metadata(manifest: ArtifactManifest, metadata: dict[str, object]) -> None:
+    manifest.retention_ttl_class = str(metadata["retention_ttl_class"])
+    max_bytes = metadata.get("max_bytes")
+    if max_bytes is None:
+        manifest.max_bytes = None
+    elif isinstance(max_bytes, int):
+        manifest.max_bytes = max_bytes
+    elif isinstance(max_bytes, str):
+        manifest.max_bytes = int(max_bytes)
+    else:
+        raise TypeError("artifact retention max_bytes must be int, str, or None")
+    manifest.delete_eligible = bool(metadata["delete_eligible"])
+    manifest.safety_class = str(metadata["safety_class"])
+    manifest.support_bundle_only = bool(metadata["support_bundle_only"])
