@@ -88,7 +88,7 @@ seektalent run \
 ```bash
 seektalent benchmark \
   --benchmarks-dir ./artifacts/benchmarks \
-  --output-dir ./runs/benchmark \
+  --output-dir ./artifacts/benchmark-executions/manual \
   --benchmark-max-concurrency 6 \
   --enable-eval
 ```
@@ -98,7 +98,7 @@ seektalent benchmark \
 ```bash
 seektalent benchmark \
   --jds-file ./artifacts/benchmarks/agent_jds.jsonl \
-  --output-dir ./runs/benchmark
+  --output-dir ./artifacts/benchmark-executions/manual
 ```
 
 每一行必须包含 `job_title` 和 `job_description`。允许有额外字段。

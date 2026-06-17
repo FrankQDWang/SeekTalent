@@ -1,6 +1,6 @@
 # Architecture
 
-`SeekTalent` is a CLI-first, local-first resume matching engine. Public entrypoints collect a job title, JD, and optional notes, then hand them to one deterministic runtime rooted in `src/seektalent/runtime/orchestrator.py`. The runtime owns orchestration, budgets, provider selection, retrieval execution, deduplication, artifact writing, and final ranking. LLM calls are bounded stages that return structured outputs; they do not execute tools directly.
+`SeekTalent` is a local-first recruiter workbench. The conversation agent is the user-facing thread/turn layer, the workflow runtime is the execution engine, `runtime_control.sqlite3` is the canonical workflow control store, and Workbench tables are recruiter-facing projections. LLM calls are bounded stages that return structured outputs; they do not execute tools directly.
 
 ## Public entrypoints
 
@@ -8,10 +8,10 @@
 | --- | --- | --- |
 | CLI | `src/seektalent/cli.py` | Primary user-facing `seektalent` command, env loading, argument parsing, human and JSON output. |
 | Python API | `src/seektalent/api.py` | Stable wrapper functions: `run_match(...)` and `run_match_async(...)`. |
-| Local UI API | `src/seektalent_ui/server.py` | Thin local HTTP API that runs the same runtime in a background thread. |
+| Local UI API | `src/seektalent_ui/server.py` | Local HTTP API over the conversation agent, runtime-control store, worker, Workbench projection, and maintenance surfaces. |
 | Web UI | `apps/web-react/` | React Agent Workbench shell over the local UI BFF. |
 
-All product surfaces converge on `WorkflowRuntime` in `src/seektalent/runtime/orchestrator.py`.
+All product workflow starts, interventions, progress, checkpoints, candidate truth, and projection state flow through runtime-control. The runtime still owns recruiting execution, but it does not make artifacts the Workbench source of truth.
 
 ## Architecture diagram
 
@@ -24,7 +24,11 @@ flowchart LR
 
     cli --> api
     api --> runtime["WorkflowRuntime\nruntime/orchestrator.py"]
-    uiapi --> runtime
+    uiapi --> agent["ConversationAgentService\nseektalent_conversation_agent"]
+    agent --> control["RuntimeControlStore\nruntime_control.sqlite3"]
+    control --> worker["RuntimeExecutionWorker"]
+    worker --> runtime
+    control --> workbench["WorkbenchStore projection\nworkbench.sqlite3"]
 
     config["AppSettings\nconfig.py"] --> runtime
     prompts["PromptRegistry\nprompting.py + prompts/*.md"] --> runtime
@@ -43,7 +47,9 @@ flowchart LR
     runtime --> reflection["ReflectionCritic\nreflection/"]
     runtime --> finalizer["Finalizer\nfinalize/"]
     runtime --> eval["Optional evaluator\nevaluation.py"]
-    runtime --> tracer["RunTracer\ntracing.py"]
+    runtime --> sink["Runtime event/checkpoint sink"]
+    sink --> control
+    runtime --> tracer["RunTracer diagnostics\ntracing.py"]
 
     req -. "structured output" .-> llm["LLM provider\npydantic-ai"]
     controller -. "structured decision" .-> llm
@@ -64,7 +70,7 @@ flowchart LR
     discovery --> bocha["Bocha search\nwhen enabled"]
     discovery -. "planning / evidence reduction" .-> llm
 
-    tracer --> runs["runs/<timestamp>_<run_id>/\ntrace, events, JSON, markdown"]
+    tracer --> artifacts["artifacts/runs/YYYY/MM/DD/run_*\ndev/debug diagnostics only"]
 ```
 
 ## Runtime sequence
@@ -74,7 +80,8 @@ sequenceDiagram
     actor User
     participant Entry as CLI / Python API / UI API
     participant Runtime as WorkflowRuntime
-    participant Tracer as RunTracer
+    participant Control as RuntimeControlStore
+    participant Tracer as RunTracer diagnostics
     participant Req as RequirementExtractor
     participant Controller as ReActController
     participant Retrieval as Retrieval planner
@@ -85,17 +92,18 @@ sequenceDiagram
     participant Reflection as ReflectionCritic
     participant Finalizer as Finalizer
     participant LLM as LLM provider
-    participant Runs as runs/ artifacts
+    participant Artifacts as dev/debug artifacts
 
     User->>Entry: job_title + jd + notes
-    Entry->>Runtime: run or run_async
-    Runtime->>Tracer: create run directory and snapshots
-    Tracer->>Runs: run_config, input_snapshot, prompt_snapshots
+    Entry->>Control: enqueue or attach runtime run
+    Control->>Runtime: worker executes claimed run
+    Runtime->>Tracer: write optional diagnostics
+    Tracer->>Artifacts: compact diagnostics or explicit debug output
     Runtime->>Req: extract requirements
     Req->>LLM: RequirementExtractionDraft
     LLM-->>Req: structured draft
     Req-->>Runtime: RequirementSheet + scoring policy
-    Runtime->>Runs: input_truth, requirement_sheet, scoring_policy
+    Runtime->>Control: compact checkpoint and stage outputs
 
     loop round 1..max_rounds
         Runtime->>Controller: decide with controller context
@@ -104,7 +112,7 @@ sequenceDiagram
         Controller-->>Runtime: structured decision
 
         alt stop is allowed
-            Runtime->>Runs: controller_decision
+            Runtime->>Control: final checkpoint and public event
             Runtime-->>Runtime: leave round loop
         else search selected sources
             Runtime->>Retrieval: build source-neutral source plan
@@ -123,7 +131,8 @@ sequenceDiagram
             Reflection->>LLM: ReflectionAdvice
             LLM-->>Reflection: structured advice
             Reflection-->>Runtime: next-round guidance
-            Runtime->>Runs: round artifacts and round_review.md
+            Runtime->>Control: public event, checkpoint, and compact stage outputs
+            Runtime->>Tracer: optional round diagnostics
         end
 
         opt low-quality rescue is required
@@ -161,7 +170,19 @@ The local Workbench API stores runtime-owned session, source-lane, and final-top
 | `src/seektalent/finalize/` | Preserves runtime ranking order while generating final shortlist presentation text. |
 | `src/seektalent/tracing.py` | Writes trace events, JSON artifacts, prompt snapshots, hashes, and compact LLM call metadata. |
 
-## Runtime state
+## Runtime-Control State
+
+`src/seektalent_runtime_control` owns canonical workflow control:
+
+- run identity, start idempotency, status FSM, commands, and human interventions;
+- worker claims, executor leases, attempt fencing, checkpoints, snapshots, and final summaries;
+- compact public/developer events and projection watermarks;
+- canonical candidate identities, evidence, finalization revisions, and shortlist product facts;
+- retention metadata, artifact refs, and repair/import source metadata.
+
+Workbench state is a projection/read model. Runtime public progress reaches Workbench through runtime-control projection, not `runtime/public_events.jsonl`.
+
+## Runtime Execution State
 
 The runtime keeps state explicit:
 
@@ -169,11 +190,11 @@ The runtime keeps state explicit:
 - `RetrievalState` tracks the query-term pool, sent query history, plan version, projection result, and rescue attempts.
 - `RoundState` records the controller decision, source/retrieval plan, source search observations, scored top candidates, dropped candidates, and reflection advice for one round.
 
-The state objects live in `src/seektalent/models.py` and are written out as artifacts instead of being hidden behind a long-lived service object.
+The state objects live in `src/seektalent/models.py`. Safe boundary state is written to runtime-control checkpoints and compact stage outputs; artifacts are optional diagnostics.
 
 ## Artifact model
 
-Each run writes a directory under `runs/` by default. The important artifact groups are:
+Artifacts are diagnostics and exports, not product truth. In `dev` and explicit `debug_full_local`, a run may write partitioned files under `artifacts/runs/YYYY/MM/DD/run_*`. Important diagnostic groups include:
 
 - run setup: `run_config.json`, `input_snapshot.json`, `input_truth.json`, `prompt_snapshots/`
 - requirement setup: `requirement_extraction_draft.json`, `requirements_call.json`, `requirement_sheet.json`, `scoring_policy.json`
@@ -181,11 +202,14 @@ Each run writes a directory under `runs/` by default. The important artifact gro
 - final outputs: `finalizer_context.json`, `finalizer_call.json`, `final_candidates.json`, `final_answer.md`, `run_summary.md`
 - diagnostics: `events.jsonl`, `trace.log`, `sent_query_history.json`, `search_diagnostics.json`, `term_surface_audit.json`
 
+Production Workbench progress, completion, candidate review rows, and final shortlist projection do not depend on these files. Old artifact imports live behind explicit debug/repair commands.
+
 See [Outputs](outputs.md) for the full file reference.
 
 ## Boundaries
 
 - CLI, Python API, and UI API are shells around `WorkflowRuntime`, with the CLI as the primary user entrypoint.
+- Conversation-agent tools remain domain-specific recruiting workflow tools; SeekTalent does not copy Codex shell, patch, git, file-search, or code-execution tools.
 - UI depends on core runtime code; `src/seektalent` must not import `seektalent_ui` or `experiments`.
 - The controller returns structured decisions only. Python runtime code executes CTS, scoring fan-out, artifact writes, and stop rules.
 - Generic retrieval planning stays under `src/seektalent/retrieval/` and `src/seektalent/core/retrieval/`.

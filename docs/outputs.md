@@ -1,8 +1,10 @@
 # Outputs
 
+SeekTalent product state is SQLite-first. Workbench progress, workflow state, candidate truth, final summaries, and recruiter projections are stored in local product databases, not reconstructed from artifact files in production.
+
 ## Artifact roots
 
-- Active single runs write to `artifacts/runs/YYYY/MM/DD/run_<ulid>/`
+- Development and explicit debug runs may write diagnostics to `artifacts/runs/YYYY/MM/DD/run_<ulid>/`
 - Maintained benchmark input JSONL files remain in `artifacts/benchmarks/`
 - Benchmark execution outputs write to `artifacts/benchmark-executions/YYYY/MM/DD/benchmark_<ulid>/`
 - Query rewriting dataset exports write to `artifacts/exports/YYYY/MM/DD/export_<ulid>/`
@@ -16,12 +18,17 @@ Packaged `seektalent workbench` uses prod defaults under `~/.seektalent/` unless
 
 | Data | Cleanup |
 | --- | --- |
-| `artifacts/runs/YYYY/MM/DD/run_*` | partitions older than 7 days are removed during startup/run cleanup |
+| `runtime_control.sqlite3` | retained with runtime-control retention for terminal-run debug rows |
+| `conversation_agent.sqlite3` | retained with conversation and memory retention policy |
+| `workbench.sqlite3` | retained as recruiter-facing projection |
+| `agent_workbench_stream.sqlite3` | retained with stream retention cleanup |
+| `agent_memory.sqlite3` | retained with memory retention cleanup |
+| `liepin_connector.sqlite3` | retained provider state |
+| `corpus.sqlite3` | retained corpus index |
+| `artifacts/runs/YYYY/MM/DD/run_*` | dev/debug diagnostics; partitions older than 7 days are removed during startup/run cleanup |
 | `artifacts/benchmark-executions/YYYY/MM/DD/benchmark_*` | partitions older than 7 days are removed during startup/run cleanup |
 | `cache/` | exact LLM cache is cleared during cleanup |
-| `workbench.sqlite3` | retained |
-| `corpus.sqlite3` | retained |
-| `backups/` | retained |
+| `backups/` | retained under backup age/count/size policy |
 | `flywheel.sqlite3` | dev only by default |
 
 ## Dev-only Flywheel index
@@ -30,15 +37,15 @@ In `dev` mode, the query rewriting data flywheel uses `.seektalent/flywheel.sqli
 
 ### Corpus Assets
 
-`.seektalent/corpus.sqlite3` is the local queryable corpus index. It stores JD documents, resume subjects, resume snapshots, provider observations, run-to-JD links, corpus collections, and immutable corpus export ledger rows.
+`.seektalent/corpus.sqlite3` is the local queryable corpus index. It stores JD documents, resume subjects, resume snapshots, provider observations, run-to-JD links, corpus collections, and immutable corpus export ledger rows when corpus capture is enabled for developer diagnostics.
 
-Raw provider resume payloads are artifact-first. Runtime writes them under `artifacts/corpus/YYYY/MM/DD/corpus_<ulid>/raw_payloads/`, and the DB stores artifact ref, hash, and size rather than inlining full resume payload JSON by default.
+In `prod`, runtime provider-return capture is skipped for corpus raw payloads; recruiter product state comes from runtime-control and Workbench SQLite projections instead. In `dev` and `debug_full_local`, raw provider resume payloads are artifact-first diagnostics under `artifacts/corpus/YYYY/MM/DD/corpus_<ulid>/raw_payloads/`, and the DB stores artifact ref, hash, and size rather than inlining full resume payload JSON.
 
 Use `uv run seektalent corpus-export` to materialize corpus rows through `ArtifactStore` logical names. Corpus exports are separate from Flywheel query rewriting exports and do not contain benchmark qrels. V1 corpus exports are ref-only: `self_contained=false` and `raw_payload_policy=external_refs_only`.
 
 ## Single-run layout
 
-Each active run root is partitioned and typed:
+When `dev` or `debug_full_local` writes runtime diagnostics, each run root is partitioned and typed:
 
 ```text
 artifacts/runs/YYYY/MM/DD/run_<ulid>/
@@ -79,13 +86,13 @@ In `dev` mode, flywheel materialized rows may also appear under:
 
 ## Prompt assets
 
-Prompt files used for the run are stored under:
+In `debug_full_local`, prompt files used for the run may be stored under:
 
 ```text
 assets/prompts/
 ```
 
-This keeps the exact prompt content used by that run.
+This keeps the exact prompt content used by that run for explicit local troubleshooting. Normal production behavior should rely on compact DB state and metadata-only diagnostics.
 
 ## Per-round files
 

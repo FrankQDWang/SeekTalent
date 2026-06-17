@@ -88,7 +88,7 @@ Run benchmark rows from the maintained benchmark directory:
 ```bash
 seektalent benchmark \
   --benchmarks-dir ./artifacts/benchmarks \
-  --output-dir ./runs/benchmark \
+  --output-dir ./artifacts/benchmark-executions/manual \
   --benchmark-max-concurrency 6 \
   --enable-eval
 ```
@@ -98,7 +98,7 @@ Run an explicit JSONL file:
 ```bash
 seektalent benchmark \
   --jds-file ./artifacts/benchmarks/agent_jds.jsonl \
-  --output-dir ./runs/benchmark
+  --output-dir ./artifacts/benchmark-executions/manual
 ```
 
 Each row must include `job_title` and `job_description`. Extra fields are allowed.
