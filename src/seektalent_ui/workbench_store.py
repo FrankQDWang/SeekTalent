@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Mapping
 from contextlib import contextmanager
@@ -274,6 +275,7 @@ class WorkbenchStore:
         jd_text: str,
         notes: str,
         source_kinds: list[Literal["cts", "liepin"]] | None = None,
+        runtime_run_id: str | None = None,
     ) -> WorkbenchSession:
         return self._sessions.create_workbench_session(
             user=user,
@@ -281,15 +283,22 @@ class WorkbenchStore:
             jd_text=jd_text,
             notes=notes,
             source_kinds=source_kinds,
+            runtime_run_id=runtime_run_id,
         )
 
     def list_workbench_sessions(self, *, user: WorkbenchUser) -> list[WorkbenchSession]:
-        self._jobs.reconcile_expired_runtime_sourcing_jobs()
         return self._sessions.list_workbench_sessions(user=user)
 
     def get_workbench_session(self, *, user: WorkbenchUser, session_id: str) -> WorkbenchSession | None:
-        self._jobs.reconcile_expired_runtime_sourcing_jobs()
         return self._sessions.get_workbench_session(user=user, session_id=session_id)
+
+    def get_workbench_session_by_runtime_run_id(
+        self,
+        *,
+        user: WorkbenchUser,
+        runtime_run_id: str,
+    ) -> WorkbenchSession | None:
+        return self._sessions.get_workbench_session_by_runtime_run_id(user=user, runtime_run_id=runtime_run_id)
 
     def list_runtime_source_lane_latest_state(
         self,
@@ -501,21 +510,20 @@ class WorkbenchStore:
             runtime_run_id=runtime_run_id,
         )
 
-    def complete_runtime_sourcing_job_with_artifacts(
+    def complete_runtime_sourcing_job(
         self,
         *,
         context: WorkbenchRuntimeSourcingJobContext,
-        artifacts: object,
     ) -> None:
-        self._jobs.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+        self._jobs.complete_runtime_sourcing_job(context=context)
 
-    def refresh_runtime_candidate_index_with_artifacts(
+    def complete_runtime_sourcing_job_with_runtime_result(
         self,
         *,
         context: WorkbenchRuntimeSourcingJobContext,
-        artifacts: object,
+        runtime_result: object,
     ) -> None:
-        self._jobs.refresh_runtime_candidate_index_with_artifacts(context=context, artifacts=artifacts)
+        self._jobs.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=runtime_result)
 
     def fail_runtime_sourcing_job(
         self,
@@ -593,14 +601,6 @@ class WorkbenchStore:
             source_kind=source_kind,
             payload=payload,
         )
-
-    def reconcile_runtime_public_events_from_artifacts(
-        self,
-        *,
-        context: WorkbenchRuntimeSourcingJobContext,
-        artifacts: object,
-    ) -> int:
-        return self._events.reconcile_runtime_public_events_from_artifacts(context=context, artifacts=artifacts)
 
     def latest_runtime_source_count_projection(
         self,
@@ -710,6 +710,27 @@ class WorkbenchStore:
             user=user,
             session_id=session_id,
             runtime_run_id=runtime_run_id,
+        )
+
+    def persist_runtime_candidate_truth_from_control(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        runtime_run_id: str,
+        identities: Iterable[object],
+        evidence: Iterable[object],
+        finalization_revision: object,
+        projected_at: str,
+    ) -> str:
+        return self._candidates.persist_runtime_candidate_truth_from_control(
+            user=user,
+            session_id=session_id,
+            runtime_run_id=runtime_run_id,
+            identities=identities,
+            evidence=evidence,
+            finalization_revision=finalization_revision,
+            projected_at=projected_at,
         )
 
     def list_workbench_events(self, *, user: WorkbenchUser, after_seq: int, limit: int = 100) -> list[WorkbenchEvent]:
@@ -917,7 +938,7 @@ class WorkbenchStore:
         if self._initialized:
             return
         with self._connect() as conn:
-            initialize_workbench_schema(conn, now=_now_iso())
+            initialize_workbench_schema(conn, now=_now_iso(), database_path=self.db_path)
         self._initialized = True
 
     @contextmanager
@@ -1060,6 +1081,7 @@ def _session_from_row(
         status=row["status"],
         source_runs=source_runs,
         requirement_review=requirement_review,
+        runtime_run_id=row["runtime_run_id"],
     )
 
 

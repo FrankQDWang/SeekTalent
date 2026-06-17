@@ -640,6 +640,7 @@ async def start_session_source_runs(
         raise HTTPException(status_code=409, detail="requirement_review_not_approved")
     if session.requirement_review.requirement_sheet is None:
         raise HTTPException(status_code=409, detail="requirement_review_empty")
+    has_active_runtime_job = store.has_active_runtime_sourcing_job(user=user, session_id=session_id)
     blocked: list[WorkbenchSessionStartBlockedSourceResponse] = []
     should_wake_runner = False
     for source_run in session.source_runs:
@@ -648,6 +649,7 @@ async def start_session_source_runs(
         if (
             source_run.source_kind == "liepin"
             and source_run.status != "running"
+            and not has_active_runtime_job
             and (
                 source_run.status in {"blocked", "queued"}
                 or source_run.auth_state == "login_required"

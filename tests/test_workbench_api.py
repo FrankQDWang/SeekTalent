@@ -84,6 +84,25 @@ def test_legacy_runs_api_is_removed(tmp_path: Path) -> None:
     assert client.get(f"{legacy_runs_path}/legacy-run-id").status_code == 404
 
 
+def test_product_session_read_routes_do_not_reconcile_expired_runtime_sourcing_jobs(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    session = _create_session(client)
+
+    def fail_reconcile() -> int:
+        raise AssertionError("product read path must not mutate runtime sourcing jobs")
+
+    client.app.state.workbench_store._jobs.reconcile_expired_runtime_sourcing_jobs = fail_reconcile
+
+    list_response = client.get("/api/workbench/sessions")
+    get_response = client.get(f"/api/workbench/sessions/{session['sessionId']}")
+
+    assert list_response.status_code == 200, list_response.text
+    assert get_response.status_code == 200, get_response.text
+
+
 class FakeWorkbenchRuntime:
     started = threading.Event()
     release = threading.Event()
@@ -4503,20 +4522,31 @@ def test_runtime_public_events_are_persisted_by_contract_and_deduped(tmp_path: P
 
     events = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0").json()["events"]
     public_events = [event for event in events if event["schemaVersion"] == "runtime_public_event_v1"]
+    runtime_public_events = client.app.state.runtime_control_store.list_public_events(
+        runtime_run_id="run_public_1",
+        after_seq=0,
+        limit=10,
+    ).events
     assert [event["eventName"] for event in public_events] == [
         "runtime_round_source_dispatch",
         "runtime_round_source_result",
     ]
-    assert [event["idempotencyKey"] for event in public_events] == [
+    assert [event.idempotency_key for event in runtime_public_events] == [
         "run_public_1:1:source_dispatch:cts",
         "run_public_1:1:source_result:cts",
+    ]
+    assert [event.event_id for event in runtime_public_events] == [
+        event["idempotencyKey"] for event in public_events
+    ]
+    assert [event.workbench_event_global_seq for event in runtime_public_events] == [
+        event["globalSeq"] for event in public_events
     ]
     assert public_events[1]["sourceKind"] == "cts"
     assert public_events[1]["payload"]["counts"]["sourceCumulativeIdentities"] == 6
     assert "runtime_runtime_public_event" not in [event["eventName"] for event in events]
 
 
-def test_runtime_public_event_artifact_reconciliation_backfills_missing_progress_event(tmp_path: Path) -> None:
+def test_runtime_public_event_artifact_mirror_does_not_backfill_product_events(tmp_path: Path) -> None:
     _reset_fake_runtime()
     run_dir = tmp_path / "runtime-run"
     public_event_dir = run_dir / "runtime"
@@ -4560,9 +4590,7 @@ def test_runtime_public_event_artifact_reconciliation_backfills_missing_progress
 
     events = client.get(f"/api/workbench/sessions/{session['sessionId']}/events?after_seq=0").json()["events"]
     reconciled = [event for event in events if event.get("idempotencyKey") == public_event["eventId"]]
-    assert len(reconciled) == 1
-    assert reconciled[0]["eventName"] == "runtime_round_source_result"
-    assert reconciled[0]["schemaVersion"] == "runtime_public_event_v1"
+    assert reconciled == []
 
 
 def test_source_cards_prefer_runtime_public_source_cumulative_counts(tmp_path: Path) -> None:
@@ -5744,7 +5772,7 @@ def test_event_reads_do_not_create_legacy_workbench_user_sessions_table(tmp_path
     assert table_count == 0
 
 
-def test_expired_running_job_is_reconciled_on_app_startup(tmp_path: Path) -> None:
+def test_expired_running_job_is_not_reconciled_by_session_read_after_app_startup(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
     _ensure_local_actor(client)
@@ -5771,13 +5799,13 @@ def test_expired_running_job_is_reconciled_on_app_startup(tmp_path: Path) -> Non
     reconciled = new_client.get(f"/api/workbench/sessions/{session['sessionId']}")
     assert reconciled.status_code == 200
     run = next(item for item in reconciled.json()["sourceRuns"] if item["sourceRunId"] == cts_run["sourceRunId"])
-    assert run["status"] == "failed"
-    assert run["warningCode"] == "job_lease_expired"
+    assert run["status"] == "running"
+    assert run["warningCode"] is None
 
     FakeWorkbenchRuntime.release.set()
 
 
-def test_expired_running_job_is_reconciled_on_session_read_without_app_restart(tmp_path: Path) -> None:
+def test_expired_running_job_is_not_reconciled_on_session_read_without_app_restart(tmp_path: Path) -> None:
     _reset_fake_runtime()
     client = _client(tmp_path)
     _ensure_local_actor(client)
@@ -5802,8 +5830,8 @@ def test_expired_running_job_is_reconciled_on_session_read_without_app_restart(t
     refreshed = client.get(f"/api/workbench/sessions/{session['sessionId']}")
     assert refreshed.status_code == 200
     run = next(item for item in refreshed.json()["sourceRuns"] if item["sourceRunId"] == cts_run["sourceRunId"])
-    assert run["status"] == "failed"
-    assert run["warningCode"] == "job_lease_expired"
+    assert run["status"] == "running"
+    assert run["warningCode"] is None
 
     FakeWorkbenchRuntime.release.set()
 

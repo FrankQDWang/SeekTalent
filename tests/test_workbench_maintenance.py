@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -20,6 +22,10 @@ from seektalent_ui.maintenance import (
     backup_workbench,
     main,
     restore_workbench,
+    run_local_storage_cleanup,
+    run_database_group_backup,
+    run_operator_health,
+    run_runtime_control_retention,
     run_rollout_readiness,
 )
 from seektalent_ui.workbench_store import DEFAULT_TENANT_ID, WorkbenchSession, WorkbenchStore, WorkbenchUser
@@ -37,6 +43,177 @@ def test_workbench_store_connect_closes_after_context(tmp_path: Path) -> None:
 
     with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
         conn.execute("SELECT 1").fetchone()
+
+
+def test_runtime_control_retention_operator_entrypoint_defaults_to_dry_run(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from seektalent_runtime_control.models import RuntimeControlEventInput, RuntimeRunRecord
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    runtime_db = tmp_path / "runtime_control.sqlite3"
+    store = RuntimeControlStore(runtime_db)
+    store.initialize()
+    store.create_run(
+        RuntimeRunRecord(
+            runtime_run_id="runtime_run_maintenance",
+            agent_conversation_id="agent_conv_1",
+            workbench_session_id="workbench_session_1",
+            approved_requirement_revision_id="reqapproved_maintenance",
+            status="completed",
+            current_stage="finalization",
+            current_round=None,
+            latest_checkpoint_id=None,
+            latest_event_seq=0,
+            source_ids=["cts"],
+            stop_reason_code=None,
+            created_at="2026-05-01T00:00:00.000000Z",
+            updated_at="2026-05-01T00:00:00.000000Z",
+            completed_at="2026-05-01T00:00:00.000000Z",
+        )
+    )
+    store.append_event(
+        RuntimeControlEventInput(
+            event_id="rtevt_maintenance_debug",
+            runtime_run_id="runtime_run_maintenance",
+            event_type="runtime_debug_note",
+            stage="debug",
+            round_no=None,
+            source_id=None,
+            status="completed",
+            summary="debug row can be deleted only after apply",
+            payload={"debug": True},
+            visibility="developer",
+            created_at="2026-05-01T00:00:01.000000Z",
+        )
+    )
+
+    result = run_runtime_control_retention(
+        runtime_control_db_path=runtime_db,
+        now=lambda: "2026-06-08T00:00:00.000000Z",
+        database_budget_bytes=1,
+    )
+    exit_code = main(
+        [
+            "runtime-retention",
+            "--runtime-control-db",
+            str(runtime_db),
+            "--now",
+            "2026-06-08T00:00:00.000000Z",
+            "--database-budget-bytes",
+            "1",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert result.dry_run is True
+    assert result.stats.nonpublic_event_count == 1
+    assert result.stats.over_database_budget is True
+    assert exit_code == 0
+    assert "dry_run: true" in output
+    assert "total_deletable_count: 1" in output
+    assert store.get_event(runtime_run_id="runtime_run_maintenance", event_id="rtevt_maintenance_debug") is not None
+
+
+def test_local_storage_cleanup_operator_entrypoint_defaults_to_dry_run(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    artifacts_dir = tmp_path / "artifacts"
+    cache_dir = tmp_path / "cache"
+    old_debug = artifacts_dir / "debug" / "2026" / "05" / "01" / "debug.json"
+    old_debug.parent.mkdir(parents=True)
+    old_debug.write_text("debug", encoding="utf-8")
+    old_timestamp = datetime(2026, 5, 1, tzinfo=timezone.utc).timestamp()
+    os.utime(old_debug, (old_timestamp, old_timestamp))
+
+    result = run_local_storage_cleanup(
+        workspace_root=tmp_path,
+        runtime_mode="prod",
+        artifacts_dir=str(artifacts_dir),
+        llm_cache_dir=str(cache_dir),
+        now=datetime(2026, 6, 17, tzinfo=timezone.utc),
+        debug_retention_days=7,
+    )
+    exit_code = main(
+        [
+            "local-storage-cleanup",
+            "--workspace-root",
+            str(tmp_path),
+            "--runtime-mode",
+            "prod",
+            "--artifacts-dir",
+            str(artifacts_dir),
+            "--llm-cache-dir",
+            str(cache_dir),
+            "--now",
+            "2026-06-17T00:00:00+00:00",
+            "--debug-retention-days",
+            "7",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert result.dry_run is True
+    assert len(result.candidates) == 1
+    assert old_debug.exists()
+    assert exit_code == 0
+    assert "dry_run: true" in output
+    assert "candidate_count: 1" in output
+    assert old_debug.exists()
+
+
+def test_operator_health_cli_reports_product_database_status(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION
+
+    runtime_db = tmp_path / ".seektalent" / "runtime_control.sqlite3"
+    _create_marker_database(runtime_db, marker="runtime_control", user_version=RUNTIME_CONTROL_SCHEMA_VERSION)
+
+    result = run_operator_health(workspace_root=tmp_path, required_free_bytes=1)
+    exit_code = main(["operator-health", "--workspace-root", str(tmp_path), "--required-free-bytes", "1"])
+    output = capsys.readouterr().out
+
+    assert result.status == "warning"
+    assert exit_code == 0
+    assert "status: warning" in output
+    assert "database_count: 7" in output
+    assert "database:runtime_control:ok:db_ok" in output
+    assert "database:conversation:warning:db_missing" in output
+
+
+def test_database_group_backup_cli_writes_manifest_and_reports_partial_status(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    runtime_db = tmp_path / ".seektalent" / "runtime_control.sqlite3"
+    _create_marker_database(runtime_db, marker="runtime_control", user_version=1)
+
+    result = run_database_group_backup(
+        workspace_root=tmp_path,
+        now=datetime(2026, 6, 17, tzinfo=timezone.utc),
+    )
+    exit_code = main(
+        [
+            "backup-db-group",
+            "--workspace-root",
+            str(tmp_path),
+            "--now",
+            "2026-06-17T00:00:00+00:00",
+        ]
+    )
+    output = capsys.readouterr().out
+
+    assert result.status == "warning"
+    assert result.manifest_path.exists()
+    assert exit_code == 0
+    assert "status: warning" in output
+    assert "reason_code: db_group_backup_partial" in output
+    assert "database_count: 7" in output
+    assert "verified_count: 1" in output
 
 
 def _create_workbench_fixture(workspace_root: Path, *, job_title: str) -> tuple[WorkbenchStore, WorkbenchUser, WorkbenchSession]:
@@ -73,6 +250,14 @@ def _create_workbench_fixture(workspace_root: Path, *, job_title: str) -> tuple[
     assert detail_request is not None
     assert detail_request.ledger is not None
     return store, user, session
+
+
+def _create_marker_database(path: Path, *, marker: str, user_version: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE marker (value TEXT NOT NULL)")
+        conn.execute("INSERT INTO marker(value) VALUES (?)", (marker,))
+        conn.execute(f"PRAGMA user_version = {user_version}")
 
 
 def _insert_liepin_card_candidate(database_path: Path, *, user: WorkbenchUser, session: WorkbenchSession) -> None:
@@ -253,7 +438,7 @@ def _write_same_columns_wrong_schema_backup(path: Path) -> None:
             for table, foreign_keys in canonical_schema["foreign_keys"].items()
             if foreign_keys
         },
-        "workbench_required_indexes": sorted(WORKBENCH_REQUIRED_INDEXES),
+        "workbench_required_indexes": sorted(canonical_schema["indexes"]),
         "workbench_required_table_fragments": maintenance.WORKBENCH_REQUIRED_TABLE_FRAGMENTS,
         "workbench_required_tables": sorted(WORKBENCH_REQUIRED_TABLES),
     }
@@ -300,7 +485,7 @@ def _write_column_fragment_spoof_backup(path: Path) -> None:
             for table, foreign_keys in canonical_schema["foreign_keys"].items()
             if foreign_keys
         },
-        "workbench_required_indexes": sorted(WORKBENCH_REQUIRED_INDEXES),
+        "workbench_required_indexes": sorted(canonical_schema["indexes"]),
         "workbench_required_table_fragments": maintenance.WORKBENCH_REQUIRED_TABLE_FRAGMENTS,
         "workbench_required_tables": sorted(WORKBENCH_REQUIRED_TABLES),
     }

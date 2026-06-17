@@ -1,6 +1,15 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
+
+from seektalent.product_database_versions import WORKBENCH_SCHEMA_VERSION
+from seektalent.sqlite_migrations import (
+    backup_sqlite_before_migration,
+    has_user_tables,
+    require_supported_version,
+    run_sqlite_integrity_checks,
+)
 
 
 SCHEMA_SQL = """
@@ -42,6 +51,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     tenant_id TEXT NOT NULL,
     workspace_id TEXT NOT NULL,
     user_id TEXT NOT NULL,
+    runtime_run_id TEXT,
     job_title TEXT NOT NULL,
     jd_text TEXT NOT NULL,
     notes TEXT NOT NULL,
@@ -542,8 +552,28 @@ ON external_write_intents(tenant_id, workspace_id, status, updated_at, intent_id
 """
 
 
-def initialize_workbench_schema(conn: sqlite3.Connection, *, now: str) -> None:
+def initialize_workbench_schema(conn: sqlite3.Connection, *, now: str, database_path: str | Path | None = None) -> None:
+    version = require_supported_version(conn, supported_version=WORKBENCH_SCHEMA_VERSION, store_name="workbench")
+    if version == WORKBENCH_SCHEMA_VERSION:
+        return
+    if version > 0 or has_user_tables(conn):
+        if database_path is not None:
+            path = Path(database_path)
+            backup_sqlite_before_migration(
+                path,
+                backup_root=path.parent / "migration_backups",
+                store_name="workbench",
+                now=now,
+            )
     conn.executescript(SCHEMA_SQL)
+    ensure_column(conn, "sessions", "runtime_run_id", "TEXT")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_runtime_run_id
+        ON sessions(runtime_run_id)
+        WHERE runtime_run_id IS NOT NULL
+        """
+    )
     ensure_column(conn, "source_run_jobs", "idempotency_key", "TEXT")
     ensure_column(conn, "source_connections", "provider_account_hash", "TEXT")
     ensure_column(conn, "source_connections", "compliance_gate_ref", "TEXT")
@@ -580,6 +610,8 @@ def initialize_workbench_schema(conn: sqlite3.Connection, *, now: str) -> None:
         (now, now),
     )
     backfill_completed_cts_source_run_counts(conn)
+    conn.execute(f"PRAGMA user_version = {WORKBENCH_SCHEMA_VERSION}")
+    run_sqlite_integrity_checks(conn, store_name="workbench", foreign_keys=True)
 
 
 def ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:

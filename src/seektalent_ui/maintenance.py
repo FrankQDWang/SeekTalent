@@ -7,12 +7,32 @@ import os
 import sqlite3
 import subprocess
 import sys
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Sequence, cast
+from typing import Callable, Sequence, cast
 
+from seektalent.config import DEFAULT_RUNTIME_CONTROL_DB_PATH, AppSettings
+from seektalent.backup_group import DatabaseGroupBackupResult, backup_product_database_group
+from seektalent.local_storage_lifecycle import (
+    LocalStorageCleanupResult,
+    LocalStorageLifecyclePolicy,
+    LocalStorageStoreCleanupCount,
+    cleanup_local_storage,
+)
+from seektalent.operator_health import OperatorHealthReport, build_operator_health_report
+from seektalent.corpus.store import DEFAULT_TENANT_ID as CORPUS_DEFAULT_TENANT_ID
+from seektalent.corpus.store import DEFAULT_WORKSPACE_ID as CORPUS_DEFAULT_WORKSPACE_ID
+from seektalent.corpus.store import CorpusStore
+from seektalent.providers.liepin.store import LiepinStore
+from seektalent_runtime_control.retention import (
+    RuntimeControlRetentionPolicy,
+    RuntimeRetentionResult,
+    RuntimeRetentionService,
+)
+from seektalent_runtime_control.store import RuntimeControlStore
+from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
 from seektalent_ui.workbench_store import DEFAULT_WORKSPACE_ID, WorkbenchStore
 
 
@@ -507,6 +527,188 @@ def run_rollout_readiness(*, workspace_root: Path, output_dir: Path | None = Non
     )
 
 
+def run_runtime_control_retention(
+    *,
+    runtime_control_db_path: Path,
+    apply: bool = False,
+    now: Callable[[], str] | None = None,
+    terminal_run_min_age_days: int = 30,
+    developer_event_ttl_days: int = 14,
+    internal_event_ttl_days: int = 30,
+    checkpoint_ttl_days: int = 30,
+    lease_ttl_days: int = 7,
+    command_ttl_days: int = 30,
+    non_required_stage_output_ttl_days: int = 30,
+    batch_size: int = 500,
+    database_budget_bytes: int | None = None,
+) -> RuntimeRetentionResult:
+    store = RuntimeControlStore(runtime_control_db_path)
+    store.initialize()
+    policy = RuntimeControlRetentionPolicy(
+        terminal_run_min_age_days=terminal_run_min_age_days,
+        developer_event_ttl_days=developer_event_ttl_days,
+        internal_event_ttl_days=internal_event_ttl_days,
+        checkpoint_ttl_days=checkpoint_ttl_days,
+        lease_ttl_days=lease_ttl_days,
+        command_ttl_days=command_ttl_days,
+        non_required_stage_output_ttl_days=non_required_stage_output_ttl_days,
+        batch_size=batch_size,
+        database_budget_bytes=database_budget_bytes,
+    )
+    return RuntimeRetentionService(store=store, now=now, policy=policy).cleanup(dry_run=not apply)
+
+
+def run_local_storage_cleanup(
+    *,
+    workspace_root: Path,
+    runtime_mode: str = "dev",
+    artifacts_dir: str | None = None,
+    llm_cache_dir: str | None = None,
+    closed_conversation_ids: Sequence[str] = (),
+    corpus_tenant_id: str = CORPUS_DEFAULT_TENANT_ID,
+    corpus_workspace_id: str = CORPUS_DEFAULT_WORKSPACE_ID,
+    apply: bool = False,
+    now: datetime | None = None,
+    debug_retention_days: int = 7,
+    cache_retention_days: int = 7,
+    support_bundle_retention_days: int = 7,
+    backup_retention_days: int = 30,
+    stream_event_retention_days: int = 30,
+    liepin_detail_retention_days: int = 30,
+    corpus_export_retention_days: int = 30,
+    max_backup_count: int = 10,
+    max_backup_total_bytes: int = 2_000_000_000,
+) -> LocalStorageCleanupResult:
+    current_time = now or datetime.now(UTC)
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=UTC)
+    settings = AppSettings(
+        _env_file=None,
+        runtime_mode=runtime_mode,
+        workspace_root=str(workspace_root),
+        artifacts_dir=artifacts_dir,
+        llm_cache_dir=llm_cache_dir,
+    )
+    policy = LocalStorageLifecyclePolicy(
+        debug_retention_days=debug_retention_days,
+        cache_retention_days=cache_retention_days,
+        support_bundle_retention_days=support_bundle_retention_days,
+        backup_retention_days=backup_retention_days,
+        max_backup_count=max_backup_count,
+        max_backup_total_bytes=max_backup_total_bytes,
+    )
+    result = cleanup_local_storage(settings, now=current_time, policy=policy, apply=apply)
+    store_counts = _run_store_specific_local_retention(
+        settings=settings,
+        current_time=current_time,
+        closed_conversation_ids=closed_conversation_ids,
+        corpus_tenant_id=corpus_tenant_id,
+        corpus_workspace_id=corpus_workspace_id,
+        apply=apply,
+        stream_event_retention_days=stream_event_retention_days,
+        liepin_detail_retention_days=liepin_detail_retention_days,
+        corpus_export_retention_days=corpus_export_retention_days,
+    )
+    return replace(result, store_cleanup_counts=store_counts)
+
+
+def run_database_group_backup(
+    *,
+    workspace_root: Path,
+    runtime_mode: str = "prod",
+    artifacts_dir: str | None = None,
+    llm_cache_dir: str | None = None,
+    backup_root: Path | None = None,
+    now: datetime | None = None,
+) -> DatabaseGroupBackupResult:
+    settings = AppSettings(
+        _env_file=None,
+        runtime_mode=runtime_mode,
+        workspace_root=str(workspace_root),
+        artifacts_dir=artifacts_dir,
+        llm_cache_dir=llm_cache_dir,
+    )
+    return backup_product_database_group(settings, backup_root=backup_root, now=now)
+
+
+def run_operator_health(
+    *,
+    workspace_root: Path,
+    runtime_mode: str = "prod",
+    artifacts_dir: str | None = None,
+    llm_cache_dir: str | None = None,
+    required_free_bytes: int = 1_000_000_000,
+) -> OperatorHealthReport:
+    settings = AppSettings(
+        _env_file=None,
+        runtime_mode=runtime_mode,
+        workspace_root=str(workspace_root),
+        artifacts_dir=artifacts_dir,
+        llm_cache_dir=llm_cache_dir,
+    )
+    return build_operator_health_report(settings, required_free_bytes=required_free_bytes)
+
+
+def _run_store_specific_local_retention(
+    *,
+    settings: AppSettings,
+    current_time: datetime,
+    closed_conversation_ids: Sequence[str],
+    corpus_tenant_id: str,
+    corpus_workspace_id: str,
+    apply: bool,
+    stream_event_retention_days: int,
+    liepin_detail_retention_days: int,
+    corpus_export_retention_days: int,
+) -> tuple[LocalStorageStoreCleanupCount, ...]:
+    counts: list[LocalStorageStoreCleanupCount] = []
+    stream_db_path = settings.project_root / ".seektalent" / "agent_workbench_stream.sqlite3"
+    if closed_conversation_ids and stream_db_path.exists():
+        store = AgentWorkbenchStreamStore(stream_db_path)
+        counts.append(
+            LocalStorageStoreCleanupCount(
+                store_name="agent_workbench_stream",
+                item_kind="closed_conversation_events",
+                count=store.prune_closed_conversation_events(
+                    closed_conversation_ids,
+                    created_before=_maintenance_cutoff(current_time, stream_event_retention_days),
+                    dry_run=not apply,
+                ),
+            )
+        )
+    liepin_db_path = settings.resolve_workspace_path(settings.liepin_connector_db_path)
+    if liepin_db_path.exists():
+        counts.append(
+            LocalStorageStoreCleanupCount(
+                store_name="liepin",
+                item_kind="terminal_detail_attempts",
+                count=LiepinStore(liepin_db_path).delete_terminal_detail_attempts(
+                    updated_before=_maintenance_cutoff(current_time, liepin_detail_retention_days),
+                    budget_date_before=(current_time - timedelta(days=liepin_detail_retention_days)).date().isoformat(),
+                    dry_run=not apply,
+                ),
+            )
+        )
+    if settings.corpus_path.exists():
+        corpus_store = CorpusStore(settings.corpus_path)
+        try:
+            counts.append(
+                LocalStorageStoreCleanupCount(
+                    store_name="corpus",
+                    item_kind="corpus_exports",
+                    count=corpus_store.delete_expired_corpus_exports(
+                        corpus_tenant_id,
+                        corpus_workspace_id,
+                        created_before=_maintenance_cutoff(current_time, corpus_export_retention_days),
+                        dry_run=not apply,
+                    ),
+                )
+            )
+        finally:
+            corpus_store.close()
+    return tuple(counts)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
@@ -533,6 +735,109 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"report: {result.report_path}")
             print(f"markdown: {result.markdown_path}")
             return 1 if result.status == "fail" else 0
+        if args.command == "runtime-retention":
+            runtime_control_db_path = args.runtime_control_db or _runtime_control_db_path(args.workspace_root)
+            result = run_runtime_control_retention(
+                runtime_control_db_path=runtime_control_db_path,
+                apply=args.apply,
+                now=(lambda: args.now) if args.now is not None else None,
+                terminal_run_min_age_days=args.terminal_run_min_age_days,
+                developer_event_ttl_days=args.developer_event_ttl_days,
+                internal_event_ttl_days=args.internal_event_ttl_days,
+                checkpoint_ttl_days=args.checkpoint_ttl_days,
+                lease_ttl_days=args.lease_ttl_days,
+                command_ttl_days=args.command_ttl_days,
+                non_required_stage_output_ttl_days=args.non_required_stage_output_ttl_days,
+                batch_size=args.batch_size,
+                database_budget_bytes=args.database_budget_bytes,
+            )
+            print(f"dry_run: {str(result.dry_run).lower()}")
+            print(f"total_deletable_count: {result.stats.total_count}")
+            print(f"total_deleted_count: {result.total_deleted_count}")
+            print(f"estimated_deletable_bytes: {result.stats.total_estimated_bytes}")
+            print(f"database_bytes: {result.stats.total_database_bytes}")
+            print(f"over_database_budget: {str(result.stats.over_database_budget).lower()}")
+            return 0
+        if args.command == "local-storage-cleanup":
+            result = run_local_storage_cleanup(
+                workspace_root=args.workspace_root,
+                runtime_mode=args.runtime_mode,
+                artifacts_dir=str(args.artifacts_dir) if args.artifacts_dir is not None else None,
+                llm_cache_dir=str(args.llm_cache_dir) if args.llm_cache_dir is not None else None,
+                closed_conversation_ids=args.closed_conversation_id,
+                corpus_tenant_id=args.corpus_tenant_id,
+                corpus_workspace_id=args.corpus_workspace_id,
+                apply=args.apply,
+                now=_parse_maintenance_datetime(args.now) if args.now is not None else None,
+                debug_retention_days=args.debug_retention_days,
+                cache_retention_days=args.cache_retention_days,
+                support_bundle_retention_days=args.support_bundle_retention_days,
+                backup_retention_days=args.backup_retention_days,
+                stream_event_retention_days=args.stream_event_retention_days,
+                liepin_detail_retention_days=args.liepin_detail_retention_days,
+                corpus_export_retention_days=args.corpus_export_retention_days,
+                max_backup_count=args.max_backup_count,
+                max_backup_total_bytes=args.max_backup_total_bytes,
+            )
+            print(f"dry_run: {str(result.dry_run).lower()}")
+            print(f"total_size_bytes: {result.inventory.total_size_bytes}")
+            print(f"budget_bytes: {result.inventory.budget_bytes}")
+            print(f"over_budget: {str(result.inventory.over_budget).lower()}")
+            print(f"candidate_count: {len(result.candidates)}")
+            print(f"candidate_bytes: {sum(candidate.size_bytes for candidate in result.candidates)}")
+            print(f"store_candidate_count: {result.store_candidate_count}")
+            print(f"deleted_file_count: {result.deleted_file_count}")
+            print(f"deleted_bytes: {result.deleted_bytes}")
+            for store_count in result.store_cleanup_counts:
+                print(f"{store_count.store_name}.{store_count.item_kind}: {store_count.count}")
+            if result.errors:
+                print(f"errors: {len(result.errors)}")
+            return 0
+        if args.command == "backup-db-group":
+            result = run_database_group_backup(
+                workspace_root=args.workspace_root,
+                runtime_mode=args.runtime_mode,
+                artifacts_dir=str(args.artifacts_dir) if args.artifacts_dir is not None else None,
+                llm_cache_dir=str(args.llm_cache_dir) if args.llm_cache_dir is not None else None,
+                backup_root=args.backup_root,
+                now=_parse_maintenance_datetime(args.now) if args.now is not None else None,
+            )
+            print(f"status: {result.status}")
+            print(f"reason_code: {result.reason_code}")
+            print(f"manifest: {result.manifest_path}")
+            print(f"database_count: {len(result.entries)}")
+            print(f"verified_count: {sum(1 for entry in result.entries if entry.status == 'verified')}")
+            print(f"missing_count: {sum(1 for entry in result.entries if entry.status == 'missing')}")
+            print(f"failed_count: {sum(1 for entry in result.entries if entry.status == 'failed')}")
+            return 1 if result.status == "failed" else 0
+        if args.command == "operator-health":
+            result = run_operator_health(
+                workspace_root=args.workspace_root,
+                runtime_mode=args.runtime_mode,
+                artifacts_dir=str(args.artifacts_dir) if args.artifacts_dir is not None else None,
+                llm_cache_dir=str(args.llm_cache_dir) if args.llm_cache_dir is not None else None,
+                required_free_bytes=args.required_free_bytes,
+            )
+            print(f"status: {result.status}")
+            print(f"reason_code: {result.reason_code}")
+            print(f"disk_status: {result.disk.status}")
+            print(f"disk_reason_code: {result.disk.reason_code}")
+            print(f"disk_free_bytes: {result.disk.free_bytes}")
+            print(f"database_count: {len(result.databases)}")
+            print(f"warning_database_count: {sum(1 for database in result.databases if database.status == 'warning')}")
+            print(f"failed_database_count: {sum(1 for database in result.databases if database.status == 'failed')}")
+            for database in result.databases:
+                print(
+                    "database:"
+                    f"{database.name}:"
+                    f"{database.status}:"
+                    f"{database.reason_code}:"
+                    f"user_version={database.schema_user_version}:"
+                    f"db_bytes={database.database_size_bytes}:"
+                    f"wal_bytes={database.wal_size_bytes}:"
+                    f"shm_bytes={database.shm_size_bytes}"
+                )
+            return 1 if result.status == "failed" else 0
     except MaintenanceError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -563,11 +868,86 @@ def _build_parser() -> argparse.ArgumentParser:
     readiness.add_argument("--workspace-root", type=Path, default=Path.cwd())
     readiness.add_argument("--output-dir", type=Path, default=None)
 
+    runtime_retention = subparsers.add_parser(
+        "runtime-retention",
+        help="Dry-run or apply runtime-control retention cleanup without running VACUUM.",
+    )
+    runtime_retention.add_argument("--workspace-root", type=Path, default=Path.cwd())
+    runtime_retention.add_argument("--runtime-control-db", type=Path, default=None)
+    runtime_retention.add_argument("--apply", action="store_true", help="Apply deletion. Omit for dry-run only.")
+    runtime_retention.add_argument("--now", default=None)
+    runtime_retention.add_argument("--terminal-run-min-age-days", type=int, default=30)
+    runtime_retention.add_argument("--developer-event-ttl-days", type=int, default=14)
+    runtime_retention.add_argument("--internal-event-ttl-days", type=int, default=30)
+    runtime_retention.add_argument("--checkpoint-ttl-days", type=int, default=30)
+    runtime_retention.add_argument("--lease-ttl-days", type=int, default=7)
+    runtime_retention.add_argument("--command-ttl-days", type=int, default=30)
+    runtime_retention.add_argument("--non-required-stage-output-ttl-days", type=int, default=30)
+    runtime_retention.add_argument("--batch-size", type=int, default=500)
+    runtime_retention.add_argument("--database-budget-bytes", type=int, default=None)
+
+    local_storage = subparsers.add_parser(
+        "local-storage-cleanup",
+        help="Dry-run or apply whole-product local storage cleanup. Omit --apply for dry-run.",
+    )
+    local_storage.add_argument("--workspace-root", type=Path, default=Path.cwd())
+    local_storage.add_argument("--runtime-mode", choices=("prod", "dev"), default="dev")
+    local_storage.add_argument("--artifacts-dir", type=Path, default=None)
+    local_storage.add_argument("--llm-cache-dir", type=Path, default=None)
+    local_storage.add_argument("--closed-conversation-id", action="append", default=[])
+    local_storage.add_argument("--corpus-tenant-id", default=CORPUS_DEFAULT_TENANT_ID)
+    local_storage.add_argument("--corpus-workspace-id", default=CORPUS_DEFAULT_WORKSPACE_ID)
+    local_storage.add_argument("--apply", action="store_true", help="Apply deletion. Omit for dry-run only.")
+    local_storage.add_argument("--now", default=None)
+    local_storage.add_argument("--debug-retention-days", type=int, default=7)
+    local_storage.add_argument("--cache-retention-days", type=int, default=7)
+    local_storage.add_argument("--support-bundle-retention-days", type=int, default=7)
+    local_storage.add_argument("--backup-retention-days", type=int, default=30)
+    local_storage.add_argument("--stream-event-retention-days", type=int, default=30)
+    local_storage.add_argument("--liepin-detail-retention-days", type=int, default=30)
+    local_storage.add_argument("--corpus-export-retention-days", type=int, default=30)
+    local_storage.add_argument("--max-backup-count", type=int, default=10)
+    local_storage.add_argument("--max-backup-total-bytes", type=int, default=2_000_000_000)
+
+    backup_group = subparsers.add_parser(
+        "backup-db-group",
+        help="Create a manifest-backed backup of all product SQLite databases.",
+    )
+    backup_group.add_argument("--workspace-root", type=Path, default=Path.cwd())
+    backup_group.add_argument("--runtime-mode", choices=("prod", "dev"), default="prod")
+    backup_group.add_argument("--artifacts-dir", type=Path, default=None)
+    backup_group.add_argument("--llm-cache-dir", type=Path, default=None)
+    backup_group.add_argument("--backup-root", type=Path, default=None)
+    backup_group.add_argument("--now", default=None)
+
+    operator_health = subparsers.add_parser(
+        "operator-health",
+        help="Report disk, schema, integrity, and SQLite file health for product databases.",
+    )
+    operator_health.add_argument("--workspace-root", type=Path, default=Path.cwd())
+    operator_health.add_argument("--runtime-mode", choices=("prod", "dev"), default="prod")
+    operator_health.add_argument("--artifacts-dir", type=Path, default=None)
+    operator_health.add_argument("--llm-cache-dir", type=Path, default=None)
+    operator_health.add_argument("--required-free-bytes", type=int, default=1_000_000_000)
+
     return parser
 
 
 def _workbench_db_path(workspace_root: Path) -> Path:
     return workspace_root / ".seektalent" / "workbench.sqlite3"
+
+
+def _runtime_control_db_path(workspace_root: Path) -> Path:
+    return workspace_root / DEFAULT_RUNTIME_CONTROL_DB_PATH
+
+
+def _parse_maintenance_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _maintenance_cutoff(now: datetime, days: int) -> str:
+    cutoff = now - timedelta(days=days)
+    return cutoff.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _next_backup_path(backups_dir: Path) -> Path:
@@ -576,16 +956,21 @@ def _next_backup_path(backups_dir: Path) -> Path:
 
 
 def _sqlite_backup(*, source_path: Path, backup_path: Path) -> None:
-    with (
-        sqlite3.connect(f"file:{source_path}?mode=ro", uri=True) as source,
-        sqlite3.connect(backup_path) as backup,
-    ):
+    source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+    backup = sqlite3.connect(backup_path)
+    try:
         source.backup(backup)
+    finally:
+        backup.close()
+        source.close()
 
 
 def _integrity_check(database_path: Path) -> str:
-    with sqlite3.connect(f"file:{database_path.resolve()}?mode=ro", uri=True) as conn:
+    conn = sqlite3.connect(f"file:{database_path.resolve()}?mode=ro", uri=True)
+    try:
         rows = conn.execute("PRAGMA integrity_check").fetchall()
+    finally:
+        conn.close()
 
     messages = [row[0] for row in rows]
     if messages != ["ok"]:
@@ -672,7 +1057,8 @@ def _validate_workbench_schema(database_path: Path) -> None:
     canonical_foreign_keys = cast(dict[str, tuple[ForeignKeySignature, ...]], canonical["foreign_keys"])
     canonical_indexes = cast(dict[str, str], canonical["indexes"])
     canonical_tables = cast(dict[str, str], canonical["tables"])
-    with sqlite3.connect(f"file:{database_path.resolve()}?mode=ro", uri=True) as conn:
+    conn = sqlite3.connect(f"file:{database_path.resolve()}?mode=ro", uri=True)
+    try:
         extra_executable_objects = conn.execute(
             "SELECT type, name FROM sqlite_master WHERE type IN ('trigger', 'view')"
         ).fetchall()
@@ -723,13 +1109,16 @@ def _validate_workbench_schema(database_path: Path) -> None:
         if foreign_key_failures:
             raise MaintenanceError("backup is not a workbench database; foreign key check failed")
         _smoke_workbench_schema(conn)
+    finally:
+        conn.close()
 
 
 def _canonical_schema_signature() -> dict[str, SchemaSignature]:
     with TemporaryDirectory(prefix="seektalent-workbench-schema-") as temp_dir:
         canonical_path = Path(temp_dir) / "workbench.sqlite3"
         WorkbenchStore(canonical_path).list_security_audit_events()
-        with sqlite3.connect(canonical_path) as conn:
+        conn = sqlite3.connect(canonical_path)
+        try:
             table_rows = conn.execute(
                 "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             ).fetchall()
@@ -752,6 +1141,8 @@ def _canonical_schema_signature() -> dict[str, SchemaSignature]:
                 "indexes": {str(row[0]): _normalize_schema_sql(row[1]) for row in index_rows},
                 "tables": {str(row[0]): _normalize_schema_sql(row[1]) for row in table_rows},
             }
+        finally:
+            conn.close()
 
 
 def _table_column_signature(conn: sqlite3.Connection, table: str) -> dict[str, ColumnSignature]:
@@ -971,10 +1362,13 @@ def _smoke_workbench_schema(conn: sqlite3.Connection) -> None:
 def _read_path_smoke(database_path: Path) -> dict[str, object]:
     store = WorkbenchStore(database_path)
     audit_events = store.list_security_audit_events()
-    with sqlite3.connect(f"file:{database_path.resolve()}?mode=ro", uri=True) as conn:
+    conn = sqlite3.connect(f"file:{database_path.resolve()}?mode=ro", uri=True)
+    try:
         session_count = int(conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0])
         review_item_count = int(conn.execute("SELECT COUNT(*) FROM candidate_review_items").fetchone()[0])
         detail_request_count = int(conn.execute("SELECT COUNT(*) FROM detail_open_requests").fetchone()[0])
+    finally:
+        conn.close()
     return {
         "security_audit_event_count": len(audit_events),
         "session_count": session_count,

@@ -1,0 +1,5 @@
+from __future__ import annotations
+
+
+WORKBENCH_SCHEMA_VERSION = 1
+AGENT_WORKBENCH_STREAM_SCHEMA_VERSION = 1

@@ -1,0 +1,36 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Integrate runtime-control state with the Workbench product control plane.",
+  "rationale": "This slice wires the DB-first runtime-control store into Workbench sessions, job execution, event projection, maintenance, repair import, privacy erasure, and recruiter-facing API contracts. It intentionally crosses the BFF and supporting storage layers because Workbench is the product entry point for runtime progress and candidate truth.",
+  "touched_layers": [
+    "bff",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_ui/runtime_bridge.py",
+    "src/seektalent_ui/workbench_store.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_ui/workbench_candidate_store.py",
+    "tests/test_workbench_api.py"
+  ],
+  "line_count_rationale": "Both files are pre-existing large Workbench surfaces. This PR only adds the runtime-control projection and API assertions needed for the integration slice, while keeping extraction work out of the stacked CI repair.",
+  "deletion_targets": [
+    "artifact-first Workbench progress reconciliation as the only source of product state",
+    "runtime candidate truth duplicated outside the canonical runtime-control projection path",
+    "manual cleanup paths that leave runtime-control owned rows or local artifacts behind"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "risks": [
+    "Workbench APIs must continue reading recruiter-visible progress from compact product rows rather than raw provider or debug payloads.",
+    "Repair import and privacy erasure must remain idempotent when runtime-control rows already exist.",
+    "This integration must not reintroduce artifact files as the primary Workbench state source."
+  ]
+}

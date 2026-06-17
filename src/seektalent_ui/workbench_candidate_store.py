@@ -266,6 +266,223 @@ class WorkbenchCandidateStore:
             for row in rows
         ]
 
+    def persist_runtime_candidate_truth_from_control(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        runtime_run_id: str,
+        identities: Iterable[object],
+        evidence: Iterable[object],
+        finalization_revision: object,
+        projected_at: str,
+    ) -> str:
+        self._initialize()
+        with self._connect() as conn, conn:
+            if not self._session_exists_for_user_conn(conn, user=user, session_id=session_id):
+                raise ValueError("workbench_session_missing")
+            source_run_by_kind = _source_run_by_kind_conn(conn, session_id=session_id)
+            identity_rows: list[tuple[object, ...]] = []
+            review_rows: list[tuple[object, ...]] = []
+            evidence_rows: list[tuple[object, ...]] = []
+            evidence_by_identity: dict[str, list[object]] = {}
+            for item in evidence:
+                identity_id = _safe_candidate_text(_attr(item, "identity_id"), 256)
+                if identity_id:
+                    evidence_by_identity.setdefault(identity_id, []).append(item)
+            for identity in identities:
+                identity_id = _safe_candidate_text(_attr(identity, "identity_id"), 256)
+                canonical_resume_id = _safe_candidate_text(_attr(identity, "canonical_resume_id"), 256)
+                if not identity_id or not canonical_resume_id:
+                    continue
+                source_evidence_ids = _safe_string_list(_attr(identity, "source_evidence_ids"))
+                review_item_id = _stable_id("review", session_id, "identity", identity_id)
+                primary_evidence_id = source_evidence_ids[0] if source_evidence_ids else _stable_id(
+                    "evidence",
+                    session_id,
+                    identity_id,
+                    "runtime-control",
+                )
+                identity_rows.append(
+                    (
+                        session_id,
+                        runtime_run_id,
+                        identity_id,
+                        canonical_resume_id,
+                        json.dumps(
+                            _safe_string_list(_attr(identity, "merged_resume_ids")),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(source_evidence_ids, ensure_ascii=False, separators=(",", ":")),
+                        projected_at,
+                    )
+                )
+                review_rows.append(
+                    (
+                        review_item_id,
+                        DEFAULT_TENANT_ID,
+                        user.workspace_id,
+                        user.user_id,
+                        session_id,
+                        primary_evidence_id,
+                        _safe_candidate_text(_attr(identity, "display_name"), 160) or f"Candidate {identity_id[-8:]}",
+                        _safe_candidate_text(_attr(identity, "title"), 240) or "",
+                        _safe_candidate_text(_attr(identity, "company"), 240) or "",
+                        _safe_candidate_text(_attr(identity, "location"), 160) or "",
+                        _safe_candidate_text(_attr(identity, "summary"), 1000) or "",
+                        _int_or_none(_attr(identity, "score")),
+                        _safe_candidate_text(_attr(identity, "fit_bucket"), 64),
+                        "",
+                        _int_or_none(_attr(identity, "source_round")),
+                        projected_at,
+                        projected_at,
+                    )
+                )
+                for evidence_item in evidence_by_identity.get(identity_id, []):
+                    evidence_id = _safe_candidate_text(_attr(evidence_item, "evidence_id"), 256)
+                    if not evidence_id:
+                        continue
+                    source_kind = _runtime_source_kind(_safe_candidate_text(_attr(evidence_item, "source_kind"), 32))
+                    if source_kind is None:
+                        continue
+                    source_run_id = source_run_by_kind.get(source_kind) or f"{runtime_run_id}:workbench:{source_kind}"
+                    evidence_rows.append(
+                        (
+                            evidence_id,
+                            review_item_id,
+                            DEFAULT_TENANT_ID,
+                            user.workspace_id,
+                            user.user_id,
+                            session_id,
+                            source_run_id,
+                            source_kind,
+                            _safe_candidate_text(_attr(evidence_item, "evidence_level"), 64) or "unknown",
+                            _safe_candidate_text(_attr(evidence_item, "provider_candidate_key_hash"), 256) or "",
+                            identity_id,
+                            _safe_candidate_text(_attr(evidence_item, "resume_id"), 256) or canonical_resume_id,
+                            _int_or_none(_attr(evidence_item, "score")),
+                            _safe_candidate_text(_attr(evidence_item, "fit_bucket"), 64),
+                            "[]",
+                            "[]",
+                            "[]",
+                            "[]",
+                            "[]",
+                            projected_at,
+                        )
+                    )
+            revision_no = _int_or_none(_attr(finalization_revision, "revision"))
+            if revision_no is None:
+                raise ValueError("runtime_finalization_revision_invalid")
+            candidate_identity_ids = _safe_string_list(_attr(finalization_revision, "candidate_identity_ids"))
+            coverage_summary = _mapping_payload(_attr(finalization_revision, "coverage_summary"))
+            conn.execute(
+                """
+                INSERT INTO runtime_finalization_revisions (
+                    session_id, runtime_run_id, revision, reason_code,
+                    ordered_candidate_identity_ids_json, coverage_summary_json, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(session_id, runtime_run_id, revision) DO UPDATE SET
+                    reason_code = excluded.reason_code,
+                    ordered_candidate_identity_ids_json = excluded.ordered_candidate_identity_ids_json,
+                    coverage_summary_json = excluded.coverage_summary_json,
+                    created_at = excluded.created_at
+                """,
+                (
+                    session_id,
+                    runtime_run_id,
+                    revision_no,
+                    _safe_candidate_text(_attr(finalization_revision, "reason_code"), 128) or "runtime_finalized",
+                    json.dumps(candidate_identity_ids, ensure_ascii=False, separators=(",", ":")),
+                    json.dumps(coverage_summary, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    projected_at,
+                ),
+            )
+            if identity_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO runtime_candidate_identity_snapshots (
+                        session_id, runtime_run_id, identity_id, canonical_resume_id,
+                        merged_resume_ids_json, source_evidence_ids_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_id, runtime_run_id, identity_id) DO UPDATE SET
+                        canonical_resume_id = excluded.canonical_resume_id,
+                        merged_resume_ids_json = excluded.merged_resume_ids_json,
+                        source_evidence_ids_json = excluded.source_evidence_ids_json
+                    """,
+                    identity_rows,
+                )
+            if review_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO candidate_review_items (
+                        review_item_id, tenant_id, workspace_id, user_id, session_id,
+                        primary_evidence_id, display_name, title, company, location, summary,
+                        aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                    ON CONFLICT(review_item_id) DO UPDATE SET
+                        primary_evidence_id = excluded.primary_evidence_id,
+                        display_name = excluded.display_name,
+                        title = excluded.title,
+                        company = excluded.company,
+                        location = excluded.location,
+                        summary = excluded.summary,
+                        aggregate_score = excluded.aggregate_score,
+                        fit_bucket = excluded.fit_bucket,
+                        source_round = excluded.source_round,
+                        updated_at = excluded.updated_at
+                    """,
+                    review_rows,
+                )
+            if evidence_rows:
+                conn.executemany(
+                    """
+                    INSERT INTO candidate_evidence (
+                        evidence_id, review_item_id, tenant_id, workspace_id, user_id, session_id,
+                        source_run_id, source_kind, evidence_level, provider_candidate_key_hash,
+                        runtime_identity_id, resume_id, score, fit_bucket, matched_must_haves_json,
+                        matched_preferences_json, missing_risks_json, strengths_json, weaknesses_json,
+                        created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(evidence_id) DO UPDATE SET
+                        review_item_id = excluded.review_item_id,
+                        source_run_id = excluded.source_run_id,
+                        source_kind = excluded.source_kind,
+                        evidence_level = excluded.evidence_level,
+                        provider_candidate_key_hash = excluded.provider_candidate_key_hash,
+                        runtime_identity_id = excluded.runtime_identity_id,
+                        resume_id = excluded.resume_id,
+                        score = excluded.score,
+                        fit_bucket = excluded.fit_bucket
+                    """,
+                    evidence_rows,
+                )
+            for row in review_rows:
+                review_item_id = str(row[0])
+                self._append_workbench_event_conn(
+                    conn,
+                    tenant_id=DEFAULT_TENANT_ID,
+                    workspace_id=user.workspace_id,
+                    user_id=user.user_id,
+                    session_id=session_id,
+                    source_run_id=None,
+                    source_kind=None,
+                    event_name="candidate_review_item_upserted",
+                    payload={
+                        "reviewItemId": review_item_id,
+                        "runtimeRunId": runtime_run_id,
+                        "candidateId": row[5],
+                    },
+                    idempotency_key=f"runtime-candidate-truth:{runtime_run_id}:{review_item_id}:{revision_no}",
+                    occurred_at=projected_at,
+                )
+            return f"{session_id}:runtime-finalization:{revision_no}"
+
 
     def persist_cts_candidate_results(
         self,
@@ -316,14 +533,32 @@ class WorkbenchCandidateStore:
             artifacts,
             ordered_identity_ids=ordered_identity_ids,
         )
-        next_revision = int(
-            conn.execute(
-                "SELECT COALESCE(MAX(revision), 0) + 1 FROM runtime_finalization_revisions WHERE session_id = ?",
-                (context.session.session_id,),
-            ).fetchone()[0]
-            or 1
-        )
-        revision = next_revision
+        artifacts_revision = _int_or_none(_attr(getattr(artifacts, "finalization_revision", None), "revision"))
+        if artifacts_revision is not None:
+            revision = artifacts_revision
+        else:
+            existing_revision = conn.execute(
+                """
+                SELECT revision
+                FROM runtime_finalization_revisions
+                WHERE session_id = ? AND runtime_run_id = ?
+                ORDER BY revision DESC
+                LIMIT 1
+                """,
+                (context.session.session_id, runtime_run_id),
+            ).fetchone()
+            if existing_revision is not None:
+                revision = int(existing_revision["revision"])
+            else:
+                next_revision = conn.execute(
+                    """
+                    SELECT COALESCE(MAX(revision), 0) + 1
+                    FROM runtime_finalization_revisions
+                    WHERE session_id = ?
+                    """,
+                    (context.session.session_id,),
+                ).fetchone()[0]
+                revision = int(next_revision or 1)
         if write_finalization_revision:
             conn.execute(
                 """
@@ -332,6 +567,11 @@ class WorkbenchCandidateStore:
                     ordered_candidate_identity_ids_json, coverage_summary_json, created_at
                 )
                 VALUES (?, ?, ?, 'runtime_finalized', ?, ?, ?)
+                ON CONFLICT(session_id, runtime_run_id, revision) DO UPDATE SET
+                    reason_code = excluded.reason_code,
+                    ordered_candidate_identity_ids_json = excluded.ordered_candidate_identity_ids_json,
+                    coverage_summary_json = excluded.coverage_summary_json,
+                    created_at = excluded.created_at
                 """,
                 (
                     context.session.session_id,
@@ -2231,6 +2471,51 @@ def _runtime_source_kind(value: object) -> Literal["cts", "liepin"] | None:
     if source_kind == "liepin":
         return "liepin"
     return None
+
+
+def _source_run_by_kind_conn(conn: sqlite3.Connection, *, session_id: str) -> dict[str, str]:
+    rows = conn.execute(
+        """
+        SELECT source_kind, source_run_id
+        FROM source_runs
+        WHERE session_id = ?
+        """,
+        (session_id,),
+    ).fetchall()
+    return {
+        row["source_kind"]: row["source_run_id"]
+        for row in rows
+        if isinstance(row["source_kind"], str) and isinstance(row["source_run_id"], str)
+    }
+
+
+def _safe_string_list(value: object, *, max_items: int = 100, max_length: int = 256) -> list[str]:
+    if not isinstance(value, Iterable) or isinstance(value, str | bytes | bytearray):
+        return []
+    items: list[str] = []
+    for item in value:
+        text = _safe_candidate_text(item, max_length)
+        if text is not None:
+            items.append(text)
+        if len(items) >= max_items:
+            break
+    return items
+
+
+def _mapping_payload(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    payload: dict[str, object] = {}
+    for key, item in value.items():
+        if not isinstance(key, str):
+            continue
+        if isinstance(item, str | int | float | bool) or item is None:
+            payload[key] = item
+        elif isinstance(item, Mapping):
+            payload[key] = _mapping_payload(item)
+        elif isinstance(item, Iterable) and not isinstance(item, str | bytes | bytearray):
+            payload[key] = _safe_string_list(item)
+    return payload
 
 
 def _mapping_items(value: object) -> list[tuple[object, object]]:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 def test_workbench_bridge_creates_session_link_for_runtime_run(tmp_path: Path) -> None:
-    from seektalent_runtime_control.workbench_bridge import RuntimeWorkbenchBridge
+    from seektalent_ui.runtime_workbench_bridge import RuntimeWorkbenchBridge
 
     runtime_store = _runtime_store_with_run(tmp_path, runtime_run_id="runtime_run_1", workbench_session_id=None)
     workbench_store, user = _workbench_store_with_user(tmp_path)
@@ -26,7 +26,7 @@ def test_workbench_bridge_creates_session_link_for_runtime_run(tmp_path: Path) -
 
 def test_project_runtime_event_to_workbench_is_idempotent_and_records_global_seq(tmp_path: Path) -> None:
     from seektalent_runtime_control.models import RuntimeControlEventInput
-    from seektalent_runtime_control.workbench_bridge import RuntimeWorkbenchBridge
+    from seektalent_ui.runtime_workbench_bridge import RuntimeWorkbenchBridge
 
     workbench_store, user = _workbench_store_with_user(tmp_path)
     session = workbench_store.create_workbench_session(
@@ -72,7 +72,7 @@ def test_project_runtime_event_to_workbench_is_idempotent_and_records_global_seq
 
 
 def test_workbench_bridge_reconciliation_returns_stable_reason_codes(tmp_path: Path) -> None:
-    from seektalent_runtime_control.workbench_bridge import RuntimeWorkbenchBridge
+    from seektalent_ui.runtime_workbench_bridge import RuntimeWorkbenchBridge
 
     workbench_store, user = _workbench_store_with_user(tmp_path)
     runtime_store = _runtime_store_with_run(tmp_path, runtime_run_id="runtime_run_missing", workbench_session_id=None)

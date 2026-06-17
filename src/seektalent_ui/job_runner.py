@@ -8,6 +8,9 @@ from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
 from seektalent.runtime.public_events import PUBLIC_EVENT_SCHEMA_VERSION
 from seektalent.providers.liepin.client import LiepinWorkerClient
+from seektalent_runtime_control.events import normalize_progress_event
+from seektalent_runtime_control.models import RuntimeRunRecord
+from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_ui.workbench_note_writer import NOTE_WRITER_TICK_SECONDS, WorkbenchNoteWriter
 from seektalent_ui.runtime_bridge import (
     RuntimeFactory,
@@ -41,11 +44,13 @@ class WorkbenchJobRunner:
         store: WorkbenchStore,
         settings: AppSettings,
         runtime_factory: RuntimeFactory,
+        runtime_control_store: RuntimeControlStore | None = None,
         liepin_worker_client: LiepinWorkerClient | None = None,
     ) -> None:
         self.store = store
         self.settings = settings
         self.runtime_factory = runtime_factory
+        self.runtime_control_store = runtime_control_store
         self.liepin_worker_client = liepin_worker_client
         self.owner_id = f"local-{uuid.uuid4().hex[:12]}"
         self.lease_duration = LEASE_DURATION
@@ -301,15 +306,7 @@ class WorkbenchJobRunner:
 
     def _record_runtime_sourcing_progress(self, context: WorkbenchRuntimeSourcingJobContext, event: ProgressEvent) -> None:
         if event.payload.get("schemaVersion") == PUBLIC_EVENT_SCHEMA_VERSION:
-            source_kind = event.payload.get("sourceKind")
-            self.store.append_runtime_public_event_by_ids(
-                tenant_id=DEFAULT_TENANT_ID,
-                workspace_id=context.session.workspace_id,
-                user_id=context.session.owner_user_id,
-                session_id=context.session.session_id,
-                source_kind=source_kind if source_kind in {"cts", "liepin"} else None,
-                payload=event.payload,
-            )
+            self._record_runtime_control_progress(context=context, event=event)
             self._tick_note_writer_for_session(
                 user=self._user_for_session(context.session),
                 session_id=context.session.session_id,
@@ -337,6 +334,71 @@ class WorkbenchJobRunner:
         self._tick_note_writer_for_session(
             user=self._user_for_session(context.session),
             session_id=context.session.session_id,
+        )
+
+    def _record_runtime_control_progress(
+        self,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        event: ProgressEvent,
+    ) -> None:
+        if self.runtime_control_store is None:
+            raise RuntimeError("runtime_control_store_required")
+        runtime_run_id = _runtime_run_id_from_public_progress(event)
+        if runtime_run_id is None:
+            raise RuntimeError("runtime_run_id_required")
+        self._ensure_runtime_control_run(context=context, runtime_run_id=runtime_run_id)
+        stored = self.runtime_control_store.append_event(
+            normalize_progress_event(
+                event,
+                runtime_run_id=runtime_run_id,
+                now=_iso(_now()),
+            )
+        )
+        del stored
+        from seektalent_ui.runtime_control_projection import RuntimeControlProjectionService
+        from seektalent_ui.runtime_workbench_bridge import RuntimeWorkbenchBridge
+
+        service = RuntimeControlProjectionService(
+            runtime_store=self.runtime_control_store,
+            bridge=RuntimeWorkbenchBridge(
+                runtime_store=self.runtime_control_store,
+                workbench_store=self.store,
+            ),
+            user=self._user_for_session(context.session),
+            now=lambda: _iso(_now()),
+        )
+        service.project_unprojected_public_events(runtime_run_id=runtime_run_id, limit=100)
+
+    def _ensure_runtime_control_run(
+        self,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+        runtime_run_id: str,
+    ) -> None:
+        if self.runtime_control_store is None:
+            raise RuntimeError("runtime_control_store_required")
+        self.store.attach_runtime_sourcing_job_runtime_run_id(context=context, runtime_run_id=runtime_run_id)
+        now = _iso(_now())
+        self.runtime_control_store.create_run(
+            RuntimeRunRecord(
+                runtime_run_id=runtime_run_id,
+                run_intent_id=f"workbench:{context.job.job_id}",
+                start_idempotency_key=f"workbench:{context.job.job_id}",
+                agent_conversation_id=None,
+                workbench_session_id=context.session.session_id,
+                approved_requirement_revision_id=f"workbench:{context.session.session_id}:approved",
+                status="running",
+                current_stage="runtime",
+                current_round=None,
+                latest_checkpoint_id=None,
+                latest_event_seq=0,
+                source_ids=list(context.job.source_kinds),
+                stop_reason_code=None,
+                created_at=now,
+                updated_at=now,
+                completed_at=None,
+            )
         )
 
     def _record_requirement_progress(self, *, user: WorkbenchUser, session: WorkbenchSession, event: ProgressEvent) -> None:
@@ -439,6 +501,14 @@ def _safe_event_suffix(value: str) -> str:
     suffix = "".join(character if character.isalnum() else "_" for character in value.strip().lower())
     suffix = "_".join(part for part in suffix.split("_") if part)
     return suffix or "progress"
+
+
+def _runtime_run_id_from_public_progress(event: ProgressEvent) -> str | None:
+    value = event.payload.get("runtimeRunId")
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
 
 
 def _runtime_sourcing_error_message(exc: Exception) -> str:

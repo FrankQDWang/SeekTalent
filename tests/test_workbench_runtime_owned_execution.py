@@ -10,8 +10,16 @@ import pytest
 
 from seektalent.config import AppSettings
 from seektalent.models import RequirementSheet, ResumeCandidate, RuntimeSourceEvidence
+from seektalent.progress import ProgressEvent
 from seektalent.runtime import RunArtifacts
+from seektalent.runtime.public_events import make_runtime_public_event
 from seektalent.runtime.source_lanes import RuntimeDetailRecommendation, RuntimeSourceLaneEvent, RuntimeSourceLaneResult
+from seektalent_runtime_control.store import RuntimeControlStore
+from seektalent_ui.artifact_repair_import import (
+    import_legacy_runtime_checkpoint_for_repair,
+    import_legacy_runtime_completion_for_repair,
+)
+from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.runtime_bridge import run_liepin_detail_open_intent, run_runtime_sourcing_job
 from seektalent_ui.workbench_store import WorkbenchStore, WorkbenchUser
 
@@ -205,6 +213,148 @@ def test_runtime_bridge_calls_runtime_once_for_dual_source_session(tmp_path: Pat
     assert call["notes"] == session.notes
     assert call["approved_requirement_sheet"].job_title == session.job_title
     assert call["requirement_cache_scope"] == session.session_id
+    assert "runtime_checkpoint_callback" not in call
+    with sqlite3.connect(store.db_path) as conn:
+        row = conn.execute(
+            "SELECT status FROM runtime_sourcing_jobs WHERE job_id = ?",
+            (job[0].job_id,),
+        ).fetchone()
+    assert row[0] == "completed"
+
+
+def test_product_session_reads_do_not_reconcile_expired_runtime_sourcing_jobs(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_dual_source_session(store)
+
+    def fail_reconcile() -> int:
+        raise AssertionError("product read path must not mutate runtime sourcing jobs")
+
+    store._jobs.reconcile_expired_runtime_sourcing_jobs = fail_reconcile
+
+    assert store.list_workbench_sessions(user=user)
+    assert store.get_workbench_session(user=user, session_id=session.session_id) is not None
+    assert store.get_workbench_session_by_runtime_run_id(user=user, runtime_run_id="missing") is None
+
+
+def test_workbench_runner_records_runtime_public_progress_through_runtime_control_projection(
+    tmp_path: Path,
+) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    runtime_store = RuntimeControlStore(tmp_path / "runtime-control.sqlite3")
+    runtime_store.initialize()
+    user, session = _approved_source_session(store, source_kinds=["cts"])
+    created = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="runtime-db-first",
+    )
+    assert created is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    runner = WorkbenchJobRunner(
+        store=store,
+        settings=_settings(tmp_path),
+        runtime_factory=lambda settings: FakeRuntime(calls=[]),
+        runtime_control_store=runtime_store,
+    )
+    payload = make_runtime_public_event(
+        runtime_run_id="runtime-run-db-first",
+        stage="source_result",
+        event_seq=1,
+        round_no=1,
+        source_kind="cts",
+        status="completed",
+        counts={
+            "roundReturned": 3,
+            "roundIdentities": 2,
+            "sourceCumulativeReturned": 3,
+            "sourceCumulativeIdentities": 2,
+        },
+        created_at="2026-06-17T00:00:01+00:00",
+    )
+
+    runner._record_runtime_sourcing_progress(
+        context,
+        ProgressEvent(
+            type="runtime_public_event",
+            message="CTS completed",
+            timestamp="2026-06-17T00:00:01+00:00",
+            round_no=1,
+            payload=payload,
+        ),
+    )
+
+    run = runtime_store.get_run("runtime-run-db-first")
+    runtime_events = runtime_store.list_public_events(
+        runtime_run_id="runtime-run-db-first",
+        after_seq=0,
+        limit=10,
+    ).events
+    workbench_events = [
+        event
+        for event in store.list_session_workbench_events(user=user, session_id=session.session_id, after_seq=0, limit=50)
+        if event.schema_version == "runtime_public_event_v1"
+    ]
+    source_counts = store.latest_runtime_source_count_projection(user=user, session_id=session.session_id)
+
+    assert run.workbench_session_id == session.session_id
+    assert len(runtime_events) == 1
+    assert runtime_events[0].idempotency_key == payload["eventId"]
+    assert runtime_events[0].workbench_event_global_seq == workbench_events[0].global_seq
+    assert len(workbench_events) == 1
+    assert workbench_events[0].idempotency_key == runtime_events[0].event_id
+    assert workbench_events[0].payload["counts"]["sourceCumulativeReturned"] == 3
+    assert source_counts["cts"].cards_scanned_count == 3
+    assert source_counts["cts"].unique_candidates_count == 2
+
+
+def test_workbench_runner_rejects_public_progress_without_runtime_control_store(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.sqlite3")
+    user, session = _approved_source_session(store, source_kinds=["cts"])
+    created = store.start_runtime_sourcing_job(
+        user=user,
+        session_id=session.session_id,
+        idempotency_key="runtime-db-required",
+    )
+    assert created is not None
+    context = store.claim_next_runtime_sourcing_job(
+        owner_id="test-owner",
+        lease_expires_at="2099-01-01T00:00:00+00:00",
+    )
+    assert context is not None
+    runner = WorkbenchJobRunner(
+        store=store,
+        settings=_settings(tmp_path),
+        runtime_factory=lambda settings: FakeRuntime(calls=[]),
+    )
+    payload = make_runtime_public_event(
+        runtime_run_id="runtime-run-missing-store",
+        stage="source_result",
+        event_seq=1,
+        round_no=1,
+        source_kind="cts",
+        status="completed",
+        counts={"sourceCumulativeReturned": 1, "sourceCumulativeIdentities": 1},
+        created_at="2026-06-17T00:00:01+00:00",
+    )
+
+    with pytest.raises(RuntimeError, match="runtime_control_store_required"):
+        runner._record_runtime_sourcing_progress(
+            context,
+            ProgressEvent(
+                type="runtime_public_event",
+                message="CTS completed",
+                timestamp="2026-06-17T00:00:01+00:00",
+                round_no=1,
+                payload=payload,
+            ),
+        )
+
+    events = store.list_session_workbench_events(user=user, session_id=session.session_id, after_seq=0, limit=50)
+    assert not [event for event in events if event.schema_version == "runtime_public_event_v1"]
 
 
 def test_runtime_sourcing_job_scope_excludes_completed_source_runs(tmp_path: Path) -> None:
@@ -715,7 +865,7 @@ def test_runtime_completion_persists_finalization_order_and_all_source_evidence(
         ),
     )
 
-    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+    import_legacy_runtime_completion_for_repair(store=store, context=context, artifacts=artifacts, repair_confirmed=True, runtime_mode="dev")
 
     final = store.list_runtime_final_top_review_items(user=user, session_id=session.session_id)
     assert final is not None
@@ -803,7 +953,7 @@ def test_runtime_checkpoint_persists_candidate_index_without_finalization(tmp_pa
         final_result=SimpleNamespace(candidates=[]),
     )
 
-    store.refresh_runtime_candidate_index_with_artifacts(context=context, artifacts=artifacts)
+    import_legacy_runtime_checkpoint_for_repair(store=store, context=context, artifacts=artifacts, repair_confirmed=True, runtime_mode="dev")
 
     items = store.list_candidate_review_items(user=user, session_id=session.session_id)
     assert items is not None
@@ -825,13 +975,16 @@ def test_runtime_final_candidate_evidence_facts_update_on_repeated_finalization(
     )
     assert first_context is not None
     source_run = first_context.session.source_runs[0]
-    store.complete_runtime_sourcing_job_with_artifacts(
+    import_legacy_runtime_completion_for_repair(
+        store=store,
         context=first_context,
         artifacts=_single_final_candidate_artifacts(
             label="A",
             runtime_run_id="run-final-a",
             source_run_id=source_run.source_run_id,
         ),
+        repair_confirmed=True,
+        runtime_mode="dev",
     )
     with sqlite3.connect(store.db_path) as conn:
         conn.execute("UPDATE source_runs SET status = 'queued' WHERE source_run_id = ?", (source_run.source_run_id,))
@@ -843,13 +996,16 @@ def test_runtime_final_candidate_evidence_facts_update_on_repeated_finalization(
         lease_expires_at="2099-01-01T00:00:00+00:00",
     )
     assert second_context is not None
-    store.complete_runtime_sourcing_job_with_artifacts(
+    import_legacy_runtime_completion_for_repair(
+        store=store,
         context=second_context,
         artifacts=_single_final_candidate_artifacts(
             label="B",
             runtime_run_id="run-final-b",
             source_run_id=source_run.source_run_id,
         ),
+        repair_confirmed=True,
+        runtime_mode="dev",
     )
 
     final = store.list_runtime_final_top_review_items(user=user, session_id=session.session_id)
@@ -914,7 +1070,7 @@ def test_runtime_completion_projects_source_lane_state_and_finalization_revision
         final_result=SimpleNamespace(candidates=[SimpleNamespace(resume_id="resume-a", final_score=90)]),
     )
 
-    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+    import_legacy_runtime_completion_for_repair(store=store, context=context, artifacts=artifacts, repair_confirmed=True, runtime_mode="dev")
 
     states = store.list_runtime_source_lane_latest_state(user=user, session_id=session.session_id)
     state_by_source = {state.source_kind: state for state in states}
@@ -954,7 +1110,7 @@ def test_runtime_completion_projects_source_lane_state_when_final_top_is_empty(t
         final_result=SimpleNamespace(candidates=[]),
     )
 
-    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+    import_legacy_runtime_completion_for_repair(store=store, context=context, artifacts=artifacts, repair_confirmed=True, runtime_mode="dev")
 
     states = store.list_runtime_source_lane_latest_state(user=user, session_id=session.session_id)
     assert [state.source_kind for state in states] == ["cts"]
@@ -1027,7 +1183,7 @@ def test_runtime_completion_auto_creates_liepin_detail_open_requests(tmp_path: P
         final_result=SimpleNamespace(candidates=[SimpleNamespace(resume_id="resume-a", final_score=90)]),
     )
 
-    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+    import_legacy_runtime_completion_for_repair(store=store, context=context, artifacts=artifacts, repair_confirmed=True, runtime_mode="dev")
 
     requests = store.list_liepin_detail_open_requests(user=user, session_id=session.session_id, status="pending")
     assert len(requests) == 1
@@ -1137,7 +1293,7 @@ def test_runtime_completion_creates_liepin_detail_requests_for_recommended_cards
         final_result=SimpleNamespace(candidates=[SimpleNamespace(resume_id="resume-cts-a", final_score=90)]),
     )
 
-    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+    import_legacy_runtime_completion_for_repair(store=store, context=context, artifacts=artifacts, repair_confirmed=True, runtime_mode="dev")
 
     runtime_final = store.list_runtime_final_top_review_items(user=user, session_id=session.session_id)
     assert runtime_final is not None
@@ -1247,7 +1403,7 @@ def test_leased_liepin_detail_open_intent_executes_detail_lane_and_persists_deta
         normalized_store={},
         final_result=SimpleNamespace(candidates=[SimpleNamespace(resume_id="provider-candidate-1", final_score=90)]),
     )
-    store.complete_runtime_sourcing_job_with_artifacts(context=context, artifacts=artifacts)
+    import_legacy_runtime_completion_for_repair(store=store, context=context, artifacts=artifacts, repair_confirmed=True, runtime_mode="dev")
 
     detail_context = store.claim_next_liepin_detail_open_intent()
     assert detail_context is not None

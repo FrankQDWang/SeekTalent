@@ -68,6 +68,7 @@ class WorkbenchSessionStore:
         jd_text: str,
         notes: str,
         source_kinds: list[Literal["cts", "liepin"]] | None = None,
+        runtime_run_id: str | None = None,
     ) -> WorkbenchSession:
         now = _now_iso()
         session_id = f"session_{uuid.uuid4().hex[:16]}"
@@ -108,26 +109,35 @@ class WorkbenchSessionStore:
                 _new_source_run(source_kind, liepin_connection_connected=liepin_connection_connected)
                 for source_kind in requested_source_kinds
             ]
-            conn.execute(
-                """
-                INSERT INTO sessions (
-                    session_id, tenant_id, workspace_id, user_id, job_title, jd_text, notes,
-                    status, created_at, updated_at
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO sessions (
+                        session_id, tenant_id, workspace_id, user_id, runtime_run_id, job_title, jd_text, notes,
+                        status, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
+                    """,
+                    (
+                        session_id,
+                        DEFAULT_TENANT_ID,
+                        user.workspace_id,
+                        user.user_id,
+                        runtime_run_id,
+                        job_title,
+                        jd_text,
+                        notes,
+                        now,
+                        now,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)
-                """,
-                (
-                    session_id,
-                    DEFAULT_TENANT_ID,
-                    user.workspace_id,
-                    user.user_id,
-                    job_title,
-                    jd_text,
-                    notes,
-                    now,
-                    now,
-                ),
-            )
+            except sqlite3.IntegrityError as exc:
+                if runtime_run_id is None or not _is_sessions_runtime_run_id_unique_conflict(exc):
+                    raise
+                existing = _session_by_runtime_run_id_conn(conn, user=user, runtime_run_id=runtime_run_id)
+                if existing is None:
+                    raise
+                return existing
             for source_run in source_runs:
                 conn.execute(
                     """
@@ -183,6 +193,7 @@ class WorkbenchSessionStore:
             status="draft",
             source_runs=source_runs,
             requirement_review=requirement_review,
+            runtime_run_id=runtime_run_id,
         )
 
     def list_workbench_sessions(self, *, user: WorkbenchUser) -> list[WorkbenchSession]:
@@ -221,6 +232,16 @@ class WorkbenchSessionStore:
             source_runs = _source_runs_by_session(conn, [session_id]).get(session_id, [])
             requirement_review = _requirement_reviews_by_session(conn, [session_id])[session_id]
         return _session_from_row(row, source_runs, requirement_review)
+
+    def get_workbench_session_by_runtime_run_id(
+        self,
+        *,
+        user: WorkbenchUser,
+        runtime_run_id: str,
+    ) -> WorkbenchSession | None:
+        self._initialize()
+        with self._connect() as conn:
+            return _session_by_runtime_run_id_conn(conn, user=user, runtime_run_id=runtime_run_id)
 
     def get_requirement_review(
         self,
@@ -598,6 +619,36 @@ def _session_exists_for_ids_conn(
     return row is not None
 
 
+def _session_by_runtime_run_id_conn(
+    conn: sqlite3.Connection,
+    *,
+    user: WorkbenchUser,
+    runtime_run_id: str,
+) -> WorkbenchSession | None:
+    row = conn.execute(
+        """
+        SELECT *
+        FROM sessions
+        WHERE tenant_id = ?
+          AND workspace_id = ?
+          AND user_id = ?
+          AND runtime_run_id = ?
+        """,
+        (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, runtime_run_id),
+    ).fetchone()
+    if row is None:
+        return None
+    session_id = row["session_id"]
+    source_runs = _source_runs_by_session(conn, [session_id]).get(session_id, [])
+    requirement_review = _requirement_reviews_by_session(conn, [session_id])[session_id]
+    return _session_from_row(row, source_runs, requirement_review)
+
+
+def _is_sessions_runtime_run_id_unique_conflict(exc: sqlite3.IntegrityError) -> bool:
+    message = str(exc)
+    return "sessions.runtime_run_id" in message or "idx_sessions_runtime_run_id" in message
+
+
 def _source_runs_by_session(
     conn: sqlite3.Connection,
     session_ids: list[str],
@@ -791,6 +842,7 @@ def _session_from_row(
         status=row["status"],
         source_runs=source_runs,
         requirement_review=requirement_review,
+        runtime_run_id=row["runtime_run_id"],
     )
 
 

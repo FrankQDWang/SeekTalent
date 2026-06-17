@@ -125,6 +125,7 @@ class WorkbenchSession:
     status: Literal["draft"]
     source_runs: list[WorkbenchSourceRun]
     requirement_review: WorkbenchRequirementReview
+    runtime_run_id: str | None = None
 
 
 @dataclass(frozen=True)

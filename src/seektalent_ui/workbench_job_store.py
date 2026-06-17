@@ -334,6 +334,13 @@ class WorkbenchJobStore:
     ) -> None:
         self._finish_runtime_sourcing_job(context=context, status="completed", error_message=None, artifacts=artifacts)
 
+    def complete_runtime_sourcing_job(
+        self,
+        *,
+        context: WorkbenchRuntimeSourcingJobContext,
+    ) -> None:
+        self._finish_runtime_sourcing_job(context=context, status="completed", error_message=None, artifacts=None)
+
     def refresh_runtime_candidate_index_with_artifacts(
         self,
         *,

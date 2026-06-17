@@ -10,6 +10,11 @@ import pytest
 from seektalent.sqlite_migrations import SQLiteMigrationError
 from seektalent.corpus.store import CORPUS_SQLITE_USER_VERSION, CorpusStore
 from seektalent.providers.liepin.store import LIEPIN_SCHEMA_VERSION, LiepinStore
+from seektalent_ui.agent_workbench_models import AgentWorkbenchTranscriptPayloadResponse
+from seektalent_ui.agent_workbench_stream_store import (
+    AGENT_WORKBENCH_STREAM_SCHEMA_VERSION,
+    AgentWorkbenchStreamStore,
+)
 
 
 def test_shared_migration_helper_runs_ordered_backup_integrity_and_retention(tmp_path: Path) -> None:
@@ -140,6 +145,90 @@ def test_runtime_control_future_version_is_refused(tmp_path: Path) -> None:
         RuntimeControlStore(runtime_db).initialize()
 
     assert runtime_exc.value.reason_code == "runtime_control_schema_unsupported"
+
+
+def test_workbench_schema_has_version_gate_and_backs_up_legacy_database(tmp_path: Path) -> None:
+    from seektalent_ui.workbench_schema import WORKBENCH_SCHEMA_VERSION, initialize_workbench_schema
+
+    legacy_db = tmp_path / "workbench.sqlite3"
+    with sqlite3.connect(legacy_db) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE legacy_marker (value TEXT NOT NULL)")
+        conn.execute("INSERT INTO legacy_marker(value) VALUES ('keep')")
+        initialize_workbench_schema(conn, now="2026-06-17T00:00:00Z", database_path=legacy_db)
+
+    backup_root = legacy_db.parent / "migration_backups"
+    backups = sorted(backup_root.glob("workbench-*.sqlite3"))
+    assert backups
+    with sqlite3.connect(legacy_db) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == WORKBENCH_SCHEMA_VERSION
+        assert conn.execute("SELECT value FROM legacy_marker").fetchone()[0] == "keep"
+
+    future_db = tmp_path / "workbench_future.sqlite3"
+    with sqlite3.connect(future_db) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(f"PRAGMA user_version = {WORKBENCH_SCHEMA_VERSION + 1}")
+        with pytest.raises(SQLiteMigrationError) as exc_info:
+            initialize_workbench_schema(conn, now="2026-06-17T00:00:00Z", database_path=future_db)
+
+    assert exc_info.value.reason_code == "sqlite_schema_unsupported"
+
+
+def test_workbench_stream_sets_schema_version_and_rejects_newer_db(tmp_path: Path) -> None:
+    path = tmp_path / "stream.sqlite3"
+    AgentWorkbenchStreamStore(path)
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == AGENT_WORKBENCH_STREAM_SCHEMA_VERSION
+        conn.execute(f"PRAGMA user_version = {AGENT_WORKBENCH_STREAM_SCHEMA_VERSION + 1}")
+
+    with pytest.raises(SQLiteMigrationError) as exc_info:
+        AgentWorkbenchStreamStore(path)
+    assert exc_info.value.reason_code == "sqlite_schema_unsupported"
+
+
+def test_workbench_stream_migrates_unversioned_legacy_events(tmp_path: Path) -> None:
+    path = tmp_path / "stream.sqlite3"
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE agent_workbench_stream_events (
+                conversation_id TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                event_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(conversation_id, seq),
+                UNIQUE(conversation_id, event_id)
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO agent_workbench_stream_events (
+                conversation_id, seq, event_id, kind, payload_json, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "agent_conv_1",
+                1,
+                "message:msg_1",
+                "message.completed",
+                AgentWorkbenchTranscriptPayloadResponse(kind="message", messageId="msg_1").model_dump_json(),
+                "2026-06-17T00:00:00Z",
+            ),
+        )
+
+    store = AgentWorkbenchStreamStore(path)
+
+    with sqlite3.connect(path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_workbench_stream_events)").fetchall()}
+        assert {"source_kind", "source_id", "source_seq", "idempotency_key"} <= columns
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == AGENT_WORKBENCH_STREAM_SCHEMA_VERSION
+    replay = store.replay_stream_envelopes(conversation_id="agent_conv_1", after_seq=0)
+    assert replay[0].payload.messageId == "msg_1"
 
 
 def test_liepin_store_sets_schema_version_and_rejects_newer_db(tmp_path: Path) -> None:

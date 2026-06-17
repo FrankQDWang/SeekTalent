@@ -113,6 +113,29 @@ def test_runtime_control_store_closes_connections_and_sets_busy_timeout(
     tracker.assert_all_closed()
 
 
+def test_workbench_stream_store_closes_connections_after_append_and_replay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import seektalent_ui.agent_workbench_stream_store as store_module
+    from seektalent_ui.agent_workbench_models import AgentWorkbenchTranscriptPayloadResponse
+
+    tracker = _track_sqlite_connect(monkeypatch, store_module)
+    store = store_module.AgentWorkbenchStreamStore(tmp_path / "workbench_stream.sqlite3", busy_timeout_ms=4567)
+
+    store.append_event(
+        conversation_id="agent_conv_1",
+        kind="message.completed",
+        payload=AgentWorkbenchTranscriptPayloadResponse(kind="message", messageId="message_1"),
+        source_fact_key="message:message_1",
+        created_at="2026-06-17T00:00:00Z",
+    )
+    assert len(store.replay_stream_envelopes(conversation_id="agent_conv_1", after_seq=0)) == 1
+
+    tracker.assert_executed("PRAGMA busy_timeout = 4567")
+    tracker.assert_all_closed()
+
+
 def test_liepin_store_closes_connections_and_sets_busy_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

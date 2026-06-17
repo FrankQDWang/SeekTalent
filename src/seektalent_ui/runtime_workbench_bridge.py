@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
 
 from seektalent.runtime.public_events import PUBLIC_EVENT_SCHEMA_VERSION
-from seektalent_runtime_control.models import RuntimeControlEvent
+from seektalent_runtime_control.models import (
+    RuntimeControlCandidateEvidence,
+    RuntimeControlCandidateFinalizationRevision,
+    RuntimeControlCandidateIdentity,
+    RuntimeControlEvent,
+    RuntimeRunRecord,
+)
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_ui.workbench_store import WorkbenchStore, WorkbenchUser
 
@@ -23,6 +29,13 @@ class WorkbenchEventProjection:
     runtime_run_id: str
     runtime_event_id: str
     workbench_event_global_seq: int
+
+
+@dataclass(frozen=True)
+class WorkbenchCandidateTruthProjection:
+    runtime_run_id: str
+    revision: int
+    projected_ref: str
 
 
 class RuntimeWorkbenchBridge:
@@ -48,9 +61,25 @@ class RuntimeWorkbenchBridge:
     ) -> WorkbenchRunLink:
         run = self.runtime_store.get_run(runtime_run_id)
         if run.workbench_session_id is not None:
+            session = self.workbench_store.get_workbench_session(user=user, session_id=run.workbench_session_id)
+            if session is not None:
+                return WorkbenchRunLink(
+                    runtime_run_id=runtime_run_id,
+                    workbench_session_id=run.workbench_session_id,
+                )
+        session = self.workbench_store.get_workbench_session_by_runtime_run_id(
+            user=user,
+            runtime_run_id=runtime_run_id,
+        )
+        if session is not None:
+            linked = self.runtime_store.link_workbench_session(
+                runtime_run_id=runtime_run_id,
+                workbench_session_id=session.session_id,
+                updated_at=self.now(),
+            )
             return WorkbenchRunLink(
                 runtime_run_id=runtime_run_id,
-                workbench_session_id=run.workbench_session_id,
+                workbench_session_id=linked.workbench_session_id,
             )
         session = self.workbench_store.create_workbench_session(
             user=user,
@@ -58,13 +87,14 @@ class RuntimeWorkbenchBridge:
             jd_text=jd_text,
             notes=notes,
             source_kinds=_workbench_source_kinds(run.source_ids),
+            runtime_run_id=runtime_run_id,
         )
-        self.runtime_store.link_workbench_session(
+        linked = self.runtime_store.link_workbench_session(
             runtime_run_id=runtime_run_id,
             workbench_session_id=session.session_id,
             updated_at=self.now(),
         )
-        return WorkbenchRunLink(runtime_run_id=runtime_run_id, workbench_session_id=session.session_id)
+        return WorkbenchRunLink(runtime_run_id=runtime_run_id, workbench_session_id=linked.workbench_session_id)
 
     def reconcile_run_link(self, *, user: WorkbenchUser, runtime_run_id: str) -> WorkbenchRunLink:
         run = self.runtime_store.get_run(runtime_run_id)
@@ -89,10 +119,14 @@ class RuntimeWorkbenchBridge:
         user: WorkbenchUser,
         runtime_run_id: str,
         event_id: str,
+        projected_at: str | None = None,
     ) -> WorkbenchEventProjection:
         run = self.runtime_store.get_run(runtime_run_id)
-        if run.workbench_session_id is None:
-            raise ValueError("workbench_session_missing")
+        workbench_session_id = self._workbench_session_id_for_projection(user=user, run=run)
+        if workbench_session_id is None:
+            if run.workbench_session_id is None:
+                raise ValueError("workbench_session_missing")
+            raise ValueError("runtime_link_broken")
         event = self.runtime_store.get_event(runtime_run_id=runtime_run_id, event_id=event_id)
         if event.workbench_event_global_seq is not None:
             return WorkbenchEventProjection(
@@ -104,20 +138,94 @@ class RuntimeWorkbenchBridge:
             tenant_id="local",
             workspace_id=user.workspace_id,
             user_id=user.user_id,
-            session_id=run.workbench_session_id,
+            session_id=workbench_session_id,
             source_kind=_workbench_source_kind(event.source_id),
             payload=_public_event_payload(event),
         )
-        updated = self.runtime_store.mark_event_projected_to_workbench(
+        updated = self.runtime_store.mark_event_projection_success(
             runtime_run_id=runtime_run_id,
             event_id=event_id,
             workbench_event_global_seq=workbench_event.global_seq,
+            projected_at=projected_at or self.now(),
         )
         return WorkbenchEventProjection(
             runtime_run_id=runtime_run_id,
             runtime_event_id=event_id,
             workbench_event_global_seq=updated.workbench_event_global_seq or workbench_event.global_seq,
         )
+
+    def project_candidate_finalization_revision(
+        self,
+        *,
+        user: WorkbenchUser,
+        runtime_run_id: str,
+        revision: int,
+        finalization_revision: RuntimeControlCandidateFinalizationRevision | None = None,
+        identities: Sequence[RuntimeControlCandidateIdentity] | None = None,
+        evidence: Sequence[RuntimeControlCandidateEvidence] | None = None,
+        projected_at: str | None = None,
+    ) -> WorkbenchCandidateTruthProjection:
+        run = self.runtime_store.get_run(runtime_run_id)
+        workbench_session_id = self._workbench_session_id_for_projection(user=user, run=run)
+        if workbench_session_id is None:
+            if run.workbench_session_id is None:
+                raise ValueError("workbench_session_missing")
+            raise ValueError("runtime_link_broken")
+        target_revision = finalization_revision if finalization_revision is not None else None
+        if target_revision is not None and target_revision.revision != revision:
+            raise ValueError("runtime_candidate_finalization_revision_mismatch")
+        if target_revision is None:
+            revisions = self.runtime_store.list_candidate_finalization_revisions(runtime_run_id=runtime_run_id)
+            target_revision = next((item for item in revisions if item.revision == revision), None)
+        if target_revision is None:
+            raise ValueError("runtime_candidate_finalization_revision_missing")
+        resolved_identities = (
+            list(identities)
+            if identities is not None
+            else self.runtime_store.list_candidate_identities(runtime_run_id=runtime_run_id)
+        )
+        resolved_evidence = (
+            list(evidence)
+            if evidence is not None
+            else self.runtime_store.list_candidate_evidence(runtime_run_id=runtime_run_id)
+        )
+        projected_ref = self.workbench_store.persist_runtime_candidate_truth_from_control(
+            user=user,
+            session_id=workbench_session_id,
+            runtime_run_id=runtime_run_id,
+            identities=resolved_identities,
+            evidence=resolved_evidence,
+            finalization_revision=target_revision,
+            projected_at=projected_at or self.now(),
+        )
+        return WorkbenchCandidateTruthProjection(
+            runtime_run_id=runtime_run_id,
+            revision=revision,
+            projected_ref=projected_ref,
+        )
+
+    def _workbench_session_id_for_projection(
+        self,
+        *,
+        user: WorkbenchUser,
+        run: RuntimeRunRecord,
+    ) -> str | None:
+        if run.workbench_session_id is not None:
+            session = self.workbench_store.get_workbench_session(user=user, session_id=run.workbench_session_id)
+            if session is not None:
+                return session.session_id
+        session = self.workbench_store.get_workbench_session_by_runtime_run_id(
+            user=user,
+            runtime_run_id=run.runtime_run_id,
+        )
+        if session is None:
+            return None
+        linked = self.runtime_store.link_workbench_session(
+            runtime_run_id=run.runtime_run_id,
+            workbench_session_id=session.session_id,
+            updated_at=self.now(),
+        )
+        return linked.workbench_session_id
 
 
 def _public_event_payload(event: RuntimeControlEvent) -> dict[str, object]:
