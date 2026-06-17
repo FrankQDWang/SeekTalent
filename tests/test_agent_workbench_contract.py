@@ -19,6 +19,7 @@ from seektalent_conversation_agent.models import (
     AgentToolCallRecord,
     ContextCompactionRecord,
     ConversationReopenState,
+    ConversationRuntimeRunLink,
     ConversationThreadView,
     TranscriptActivityItem,
     TranscriptMessage,
@@ -131,6 +132,12 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
     assert response.schemaVersion == "agent.workbench.view.v1"
     assert response.conversation.conversationId == "agent_conv_1"
     assert response.conversation.runtimeRunId == "runtime_1"
+    assert [link.runtimeRunId for link in response.conversation.linkedRuntimeRuns] == [
+        "runtime_1",
+        "runtime_2",
+    ]
+    assert response.conversation.linkedRuntimeRuns[0].isActive is True
+    assert response.conversation.linkedRuntimeRuns[1].runKind == "rerun"
     assert response.streamCursor.latestMessageSeq == 2
     assert response.streamCursor.latestActivitySeq == 1
     assert response.streamCursor.latestRuntimeEventSeq == 7
@@ -283,6 +290,52 @@ def test_agent_workbench_stream_store_replays_durable_bff_seq_and_gaps(tmp_path:
     assert gap.kind == "stream.gap"
     assert gap.payload.missingFromSeq == 10
     assert gap.payload.nextAvailableSeq == 3
+
+
+def test_stream_store_prunes_only_explicitly_closed_conversation_prefix_and_preserves_gap(tmp_path: Path) -> None:
+    store = AgentWorkbenchStreamStore(tmp_path / "stream.sqlite3")
+    for index in range(3):
+        store.append_event(
+            conversation_id="agent_conv_closed",
+            kind="message.completed",
+            payload=AgentWorkbenchTranscriptPayloadResponse(kind="message", messageId=f"msg_{index}"),
+            source_fact_key=f"message:closed:{index}",
+            created_at=f"2026-05-0{index + 1}T00:00:00Z",
+        )
+        store.append_event(
+            conversation_id="agent_conv_active",
+            kind="message.completed",
+            payload=AgentWorkbenchTranscriptPayloadResponse(kind="message", messageId=f"active_{index}"),
+            source_fact_key=f"message:active:{index}",
+            created_at=f"2026-05-0{index + 1}T00:00:00Z",
+        )
+
+    dry_run = store.prune_closed_conversation_events(
+        ["agent_conv_closed"],
+        created_before="2026-06-01T00:00:00Z",
+        retain_last=1,
+        dry_run=True,
+    )
+    applied = store.prune_closed_conversation_events(
+        ["agent_conv_closed"],
+        created_before="2026-06-01T00:00:00Z",
+        retain_last=1,
+    )
+    replay = list(replay_stream_envelopes(store, conversation_id="agent_conv_closed", after_seq=0))
+
+    assert dry_run == 2
+    assert applied == 2
+    assert store.first_seq(conversation_id="agent_conv_closed") == 3
+    assert store.latest_seq(conversation_id="agent_conv_closed") == 3
+    assert store.first_seq(conversation_id="agent_conv_active") == 1
+    assert [event.seq for event in store.replay_stream_envelopes(conversation_id="agent_conv_active", after_seq=0)] == [
+        1,
+        2,
+        3,
+    ]
+    assert replay[0].kind == "stream.gap"
+    assert replay[0].payload.nextAvailableSeq == 3
+    assert replay[1].seq == 3
 
 
 def test_agent_workbench_stream_store_replays_after_process_restart(tmp_path: Path) -> None:
@@ -589,6 +642,7 @@ def test_transcript_projection_dedupes_runtime_events_materialized_as_activities
         status="running",
         summary="Round 1 duplicate",
         payload={},
+        payload_size_bytes=0,
         created_at=_now(),
     )
     projection_input = AgentWorkbenchProjectionInput(
@@ -1022,6 +1076,7 @@ class _FakeRuntimeStore:
                     status="running",
                     summary="Round 1",
                     payload={"query_terms": ["AI agent"], "raw_provider_payload": "must not leak"},
+                    payload_size_bytes=0,
                     created_at=_now(),
                 )
             ],
@@ -1169,6 +1224,37 @@ def _thread_view(final_summary_id: str | None = None) -> ConversationThreadView:
             pending_command_count=0,
             pending_requirement_review_count=1,
             pending_memory_review_count=0,
+            linked_runtime_runs=[
+                ConversationRuntimeRunLink(
+                    conversation_id="agent_conv_1",
+                    runtime_run_id="runtime_1",
+                    status="active",
+                    run_kind="primary",
+                    workbench_session_id="session_1",
+                    approved_requirement_revision_id="approved_1",
+                    run_intent_id="workflow:agent_conv_1:approved_1:primary",
+                    link_reason="start",
+                    latest_event_seq=7,
+                    linked_at=_now(),
+                    updated_at=_now(),
+                    active_at=_now(),
+                    is_active=True,
+                ),
+                ConversationRuntimeRunLink(
+                    conversation_id="agent_conv_1",
+                    runtime_run_id="runtime_2",
+                    status="linked",
+                    run_kind="rerun",
+                    workbench_session_id="session_2",
+                    approved_requirement_revision_id="approved_1",
+                    run_intent_id="workflow:agent_conv_1:approved_1:rerun",
+                    link_reason="rerun",
+                    latest_event_seq=3,
+                    linked_at=_now(),
+                    updated_at=_now(),
+                    is_active=False,
+                ),
+            ],
             allowed_actions=["submit_message", "confirm_requirements", "start_workflow"],
             reason_code=None,
             last_opened_at=_now(),

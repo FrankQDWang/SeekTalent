@@ -81,6 +81,25 @@ class AgentWorkbenchMessagePayloadResponse(BaseModel):
     requirementDraftId: str | None = None
 
 
+class AgentWorkbenchLinkedRuntimeRunResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtimeRunId: str
+    status: str
+    runKind: str
+    workbenchSessionId: str | None = None
+    approvedRequirementRevisionId: str
+    runIntentId: str | None = None
+    linkReason: str
+    latestEventSeq: int
+    linkedAt: str
+    updatedAt: str
+    activeAt: str | None = None
+    supersededAt: str | None = None
+    completedAt: str | None = None
+    isActive: bool = False
+
+
 class AgentWorkbenchConversationSummaryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -90,6 +109,7 @@ class AgentWorkbenchConversationSummaryResponse(BaseModel):
     isArchived: bool
     runtimeRunId: str | None = None
     workbenchSessionId: str | None = None
+    linkedRuntimeRuns: list[AgentWorkbenchLinkedRuntimeRunResponse] = Field(default_factory=list)
     updatedAt: str | None = None
 
 

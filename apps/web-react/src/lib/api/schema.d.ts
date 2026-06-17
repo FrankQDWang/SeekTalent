@@ -1468,6 +1468,8 @@ export interface components {
       runtimeRunId?: string | null;
       /** Workbenchsessionid */
       workbenchSessionId?: string | null;
+      /** Linkedruntimeruns */
+      linkedRuntimeRuns?: components["schemas"]["AgentWorkbenchLinkedRuntimeRunResponse"][];
       /** Updatedat */
       updatedAt?: string | null;
     };
@@ -1615,6 +1617,40 @@ export interface components {
       sourceRuntimeRunId?: string | null;
       /** Summary */
       summary?: string | null;
+    };
+    /** AgentWorkbenchLinkedRuntimeRunResponse */
+    AgentWorkbenchLinkedRuntimeRunResponse: {
+      /** Runtimerunid */
+      runtimeRunId: string;
+      /** Status */
+      status: string;
+      /** Runkind */
+      runKind: string;
+      /** Workbenchsessionid */
+      workbenchSessionId?: string | null;
+      /** Approvedrequirementrevisionid */
+      approvedRequirementRevisionId: string;
+      /** Runintentid */
+      runIntentId?: string | null;
+      /** Linkreason */
+      linkReason: string;
+      /** Latesteventseq */
+      latestEventSeq: number;
+      /** Linkedat */
+      linkedAt: string;
+      /** Updatedat */
+      updatedAt: string;
+      /** Activeat */
+      activeAt?: string | null;
+      /** Supersededat */
+      supersededAt?: string | null;
+      /** Completedat */
+      completedAt?: string | null;
+      /**
+       * Isactive
+       * @default false
+       */
+      isActive: boolean;
     };
     /** AgentWorkbenchMessagePayloadResponse */
     AgentWorkbenchMessagePayloadResponse: {
@@ -2037,7 +2073,7 @@ export interface components {
     /** FinalSummaryRequest */
     FinalSummaryRequest: {
       /** Runtimerunid */
-      runtimeRunId: string;
+      runtimeRunId?: string | null;
       /** Userinstruction */
       userInstruction?: string | null;
       /** Idempotencykey */
@@ -3963,7 +3999,7 @@ export interface components {
     /** WorkflowCommandRequest */
     WorkflowCommandRequest: {
       /** Runtimerunid */
-      runtimeRunId: string;
+      runtimeRunId?: string | null;
       /**
        * Commandtype
        * @enum {string}
@@ -5435,8 +5471,8 @@ export interface operations {
   };
   workflow_events_api_agent_conversations__conversation_id__workflow_events_get: {
     parameters: {
-      query: {
-        runtimeRunId: string;
+      query?: {
+        runtimeRunId?: string | null;
         limit?: number;
       };
       header?: never;
@@ -5471,8 +5507,8 @@ export interface operations {
   };
   workflow_snapshot_api_agent_conversations__conversation_id__workflow_snapshot_get: {
     parameters: {
-      query: {
-        runtimeRunId: string;
+      query?: {
+        runtimeRunId?: string | null;
       };
       header?: never;
       path: {
@@ -5507,8 +5543,8 @@ export interface operations {
   workflow_detail_api_agent_conversations__conversation_id__workflow_detail_get: {
     parameters: {
       query: {
-        runtimeRunId: string;
         kind: string;
+        runtimeRunId?: string | null;
         roundNo?: number | null;
         eventId?: string | null;
         commandId?: string | null;

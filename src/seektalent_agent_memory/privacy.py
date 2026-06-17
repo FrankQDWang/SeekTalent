@@ -14,9 +14,21 @@ class MemoryPrivacyError(ValueError):
 _EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
 _PHONE_RE = re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")
 _AUTH_RE = re.compile(r"\b(cookie|authorization|bearer|sessionid|set-cookie|x-api-key|api[_-]?key)\b", re.IGNORECASE)
-_RESUME_RE = re.compile(r"(?:BEGIN RESUME|简历原文|教育经历|工作经历).{0,120}(?:姓名|电话|邮箱)", re.IGNORECASE | re.DOTALL)
+_RESUME_RE = re.compile(
+    r"(?:BEGIN RESUME|RESUME\s*:|简历原文|教育经历|工作经历|work experience|education).{0,180}"
+    r"(?:姓名|电话|邮箱|email|skills|education|work experience)",
+    re.IGNORECASE | re.DOTALL,
+)
 _PROVIDER_PAYLOAD_RE = re.compile(r"\b(providerPayload|provider_payload|rawProvider|sourcePayload|profileUrl)\b", re.IGNORECASE)
 _RUNTIME_PAYLOAD_RE = re.compile(r"\b(runtimeEvent|runtime_event|eventPayload|checkpointPayload)\b", re.IGNORECASE)
+_RUNTIME_COMMAND_RE = re.compile(
+    r"("
+    r"\bruntime\s*command\b"
+    r"|\b(start_search|start_workflow|resume_workflow|pause_workflow|cancel_workflow)\b"
+    r"|(?:自动|直接|立刻|马上|运行|执行|触发|启动|开始).{0,24}(?:检索|搜索|search|sourcing|workflow|runtime|command)"
+    r")",
+    re.IGNORECASE | re.DOTALL,
+)
 _REQUIREMENT_JSON_KEYS = {
     "must_have_capabilities",
     "preferred_capabilities",
@@ -72,6 +84,8 @@ def _reject_if_forbidden(clean: str) -> None:
         raise MemoryPrivacyError("agent_memory_privacy_provider_payload")
     if _RUNTIME_PAYLOAD_RE.search(clean):
         raise MemoryPrivacyError("agent_memory_privacy_runtime_payload")
+    if _RUNTIME_COMMAND_RE.search(clean):
+        raise MemoryPrivacyError("agent_memory_privacy_runtime_command")
     if _FULL_JD_RE.search(clean):
         raise MemoryPrivacyError("agent_memory_privacy_requirement_json")
     if _INSTRUCTION_LIKE_RE.search(clean):

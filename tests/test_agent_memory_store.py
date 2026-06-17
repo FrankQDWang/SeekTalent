@@ -29,6 +29,40 @@ def test_agent_memory_store_initializes_required_tables(tmp_path: Path) -> None:
     } <= tables
 
 
+def test_memory_store_does_not_own_runtime_control_tables_or_progression_state(tmp_path: Path) -> None:
+    from seektalent_agent_memory.store import MemoryStore
+
+    db_path = tmp_path / "agent_memory.sqlite3"
+    MemoryStore(db_path).initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        columns = {
+            row[1]
+            for table in tables
+            if table.startswith("agent_memory_")
+            for row in conn.execute(f"PRAGMA table_info({table})")
+        }
+
+    assert "runtime_control_runs" not in tables
+    assert "runtime_control_events" not in tables
+    assert "runtime_control_stage_outputs" not in tables
+    assert "runtime_control_commands" not in tables
+    assert columns & {
+        "runtime_run_id",
+        "runtime_status",
+        "run_intent_id",
+        "start_idempotency_key",
+        "run_kind",
+        "current_stage",
+        "current_round",
+        "latest_event_seq",
+        "latest_checkpoint_id",
+        "event_type",
+        "output_kind",
+    } == set()
+
+
 def test_memory_store_migrates_unshipped_v1_schema_to_v2(tmp_path: Path) -> None:
     db_path = tmp_path / "agent_memory.sqlite3"
     with sqlite3.connect(db_path) as conn:

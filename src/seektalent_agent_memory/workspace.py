@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import difflib
 import json
+from contextlib import suppress
 from pathlib import Path
 
 
@@ -22,6 +23,19 @@ class MemoryWorkspace:
         path = self.root / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+
+    def prune_artifacts(self, allowed_relative_paths: set[str]) -> None:
+        allowed = {_normalize_relative_path(path) for path in allowed_relative_paths}
+        self.prepare()
+        for path in sorted(self.root.rglob("*"), reverse=True):
+            if not path.is_file() or path == self.baseline_path:
+                continue
+            relative_path = path.relative_to(self.root).as_posix()
+            if relative_path not in allowed:
+                path.unlink()
+        for path in sorted((item for item in self.root.rglob("*") if item.is_dir()), reverse=True):
+            with suppress(OSError):
+                path.rmdir()
 
     def reset_baseline(self) -> None:
         self.prepare()
@@ -76,3 +90,10 @@ class MemoryWorkspace:
         diff_path = self.root / "phase2_workspace_diff.md"
         if diff_path.exists():
             diff_path.unlink()
+
+
+def _normalize_relative_path(relative_path: str) -> str:
+    path = Path(relative_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError("agent_memory_workspace_path_invalid")
+    return path.as_posix()

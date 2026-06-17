@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.conversation_agent_test_support import build_service
+from tests.conversation_agent_test_support import build_service, execute_queued_workflow
 
 
 def test_final_summary_is_persisted_as_grounded_transcript_message(tmp_path: Path) -> None:
-    service, _conversation_store, _runtime_store = build_service(tmp_path)
+    service, _conversation_store, runtime_store = build_service(tmp_path)
     conversation = service.create_conversation(
         owner_user_id="user_1",
         workspace_id="workspace_1",
@@ -44,6 +44,7 @@ def test_final_summary_is_persisted_as_grounded_transcript_message(tmp_path: Pat
         notes=None,
         source_ids=["cts"],
     )
+    execute_queued_workflow(runtime_store, runtime_run_id=started.conversation_reopen_state.runtime_run_id)
 
     response = service.prepare_final_summary(
         conversation_id=conversation.conversation_id,
@@ -61,7 +62,7 @@ def test_final_summary_is_persisted_as_grounded_transcript_message(tmp_path: Pat
 
 
 def test_final_summary_filters_instruction_like_text_before_transcript_storage(tmp_path: Path) -> None:
-    service, _conversation_store, _runtime_store = build_service(tmp_path)
+    service, _conversation_store, runtime_store = build_service(tmp_path)
     conversation = service.create_conversation(
         owner_user_id="user_1",
         workspace_id="workspace_1",
@@ -99,6 +100,7 @@ def test_final_summary_filters_instruction_like_text_before_transcript_storage(t
         notes=None,
         source_ids=["cts"],
     )
+    execute_queued_workflow(runtime_store, runtime_run_id=started.conversation_reopen_state.runtime_run_id)
 
     response = service.prepare_final_summary(
         conversation_id=conversation.conversation_id,

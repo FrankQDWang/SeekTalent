@@ -171,7 +171,7 @@ class WorkflowStartRequest(BaseModel):
 class WorkflowCommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    runtimeRunId: str
+    runtimeRunId: str | None = None
     commandType: Literal["pause", "cancel", "resume", "nextRoundRequirement"]
     idempotencyKey: str = Field(min_length=1, max_length=160)
     text: str | None = Field(default=None, max_length=2000)
@@ -181,7 +181,7 @@ class WorkflowCommandRequest(BaseModel):
 class FinalSummaryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    runtimeRunId: str
+    runtimeRunId: str | None = None
     userInstruction: str | None = Field(default=None, max_length=2000)
     idempotencyKey: str = Field(min_length=1, max_length=160)
 
@@ -517,8 +517,8 @@ def workflow_command(
 @router.get("/conversations/{conversation_id}/workflow/events")
 def workflow_events(
     conversation_id: str,
-    runtimeRunId: str,
     request: Request,
+    runtimeRunId: str | None = None,
     limit: int = 100,
     user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
@@ -539,8 +539,8 @@ def workflow_events(
 @router.get("/conversations/{conversation_id}/workflow/snapshot")
 def workflow_snapshot(
     conversation_id: str,
-    runtimeRunId: str,
     request: Request,
+    runtimeRunId: str | None = None,
     user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> dict[str, object]:
     service = get_agent_service(request)
@@ -559,9 +559,9 @@ def workflow_snapshot(
 @router.get("/conversations/{conversation_id}/workflow/detail")
 def workflow_detail(
     conversation_id: str,
-    runtimeRunId: str,
     kind: str,
     request: Request,
+    runtimeRunId: str | None = None,
     roundNo: int | None = None,
     eventId: str | None = None,
     commandId: str | None = None,

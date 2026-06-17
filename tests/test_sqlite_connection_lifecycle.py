@@ -113,6 +113,84 @@ def test_runtime_control_store_closes_connections_and_sets_busy_timeout(
     tracker.assert_all_closed()
 
 
+def test_conversation_store_closes_connections_and_enforces_foreign_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import seektalent_conversation_agent.store as store_module
+
+    tracker = _track_sqlite_connect(monkeypatch, store_module)
+    store = store_module.ConversationStore(tmp_path / "conversation_agent.sqlite3", busy_timeout_ms=2345)
+
+    store.initialize()
+    store.create_conversation(
+        conversation_id="agent_conv_1",
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python platform lead",
+        created_at="2026-06-17T00:00:00Z",
+    )
+    store.append_message(
+        conversation_id="agent_conv_1",
+        role="user",
+        message_type="user_text",
+        text="Find backend candidates.",
+        payload={},
+        created_at="2026-06-17T00:00:01Z",
+    )
+    assert len(store.get_messages(conversation_id="agent_conv_1")) == 1
+
+    tracker.assert_executed("PRAGMA foreign_keys = ON")
+    tracker.assert_executed("PRAGMA busy_timeout = 2345")
+    tracker.assert_all_closed()
+
+
+def test_agent_memory_store_closes_regular_and_immediate_connections(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import seektalent_agent_memory.store as store_module
+
+    tracker = _track_sqlite_connect(monkeypatch, store_module)
+    store = store_module.MemoryStore(tmp_path / "agent_memory.sqlite3", busy_timeout_ms=3456)
+
+    store.initialize()
+    store.update_settings(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        memory_enabled=True,
+        review_required=True,
+        updated_at="2026-06-17T00:00:00Z",
+    )
+    claimed = store.try_claim_stage1_job(
+        conversation_id="agent_conv_1",
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        worker_id="worker_1",
+        source_updated_at="2026-06-17T00:00:01.000000Z",
+        now="2026-06-17T00:00:02.000000Z",
+        lease_seconds=60,
+        max_running_jobs=1,
+    )
+    blocked = store.try_claim_stage1_job(
+        conversation_id="agent_conv_2",
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        worker_id="worker_2",
+        source_updated_at="2026-06-17T00:00:03.000000Z",
+        now="2026-06-17T00:00:04.000000Z",
+        lease_seconds=60,
+        max_running_jobs=1,
+    )
+
+    assert claimed.status == "claimed"
+    assert blocked.status == "skipped_running_cap"
+    tracker.assert_executed("PRAGMA foreign_keys = ON")
+    tracker.assert_executed("PRAGMA busy_timeout = 3456")
+    tracker.assert_executed("BEGIN IMMEDIATE")
+    tracker.assert_all_closed()
+
+
 def test_workbench_stream_store_closes_connections_after_append_and_replay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

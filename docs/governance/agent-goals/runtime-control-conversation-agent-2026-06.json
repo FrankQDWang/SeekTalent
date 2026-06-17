@@ -1,0 +1,34 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add conversation-agent and memory control-plane persistence.",
+  "rationale": "This slice connects the outer conversation agent, memory services, Workbench routes, and runtime-control lineage so user clarification and human intervention can safely pause, reopen, and continue workflow runs from durable SQLite state.",
+  "touched_layers": [
+    "bff",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/factory.py",
+    "src/seektalent_conversation_agent/models.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/store.py",
+    "src/seektalent_conversation_agent/tools.py"
+  ],
+  "deletion_targets": [
+    "conversation state that only exists in transient process memory",
+    "human intervention context that cannot be linked back to runtime-control runs",
+    "memory usage records that are not tied to the local product control plane"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "risks": [
+    "Conversation-agent state must remain product control state, not raw prompt or provider payload storage.",
+    "Human intervention lineage must be idempotent when a runtime process is restarted.",
+    "Memory retention and privacy erasure must keep recruiter-visible state separate from developer/debug artifacts."
+  ]
+}

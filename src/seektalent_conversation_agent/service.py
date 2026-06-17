@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -15,6 +14,7 @@ from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.models import (
     ConversationAgentResponse,
     ConversationRecord,
+    ConversationRuntimeRunLink,
     ConversationThreadView,
     TranscriptMessage,
 )
@@ -61,6 +61,16 @@ class MemoryServiceProtocol(Protocol):
 class CompletedMemoryConversation:
     conversation_id: str
     updated_at: str
+
+
+@dataclass(frozen=True)
+class RuntimeRunTarget:
+    conversation: ConversationRecord
+    link: ConversationRuntimeRunLink
+
+    @property
+    def runtime_run_id(self) -> str:
+        return self.link.runtime_run_id
 
 
 class ConversationAgentService:
@@ -744,22 +754,23 @@ class ConversationAgentService:
         approved = self.tool_adapter._require_requirement_service().store.get_approved_requirement(
             conversation.approved_requirement_revision_id
         )
-        run = asyncio.run(
-            self.tool_adapter.start_workflow(
-                conversation_id=conversation_id,
-                workbench_session_id=conversation.workbench_session_id,
-                approved_requirement=approved,
-                job_title=job_title,
-                jd_text=jd_text,
-                notes=notes,
-                source_ids=source_ids,
-            )
+        run = self.tool_adapter.start_workflow(
+            conversation_id=conversation_id,
+            workbench_session_id=conversation.workbench_session_id,
+            approved_requirement=approved,
+            job_title=job_title,
+            jd_text=jd_text,
+            notes=notes,
+            source_ids=source_ids,
         )
         self.store.link_runtime_run(
             conversation_id=conversation_id,
             runtime_run_id=run.runtime_run_id,
             workbench_session_id=run.workbench_session_id,
             approved_requirement_revision_id=run.approved_requirement_revision_id,
+            run_intent_id=run.run_intent_id,
+            run_kind=run.run_kind,
+            link_reason="start",
             linked_at=self.now(),
         )
         self.store.update_conversation_status(
@@ -782,18 +793,18 @@ class ConversationAgentService:
         conversation_id: str,
         owner_user_id: str,
         workspace_id: str,
-        runtime_run_id: str,
+        runtime_run_id: str | None,
         limit: int,
     ) -> ConversationAgentResponse:
-        conversation = self._require_runtime_run_link(
+        target = self._resolve_runtime_run_target(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
             runtime_run_id=runtime_run_id,
         )
         page = self.tool_adapter.list_workflow_events(
-            runtime_run_id=runtime_run_id,
-            after_seq=conversation.latest_rendered_runtime_event_seq,
+            runtime_run_id=target.runtime_run_id,
+            after_seq=target.link.latest_event_seq,
             limit=limit,
         )
         if page.reason_code == "runtime_event_gap_detected":
@@ -834,7 +845,7 @@ class ConversationAgentService:
             )
             self._append_runtime_progress_once(
                 conversation_id=conversation_id,
-                runtime_run_id=runtime_run_id,
+                runtime_run_id=target.runtime_run_id,
                 event_seq=event.event_seq,
                 text=event.summary,
                 payload={"eventId": event.event_id, "eventType": event.event_type, "status": event.status},
@@ -842,11 +853,12 @@ class ConversationAgentService:
             )
             self.store.update_rendered_runtime_cursor(
                 conversation_id=conversation_id,
-                runtime_run_id=runtime_run_id,
+                runtime_run_id=target.runtime_run_id,
                 latest_event_seq=event.event_seq,
                 updated_at=self.now(),
             )
-        self._sync_status_from_runtime(conversation_id=conversation_id, runtime_run_id=runtime_run_id)
+        if target.link.is_active:
+            self._sync_status_from_runtime(conversation_id=conversation_id, runtime_run_id=target.runtime_run_id)
         reopened = self.reopen_conversation(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -864,19 +876,19 @@ class ConversationAgentService:
         conversation_id: str,
         owner_user_id: str,
         workspace_id: str,
-        runtime_run_id: str,
+        runtime_run_id: str | None,
         user_instruction: str | None,
         idempotency_key: str,
     ) -> ConversationAgentResponse:
-        self._require_runtime_run_link(
+        target = self._resolve_runtime_run_target(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
             runtime_run_id=runtime_run_id,
         )
-        source_snapshot_event_seq = self._latest_runtime_snapshot_seq(runtime_run_id)
+        source_snapshot_event_seq = self._latest_runtime_snapshot_seq(target.runtime_run_id)
         summary = self.tool_adapter.prepare_final_summary(
-            runtime_run_id=runtime_run_id,
+            runtime_run_id=target.runtime_run_id,
             user_instruction=user_instruction,
             source_snapshot_event_seq=source_snapshot_event_seq,
             idempotency_key=idempotency_key,
@@ -892,18 +904,19 @@ class ConversationAgentService:
                 ),
             }
         )
-        self.store.set_final_summary(
-            conversation_id=conversation_id,
-            final_summary_id=summary_id,
-            updated_at=self.now(),
-        )
+        if target.link.is_active:
+            self.store.set_final_summary(
+                conversation_id=conversation_id,
+                final_summary_id=summary_id,
+                updated_at=self.now(),
+            )
         self.store.append_message(
             conversation_id=conversation_id,
             role="assistant",
             message_type="final_summary",
             text=safe_summary.summary,
             payload=safe_summary.model_dump(mode="json"),
-            source_runtime_run_id=runtime_run_id,
+            source_runtime_run_id=target.runtime_run_id,
             created_at=self.now(),
             message_id=self.message_id_factory(),
         )
@@ -925,11 +938,11 @@ class ConversationAgentService:
         conversation_id: str,
         owner_user_id: str,
         workspace_id: str,
-        runtime_run_id: str,
+        runtime_run_id: str | None,
         command_type: str,
         idempotency_key: str,
     ) -> ConversationAgentResponse:
-        self._require_runtime_run_link(
+        target = self._resolve_runtime_run_target(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
@@ -937,19 +950,19 @@ class ConversationAgentService:
         )
         if command_type == "pause":
             command = self.tool_adapter.request_pause(
-                runtime_run_id=runtime_run_id,
+                runtime_run_id=target.runtime_run_id,
                 requested_by=owner_user_id,
                 idempotency_key=idempotency_key,
             )
         elif command_type == "cancel":
             command = self.tool_adapter.request_cancel(
-                runtime_run_id=runtime_run_id,
+                runtime_run_id=target.runtime_run_id,
                 requested_by=owner_user_id,
                 idempotency_key=idempotency_key,
             )
         elif command_type == "resume":
             command = self.tool_adapter.resume_workflow(
-                runtime_run_id=runtime_run_id,
+                runtime_run_id=target.runtime_run_id,
                 requested_by=owner_user_id,
                 idempotency_key=idempotency_key,
             )
@@ -961,11 +974,12 @@ class ConversationAgentService:
             message_type="command_state",
             text=f"命令已记录：{command.command_type}，状态 {command.status}。",
             payload={"command": command.model_dump(mode="json")},
-            source_runtime_run_id=runtime_run_id,
+            source_runtime_run_id=target.runtime_run_id,
             created_at=self.now(),
             message_id=self.message_id_factory(),
         )
-        self._sync_status_from_runtime(conversation_id=conversation_id, runtime_run_id=runtime_run_id)
+        if target.link.is_active:
+            self._sync_status_from_runtime(conversation_id=conversation_id, runtime_run_id=target.runtime_run_id)
         reopened = self.reopen_conversation(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -983,12 +997,12 @@ class ConversationAgentService:
         conversation_id: str,
         owner_user_id: str,
         workspace_id: str,
-        runtime_run_id: str,
+        runtime_run_id: str | None,
         text: str,
         target_section_hint: str | None,
         idempotency_key: str,
     ) -> ConversationAgentResponse:
-        self._require_runtime_run_link(
+        target = self._resolve_runtime_run_target(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
@@ -996,7 +1010,7 @@ class ConversationAgentService:
         )
         safe_text = screen_requirement_text(text)
         result = self.tool_adapter.submit_next_round_requirement(
-            runtime_run_id=runtime_run_id,
+            runtime_run_id=target.runtime_run_id,
             text=safe_text,
             target_section_hint=target_section_hint,
             idempotency_key=idempotency_key,
@@ -1015,7 +1029,7 @@ class ConversationAgentService:
             message_type="command_state",
             text=text_out,
             payload={"nextRoundRequirement": _object_payload(result), "status": status},
-            source_runtime_run_id=runtime_run_id,
+            source_runtime_run_id=target.runtime_run_id,
             created_at=self.now(),
             message_id=self.message_id_factory(),
         )
@@ -1023,7 +1037,7 @@ class ConversationAgentService:
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
-            runtime_run_id=runtime_run_id,
+            runtime_run_id=target.runtime_run_id,
             limit=200,
         )
 
@@ -1033,21 +1047,21 @@ class ConversationAgentService:
         conversation_id: str,
         owner_user_id: str,
         workspace_id: str,
-        runtime_run_id: str,
+        runtime_run_id: str | None,
         kind: str,
         round_no: int | None = None,
         event_id: str | None = None,
         command_id: str | None = None,
         checkpoint_id: str | None = None,
     ) -> ConversationAgentResponse:
-        self._require_runtime_run_link(
+        target = self._resolve_runtime_run_target(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
             runtime_run_id=runtime_run_id,
         )
         detail = self.tool_adapter.get_runtime_detail(
-            runtime_run_id=runtime_run_id,
+            runtime_run_id=target.runtime_run_id,
             kind=kind,
             round_no=round_no,
             event_id=event_id,
@@ -1060,7 +1074,7 @@ class ConversationAgentService:
             message_type="detail_answer",
             text=detail.summary,
             payload={"detail": detail.model_dump(mode="json")},
-            source_runtime_run_id=runtime_run_id,
+            source_runtime_run_id=target.runtime_run_id,
             created_at=self.now(),
             message_id=self.message_id_factory(),
         )
@@ -1081,15 +1095,15 @@ class ConversationAgentService:
         conversation_id: str,
         owner_user_id: str,
         workspace_id: str,
-        runtime_run_id: str,
+        runtime_run_id: str | None,
     ) -> RuntimeRunSnapshot:
-        self._require_runtime_run_link(
+        target = self._resolve_runtime_run_target(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
             runtime_run_id=runtime_run_id,
         )
-        return self.tool_adapter.get_workflow_snapshot(runtime_run_id=runtime_run_id)
+        return self.tool_adapter.get_workflow_snapshot(runtime_run_id=target.runtime_run_id)
 
     def compact_context(
         self,
@@ -1339,6 +1353,48 @@ class ConversationAgentService:
             raise ConversationAgentError("conversation_not_found")
         return conversation
 
+    def _resolve_runtime_run_target(
+        self,
+        *,
+        conversation_id: str,
+        owner_user_id: str,
+        workspace_id: str,
+        runtime_run_id: str | None,
+    ) -> RuntimeRunTarget:
+        conversation = self._require_conversation(
+            conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+        )
+        target_runtime_run_id = runtime_run_id or conversation.runtime_run_id
+        if target_runtime_run_id is None:
+            raise ConversationAgentError(
+                "agent_runtime_run_not_linked",
+                payload={"runtimeRunId": runtime_run_id},
+            )
+        links = self.store.list_runtime_links(conversation_id=conversation_id)
+        link = next((item for item in links if item.runtime_run_id == target_runtime_run_id), None)
+        if link is None:
+            raise ConversationAgentError(
+                "agent_runtime_run_not_linked",
+                payload={"runtimeRunId": target_runtime_run_id},
+            )
+        runtime_store = self.tool_adapter.runtime_store
+        if runtime_store is not None:
+            try:
+                run = runtime_store.get_run(target_runtime_run_id)
+            except RuntimeControlError as exc:
+                raise ConversationAgentError(
+                    "agent_runtime_run_not_linked",
+                    payload={"runtimeRunId": target_runtime_run_id},
+                ) from exc
+            if run.agent_conversation_id not in {None, conversation_id}:
+                raise ConversationAgentError(
+                    "agent_runtime_run_not_linked",
+                    payload={"runtimeRunId": target_runtime_run_id},
+                )
+        return RuntimeRunTarget(conversation=conversation, link=link)
+
     def _require_runtime_run_link(
         self,
         *,
@@ -1347,17 +1403,12 @@ class ConversationAgentService:
         workspace_id: str,
         runtime_run_id: str,
     ) -> ConversationRecord:
-        conversation = self._require_conversation(
-            conversation_id,
+        return self._resolve_runtime_run_target(
+            conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
-        )
-        if not self.store.runtime_run_is_linked(conversation_id=conversation_id, runtime_run_id=runtime_run_id):
-            raise ConversationAgentError(
-                "agent_runtime_run_not_linked",
-                payload={"runtimeRunId": runtime_run_id},
-            )
-        return conversation
+            runtime_run_id=runtime_run_id,
+        ).conversation
 
 
 def _conversation_status_from_run(run_status: str) -> str:

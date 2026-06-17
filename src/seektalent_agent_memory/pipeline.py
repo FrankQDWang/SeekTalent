@@ -217,9 +217,13 @@ class MemoryPipeline:
             f"## {item.rollout_slug or item.conversation_id}\n\n{item.rollout_summary}" for item in selected
         )
         workspace.write_artifact("raw_memories.md", raw_memories)
+        rollout_artifact_paths: set[str] = set()
         for item in selected:
             slug = item.rollout_slug or item.conversation_id
-            workspace.write_artifact(f"rollout_summaries/{slug}.md", item.rollout_summary)
+            rollout_path = f"rollout_summaries/{slug}.md"
+            rollout_artifact_paths.add(rollout_path)
+            workspace.write_artifact(rollout_path, item.rollout_summary)
+        workspace.prune_artifacts({"raw_memories.md", *rollout_artifact_paths})
         diff = workspace.render_workspace_diff(max_bytes=24_000)
         workspace.write_artifact("phase2_workspace_diff.md", diff)
         try:
@@ -249,13 +253,23 @@ class MemoryPipeline:
                 conversation_ids=[item.conversation_id for item in selected],
                 selected_at=self.now(),
             )
+            workspace.write_artifact("final_summary.md", summary.summary_text)
+            workspace.prune_artifacts(
+                {
+                    "final_summary.md",
+                    "phase2_workspace_diff.md",
+                    "raw_memories.md",
+                    *rollout_artifact_paths,
+                }
+            )
+            workspace.reset_baseline()
+            workspace.write_artifact("phase2_workspace_diff.md", diff)
             self.store.mark_phase2_job_succeeded(
                 owner_user_id=owner_user_id,
                 workspace_id=workspace_id,
                 ownership_token=claim.ownership_token,
                 now=self.now(),
             )
-            workspace.reset_baseline()
         except (RuntimeError, TypeError, ValueError) as exc:
             self.store.mark_phase2_job_failed(
                 owner_user_id=owner_user_id,

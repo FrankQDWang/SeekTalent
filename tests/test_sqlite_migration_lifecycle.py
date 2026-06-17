@@ -147,6 +147,29 @@ def test_runtime_control_future_version_is_refused(tmp_path: Path) -> None:
     assert runtime_exc.value.reason_code == "runtime_control_schema_unsupported"
 
 
+def test_conversation_and_memory_future_versions_are_refused(tmp_path: Path) -> None:
+    from seektalent_agent_memory.store import AGENT_MEMORY_SCHEMA_VERSION, MemoryStore
+    from seektalent_conversation_agent.errors import ConversationAgentError
+    from seektalent_conversation_agent.store import CONVERSATION_AGENT_SCHEMA_VERSION, ConversationStore
+
+    conversation_db = tmp_path / "conversation_agent.sqlite3"
+    memory_db = tmp_path / "agent_memory.sqlite3"
+    for db_path, version in [
+        (conversation_db, CONVERSATION_AGENT_SCHEMA_VERSION + 1),
+        (memory_db, AGENT_MEMORY_SCHEMA_VERSION + 1),
+    ]:
+        with sqlite3.connect(db_path) as conn:
+            conn.execute(f"PRAGMA user_version = {version}")
+
+    with pytest.raises(ConversationAgentError) as conversation_exc:
+        ConversationStore(conversation_db).initialize()
+    with pytest.raises(SQLiteMigrationError) as memory_exc:
+        MemoryStore(memory_db).initialize()
+
+    assert conversation_exc.value.reason_code == "conversation_agent_schema_unsupported"
+    assert memory_exc.value.reason_code == "sqlite_schema_unsupported"
+
+
 def test_workbench_schema_has_version_gate_and_backs_up_legacy_database(tmp_path: Path) -> None:
     from seektalent_ui.workbench_schema import WORKBENCH_SCHEMA_VERSION, initialize_workbench_schema
 

@@ -78,6 +78,26 @@ class TranscriptActivityItem(BaseModel):
     created_at: str
 
 
+class ConversationRuntimeRunLink(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversation_id: str
+    runtime_run_id: str
+    status: str
+    run_kind: str = "primary"
+    workbench_session_id: str | None = None
+    approved_requirement_revision_id: str
+    run_intent_id: str | None = None
+    link_reason: str = "start"
+    latest_event_seq: int = 0
+    linked_at: str
+    updated_at: str
+    active_at: str | None = None
+    superseded_at: str | None = None
+    completed_at: str | None = None
+    is_active: bool = False
+
+
 class ConversationReopenState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -97,6 +117,7 @@ class ConversationReopenState(BaseModel):
     pending_command_count: int = 0
     pending_requirement_review_count: int = 0
     pending_memory_review_count: int = 0
+    linked_runtime_runs: list[ConversationRuntimeRunLink] = Field(default_factory=list)
     compaction_summary_cursor: CompactionSummaryCursor = Field(default_factory=CompactionSummaryCursor)
     allowed_actions: list[str] = Field(default_factory=list)
     reason_code: str | None = None

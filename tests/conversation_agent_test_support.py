@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from seektalent.models import QueryTermCandidate, RequirementSheet
@@ -167,12 +168,51 @@ def build_service(tmp_path: Path) -> tuple[ConversationAgentService, Conversatio
     return service, conversation_store, runtime_store
 
 
+def execute_queued_workflow(
+    runtime_store: RuntimeControlStore,
+    *,
+    runtime_run_id: str = "runtime_run_1",
+) -> None:
+    executor = WorkflowRuntimeExecutor(
+        store=runtime_store,
+        runtime_factory=DeterministicWorkflowRuntime,
+        runtime_run_id_factory=lambda: runtime_run_id,
+        executor_id_factory=lambda: "runtime_executor_worker",
+        checkpoint_id_factory=lambda: "runtime_checkpoint_worker",
+        now=_worker_clock(),
+    )
+    claim = runtime_store.claim_next_runnable_run(
+        executor_id="runtime_executor_worker",
+        claimed_at="2026-06-09T00:01:00.000000Z",
+        lease_expires_at="2026-06-09T00:02:00.000000Z",
+        runtime_run_id=runtime_run_id,
+    )
+    assert claim is not None
+    asyncio.run(
+        executor.execute_claimed_run(
+            runtime_run_id=claim.runtime_run.runtime_run_id,
+            executor_id=claim.lease.executor_id,
+            attempt_no=claim.lease.attempt_no,
+        )
+    )
+
+
 def _clock():
     values = [0]
 
     def now() -> str:
         values[0] += 1
         return f"2026-06-09T00:00:{values[0]:02d}.000000Z"
+
+    return now
+
+
+def _worker_clock():
+    values = [10]
+
+    def now() -> str:
+        values[0] += 1
+        return f"2026-06-09T00:01:{values[0]:02d}.000000Z"
 
     return now
 
