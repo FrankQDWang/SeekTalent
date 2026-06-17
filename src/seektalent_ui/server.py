@@ -81,11 +81,6 @@ def create_app(
     app.state.workbench_graph_secret = secrets.token_urlsafe(32)
     app.state.workbench_store = WorkbenchStore(_workbench_db_path(app_settings))
     app.state.agent_workbench_stream_store = AgentWorkbenchStreamStore(_agent_workbench_stream_db_path(app_settings))
-    app.state.workbench_job_runner = WorkbenchJobRunner(
-        store=app.state.workbench_store,
-        settings=app_settings,
-        runtime_factory=runtime_factory,
-    )
     app.state.agent_memory_service = agent_routes.build_memory_service(settings=app_settings)
     app.state.agent_conversation_service = build_agent_service(
         settings=app_settings,
@@ -94,6 +89,12 @@ def create_app(
     app.state.agent_conversation_store = app.state.agent_conversation_service.store
     app.state.runtime_control_store = app.state.agent_conversation_service.tool_adapter.runtime_store
     app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
+    app.state.workbench_job_runner = WorkbenchJobRunner(
+        store=app.state.workbench_store,
+        settings=app_settings,
+        runtime_factory=runtime_factory,
+        runtime_control_store=app.state.runtime_control_store,
+    )
     app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
     app.state.workbench_store.record_security_audit_event(
