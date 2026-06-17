@@ -1,0 +1,31 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "governance-bootstrap-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Keep Python Quality required check names mergeable for docs-only runtime-control PRs.",
+  "rationale": "Graphite treats required Python Quality child jobs as failed when docs-only PRs skip them at the job level. This PR keeps the protected job names stable by moving scope skips into successful no-op steps while preserving full Python execution for Python and workflow changes.",
+  "touched_layers": [
+    "docs",
+    "governance",
+    "other"
+  ],
+  "red_files": [
+    ".github/workflows/python-quality.yml"
+  ],
+  "deletion_targets": [
+    "job-level required-check skips that block Graphite stack merge for docs-only PRs"
+  ],
+  "verification": [
+    "uv run pytest tests/test_pr_governance.py -q",
+    "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "python3 tools/ci_change_scope.py --event pull_request --changed-file docs/runtime-control-storage-contracts.md",
+    "python3 tools/ci_change_scope.py --event pull_request --changed-file .github/workflows/python-quality.yml",
+    "python3 - <<'PY'\nfrom pathlib import Path\nimport yaml\nwith Path('.github/workflows/python-quality.yml').open(encoding='utf-8') as fh:\n    yaml.safe_load(fh)\nprint('yaml ok')\nPY"
+  ],
+  "risks": [
+    "Required check names must stay stable while docs-only PRs avoid expensive Python jobs.",
+    "Workflow-file changes must still force full Python Quality execution.",
+    "No-op skip steps must not mask real Python, tests, or workflow changes."
+  ]
+}

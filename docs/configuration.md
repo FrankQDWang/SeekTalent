@@ -223,10 +223,11 @@ The checked-in three-case fixture is only a harness smoke test. Production promo
 | `SEEKTALENT_SEARCH_MAX_PAGES_PER_ROUND` | `3` | Per-round CTS page budget. |
 | `SEEKTALENT_SEARCH_MAX_ATTEMPTS_PER_ROUND` | `3` | Per-round CTS attempt budget. |
 | `SEEKTALENT_SEARCH_NO_PROGRESS_LIMIT` | `2` | Repeated no-progress threshold. |
-| `SEEKTALENT_RUNTIME_MODE` | `dev` | Resolves default output/cache roots for source checkouts versus packaged runs. |
+| `SEEKTALENT_RUNTIME_MODE` | `dev` | Resolves default SQLite, artifact, cache, backup, and maintenance behavior for source checkouts versus packaged runs. |
 | `SEEKTALENT_LLM_CACHE_DIR` | `.seektalent/cache` | Local cache root. Relative paths resolve from the workspace root. |
 | `SEEKTALENT_ENABLE_REFLECTION` | `true` | Enables reflection after each completed round. |
-| `SEEKTALENT_RUNS_DIR` | `runs` | Output root. Relative paths resolve from the workspace root. |
+| `SEEKTALENT_ARTIFACTS_DIR` | `artifacts` | Diagnostic/export artifact root. Relative paths resolve from the workspace root. |
+| `SEEKTALENT_RUNS_DIR` | `runs` | Legacy CLI compatibility root. The active product output root is `SEEKTALENT_ARTIFACTS_DIR`; the legacy root is rejected for active runtime output. |
 
 ## Local Product Data Roots
 
@@ -240,6 +241,32 @@ The local-first CLI and local workbench keep business data on the user's machine
 | `SEEKTALENT_LLM_CACHE_DIR` | Local cache root. Relative paths resolve from the workspace root. |
 
 Repository-local and known sync-folder roots are acceptable only as source-checkout development warnings. Packaged or production users should use a non-repository local data root such as the user's `.seektalent` directory.
+
+## Runtime Control Plane
+
+The local Workbench is DB-first. The conversation agent is the user-facing thread/turn layer, the workflow runtime is the execution engine, and `runtime_control.sqlite3` is the canonical workflow store for run identity, start idempotency, commands, public progress events, checkpoints, stage outputs, candidate truth, finalization revisions, executor leases, and projection marks.
+
+Workbench tables are recruiter-facing projections. They can be rebuilt or repaired from runtime-control source identities, and normal production paths do not read `runtime/public_events.jsonl` or artifact manifests to discover progress or completion. Old artifact imports are explicit debug/repair operations only.
+
+Runtime-control stores compact product state and indexes. Raw prompts, raw provider payloads, raw resume text, full traces, and large debug snapshots belong only in bounded developer diagnostics or `debug_full_local` artifacts. `prod` skips corpus raw-provider-payload capture; `dev` and `debug_full_local` may write those payloads under corpus diagnostics with retention cleanup.
+
+## Artifact Modes
+
+| Mode | Intended user | Behavior |
+| --- | --- | --- |
+| `prod` | Recruiters | Product state is SQLite-first. Full runtime traces and public-event JSONL mirrors are not required for Workbench progress or completion. |
+| `dev` | Developers and advanced users | Emits compact bounded diagnostics under `artifacts/` while keeping runtime-control as the source of truth. |
+| `debug_full_local` | Explicit troubleshooting | Emits full local diagnostics with short retention. Do not use it as normal production behavior. |
+
+Removed legacy mode names such as `dev_full_local`, `prod_compact_local`, and `off_except_db` fail fast instead of being silently normalized.
+
+## Maintenance And Operator Health
+
+Whole-product local storage lifecycle covers SQLite DB files, WAL/SHM siblings, artifacts, caches, backups, memory workspace files, provider/session state, and corpus outputs. Cleanup and retention support dry-run reporting; retention is age/size based and is separate from privacy erasure.
+
+Privacy erasure is subject-scoped. Candidate erasure de-identifies runtime-control candidate truth and Workbench product rows while preserving lineage rows; backup beyond-use handling and support-bundle safeguards are operator concerns, not ordinary retention cleanup.
+
+DB-group backup uses SQLite online backup copies plus a group manifest for the product stores: Workbench, runtime-control, conversation, Workbench stream, agent memory, Liepin connector, and corpus. Operator health reports disk preflight, schema version posture, integrity status, DB/WAL/SHM sizes, missing stores, and backup/projection/cleanup state.
 
 ## Privacy Defaults
 
