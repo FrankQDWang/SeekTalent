@@ -601,7 +601,10 @@ def build_term_surface_audit(
 
 
 def collect_llm_schema_pressure(run_dir: Path) -> list[dict[str, object]]:
-    resolver = ArtifactResolver.for_root(run_dir)
+    try:
+        resolver = ArtifactResolver.for_root(run_dir)
+    except ValueError:
+        return []
     pressure: list[dict[str, object]] = []
     pressure.append(_llm_schema_pressure_item(json.loads(resolver.resolve("runtime.requirements_call").read_text(encoding="utf-8"))))
     repair_requirements_call = resolver.resolve_optional("runtime.repair_requirements_call")

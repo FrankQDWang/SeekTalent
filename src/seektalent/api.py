@@ -43,7 +43,7 @@ class MatchRunResult:
 
 
 class _InjectedSessionRunTracer(BaseRunTracer):
-    def __init__(self, artifacts_root: Path, *, output_mode: object = "dev_full_local") -> None:
+    def __init__(self, artifacts_root: Path, *, output_mode: object = "dev") -> None:
         session = getattr(_TRACER_OVERRIDE, "artifact_session", None)
         if session is None:
             super().__init__(artifacts_root, output_mode=output_mode)

@@ -1,0 +1,35 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Wire runtime-control execution, retention, and artifact policy.",
+  "rationale": "This slice connects the existing workflow runtime adapter to durable runtime-control events, executor leases, resume handling, and artifact retention. It intentionally touches the runtime orchestrator boundary plus runtime-control package code so the runtime can emit DB-first progress while preserving the orchestrator as the concrete execution adapter.",
+  "touched_layers": [
+    "other",
+    "runtime",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent/runtime/runtime_diagnostics.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/runtime/orchestrator.py"
+  ],
+  "line_count_rationale": "The orchestrator is a pre-existing oversized runtime adapter; this PR adds only the small runtime-control event sink and checkpoint integration needed for DB-first execution, with focused runtime-control tests and full pytest verification.",
+  "deletion_targets": [
+    "runtime progress callbacks that are not persisted as runtime-control events",
+    "executor resume paths that lose canonical checkpoint failure semantics",
+    "artifact output modes that cannot distinguish prod-minimal from dev/debug retention"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "risks": [
+    "WorkflowRuntime must remain the only runtime-control module allowed to import the concrete orchestrator adapter.",
+    "Artifact policy changes must not expose provider payloads, cookies, auth headers, browser storage, or raw resume text outside the configured visibility policy.",
+    "Retention cleanup must not delete active runtime-control audit state or executor leases."
+  ]
+}

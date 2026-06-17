@@ -877,6 +877,11 @@ class WorkflowRuntime:
                 build_term_surface_audit=self._build_term_surface_audit,
                 render_run_finished_summary=self._render_run_finished_summary,
             )
+            self._refresh_runtime_candidate_checkpoint(
+                runtime_checkpoint_callback=runtime_checkpoint_callback,
+                tracer=tracer,
+                run_state=run_state,
+            )
             self._emit_runtime_public_event(
                 tracer=tracer,
                 progress_callback=progress_callback,
@@ -2441,6 +2446,8 @@ class WorkflowRuntime:
         corpus_session = self._active_corpus_session
         if corpus_session is None:
             return
+        if not tracer.artifact_policy.writes_local_debug_artifacts:
+            return
         try:
             record_corpus_provider_results(
                 session=corpus_session,
@@ -3492,7 +3499,7 @@ class WorkflowRuntime:
         event: RuntimePublicEvent,
     ) -> None:
         payload = dict(event)
-        tracer.append_jsonl("runtime/public_events.jsonl", payload)
+        tracer.append_runtime_public_event_mirror(payload)
         self._emit_progress(
             progress_callback,
             "runtime_public_event",

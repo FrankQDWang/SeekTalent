@@ -52,14 +52,16 @@ def test_workflow_adapter_persists_run_and_runtime_callbacks(tmp_path: Path) -> 
 
     events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=20).events
     assert [event.event_type for event in events] == [
+        "runtime_run_queued",
+        "runtime_worker_claimed",
         "runtime_executor_starting",
         "runtime_executor_started",
         "runtime_run_started",
         "runtime_checkpoint_written",
         "runtime_run_completed",
     ]
-    assert events[1].payload["workflowRuntimeRunId"] == "workflow_run_1"
-    assert events[3].payload["checkpointId"] == "rtcheckpoint_1"
+    assert events[3].payload["workflowRuntimeRunId"] == "workflow_run_1"
+    assert events[5].payload["checkpointId"] == "rtcheckpoint_1"
     assert store.get_latest_checkpoint(runtime_run_id="runtime_run_1").run_state == {"round": 1}
 
 
@@ -97,6 +99,8 @@ def test_workflow_adapter_records_failed_event_before_reraising_runtime_error(tm
     assert store.get_run("runtime_run_1").status == "failed"
     events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=20).events
     assert [event.event_type for event in events] == [
+        "runtime_run_queued",
+        "runtime_worker_claimed",
         "runtime_executor_starting",
         "runtime_executor_start_failed",
     ]
@@ -142,6 +146,8 @@ def test_workflow_adapter_records_runtime_run_failed_after_start_ack(tmp_path: P
     assert run.stop_reason_code == "runtime_run_failed"
     events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=20).events
     assert [event.event_type for event in events] == [
+        "runtime_run_queued",
+        "runtime_worker_claimed",
         "runtime_executor_starting",
         "runtime_executor_started",
         "runtime_run_failed",
