@@ -20,7 +20,7 @@ jobs:
       python_quality: ${{ steps.scope.outputs.python_quality }}
       reason: ${{ steps.scope.outputs.reason }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - name: Resolve PR base
@@ -48,7 +48,7 @@ jobs:
       - name: Skip Python architecture
         if: needs.python-scope.outputs.python_quality != 'true'
         run: 'echo "Python architecture skipped for change scope: ${{ needs.python-scope.outputs.reason }}"'
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         if: needs.python-scope.outputs.python_quality == 'true'
       - uses: actions/setup-python@v6
         if: needs.python-scope.outputs.python_quality == 'true'
@@ -80,7 +80,7 @@ jobs:
       - name: Skip Ruff
         if: needs.python-scope.outputs.python_quality != 'true'
         run: 'echo "Ruff skipped for change scope: ${{ needs.python-scope.outputs.reason }}"'
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         if: needs.python-scope.outputs.python_quality == 'true'
       - uses: actions/setup-python@v6
         if: needs.python-scope.outputs.python_quality == 'true'
@@ -109,7 +109,7 @@ jobs:
       - name: Skip Ty
         if: needs.python-scope.outputs.python_quality != 'true'
         run: 'echo "Ty skipped for change scope: ${{ needs.python-scope.outputs.reason }}"'
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         if: needs.python-scope.outputs.python_quality == 'true'
       - uses: actions/setup-python@v6
         if: needs.python-scope.outputs.python_quality == 'true'
@@ -138,7 +138,7 @@ jobs:
       - name: Skip Pytest
         if: needs.python-scope.outputs.python_quality != 'true'
         run: 'echo "Pytest skipped for change scope: ${{ needs.python-scope.outputs.reason }}"'
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         if: needs.python-scope.outputs.python_quality == 'true'
       - uses: actions/setup-python@v6
         if: needs.python-scope.outputs.python_quality == 'true'
@@ -167,7 +167,7 @@ jobs:
       - name: Skip Workbench schema
         if: needs.python-scope.outputs.python_quality != 'true'
         run: 'echo "Workbench schema skipped for change scope: ${{ needs.python-scope.outputs.reason }}"'
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         if: needs.python-scope.outputs.python_quality == 'true'
       - uses: actions/setup-python@v6
         if: needs.python-scope.outputs.python_quality == 'true'
