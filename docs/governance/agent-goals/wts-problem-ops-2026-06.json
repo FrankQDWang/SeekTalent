@@ -1,0 +1,45 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add Workbench BFF Problem Details, operations logging hooks, and product payload budgets for the WTS recruiter control-plane stack.",
+  "rationale": "Task 0D keeps raw conversation-agent APIs on their existing error contract while giving /api/agent/workbench/* a stable BFF-facing Problem Details envelope, correlation IDs, validation regions, replay-gap observability, and capped Workbench snapshots.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "frontend",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_ui/problem_details.py",
+    "src/seektalent_ui/workbench_observability.py",
+    "src/seektalent_ui/agent_workbench_routes.py",
+    "src/seektalent_ui/agent_workbench_response.py",
+    "src/seektalent_ui/server.py",
+    "apps/web-react/src/lib/api/client.ts"
+  ],
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+    "uv run pytest tests/test_agent_workbench_problem_details.py tests/test_agent_workbench_contract.py -q",
+    "uv run pytest tests/test_agent_workbench_stream_consistency.py -q",
+    "uv run ruff check src/seektalent_ui tests/test_agent_workbench_problem_details.py tests/test_agent_workbench_contract.py tests/test_agent_workbench_stream_consistency.py",
+    "pnpm --dir apps/web-react test",
+    "uv run python tools/check_pr_governance.py --base codex/wts-03-stream-snapshots",
+    "git diff --check codex/wts-03-stream-snapshots...HEAD"
+  ],
+  "deletion_targets": [
+    "Workbench BFF errors that only expose the raw conversation-agent error schema",
+    "Workbench validation errors without correlation IDs or public regions",
+    "uncapped Workbench snapshot arrays that can exceed the product payload budget"
+  ],
+  "risks": [
+    "Raw /api/agent/conversations routes must keep the existing agent_http_error contract.",
+    "Payload caps must preserve recent transcript data and must not fabricate omitted items.",
+    "Problem Details must avoid leaking raw validation inputs or provider payloads."
+  ]
+}
