@@ -26,6 +26,7 @@ from seektalent_conversation_agent.models import (
 )
 from seektalent_runtime_control.models import RuntimeControlEvent, RuntimeControlEventPage, RuntimeRunRecord
 from seektalent_ui.agent_workbench_models import (
+    AgentWorkbenchCandidateSummaryResponse,
     AgentWorkbenchDetailApprovalResponse,
     AgentWorkbenchMessageStreamPayloadResponse,
     AgentWorkbenchItemStreamPayloadResponse,
@@ -173,6 +174,82 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
     assert "LangChain" in response.thinkingProcess.rounds[0].cards[2].text
     assert "rawPayload" not in serialized
     assert "providerResponse" not in serialized
+
+
+def test_workbench_view_enforces_product_payload_budgets() -> None:
+    thread = _thread_view()
+    thread = thread.model_copy(
+        update={
+            "messages": [
+                thread.messages[index % len(thread.messages)].model_copy(
+                    update={
+                        "message_id": f"msg_budget_{index}",
+                        "message_seq": index + 1,
+                        "text": f"message {index}",
+                    }
+                )
+                for index in range(140)
+            ],
+            "activity_items": [
+                thread.activity_items[0].model_copy(
+                    update={
+                        "activity_id": f"activity_budget_{index}",
+                        "activity_seq": index + 1,
+                        "activity_key": f"runtime_1:round:{index}",
+                        "title": f"第 {index} 轮检索",
+                        "source_event_seq_start": index + 1,
+                        "source_event_seq_latest": index + 1,
+                        "source_event_id_latest": f"event_budget_{index}",
+                        "payload": {
+                            **thread.activity_items[0].payload,
+                            "round_no": index + 1,
+                            "keyword_query": f"query {index}",
+                        },
+                    }
+                )
+                for index in range(90)
+            ],
+        }
+    )
+    projection_input = AgentWorkbenchProjectionInput(
+        conversation_reopen_state=thread.conversation_reopen_state.model_copy(
+            update={
+                "latest_message_seq": 140,
+                "latest_activity_seq": 90,
+                "latest_rendered_runtime_event_seq": 90,
+            }
+        ),
+        messages=thread.messages,
+        activity_items=thread.activity_items,
+        tool_call_records=[],
+        context_compactions=[],
+        runtime_events=[],
+        source_connections=[],
+        candidates=[
+            AgentWorkbenchCandidateSummaryResponse(
+                candidateId=f"candidate_{index}",
+                displayName=f"Candidate {index}",
+                headline="Backend Engineer",
+                matchSummary="safe summary",
+                sourceKind="cts",
+                status="new",
+            )
+            for index in range(140)
+        ],
+        detail_approvals=[],
+        review_artifacts=[],
+    )
+
+    response = project_agent_workbench_view(projection_input)
+
+    assert len(response.messages) <= 100
+    assert len(response.activities) <= 100
+    assert sum(len(group.events) for group in response.transcriptGroups) <= 200
+    assert len(response.strategyGraph.nodes) <= 80
+    assert len(response.strategyGraph.edges) <= 120
+    assert len(response.thinkingProcess.rounds) <= 50
+    assert len(response.candidates) <= 10
+    assert len(response.model_dump_json()) <= 750_000
 
 
 def test_detail_approval_status_schema_uses_public_design_vocabulary() -> None:
@@ -573,6 +650,31 @@ def test_projection_input_aggregator_loads_named_store_boundaries() -> None:
     assert projection_input.final_summary.summaryId == "summary_1"
 
 
+def test_projection_input_aggregator_reads_recent_runtime_event_window() -> None:
+    thread = _thread_view()
+    runtime_store = _LargeRuntimeStore()
+
+    projection_input = build_agent_workbench_projection_input(
+        service=_FakeAgentService(thread),
+        conversation_store=_FakeConversationStore(),
+        runtime_store=runtime_store,
+        workbench_store=_FakeWorkbenchStore(),
+        conversation_id="agent_conv_1",
+        user=WorkbenchUser(
+            user_id="user_admin_example_com",
+            email="admin@example.com",
+            display_name="Admin User",
+            role="admin",
+            workspace_id="default",
+        ),
+    )
+
+    assert runtime_store.calls[0] == (150, 100)
+    assert len(projection_input.runtime_events) == 100
+    assert projection_input.runtime_events[0].event_seq == 151
+    assert projection_input.runtime_events[-1].event_seq == 250
+
+
 def test_transcript_groups_split_on_user_turns_and_context_compactions() -> None:
     first = _thread_view().model_copy(deep=True)
     second_user = TranscriptMessage(
@@ -862,10 +964,10 @@ def test_agent_workbench_confirm_route_rejects_same_key_changed_expected_revisio
         },
     )
 
-    assert conflict.status_code == 400, conflict.text
+    assert conflict.status_code == 409, conflict.text
     problem = conflict.json()
-    detail = problem.get("detail", problem)
-    assert detail["reasonCode"] == "idempotency_key_conflict"
+    assert problem["reasonCode"] == "idempotency_key_conflict"
+    assert isinstance(problem["detail"], str)
 
 
 def test_agent_workbench_conversation_list_route_returns_typed_summaries(tmp_path: Path) -> None:
@@ -1192,6 +1294,51 @@ class _FakeRuntimeStore:
     def get_final_summary(self, *, summary_id: str):
         assert summary_id == "summary_1"
         return {"summary_id": "summary_1", "text": "Final shortlist ready.", "raw_body": "must not leak"}
+
+
+class _LargeRuntimeStore(_FakeRuntimeStore):
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int]] = []
+
+    def get_run(self, runtime_run_id: str) -> RuntimeRunRecord:
+        assert runtime_run_id == "runtime_1"
+        return RuntimeRunRecord(
+            runtime_run_id="runtime_1",
+            agent_conversation_id="agent_conv_1",
+            workbench_session_id="session_1",
+            approved_requirement_revision_id="approved_1",
+            status="running",
+            current_stage="round",
+            current_round=250,
+            latest_event_seq=250,
+            source_ids=["liepin"],
+            created_at=_now(),
+            updated_at=_now(),
+        )
+
+    def list_events(self, *, runtime_run_id: str, after_seq: int, limit: int) -> RuntimeControlEventPage:
+        assert runtime_run_id == "runtime_1"
+        self.calls.append((after_seq, limit))
+        if after_seq >= 250:
+            return RuntimeControlEventPage(events=[], next_cursor=after_seq)
+        events = [
+            RuntimeControlEvent(
+                event_id=f"runtime_event_{event_seq}",
+                runtime_run_id="runtime_1",
+                event_seq=event_seq,
+                event_type="runtime_round",
+                stage="round",
+                round_no=event_seq,
+                source_id="liepin",
+                status="running",
+                summary=f"Round {event_seq}",
+                payload={"query_terms": ["AI agent"]},
+                payload_size_bytes=0,
+                created_at=_now(),
+            )
+            for event_seq in range(151, 251)
+        ]
+        return RuntimeControlEventPage(events=events, next_cursor=250)
 
 
 class _FakeWorkbenchStore:

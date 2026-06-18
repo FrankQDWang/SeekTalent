@@ -50,8 +50,14 @@ from seektalent_ui.network_guard import (
     render_startup_diagnostics,
     require_allowed_bind,
 )
+from seektalent_ui.problem_details import (
+    no_store_json_response,
+    problem_from_reason,
+    regions_from_validation_errors,
+)
 from seektalent_ui.liepin_security import reject_unsafe_liepin_control_plane
 from seektalent_ui.resources import frontend_available, package_frontend_dir
+from seektalent_ui.workbench_observability import correlation_id_from_request
 from seektalent_ui.workbench_store import WorkbenchStore
 
 
@@ -121,7 +127,20 @@ def create_app(
         if request.method == "OPTIONS":
             response = Response(status_code=204)
         elif not app_settings.workbench_enabled and request.url.path.startswith(("/api/workbench", "/api/agent")):
-            response = JSONResponse(status_code=503, content={"detail": "Workbench is disabled by feature gate."})
+            if request.url.path.startswith("/api/agent/workbench"):
+                problem = problem_from_reason(
+                    reason_code="workbench_feature_gate_disabled",
+                    status=503,
+                    instance=request.url.path,
+                    correlation_id=correlation_id_from_request(request),
+                    detail="Workbench is disabled by feature gate.",
+                )
+                response = no_store_json_response(
+                    status_code=503,
+                    content=problem.model_dump(mode="json", exclude_none=True),
+                )
+            else:
+                response = JSONResponse(status_code=503, content={"detail": "Workbench is disabled by feature gate."})
         else:
             response = await call_next(request)
         if origin is not None:
@@ -139,6 +158,19 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(_request: Request, exc: RequestValidationError) -> JSONResponse:
+        if _request.url.path.startswith("/api/agent/workbench"):
+            public_errors = validation_errors.public_validation_errors(exc)
+            problem = problem_from_reason(
+                reason_code="agent_request_invalid",
+                status=400,
+                instance=_request.url.path,
+                correlation_id=correlation_id_from_request(_request),
+                regions=regions_from_validation_errors(public_errors),
+            )
+            return no_store_json_response(
+                status_code=400,
+                content=problem.model_dump(mode="json", exclude_none=True),
+            )
         if _request.url.path.startswith("/api/agent"):
             schema_version = (
                 agent_routes.AGENT_MEMORY_SCHEMA_VERSION
@@ -159,6 +191,8 @@ def create_app(
     async def http_exception_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
         if _request.url.path.startswith("/api/agent") and isinstance(exc.detail, dict):
             content = dict(exc.detail)
+            if _request.url.path.startswith("/api/agent/workbench") and "type" in content:
+                return no_store_json_response(status_code=exc.status_code, content=content)
             return JSONResponse(status_code=exc.status_code, content=content)
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     def require_liepin_scope(

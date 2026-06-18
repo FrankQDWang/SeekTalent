@@ -5,7 +5,6 @@ import json
 import logging
 from collections.abc import AsyncIterator
 from typing import Annotated, cast
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,7 +12,6 @@ from sse_starlette import EventSourceResponse
 
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_ui.agent_route_deps import (
-    agent_http_error,
     get_agent_conversation_store,
     get_agent_service,
     get_agent_workbench_stream_store,
@@ -30,12 +28,21 @@ from seektalent_ui.agent_workbench_response import project_agent_workbench_view
 from seektalent_ui.agent_workbench_stream import encode_sse_event, replay_stream_envelopes
 from seektalent_ui.agent_workbench_stream_projection import append_projected_stream_events
 from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
+from seektalent_ui.problem_details import problem_http_error_from_conversation_error, problem_http_error_from_reason
+from seektalent_ui.workbench_observability import (
+    correlation_id_from_request,
+    record_duplicate_run_prevented,
+    record_idempotency_conflict,
+    record_sse_replay_gap,
+    record_workbench_audit_event,
+)
 from seektalent_ui.workbench_local_actor import get_workbench_store, local_workbench_read_user, local_workbench_write_user
 from seektalent_ui.workbench_store import WorkbenchUser
 
 
 router = APIRouter(prefix="/api/agent/workbench")
 logger = logging.getLogger(__name__)
+# Raw conversation routes keep agent_http_error; Workbench routes return Problem Details.
 
 
 class AgentWorkbenchRequirementConfirmRequest(BaseModel):
@@ -100,9 +107,9 @@ def confirm_agent_workbench_requirements(
             draft_revision_id=payload.draftRevisionId,
             expected_draft_revision_id=payload.expectedDraftRevisionId,
             idempotency_key=payload.idempotencyKey,
-        )
+    )
     except ConversationAgentError as exc:
-        raise agent_http_error(exc) from exc
+        raise _agent_workbench_error(exc, request) from exc
     return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
 
 
@@ -182,7 +189,7 @@ def _build_agent_workbench_view(
             user=user,
         )
     except ConversationAgentError as exc:
-        raise agent_http_error(exc) from exc
+        raise _agent_workbench_error(exc, request) from exc
     return project_agent_workbench_view(projection_input)
 
 
@@ -195,9 +202,15 @@ def stream_agent_workbench_events(
     last_event_id: Annotated[str | None, Header(alias="Last-Event-ID")] = None,
 ) -> EventSourceResponse:
     if any(_is_forbidden_query_param(name) for name in request.query_params):
-        raise HTTPException(status_code=400, detail="Auth and token query parameters are not accepted.")
+        raise problem_http_error_from_reason(
+            reason_code="agent_request_invalid",
+            status=400,
+            request=request,
+            correlation_id=correlation_id_from_request(request),
+            detail="Auth and token query parameters are not accepted.",
+        )
     _ensure_conversation_access(request=request, conversation_id=conversation_id, user=user)
-    sequence = _stream_start_sequence(after_seq=after_seq, last_event_id=last_event_id)
+    sequence = _stream_start_sequence(request=request, after_seq=after_seq, last_event_id=last_event_id)
     stream_store = get_agent_workbench_stream_store(request)
     return EventSourceResponse(
         _event_generator(
@@ -220,7 +233,7 @@ def _ensure_conversation_access(*, request: Request, conversation_id: str, user:
             workspace_id=user.workspace_id,
         )
     except ConversationAgentError as exc:
-        raise agent_http_error(exc) from exc
+        raise _agent_workbench_error(exc, request) from exc
 
 
 def _append_current_projection_events(
@@ -242,12 +255,13 @@ async def _event_generator(
     conversation_id: str,
     after_seq: int,
 ) -> AsyncIterator[dict[str, str]]:
-    correlation_id = _correlation_id(request)
+    correlation_id = correlation_id_from_request(request)
     if _replay_cursor_is_stale(
         stream_store=stream_store,
         conversation_id=conversation_id,
         after_seq=after_seq,
     ):
+        record_sse_replay_gap(correlation_id=correlation_id)
         yield _terminal_error_event(
             conversation_id=conversation_id,
             reason_code="stream_replay_gap",
@@ -260,6 +274,7 @@ async def _event_generator(
         emitted = False
         for event in replay_stream_envelopes(stream_store, conversation_id=conversation_id, after_seq=sequence):
             if event.kind == "stream.gap":
+                record_sse_replay_gap(correlation_id=correlation_id)
                 yield _terminal_error_event(
                     conversation_id=conversation_id,
                     reason_code="stream_replay_gap",
@@ -280,6 +295,11 @@ async def _event_generator(
                 conversation_id=conversation_id,
             )
         except HTTPException as exc:
+            record_workbench_audit_event(
+                "projection_unavailable",
+                reason_code="projection_unavailable",
+                correlation_id=correlation_id,
+            )
             logger.warning(
                 "Agent workbench SSE projection catch-up failed.",
                 extra={"conversation_ref": "redacted", "status_code": exc.status_code},
@@ -293,6 +313,7 @@ async def _event_generator(
             return
         for event in replay_stream_envelopes(stream_store, conversation_id=conversation_id, after_seq=sequence):
             if event.kind == "stream.gap":
+                record_sse_replay_gap(correlation_id=correlation_id)
                 yield _terminal_error_event(
                     conversation_id=conversation_id,
                     reason_code="stream_replay_gap",
@@ -308,20 +329,26 @@ async def _event_generator(
         await asyncio.sleep(0.25)
 
 
-def _stream_start_sequence(*, after_seq: int | None, last_event_id: str | None) -> int:
-    header_sequence = _sequence_from_header(last_event_id)
+def _stream_start_sequence(*, request: Request, after_seq: int | None, last_event_id: str | None) -> int:
+    header_sequence = _sequence_from_header(request=request, last_event_id=last_event_id)
     if after_seq is not None:
         return max(after_seq, header_sequence)
     return header_sequence
 
 
-def _sequence_from_header(last_event_id: str | None) -> int:
+def _sequence_from_header(*, request: Request, last_event_id: str | None) -> int:
     if last_event_id is None:
         return 0
     try:
         return max(0, int(last_event_id))
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Last-Event-ID must be an integer.") from exc
+        raise problem_http_error_from_reason(
+            reason_code="agent_request_invalid",
+            status=400,
+            request=request,
+            correlation_id=correlation_id_from_request(request),
+            detail="Last-Event-ID must be an integer.",
+        ) from exc
 
 
 def _is_forbidden_query_param(name: str) -> bool:
@@ -355,22 +382,27 @@ def _replay_cursor_is_stale(
 
 
 def _stream_replay_gap_error(request: Request) -> HTTPException:
-    return HTTPException(
-        status_code=410,
-        detail={
-            "reasonCode": "stream_replay_gap",
-            "correlationId": _correlation_id(request),
-        },
+    correlation_id = correlation_id_from_request(request)
+    record_sse_replay_gap(correlation_id=correlation_id)
+    return problem_http_error_from_reason(
+        reason_code="stream_replay_gap",
+        status=410,
+        request=request,
+        correlation_id=correlation_id,
     )
 
 
-def _correlation_id(request: object) -> str:
-    headers = getattr(request, "headers", None)
-    if headers is not None:
-        request_id = headers.get("x-correlation-id") or headers.get("x-request-id")
-        if request_id:
-            return request_id
-    return f"awb_{uuid4().hex}"
+def _agent_workbench_error(exc: ConversationAgentError, request: Request) -> HTTPException:
+    correlation_id = correlation_id_from_request(request)
+    if exc.reason_code == "idempotency_key_conflict":
+        record_idempotency_conflict(correlation_id=correlation_id)
+    elif exc.reason_code == "agent_request_in_progress":
+        record_duplicate_run_prevented(correlation_id=correlation_id)
+    return problem_http_error_from_conversation_error(
+        exc=exc,
+        request=request,
+        correlation_id=correlation_id,
+    )
 
 
 def _terminal_error_event(
