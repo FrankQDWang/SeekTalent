@@ -32,7 +32,7 @@ from seektalent_conversation_agent.models import (
 )
 
 
-CONVERSATION_AGENT_SCHEMA_VERSION = 5
+CONVERSATION_AGENT_SCHEMA_VERSION = 6
 
 _ACTIVE_ARCHIVE_BLOCKING_STATUSES = {"starting", "running"}
 _RUNTIME_RUN_KINDS = {"primary", "rerun", "fork"}
@@ -72,7 +72,7 @@ class ConversationStore:
                     conn.execute(f"PRAGMA user_version = {CONVERSATION_AGENT_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="conversation-agent", foreign_keys=True)
                 return
-            if version in {2, 3, 4}:
+            if version in {2, 3, 4, 5}:
                 with conn:
                     run_ordered_migrations(
                         conn,
@@ -82,6 +82,7 @@ class ConversationStore:
                             2: SQLiteMigrationStep(2, 3, _migrate_v2_to_v3),
                             3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
                             4: SQLiteMigrationStep(4, 5, _migrate_v4_to_v5),
+                            5: SQLiteMigrationStep(5, 6, _migrate_v5_to_v6),
                         },
                         store_name="conversation-agent",
                     )
@@ -1320,6 +1321,10 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    migrate_wts_control_plane(conn)
+
+
+def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     migrate_wts_control_plane(conn)
 
 

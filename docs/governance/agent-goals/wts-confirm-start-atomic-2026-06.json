@@ -1,0 +1,49 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Make WTS requirement confirmation create a durable workflow-start intent and outbox item.",
+  "rationale": "Task 0B intentionally crosses the conversation-agent control plane and Workbench BFF route boundary so recruiter confirmation can atomically queue workflow start through WorkflowStartIntent instead of relying on a separate frontend workflow/start call.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/control_plane_schema.py",
+    "src/seektalent_conversation_agent/models.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/source_selection.py",
+    "src/seektalent_conversation_agent/store.py",
+    "src/seektalent_conversation_agent/tools.py",
+    "src/seektalent_conversation_agent/workflow_start_intents.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "Task 0B review blocker requires runtime approved-requirement save to recover same-key uniqueness conflicts without leaking sqlite3.IntegrityError. The existing store is already above the repository redline; this patch adds only the idempotency conflict branch needed for the approved-revision recovery contract.",
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run pytest tests/test_wts_control_plane.py -q",
+    "uv run pytest tests/test_agent_workbench_contract.py tests/test_conversation_agent_routes.py -q",
+    "uv run pytest tests/test_conversation_agent_service.py tests/test_agent_final_summary.py tests/test_runtime_control_store.py tests/test_runtime_control_requirements.py tests/test_workflow_runtime_control_integration.py -q",
+    "uv run ruff check src/seektalent_conversation_agent src/seektalent_runtime_control src/seektalent_ui tests/test_wts_control_plane.py tests/test_agent_workbench_contract.py tests/test_conversation_agent_service.py tests/test_runtime_control_requirements.py",
+    "uv run python tools/check_pr_governance.py --base codex/wts-01-control-plane",
+    "uv run python tools/check_source_boundaries.py",
+    "git diff --check codex/wts-01-control-plane...HEAD"
+  ],
+  "deletion_targets": [
+    "normal recruiter confirm flow depending on a separate frontend workflow/start call",
+    "runtime start parameters recovered from frontend payloads instead of canonical job request revisions",
+    "duplicate workflow starts for repeated confirmation attempts"
+  ],
+  "risks": [
+    "The confirm path must not create duplicate workflow-start intents or outbox rows under retries.",
+    "The pre-approval confirm request hash must catch changed expected/base and job-request body identity during crash recovery.",
+    "The outbox worker must pass the approved requirement object to the runtime executor, not an approved revision ID string.",
+    "Source selection must remain behind an explicit resolver so recruiter source kinds are validated before runtime enqueue."
+  ]
+}

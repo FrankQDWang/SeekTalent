@@ -110,6 +110,7 @@ class ConversationReopenState(BaseModel):
     latest_rendered_runtime_event_seq: int
     runtime_run_id: str | None = None
     workbench_session_id: str | None = None
+    workflow_start_intent_id: str | None = None
     latest_draft_revision_id: str | None = None
     approved_requirement_revision_id: str | None = None
     final_summary_id: str | None = None

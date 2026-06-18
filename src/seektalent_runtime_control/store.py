@@ -612,30 +612,41 @@ class RuntimeControlStore:
         *,
         idempotency_key: str,
     ) -> ApprovedRequirementRevision:
-        with self._connect() as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO runtime_approved_requirements (
-                    approved_requirement_revision_id, draft_revision_id,
-                    base_approved_requirement_revision_id, source_amendment_id,
-                    agent_conversation_id, requirement_sheet_json,
-                    selected_item_ids_json, deselected_item_ids_json, idempotency_key, created_at
+        try:
+            with self._connect() as conn, conn:
+                conn.execute(
+                    """
+                    INSERT INTO runtime_approved_requirements (
+                        approved_requirement_revision_id, draft_revision_id,
+                        base_approved_requirement_revision_id, source_amendment_id,
+                        agent_conversation_id, requirement_sheet_json,
+                        selected_item_ids_json, deselected_item_ids_json, idempotency_key, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        approved.approved_requirement_revision_id,
+                        approved.draft_revision_id,
+                        approved.base_approved_requirement_revision_id,
+                        approved.source_amendment_id,
+                        approved.agent_conversation_id,
+                        _json(approved.requirement_sheet.model_dump(mode="json")),
+                        _json(approved.selected_item_ids),
+                        _json(approved.deselected_item_ids),
+                        idempotency_key,
+                        approved.created_at,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    approved.approved_requirement_revision_id,
-                    approved.draft_revision_id,
-                    approved.base_approved_requirement_revision_id,
-                    approved.source_amendment_id,
-                    approved.agent_conversation_id,
-                    _json(approved.requirement_sheet.model_dump(mode="json")),
-                    _json(approved.selected_item_ids),
-                    _json(approved.deselected_item_ids),
-                    idempotency_key,
-                    approved.created_at,
-                ),
+        except sqlite3.IntegrityError as exc:
+            existing = self.get_approved_requirement_by_idempotency(
+                conversation_id=approved.agent_conversation_id,
+                idempotency_key=idempotency_key,
             )
+            if existing is not None:
+                if existing.draft_revision_id != approved.draft_revision_id:
+                    raise RuntimeControlError("idempotency_key_conflict") from exc
+                return existing
+            raise
         return approved
 
     def get_approved_requirement_by_idempotency(
