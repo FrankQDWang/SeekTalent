@@ -1683,8 +1683,15 @@ export interface components {
       kind: "empty" | "job_request" | "requirement_review";
       /** Jobtitle */
       jobTitle?: string | null;
+      /** Notes */
+      notes?: string | null;
+      /** Sourcekinds */
+      sourceKinds?: ("cts" | "liepin")[];
       /** Requirementdraftid */
       requirementDraftId?: string | null;
+      requirementDraftSnapshot?:
+        | components["schemas"]["AgentWorkbenchRequirementDraftResponse"]
+        | null;
     };
     /** AgentWorkbenchMessageResponse */
     AgentWorkbenchMessageResponse: {

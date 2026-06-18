@@ -93,6 +93,15 @@ def record_workbench_payload_bytes(value: int, *, correlation_id: str | None = N
     record_workbench_metric("workbench_payload_bytes", value, correlation_id=correlation_id)
 
 
+def record_requirement_snapshot_invalid(*, error_count: int, correlation_id: str | None = None) -> None:
+    record_workbench_audit_event(
+        "requirement_snapshot_invalid",
+        reason_code="requirement_snapshot_invalid",
+        correlation_id=correlation_id,
+        extra={"error_count": error_count},
+    )
+
+
 def record_workflow_start_kill_switch_blocked(*, correlation_id: str | None = None) -> None:
     record_workbench_audit_event(
         "workflow_start_kill_switch_blocked",

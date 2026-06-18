@@ -78,7 +78,10 @@ class AgentWorkbenchMessagePayloadResponse(BaseModel):
 
     kind: Literal["empty", "job_request", "requirement_review"] = "empty"
     jobTitle: str | None = None
+    notes: str | None = None
+    sourceKinds: list[Literal["cts", "liepin"]] = Field(default_factory=list)
     requirementDraftId: str | None = None
+    requirementDraftSnapshot: AgentWorkbenchRequirementDraftResponse | None = None
 
 
 class AgentWorkbenchLinkedRuntimeRunResponse(BaseModel):
