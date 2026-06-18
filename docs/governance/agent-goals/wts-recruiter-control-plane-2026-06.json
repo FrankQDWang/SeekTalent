@@ -1,0 +1,45 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add the canonical WTS recruiter control-plane persistence layer for submitted job requests and draft lineage.",
+  "rationale": "Task 0A adds durable job request revisions, draft-to-request lineage, and future workflow-start groundwork inside the conversation-agent SQLite lifecycle so later runtime-control tasks can start from canonical state instead of transcript or frontend payloads.",
+  "touched_layers": [
+    "bff",
+    "other",
+    "runtime",
+    "tests",
+    "docs"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/control_plane_schema.py",
+    "src/seektalent_conversation_agent/factory.py",
+    "src/seektalent_conversation_agent/job_request_store.py",
+    "src/seektalent_conversation_agent/job_requests.py",
+    "src/seektalent_conversation_agent/models.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/store.py",
+    "src/seektalent_conversation_agent/tools.py",
+    "src/seektalent_conversation_agent/workflow_start_intents.py",
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent/runtime/requirements_runtime.py"
+  ],
+  "deletion_targets": [
+    "workflow-start state inferred from transcript messages",
+    "requirement-draft lineage inferred from frontend submit payloads",
+    "job request identity represented only by ad hoc source IDs"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run pytest tests/test_wts_control_plane.py -q",
+    "uv run python tools/check_pr_governance.py --base main",
+    "git diff --check main...HEAD"
+  ],
+  "risks": [
+    "The new WTS schema must remain owned by the conversation-agent SQLite lifecycle without introducing a second PRAGMA authority.",
+    "Job request idempotency must reject conflicting bodies while allowing safe replay of the same submitted JD.",
+    "Task 0B depends on canonical field names for workflow start intents and draft-to-job-request lineage."
+  ]
+}

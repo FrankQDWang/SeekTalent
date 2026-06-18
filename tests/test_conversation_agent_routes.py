@@ -15,6 +15,7 @@ from tests.settings_factory import make_settings
 
 class DeterministicRouteRuntime:
     workflow_calls: list[dict[str, object]] = []
+    requirement_calls: list[dict[str, object]] = []
 
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
@@ -22,12 +23,20 @@ class DeterministicRouteRuntime:
     def extract_requirements(
         self,
         *,
-        job_title: str,
+        job_title: str | None,
         jd: str,
         notes: str,
         progress_callback=None,
         requirement_cache_scope: str | None = None,
     ) -> object:
+        type(self).requirement_calls.append(
+            {
+                "job_title": job_title,
+                "jd": jd,
+                "notes": notes,
+                "requirement_cache_scope": requirement_cache_scope,
+            }
+        )
         if callable(progress_callback):
             progress_callback(
                 ProgressEvent(
@@ -35,8 +44,9 @@ class DeterministicRouteRuntime:
                     message="岗位需求解析完成。",
                     payload={"stage": "requirements"},
                 )
-        )
-        return sample_requirement_sheet(job_title=job_title)
+            )
+        derived_title = job_title if isinstance(job_title, str) and job_title.strip() else "Python 平台负责人"
+        return sample_requirement_sheet(job_title=derived_title)
 
     async def run_async(self, **kwargs: object) -> object:
         type(self).workflow_calls.append(dict(kwargs))
@@ -108,6 +118,36 @@ def test_agent_conversation_routes_create_list_reopen_and_submit_jd(tmp_path: Pa
     reopened = client.get(f"/api/agent/conversations/{conversation_id}")
     assert reopened.status_code == 200, reopened.text
     assert reopened.json()["conversationReopenState"]["latestMessageSeq"] == 2
+
+
+def test_submit_jd_route_accepts_omitted_job_title_and_source_kinds(tmp_path: Path) -> None:
+    DeterministicRouteRuntime.requirement_calls = []
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    created = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    )
+    assert created.status_code == 201, created.text
+    conversation_id = created.json()["conversation"]["conversationId"]
+
+    message = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "notes": "优先华东，接受远程协作",
+            "sourceKinds": ["cts", "liepin"],
+            "idempotencyKey": "submit-jd-route-source-kinds-1",
+        },
+    )
+
+    assert message.status_code == 200, message.text
+    payload = message.json()
+    assert payload["jobRequestRevisionId"]
+    assert payload["requirementDraftRevisionId"]
+    assert payload["requirementDraft"]["draftRevisionId"] == payload["requirementDraftRevisionId"]
+    assert DeterministicRouteRuntime.requirement_calls[0]["job_title"] is None
 
 
 def test_workflow_start_route_uses_app_factory_runtime_wrapper(tmp_path: Path) -> None:

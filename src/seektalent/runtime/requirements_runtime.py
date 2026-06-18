@@ -73,7 +73,7 @@ async def build_run_state(
     settings: Any,
     requirement_extractor: Any,
     tracer: RunTracer,
-    job_title: str,
+    job_title: str | None,
     jd: str,
     notes: str,
     requirement_cache_scope: str | None,
