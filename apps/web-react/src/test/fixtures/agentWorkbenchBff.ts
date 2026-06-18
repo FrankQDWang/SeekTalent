@@ -147,9 +147,33 @@ function workbenchView(
       },
     ],
     requirementDraft: {
+      canConfirm: true,
       draftRevisionId: "draft_001",
+      otherInputPrompt: "其他",
+      sections: [
+        {
+          backendField: "must_have_capabilities",
+          displayName: "必须满足",
+          items: [
+            {
+              allowedActions: ["set_selected", "edit_text"],
+              editable: true,
+              enabled: true,
+              itemId: "item_001",
+              sectionId: "must_have_capabilities",
+              selected: true,
+              source: "extracted",
+              status: "resolved",
+              text: "Python 后端平台经验",
+            },
+          ],
+          sectionId: "must_have_capabilities",
+        },
+      ],
+      status: "needs_review",
       summary: "上海 / 资深 / Python 后端 / RAG / workflow orchestration",
       title: "AI Agent 平台工程师",
+      unresolvedReviewItemCount: 0,
     },
     runtime: {
       currentRound: 1,

@@ -504,12 +504,45 @@ class AgentWorkbenchStrategyGraphResponse(BaseModel):
     edges: list[AgentWorkbenchGraphEdgeResponse] = Field(default_factory=list)
 
 
+AgentWorkbenchRequirementItemStatus = Literal["resolved", "needs_review", "deleted", "moved", "rejected", "unknown"]
+AgentWorkbenchRequirementDraftStatus = Literal["draft_ready", "needs_review", "unknown"]
+
+
+class AgentWorkbenchRequirementDraftItemResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    itemId: str
+    sectionId: str
+    selected: bool
+    enabled: bool
+    editable: bool
+    text: str
+    status: AgentWorkbenchRequirementItemStatus
+    source: str
+    allowedActions: list[str] = Field(default_factory=list)
+
+
+class AgentWorkbenchRequirementDraftSectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sectionId: str
+    displayName: str
+    backendField: str
+    items: list[AgentWorkbenchRequirementDraftItemResponse] = Field(default_factory=list)
+
+
 class AgentWorkbenchRequirementDraftResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     draftRevisionId: str
+    parentDraftRevisionId: str | None = None
+    status: AgentWorkbenchRequirementDraftStatus
     title: str
     summary: str
+    canConfirm: bool
+    unresolvedReviewItemCount: int
+    sections: list[AgentWorkbenchRequirementDraftSectionResponse] = Field(default_factory=list)
+    otherInputPrompt: str = "其他"
 
 
 class AgentWorkbenchRuntimeResponse(BaseModel):
