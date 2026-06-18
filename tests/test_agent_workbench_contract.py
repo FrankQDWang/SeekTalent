@@ -129,7 +129,7 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
     response = project_agent_workbench_view(projection_input)
     serialized = response.model_dump_json()
 
-    assert response.schemaVersion == "agent.workbench.view.v1"
+    assert response.schemaVersion == "agent.workbench.view.v2"
     assert response.conversation.conversationId == "agent_conv_1"
     assert response.conversation.runtimeRunId == "runtime_1"
     assert [link.runtimeRunId for link in response.conversation.linkedRuntimeRuns] == [
@@ -142,6 +142,8 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
     assert response.streamCursor.latestActivitySeq == 1
     assert response.streamCursor.latestRuntimeEventSeq == 7
     assert response.streamCursor.latestStreamSeq == 0
+    assert response.streamCursor.snapshotSeq == 0
+    assert response.streamCursor.viewRevision == 0
     assert [message.messageId for message in response.messages] == ["msg_1", "msg_2"]
     assert response.pendingActions.primary == "confirm_requirements"
     assert response.strategyGraph.nodes[0].nodeId == "requirements"
@@ -765,11 +767,13 @@ def test_agent_workbench_view_route_returns_typed_snapshot(tmp_path: Path) -> No
 
     assert response.status_code == 200, response.text
     payload = response.json()
-    assert payload["schemaVersion"] == "agent.workbench.view.v1"
+    assert payload["schemaVersion"] == "agent.workbench.view.v2"
     assert payload["conversation"]["conversationId"] == conversation_id
     assert "transcriptGroups" in payload
     assert "streamCursor" in payload
     assert payload["streamCursor"]["latestStreamSeq"] == 0
+    assert payload["streamCursor"]["snapshotSeq"] == 0
+    assert payload["streamCursor"]["viewRevision"] == 0
     assert stream_store.latest_seq(conversation_id=conversation_id) == 0
 
 
@@ -805,8 +809,10 @@ def test_agent_workbench_confirm_route_queues_start_intent_without_sync_runtime_
 
     assert confirmed.status_code == 200, confirmed.text
     payload = confirmed.json()
-    assert payload["schemaVersion"] == "agent.workbench.view.v1"
+    assert payload["schemaVersion"] == "agent.workbench.view.v2"
     assert payload["conversation"]["conversationId"] == conversation_id
+    assert payload["streamCursor"]["snapshotSeq"] == payload["streamCursor"]["latestStreamSeq"]
+    assert payload["streamCursor"]["viewRevision"] == payload["streamCursor"]["snapshotSeq"]
     assert payload["conversation"]["workflowStartIntentId"]
     assert payload["conversation"]["runtimeRunId"] is None
     assert payload["runtime"] is None
@@ -1066,12 +1072,11 @@ def test_agent_workbench_sse_generator_emits_terminal_error_on_projection_failur
         first, second = asyncio.run(consume())
     payload = json.loads(first["data"])
     assert first["event"] == "agent_workbench_error"
-    assert payload == {
-        "schemaVersion": "agent.workbench.stream.error.v1",
-        "conversationId": "missing_conversation",
-        "reasonCode": "projection_unavailable",
-        "statusCode": 404,
-    }
+    assert payload["schemaVersion"] == "agent.workbench.stream.error.v1"
+    assert payload["conversationId"] == "missing_conversation"
+    assert payload["reasonCode"] == "projection_unavailable"
+    assert payload["statusCode"] == 404
+    assert "correlationId" in payload
     assert second is None
     [record] = [
         record

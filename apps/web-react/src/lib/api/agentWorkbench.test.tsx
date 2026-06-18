@@ -8,6 +8,12 @@ import { createWorkbenchQueryClient } from "../query/client";
 import { queryKeys } from "../query/keys";
 import { connectAgentStream } from "../stream/agentStream";
 import { applyStreamEnvelope } from "../stream/agentStreamReducer";
+import { getAgentWorkbenchConversation } from "./client";
+
+vi.mock("./client", () => ({
+  getAgentWorkbenchConversation: vi.fn(),
+  listAgentWorkbenchConversations: vi.fn(),
+}));
 
 vi.mock("../stream/agentStream", () => ({
   connectAgentStream: vi.fn(() => vi.fn()),
@@ -100,6 +106,117 @@ describe("live Agent Workbench conversation hook", () => {
     });
   });
 
+  it("applies sequential stream-only cache updates without reconnecting the EventSource", async () => {
+    expect.hasAssertions();
+    const client = createWorkbenchQueryClient();
+    client.setQueryData(
+      queryKeys.agentConversation("agent_conv_1"),
+      conversationSnapshot,
+    );
+
+    render(
+      <QueryClientProvider client={client}>
+        <ConversationProbe conversationId="agent_conv_1" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(connectAgentStream).toHaveBeenCalledOnce());
+    const options = vi.mocked(connectAgentStream).mock.calls[0]?.[0];
+    expect(options).toBeDefined();
+
+    options?.onBatch([
+      {
+        schemaVersion: "agent.workbench.stream.v1",
+        conversationId: "agent_conv_1",
+        seq: 1,
+        kind: "activity.upserted",
+        payload: {
+          payloadType: "activity.upserted",
+          kind: "activity",
+          activityId: "activity_1",
+          summary: "第一轮检索完成。",
+        },
+        createdAt: "2026-06-12T12:00:00+00:00",
+      },
+    ]);
+
+    await waitFor(() => {
+      const updated = client.getQueryData<AgentWorkbenchConversationResponse>(
+        queryKeys.agentConversation("agent_conv_1"),
+      );
+      expect(updated?.streamCursor.latestStreamSeq).toBe(1);
+      expect(updated?.streamCursor.snapshotSeq).toBe(0);
+    });
+
+    options?.onBatch([
+      {
+        schemaVersion: "agent.workbench.stream.v1",
+        conversationId: "agent_conv_1",
+        seq: 2,
+        kind: "activity.upserted",
+        payload: {
+          payloadType: "activity.upserted",
+          kind: "activity",
+          activityId: "activity_2",
+          summary: "第二轮检索完成。",
+        },
+        createdAt: "2026-06-12T12:00:01+00:00",
+      },
+    ]);
+
+    await waitFor(() => {
+      const updated = client.getQueryData<AgentWorkbenchConversationResponse>(
+        queryKeys.agentConversation("agent_conv_1"),
+      );
+      expect(updated?.streamCursor.latestStreamSeq).toBe(2);
+      expect(updated?.streamCursor.snapshotSeq).toBe(0);
+    });
+    expect(connectAgentStream).toHaveBeenCalledOnce();
+  });
+
+  it("preserves stream-applied cache state when refetch returns an older effective stream boundary", async () => {
+    expect.hasAssertions();
+    const client = createWorkbenchQueryClient();
+    const queryKey = queryKeys.agentConversation("agent_conv_1");
+    const current = {
+      ...conversationSnapshot,
+      streamCursor: {
+        ...conversationSnapshot.streamCursor,
+        snapshotSeq: 4,
+        viewRevision: 4,
+        latestStreamSeq: 5,
+      },
+    };
+    const olderRefetch = {
+      ...conversationSnapshot,
+      streamCursor: {
+        ...conversationSnapshot.streamCursor,
+        snapshotSeq: 4,
+        viewRevision: 4,
+        latestStreamSeq: 4,
+      },
+    };
+    vi.mocked(getAgentWorkbenchConversation).mockResolvedValueOnce(
+      olderRefetch,
+    );
+    client.setQueryData(queryKey, current);
+
+    render(
+      <QueryClientProvider client={client}>
+        <ConversationProbe conversationId="agent_conv_1" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(connectAgentStream).toHaveBeenCalledOnce());
+
+    await client.invalidateQueries({ queryKey });
+
+    await waitFor(() => {
+      expect(getAgentWorkbenchConversation).toHaveBeenCalledWith(
+        "agent_conv_1",
+      );
+    });
+    expect(client.getQueryData(queryKey)).toBe(current);
+  });
+
   it("invalidates the snapshot only for stream events that depend on durable view data", async () => {
     expect.hasAssertions();
     const client = createWorkbenchQueryClient();
@@ -187,7 +304,9 @@ describe("live Agent Workbench conversation hook", () => {
       ...conversationSnapshot,
       streamCursor: {
         ...conversationSnapshot.streamCursor,
-        latestStreamSeq: 4,
+        latestStreamSeq: 9,
+        snapshotSeq: 4,
+        viewRevision: 4,
       },
     };
     client.setQueryData(queryKeys.agentConversation("agent_conv_1"), snapshot);
@@ -227,7 +346,7 @@ function ConversationProbe({ conversationId }: { conversationId: string }) {
 }
 
 const conversationSnapshot: AgentWorkbenchConversationResponse = {
-  schemaVersion: "agent.workbench.view.v1",
+  schemaVersion: "agent.workbench.view.v2",
   conversation: {
     conversationId: "agent_conv_1",
     title: "资深 Python 后端",
@@ -261,6 +380,8 @@ const conversationSnapshot: AgentWorkbenchConversationResponse = {
     latestActivitySeq: 0,
     latestRuntimeEventSeq: 0,
     latestStreamSeq: 0,
+    snapshotSeq: 0,
+    viewRevision: 0,
   },
   reasonCode: null,
 };

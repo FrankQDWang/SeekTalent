@@ -24,7 +24,7 @@ function workbenchView(
   const { conversation, pendingActions, streamCursor, ...topLevelOverrides } =
     overrides;
   return {
-    schemaVersion: "agent.workbench.view.v1",
+    schemaVersion: "agent.workbench.view.v2",
     messages: [
       {
         createdAt: now,
@@ -265,6 +265,8 @@ function workbenchView(
       latestMessageSeq: 2,
       latestRuntimeEventSeq: 7,
       latestStreamSeq: 12,
+      snapshotSeq: 12,
+      viewRevision: 12,
       ...streamCursor,
     },
   };

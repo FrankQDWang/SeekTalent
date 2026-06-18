@@ -126,6 +126,37 @@ describe("agent stream client", () => {
     expect(source.closed).toBe(true);
   });
 
+  it("calls onGap for terminal stream replay gap error events", () => {
+    expect.hasAssertions();
+
+    installAnimationFrame();
+    const eventSources = installEventSource();
+    const onBatch = vi.fn();
+    const onGap = vi.fn();
+
+    connectAgentStream({
+      conversationId: "agent_conv_1",
+      afterSeq: 0,
+      onBatch,
+      onGap,
+    });
+    const source = onlyEventSource(eventSources);
+
+    source.dispatch(
+      "agent_workbench_error",
+      JSON.stringify({
+        schemaVersion: "agent.workbench.stream.error.v1",
+        conversationId: "agent_conv_1",
+        reasonCode: "stream_replay_gap",
+        statusCode: 410,
+        correlationId: "corr_1",
+      }),
+    );
+
+    expect(onGap).toHaveBeenCalledOnce();
+    expect(onBatch).not.toHaveBeenCalled();
+  });
+
   it("surfaces EventSource errors while the document is visible", () => {
     expect.hasAssertions();
 

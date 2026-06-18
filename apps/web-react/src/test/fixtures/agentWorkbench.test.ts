@@ -16,7 +16,7 @@ const fixtureDir = dirname(fileURLToPath(import.meta.url));
 describe("agent workbench design fixture", () => {
   it("provides BFF-native workbench fixtures for Storybook and visual tests", () => {
     expect(agentWorkbenchRunningViewFixture.schemaVersion).toBe(
-      "agent.workbench.view.v1",
+      "agent.workbench.view.v2",
     );
     expect(Array.isArray(agentWorkbenchRunningViewFixture.candidates)).toBe(
       true,
