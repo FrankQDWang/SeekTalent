@@ -63,7 +63,7 @@ function envelope({
 }
 
 const conversationSnapshot: AgentWorkbenchConversationResponse = {
-  schemaVersion: "agent.workbench.view.v1",
+  schemaVersion: "agent.workbench.view.v2",
   conversation: {
     conversationId: "agent_conv_1",
     title: "资深 Python 后端",
@@ -97,6 +97,8 @@ const conversationSnapshot: AgentWorkbenchConversationResponse = {
     latestActivitySeq: 0,
     latestRuntimeEventSeq: 0,
     latestStreamSeq: 0,
+    snapshotSeq: 0,
+    viewRevision: 0,
   },
   reasonCode: null,
 };

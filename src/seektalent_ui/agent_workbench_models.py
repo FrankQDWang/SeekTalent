@@ -603,16 +603,18 @@ class AgentWorkbenchPendingActionsResponse(BaseModel):
 class AgentWorkbenchStreamCursorResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    latestMessageSeq: int
-    latestActivitySeq: int
-    latestRuntimeEventSeq: int
+    latestMessageSeq: int = 0
+    latestActivitySeq: int = 0
+    latestRuntimeEventSeq: int = 0
     latestStreamSeq: int = 0
+    snapshotSeq: int = 0
+    viewRevision: int = 0
 
 
 class AgentWorkbenchConversationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schemaVersion: Literal["agent.workbench.view.v1"] = "agent.workbench.view.v1"
+    schemaVersion: Literal["agent.workbench.view.v2"] = "agent.workbench.view.v2"
     conversation: AgentWorkbenchConversationSummaryResponse
     messages: list[AgentWorkbenchMessageResponse] = Field(default_factory=list)
     activities: list[AgentWorkbenchActivityResponse] = Field(default_factory=list)

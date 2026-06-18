@@ -4,6 +4,7 @@ import logging
 import sqlite3
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
@@ -31,6 +32,12 @@ logger = logging.getLogger(__name__)
 _STREAM_EVENTS_TABLE = "agent_workbench_stream_events"
 
 
+@dataclass(frozen=True)
+class AgentWorkbenchStreamSnapshotBoundary:
+    snapshot_seq: int
+    view_revision: int
+
+
 class AgentWorkbenchStreamStore:
     def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
         self.path = Path(path)
@@ -41,6 +48,19 @@ class AgentWorkbenchStreamStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             _migrate_stream_schema(conn, database_path=self.path)
+
+    def snapshot_boundary(self, *, conversation_id: str) -> AgentWorkbenchStreamSnapshotBoundary:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COALESCE(MAX(seq), 0) AS snapshot_seq
+                FROM agent_workbench_stream_events
+                WHERE conversation_id = ?
+                """,
+                (conversation_id,),
+            ).fetchone()
+        snapshot_seq = int(row["snapshot_seq"])
+        return AgentWorkbenchStreamSnapshotBoundary(snapshot_seq=snapshot_seq, view_revision=snapshot_seq)
 
     def append_event(
         self,
@@ -170,6 +190,12 @@ class AgentWorkbenchStreamStore:
         if row is None or row["first_seq"] is None:
             return None
         return int(row["first_seq"])
+
+    def minimum_replay_seq(self, *, conversation_id: str) -> int:
+        first_seq = self.first_seq(conversation_id=conversation_id)
+        if first_seq is None:
+            return 0
+        return max(0, first_seq - 1)
 
     def build_gap_event(self, *, conversation_id: str, requested_after_seq: int, created_at: str):
         next_available_seq = self.latest_seq(conversation_id=conversation_id) + 1

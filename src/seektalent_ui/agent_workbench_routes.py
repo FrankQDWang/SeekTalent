@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Annotated, cast
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -78,10 +79,7 @@ def get_agent_workbench_view(
     request: Request,
     user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> AgentWorkbenchConversationResponse:
-    response = _build_agent_workbench_view(request=request, conversation_id=conversation_id, user=user)
-    stream_store = get_agent_workbench_stream_store(request)
-    response.streamCursor.latestStreamSeq = stream_store.latest_seq(conversation_id=conversation_id)
-    return response
+    return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
 
 
 @router.post(
@@ -105,11 +103,7 @@ def confirm_agent_workbench_requirements(
         )
     except ConversationAgentError as exc:
         raise agent_http_error(exc) from exc
-    response = _build_agent_workbench_view(request=request, conversation_id=conversation_id, user=user)
-    response.streamCursor.latestStreamSeq = get_agent_workbench_stream_store(request).latest_seq(
-        conversation_id=conversation_id
-    )
-    return response
+    return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
 
 
 @router.get(
@@ -125,6 +119,12 @@ def list_agent_workbench_events(
 ) -> AgentWorkbenchStreamReplayResponse:
     _ensure_conversation_access(request=request, conversation_id=conversation_id, user=user)
     stream_store = get_agent_workbench_stream_store(request)
+    _raise_if_replay_cursor_stale(
+        request=request,
+        stream_store=stream_store,
+        conversation_id=conversation_id,
+        after_seq=after_seq,
+    )
     _append_current_projection_events(
         request=request,
         user=user,
@@ -139,6 +139,7 @@ def list_agent_workbench_events(
             limit=limit + 1,
         )
     )
+    _raise_if_replay_has_gap(request=request, replayed=replayed)
     events = replayed[:limit]
     has_more = len(replayed) > limit
     return AgentWorkbenchStreamReplayResponse(
@@ -148,6 +149,21 @@ def list_agent_workbench_events(
         hasMore=has_more,
         nextAfterSeq=events[-1].seq if has_more and events else None,
     )
+
+
+def _build_agent_workbench_snapshot(
+    *,
+    request: Request,
+    conversation_id: str,
+    user: WorkbenchUser,
+) -> AgentWorkbenchConversationResponse:
+    stream_store = get_agent_workbench_stream_store(request)
+    boundary = stream_store.snapshot_boundary(conversation_id=conversation_id)
+    response = _build_agent_workbench_view(request=request, conversation_id=conversation_id, user=user)
+    response.streamCursor.snapshotSeq = boundary.snapshot_seq
+    response.streamCursor.latestStreamSeq = boundary.snapshot_seq
+    response.streamCursor.viewRevision = boundary.view_revision
+    return response
 
 
 def _build_agent_workbench_view(
@@ -226,10 +242,31 @@ async def _event_generator(
     conversation_id: str,
     after_seq: int,
 ) -> AsyncIterator[dict[str, str]]:
+    correlation_id = _correlation_id(request)
+    if _replay_cursor_is_stale(
+        stream_store=stream_store,
+        conversation_id=conversation_id,
+        after_seq=after_seq,
+    ):
+        yield _terminal_error_event(
+            conversation_id=conversation_id,
+            reason_code="stream_replay_gap",
+            status_code=410,
+            correlation_id=correlation_id,
+        )
+        return
     sequence = after_seq
     while not await request.is_disconnected():
         emitted = False
         for event in replay_stream_envelopes(stream_store, conversation_id=conversation_id, after_seq=sequence):
+            if event.kind == "stream.gap":
+                yield _terminal_error_event(
+                    conversation_id=conversation_id,
+                    reason_code="stream_replay_gap",
+                    status_code=410,
+                    correlation_id=correlation_id,
+                )
+                return
             sequence = event.seq
             emitted = True
             yield encode_sse_event(event)
@@ -247,9 +284,22 @@ async def _event_generator(
                 "Agent workbench SSE projection catch-up failed.",
                 extra={"conversation_ref": "redacted", "status_code": exc.status_code},
             )
-            yield _terminal_error_event(conversation_id=conversation_id, status_code=exc.status_code)
+            yield _terminal_error_event(
+                conversation_id=conversation_id,
+                reason_code="projection_unavailable",
+                status_code=exc.status_code,
+                correlation_id=correlation_id,
+            )
             return
         for event in replay_stream_envelopes(stream_store, conversation_id=conversation_id, after_seq=sequence):
+            if event.kind == "stream.gap":
+                yield _terminal_error_event(
+                    conversation_id=conversation_id,
+                    reason_code="stream_replay_gap",
+                    status_code=410,
+                    correlation_id=correlation_id,
+                )
+                return
             sequence = event.seq
             emitted = True
             yield encode_sse_event(event)
@@ -279,15 +329,66 @@ def _is_forbidden_query_param(name: str) -> bool:
     return "token" in lowered or "auth" in lowered
 
 
-def _terminal_error_event(*, conversation_id: str, status_code: int) -> dict[str, str]:
+def _raise_if_replay_cursor_stale(
+    *,
+    request: Request,
+    stream_store: AgentWorkbenchStreamStore,
+    conversation_id: str,
+    after_seq: int,
+) -> None:
+    if _replay_cursor_is_stale(stream_store=stream_store, conversation_id=conversation_id, after_seq=after_seq):
+        raise _stream_replay_gap_error(request)
+
+
+def _raise_if_replay_has_gap(*, request: Request, replayed: Sequence[object]) -> None:
+    if any(getattr(event, "kind", None) == "stream.gap" for event in replayed):
+        raise _stream_replay_gap_error(request)
+
+
+def _replay_cursor_is_stale(
+    *,
+    stream_store: AgentWorkbenchStreamStore,
+    conversation_id: str,
+    after_seq: int,
+) -> bool:
+    return after_seq < stream_store.minimum_replay_seq(conversation_id=conversation_id)
+
+
+def _stream_replay_gap_error(request: Request) -> HTTPException:
+    return HTTPException(
+        status_code=410,
+        detail={
+            "reasonCode": "stream_replay_gap",
+            "correlationId": _correlation_id(request),
+        },
+    )
+
+
+def _correlation_id(request: object) -> str:
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        request_id = headers.get("x-correlation-id") or headers.get("x-request-id")
+        if request_id:
+            return request_id
+    return f"awb_{uuid4().hex}"
+
+
+def _terminal_error_event(
+    *,
+    conversation_id: str,
+    reason_code: str,
+    status_code: int,
+    correlation_id: str,
+) -> dict[str, str]:
     return {
         "event": "agent_workbench_error",
         "data": json.dumps(
             {
                 "schemaVersion": "agent.workbench.stream.error.v1",
                 "conversationId": conversation_id,
-                "reasonCode": "projection_unavailable",
+                "reasonCode": reason_code,
                 "statusCode": status_code,
+                "correlationId": correlation_id,
             },
             separators=(",", ":"),
         ),

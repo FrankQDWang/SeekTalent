@@ -125,7 +125,7 @@ declare global {
 }
 
 const conversationSnapshot = {
-  schemaVersion: "agent.workbench.view.v1",
+  schemaVersion: "agent.workbench.view.v2",
   conversation: {
     conversationId: "agent_conv_1",
     title: "资深 Python 后端",
@@ -267,6 +267,8 @@ const conversationSnapshot = {
     latestActivitySeq: 1,
     latestRuntimeEventSeq: 7,
     latestStreamSeq: 4,
+    snapshotSeq: 4,
+    viewRevision: 4,
   },
   reasonCode: null,
 };
