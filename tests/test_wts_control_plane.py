@@ -163,6 +163,162 @@ def test_submit_jd_persists_canonical_job_request_revision(tmp_path: Path) -> No
     assert link.job_request_revision_id == result.job_request_revision_id
 
 
+def test_submit_jd_persists_safe_requirement_transcript_snapshot(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 岗位",
+    )
+
+    result = service.submit_jd(
+        conversation_id=conversation.conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        job_title=None,
+        jd_text="需要 Python 平台负责人，负责 API 与平台工程。",
+        notes="优先华东，接受远程协作",
+        source_kinds=["cts", "liepin"],
+        idempotency_key="submit-jd-safe-transcript-snapshot-1",
+    )
+    [assistant_message] = [
+        message for message in result.messages if message.message_type == "requirement_review"
+    ]
+
+    assert assistant_message.payload["requirementDraft"] == {
+        "draftRevisionId": result.requirement_draft_revision_id
+    }
+    snapshot = assistant_message.payload["requirementDraftSnapshot"]
+    assert isinstance(snapshot, dict)
+    serialized_snapshot = str(snapshot)
+    assert snapshot["draftRevisionId"] == result.requirement_draft_revision_id
+    assert snapshot["sections"][0]["items"][0]["text"] == "Python API"
+    assert "value" not in serialized_snapshot
+    assert "source_span_refs" not in serialized_snapshot
+    assert "amendment" not in serialized_snapshot
+
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT transcript_message_id, workspace_id, draft_revision_id, snapshot_json
+            FROM wts_requirement_transcript_snapshots
+            WHERE conversation_id = ?
+            """,
+            (conversation.conversation_id,),
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == assistant_message.message_id
+    assert row[1] == "workspace_1"
+    assert row[2] == result.requirement_draft_revision_id
+    assert result.requirement_draft_revision_id in row[3]
+
+
+def test_requirement_update_replay_does_not_create_snapshotless_transcript_message(tmp_path: Path) -> None:
+    service, _ = _service(tmp_path)
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 岗位",
+    )
+    submitted = service.submit_jd(
+        conversation_id=conversation.conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        job_title=None,
+        jd_text="需要 Python 平台负责人，负责 API 与平台工程。",
+        notes="优先华东，接受远程协作",
+        source_kinds=["cts", "liepin"],
+        idempotency_key="submit-jd-update-replay-snapshot-1",
+    )
+    base_draft = submitted.requirement_draft
+    assert base_draft is not None
+    first_item = base_draft.sections[0].items[0]
+
+    first = service.update_requirement_draft(
+        conversation_id=conversation.conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        draft_revision_id=base_draft.draft_revision_id,
+        base_revision_id=base_draft.draft_revision_id,
+        operations=[
+            {
+                "op": "set_selected",
+                "item_id": first_item.item_id,
+                "selected": False,
+            }
+        ],
+        idempotency_key="update-replay-snapshot-1",
+    )
+    replay = service.update_requirement_draft(
+        conversation_id=conversation.conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        draft_revision_id=base_draft.draft_revision_id,
+        base_revision_id=base_draft.draft_revision_id,
+        operations=[
+            {
+                "op": "set_selected",
+                "item_id": first_item.item_id,
+                "selected": False,
+            }
+        ],
+        idempotency_key="update-replay-snapshot-1",
+    )
+
+    assert replay.requirement_draft_revision_id == first.requirement_draft_revision_id
+    messages = service.store.get_messages(conversation_id=conversation.conversation_id)
+    requirement_messages = [message for message in messages if message.message_type == "requirement_review"]
+    with sqlite3.connect(service.store.path) as conn:
+        snapshot_rows = conn.execute(
+            """
+            SELECT transcript_message_id
+            FROM wts_requirement_transcript_snapshots
+            WHERE conversation_id = ?
+            ORDER BY created_at ASC
+            """,
+            (conversation.conversation_id,),
+        ).fetchall()
+
+    assert len(requirement_messages) == 2
+    assert len(snapshot_rows) == 2
+    assert {row[0] for row in snapshot_rows} == {message.message_id for message in requirement_messages}
+
+
+def test_conversation_store_duplicate_message_idempotency_raises_by_default(tmp_path: Path) -> None:
+    store = ConversationStore(tmp_path / "conversation_agent.sqlite3")
+    store.initialize()
+    conversation = store.create_conversation(
+        conversation_id="agent_conv_1",
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 岗位",
+        created_at="2026-06-09T00:00:01.000000Z",
+    )
+    store.append_message(
+        conversation_id=conversation.conversation_id,
+        role="user",
+        message_type="user_text",
+        text="第一条消息",
+        payload={},
+        created_at="2026-06-09T00:00:02.000000Z",
+        message_id="agent_msg_1",
+        idempotency_key="turn-1",
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        store.append_message(
+            conversation_id=conversation.conversation_id,
+            role="user",
+            message_type="user_text",
+            text="重复消息",
+            payload={},
+            created_at="2026-06-09T00:00:03.000000Z",
+            message_id="agent_msg_2",
+            idempotency_key="turn-1",
+        )
+
+
 def test_submit_jd_idempotency_reuses_same_body_and_rejects_different_body(tmp_path: Path) -> None:
     service, extractor = _service(tmp_path)
     conversation = service.create_conversation(

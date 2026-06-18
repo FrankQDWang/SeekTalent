@@ -759,7 +759,7 @@ class ConversationAgentService:
             role="assistant",
             message_type="requirement_review",
             text="已拆解岗位需求，请确认后再启动检索。",
-            payload={"requirementDraft": draft.model_dump(mode="json")},
+            payload=_requirement_review_payload(draft),
             source_tool_call_id=tool_call_id,
             created_at=self.now(),
             message_id=self.message_id_factory(),
@@ -806,6 +806,7 @@ class ConversationAgentService:
             workspace_id=workspace_id,
             draft=draft,
             source_draft_revision_id=draft_revision_id,
+            idempotency_key=idempotency_key,
         )
 
     def amend_requirement_draft_from_text(
@@ -835,6 +836,7 @@ class ConversationAgentService:
             workspace_id=workspace_id,
             draft=draft,
             source_draft_revision_id=draft_revision_id,
+            idempotency_key=idempotency_key,
         )
 
     def resolve_requirement_review(
@@ -867,6 +869,7 @@ class ConversationAgentService:
             workspace_id=workspace_id,
             draft=draft,
             source_draft_revision_id=draft_revision_id,
+            idempotency_key=idempotency_key,
         )
 
     def confirm_requirements(
@@ -1753,6 +1756,7 @@ class ConversationAgentService:
         workspace_id: str,
         draft: DraftProtocol,
         source_draft_revision_id: str | None = None,
+        idempotency_key: str | None = None,
     ) -> ConversationAgentResponse:
         unresolved = int(getattr(draft, "unresolved_review_item_count", 0))
         draft_revision_id = str(getattr(draft, "draft_revision_id"))
@@ -1777,9 +1781,14 @@ class ConversationAgentService:
             role="assistant",
             message_type="requirement_review",
             text="需求草稿已更新，请继续确认。",
-            payload={"requirementDraft": draft.model_dump(mode="json")},
+            payload=_requirement_review_payload(draft),
             created_at=self.now(),
             message_id=self.message_id_factory(),
+            idempotency_key=_requirement_review_message_idempotency_key(
+                draft_revision_id=draft_revision_id,
+                idempotency_key=idempotency_key,
+            ),
+            return_existing_on_idempotency=True,
         )
         reopened = self.reopen_conversation(
             conversation_id=conversation_id,
@@ -2032,6 +2041,78 @@ def _json_safe_value(value: object) -> object | None:
         dumped = model_dump(mode="json")
         return _json_safe_value(dumped)
     return str(value)
+
+
+def _requirement_review_payload(draft: object) -> dict[str, object]:
+    draft_revision_id = str(getattr(draft, "draft_revision_id"))
+    return {
+        "requirementDraft": {"draftRevisionId": draft_revision_id},
+        "requirementDraftSnapshot": _requirement_draft_snapshot(draft),
+    }
+
+
+def _requirement_review_message_idempotency_key(
+    *,
+    draft_revision_id: str,
+    idempotency_key: str | None,
+) -> str | None:
+    if not idempotency_key:
+        return None
+    return f"requirement_review:{draft_revision_id}:{idempotency_key}"
+
+
+def _requirement_draft_snapshot(draft: object) -> dict[str, object]:
+    sections = list(getattr(draft, "sections", ()) or ())
+    return {
+        "draftRevisionId": str(getattr(draft, "draft_revision_id")),
+        "parentDraftRevisionId": _str_or_none(getattr(draft, "base_revision_id", None)),
+        "status": str(getattr(draft, "status", "unknown")),
+        "title": "需求确认",
+        "summary": _requirement_draft_snapshot_summary(sections),
+        "canConfirm": bool(getattr(draft, "can_confirm", False)),
+        "unresolvedReviewItemCount": int(getattr(draft, "unresolved_review_item_count", 0) or 0),
+        "sections": [_requirement_draft_section_snapshot(section) for section in sections],
+        "otherInputPrompt": "其他",
+    }
+
+
+def _requirement_draft_section_snapshot(section: object) -> dict[str, object]:
+    section_id = str(getattr(section, "section_id"))
+    return {
+        "sectionId": section_id,
+        "displayName": str(getattr(section, "display_name", section_id)),
+        "backendField": str(getattr(section, "backend_field", section_id)),
+        "items": [_requirement_draft_item_snapshot(section_id, item) for item in getattr(section, "items", ()) or ()],
+    }
+
+
+def _requirement_draft_item_snapshot(section_id: str, item: object) -> dict[str, object]:
+    status = str(getattr(item, "status", "unknown"))
+    return {
+        "itemId": str(getattr(item, "item_id")),
+        "sectionId": section_id,
+        "selected": bool(getattr(item, "selected", False)),
+        "enabled": bool(getattr(item, "enabled", False)),
+        "editable": bool(getattr(item, "editable", False)),
+        "text": str(getattr(item, "text", "")),
+        "status": status if status in {"resolved", "needs_review", "deleted", "moved", "rejected"} else "unknown",
+        "source": str(getattr(item, "source", "unknown")),
+        "allowedActions": [str(action) for action in getattr(item, "allowed_actions", ()) or ()],
+    }
+
+
+def _requirement_draft_snapshot_summary(sections: list[object]) -> str:
+    selected_count = sum(
+        1
+        for section in sections
+        for item in getattr(section, "items", ()) or ()
+        if bool(getattr(item, "selected", False)) and getattr(item, "status", "") == "resolved"
+    )
+    return f"已生成 {selected_count} 条已选择需求，请确认后启动检索。"
+
+
+def _str_or_none(value: object) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _agent_result_text(value: object) -> str:

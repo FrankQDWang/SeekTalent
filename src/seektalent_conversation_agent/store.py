@@ -176,6 +176,7 @@ class ConversationStore:
         source_runtime_run_id: str | None = None,
         source_runtime_event_seq: int | None = None,
         idempotency_key: str | None = None,
+        return_existing_on_idempotency: bool = False,
     ) -> TranscriptMessage:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -183,6 +184,15 @@ class ConversationStore:
                 row = _conversation_row(conn, conversation_id)
                 if row is None:
                     raise ConversationAgentError("conversation_not_found")
+                if return_existing_on_idempotency and idempotency_key is not None:
+                    existing = _message_row_by_idempotency(
+                        conn,
+                        conversation_id=conversation_id,
+                        idempotency_key=idempotency_key,
+                    )
+                    if existing is not None:
+                        conn.rollback()
+                        return _message_from_row(existing)
                 message_seq = int(row["latest_message_seq"]) + 1
                 message = TranscriptMessage(
                     message_id=message_id or f"agent_msg_{uuid4().hex}",
@@ -225,6 +235,11 @@ class ConversationStore:
                         message.created_at,
                     ),
                 )
+                _insert_requirement_transcript_snapshot(
+                    conn,
+                    message=message,
+                    workspace_id=row["workspace_id"],
+                )
                 conn.execute(
                     """
                     UPDATE agent_conversations
@@ -241,16 +256,7 @@ class ConversationStore:
 
     def get_message_by_idempotency(self, *, conversation_id: str, idempotency_key: str) -> TranscriptMessage | None:
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT *
-                FROM agent_transcript_messages
-                WHERE conversation_id = ? AND idempotency_key = ?
-                ORDER BY message_seq ASC
-                LIMIT 1
-                """,
-                (conversation_id, idempotency_key),
-            ).fetchone()
+            row = _message_row_by_idempotency(conn, conversation_id=conversation_id, idempotency_key=idempotency_key)
         return _message_from_row(row) if row is not None else None
 
     def get_messages(self, *, conversation_id: str) -> list[TranscriptMessage]:
@@ -1558,6 +1564,64 @@ def _activity_from_row(row: sqlite3.Row) -> TranscriptActivityItem:
         completed_at=row["completed_at"],
         created_at=row["created_at"],
     )
+
+
+def _message_row_by_idempotency(
+    conn: sqlite3.Connection,
+    *,
+    conversation_id: str,
+    idempotency_key: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT *
+        FROM agent_transcript_messages
+        WHERE conversation_id = ? AND idempotency_key = ?
+        ORDER BY message_seq ASC
+        LIMIT 1
+        """,
+        (conversation_id, idempotency_key),
+    ).fetchone()
+
+
+def _insert_requirement_transcript_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    message: TranscriptMessage,
+    workspace_id: str,
+) -> None:
+    if message.message_type != "requirement_review":
+        return
+    snapshot = _snapshot_payload_from_message(message.payload)
+    if snapshot is None:
+        return
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO wts_requirement_transcript_snapshots (
+            transcript_message_id, workspace_id, conversation_id, draft_revision_id, snapshot_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            message.message_id,
+            workspace_id,
+            message.conversation_id,
+            snapshot["draftRevisionId"],
+            _json(snapshot),
+            message.created_at,
+        ),
+    )
+
+
+def _snapshot_payload_from_message(payload: dict[str, object]) -> dict[str, object] | None:
+    snapshot = payload.get("requirementDraftSnapshot")
+    if not isinstance(snapshot, dict):
+        return None
+    snapshot_payload = {str(key): item for key, item in snapshot.items()}
+    draft_revision_id = snapshot_payload.get("draftRevisionId")
+    if not isinstance(draft_revision_id, str) or not draft_revision_id:
+        return None
+    return snapshot_payload
 
 
 def _json(value: object) -> str:
