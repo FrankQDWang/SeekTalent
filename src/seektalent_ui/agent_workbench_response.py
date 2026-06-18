@@ -4,6 +4,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Literal, cast
 
+from pydantic import ValidationError
+
 from seektalent_conversation_agent.models import TranscriptActivityItem, TranscriptMessage
 from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchActivityPayloadResponse,
@@ -168,13 +170,23 @@ def _message_payload(message: TranscriptMessage) -> AgentWorkbenchMessagePayload
     payload = message.payload
     if message.message_type == "user_text":
         job_title = _str_or_none(payload.get("jobTitle")) or _str_or_none(payload.get("job_title"))
-        return AgentWorkbenchMessagePayloadResponse(kind="job_request", jobTitle=job_title)
+        return AgentWorkbenchMessagePayloadResponse(
+            kind="job_request",
+            jobTitle=job_title,
+            notes=_str_or_none(payload.get("notes")),
+            sourceKinds=_source_kinds(payload.get("sourceKinds") or payload.get("source_kinds")),
+        )
     if message.message_type == "requirement_review":
         draft = payload.get("requirementDraft")
         draft_id = _str_or_none(_mapping_get(draft, "draftRevisionId")) or _str_or_none(
             _mapping_get(draft, "draft_revision_id")
         )
-        return AgentWorkbenchMessagePayloadResponse(kind="requirement_review", requirementDraftId=draft_id)
+        snapshot = _requirement_snapshot_payload(payload.get("requirementDraftSnapshot"))
+        return AgentWorkbenchMessagePayloadResponse(
+            kind="requirement_review",
+            requirementDraftId=draft_id,
+            requirementDraftSnapshot=snapshot,
+        )
     return AgentWorkbenchMessagePayloadResponse()
 
 
@@ -258,6 +270,15 @@ def _requirement_item_status(status: object) -> AgentWorkbenchRequirementItemSta
     if status in {"resolved", "needs_review", "deleted", "moved", "rejected"}:
         return cast(AgentWorkbenchRequirementItemStatus, status)
     return "unknown"
+
+
+def _requirement_snapshot_payload(value: object) -> AgentWorkbenchRequirementDraftResponse | None:
+    if not isinstance(value, Mapping):
+        return None
+    try:
+        return AgentWorkbenchRequirementDraftResponse.model_validate(value)
+    except ValidationError:
+        return None
 
 
 def _runtime_from_state(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchRuntimeResponse | None:
@@ -438,6 +459,12 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
+
+
+def _source_kinds(value: object) -> list[Literal["cts", "liepin"]]:
+    if not isinstance(value, list):
+        return []
+    return [cast(Literal["cts", "liepin"], item) for item in value if item in {"cts", "liepin"}]
 
 
 def _str_or_none(value: object) -> str | None:

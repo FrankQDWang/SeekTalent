@@ -269,6 +269,64 @@ def test_agent_workbench_marks_requirement_projection_unavailable_when_latest_dr
     assert response.reasonCode == "runtime_projection_unavailable"
 
 
+def test_requirement_review_transcript_keeps_safe_historical_snapshot(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+
+    submitted = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "jobTitle": "Python 平台负责人",
+            "text": "需要 Python API、平台工程和检索排序。",
+            "notes": "优先 toB SaaS",
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-safe-snapshot-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft_id = submitted.json()["requirementDraftRevisionId"]
+
+    view = client.get(f"/api/agent/workbench/conversations/{conversation_id}")
+    assert view.status_code == 200, view.text
+    payload = view.json()
+    [requirement_message] = [
+        message for message in payload["messages"] if message["messageType"] == "requirement_review"
+    ]
+    message_payload = requirement_message["payload"]
+    snapshot = message_payload["requirementDraftSnapshot"]
+    serialized_snapshot = json.dumps(snapshot, ensure_ascii=False)
+
+    assert message_payload["kind"] == "requirement_review"
+    assert message_payload["requirementDraftId"] == draft_id
+    assert snapshot["draftRevisionId"] == draft_id
+    assert snapshot["sections"][0]["items"][0]["text"] == "Python API"
+    assert payload["requirementDraft"]["draftRevisionId"] == draft_id
+    assert "value" not in serialized_snapshot
+    assert "source_span_refs" not in serialized_snapshot
+    assert "amendment" not in serialized_snapshot
+
+    store_path = client.app.state.agent_conversation_store.path
+    with sqlite3.connect(store_path) as conn:
+        row = conn.execute(
+            """
+            SELECT transcript_message_id, draft_revision_id, snapshot_json
+            FROM wts_requirement_transcript_snapshots
+            WHERE conversation_id = ?
+            """,
+            (conversation_id,),
+        ).fetchone()
+
+    assert row is not None
+    assert row[0] == requirement_message["messageId"]
+    assert row[1] == draft_id
+    assert json.loads(row[2])["draftRevisionId"] == draft_id
+
+
 def test_workbench_view_enforces_product_payload_budgets() -> None:
     thread = _thread_view()
     thread = thread.model_copy(
