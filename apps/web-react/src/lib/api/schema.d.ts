@@ -1013,6 +1013,57 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/agent/workbench/conversations/{conversation_id}/messages": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Submit Agent Workbench Message */
+    post: operations["submit_agent_workbench_message_api_agent_workbench_conversations__conversation_id__messages_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/agent/workbench/conversations/{conversation_id}/requirements/operations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Update Agent Workbench Requirement Draft */
+    post: operations["update_agent_workbench_requirement_draft_api_agent_workbench_conversations__conversation_id__requirements_operations_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/agent/workbench/conversations/{conversation_id}/requirements/amend-from-text": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Amend Agent Workbench Requirement From Text */
+    post: operations["amend_agent_workbench_requirement_from_text_api_agent_workbench_conversations__conversation_id__requirements_amend_from_text_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/agent/workbench/conversations/{conversation_id}/requirements/confirm": {
     parameters: {
       query?: never;
@@ -1024,6 +1075,23 @@ export interface paths {
     put?: never;
     /** Confirm Agent Workbench Requirements */
     post: operations["confirm_agent_workbench_requirements_api_agent_workbench_conversations__conversation_id__requirements_confirm_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/agent/workbench/conversations/{conversation_id}/workflow/commands": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Submit Agent Workbench Workflow Command */
+    post: operations["submit_agent_workbench_workflow_command_api_agent_workbench_conversations__conversation_id__workflow_commands_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1753,15 +1821,6 @@ export interface components {
        * @default 0
        */
       pendingMemoryReviewCount: number;
-    };
-    /** AgentWorkbenchRequirementConfirmRequest */
-    AgentWorkbenchRequirementConfirmRequest: {
-      /** Draftrevisionid */
-      draftRevisionId: string;
-      /** Expecteddraftrevisionid */
-      expectedDraftRevisionId: string;
-      /** Idempotencykey */
-      idempotencyKey: string;
     };
     /** AgentWorkbenchRequirementDraftItemResponse */
     AgentWorkbenchRequirementDraftItemResponse: {
@@ -3417,6 +3476,39 @@ export interface components {
       /** Message */
       message: string;
     };
+    /** WorkbenchRequirementAmendRequest */
+    WorkbenchRequirementAmendRequest: {
+      /** Draftrevisionid */
+      draftRevisionId: string;
+      /** Expecteddraftrevisionid */
+      expectedDraftRevisionId: string;
+      /** Text */
+      text: string;
+      /** Targetsectionhint */
+      targetSectionHint?: string | null;
+      /** Idempotencykey */
+      idempotencyKey: string;
+    };
+    /** WorkbenchRequirementConfirmRequest */
+    WorkbenchRequirementConfirmRequest: {
+      /** Draftrevisionid */
+      draftRevisionId: string;
+      /** Expecteddraftrevisionid */
+      expectedDraftRevisionId: string;
+      /** Idempotencykey */
+      idempotencyKey: string;
+    };
+    /** WorkbenchRequirementOperationsRequest */
+    WorkbenchRequirementOperationsRequest: {
+      /** Draftrevisionid */
+      draftRevisionId: string;
+      /** Expecteddraftrevisionid */
+      expectedDraftRevisionId: string;
+      /** Operations */
+      operations: components["schemas"]["RequirementDraftOperationRequest"][];
+      /** Idempotencykey */
+      idempotencyKey: string;
+    };
     /** WorkbenchRequirementReviewResponse */
     WorkbenchRequirementReviewResponse: {
       /** Session Id */
@@ -4107,6 +4199,36 @@ export interface components {
        * @default 0
        */
       detailOpenBlockedCount: number;
+    };
+    /** WorkbenchSubmitJdMessageRequest */
+    WorkbenchSubmitJdMessageRequest: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      messageType: "submitJd";
+      /** Text */
+      text: string;
+      /** Jobtitle */
+      jobTitle?: string | null;
+      /** Notes */
+      notes?: string | null;
+      /** Sourcekinds */
+      sourceKinds: string[];
+      /** Idempotencykey */
+      idempotencyKey: string;
+    };
+    /** WorkbenchUserTextMessageRequest */
+    WorkbenchUserTextMessageRequest: {
+      /**
+       * @description discriminator enum property added by openapi-typescript
+       * @enum {string}
+       */
+      messageType: "userText";
+      /** Text */
+      text: string;
+      /** Idempotencykey */
+      idempotencyKey: string;
     };
     /** WorkflowCommandRequest */
     WorkflowCommandRequest: {
@@ -6164,6 +6286,113 @@ export interface operations {
       };
     };
   };
+  submit_agent_workbench_message_api_agent_workbench_conversations__conversation_id__messages_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json":
+          | components["schemas"]["WorkbenchSubmitJdMessageRequest"]
+          | components["schemas"]["WorkbenchUserTextMessageRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  update_agent_workbench_requirement_draft_api_agent_workbench_conversations__conversation_id__requirements_operations_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkbenchRequirementOperationsRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  amend_agent_workbench_requirement_from_text_api_agent_workbench_conversations__conversation_id__requirements_amend_from_text_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkbenchRequirementAmendRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
   confirm_agent_workbench_requirements_api_agent_workbench_conversations__conversation_id__requirements_confirm_post: {
     parameters: {
       query?: never;
@@ -6175,7 +6404,42 @@ export interface operations {
     };
     requestBody: {
       content: {
-        "application/json": components["schemas"]["AgentWorkbenchRequirementConfirmRequest"];
+        "application/json": components["schemas"]["WorkbenchRequirementConfirmRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  submit_agent_workbench_workflow_command_api_agent_workbench_conversations__conversation_id__workflow_commands_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkflowCommandRequest"];
       };
     };
     responses: {
