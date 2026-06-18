@@ -7,10 +7,17 @@ from collections.abc import AsyncIterator
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette import EventSourceResponse
 
 from seektalent_conversation_agent.errors import ConversationAgentError
+from seektalent_ui.agent_rate_limit import check_agent_write_rate
+from seektalent_ui.agent_request_models import (
+    WorkbenchAgentMessageRequest,
+    WorkbenchRequirementAmendRequest,
+    WorkbenchRequirementConfirmRequest,
+    WorkbenchRequirementOperationsRequest,
+    WorkflowCommandRequest,
+)
 from seektalent_ui.agent_route_deps import (
     get_agent_conversation_store,
     get_agent_service,
@@ -43,14 +50,6 @@ from seektalent_ui.workbench_store import WorkbenchUser
 router = APIRouter(prefix="/api/agent/workbench")
 logger = logging.getLogger(__name__)
 # Raw conversation routes keep agent_http_error; Workbench routes return Problem Details.
-
-
-class AgentWorkbenchRequirementConfirmRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    draftRevisionId: str = Field(min_length=1)
-    expectedDraftRevisionId: str = Field(min_length=1)
-    idempotencyKey: str = Field(min_length=1, max_length=160)
 
 
 @router.get("/conversations", response_model=AgentWorkbenchConversationListResponse)
@@ -90,16 +89,107 @@ def get_agent_workbench_view(
 
 
 @router.post(
+    "/conversations/{conversation_id}/messages",
+    response_model=AgentWorkbenchConversationResponse,
+)
+async def submit_agent_workbench_message(
+    conversation_id: str,
+    payload: WorkbenchAgentMessageRequest,
+    request: Request,
+    user: WorkbenchUser = Depends(local_workbench_write_user),
+) -> AgentWorkbenchConversationResponse:
+    service = get_agent_service(request)
+    try:
+        check_agent_write_rate(request, user=user, conversation_id=conversation_id)
+        if payload.messageType == "submitJd":
+            service.submit_jd(
+                conversation_id=conversation_id,
+                owner_user_id=user.user_id,
+                workspace_id=user.workspace_id,
+                job_title=payload.jobTitle,
+                jd_text=payload.text,
+                notes=payload.notes,
+                source_kinds=payload.sourceKinds,
+                idempotency_key=payload.idempotencyKey,
+            )
+        else:
+            await service.run_agent_turn(
+                conversation_id=conversation_id,
+                owner_user_id=user.user_id,
+                workspace_id=user.workspace_id,
+                user_message=payload.text,
+                idempotency_key=payload.idempotencyKey,
+            )
+    except ConversationAgentError as exc:
+        raise _agent_workbench_error(exc, request) from exc
+    return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
+
+
+@router.post(
+    "/conversations/{conversation_id}/requirements/operations",
+    response_model=AgentWorkbenchConversationResponse,
+)
+def update_agent_workbench_requirement_draft(
+    conversation_id: str,
+    payload: WorkbenchRequirementOperationsRequest,
+    request: Request,
+    user: WorkbenchUser = Depends(local_workbench_write_user),
+) -> AgentWorkbenchConversationResponse:
+    try:
+        check_agent_write_rate(request, user=user, conversation_id=conversation_id)
+        get_agent_service(request).update_requirement_draft(
+            conversation_id=conversation_id,
+            owner_user_id=user.user_id,
+            workspace_id=user.workspace_id,
+            draft_revision_id=payload.draftRevisionId,
+            base_revision_id=payload.expectedDraftRevisionId,
+            operations=[operation.to_runtime_payload() for operation in payload.operations],
+            idempotency_key=payload.idempotencyKey,
+        )
+    except ConversationAgentError as exc:
+        raise _agent_workbench_error(exc, request) from exc
+    return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
+
+
+@router.post(
+    "/conversations/{conversation_id}/requirements/amend-from-text",
+    response_model=AgentWorkbenchConversationResponse,
+)
+def amend_agent_workbench_requirement_from_text(
+    conversation_id: str,
+    payload: WorkbenchRequirementAmendRequest,
+    request: Request,
+    user: WorkbenchUser = Depends(local_workbench_write_user),
+) -> AgentWorkbenchConversationResponse:
+    try:
+        check_agent_write_rate(request, user=user, conversation_id=conversation_id)
+        get_agent_service(request).amend_requirement_draft_from_text(
+            conversation_id=conversation_id,
+            owner_user_id=user.user_id,
+            workspace_id=user.workspace_id,
+            draft_revision_id=payload.draftRevisionId,
+            base_revision_id=payload.expectedDraftRevisionId,
+            text=payload.text,
+            target_section_hint=payload.targetSectionHint,
+            idempotency_key=payload.idempotencyKey,
+        )
+    except ConversationAgentError as exc:
+        raise _agent_workbench_error(exc, request) from exc
+    return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
+
+
+@router.post(
     "/conversations/{conversation_id}/requirements/confirm",
     response_model=AgentWorkbenchConversationResponse,
 )
 def confirm_agent_workbench_requirements(
     conversation_id: str,
-    payload: AgentWorkbenchRequirementConfirmRequest,
+    payload: WorkbenchRequirementConfirmRequest,
     request: Request,
     user: WorkbenchUser = Depends(local_workbench_write_user),
 ) -> AgentWorkbenchConversationResponse:
     try:
+        check_agent_write_rate(request, user=user, conversation_id=conversation_id)
         get_agent_service(request).confirm_requirements(
             conversation_id=conversation_id,
             owner_user_id=user.user_id,
@@ -108,6 +198,45 @@ def confirm_agent_workbench_requirements(
             expected_draft_revision_id=payload.expectedDraftRevisionId,
             idempotency_key=payload.idempotencyKey,
     )
+    except ConversationAgentError as exc:
+        raise _agent_workbench_error(exc, request) from exc
+    return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
+
+
+@router.post(
+    "/conversations/{conversation_id}/workflow/commands",
+    response_model=AgentWorkbenchConversationResponse,
+)
+def submit_agent_workbench_workflow_command(
+    conversation_id: str,
+    payload: WorkflowCommandRequest,
+    request: Request,
+    user: WorkbenchUser = Depends(local_workbench_write_user),
+) -> AgentWorkbenchConversationResponse:
+    service = get_agent_service(request)
+    try:
+        check_agent_write_rate(request, user=user, conversation_id=conversation_id)
+        if payload.commandType == "nextRoundRequirement":
+            if payload.text is None:
+                raise ConversationAgentError("agent_free_text_empty")
+            service.submit_next_round_requirement(
+                conversation_id=conversation_id,
+                owner_user_id=user.user_id,
+                workspace_id=user.workspace_id,
+                runtime_run_id=payload.runtimeRunId,
+                text=payload.text,
+                target_section_hint=payload.targetSectionHint,
+                idempotency_key=payload.idempotencyKey,
+            )
+        else:
+            service.request_workflow_command(
+                conversation_id=conversation_id,
+                owner_user_id=user.user_id,
+                workspace_id=user.workspace_id,
+                runtime_run_id=payload.runtimeRunId,
+                command_type=payload.commandType,
+                idempotency_key=payload.idempotencyKey,
+            )
     except ConversationAgentError as exc:
         raise _agent_workbench_error(exc, request) from exc
     return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)

@@ -25,6 +25,7 @@ from seektalent_conversation_agent.models import (
     TranscriptMessage,
 )
 from seektalent_runtime_control.models import RuntimeControlEvent, RuntimeControlEventPage, RuntimeRunRecord
+from seektalent_ui.agent_routes import LocalAgentRateLimiter
 from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchCandidateSummaryResponse,
     AgentWorkbenchDetailApprovalResponse,
@@ -1028,6 +1029,205 @@ def test_agent_workbench_view_route_returns_typed_snapshot(tmp_path: Path) -> No
     assert payload["streamCursor"]["snapshotSeq"] == 0
     assert payload["streamCursor"]["viewRevision"] == 0
     assert stream_store.latest_seq(conversation_id=conversation_id) == 0
+
+
+def test_workbench_message_action_returns_refreshed_workbench_view(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-view-1",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["schemaVersion"] == "agent.workbench.view.v2"
+    assert body["requirementDraft"]["sections"][0]["displayName"] == "必须满足"
+    assert body["messages"][0]["payload"]["kind"] == "job_request"
+    assert "confirm_requirements" in body["pendingActions"]["allowed"]
+
+
+def test_workbench_message_action_uses_agent_write_rate_limiter(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    client.app.state.agent_rate_limiter = LocalAgentRateLimiter(max_writes_per_minute=1)
+    _ensure_local_actor(client)
+    created = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    )
+    assert created.status_code == 201, created.text
+    conversation_id = created.json()["conversation"]["conversationId"]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-rate-limited-1",
+        },
+    )
+
+    assert response.status_code == 429
+    problem = response.json()
+    assert problem["type"].endswith("/agent_rate_limited")
+    assert problem["status"] == 429
+    assert problem["reasonCode"] == "agent_rate_limited"
+
+
+def test_workbench_requirement_operation_returns_refreshed_workbench_view(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    submitted = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-operation-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft = submitted.json()["requirementDraft"]
+    first_item = draft["sections"][0]["items"][0]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/operations",
+        json={
+            "draftRevisionId": draft["draftRevisionId"],
+            "expectedDraftRevisionId": draft["draftRevisionId"],
+            "operations": [{"op": "set_selected", "itemId": first_item["itemId"], "selected": False}],
+            "idempotencyKey": "deselect-workbench-1",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["schemaVersion"] == "agent.workbench.view.v2"
+    updated = body["requirementDraft"]["sections"][0]["items"][0]
+    assert updated["itemId"] == first_item["itemId"]
+    assert updated["selected"] is False
+
+
+def test_workbench_message_action_rejects_source_ids_only_submit_jd_contract(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceIds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-source-ids-only-1",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    problem = response.json()
+    assert problem["reasonCode"] == "agent_request_invalid"
+    assert {region["field"] for region in problem["regions"]} >= {"submitJd.sourceIds", "submitJd.sourceKinds"}
+
+
+def test_workbench_requirement_operation_stale_revision_returns_problem_details(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    submitted = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-stale-operation-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft = submitted.json()["requirementDraft"]
+    first_item = draft["sections"][0]["items"][0]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/operations",
+        json={
+            "draftRevisionId": draft["draftRevisionId"],
+            "expectedDraftRevisionId": "stale-draft",
+            "operations": [{"op": "set_selected", "itemId": first_item["itemId"], "selected": False}],
+            "idempotencyKey": "deselect-workbench-stale-1",
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    problem = response.json()
+    assert problem["type"].endswith("/requirement_draft_stale")
+    assert problem["reasonCode"] == "requirement_draft_stale"
+
+
+def test_workbench_requirement_amend_empty_expected_revision_returns_validation_error(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    submitted = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-empty-amend-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft_id = submitted.json()["requirementDraft"]["draftRevisionId"]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/amend-from-text",
+        json={
+            "draftRevisionId": draft_id,
+            "expectedDraftRevisionId": "",
+            "text": "补充要求：平台治理经验",
+            "idempotencyKey": "amend-workbench-empty-expected-1",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    problem = response.json()
+    assert problem["reasonCode"] == "agent_request_invalid"
+    assert problem["regions"][0]["field"] == "expectedDraftRevisionId"
 
 
 def test_agent_workbench_confirm_route_queues_start_intent_without_sync_runtime_start(tmp_path: Path) -> None:

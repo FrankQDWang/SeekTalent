@@ -1,10 +1,6 @@
 from __future__ import annotations
 
 import time
-from collections import defaultdict, deque
-from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +13,15 @@ from seektalent_agent_memory.service import MemoryService
 from seektalent_agent_memory.store import MemoryStore
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.runtime import AgentRuntime
+from seektalent_ui.agent_rate_limit import LocalAgentRateLimiter as LocalAgentRateLimiter, check_agent_write_rate
+from seektalent_ui.agent_request_models import (
+    AgentMessageRequest,
+    RequirementAmendRequest,
+    RequirementConfirmRequest,
+    RequirementOperationsRequest,
+    RequirementReviewResolveRequest,
+    WorkflowCommandRequest,
+)
 from seektalent_ui.agent_route_deps import AGENT_CONVERSATION_SCHEMA_VERSION, agent_http_error, get_agent_service
 from seektalent_ui.workbench_local_actor import local_workbench_read_user, local_workbench_write_user
 from seektalent_ui.workbench_store import WorkbenchUser
@@ -25,29 +30,6 @@ from seektalent_ui.workbench_store import WorkbenchUser
 AGENT_MEMORY_SCHEMA_VERSION = "agent.memory.v2"
 
 router = APIRouter(prefix="/api/agent")
-
-
-@dataclass
-class LocalAgentRateLimiter:
-    max_writes_per_minute: int = 60
-    now: Callable[[], float] = time.monotonic
-
-    def __post_init__(self) -> None:
-        self._hits: dict[tuple[str, str], deque[float]] = defaultdict(deque)
-
-    def check(self, *, user_id: str, conversation_id: str) -> None:
-        self._check_bucket(("user", user_id))
-        if conversation_id != "new":
-            self._check_bucket((user_id, conversation_id))
-
-    def _check_bucket(self, key: tuple[str, str]) -> None:
-        bucket = self._hits[key]
-        current = self.now()
-        while bucket and current - bucket[0] >= 60:
-            bucket.popleft()
-        if len(bucket) >= self.max_writes_per_minute:
-            raise ConversationAgentError("agent_rate_limited")
-        bucket.append(current)
 
 
 class ConversationCreateRequest(BaseModel):
@@ -62,98 +44,6 @@ class ConversationTitleRequest(BaseModel):
     title: str = Field(min_length=1, max_length=120)
 
 
-class AgentMessageRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    messageType: Literal["submitJd", "userText"]
-    text: str = Field(min_length=1, max_length=20000)
-    jobTitle: str | None = Field(default=None, min_length=1, max_length=256)
-    notes: str | None = Field(default=None, max_length=5000)
-    sourceIds: list[str] = Field(default_factory=lambda: ["cts"], min_length=1, max_length=2)
-    sourceKinds: list[str] | None = Field(default=None, min_length=1, max_length=2)
-    idempotencyKey: str = Field(min_length=1, max_length=160)
-
-
-class RequirementDraftOperationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    op: Literal["set_selected", "edit_text", "delete_item", "move_item", "set_enabled"]
-    itemId: str
-    selected: bool | None = None
-    text: str | None = None
-    targetSection: str | None = None
-    enabled: bool | None = None
-
-    def to_runtime_payload(self) -> dict[str, object]:
-        payload: dict[str, object] = {"op": self.op, "item_id": self.itemId}
-        if self.selected is not None:
-            payload["selected"] = self.selected
-        if self.text is not None:
-            payload["text"] = self.text
-        if self.targetSection is not None:
-            payload["target_section"] = self.targetSection
-        if self.enabled is not None:
-            payload["enabled"] = self.enabled
-        return payload
-
-
-class RequirementOperationsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    draftRevisionId: str
-    baseRevisionId: str
-    operations: list[RequirementDraftOperationRequest]
-    idempotencyKey: str = Field(min_length=1, max_length=160)
-
-
-class ReviewResolutionOperationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    op: Literal["accept_candidate", "edit_candidate", "move_candidate", "reject_candidate", "reject_fragment"]
-    reviewItemId: str
-    targetSection: str | None = None
-    text: str | None = None
-    reasonCode: str | None = None
-
-    def to_runtime_payload(self) -> dict[str, object]:
-        payload: dict[str, object] = {"op": self.op, "review_item_id": self.reviewItemId}
-        if self.targetSection is not None:
-            payload["target_section"] = self.targetSection
-        if self.text is not None:
-            payload["text"] = self.text
-        if self.reasonCode is not None:
-            payload["reason_code"] = self.reasonCode
-        return payload
-
-
-class RequirementAmendRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    draftRevisionId: str
-    baseRevisionId: str
-    text: str = Field(min_length=1, max_length=2000)
-    targetSectionHint: str | None = None
-    idempotencyKey: str = Field(min_length=1, max_length=160)
-
-
-class RequirementReviewResolveRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    draftRevisionId: str
-    baseRevisionId: str
-    amendmentId: str
-    operations: list[ReviewResolutionOperationRequest]
-    idempotencyKey: str = Field(min_length=1, max_length=160)
-
-
-class RequirementConfirmRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    draftRevisionId: str
-    baseRevisionId: str
-    idempotencyKey: str = Field(min_length=1, max_length=160)
-
-
 class WorkflowStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -161,16 +51,6 @@ class WorkflowStartRequest(BaseModel):
     jdText: str = Field(min_length=1, max_length=20000)
     notes: str | None = Field(default=None, max_length=5000)
     sourceIds: list[str] = Field(default_factory=lambda: ["cts"], min_length=1, max_length=2)
-
-
-class WorkflowCommandRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    runtimeRunId: str | None = None
-    commandType: Literal["pause", "cancel", "resume", "nextRoundRequirement"]
-    idempotencyKey: str = Field(min_length=1, max_length=160)
-    text: str | None = Field(default=None, max_length=2000)
-    targetSectionHint: str | None = None
 
 
 class FinalSummaryRequest(BaseModel):
@@ -834,21 +714,15 @@ def get_memory_service(request: Request) -> MemoryService:
 
 
 def _check_write_rate(request: Request, *, user: WorkbenchUser, conversation_id: str) -> None:
-    limiter = getattr(request.app.state, "agent_rate_limiter", None)
-    if not isinstance(limiter, LocalAgentRateLimiter):
-        return
     try:
-        limiter.check(user_id=user.user_id, conversation_id=conversation_id)
+        check_agent_write_rate(request, user=user, conversation_id=conversation_id)
     except ConversationAgentError as exc:
         raise agent_http_error(exc) from exc
 
 
 def _check_memory_write_rate(request: Request, *, user: WorkbenchUser) -> None:
-    limiter = getattr(request.app.state, "agent_rate_limiter", None)
-    if not isinstance(limiter, LocalAgentRateLimiter):
-        return
     try:
-        limiter.check(user_id=user.user_id, conversation_id="memory")
+        check_agent_write_rate(request, user=user, conversation_id="memory")
     except ConversationAgentError as exc:
         raise _memory_http_error(exc, status_code=429) from exc
 
