@@ -1013,6 +1013,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/agent/workbench/conversations/{conversation_id}/requirements/confirm": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Confirm Agent Workbench Requirements */
+    post: operations["confirm_agent_workbench_requirements_api_agent_workbench_conversations__conversation_id__requirements_confirm_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/agent/workbench/conversations/{conversation_id}/events": {
     parameters: {
       query?: never;
@@ -1301,6 +1318,8 @@ export interface components {
       notes?: string | null;
       /** Sourceids */
       sourceIds?: string[];
+      /** Sourcekinds */
+      sourceKinds?: string[] | null;
       /** Idempotencykey */
       idempotencyKey: string;
     };
@@ -1468,6 +1487,8 @@ export interface components {
       runtimeRunId?: string | null;
       /** Workbenchsessionid */
       workbenchSessionId?: string | null;
+      /** Workflowstartintentid */
+      workflowStartIntentId?: string | null;
       /** Linkedruntimeruns */
       linkedRuntimeRuns?: components["schemas"]["AgentWorkbenchLinkedRuntimeRunResponse"][];
       /** Updatedat */
@@ -1662,8 +1683,15 @@ export interface components {
       kind: "empty" | "job_request" | "requirement_review";
       /** Jobtitle */
       jobTitle?: string | null;
+      /** Notes */
+      notes?: string | null;
+      /** Sourcekinds */
+      sourceKinds?: ("cts" | "liepin")[];
       /** Requirementdraftid */
       requirementDraftId?: string | null;
+      requirementDraftSnapshot?:
+        | components["schemas"]["AgentWorkbenchRequirementDraftResponse"]
+        | null;
     };
     /** AgentWorkbenchMessageResponse */
     AgentWorkbenchMessageResponse: {
@@ -1726,14 +1754,79 @@ export interface components {
        */
       pendingMemoryReviewCount: number;
     };
+    /** AgentWorkbenchRequirementConfirmRequest */
+    AgentWorkbenchRequirementConfirmRequest: {
+      /** Draftrevisionid */
+      draftRevisionId: string;
+      /** Expecteddraftrevisionid */
+      expectedDraftRevisionId: string;
+      /** Idempotencykey */
+      idempotencyKey: string;
+    };
+    /** AgentWorkbenchRequirementDraftItemResponse */
+    AgentWorkbenchRequirementDraftItemResponse: {
+      /** Itemid */
+      itemId: string;
+      /** Sectionid */
+      sectionId: string;
+      /** Selected */
+      selected: boolean;
+      /** Enabled */
+      enabled: boolean;
+      /** Editable */
+      editable: boolean;
+      /** Text */
+      text: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        | "resolved"
+        | "needs_review"
+        | "deleted"
+        | "moved"
+        | "rejected"
+        | "unknown";
+      /** Source */
+      source: string;
+      /** Allowedactions */
+      allowedActions?: string[];
+    };
     /** AgentWorkbenchRequirementDraftResponse */
     AgentWorkbenchRequirementDraftResponse: {
       /** Draftrevisionid */
       draftRevisionId: string;
+      /** Parentdraftrevisionid */
+      parentDraftRevisionId?: string | null;
+      /** Status */
+      status: string;
       /** Title */
       title: string;
       /** Summary */
       summary: string;
+      /** Canconfirm */
+      canConfirm: boolean;
+      /** Unresolvedreviewitemcount */
+      unresolvedReviewItemCount: number;
+      /** Sections */
+      sections?: components["schemas"]["AgentWorkbenchRequirementDraftSectionResponse"][];
+      /**
+       * Otherinputprompt
+       * @default 其他
+       */
+      otherInputPrompt: string;
+    };
+    /** AgentWorkbenchRequirementDraftSectionResponse */
+    AgentWorkbenchRequirementDraftSectionResponse: {
+      /** Sectionid */
+      sectionId: string;
+      /** Displayname */
+      displayName: string;
+      /** Backendfield */
+      backendField: string;
+      /** Items */
+      items?: components["schemas"]["AgentWorkbenchRequirementDraftItemResponse"][];
     };
     /** AgentWorkbenchReviewArtifactResponse */
     AgentWorkbenchReviewArtifactResponse: {
@@ -1792,11 +1885,20 @@ export interface components {
     };
     /** AgentWorkbenchStreamCursorResponse */
     AgentWorkbenchStreamCursorResponse: {
-      /** Latestmessageseq */
+      /**
+       * Latestmessageseq
+       * @default 0
+       */
       latestMessageSeq: number;
-      /** Latestactivityseq */
+      /**
+       * Latestactivityseq
+       * @default 0
+       */
       latestActivitySeq: number;
-      /** Latestruntimeeventseq */
+      /**
+       * Latestruntimeeventseq
+       * @default 0
+       */
       latestRuntimeEventSeq: number;
       /**
        * Lateststreamseq
@@ -6041,6 +6143,41 @@ export interface operations {
       cookie?: never;
     };
     requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  confirm_agent_workbench_requirements_api_agent_workbench_conversations__conversation_id__requirements_confirm_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AgentWorkbenchRequirementConfirmRequest"];
+      };
+    };
     responses: {
       /** @description Successful Response */
       200: {
