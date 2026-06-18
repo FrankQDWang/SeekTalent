@@ -109,6 +109,7 @@ class AgentWorkbenchConversationSummaryResponse(BaseModel):
     isArchived: bool
     runtimeRunId: str | None = None
     workbenchSessionId: str | None = None
+    workflowStartIntentId: str | None = None
     linkedRuntimeRuns: list[AgentWorkbenchLinkedRuntimeRunResponse] = Field(default_factory=list)
     updatedAt: str | None = None
 

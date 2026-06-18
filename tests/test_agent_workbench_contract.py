@@ -773,6 +773,95 @@ def test_agent_workbench_view_route_returns_typed_snapshot(tmp_path: Path) -> No
     assert stream_store.latest_seq(conversation_id=conversation_id) == 0
 
 
+def test_agent_workbench_confirm_route_queues_start_intent_without_sync_runtime_start(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    submitted = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "jobTitle": "Python 平台负责人",
+            "text": "需要 Python API、平台工程和检索排序。",
+            "notes": "优先 toB SaaS",
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-confirm-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft_id = submitted.json()["requirementDraftRevisionId"]
+
+    confirmed = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
+        json={
+            "draftRevisionId": draft_id,
+            "expectedDraftRevisionId": draft_id,
+            "idempotencyKey": "confirm-workbench-1",
+        },
+    )
+
+    assert confirmed.status_code == 200, confirmed.text
+    payload = confirmed.json()
+    assert payload["schemaVersion"] == "agent.workbench.view.v1"
+    assert payload["conversation"]["conversationId"] == conversation_id
+    assert payload["conversation"]["workflowStartIntentId"]
+    assert payload["conversation"]["runtimeRunId"] is None
+    assert payload["runtime"] is None
+    service = client.app.state.agent_conversation_service
+    runtime_store = service.tool_adapter.runtime_store
+    assert runtime_store.get_run_by_run_intent_id(
+        f"wts:default:{conversation_id}:{draft_id}"
+    ) is None
+
+
+def test_agent_workbench_confirm_route_rejects_same_key_changed_expected_revision(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    submitted = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "jobTitle": "Python 平台负责人",
+            "text": "需要 Python API、平台工程和检索排序。",
+            "notes": "优先 toB SaaS",
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-confirm-conflict-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft_id = submitted.json()["requirementDraftRevisionId"]
+    first = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
+        json={
+            "draftRevisionId": draft_id,
+            "expectedDraftRevisionId": draft_id,
+            "idempotencyKey": "confirm-workbench-conflict-1",
+        },
+    )
+    assert first.status_code == 200, first.text
+
+    conflict = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
+        json={
+            "draftRevisionId": draft_id,
+            "expectedDraftRevisionId": "stale-draft-revision",
+            "idempotencyKey": "confirm-workbench-conflict-1",
+        },
+    )
+
+    assert conflict.status_code == 400, conflict.text
+    problem = conflict.json()
+    detail = problem.get("detail", problem)
+    assert detail["reasonCode"] == "idempotency_key_conflict"
+
+
 def test_agent_workbench_conversation_list_route_returns_typed_summaries(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)

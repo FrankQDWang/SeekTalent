@@ -154,6 +154,8 @@ class AgentToolAdapter:
         jd_text: str,
         notes: str | None,
         source_ids: Sequence[str],
+        run_intent_id: str | None = None,
+        start_idempotency_key: str | None = None,
     ) -> RuntimeRunRecord:
         executor = self.workflow_executor
         if executor is None:
@@ -166,6 +168,8 @@ class AgentToolAdapter:
             jd_text=jd_text,
             notes=notes,
             source_ids=source_ids,
+            run_intent_id=run_intent_id,
+            start_idempotency_key=start_idempotency_key,
         )
 
     def get_workflow_snapshot(self, *, runtime_run_id: str) -> RuntimeRunSnapshot:

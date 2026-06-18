@@ -27,11 +27,23 @@ from seektalent_conversation_agent.models import (
 from seektalent_conversation_agent.projection import project_runtime_event
 from seektalent_conversation_agent.runtime import AgentRunner, AgentRuntime
 from seektalent_conversation_agent.safety import sanitize_summary_text, screen_requirement_text
+from seektalent_conversation_agent.source_selection import (
+    RuntimeSourceSelectionResolver,
+    SourceSelectionError,
+)
 from seektalent_conversation_agent.store import ConversationStore
 from seektalent_conversation_agent.tools import AgentToolAdapter
+from seektalent_conversation_agent.workflow_start_intents import (
+    WorkbenchOutboxStore,
+    WorkflowConfirmRequestStore,
+    WorkflowStartIntent,
+    WorkflowStartIntentStore,
+    workflow_confirm_request_hash,
+    workflow_start_request_hash,
+)
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.models import RuntimeRunSnapshot
-from seektalent_runtime_control.requirements import DraftOperation, ReviewResolutionOperation
+from seektalent_runtime_control.requirements import ApprovedRequirementRevision, DraftOperation, ReviewResolutionOperation
 
 
 _TERMINAL_RUN_STATUS_TO_CONVERSATION = {
@@ -39,6 +51,7 @@ _TERMINAL_RUN_STATUS_TO_CONVERSATION = {
     "failed": "failed",
     "cancelled": "cancelled",
 }
+_WORKFLOW_START_OUTBOX_CLAIM_TIMEOUT_SECONDS = 60
 
 
 class DraftProtocol(Protocol):
@@ -97,6 +110,7 @@ class ConversationAgentService:
         agent_instructions: str = "You are SeekTalent Assistant. Help the user operate the local recruiting workflow.",
         agent_runner: AgentRunner | None = None,
         budget_policy: AgentBudgetPolicy | None = None,
+        source_selection_resolver: RuntimeSourceSelectionResolver | None = None,
     ) -> None:
         self.store = store
         self.tool_adapter = tool_adapter
@@ -113,6 +127,18 @@ class ConversationAgentService:
         self.agent_runner = agent_runner
         self.budget_policy = budget_policy
         self.job_request_store = JobRequestStore(store.path, busy_timeout_ms=store.busy_timeout_ms)
+        self.workflow_start_intent_store = WorkflowStartIntentStore(
+            store.path,
+            busy_timeout_ms=store.busy_timeout_ms,
+        )
+        self.workflow_confirm_request_store = WorkflowConfirmRequestStore(
+            store.path,
+            busy_timeout_ms=store.busy_timeout_ms,
+        )
+        self.outbox_store = WorkbenchOutboxStore(store.path, busy_timeout_ms=store.busy_timeout_ms)
+        self.source_selection_resolver = source_selection_resolver or RuntimeSourceSelectionResolver(
+            registered_runtime_source_ids={"cts", "liepin"}
+        )
 
     def create_conversation(self, *, owner_user_id: str, workspace_id: str, title: str) -> ConversationRecord:
         return self.store.create_conversation(
@@ -490,11 +516,24 @@ class ConversationAgentService:
         owner_user_id: str,
         workspace_id: str,
     ) -> ConversationThreadView:
-        return self.store.reopen_conversation(
+        thread = self.store.reopen_conversation(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
             opened_at=self.now(),
+        )
+        intent = self.workflow_start_intent_store.get_latest_for_conversation(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+        )
+        if intent is None:
+            return thread
+        return thread.model_copy(
+            update={
+                "conversation_reopen_state": thread.conversation_reopen_state.model_copy(
+                    update={"workflow_start_intent_id": intent.workflow_start_intent_id}
+                )
+            }
         )
 
     def rename_conversation(
@@ -837,25 +876,304 @@ class ConversationAgentService:
         owner_user_id: str,
         workspace_id: str,
         draft_revision_id: str,
-        base_revision_id: str,
+        base_revision_id: str | None = None,
+        expected_draft_revision_id: str | None = None,
         idempotency_key: str,
     ) -> ConversationAgentResponse:
-        self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
+        conversation = self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
+        expected_revision_id = expected_draft_revision_id or base_revision_id
+        if expected_revision_id is None:
+            raise ConversationAgentError("requirement_draft_base_revision_required")
+        existing_confirm_request = self.workflow_confirm_request_store.get_by_idempotency_key(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing_confirm_request is not None and existing_confirm_request.draft_revision_id != draft_revision_id:
+            raise ConversationAgentError("idempotency_key_conflict")
+        job_request = self._require_confirmable_job_request(
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
+            draft_revision_id=draft_revision_id,
+        )
+        confirm_request_hash = workflow_confirm_request_hash(
+            draft_revision_id=draft_revision_id,
+            expected_draft_revision_id=expected_revision_id,
+            job_request_revision_id=job_request.job_request_revision_id,
+            job_request_request_hash=job_request.request_hash,
+            source_kinds=job_request.source_kinds,
+            workspace_source_policy_id=job_request.workspace_source_policy_id,
+        )
+        if existing_confirm_request is not None and existing_confirm_request.request_hash != confirm_request_hash:
+            raise ConversationAgentError("idempotency_key_conflict")
+        existing_by_key = self.workflow_start_intent_store.get_by_idempotency_key(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing_by_key is not None:
+            if existing_by_key.draft_revision_id != draft_revision_id:
+                raise ConversationAgentError("idempotency_key_conflict")
+            request_hash = workflow_start_request_hash(
+                draft_revision_id=draft_revision_id,
+                expected_draft_revision_id=expected_revision_id,
+                approved_requirement_revision_id=existing_by_key.approved_requirement_revision_id,
+                job_request_revision_id=job_request.job_request_revision_id,
+                job_request_request_hash=job_request.request_hash,
+                source_kinds=job_request.source_kinds,
+                workspace_source_policy_id=job_request.workspace_source_policy_id,
+            )
+            if existing_by_key.request_hash != request_hash:
+                raise ConversationAgentError("idempotency_key_conflict")
+            if existing_confirm_request is None:
+                self.workflow_confirm_request_store.create_or_get(
+                    workspace_id=workspace_id,
+                    owner_user_id=owner_user_id,
+                    conversation_id=conversation_id,
+                    draft_revision_id=draft_revision_id,
+                    expected_draft_revision_id=expected_revision_id,
+                    job_request_revision_id=job_request.job_request_revision_id,
+                    idempotency_key=idempotency_key,
+                    request_hash=confirm_request_hash,
+                    approved_requirement_revision_id=existing_by_key.approved_requirement_revision_id,
+                    status="intent_created",
+                    now=self.now(),
+                )
+            return self._confirmed_intent_response(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                draft_revision_id=draft_revision_id,
+                job_request_revision_id=existing_by_key.job_request_revision_id,
+                workflow_start_intent_id=existing_by_key.workflow_start_intent_id,
+            )
+        existing_by_draft = self.workflow_start_intent_store.get_by_draft(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            draft_revision_id=draft_revision_id,
+        )
+        if existing_by_draft is not None:
+            if (
+                existing_confirm_request is None
+                and (conversation.latest_draft_revision_id != draft_revision_id or expected_revision_id != draft_revision_id)
+            ):
+                raise ConversationAgentError(
+                    "requirement_draft_stale",
+                    payload={"latestDraftRevisionId": conversation.latest_draft_revision_id},
+                )
+            self.workflow_confirm_request_store.create_or_get(
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
+                conversation_id=conversation_id,
+                draft_revision_id=draft_revision_id,
+                expected_draft_revision_id=expected_revision_id,
+                job_request_revision_id=job_request.job_request_revision_id,
+                idempotency_key=idempotency_key,
+                request_hash=confirm_request_hash,
+                approved_requirement_revision_id=existing_by_draft.approved_requirement_revision_id,
+                status="intent_created",
+                now=self.now(),
+            )
+            return self._confirmed_intent_response(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                draft_revision_id=draft_revision_id,
+                job_request_revision_id=existing_by_draft.job_request_revision_id,
+                workflow_start_intent_id=existing_by_draft.workflow_start_intent_id,
+            )
+        if (
+            existing_confirm_request is None
+            and (conversation.latest_draft_revision_id != draft_revision_id or expected_revision_id != draft_revision_id)
+        ):
+            raise ConversationAgentError(
+                "requirement_draft_stale",
+                payload={"latestDraftRevisionId": conversation.latest_draft_revision_id},
+            )
+        if existing_confirm_request is not None:
+            confirm_request = existing_confirm_request
+        else:
+            confirm_request = self.workflow_confirm_request_store.create_or_get(
+                workspace_id=workspace_id,
+                owner_user_id=owner_user_id,
+                conversation_id=conversation_id,
+                draft_revision_id=draft_revision_id,
+                expected_draft_revision_id=expected_revision_id,
+                job_request_revision_id=job_request.job_request_revision_id,
+                idempotency_key=idempotency_key,
+                request_hash=confirm_request_hash,
+                now=self.now(),
+            )
+        approved = self._confirm_or_recover_approved_requirement(
+            conversation_id=conversation.conversation_id,
+            draft_revision_id=draft_revision_id,
+            base_revision_id=expected_revision_id,
+            idempotency_key=idempotency_key,
+        )
+        self.workflow_confirm_request_store.mark_approved(
+            confirm_request.confirm_request_id,
+            approved_requirement_revision_id=approved.approved_requirement_revision_id,
+            updated_at=self.now(),
+        )
+        request_hash = workflow_start_request_hash(
+            draft_revision_id=draft_revision_id,
+            expected_draft_revision_id=expected_revision_id,
+            approved_requirement_revision_id=approved.approved_requirement_revision_id,
+            job_request_revision_id=job_request.job_request_revision_id,
+            job_request_request_hash=job_request.request_hash,
+            source_kinds=job_request.source_kinds,
+            workspace_source_policy_id=job_request.workspace_source_policy_id,
+        )
+        intent = self.workflow_start_intent_store.create_or_get_confirmed_draft_intent(
+            workspace_id=workspace_id,
+            owner_user_id=owner_user_id,
+            conversation_id=conversation_id,
+            draft_revision_id=draft_revision_id,
+            approved_requirement_revision_id=approved.approved_requirement_revision_id,
+            job_request_revision_id=job_request.job_request_revision_id,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            now=self.now(),
+        )
+        self.workflow_confirm_request_store.mark_intent_created(
+            confirm_request.confirm_request_id,
+            updated_at=self.now(),
+        )
+        return self._confirmed_intent_response(
+            conversation_id=conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+            draft_revision_id=draft_revision_id,
+            job_request_revision_id=job_request.job_request_revision_id,
+            workflow_start_intent_id=intent.workflow_start_intent_id,
+        )
+
+    def _require_confirmable_job_request(
+        self,
+        *,
+        conversation_id: str,
+        workspace_id: str,
+        draft_revision_id: str,
+    ) -> JobRequestRevision:
         job_request_link = self.job_request_store.get_requirement_draft_job_request_link(draft_revision_id)
         if job_request_link is None:
             raise ConversationAgentError("requirement_draft_job_request_not_found")
         if job_request_link.workspace_id != workspace_id or job_request_link.conversation_id != conversation_id:
             raise ConversationAgentError("requirement_draft_job_request_not_found")
-        approved = self.tool_adapter.confirm_requirements(
+        job_request = self.job_request_store.get_job_request_revision(job_request_link.job_request_revision_id)
+        if job_request is None:
+            raise ConversationAgentError("job_request_revision_not_found")
+        if job_request.effective_job_title is None:
+            raise ConversationAgentError("job_title_missing")
+        return job_request
+
+    def _confirm_or_recover_approved_requirement(
+        self,
+        *,
+        conversation_id: str,
+        draft_revision_id: str,
+        base_revision_id: str,
+        idempotency_key: str,
+    ) -> ApprovedRequirementRevision:
+        if self.tool_adapter.runtime_store is not None:
+            approved = self.tool_adapter.runtime_store.get_approved_requirement_by_idempotency(
+                conversation_id=conversation_id,
+                idempotency_key=idempotency_key,
+            )
+            if approved is not None:
+                if approved.draft_revision_id != draft_revision_id:
+                    raise ConversationAgentError("idempotency_key_conflict")
+                return approved
+        return self.tool_adapter.confirm_requirements(
             draft_revision_id=draft_revision_id,
             base_revision_id=base_revision_id,
             idempotency_key=idempotency_key,
         )
-        self.store.link_approved_requirement(
-            conversation_id=conversation_id,
-            approved_requirement_revision_id=approved.approved_requirement_revision_id,
+
+    def process_workflow_start_outbox_item(self, outbox_id: str) -> WorkflowStartIntent:
+        current_item = self.outbox_store.get(outbox_id)
+        if current_item.event_type != "workflow_start_requested":
+            raise ConversationAgentError("workbench_outbox_event_type_invalid")
+        if current_item.status == "done":
+            return self.workflow_start_intent_store.get(current_item.aggregate_id)
+        claimed_at = self.now()
+        reclaim_before = _format_time(
+            _parse_time(claimed_at) - timedelta(seconds=_WORKFLOW_START_OUTBOX_CLAIM_TIMEOUT_SECONDS)
+        )
+        item = self.outbox_store.claim_for_processing(
+            outbox_id,
+            claimed_at=claimed_at,
+            reclaim_before=reclaim_before,
+        )
+        if item is None:
+            return self.workflow_start_intent_store.get(current_item.aggregate_id)
+        intent = self.workflow_start_intent_store.get(item.aggregate_id)
+        if intent.status == "started":
+            if intent.runtime_run_id is not None:
+                self._link_started_workflow_run(intent, runtime_run_id=intent.runtime_run_id)
+            self.outbox_store.mark_done(outbox_id, updated_at=self.now())
+            return self.workflow_start_intent_store.get(intent.workflow_start_intent_id)
+        if intent.status in {"failed", "cancelled"}:
+            self.outbox_store.mark_done(outbox_id, updated_at=self.now())
+            return intent
+
+        if self.tool_adapter.runtime_store is None:
+            raise ConversationAgentError("runtime_control_store_required")
+        approved = self.tool_adapter.runtime_store.get_approved_requirement(intent.approved_requirement_revision_id)
+        job_request = self.job_request_store.get_job_request_revision(intent.job_request_revision_id)
+        if job_request is None or job_request.effective_job_title is None:
+            failed = self.workflow_start_intent_store.mark_failed(
+                intent.workflow_start_intent_id,
+                reason_code="job_request_missing",
+                updated_at=self.now(),
+            )
+            self.outbox_store.mark_done(outbox_id, updated_at=self.now())
+            return failed
+
+        try:
+            source_selection = self.source_selection_resolver.resolve_runtime_source_selection(
+                source_kinds=job_request.source_kinds,
+                workspace_source_policy_id=job_request.workspace_source_policy_id,
+            )
+        except SourceSelectionError as exc:
+            failed = self.workflow_start_intent_store.mark_failed(
+                intent.workflow_start_intent_id,
+                reason_code=exc.reason_code,
+                updated_at=self.now(),
+            )
+            self.outbox_store.mark_done(outbox_id, updated_at=self.now())
+            return failed
+
+        runtime_run = self.tool_adapter.start_workflow(
+            conversation_id=intent.conversation_id,
+            workbench_session_id=None,
+            approved_requirement=approved,
+            job_title=job_request.effective_job_title,
+            jd_text=job_request.jd_text,
+            notes=job_request.notes,
+            source_ids=source_selection.runtime_source_ids,
+            run_intent_id=intent.deterministic_run_key,
+            start_idempotency_key=intent.deterministic_run_key,
+        )
+        self._link_started_workflow_run(intent, runtime_run_id=runtime_run.runtime_run_id)
+        started = self.workflow_start_intent_store.mark_started(
+            intent.workflow_start_intent_id,
+            runtime_run_id=runtime_run.runtime_run_id,
             updated_at=self.now(),
         )
+        self.outbox_store.mark_done(outbox_id, updated_at=self.now())
+        return started
+
+    def _confirmed_intent_response(
+        self,
+        *,
+        conversation_id: str,
+        owner_user_id: str,
+        workspace_id: str,
+        draft_revision_id: str,
+        job_request_revision_id: str,
+        workflow_start_intent_id: str,
+    ) -> ConversationAgentResponse:
         reopened = self.reopen_conversation(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -869,8 +1187,21 @@ class ConversationAgentService:
                 conversation_id=conversation_id,
                 draft_revision_id=draft_revision_id,
             ),
-            job_request_revision_id=job_request_link.job_request_revision_id,
+            job_request_revision_id=job_request_revision_id,
             requirement_draft_revision_id=draft_revision_id,
+            workflow_start_intent_id=workflow_start_intent_id,
+        )
+
+    def _link_started_workflow_run(self, intent: WorkflowStartIntent, *, runtime_run_id: str) -> None:
+        self.store.link_runtime_run(
+            conversation_id=intent.conversation_id,
+            runtime_run_id=runtime_run_id,
+            workbench_session_id=None,
+            approved_requirement_revision_id=intent.approved_requirement_revision_id,
+            run_intent_id=intent.deterministic_run_key,
+            run_kind="primary",
+            link_reason="start",
+            linked_at=self.now(),
         )
 
     def start_workflow(
@@ -887,6 +1218,31 @@ class ConversationAgentService:
         conversation = self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
         if conversation.approved_requirement_revision_id is None:
             raise ConversationAgentError("requirement_not_confirmed")
+        intent = self.workflow_start_intent_store.get_latest_for_conversation(
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+        )
+        if (
+            intent is not None
+            and intent.approved_requirement_revision_id == conversation.approved_requirement_revision_id
+            and intent.status in {"pending", "started"}
+        ):
+            if intent.status == "pending":
+                outbox_item = self.outbox_store.get_for_aggregate(intent.workflow_start_intent_id)
+                if outbox_item is None:
+                    raise ConversationAgentError("workflow_start_outbox_not_found")
+                intent = self.process_workflow_start_outbox_item(outbox_item.outbox_id)
+            elif intent.runtime_run_id is not None:
+                self._link_started_workflow_run(intent, runtime_run_id=intent.runtime_run_id)
+            if intent.runtime_run_id is None:
+                raise ConversationAgentError(intent.reason_code or "workflow_start_not_started")
+            return self.poll_runtime_events(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                runtime_run_id=intent.runtime_run_id,
+                limit=200,
+            )
         approved = self.tool_adapter._require_requirement_service().store.get_approved_requirement(
             conversation.approved_requirement_revision_id
         )

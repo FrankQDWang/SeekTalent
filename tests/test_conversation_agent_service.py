@@ -123,8 +123,7 @@ def test_requirement_edit_amend_review_resolution_confirm_and_workflow_start(tmp
     assert linked_run.is_active is True
     assert linked_run.run_kind == "primary"
     assert linked_run.run_intent_id == (
-        f"workflow:{conversation.conversation_id}:"
-        f"{confirmed.conversation_reopen_state.approved_requirement_revision_id}:primary"
+        f"wts:workspace_1:{conversation.conversation_id}:{resolved.requirement_draft.draft_revision_id}"
     )
     assert runtime_store.get_run("runtime_run_1").status == "queued"
     events = runtime_store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
