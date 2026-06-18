@@ -16,6 +16,7 @@ from seektalent.sqlite_migrations import (
     run_ordered_migrations,
     run_sqlite_integrity_checks,
 )
+from seektalent_conversation_agent.control_plane_schema import migrate_wts_control_plane
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.models import (
     AgentToolCallRecord,
@@ -31,7 +32,7 @@ from seektalent_conversation_agent.models import (
 )
 
 
-CONVERSATION_AGENT_SCHEMA_VERSION = 4
+CONVERSATION_AGENT_SCHEMA_VERSION = 5
 
 _ACTIVE_ARCHIVE_BLOCKING_STATUSES = {"starting", "running"}
 _RUNTIME_RUN_KINDS = {"primary", "rerun", "fork"}
@@ -71,7 +72,7 @@ class ConversationStore:
                     conn.execute(f"PRAGMA user_version = {CONVERSATION_AGENT_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="conversation-agent", foreign_keys=True)
                 return
-            if version in {2, 3}:
+            if version in {2, 3, 4}:
                 with conn:
                     run_ordered_migrations(
                         conn,
@@ -80,6 +81,7 @@ class ConversationStore:
                         migrations={
                             2: SQLiteMigrationStep(2, 3, _migrate_v2_to_v3),
                             3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
+                            4: SQLiteMigrationStep(4, 5, _migrate_v4_to_v5),
                         },
                         store_name="conversation-agent",
                     )
@@ -1249,6 +1251,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    migrate_wts_control_plane(conn)
 
 
 def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
@@ -1314,6 +1317,10 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
             ON agent_runtime_links(runtime_run_id)
         """
     )
+
+
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    migrate_wts_control_plane(conn)
 
 
 def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str, str]) -> None:

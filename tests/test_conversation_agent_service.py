@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_runtime_control.requirements import DraftOperation
 
 from tests.conversation_agent_test_support import build_service
@@ -37,6 +40,30 @@ def test_submit_jd_persists_user_message_and_requirement_review(tmp_path: Path) 
     ]
     assert all(item.selected for section in response.requirement_draft.sections for item in section.items)
     assert [message.message_type for message in response.messages] == ["user_text", "requirement_review"]
+
+
+def test_submit_jd_rejects_conflicting_source_aliases(tmp_path: Path) -> None:
+    service, _conversation_store, _runtime_store = build_service(tmp_path)
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="资深 Python 后端",
+    )
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        service.submit_jd(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            job_title="Python 平台负责人",
+            jd_text="需要 Python API、平台工程和检索排序。",
+            notes=None,
+            source_kinds=["cts"],
+            source_ids=["liepin"],
+            idempotency_key="submit-jd-conflicting-sources",
+        )
+
+    assert exc_info.value.reason_code == "job_request_source_kinds_conflict"
 
 
 def test_requirement_edit_amend_review_resolution_confirm_and_workflow_start(tmp_path: Path) -> None:

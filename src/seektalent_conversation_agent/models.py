@@ -190,6 +190,9 @@ class ConversationAgentResponse(BaseModel):
     messages: list[TranscriptMessage] = Field(default_factory=list)
     activity_items: list[TranscriptActivityItem] = Field(default_factory=list)
     requirement_draft: object | None = None
+    job_request_revision_id: str | None = None
+    requirement_draft_revision_id: str | None = None
+    workflow_start_intent_id: str | None = None
     final_summary: object | None = None
     compaction: ContextCompactionRecord | None = None
     reason_code: str | None = None

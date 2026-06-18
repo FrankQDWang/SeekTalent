@@ -17,8 +17,9 @@ from seektalent_runtime_control.store import RuntimeControlStore
 
 
 class DeterministicRequirementExecutor:
-    def extract_requirements(self, *, job_title: str, jd_text: str, notes: str | None) -> RequirementSheet:
-        return sample_requirement_sheet(job_title=job_title)
+    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet:
+        del jd_text, notes
+        return sample_requirement_sheet(job_title=job_title or "Python 平台负责人")
 
     def normalize_requirement_text(
         self,

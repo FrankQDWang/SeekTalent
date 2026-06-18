@@ -24,7 +24,7 @@ from seektalent_runtime_control.store import RuntimeControlStore
 
 
 class RequirementExecutor(Protocol):
-    def extract_requirements(self, *, job_title: str, jd_text: str, notes: str | None) -> RequirementSheet: ...
+    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet: ...
 
     def normalize_requirement_text(
         self,
@@ -44,7 +44,7 @@ class RuntimeControlService:
         self,
         *,
         conversation_id: str,
-        job_title: str,
+        job_title: str | None,
         jd_text: str,
         notes: str | None,
         source_ids: list[str],

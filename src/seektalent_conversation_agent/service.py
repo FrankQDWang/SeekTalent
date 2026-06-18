@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
@@ -11,6 +11,12 @@ from pydantic import TypeAdapter, ValidationError
 
 from seektalent_conversation_agent.budget import AgentBudgetPolicy
 from seektalent_conversation_agent.errors import ConversationAgentError
+from seektalent_conversation_agent.job_request_store import JobRequestStore
+from seektalent_conversation_agent.job_requests import (
+    JobRequestRevision,
+    RequirementDraftJobRequestLink,
+    normalize_source_kinds,
+)
 from seektalent_conversation_agent.models import (
     ConversationAgentResponse,
     ConversationRecord,
@@ -106,6 +112,7 @@ class ConversationAgentService:
         self.agent_instructions = agent_instructions
         self.agent_runner = agent_runner
         self.budget_policy = budget_policy
+        self.job_request_store = JobRequestStore(store.path, busy_timeout_ms=store.busy_timeout_ms)
 
     def create_conversation(self, *, owner_user_id: str, workspace_id: str, title: str) -> ConversationRecord:
         return self.store.create_conversation(
@@ -528,25 +535,98 @@ class ConversationAgentService:
             updated_at=self.now(),
         )
 
+    def get_job_request_revision(self, job_request_revision_id: str) -> JobRequestRevision:
+        revision = self.job_request_store.get_job_request_revision(job_request_revision_id)
+        if revision is None:
+            raise ConversationAgentError("job_request_revision_not_found")
+        return revision
+
+    def get_requirement_draft_job_request_link(
+        self,
+        requirement_draft_revision_id: str,
+    ) -> RequirementDraftJobRequestLink:
+        link = self.job_request_store.get_requirement_draft_job_request_link(requirement_draft_revision_id)
+        if link is None:
+            raise ConversationAgentError("requirement_draft_job_request_not_found")
+        return link
+
     def submit_jd(
         self,
         *,
         conversation_id: str,
         owner_user_id: str,
         workspace_id: str,
-        job_title: str,
+        job_title: str | None,
         jd_text: str,
         notes: str | None,
-        source_ids: list[str],
         idempotency_key: str,
+        source_kinds: Sequence[str] | None = None,
+        source_ids: Sequence[str] | None = None,
+        workspace_source_policy_id: str | None = None,
     ) -> ConversationAgentResponse:
         self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
+        normalized_source_kinds = _resolve_submit_jd_source_kinds(
+            source_kinds=source_kinds,
+            source_ids=source_ids,
+        )
+        user_job_title = _normalize_optional_job_title(job_title)
+        job_request = self.job_request_store.insert_job_request_revision(
+            conversation_id=conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+            jd_text=jd_text,
+            user_job_title=user_job_title,
+            extracted_job_title=None,
+            notes=notes,
+            source_kinds=list(normalized_source_kinds),
+            workspace_source_policy_id=workspace_source_policy_id,
+            idempotency_key=idempotency_key,
+            created_at=self.now(),
+        )
+        existing_link = self.job_request_store.get_requirement_draft_job_request_link_by_job_request(
+            job_request.job_request_revision_id
+        )
+        if existing_link is not None:
+            draft = self.tool_adapter.get_requirement_draft(
+                conversation_id=conversation_id,
+                draft_revision_id=existing_link.draft_revision_id,
+            )
+            conversation_after_draft_repair = self.store.link_requirement_draft(
+                conversation_id=conversation_id,
+                draft_revision_id=existing_link.draft_revision_id,
+                pending_requirement_review_count=draft.unresolved_review_item_count,
+                updated_at=self.now(),
+            )
+            if _should_repair_submit_replay_status(conversation_after_draft_repair):
+                self.store.update_conversation_status(
+                    conversation_id=conversation_id,
+                    status="awaiting_requirement_confirmation",
+                    updated_at=self.now(),
+                )
+            reopened = self.reopen_conversation(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+            )
+            return ConversationAgentResponse(
+                conversation_reopen_state=reopened.conversation_reopen_state,
+                messages=reopened.messages,
+                activity_items=reopened.activity_items,
+                requirement_draft=draft,
+                job_request_revision_id=job_request.job_request_revision_id,
+                requirement_draft_revision_id=existing_link.draft_revision_id,
+            )
         user_message = self.store.append_message(
             conversation_id=conversation_id,
             role="user",
             message_type="user_text",
             text=jd_text,
-            payload={"jobTitle": job_title, "notes": notes, "sourceIds": source_ids},
+            payload={
+                "jobTitle": user_job_title,
+                "notes": notes,
+                "sourceKinds": list(normalized_source_kinds),
+                "jobRequestRevisionId": job_request.job_request_revision_id,
+            },
             created_at=self.now(),
             message_id=self.message_id_factory(),
         )
@@ -556,29 +636,73 @@ class ConversationAgentService:
             conversation_id=conversation_id,
             tool_name="extract_requirements",
             status="started",
-            args={"jobTitle": job_title, "sourceIds": source_ids},
+            args={
+                "jobTitle": user_job_title,
+                "sourceKinds": list(normalized_source_kinds),
+                "jobRequestRevisionId": job_request.job_request_revision_id,
+            },
             result=None,
             reason_code=None,
             started_at=self.now(),
         )
         draft = self.tool_adapter.extract_requirements(
             conversation_id=conversation_id,
-            job_title=job_title,
+            job_title=user_job_title,
             jd_text=jd_text,
             notes=notes,
-            source_ids=source_ids,
+            source_ids=list(normalized_source_kinds),
             idempotency_key=idempotency_key,
         )
+        extracted_job_title = _extracted_job_title_from_runtime_control(
+            self.tool_adapter,
+            draft_revision_id=draft.draft_revision_id,
+        )
+        job_request = self.job_request_store.update_extracted_job_title(
+            job_request_revision_id=job_request.job_request_revision_id,
+            extracted_job_title=extracted_job_title,
+            updated_at=self.now(),
+        )
+        effective_job_title = job_request.effective_job_title
+        if effective_job_title is None:
+            self.store.save_tool_call(
+                tool_call_id=tool_call_id,
+                conversation_id=conversation_id,
+                tool_name="extract_requirements",
+                status="failed",
+                args={
+                    "jobTitle": user_job_title,
+                    "sourceKinds": list(normalized_source_kinds),
+                    "jobRequestRevisionId": job_request.job_request_revision_id,
+                },
+                result={"draftRevisionId": draft.draft_revision_id},
+                reason_code="job_request_title_required",
+                started_at=self.now(),
+                completed_at=self.now(),
+            )
+            raise ConversationAgentError("job_request_title_required")
         self.store.save_tool_call(
             tool_call_id=tool_call_id,
             conversation_id=conversation_id,
             tool_name="extract_requirements",
             status="completed",
-            args={"jobTitle": job_title, "sourceIds": source_ids},
+            args={
+                "jobTitle": user_job_title,
+                "extractedJobTitle": extracted_job_title,
+                "effectiveJobTitle": effective_job_title,
+                "sourceKinds": list(normalized_source_kinds),
+                "jobRequestRevisionId": job_request.job_request_revision_id,
+            },
             result={"draftRevisionId": draft.draft_revision_id},
             reason_code=None,
             started_at=self.now(),
             completed_at=self.now(),
+        )
+        self.job_request_store.link_requirement_draft_job_request(
+            draft_revision_id=draft.draft_revision_id,
+            workspace_id=workspace_id,
+            job_request_revision_id=job_request.job_request_revision_id,
+            conversation_id=conversation_id,
+            created_at=self.now(),
         )
         self.store.link_requirement_draft(
             conversation_id=conversation_id,
@@ -611,6 +735,8 @@ class ConversationAgentService:
             messages=[user_message, assistant_message],
             activity_items=reopened.activity_items,
             requirement_draft=draft,
+            job_request_revision_id=job_request.job_request_revision_id,
+            requirement_draft_revision_id=draft.draft_revision_id,
         )
 
     def update_requirement_draft(
@@ -640,6 +766,7 @@ class ConversationAgentService:
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
             draft=draft,
+            source_draft_revision_id=draft_revision_id,
         )
 
     def amend_requirement_draft_from_text(
@@ -668,6 +795,7 @@ class ConversationAgentService:
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
             draft=draft,
+            source_draft_revision_id=draft_revision_id,
         )
 
     def resolve_requirement_review(
@@ -699,6 +827,7 @@ class ConversationAgentService:
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
             draft=draft,
+            source_draft_revision_id=draft_revision_id,
         )
 
     def confirm_requirements(
@@ -712,6 +841,11 @@ class ConversationAgentService:
         idempotency_key: str,
     ) -> ConversationAgentResponse:
         self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
+        job_request_link = self.job_request_store.get_requirement_draft_job_request_link(draft_revision_id)
+        if job_request_link is None:
+            raise ConversationAgentError("requirement_draft_job_request_not_found")
+        if job_request_link.workspace_id != workspace_id or job_request_link.conversation_id != conversation_id:
+            raise ConversationAgentError("requirement_draft_job_request_not_found")
         approved = self.tool_adapter.confirm_requirements(
             draft_revision_id=draft_revision_id,
             base_revision_id=base_revision_id,
@@ -735,6 +869,8 @@ class ConversationAgentService:
                 conversation_id=conversation_id,
                 draft_revision_id=draft_revision_id,
             ),
+            job_request_revision_id=job_request_link.job_request_revision_id,
+            requirement_draft_revision_id=draft_revision_id,
         )
 
     def start_workflow(
@@ -1260,9 +1396,20 @@ class ConversationAgentService:
         owner_user_id: str,
         workspace_id: str,
         draft: DraftProtocol,
+        source_draft_revision_id: str | None = None,
     ) -> ConversationAgentResponse:
         unresolved = int(getattr(draft, "unresolved_review_item_count", 0))
         draft_revision_id = str(getattr(draft, "draft_revision_id"))
+        job_request_link = (
+            self._inherit_requirement_draft_job_request_link(
+                conversation_id=conversation_id,
+                workspace_id=workspace_id,
+                source_draft_revision_id=source_draft_revision_id,
+                target_draft_revision_id=draft_revision_id,
+            )
+            if source_draft_revision_id is not None
+            else None
+        )
         self.store.link_requirement_draft(
             conversation_id=conversation_id,
             draft_revision_id=draft_revision_id,
@@ -1288,6 +1435,29 @@ class ConversationAgentService:
             messages=reopened.messages,
             activity_items=reopened.activity_items,
             requirement_draft=draft,
+            job_request_revision_id=job_request_link.job_request_revision_id if job_request_link is not None else None,
+            requirement_draft_revision_id=draft_revision_id if job_request_link is not None else None,
+        )
+
+    def _inherit_requirement_draft_job_request_link(
+        self,
+        *,
+        conversation_id: str,
+        workspace_id: str,
+        source_draft_revision_id: str,
+        target_draft_revision_id: str,
+    ) -> RequirementDraftJobRequestLink:
+        source_link = self.job_request_store.get_requirement_draft_job_request_link(source_draft_revision_id)
+        if source_link is None:
+            raise ConversationAgentError("requirement_draft_job_request_not_found")
+        if source_link.workspace_id != workspace_id or source_link.conversation_id != conversation_id:
+            raise ConversationAgentError("requirement_draft_job_request_not_found")
+        return self.job_request_store.link_requirement_draft_job_request(
+            draft_revision_id=target_draft_revision_id,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            job_request_revision_id=source_link.job_request_revision_id,
+            created_at=self.now(),
         )
 
     def _append_runtime_progress_once(
@@ -1417,6 +1587,57 @@ def _conversation_status_from_run(run_status: str) -> str:
     if run_status == "paused":
         return "paused"
     return "running"
+
+
+def _should_repair_submit_replay_status(conversation: ConversationRecord) -> bool:
+    return conversation.runtime_run_id is None and conversation.status in {"draft", "awaiting_requirement_confirmation"}
+
+
+def _normalize_optional_job_title(job_title: str | None) -> str | None:
+    if job_title is None:
+        return None
+    normalized = job_title.strip()
+    return normalized or None
+
+
+def _resolve_submit_jd_source_kinds(
+    *,
+    source_kinds: Sequence[str] | None,
+    source_ids: Sequence[str] | None,
+) -> list[str]:
+    if source_kinds is None and source_ids is None:
+        raise ConversationAgentError("job_request_source_kinds_required")
+    if source_kinds is None:
+        return list(normalize_source_kinds(list(source_ids or [])))
+    normalized_source_kinds = normalize_source_kinds(list(source_kinds))
+    if source_ids is None:
+        return list(normalized_source_kinds)
+    normalized_source_ids = normalize_source_kinds(list(source_ids))
+    if normalized_source_kinds != normalized_source_ids:
+        raise ConversationAgentError(
+            "job_request_source_kinds_conflict",
+            payload={
+                "sourceKinds": list(normalized_source_kinds),
+                "sourceIds": list(normalized_source_ids),
+            },
+        )
+    return list(normalized_source_kinds)
+
+
+def _extracted_job_title_from_runtime_control(
+    tool_adapter: AgentToolAdapter,
+    *,
+    draft_revision_id: str,
+) -> str | None:
+    runtime_store = tool_adapter.runtime_store
+    if runtime_store is None:
+        return None
+    payload = runtime_store.get_extracted_requirement_sheet_json(draft_revision_id)
+    job_title = payload.get("job_title")
+    if not isinstance(job_title, str):
+        return None
+    normalized = job_title.strip()
+    return normalized or None
 
 
 def _compact_summary_text(messages: list[TranscriptMessage]) -> str:

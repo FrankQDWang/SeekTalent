@@ -39,7 +39,7 @@ class RuntimeRequirementExecutor:
         self.settings = settings
         self.runtime_factory = runtime_factory
 
-    def extract_requirements(self, *, job_title: str, jd_text: str, notes: str | None) -> RequirementSheet:
+    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet:
         runtime = self.runtime_factory(self.settings)
         extractor = getattr(runtime, "extract_requirements", None)
         if not callable(extractor):
