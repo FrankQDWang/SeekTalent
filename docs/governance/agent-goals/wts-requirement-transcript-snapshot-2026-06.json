@@ -1,0 +1,37 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Persist safe WTS requirement transcript snapshots for the recruiter Workbench stack.",
+  "rationale": "Task 1 needs historical requirement_review transcript messages to retain the exact recruiter-safe draft snapshot shown at that time, without storing raw runtime draft payloads in the transcript or relying on the current runtime draft projection.",
+  "touched_layers": [
+    "docs",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/store.py"
+  ],
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+    "uv run pytest tests/test_wts_control_plane.py::test_submit_jd_persists_safe_requirement_transcript_snapshot tests/test_wts_control_plane.py -q",
+    "uv run ruff check src/seektalent_conversation_agent tests/test_wts_control_plane.py",
+    "uv run python tools/check_pr_governance.py --base codex/wts-05-requirement-projection",
+    "git diff --check codex/wts-05-requirement-projection...HEAD"
+  ],
+  "deletion_targets": [
+    "requirement_review transcript payloads that embed full runtime-control requirement draft dumps",
+    "historical requirement transcript rendering that depends on the current mutable draft projection"
+  ],
+  "risks": [
+    "Snapshot persistence must stay in the same SQLite transaction as the transcript message.",
+    "Snapshots must not include raw draft item values, source spans, amendments, provider payloads, or artifact references.",
+    "Idempotent submit replay must not create duplicate snapshot rows."
+  ]
+}
