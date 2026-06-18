@@ -43,6 +43,26 @@ def migrate_wts_control_plane(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_wts_requirement_draft_job_requests_job_request
             ON wts_requirement_draft_job_requests(job_request_revision_id);
 
+        CREATE TABLE IF NOT EXISTS wts_confirm_requirement_requests (
+            confirm_request_id TEXT PRIMARY KEY,
+            workspace_id TEXT NOT NULL,
+            owner_user_id TEXT NOT NULL,
+            conversation_id TEXT NOT NULL REFERENCES agent_conversations(conversation_id) ON DELETE CASCADE,
+            draft_revision_id TEXT NOT NULL,
+            expected_draft_revision_id TEXT NOT NULL,
+            job_request_revision_id TEXT NOT NULL REFERENCES wts_job_request_revisions(job_request_revision_id),
+            approved_requirement_revision_id TEXT,
+            idempotency_key TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(workspace_id, conversation_id, idempotency_key)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_wts_confirm_requirement_requests_draft
+            ON wts_confirm_requirement_requests(workspace_id, conversation_id, draft_revision_id);
+
         CREATE TABLE IF NOT EXISTS wts_workflow_start_intents (
             workflow_start_intent_id TEXT PRIMARY KEY,
             workspace_id TEXT NOT NULL,

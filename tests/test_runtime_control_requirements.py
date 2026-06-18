@@ -230,3 +230,42 @@ def test_confirm_requirements_uses_only_selected_resolved_items(tmp_path: Path) 
         idempotency_key="confirm-1",
     )
     assert replay.approved_requirement_revision_id == approved.approved_requirement_revision_id
+
+
+def test_confirm_requirements_recovers_existing_approval_after_idempotency_insert_conflict(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = runtime_service(tmp_path)
+    draft = service.extract_requirements(
+        conversation_id="agent_conv_1",
+        job_title="Python 后端工程师",
+        jd_text="需要 Python API 和 Kafka",
+        notes=None,
+        source_ids=[],
+        idempotency_key="extract-conflict",
+    )
+    approved = service.confirm_requirements(
+        draft_revision_id=draft.draft_revision_id,
+        base_revision_id=draft.draft_revision_id,
+        idempotency_key="confirm-conflict-1",
+    )
+    original_get = service.store.get_approved_requirement_by_idempotency
+    missed = False
+
+    def miss_existing_once(*, conversation_id: str, idempotency_key: str):
+        nonlocal missed
+        if not missed and conversation_id == "agent_conv_1" and idempotency_key == "confirm-conflict-1":
+            missed = True
+            return None
+        return original_get(conversation_id=conversation_id, idempotency_key=idempotency_key)
+
+    monkeypatch.setattr(service.store, "get_approved_requirement_by_idempotency", miss_existing_once)
+
+    replay = service.confirm_requirements(
+        draft_revision_id=draft.draft_revision_id,
+        base_revision_id=draft.draft_revision_id,
+        idempotency_key="confirm-conflict-1",
+    )
+
+    assert replay.approved_requirement_revision_id == approved.approved_requirement_revision_id

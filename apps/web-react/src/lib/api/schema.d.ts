@@ -1013,6 +1013,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/agent/workbench/conversations/{conversation_id}/requirements/confirm": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Confirm Agent Workbench Requirements */
+    post: operations["confirm_agent_workbench_requirements_api_agent_workbench_conversations__conversation_id__requirements_confirm_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/agent/workbench/conversations/{conversation_id}/events": {
     parameters: {
       query?: never;
@@ -1470,6 +1487,8 @@ export interface components {
       runtimeRunId?: string | null;
       /** Workbenchsessionid */
       workbenchSessionId?: string | null;
+      /** Workflowstartintentid */
+      workflowStartIntentId?: string | null;
       /** Linkedruntimeruns */
       linkedRuntimeRuns?: components["schemas"]["AgentWorkbenchLinkedRuntimeRunResponse"][];
       /** Updatedat */
@@ -1727,6 +1746,15 @@ export interface components {
        * @default 0
        */
       pendingMemoryReviewCount: number;
+    };
+    /** AgentWorkbenchRequirementConfirmRequest */
+    AgentWorkbenchRequirementConfirmRequest: {
+      /** Draftrevisionid */
+      draftRevisionId: string;
+      /** Expecteddraftrevisionid */
+      expectedDraftRevisionId: string;
+      /** Idempotencykey */
+      idempotencyKey: string;
     };
     /** AgentWorkbenchRequirementDraftResponse */
     AgentWorkbenchRequirementDraftResponse: {
@@ -6033,6 +6061,41 @@ export interface operations {
       cookie?: never;
     };
     requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  confirm_agent_workbench_requirements_api_agent_workbench_conversations__conversation_id__requirements_confirm_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AgentWorkbenchRequirementConfirmRequest"];
+      };
+    };
     responses: {
       /** @description Successful Response */
       200: {

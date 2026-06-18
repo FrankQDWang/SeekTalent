@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 from sse_starlette import EventSourceResponse
 
 from seektalent_conversation_agent.errors import ConversationAgentError
@@ -28,12 +29,20 @@ from seektalent_ui.agent_workbench_response import project_agent_workbench_view
 from seektalent_ui.agent_workbench_stream import encode_sse_event, replay_stream_envelopes
 from seektalent_ui.agent_workbench_stream_projection import append_projected_stream_events
 from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
-from seektalent_ui.workbench_local_actor import get_workbench_store, local_workbench_read_user
+from seektalent_ui.workbench_local_actor import get_workbench_store, local_workbench_read_user, local_workbench_write_user
 from seektalent_ui.workbench_store import WorkbenchUser
 
 
 router = APIRouter(prefix="/api/agent/workbench")
 logger = logging.getLogger(__name__)
+
+
+class AgentWorkbenchRequirementConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    draftRevisionId: str = Field(min_length=1)
+    expectedDraftRevisionId: str = Field(min_length=1)
+    idempotencyKey: str = Field(min_length=1, max_length=160)
 
 
 @router.get("/conversations", response_model=AgentWorkbenchConversationListResponse)
@@ -72,6 +81,34 @@ def get_agent_workbench_view(
     response = _build_agent_workbench_view(request=request, conversation_id=conversation_id, user=user)
     stream_store = get_agent_workbench_stream_store(request)
     response.streamCursor.latestStreamSeq = stream_store.latest_seq(conversation_id=conversation_id)
+    return response
+
+
+@router.post(
+    "/conversations/{conversation_id}/requirements/confirm",
+    response_model=AgentWorkbenchConversationResponse,
+)
+def confirm_agent_workbench_requirements(
+    conversation_id: str,
+    payload: AgentWorkbenchRequirementConfirmRequest,
+    request: Request,
+    user: WorkbenchUser = Depends(local_workbench_write_user),
+) -> AgentWorkbenchConversationResponse:
+    try:
+        get_agent_service(request).confirm_requirements(
+            conversation_id=conversation_id,
+            owner_user_id=user.user_id,
+            workspace_id=user.workspace_id,
+            draft_revision_id=payload.draftRevisionId,
+            expected_draft_revision_id=payload.expectedDraftRevisionId,
+            idempotency_key=payload.idempotencyKey,
+        )
+    except ConversationAgentError as exc:
+        raise agent_http_error(exc) from exc
+    response = _build_agent_workbench_view(request=request, conversation_id=conversation_id, user=user)
+    response.streamCursor.latestStreamSeq = get_agent_workbench_stream_store(request).latest_seq(
+        conversation_id=conversation_id
+    )
     return response
 
 
