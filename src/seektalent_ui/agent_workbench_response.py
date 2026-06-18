@@ -16,7 +16,10 @@ from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchMessagePayloadResponse,
     AgentWorkbenchMessageResponse,
     AgentWorkbenchPendingActionsResponse,
+    AgentWorkbenchRequirementDraftItemResponse,
     AgentWorkbenchRequirementDraftResponse,
+    AgentWorkbenchRequirementDraftSectionResponse,
+    AgentWorkbenchRequirementItemStatus,
     AgentWorkbenchRuntimeResponse,
     AgentWorkbenchStatus,
     AgentWorkbenchStrategyGraphResponse,
@@ -50,6 +53,9 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
     bounded_input = _bounded_projection_input(input)
     messages = _latest(input.messages, MAX_WORKBENCH_MESSAGES)
     activities = [_activity_response(activity) for activity in bounded_input.activity_items]
+    reason_code = state.reason_code
+    if input.requirement_draft_missing and reason_code is None:
+        reason_code = "runtime_projection_unavailable"
     response = AgentWorkbenchConversationResponse(
         conversation=AgentWorkbenchConversationSummaryResponse(
             conversationId=state.conversation_id,
@@ -83,7 +89,7 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
         messages=[_message_response(message) for message in messages],
         activities=activities,
         transcriptGroups=build_transcript_groups(bounded_input),
-        requirementDraft=_requirement_draft(state.latest_draft_revision_id, input.messages),
+        requirementDraft=_requirement_draft(input),
         runtime=input.runtime or _runtime_from_state(input),
         strategyGraph=_strategy_graph(bounded_input.activity_items),
         thinkingProcess=_thinking_process(bounded_input),
@@ -104,7 +110,7 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
             latestActivitySeq=state.latest_activity_seq,
             latestRuntimeEventSeq=state.latest_rendered_runtime_event_seq,
         ),
-        reasonCode=state.reason_code,
+        reasonCode=reason_code,
     )
     record_workbench_payload_bytes(len(response.model_dump_json()))
     return response
@@ -198,17 +204,60 @@ def _activity_payload(activity: TranscriptActivityItem) -> AgentWorkbenchActivit
     )
 
 
-def _requirement_draft(
-    latest_draft_revision_id: str | None, messages: Sequence[TranscriptMessage]
-) -> AgentWorkbenchRequirementDraftResponse | None:
-    if latest_draft_revision_id is None:
+def _requirement_draft(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchRequirementDraftResponse | None:
+    if input.requirement_draft_missing:
         return None
-    review_text = next((message.text for message in reversed(messages) if message.message_type == "requirement_review"), "")
+    draft = input.requirement_draft
+    if draft is None:
+        return None
     return AgentWorkbenchRequirementDraftResponse(
-        draftRevisionId=latest_draft_revision_id,
-        title="Requirement draft",
-        summary=review_text,
+        draftRevisionId=draft.draft_revision_id,
+        parentDraftRevisionId=draft.base_revision_id,
+        status=draft.status,
+        title="需求确认",
+        summary=_requirement_summary(draft),
+        canConfirm=draft.can_confirm,
+        unresolvedReviewItemCount=draft.unresolved_review_item_count,
+        sections=[
+            AgentWorkbenchRequirementDraftSectionResponse(
+                sectionId=section.section_id,
+                displayName=section.display_name,
+                backendField=section.backend_field,
+                items=[
+                    AgentWorkbenchRequirementDraftItemResponse(
+                        itemId=item.item_id,
+                        sectionId=section.section_id,
+                        selected=item.selected,
+                        enabled=item.enabled,
+                        editable=item.editable,
+                        text=item.text,
+                        status=_requirement_item_status(item.status),
+                        source=item.source,
+                        allowedActions=list(item.allowed_actions),
+                    )
+                    for item in section.items
+                ],
+            )
+            for section in draft.sections
+        ],
     )
+
+
+def _requirement_summary(draft: object) -> str:
+    sections = getattr(draft, "sections", ())
+    selected_count = sum(
+        1
+        for section in sections
+        for item in getattr(section, "items", ())
+        if getattr(item, "selected", False) and getattr(item, "status", "") == "resolved"
+    )
+    return f"已生成 {selected_count} 条已选择需求，请确认后启动检索。"
+
+
+def _requirement_item_status(status: object) -> AgentWorkbenchRequirementItemStatus:
+    if status in {"resolved", "needs_review", "deleted", "moved", "rejected"}:
+        return cast(AgentWorkbenchRequirementItemStatus, status)
+    return "unknown"
 
 
 def _runtime_from_state(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchRuntimeResponse | None:

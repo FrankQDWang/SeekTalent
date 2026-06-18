@@ -176,6 +176,99 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
     assert "providerResponse" not in serialized
 
 
+def test_agent_workbench_projects_canonical_requirement_draft_sections() -> None:
+    from seektalent_runtime_control.requirements import draft_from_requirement_sheet
+
+    thread = _thread_view()
+    draft = draft_from_requirement_sheet(
+        conversation_id="agent_conv_1",
+        draft_revision_id="reqdraft_1",
+        base_revision_id="reqdraft_base",
+        requirement_sheet=sample_requirement_sheet(job_title="Python 平台负责人"),
+        source="extracted",
+        created_at=_now(),
+    )
+    draft.sections[0].items[0].selected = False
+    draft.sections[0].items[0].allowed_actions = ["set_selected", "edit_text"]
+
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=thread.conversation_reopen_state,
+            messages=thread.messages,
+            activity_items=thread.activity_items,
+            requirement_draft=draft,
+        )
+    )
+
+    requirement = response.requirementDraft
+    assert requirement is not None
+    assert requirement.draftRevisionId == "reqdraft_1"
+    assert requirement.parentDraftRevisionId == "reqdraft_base"
+    assert requirement.canConfirm is True
+    assert [section.sectionId for section in requirement.sections] == [
+        "must_have_capabilities",
+        "preferred_capabilities",
+        "hard_constraints",
+        "exclusion_signals",
+        "initial_query_term_pool",
+    ]
+    first_item = requirement.sections[0].items[0]
+    assert first_item.itemId == draft.sections[0].items[0].item_id
+    assert first_item.selected is False
+    assert first_item.text == "Python API"
+    assert first_item.allowedActions == ["set_selected", "edit_text"]
+    assert requirement.otherInputPrompt == "其他"
+
+
+def test_agent_workbench_projection_loads_latest_requirement_draft_from_runtime_store() -> None:
+    from seektalent_runtime_control.requirements import draft_from_requirement_sheet
+
+    thread = _thread_view(latest_draft_revision_id="reqdraft_runtime")
+    draft = draft_from_requirement_sheet(
+        conversation_id="agent_conv_1",
+        draft_revision_id="reqdraft_runtime",
+        base_revision_id="reqdraft_base",
+        requirement_sheet=sample_requirement_sheet(job_title="增长负责人"),
+        source="extracted",
+        created_at=_now(),
+    )
+    runtime_store = _runtime_projection_store_with_requirement_draft(draft)
+
+    projection = build_agent_workbench_projection_input(
+        service=_conversation_agent_service_for_thread(thread),
+        conversation_store=_conversation_store_for_thread(thread),
+        runtime_store=runtime_store,
+        workbench_store=_empty_workbench_store(),
+        conversation_id="agent_conv_1",
+        user=_workbench_user(),
+    )
+
+    assert projection.requirement_draft is not None
+    assert projection.requirement_draft.draft_revision_id == "reqdraft_runtime"
+    assert runtime_store.requested_requirement_draft_ids == ["reqdraft_runtime"]
+
+
+def test_agent_workbench_marks_requirement_projection_unavailable_when_latest_draft_is_missing() -> None:
+    thread = _thread_view(latest_draft_revision_id="reqdraft_missing")
+    runtime_store = _FakeRuntimeStore()
+
+    projection = build_agent_workbench_projection_input(
+        service=_conversation_agent_service_for_thread(thread),
+        conversation_store=_conversation_store_for_thread(thread),
+        runtime_store=runtime_store,
+        workbench_store=_empty_workbench_store(),
+        conversation_id="agent_conv_1",
+        user=_workbench_user(),
+    )
+    response = project_agent_workbench_view(projection)
+
+    assert projection.requirement_draft is None
+    assert projection.requirement_draft_missing is True
+    assert runtime_store.requested_requirement_draft_ids == ["reqdraft_missing"]
+    assert response.requirementDraft is None
+    assert response.reasonCode == "runtime_projection_unavailable"
+
+
 def test_workbench_view_enforces_product_payload_budgets() -> None:
     thread = _thread_view()
     thread = thread.model_copy(
@@ -1239,6 +1332,10 @@ class _FakeConversationStore:
 
 
 class _FakeRuntimeStore:
+    def __init__(self, requirement_drafts: dict[str, object] | None = None) -> None:
+        self.requirement_drafts = requirement_drafts or {}
+        self.requested_requirement_draft_ids: list[str] = []
+
     def get_run(self, runtime_run_id: str) -> RuntimeRunRecord:
         assert runtime_run_id == "runtime_1"
         return RuntimeRunRecord(
@@ -1279,6 +1376,10 @@ class _FakeRuntimeStore:
             next_cursor=7,
         )
 
+    def get_requirement_draft(self, draft_revision_id: str) -> object | None:
+        self.requested_requirement_draft_ids.append(draft_revision_id)
+        return self.requirement_drafts.get(draft_revision_id)
+
     def list_artifact_refs(self, *, runtime_run_id: str):
         assert runtime_run_id == "runtime_1"
         return [
@@ -1298,6 +1399,7 @@ class _FakeRuntimeStore:
 
 class _LargeRuntimeStore(_FakeRuntimeStore):
     def __init__(self) -> None:
+        super().__init__()
         self.calls: list[tuple[int, int]] = []
 
     def get_run(self, runtime_run_id: str) -> RuntimeRunRecord:
@@ -1446,7 +1548,38 @@ def _project_workbench_response(
     return project_agent_workbench_view(projection_input)
 
 
-def _thread_view(final_summary_id: str | None = None) -> ConversationThreadView:
+def _runtime_projection_store_with_requirement_draft(draft: object) -> _FakeRuntimeStore:
+    draft_revision_id = getattr(draft, "draft_revision_id")
+    assert isinstance(draft_revision_id, str)
+    return _FakeRuntimeStore(requirement_drafts={draft_revision_id: draft})
+
+
+def _conversation_agent_service_for_thread(thread: ConversationThreadView) -> _FakeAgentService:
+    return _FakeAgentService(thread)
+
+
+def _conversation_store_for_thread(_: ConversationThreadView) -> _FakeConversationStore:
+    return _FakeConversationStore()
+
+
+def _empty_workbench_store() -> _FakeWorkbenchStore:
+    return _FakeWorkbenchStore()
+
+
+def _workbench_user() -> WorkbenchUser:
+    return WorkbenchUser(
+        user_id="user_admin_example_com",
+        email="admin@example.com",
+        display_name="Admin User",
+        role="admin",
+        workspace_id="default",
+    )
+
+
+def _thread_view(
+    final_summary_id: str | None = None,
+    latest_draft_revision_id: str | None = "draft_1",
+) -> ConversationThreadView:
     return ConversationThreadView(
         conversation_reopen_state=ConversationReopenState(
             conversation_id="agent_conv_1",
@@ -1458,7 +1591,7 @@ def _thread_view(final_summary_id: str | None = None) -> ConversationThreadView:
             latest_rendered_runtime_event_seq=7,
             runtime_run_id="runtime_1",
             workbench_session_id="session_1",
-            latest_draft_revision_id="draft_1",
+            latest_draft_revision_id=latest_draft_revision_id,
             approved_requirement_revision_id="approved_1",
             final_summary_id=final_summary_id,
             pending_user_action="confirm_requirements",
