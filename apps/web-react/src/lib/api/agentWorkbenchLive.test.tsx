@@ -261,6 +261,9 @@ describe("live Agent Workbench conversation hook", () => {
       expect(invalidate).toHaveBeenCalledWith({
         queryKey: queryKeys.agentConversation("agent_conv_1"),
       });
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: queryKeys.agentCandidateDetails("agent_conv_1"),
+      });
     });
   });
 

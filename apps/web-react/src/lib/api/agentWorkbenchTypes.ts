@@ -15,6 +15,12 @@ export type AgentWorkbenchMessage = Schemas["AgentWorkbenchMessageResponse"];
 export type AgentWorkbenchActivity = Schemas["AgentWorkbenchActivityResponse"];
 export type AgentWorkbenchCandidateSummary =
   Schemas["AgentWorkbenchCandidateSummaryResponse"];
+export type AgentWorkbenchCandidateDetailSection = Omit<
+  Schemas["AgentWorkbenchCandidateDetailSectionResponse"],
+  "items"
+> & {
+  items: string[];
+};
 export type AgentWorkbenchDetailApproval =
   Schemas["AgentWorkbenchDetailApprovalResponse"];
 export type AgentWorkbenchFinalSummary =
@@ -128,10 +134,20 @@ export type AgentWorkbenchConversationListResponse = {
   conversations: AgentWorkbenchConversationSummary[];
 };
 
+export type AgentWorkbenchCandidateDetailResponse = Omit<
+  Schemas["AgentWorkbenchCandidateDetailResponse"],
+  "sections" | "evidence"
+> & {
+  sections: AgentWorkbenchCandidateDetailSection[];
+  evidence: string[];
+};
+
 type GeneratedConversationResponse =
   Schemas["AgentWorkbenchConversationResponse"];
 type GeneratedConversationListResponse =
   Schemas["AgentWorkbenchConversationListResponse"];
+type GeneratedCandidateDetailResponse =
+  Schemas["AgentWorkbenchCandidateDetailResponse"];
 
 export function normalizeAgentWorkbenchConversationList(
   response: GeneratedConversationListResponse,
@@ -171,6 +187,20 @@ export function normalizeAgentWorkbenchConversation(
       snapshotSeq: streamCursor.snapshotSeq,
       viewRevision: streamCursor.viewRevision,
     },
+  };
+}
+
+export function normalizeAgentWorkbenchCandidateDetail(
+  response: GeneratedCandidateDetailResponse,
+): AgentWorkbenchCandidateDetailResponse {
+  return {
+    ...response,
+    sourceKinds: response.sourceKinds ?? [],
+    sections: (response.sections ?? []).map((section) => ({
+      ...section,
+      items: section.items ?? [],
+    })),
+    evidence: response.evidence ?? [],
   };
 }
 

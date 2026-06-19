@@ -53,6 +53,15 @@ test.beforeEach(async ({ page }) => {
       });
     },
   );
+  await page.route(
+    "**/api/agent/workbench/conversations/agent_conv_1/candidates/candidate_001/detail",
+    async (route) => {
+      await route.fulfill({
+        contentType: "application/json",
+        json: candidateDetailSnapshot,
+      });
+    },
+  );
 });
 
 test("renders live workbench graph and opens semantic stream", async ({
@@ -83,6 +92,17 @@ test("renders live workbench graph and opens semantic stream", async ({
   await expect
     .poll(() => page.locator(".react-flow__node").count())
     .toBeGreaterThan(0);
+
+  if (testInfo.project.name.includes("mobile")) {
+    await page.getByRole("tab", { name: "Candidates" }).click();
+  }
+  await page.getByRole("tab", { name: "候选人" }).click();
+  await page.getByRole("button", { name: "查看详情" }).first().click();
+  await expect(page.getByRole("dialog", { name: "候选人详情" })).toBeVisible();
+  await expect(page.getByText("工作经历")).toBeVisible();
+  await expect(
+    page.getByText("最近一段经历覆盖 Agent 工具调用平台。"),
+  ).toBeVisible();
 
   await expect
     .poll(async () =>
@@ -251,7 +271,25 @@ const conversationSnapshot = {
     ],
   },
   sourceConnections: [],
-  candidates: [],
+  candidates: [
+    {
+      candidateId: "candidate_001",
+      rank: 1,
+      displayName: "候选人 A",
+      headline: "平台工程负责人 / 上海 / Python + RAG",
+      company: "某 AI Infra 公司",
+      location: "上海",
+      education: "本科",
+      experienceYears: 10,
+      sourceKinds: ["cts", "liepin"],
+      matchScore: 92,
+      matchSummary: "Agent 工具调用平台和 RAG 链路证据完整。",
+      status: "running",
+      detailAvailability: "available",
+      accessState: "allowed",
+      evidenceLevel: "detail",
+    },
+  ],
   detailApprovals: [],
   reviewArtifacts: [],
   finalSummary: null,
@@ -271,4 +309,29 @@ const conversationSnapshot = {
     viewRevision: 4,
   },
   reasonCode: null,
+};
+
+const candidateDetailSnapshot = {
+  accessState: "allowed",
+  candidateId: "candidate_001",
+  detailAvailability: "available",
+  displayName: "候选人 A",
+  evidence: [
+    "最近一段经历覆盖 Agent 工具调用平台。",
+    "项目经验包含 RAG 检索链路和评测平台。",
+  ],
+  evidenceLevel: "detail",
+  headline: "平台工程负责人 / 上海 / Python + RAG",
+  matchScore: 92,
+  reasonCode: null,
+  sections: [
+    {
+      title: "工作经历",
+      items: [
+        "某 AI Infra 公司平台工程负责人，负责工具调用平台和权限边界。",
+        "主导 RAG 检索链路重构，覆盖召回、排序、评测和灰度发布。",
+      ],
+    },
+  ],
+  sourceKinds: ["cts", "liepin"],
 };

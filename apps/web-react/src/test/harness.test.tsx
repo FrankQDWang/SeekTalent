@@ -38,5 +38,16 @@ describe("React Workbench shell", () => {
       "conversations",
       "conv_123",
     ]);
+    expect(queryKeys.agentCandidateDetail("conv_123", "candidate_456")).toEqual(
+      [
+        "agent",
+        "workbench",
+        "conversations",
+        "conv_123",
+        "candidates",
+        "candidate_456",
+        "detail",
+      ],
+    );
   });
 });

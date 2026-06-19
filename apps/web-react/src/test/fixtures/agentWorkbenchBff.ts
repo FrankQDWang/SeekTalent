@@ -1,4 +1,5 @@
 import type {
+  AgentWorkbenchCandidateDetailResponse,
   AgentWorkbenchCandidateSummary,
   AgentWorkbenchConversationResponse,
   AgentWorkbenchStrategyGraph,
@@ -427,6 +428,47 @@ export const agentWorkbenchRequirementReviewViewFixture: AgentWorkbenchConversat
 
 export const agentWorkbenchRunningViewFixture: AgentWorkbenchConversationResponse =
   workbenchView();
+
+export const agentWorkbenchCandidateDetailFixture: AgentWorkbenchCandidateDetailResponse =
+  {
+    accessState: "allowed",
+    candidateId: "candidate_001",
+    detailAvailability: "available",
+    displayName: "候选人 A",
+    evidence: [
+      "最近一段经历覆盖 Agent 工具调用平台。",
+      "项目经验包含 RAG 检索链路和评测平台。",
+    ],
+    evidenceLevel: "detail",
+    headline: "平台工程负责人 / 上海 / Python + RAG",
+    matchScore: 92,
+    reasonCode: null,
+    sections: [
+      {
+        title: "工作经历",
+        items: [
+          "某 AI Infra 公司平台工程负责人，负责工具调用平台和权限边界。",
+          "主导 RAG 检索链路重构，覆盖召回、排序、评测和灰度发布。",
+        ],
+      },
+      {
+        title: "技能匹配",
+        items: ["Python 后端", "RAG", "workflow orchestration"],
+      },
+    ],
+    sourceKinds: ["cts", "liepin"],
+  };
+
+export const agentWorkbenchCandidateApprovalRequiredDetailFixture: AgentWorkbenchCandidateDetailResponse =
+  {
+    ...agentWorkbenchCandidateDetailFixture,
+    accessState: "approval_required",
+    detailAvailability: "approval_required",
+    evidence: [],
+    evidenceLevel: "summary",
+    reasonCode: "candidate_detail_requires_approval",
+    sections: [],
+  };
 
 export const agentWorkbenchSourceExpiredViewFixture: AgentWorkbenchConversationResponse =
   workbenchView({
