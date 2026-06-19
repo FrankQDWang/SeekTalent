@@ -13,6 +13,7 @@ from typing import Annotated, cast
 import uvicorn
 from fastapi import Cookie, Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -451,7 +452,51 @@ def create_app(
     if serve_frontend:
         mount_packaged_frontend(app)
 
+    _install_custom_openapi(app)
     return app
+
+
+def _install_custom_openapi(app: FastAPI) -> None:
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        routes=app.routes,
+    )
+    _patch_agent_workbench_openapi(schema)
+    app.openapi_schema = schema
+
+
+def _patch_agent_workbench_openapi(schema: dict[str, object]) -> None:
+    paths = _string_keyed_dict(schema.get("paths"))
+    if paths is None:
+        return
+    for path, path_item_value in paths.items():
+        if not path.startswith("/api/agent/workbench"):
+            continue
+        path_item = _string_keyed_dict(path_item_value)
+        if path_item is None:
+            continue
+        for method, operation_value in path_item.items():
+            operation = _string_keyed_dict(operation_value)
+            if operation is None:
+                continue
+            responses = _string_keyed_dict(operation.get("responses"))
+            if responses is not None:
+                responses.pop("422", None)
+                operation["responses"] = responses
+                path_item[method] = operation
+        paths[path] = path_item
+    schema["paths"] = paths
+
+
+def _string_keyed_dict(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        if isinstance(key, str):
+            result[key] = item
+    return result
 
 
 def mount_packaged_frontend(app: FastAPI) -> None:

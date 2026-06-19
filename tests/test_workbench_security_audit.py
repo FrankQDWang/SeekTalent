@@ -173,6 +173,29 @@ def test_workbench_public_event_and_audit_schemas_are_closed(tmp_path: Path) -> 
     assert response.status_code == 200
     schemas = response.json()["components"]["schemas"]
     assert schemas["WorkbenchEventPayloadResponse"]["additionalProperties"] is False
+
+
+def test_agent_workbench_openapi_documents_problem_details_and_source_kind_enum(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    openapi = response.json()
+    schemas = openapi["components"]["schemas"]
+    submit_schema = schemas["WorkbenchSubmitJdMessageRequest"]
+    source_kinds = submit_schema["properties"]["sourceKinds"]
+    assert source_kinds["items"]["enum"] == ["cts", "liepin"]
+
+    submit_message = openapi["paths"]["/api/agent/workbench/conversations/{conversation_id}/messages"]["post"]
+    responses = submit_message["responses"]
+    assert "400" in responses
+    assert "409" in responses
+    assert "422" not in responses
+    assert (
+        responses["400"]["content"]["application/json"]["schema"]["$ref"]
+        == "#/components/schemas/ProblemDetails"
+    )
     assert schemas["WorkbenchSecurityAuditMetadataResponse"]["additionalProperties"] is False
     serialized_event_payload = json.dumps(schemas["WorkbenchEventResponse"]["properties"]["payload"], sort_keys=True)
     serialized_audit_metadata = json.dumps(

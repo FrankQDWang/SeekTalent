@@ -2,38 +2,51 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+SourceKind = Literal["cts", "liepin"]
+
+MAX_AGENT_MESSAGE_CHARS = 20000
+MAX_IDEMPOTENCY_KEY_CHARS = 160
+MAX_JOB_TITLE_CHARS = 256
+MAX_NOTES_CHARS = 5000
+MAX_REQUIREMENT_TEXT_CHARS = 2000
+MAX_REQUIREMENT_OPERATION_COUNT = 50
+MAX_REQUEST_ID_CHARS = 200
+MAX_SECTION_ID_CHARS = 120
+MAX_REASON_CODE_CHARS = 160
 
 
 class AgentMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     messageType: Literal["submitJd", "userText"]
-    text: str = Field(min_length=1, max_length=20000)
-    jobTitle: str | None = Field(default=None, min_length=1, max_length=256)
-    notes: str | None = Field(default=None, max_length=5000)
+    text: str = Field(min_length=1, max_length=MAX_AGENT_MESSAGE_CHARS)
+    jobTitle: str | None = Field(default=None, min_length=1, max_length=MAX_JOB_TITLE_CHARS)
+    notes: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
     sourceIds: list[str] = Field(default_factory=lambda: ["cts"], min_length=1, max_length=2)
-    sourceKinds: list[str] | None = Field(default=None, min_length=1, max_length=2)
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    sourceKinds: list[SourceKind] | None = Field(default=None, min_length=1, max_length=2)
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 class WorkbenchSubmitJdMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     messageType: Literal["submitJd"]
-    text: str = Field(min_length=1, max_length=20000)
-    jobTitle: str | None = Field(default=None, min_length=1, max_length=256)
-    notes: str | None = Field(default=None, max_length=5000)
-    sourceKinds: list[str] = Field(min_length=1, max_length=2)
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    text: str = Field(min_length=1, max_length=MAX_AGENT_MESSAGE_CHARS)
+    jobTitle: str | None = Field(default=None, min_length=1, max_length=MAX_JOB_TITLE_CHARS)
+    notes: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
+    sourceKinds: list[SourceKind] = Field(min_length=1, max_length=2)
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 class WorkbenchUserTextMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     messageType: Literal["userText"]
-    text: str = Field(min_length=1, max_length=20000)
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    text: str = Field(min_length=1, max_length=MAX_AGENT_MESSAGE_CHARS)
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 WorkbenchAgentMessageRequest = Annotated[
@@ -46,11 +59,23 @@ class RequirementDraftOperationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     op: Literal["set_selected", "edit_text", "delete_item", "move_item", "set_enabled"]
-    itemId: str
+    itemId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
     selected: bool | None = None
-    text: str | None = None
-    targetSection: str | None = None
+    text: str | None = Field(default=None, min_length=1, max_length=MAX_REQUIREMENT_TEXT_CHARS)
+    targetSection: str | None = Field(default=None, min_length=1, max_length=MAX_SECTION_ID_CHARS)
     enabled: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_operation_payload(self) -> RequirementDraftOperationRequest:
+        if self.op == "set_selected" and self.selected is None:
+            raise ValueError("selected is required for set_selected")
+        if self.op == "set_enabled" and self.enabled is None:
+            raise ValueError("enabled is required for set_enabled")
+        if self.op == "edit_text" and self.text is None:
+            raise ValueError("text is required for edit_text")
+        if self.op == "move_item" and self.targetSection is None:
+            raise ValueError("targetSection is required for move_item")
+        return self
 
     def to_runtime_payload(self) -> dict[str, object]:
         payload: dict[str, object] = {"op": self.op, "item_id": self.itemId}
@@ -68,29 +93,35 @@ class RequirementDraftOperationRequest(BaseModel):
 class RequirementOperationsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    draftRevisionId: str
-    baseRevisionId: str
-    operations: list[RequirementDraftOperationRequest]
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    baseRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    operations: list[RequirementDraftOperationRequest] = Field(
+        min_length=1,
+        max_length=MAX_REQUIREMENT_OPERATION_COUNT,
+    )
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 class WorkbenchRequirementOperationsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    draftRevisionId: str = Field(min_length=1)
-    expectedDraftRevisionId: str = Field(min_length=1)
-    operations: list[RequirementDraftOperationRequest] = Field(min_length=1)
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    expectedDraftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    operations: list[RequirementDraftOperationRequest] = Field(
+        min_length=1,
+        max_length=MAX_REQUIREMENT_OPERATION_COUNT,
+    )
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 class ReviewResolutionOperationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     op: Literal["accept_candidate", "edit_candidate", "move_candidate", "reject_candidate", "reject_fragment"]
-    reviewItemId: str
-    targetSection: str | None = None
-    text: str | None = None
-    reasonCode: str | None = None
+    reviewItemId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    targetSection: str | None = Field(default=None, min_length=1, max_length=MAX_SECTION_ID_CHARS)
+    text: str | None = Field(default=None, min_length=1, max_length=MAX_REQUIREMENT_TEXT_CHARS)
+    reasonCode: str | None = Field(default=None, min_length=1, max_length=MAX_REASON_CODE_CHARS)
 
     def to_runtime_payload(self) -> dict[str, object]:
         payload: dict[str, object] = {"op": self.op, "review_item_id": self.reviewItemId}
@@ -106,54 +137,57 @@ class ReviewResolutionOperationRequest(BaseModel):
 class RequirementAmendRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    draftRevisionId: str
-    baseRevisionId: str
-    text: str = Field(min_length=1, max_length=2000)
-    targetSectionHint: str | None = None
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    baseRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    text: str = Field(min_length=1, max_length=MAX_REQUIREMENT_TEXT_CHARS)
+    targetSectionHint: str | None = Field(default=None, min_length=1, max_length=MAX_SECTION_ID_CHARS)
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 class WorkbenchRequirementAmendRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    draftRevisionId: str = Field(min_length=1)
-    expectedDraftRevisionId: str = Field(min_length=1)
-    text: str = Field(min_length=1, max_length=2000)
-    targetSectionHint: str | None = None
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    expectedDraftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    text: str = Field(min_length=1, max_length=MAX_REQUIREMENT_TEXT_CHARS)
+    targetSectionHint: str | None = Field(default=None, min_length=1, max_length=MAX_SECTION_ID_CHARS)
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 class RequirementReviewResolveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    draftRevisionId: str
-    baseRevisionId: str
-    amendmentId: str
-    operations: list[ReviewResolutionOperationRequest]
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    baseRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    amendmentId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    operations: list[ReviewResolutionOperationRequest] = Field(
+        min_length=1,
+        max_length=MAX_REQUIREMENT_OPERATION_COUNT,
+    )
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 class RequirementConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    draftRevisionId: str
-    baseRevisionId: str
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    baseRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 class WorkbenchRequirementConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    draftRevisionId: str = Field(min_length=1)
-    expectedDraftRevisionId: str = Field(min_length=1)
-    idempotencyKey: str = Field(min_length=1, max_length=160)
+    draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    expectedDraftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
 class WorkflowCommandRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    runtimeRunId: str | None = None
+    runtimeRunId: str | None = Field(default=None, min_length=1, max_length=MAX_REQUEST_ID_CHARS)
     commandType: Literal["pause", "cancel", "resume", "nextRoundRequirement"]
-    idempotencyKey: str = Field(min_length=1, max_length=160)
-    text: str | None = Field(default=None, max_length=2000)
-    targetSectionHint: str | None = None
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
+    text: str | None = Field(default=None, min_length=1, max_length=MAX_REQUIREMENT_TEXT_CHARS)
+    targetSectionHint: str | None = Field(default=None, min_length=1, max_length=MAX_SECTION_ID_CHARS)

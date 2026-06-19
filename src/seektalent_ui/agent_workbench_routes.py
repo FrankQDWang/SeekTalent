@@ -4,9 +4,10 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
+from starlette.concurrency import run_in_threadpool
 from sse_starlette import EventSourceResponse
 
 from seektalent_conversation_agent.errors import ConversationAgentError
@@ -45,9 +46,10 @@ from seektalent_ui.agent_workbench_response import (
 from seektalent_ui.agent_workbench_stream import encode_sse_event, replay_stream_envelopes
 from seektalent_ui.agent_workbench_stream_projection import append_projected_stream_events
 from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
-from seektalent_ui.problem_details import problem_http_error_from_conversation_error, problem_http_error_from_reason
+from seektalent_ui.problem_details import ProblemDetails, problem_http_error_from_conversation_error, problem_http_error_from_reason
 from seektalent_ui.workbench_observability import (
     correlation_id_from_request,
+    record_candidate_detail_denied,
     record_duplicate_run_prevented,
     record_idempotency_conflict,
     record_sse_replay_gap,
@@ -61,6 +63,15 @@ router = APIRouter(prefix="/api/agent/workbench")
 logger = logging.getLogger(__name__)
 # Raw conversation routes keep agent_http_error; Workbench routes return Problem Details.
 CANDIDATE_DETAIL_HEADERS = {"Cache-Control": "no-store"}
+WORKBENCH_PROBLEM_RESPONSES: dict[int | str, dict[str, Any]] = {
+    400: {"model": ProblemDetails},
+    403: {"model": ProblemDetails},
+    404: {"model": ProblemDetails},
+    409: {"model": ProblemDetails},
+    410: {"model": ProblemDetails},
+    429: {"model": ProblemDetails},
+    503: {"model": ProblemDetails},
+}
 
 
 @router.get("/conversations", response_model=AgentWorkbenchConversationListResponse)
@@ -102,6 +113,7 @@ def get_agent_workbench_view(
 @router.get(
     "/conversations/{conversation_id}/candidates/{candidate_id}/detail",
     response_model=AgentWorkbenchCandidateDetailResponse,
+    responses=WORKBENCH_PROBLEM_RESPONSES,
 )
 def get_agent_workbench_candidate_detail(
     conversation_id: str,
@@ -110,8 +122,13 @@ def get_agent_workbench_candidate_detail(
     response: Response,
     user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> AgentWorkbenchCandidateDetailResponse:
-    view = _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
-    session_id = view.conversation.workbenchSessionId
+    try:
+        conversation = get_agent_conversation_store(request).get_conversation(conversation_id)
+    except ConversationAgentError as exc:
+        raise _agent_workbench_error(exc, request) from exc
+    if conversation.owner_user_id != user.user_id or conversation.workspace_id != user.workspace_id:
+        raise _agent_workbench_error(ConversationAgentError("conversation_not_found"), request)
+    session_id = conversation.workbench_session_id
     correlation_id = correlation_id_from_request(request)
     if session_id is None:
         raise problem_http_error_from_reason(
@@ -135,13 +152,8 @@ def get_agent_workbench_candidate_detail(
             headers=CANDIDATE_DETAIL_HEADERS,
         )
     detail = candidate_detail_response_from_review_item(item)
-    record_workbench_audit_event(
-        "candidate_detail_read",
-        reason_code=detail.reasonCode,
-        correlation_id=correlation_id,
-        extra={"candidateId": candidate_id, "accessState": detail.accessState},
-    )
     if detail.accessState == "denied":
+        record_candidate_detail_denied(correlation_id=correlation_id)
         raise problem_http_error_from_reason(
             reason_code="permission_denied",
             status=403,
@@ -149,6 +161,12 @@ def get_agent_workbench_candidate_detail(
             correlation_id=correlation_id,
             headers=CANDIDATE_DETAIL_HEADERS,
         )
+    record_workbench_audit_event(
+        "candidate_detail_read",
+        reason_code=detail.reasonCode,
+        correlation_id=correlation_id,
+        extra={"candidateId": candidate_id, "accessState": detail.accessState},
+    )
     response.headers["Cache-Control"] = "no-store"
     return detail
 
@@ -156,6 +174,7 @@ def get_agent_workbench_candidate_detail(
 @router.post(
     "/conversations/{conversation_id}/messages",
     response_model=AgentWorkbenchConversationResponse,
+    responses=WORKBENCH_PROBLEM_RESPONSES,
 )
 async def submit_agent_workbench_message(
     conversation_id: str,
@@ -167,7 +186,8 @@ async def submit_agent_workbench_message(
     try:
         check_agent_write_rate(request, user=user, conversation_id=conversation_id)
         if isinstance(payload, WorkbenchSubmitJdMessageRequest):
-            service.submit_jd(
+            await run_in_threadpool(
+                service.submit_jd,
                 conversation_id=conversation_id,
                 owner_user_id=user.user_id,
                 workspace_id=user.workspace_id,
@@ -187,12 +207,18 @@ async def submit_agent_workbench_message(
             )
     except ConversationAgentError as exc:
         raise _agent_workbench_error(exc, request) from exc
-    return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
+    return await run_in_threadpool(
+        _build_agent_workbench_snapshot,
+        request=request,
+        conversation_id=conversation_id,
+        user=user,
+    )
 
 
 @router.post(
     "/conversations/{conversation_id}/requirements/operations",
     response_model=AgentWorkbenchConversationResponse,
+    responses=WORKBENCH_PROBLEM_RESPONSES,
 )
 def update_agent_workbench_requirement_draft(
     conversation_id: str,
@@ -219,6 +245,7 @@ def update_agent_workbench_requirement_draft(
 @router.post(
     "/conversations/{conversation_id}/requirements/amend-from-text",
     response_model=AgentWorkbenchConversationResponse,
+    responses=WORKBENCH_PROBLEM_RESPONSES,
 )
 def amend_agent_workbench_requirement_from_text(
     conversation_id: str,
@@ -246,6 +273,7 @@ def amend_agent_workbench_requirement_from_text(
 @router.post(
     "/conversations/{conversation_id}/requirements/confirm",
     response_model=AgentWorkbenchConversationResponse,
+    responses=WORKBENCH_PROBLEM_RESPONSES,
 )
 def confirm_agent_workbench_requirements(
     conversation_id: str,
@@ -271,6 +299,7 @@ def confirm_agent_workbench_requirements(
 @router.post(
     "/conversations/{conversation_id}/workflow/commands",
     response_model=AgentWorkbenchConversationResponse,
+    responses=WORKBENCH_PROBLEM_RESPONSES,
 )
 def submit_agent_workbench_workflow_command(
     conversation_id: str,
@@ -310,6 +339,7 @@ def submit_agent_workbench_workflow_command(
 @router.get(
     "/conversations/{conversation_id}/events",
     response_model=AgentWorkbenchStreamReplayResponse,
+    responses=WORKBENCH_PROBLEM_RESPONSES,
 )
 def list_agent_workbench_events(
     conversation_id: str,

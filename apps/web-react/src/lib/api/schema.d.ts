@@ -1404,7 +1404,7 @@ export interface components {
       /** Sourceids */
       sourceIds?: string[];
       /** Sourcekinds */
-      sourceKinds?: string[] | null;
+      sourceKinds?: ("cts" | "liepin")[] | null;
       /** Idempotencykey */
       idempotencyKey: string;
     };
@@ -2542,6 +2542,37 @@ export interface components {
       preferred_backgrounds?: string[];
       /** Preferred Query Terms */
       preferred_query_terms?: string[];
+    };
+    /** ProblemDetails */
+    ProblemDetails: {
+      /** Type */
+      type: string;
+      /** Title */
+      title: string;
+      /** Status */
+      status: number;
+      /** Detail */
+      detail: string;
+      /** Reasoncode */
+      reasonCode: string;
+      /** Instance */
+      instance: string;
+      /** Correlationid */
+      correlationId: string;
+      /** Regions */
+      regions?: components["schemas"]["ProblemRegion"][];
+    };
+    /** ProblemRegion */
+    ProblemRegion: {
+      /** Field */
+      field: string;
+      /** Message */
+      message: string;
+      /**
+       * Code
+       * @default invalid
+       */
+      code: string;
     };
     /** QueryTermCandidate */
     QueryTermCandidate: {
@@ -4319,7 +4350,7 @@ export interface components {
       /** Notes */
       notes?: string | null;
       /** Sourcekinds */
-      sourceKinds: string[];
+      sourceKinds: ("cts" | "liepin")[];
       /** Idempotencykey */
       idempotencyKey: string;
     };
@@ -6349,15 +6380,6 @@ export interface operations {
           "application/json": components["schemas"]["AgentWorkbenchConversationListResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
-        };
-      };
     };
   };
   get_agent_workbench_view_api_agent_workbench_conversations__conversation_id__get: {
@@ -6378,15 +6400,6 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };
@@ -6412,13 +6425,67 @@ export interface operations {
           "application/json": components["schemas"]["AgentWorkbenchCandidateDetailResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
+      /** @description Bad Request */
+      400: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Gone */
+      410: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
         };
       };
     };
@@ -6449,13 +6516,67 @@ export interface operations {
           "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
+      /** @description Bad Request */
+      400: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Gone */
+      410: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
         };
       };
     };
@@ -6484,13 +6605,67 @@ export interface operations {
           "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
+      /** @description Bad Request */
+      400: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Gone */
+      410: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
         };
       };
     };
@@ -6519,13 +6694,67 @@ export interface operations {
           "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
+      /** @description Bad Request */
+      400: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Gone */
+      410: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
         };
       };
     };
@@ -6554,13 +6783,67 @@ export interface operations {
           "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
+      /** @description Bad Request */
+      400: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Gone */
+      410: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
         };
       };
     };
@@ -6589,13 +6872,67 @@ export interface operations {
           "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
+      /** @description Bad Request */
+      400: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Gone */
+      410: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
         };
       };
     };
@@ -6623,13 +6960,67 @@ export interface operations {
           "application/json": components["schemas"]["AgentWorkbenchStreamReplayResponse"];
         };
       };
-      /** @description Validation Error */
-      422: {
+      /** @description Bad Request */
+      400: {
         headers: {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Gone */
+      410: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
         };
       };
     };
@@ -6656,15 +7047,6 @@ export interface operations {
         };
         content: {
           "application/json": unknown;
-        };
-      };
-      /** @description Validation Error */
-      422: {
-        headers: {
-          [name: string]: unknown;
-        };
-        content: {
-          "application/json": components["schemas"]["HTTPValidationError"];
         };
       };
     };

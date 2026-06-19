@@ -51,7 +51,7 @@ from seektalent_ui.workbench_store_types import (
     WorkbenchSourceConnection,
     WorkbenchUser,
 )
-from tests.conversation_agent_test_support import sample_requirement_sheet
+from tests.conversation_agent_test_support import sample_requirement_sheet, save_approved_requirement
 from tests.settings_factory import make_settings
 
 
@@ -928,17 +928,22 @@ def test_workbench_candidate_detail_route_returns_safe_sections(
             assert review_item_id == "candidate_00"
             return candidate
 
-    monkeypatch.setattr(
-        agent_workbench_routes,
-        "_build_agent_workbench_snapshot",
-        lambda *, request, conversation_id, user: SimpleNamespace(
-            conversation=SimpleNamespace(workbenchSessionId="session_1")
-        ),
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    client.app.state.agent_conversation_service.store.link_runtime_run(
+        conversation_id=conversation_id,
+        runtime_run_id="runtime_detail_route_1",
+        workbench_session_id="session_1",
+        approved_requirement_revision_id="reqapproved_detail_route_1",
+        linked_at="2026-06-09T00:00:20.000000Z",
     )
     monkeypatch.setattr(agent_workbench_routes, "get_workbench_store", lambda request: FakeDetailStore())
 
     with caplog.at_level("INFO", logger="seektalent_ui.workbench_observability"):
-        response = client.get("/api/agent/workbench/conversations/agent_conv_1/candidates/candidate_00/detail")
+        response = client.get(f"/api/agent/workbench/conversations/{conversation_id}/candidates/candidate_00/detail")
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
@@ -972,15 +977,14 @@ def test_workbench_candidate_detail_route_sets_no_store_on_errors(
     from seektalent_ui import agent_workbench_routes
 
     client = _client(tmp_path)
-
-    monkeypatch.setattr(
-        agent_workbench_routes,
-        "_build_agent_workbench_snapshot",
-        lambda *, request, conversation_id, user: SimpleNamespace(
-            conversation=SimpleNamespace(workbenchSessionId=None)
-        ),
+    _ensure_local_actor(client)
+    missing_session_conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    missing_session = client.get(
+        f"/api/agent/workbench/conversations/{missing_session_conversation_id}/candidates/candidate_00/detail"
     )
-    missing_session = client.get("/api/agent/workbench/conversations/agent_conv_1/candidates/candidate_00/detail")
 
     denied_candidate = _candidate_review_item(0, evidence_level="detail")
     denied_candidate.access_state = "denied"
@@ -989,15 +993,19 @@ def test_workbench_candidate_detail_route_sets_no_store_on_errors(
         def get_candidate_review_item(self, *, user: WorkbenchUser, session_id: str, review_item_id: str):
             return denied_candidate
 
-    monkeypatch.setattr(
-        agent_workbench_routes,
-        "_build_agent_workbench_snapshot",
-        lambda *, request, conversation_id, user: SimpleNamespace(
-            conversation=SimpleNamespace(workbenchSessionId="session_1")
-        ),
+    denied_conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    client.app.state.agent_conversation_service.store.link_runtime_run(
+        conversation_id=denied_conversation_id,
+        runtime_run_id="runtime_detail_route_2",
+        workbench_session_id="session_1",
+        approved_requirement_revision_id="reqapproved_detail_route_2",
+        linked_at="2026-06-09T00:00:20.000000Z",
     )
     monkeypatch.setattr(agent_workbench_routes, "get_workbench_store", lambda request: FakeDeniedStore())
-    denied = client.get("/api/agent/workbench/conversations/agent_conv_1/candidates/candidate_00/detail")
+    denied = client.get(f"/api/agent/workbench/conversations/{denied_conversation_id}/candidates/candidate_00/detail")
 
     assert missing_session.status_code == 404
     assert missing_session.headers["cache-control"] == "no-store"
@@ -1428,6 +1436,85 @@ def test_workbench_requirement_operation_returns_refreshed_workbench_view(tmp_pa
     assert updated["selected"] is False
 
 
+def test_workbench_requirement_operations_reject_request_amplification(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    submitted = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-operation-cap-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft = submitted.json()["requirementDraft"]
+    first_item = draft["sections"][0]["items"][0]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/operations",
+        json={
+            "draftRevisionId": draft["draftRevisionId"],
+            "expectedDraftRevisionId": draft["draftRevisionId"],
+            "operations": [
+                {"op": "set_selected", "itemId": first_item["itemId"], "selected": False}
+                for _ in range(51)
+            ],
+            "idempotencyKey": "deselect-workbench-operation-cap-1",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    problem = response.json()
+    assert problem["reasonCode"] == "agent_request_invalid"
+    assert any(region["field"] == "operations" for region in problem["regions"])
+
+
+def test_workbench_requirement_operations_reject_oversized_edit_text(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    submitted = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-operation-text-cap-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft = submitted.json()["requirementDraft"]
+    first_item = draft["sections"][0]["items"][0]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/operations",
+        json={
+            "draftRevisionId": draft["draftRevisionId"],
+            "expectedDraftRevisionId": draft["draftRevisionId"],
+            "operations": [{"op": "edit_text", "itemId": first_item["itemId"], "text": "x" * 2001}],
+            "idempotencyKey": "edit-workbench-operation-text-cap-1",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    problem = response.json()
+    assert problem["reasonCode"] == "agent_request_invalid"
+    assert any(region["field"] == "operations.0.text" for region in problem["regions"])
+
+
 def test_workbench_message_action_rejects_source_ids_only_submit_jd_contract(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
@@ -1452,6 +1539,39 @@ def test_workbench_message_action_rejects_source_ids_only_submit_jd_contract(tmp
     problem = response.json()
     assert problem["reasonCode"] == "agent_request_invalid"
     assert {region["field"] for region in problem["regions"]} >= {"submitJd.sourceIds", "submitJd.sourceKinds"}
+
+
+def test_workbench_submit_jd_route_offloads_sync_work_to_threadpool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import seektalent_ui.agent_workbench_routes as routes
+
+    calls: list[str] = []
+
+    async def fake_run_in_threadpool(fn: object, *args: object, **kwargs: object) -> object:
+        calls.append(getattr(fn, "__name__", repr(fn)))
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "run_in_threadpool", fake_run_in_threadpool)
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-threadpool-1",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert calls == ["submit_jd", "_build_agent_workbench_snapshot"]
 
 
 def test_workbench_requirement_operation_stale_revision_returns_problem_details(tmp_path: Path) -> None:
@@ -1723,6 +1843,63 @@ def test_agent_workbench_conversation_list_route_returns_typed_summaries(tmp_pat
     assert refreshed_summary["workflowStartIntentId"] == confirmed.json()["conversation"]["workflowStartIntentId"]
     assert refreshed_summary["workflowStartState"] == "queued"
     assert refreshed_summary["workflowStartReasonCode"] is None
+
+
+def test_agent_workbench_workflow_command_route_handles_commands_and_problem_details(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    service = client.app.state.agent_conversation_service
+    runtime_store = service.tool_adapter.runtime_store
+    approved = save_approved_requirement(
+        runtime_store,
+        conversation_id=conversation_id,
+        approved_requirement_revision_id="reqapproved_workbench_command_1",
+    )
+    runtime_store.create_run(
+        RuntimeRunRecord(
+            runtime_run_id="runtime_run_workbench_command_1",
+            agent_conversation_id=conversation_id,
+            workbench_session_id="workbench_session_workbench_command_1",
+            approved_requirement_revision_id=approved.approved_requirement_revision_id,
+            status="running",
+            current_stage="runtime",
+            current_round=1,
+            latest_checkpoint_id=None,
+            latest_event_seq=0,
+            source_ids=["cts"],
+            stop_reason_code=None,
+            created_at="2026-06-09T00:00:20.000000Z",
+            updated_at="2026-06-09T00:00:20.000000Z",
+            completed_at=None,
+        )
+    )
+    service.store.link_runtime_run(
+        conversation_id=conversation_id,
+        runtime_run_id="runtime_run_workbench_command_1",
+        workbench_session_id="workbench_session_workbench_command_1",
+        approved_requirement_revision_id=approved.approved_requirement_revision_id,
+        linked_at="2026-06-09T00:00:20.000000Z",
+    )
+
+    command = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/workflow/commands",
+        json={"commandType": "pause", "idempotencyKey": "pause-workbench-route-1"},
+    )
+    missing_text = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/workflow/commands",
+        json={"commandType": "nextRoundRequirement", "idempotencyKey": "next-round-workbench-missing-text-1"},
+    )
+
+    assert command.status_code == 200, command.text
+    assert command.json()["conversation"]["runtimeRunId"] == "runtime_run_workbench_command_1"
+    assert missing_text.status_code == 400, missing_text.text
+    problem = missing_text.json()
+    assert problem["reasonCode"] == "agent_free_text_empty"
+    assert problem["status"] == 400
 
 
 def test_agent_workbench_event_replay_route_returns_typed_envelopes(tmp_path: Path) -> None:
