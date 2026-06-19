@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from sse_starlette import EventSourceResponse
 
 from seektalent_conversation_agent.errors import ConversationAgentError
@@ -25,6 +25,7 @@ from seektalent_ui.agent_route_deps import (
     get_runtime_control_store,
 )
 from seektalent_ui.agent_workbench_models import (
+    AgentWorkbenchCandidateDetailResponse,
     AgentWorkbenchConversationListResponse,
     AgentWorkbenchConversationResponse,
     AgentWorkbenchStreamReplayResponse,
@@ -33,6 +34,7 @@ from seektalent_ui.agent_workbench_projection import (
     AgentWorkbenchWorkflowStartIntentProjection,
     RuntimeProjectionStore,
     build_agent_workbench_projection_input,
+    candidate_detail_response_from_review_item,
 )
 from seektalent_ui.agent_workbench_response import (
     project_agent_workbench_conversation_summary,
@@ -56,6 +58,7 @@ from seektalent_ui.workbench_store import WorkbenchUser
 router = APIRouter(prefix="/api/agent/workbench")
 logger = logging.getLogger(__name__)
 # Raw conversation routes keep agent_http_error; Workbench routes return Problem Details.
+CANDIDATE_DETAIL_HEADERS = {"Cache-Control": "no-store"}
 
 
 @router.get("/conversations", response_model=AgentWorkbenchConversationListResponse)
@@ -92,6 +95,60 @@ def get_agent_workbench_view(
     user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> AgentWorkbenchConversationResponse:
     return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
+
+
+@router.get(
+    "/conversations/{conversation_id}/candidates/{candidate_id}/detail",
+    response_model=AgentWorkbenchCandidateDetailResponse,
+)
+def get_agent_workbench_candidate_detail(
+    conversation_id: str,
+    candidate_id: str,
+    request: Request,
+    response: Response,
+    user: WorkbenchUser = Depends(local_workbench_read_user),
+) -> AgentWorkbenchCandidateDetailResponse:
+    view = _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
+    session_id = view.conversation.workbenchSessionId
+    correlation_id = correlation_id_from_request(request)
+    if session_id is None:
+        raise problem_http_error_from_reason(
+            reason_code="candidate_detail_unavailable",
+            status=404,
+            request=request,
+            correlation_id=correlation_id,
+            headers=CANDIDATE_DETAIL_HEADERS,
+        )
+    item = get_workbench_store(request).get_candidate_review_item(
+        user=user,
+        session_id=session_id,
+        review_item_id=candidate_id,
+    )
+    if item is None:
+        raise problem_http_error_from_reason(
+            reason_code="candidate_detail_unavailable",
+            status=404,
+            request=request,
+            correlation_id=correlation_id,
+            headers=CANDIDATE_DETAIL_HEADERS,
+        )
+    detail = candidate_detail_response_from_review_item(item)
+    record_workbench_audit_event(
+        "candidate_detail_read",
+        reason_code=detail.reasonCode,
+        correlation_id=correlation_id,
+        extra={"candidateId": candidate_id, "accessState": detail.accessState},
+    )
+    if detail.accessState == "denied":
+        raise problem_http_error_from_reason(
+            reason_code="permission_denied",
+            status=403,
+            request=request,
+            correlation_id=correlation_id,
+            headers=CANDIDATE_DETAIL_HEADERS,
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return detail
 
 
 @router.post(

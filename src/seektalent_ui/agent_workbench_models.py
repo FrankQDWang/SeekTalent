@@ -586,11 +586,43 @@ class AgentWorkbenchCandidateSummaryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidateId: str
+    rank: int
     displayName: str
     headline: str | None = None
+    company: str | None = None
+    location: str | None = None
+    education: str | None = None
+    experienceYears: int | None = None
+    sourceKinds: list[Literal["cts", "liepin"]] = Field(default_factory=list)
+    matchScore: int | None = Field(default=None, ge=0, le=100)
     matchSummary: str | None = None
-    sourceKind: Literal["cts", "liepin", "all"] = "all"
     status: str
+    detailAvailability: Literal["available", "redacted", "approval_required", "unavailable"]
+    accessState: Literal["allowed", "redacted", "approval_required", "denied"]
+    evidenceLevel: Literal["summary", "detail", "final", "unknown"]
+
+
+class AgentWorkbenchCandidateDetailSectionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    items: list[str] = Field(default_factory=list)
+
+
+class AgentWorkbenchCandidateDetailResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidateId: str
+    displayName: str
+    headline: str | None = None
+    sourceKinds: list[Literal["cts", "liepin"]] = Field(default_factory=list)
+    matchScore: int | None = Field(default=None, ge=0, le=100)
+    sections: list[AgentWorkbenchCandidateDetailSectionResponse] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    detailAvailability: Literal["available", "redacted", "approval_required", "unavailable"]
+    accessState: Literal["allowed", "redacted", "approval_required", "denied"]
+    evidenceLevel: Literal["summary", "detail", "final", "unknown"]
+    reasonCode: str | None = None
 
 
 class AgentWorkbenchDetailApprovalResponse(BaseModel):

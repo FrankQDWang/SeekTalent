@@ -1,0 +1,15 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Expose a typed WorkbenchStore accessor for the Agent Workbench candidate detail route.",
+  "rationale": "WorkbenchStore is the BFF persistence facade. The candidate detail route must not query SQLite directly, so this change adds a narrow get_candidate_review_item facade method while keeping candidate storage and projection logic in focused modules.",
+  "red_files": ["src/seektalent_ui/workbench_store.py"],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run pytest tests/test_agent_workbench_contract.py -q",
+    "uv run pytest",
+    "uv run ruff check src/seektalent_ui/agent_workbench_models.py src/seektalent_ui/agent_workbench_projection.py src/seektalent_ui/agent_workbench_routes.py src/seektalent_ui/workbench_store.py src/seektalent_ui/workbench_candidate_store.py src/seektalent_ui/workbench_candidate_display.py src/seektalent_ui/workbench_store_types.py src/seektalent_ui/workbench_schema.py tests/test_agent_workbench_contract.py",
+    "uv run python tools/check_pr_governance.py --base codex/wts-07b-confirm-route-schema-sync",
+    "git diff --check codex/wts-07b-confirm-route-schema-sync...HEAD"
+  ]
+}
