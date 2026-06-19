@@ -1,4 +1,5 @@
 import type {
+  AgentWorkbenchCandidateSummary,
   AgentWorkbenchConversationResponse,
   AgentWorkbenchStrategyGraph,
 } from "../../lib/api/agentWorkbenchTypes";
@@ -17,6 +18,29 @@ type ViewOverrides = Partial<
   >;
   streamCursor?: Partial<AgentWorkbenchConversationResponse["streamCursor"]>;
 };
+
+type CandidateSummaryOverrides = Partial<AgentWorkbenchCandidateSummary> &
+  Pick<AgentWorkbenchCandidateSummary, "candidateId" | "displayName" | "rank">;
+
+function candidateSummary(
+  overrides: CandidateSummaryOverrides,
+): AgentWorkbenchCandidateSummary {
+  return {
+    headline: null,
+    company: null,
+    location: null,
+    education: null,
+    experienceYears: null,
+    sourceKinds: ["cts"],
+    matchScore: null,
+    matchSummary: null,
+    status: "pending",
+    detailAvailability: "redacted",
+    accessState: "redacted",
+    evidenceLevel: "summary",
+    ...overrides,
+  };
+}
 
 function workbenchView(
   overrides: ViewOverrides = {},
@@ -224,22 +248,40 @@ function workbenchView(
       },
     ],
     candidates: [
-      {
+      candidateSummary({
         candidateId: "candidate_001",
+        rank: 1,
         displayName: "候选人 A",
         headline: "平台工程负责人 / 上海 / Python + RAG",
+        company: "某 AI Infra 公司",
+        location: "上海",
+        education: "本科",
+        experienceYears: 10,
+        sourceKinds: ["cts", "liepin"],
+        matchScore: 92,
         matchSummary: "Agent 工具调用平台和 RAG 链路证据完整。",
-        sourceKind: "all",
         status: "running",
-      },
-      {
+        detailAvailability: "available",
+        accessState: "allowed",
+        evidenceLevel: "detail",
+      }),
+      candidateSummary({
         candidateId: "candidate_002",
+        rank: 2,
         displayName: "候选人 B",
         headline: "后端工程师 / 上海 / 检索系统",
+        company: "某企业协作产品",
+        location: "上海",
+        education: "硕士",
+        experienceYears: 8,
+        sourceKinds: ["cts"],
+        matchScore: 84,
         matchSummary: "检索和后端强，Agent 平台证据需要补充。",
-        sourceKind: "cts",
         status: "pending",
-      },
+        detailAvailability: "redacted",
+        accessState: "redacted",
+        evidenceLevel: "summary",
+      }),
     ],
     detailApprovals: [
       {

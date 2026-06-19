@@ -168,8 +168,8 @@ export function normalizeAgentWorkbenchConversation(
     streamCursor: {
       ...streamCursor,
       latestStreamSeq: streamCursor.latestStreamSeq,
-      snapshotSeq: streamCursor.snapshotSeq ?? streamCursor.latestStreamSeq,
-      viewRevision: streamCursor.viewRevision ?? streamCursor.snapshotSeq ?? streamCursor.latestStreamSeq,
+      snapshotSeq: streamCursor.snapshotSeq,
+      viewRevision: streamCursor.viewRevision,
     },
   };
 }

@@ -57,19 +57,29 @@ function parseProblemDetails(error: unknown): {
   }
   const candidate = error as Record<string, unknown>;
   const detail = parseProblemDetail(candidate.detail);
-  if (typeof candidate.reasonCode !== "string" && typeof candidate.correlationId !== "string") {
+  if (
+    typeof candidate.reasonCode !== "string" &&
+    typeof candidate.correlationId !== "string"
+  ) {
     return null;
   }
   const reasonCode =
-    typeof candidate.reasonCode === "string" ? candidate.reasonCode : detail.reasonCode;
+    typeof candidate.reasonCode === "string"
+      ? candidate.reasonCode
+      : detail.reasonCode;
   return {
     ...(detail.message !== undefined ? { detail: detail.message } : {}),
     ...(reasonCode !== undefined ? { reasonCode } : {}),
-    ...(typeof candidate.correlationId === "string" ? { correlationId: candidate.correlationId } : {}),
+    ...(typeof candidate.correlationId === "string"
+      ? { correlationId: candidate.correlationId }
+      : {}),
   };
 }
 
-function parseProblemDetail(detail: unknown): { message?: string; reasonCode?: string } {
+function parseProblemDetail(detail: unknown): {
+  message?: string;
+  reasonCode?: string;
+} {
   if (typeof detail === "string") {
     return { message: detail };
   }
@@ -78,8 +88,12 @@ function parseProblemDetail(detail: unknown): { message?: string; reasonCode?: s
   }
   const candidate = detail as Record<string, unknown>;
   return {
-    ...(typeof candidate.message === "string" ? { message: candidate.message } : {}),
-    ...(typeof candidate.reasonCode === "string" ? { reasonCode: candidate.reasonCode } : {}),
+    ...(typeof candidate.message === "string"
+      ? { message: candidate.message }
+      : {}),
+    ...(typeof candidate.reasonCode === "string"
+      ? { reasonCode: candidate.reasonCode }
+      : {}),
   };
 }
 
