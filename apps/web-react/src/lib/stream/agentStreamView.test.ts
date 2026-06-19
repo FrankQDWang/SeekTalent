@@ -6,7 +6,7 @@ import type {
 } from "../api/agentWorkbenchTypes";
 
 describe("agent stream view merge", () => {
-  it("marks summary-only graph and candidate updates as snapshot recovery without fabricating objects", () => {
+  it("keeps normal graph and candidate update events connected without fabricating objects", () => {
     expect.hasAssertions();
 
     const updated = mergeStreamEnvelopesIntoConversation(conversationSnapshot, [
@@ -33,13 +33,38 @@ describe("agent stream view merge", () => {
     ]);
 
     expect(updated.streamCursor.latestStreamSeq).toBe(2);
-    expect(updated.conversation.status).toBe("disconnected");
-    expect(updated.reasonCode).toBe("stream_recovery");
+    expect(updated.conversation.status).toBe("running");
+    expect(updated.reasonCode).toBeNull();
     expect(updated.strategyGraph).toBe(conversationSnapshot.strategyGraph);
     expect(updated.candidates).toBe(conversationSnapshot.candidates);
     expect(
       updated.transcriptGroups.at(-1)?.events.map((event) => event.kind),
     ).toEqual(["strategyGraph.changed", "candidate.upserted"]);
+  });
+
+  it("marks explicit stream gaps as snapshot recovery", () => {
+    expect.hasAssertions();
+
+    const updated = mergeStreamEnvelopesIntoConversation(conversationSnapshot, [
+      envelope({
+        seq: 1,
+        kind: "stream.gap",
+        payload: {
+          payloadType: "stream.gap",
+          kind: "gap",
+          missingFromSeq: 1,
+          nextAvailableSeq: 4,
+          summary: "事件流存在缺口，正在恢复快照。",
+        },
+      }),
+    ]);
+
+    expect(updated.streamCursor.latestStreamSeq).toBe(1);
+    expect(updated.conversation.status).toBe("disconnected");
+    expect(updated.reasonCode).toBe("stream_recovery");
+    expect(updated.transcriptGroups.at(-1)?.events.at(-1)?.kind).toBe(
+      "stream.gap",
+    );
   });
 });
 
