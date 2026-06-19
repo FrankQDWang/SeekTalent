@@ -4,7 +4,7 @@ import "./ConversationShell.css";
 type ConversationShellProps = {
   main: ReactNode;
   rail: ReactNode;
-  side: ReactNode;
+  side?: ReactNode;
 };
 
 export function ConversationShell({
@@ -12,15 +12,22 @@ export function ConversationShell({
   rail,
   side,
 }: ConversationShellProps) {
+  const hasSide = side != null;
+
   return (
-    <div className="conversation-shell">
+    <div
+      className="conversation-shell"
+      data-side={hasSide ? "visible" : "hidden"}
+    >
       <aside aria-label="会话列表" className="conversation-shell__rail">
         {rail}
       </aside>
       <section className="conversation-shell__main">{main}</section>
-      <aside aria-label="运行详情" className="conversation-shell__side">
-        {side}
-      </aside>
+      {hasSide ? (
+        <aside aria-label="运行详情" className="conversation-shell__side">
+          {side}
+        </aside>
+      ) : null}
     </div>
   );
 }

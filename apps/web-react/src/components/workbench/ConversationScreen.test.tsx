@@ -61,6 +61,7 @@ describe("ConversationScreen", () => {
 
     expect(onConfirmRequirements).toHaveBeenCalledOnce();
     expect(screen.getByText("AI Agent 平台工程师")).toBeVisible();
+    expect(screen.queryByLabelText("检索策略图")).not.toBeInTheDocument();
   });
 
   it("keeps requirement review inside the transcript flow", () => {

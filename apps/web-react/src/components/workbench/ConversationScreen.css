@@ -6,13 +6,25 @@
 }
 
 .conversation-view__workspace {
-  display: grid;
   flex: 1;
-  gap: var(--st-space-4);
-  grid-template-columns: minmax(360px, 0.58fr) minmax(320px, 0.42fr);
   min-height: 0;
   overflow: auto;
   padding: var(--st-space-4);
+}
+
+.conversation-view__workspace[data-workflow-surface="visible"] {
+  display: grid;
+  gap: var(--st-space-4);
+  grid-template-columns: minmax(360px, 0.58fr) minmax(320px, 0.42fr);
+}
+
+.conversation-view__workspace[data-workflow-surface="hidden"] {
+  display: block;
+}
+
+.conversation-view__workspace[data-workflow-surface="hidden"]
+  .conversation-view__panel--chat {
+  min-height: 100%;
 }
 
 .conversation-view__tabs {

@@ -9,6 +9,10 @@
   min-height: 0;
 }
 
+.conversation-shell[data-side="hidden"] {
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+}
+
 .conversation-shell__rail,
 .conversation-shell__side {
   min-height: 0;

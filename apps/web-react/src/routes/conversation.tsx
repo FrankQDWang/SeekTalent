@@ -4,6 +4,7 @@ import { ConversationList } from "../components/workbench/ConversationList";
 import {
   ConversationScreen,
   ConversationScreenSide,
+  hasConversationWorkflowSurface,
 } from "../components/workbench/ConversationScreen";
 import { ConversationShell } from "../components/workbench/ConversationShell";
 import { CandidateDetailDrawer } from "../components/workbench/CandidateDetailDrawer";
@@ -67,7 +68,6 @@ function ConversationRoute() {
       <ConversationShell
         main={<section aria-busy="true" className="conversation-view__state" />}
         rail={<ConversationList selectedConversationId={conversationId} />}
-        side={<div />}
       />
     );
   }
@@ -81,12 +81,12 @@ function ConversationRoute() {
           </section>
         }
         rail={<ConversationList selectedConversationId={conversationId} />}
-        side={<div />}
       />
     );
   }
 
   const view = query.data;
+  const workflowSurfaceVisible = hasConversationWorkflowSurface(view);
   const onSubmitMessage = async (message: string) => {
     setActionErrorMessage(null);
     try {
@@ -183,13 +183,15 @@ function ConversationRoute() {
         }
         rail={<ConversationList selectedConversationId={conversationId} />}
         side={
-          <ConversationScreenSide
-            onViewCandidateDetails={(candidateId) => {
-              setActionErrorMessage(null);
-              setSelectedCandidateId(candidateId);
-            }}
-            view={view}
-          />
+          workflowSurfaceVisible ? (
+            <ConversationScreenSide
+              onViewCandidateDetails={(candidateId) => {
+                setActionErrorMessage(null);
+                setSelectedCandidateId(candidateId);
+              }}
+              view={view}
+            />
+          ) : null
         }
       />
       <CandidateDetailDrawer
