@@ -1,0 +1,36 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Remove gate-blocking raw detail and typing smells from Workbench Problem Details and job request normalization.",
+  "rationale": "The WTS red-zone verification runs privacy and AI-smell gates across the stacked diff from origin/main. This cleanup keeps public Problem Details reason-code based, removes the new SourceKind cast through explicit narrowing, and keeps Workbench observability return types precise without changing runtime behavior.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/job_requests.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run pytest tests/test_agent_workbench_problem_details.py tests/test_conversation_agent_routes.py tests/test_conversation_agent_service.py -q",
+    "uv run ruff check src/seektalent_conversation_agent/job_requests.py src/seektalent_ui/problem_details.py src/seektalent_ui/workbench_observability.py tests/test_agent_workbench_problem_details.py",
+    "uv run python tools/check_privacy_gate.py --base origin/main",
+    "uv run python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run python tools/check_pr_governance.py --base codex/wts-07b-confirm-route-schema-sync",
+    "git diff --check codex/wts-07b-confirm-route-schema-sync...HEAD"
+  ],
+  "deletion_targets": [
+    "raw ConversationAgentError string detail in public Problem Details",
+    "new SourceKind cast in job request source normalization",
+    "new Any usage in Workbench BFF helper types"
+  ],
+  "risks": [
+    "Public Problem Details must keep enough reason-code information for clients without echoing raw exception strings.",
+    "Source kind normalization must preserve the exact accepted set of cts and liepin."
+  ]
+}

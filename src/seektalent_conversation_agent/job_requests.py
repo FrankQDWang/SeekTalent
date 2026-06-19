@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
 from seektalent_conversation_agent.errors import ConversationAgentError
 
@@ -57,8 +57,19 @@ def normalize_source_kinds(values: list[str]) -> list[SourceKind]:
                 payload={"sourceKind": raw_value},
             )
         if value not in seen:
-            normalized.append(cast(SourceKind, value))
+            normalized.append(_source_kind(value))
             seen.add(value)
     if not normalized:
         raise ConversationAgentError("job_request_source_kinds_required")
     return normalized
+
+
+def _source_kind(value: str) -> SourceKind:
+    if value == "cts":
+        return "cts"
+    if value == "liepin":
+        return "liepin"
+    raise ConversationAgentError(
+        "job_request_source_kind_invalid",
+        payload={"sourceKind": value},
+    )

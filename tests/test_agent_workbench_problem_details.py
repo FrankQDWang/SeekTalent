@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from seektalent.config import AppSettings
-from seektalent_ui.problem_details import problem_from_reason, problem_status_from_reason
+from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent.progress import ProgressEvent
+from seektalent_ui.problem_details import problem_from_conversation_error, problem_from_reason, problem_status_from_reason
 from seektalent_ui.server import create_app
 from tests.conversation_agent_test_support import sample_requirement_sheet
 from tests.settings_factory import make_settings
@@ -87,6 +89,20 @@ def test_problem_details_use_string_detail_and_conflict_status() -> None:
     assert problem.reasonCode == "idempotency_key_conflict"
     assert isinstance(problem.detail, str)
     assert problem.correlationId == "corr-conflict"
+
+
+def test_conversation_error_problem_detail_uses_public_reason_text() -> None:
+    problem = problem_from_conversation_error(
+        exc=ConversationAgentError(
+            "agent_request_invalid",
+            "raw provider token bearer secret should not leak",
+        ),
+        request=SimpleNamespace(url=SimpleNamespace(path="/api/agent/workbench/example")),
+        correlation_id="corr-safe",
+    )
+
+    assert problem.detail == "The Workbench request body is invalid."
+    assert "bearer" not in problem.model_dump_json().casefold()
 
 
 def _client(tmp_path: Path) -> TestClient:

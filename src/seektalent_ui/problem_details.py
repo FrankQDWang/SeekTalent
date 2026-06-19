@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -87,7 +86,6 @@ def problem_from_conversation_error(
         status=status,
         instance=_request_path(request),
         correlation_id=correlation_id,
-        detail=str(exc),
         regions=regions_from_validation_errors(_payload_errors(exc.payload)),
     )
 
@@ -119,7 +117,7 @@ def regions_from_validation_errors(errors: Sequence[Mapping[str, object]]) -> li
     return regions
 
 
-def no_store_json_response(*, status_code: int, content: Mapping[str, Any]) -> JSONResponse:
+def no_store_json_response(*, status_code: int, content: Mapping[str, object]) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content=dict(content),

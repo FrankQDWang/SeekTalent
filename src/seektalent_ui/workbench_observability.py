@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import Any
 from uuid import uuid4
 
 
@@ -102,7 +101,7 @@ def record_workflow_start_kill_switch_blocked(*, correlation_id: str | None = No
     )
 
 
-def _redacted_extra(extra: Mapping[str, object] | None) -> dict[str, Any]:
+def _redacted_extra(extra: Mapping[str, object] | None) -> dict[str, object]:
     if extra is None:
         return {}
     return {f"workbench_{key}": "redacted" if _looks_sensitive(key) else value for key, value in extra.items()}
