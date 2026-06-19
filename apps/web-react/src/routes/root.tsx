@@ -60,7 +60,6 @@ function WorkbenchIndexRoute() {
           <ConversationList />
         )
       }
-      side={<div />}
     />
   );
 }
