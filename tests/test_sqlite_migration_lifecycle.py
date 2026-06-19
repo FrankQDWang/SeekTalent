@@ -197,6 +197,46 @@ def test_workbench_schema_has_version_gate_and_backs_up_legacy_database(tmp_path
     assert exc_info.value.reason_code == "sqlite_schema_unsupported"
 
 
+def test_workbench_schema_migrates_v1_candidate_display_columns(tmp_path: Path) -> None:
+    from seektalent_ui.workbench_schema import WORKBENCH_SCHEMA_VERSION, initialize_workbench_schema
+
+    legacy_db = tmp_path / "workbench_v1.sqlite3"
+    with sqlite3.connect(legacy_db) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE candidate_review_items (
+                review_item_id TEXT PRIMARY KEY,
+                tenant_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                primary_evidence_id TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                title TEXT NOT NULL,
+                company TEXT NOT NULL,
+                location TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                aggregate_score INTEGER,
+                fit_bucket TEXT,
+                why_selected TEXT NOT NULL DEFAULT '',
+                source_round INTEGER,
+                review_status TEXT NOT NULL CHECK(review_status IN ('new', 'promising', 'rejected')),
+                note TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            );
+            """
+        )
+        conn.execute("PRAGMA user_version = 1")
+        initialize_workbench_schema(conn, now="2026-06-19T00:00:00Z", database_path=legacy_db)
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(candidate_review_items)").fetchall()}
+        assert {"education", "experience_years"}.issubset(columns)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == WORKBENCH_SCHEMA_VERSION
+
+
 def test_workbench_stream_sets_schema_version_and_rejects_newer_db(tmp_path: Path) -> None:
     path = tmp_path / "stream.sqlite3"
     AgentWorkbenchStreamStore(path)

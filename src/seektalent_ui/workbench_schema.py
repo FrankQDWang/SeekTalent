@@ -392,6 +392,8 @@ CREATE TABLE IF NOT EXISTS candidate_review_items (
     title TEXT NOT NULL,
     company TEXT NOT NULL,
     location TEXT NOT NULL,
+    education TEXT,
+    experience_years INTEGER,
     summary TEXT NOT NULL,
     aggregate_score INTEGER,
     fit_bucket TEXT,
@@ -555,16 +557,13 @@ ON external_write_intents(tenant_id, workspace_id, status, updated_at, intent_id
 def initialize_workbench_schema(conn: sqlite3.Connection, *, now: str, database_path: str | Path | None = None) -> None:
     version = require_supported_version(conn, supported_version=WORKBENCH_SCHEMA_VERSION, store_name="workbench")
     if version == WORKBENCH_SCHEMA_VERSION:
+        if candidate_display_columns_missing(conn):
+            backup_workbench_before_migration(database_path=database_path, now=now)
+            ensure_candidate_display_columns(conn)
+            run_sqlite_integrity_checks(conn, store_name="workbench", foreign_keys=True)
         return
     if version > 0 or has_user_tables(conn):
-        if database_path is not None:
-            path = Path(database_path)
-            backup_sqlite_before_migration(
-                path,
-                backup_root=path.parent / "migration_backups",
-                store_name="workbench",
-                now=now,
-            )
+        backup_workbench_before_migration(database_path=database_path, now=now)
     conn.executescript(SCHEMA_SQL)
     ensure_column(conn, "sessions", "runtime_run_id", "TEXT")
     conn.execute(
@@ -590,6 +589,7 @@ def initialize_workbench_schema(conn: sqlite3.Connection, *, now: str, database_
     ensure_column(conn, "source_runs", "detail_open_blocked_count", "INTEGER NOT NULL DEFAULT 0")
     ensure_column(conn, "candidate_review_items", "why_selected", "TEXT NOT NULL DEFAULT ''")
     ensure_column(conn, "candidate_review_items", "source_round", "INTEGER")
+    ensure_candidate_display_columns(conn)
     ensure_column(conn, "candidate_evidence", "runtime_identity_id", "TEXT")
     ensure_column(conn, "detail_open_requests", "detail_candidates_json", "TEXT")
     conn.execute(
@@ -614,11 +614,34 @@ def initialize_workbench_schema(conn: sqlite3.Connection, *, now: str, database_
     run_sqlite_integrity_checks(conn, store_name="workbench", foreign_keys=True)
 
 
+def backup_workbench_before_migration(*, database_path: str | Path | None, now: str) -> None:
+    if database_path is None:
+        return
+    path = Path(database_path)
+    backup_sqlite_before_migration(
+        path,
+        backup_root=path.parent / "migration_backups",
+        store_name="workbench",
+        now=now,
+    )
+
+
+def ensure_candidate_display_columns(conn: sqlite3.Connection) -> None:
+    ensure_column(conn, "candidate_review_items", "education", "TEXT")
+    ensure_column(conn, "candidate_review_items", "experience_years", "INTEGER")
+
+
+def candidate_display_columns_missing(conn: sqlite3.Connection) -> bool:
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(candidate_review_items)")}
+    if not existing:
+        return False
+    return not {"education", "experience_years"}.issubset(existing)
+
+
 def ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, definition: str) -> None:
     existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")}
     if column_name not in existing:
         conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}")
-
 
 
 def backfill_completed_cts_source_run_counts(conn: sqlite3.Connection) -> None:

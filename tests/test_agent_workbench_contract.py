@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, get_args, get_origin
 
 import pytest
@@ -37,6 +38,7 @@ from seektalent_ui.agent_workbench_projection import (
     AgentWorkbenchProjectionInput,
     AgentWorkbenchWorkflowStartIntentProjection,
     build_agent_workbench_projection_input,
+    candidate_detail_response_from_review_item,
 )
 from seektalent_ui.agent_workbench_response import project_agent_workbench_view
 from seektalent_ui.agent_workbench_stream import build_stream_envelope, replay_stream_envelopes
@@ -498,11 +500,20 @@ def test_workbench_view_enforces_product_payload_budgets() -> None:
         candidates=[
             AgentWorkbenchCandidateSummaryResponse(
                 candidateId=f"candidate_{index}",
+                rank=index + 1,
                 displayName=f"Candidate {index}",
                 headline="Backend Engineer",
+                company="Example",
+                location="Shanghai",
+                education="本科",
+                experienceYears=8,
+                sourceKinds=["cts"],
+                matchScore=80,
                 matchSummary="safe summary",
-                sourceKind="cts",
                 status="new",
+                detailAvailability="available",
+                accessState="allowed",
+                evidenceLevel="detail",
             )
             for index in range(140)
         ],
@@ -843,6 +854,176 @@ def test_candidate_stream_idempotency_tracks_same_status_content_changes() -> No
     ]
 
     assert first_candidate_event.source_fact_key != updated_candidate_event.source_fact_key
+
+
+def test_agent_workbench_top_pool_is_ranked_and_capped_at_ten() -> None:
+    thread = _thread_view(final_summary_id="summary_1")
+    workbench_store = _TopPoolWorkbenchStore()
+
+    projection_input = build_agent_workbench_projection_input(
+        service=_FakeAgentService(thread),
+        conversation_store=_FakeConversationStore(),
+        runtime_store=_FakeRuntimeStore(),
+        workbench_store=workbench_store,
+        conversation_id="agent_conv_1",
+        user=_workbench_user(),
+    )
+    response = project_agent_workbench_view(projection_input)
+
+    assert workbench_store.list_limits == [10]
+    assert len(response.candidates) == 10
+    assert [candidate.rank for candidate in response.candidates] == list(range(1, 11))
+    assert response.candidates[0].candidateId == "candidate_00"
+    assert response.candidates[0].displayName == "Candidate 00"
+    assert response.candidates[0].company == "Acme"
+    assert response.candidates[0].education == "本科"
+    assert response.candidates[0].experienceYears == 10
+    assert response.candidates[0].sourceKinds == ["cts", "liepin"]
+    assert response.candidates[0].matchScore == 100
+    assert response.candidates[0].detailAvailability == "available"
+    assert response.candidates[0].accessState == "allowed"
+    assert response.candidates[0].evidenceLevel in {"detail", "final"}
+
+
+def test_agent_workbench_top_pool_prefers_runtime_final_order() -> None:
+    thread = _thread_view(final_summary_id="summary_1")
+    workbench_store = _RuntimeFinalTopPoolWorkbenchStore()
+
+    projection_input = build_agent_workbench_projection_input(
+        service=_FakeAgentService(thread),
+        conversation_store=_FakeConversationStore(),
+        runtime_store=_FakeRuntimeStore(),
+        workbench_store=workbench_store,
+        conversation_id="agent_conv_1",
+        user=_workbench_user(),
+    )
+    response = project_agent_workbench_view(projection_input)
+
+    assert workbench_store.list_limits == []
+    assert [candidate.candidateId for candidate in response.candidates[:3]] == [
+        "candidate_05",
+        "candidate_01",
+        "candidate_03",
+    ]
+    assert [candidate.rank for candidate in response.candidates[:3]] == [1, 2, 3]
+
+
+def test_workbench_candidate_detail_route_returns_safe_sections(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from seektalent_ui import agent_workbench_routes
+
+    client = _client(tmp_path)
+    candidate = _candidate_review_item(0, evidence_level="detail")
+    candidate.raw_payload = {"provider_url": "https://provider.example/resume", "cookie": "secret"}
+    candidate.provider_action = {"authorization": "Bearer secret"}
+    candidate.prompt = "internal prompt"
+
+    class FakeDetailStore:
+        def get_candidate_review_item(self, *, user: WorkbenchUser, session_id: str, review_item_id: str):
+            assert user.user_id == "user_local"
+            assert session_id == "session_1"
+            assert review_item_id == "candidate_00"
+            return candidate
+
+    monkeypatch.setattr(
+        agent_workbench_routes,
+        "_build_agent_workbench_snapshot",
+        lambda *, request, conversation_id, user: SimpleNamespace(
+            conversation=SimpleNamespace(workbenchSessionId="session_1")
+        ),
+    )
+    monkeypatch.setattr(agent_workbench_routes, "get_workbench_store", lambda request: FakeDetailStore())
+
+    with caplog.at_level("INFO", logger="seektalent_ui.workbench_observability"):
+        response = client.get("/api/agent/workbench/conversations/agent_conv_1/candidates/candidate_00/detail")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    body = response.json()
+    assert body["candidateId"] == "candidate_00"
+    assert body["displayName"] == "Candidate 00"
+    assert body["detailAvailability"] == "available"
+    assert body["accessState"] == "allowed"
+    assert body["evidenceLevel"] == "detail"
+    assert body["sections"]
+    assert any(record.event_name == "candidate_detail_read" for record in caplog.records)
+    serialized = json.dumps(body, ensure_ascii=False).casefold()
+    for forbidden in [
+        "provider_action",
+        "cookie",
+        "authorization",
+        "bearer ",
+        "provider_url",
+        "raw_payload",
+        "artifact",
+        "prompt",
+        "resume_raw",
+    ]:
+        assert forbidden not in serialized
+
+
+def test_workbench_candidate_detail_route_sets_no_store_on_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from seektalent_ui import agent_workbench_routes
+
+    client = _client(tmp_path)
+
+    monkeypatch.setattr(
+        agent_workbench_routes,
+        "_build_agent_workbench_snapshot",
+        lambda *, request, conversation_id, user: SimpleNamespace(
+            conversation=SimpleNamespace(workbenchSessionId=None)
+        ),
+    )
+    missing_session = client.get("/api/agent/workbench/conversations/agent_conv_1/candidates/candidate_00/detail")
+
+    denied_candidate = _candidate_review_item(0, evidence_level="detail")
+    denied_candidate.access_state = "denied"
+
+    class FakeDeniedStore:
+        def get_candidate_review_item(self, *, user: WorkbenchUser, session_id: str, review_item_id: str):
+            return denied_candidate
+
+    monkeypatch.setattr(
+        agent_workbench_routes,
+        "_build_agent_workbench_snapshot",
+        lambda *, request, conversation_id, user: SimpleNamespace(
+            conversation=SimpleNamespace(workbenchSessionId="session_1")
+        ),
+    )
+    monkeypatch.setattr(agent_workbench_routes, "get_workbench_store", lambda request: FakeDeniedStore())
+    denied = client.get("/api/agent/workbench/conversations/agent_conv_1/candidates/candidate_00/detail")
+
+    assert missing_session.status_code == 404
+    assert missing_session.headers["cache-control"] == "no-store"
+    assert denied.status_code == 403
+    assert denied.headers["cache-control"] == "no-store"
+
+
+def test_candidate_detail_projection_omits_sections_when_access_is_not_allowed() -> None:
+    approval_required = candidate_detail_response_from_review_item(
+        _candidate_review_item(1, evidence_level="card")
+    )
+    denied_candidate = _candidate_review_item(2, evidence_level="detail")
+    denied_candidate.access_state = "denied"
+
+    denied = candidate_detail_response_from_review_item(denied_candidate)
+
+    assert approval_required.accessState == "approval_required"
+    assert approval_required.detailAvailability == "approval_required"
+    assert approval_required.reasonCode == "candidate_detail_requires_approval"
+    assert approval_required.sections == []
+    assert approval_required.evidence == []
+    assert denied.accessState == "denied"
+    assert denied.detailAvailability == "unavailable"
+    assert denied.reasonCode == "permission_denied"
+    assert denied.sections == []
+    assert denied.evidence == []
 
 
 def test_activity_stream_idempotency_tracks_same_activity_updates(tmp_path: Path) -> None:
@@ -1930,9 +2111,9 @@ class _FakeWorkbenchStore:
             )
         ]
 
-    def list_candidate_review_items(self, *, user: WorkbenchUser, session_id: str):
+    def list_candidate_review_items(self, *, user: WorkbenchUser, session_id: str, limit: int | None = None):
         assert session_id == "session_1"
-        return [
+        items = [
             WorkbenchCandidateReviewItem(
                 review_item_id="candidate_1",
                 session_id="session_1",
@@ -1942,6 +2123,8 @@ class _FakeWorkbenchStore:
                 title="Backend Engineer",
                 company="Example",
                 location="Shanghai",
+                education="本科",
+                experience_years=8,
                 summary="Safe candidate summary.",
                 aggregate_score=91,
                 fit_bucket="strong",
@@ -1959,6 +2142,11 @@ class _FakeWorkbenchStore:
                 updated_at=_now(),
             )
         ]
+        return items[:limit] if limit is not None else items
+
+    def list_runtime_final_top_review_items(self, *, user: WorkbenchUser, session_id: str):
+        assert session_id == "session_1"
+        return None
 
     def list_liepin_detail_open_requests(self, *, user: WorkbenchUser, session_id: str | None = None, **_: object):
         assert session_id == "session_1"
@@ -1978,6 +2166,62 @@ class _FakeWorkbenchStore:
                 updated_at=_now(),
             )
         ]
+
+
+class _TopPoolWorkbenchStore(_FakeWorkbenchStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.list_limits: list[int | None] = []
+
+    def list_candidate_review_items(self, *, user: WorkbenchUser, session_id: str, limit: int | None = None):
+        assert session_id == "session_1"
+        self.list_limits.append(limit)
+        items = [_candidate_review_item(index) for index in range(12)]
+        return items[:limit] if limit is not None else items
+
+
+class _RuntimeFinalTopPoolWorkbenchStore(_TopPoolWorkbenchStore):
+    def list_runtime_final_top_review_items(self, *, user: WorkbenchUser, session_id: str):
+        assert session_id == "session_1"
+        return 7, [
+            _candidate_review_item(5),
+            _candidate_review_item(1),
+            _candidate_review_item(3),
+        ]
+
+
+def _candidate_review_item(index: int, *, evidence_level: str | None = None) -> SimpleNamespace:
+    level = evidence_level or ("final" if index % 3 == 0 else "detail")
+    return SimpleNamespace(
+        review_item_id=f"candidate_{index:02d}",
+        session_id="session_1",
+        status="new",
+        note="",
+        display_name=f"Candidate {index:02d}",
+        title="Backend Engineer",
+        company="Acme",
+        location="Shanghai",
+        education="本科",
+        experience_years=10 + index,
+        summary=f"Safe candidate summary {index}.",
+        aggregate_score=100 - index,
+        fit_bucket="strong",
+        why_selected="Strong backend fit.",
+        source_round=1,
+        source_badges=["cts", "liepin"],
+        evidence_level=level,
+        matched_must_haves=["Python", "平台"],
+        matched_preferences=["LLM"],
+        missing_risks=[],
+        strengths=["Distributed systems"],
+        weaknesses=[],
+        evidence=[
+            SimpleNamespace(source_kind="cts", evidence_level="final"),
+            SimpleNamespace(source_kind="liepin", evidence_level=level),
+        ],
+        created_at=_now(),
+        updated_at=_now(),
+    )
 
 
 def _annotation_contains_raw_object_sink(annotation: object) -> bool:

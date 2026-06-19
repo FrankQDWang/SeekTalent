@@ -94,11 +94,20 @@ export const FigmaThumbnailReference: Story = {
         candidates={[
           {
             candidateId: "candidate_001",
+            rank: 1,
             displayName: "候选人 A",
             headline: "平台后端负责人 / 上海",
+            company: "某 AI Infra 公司",
+            location: "上海",
+            education: "本科",
+            experienceYears: 10,
+            sourceKinds: ["liepin"],
+            matchScore: 92,
             matchSummary: "Agent 平台和 RAG 检索经验匹配。",
-            sourceKind: "liepin",
             status: "reviewing",
+            detailAvailability: "approval_required",
+            accessState: "approval_required",
+            evidenceLevel: "summary",
           },
         ]}
       />

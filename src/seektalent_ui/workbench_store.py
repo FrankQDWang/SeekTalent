@@ -795,8 +795,22 @@ class WorkbenchStore:
         *,
         user: WorkbenchUser,
         session_id: str,
+        limit: int | None = None,
     ) -> list[WorkbenchCandidateReviewItem] | None:
-        return self._candidates.list_candidate_review_items(user=user, session_id=session_id)
+        return self._candidates.list_candidate_review_items(user=user, session_id=session_id, limit=limit)
+
+    def get_candidate_review_item(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        review_item_id: str,
+    ) -> WorkbenchCandidateReviewItem | None:
+        return self._candidates.get_candidate_review_item(
+            user=user,
+            session_id=session_id,
+            review_item_id=review_item_id,
+        )
 
     def update_candidate_review_item(
         self,
