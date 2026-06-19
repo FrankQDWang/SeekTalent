@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_runtime_control.requirements import DraftOperation
 
 from tests.conversation_agent_test_support import build_service
@@ -128,3 +131,39 @@ def test_requirement_edit_amend_review_resolution_confirm_and_workflow_start(tmp
     assert runtime_store.get_run("runtime_run_1").status == "queued"
     events = runtime_store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
     assert [event.event_type for event in events] == ["runtime_run_queued"]
+
+
+def test_requirement_update_stale_runtime_error_is_conversation_agent_error(tmp_path: Path) -> None:
+    service, _conversation_store, _runtime_store = build_service(tmp_path)
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="资深 Python 后端",
+    )
+    submitted = service.submit_jd(
+        conversation_id=conversation.conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        job_title="Python 平台负责人",
+        jd_text="需要 Python API、平台工程和检索排序。",
+        notes=None,
+        source_ids=["cts"],
+        idempotency_key="submit-jd-stale-error-1",
+    )
+    draft = submitted.requirement_draft
+    assert draft is not None
+    first_item = draft.sections[0].items[0]
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        service.update_requirement_draft(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            draft_revision_id=draft.draft_revision_id,
+            base_revision_id="stale-draft",
+            operations=[DraftOperation(op="set_selected", item_id=first_item.item_id, selected=False)],
+            idempotency_key="edit-stale-error-1",
+    )
+
+    assert exc_info.value.reason_code == "requirement_draft_stale"
+    assert exc_info.value.payload["latestDraftRevisionId"] == draft.draft_revision_id
