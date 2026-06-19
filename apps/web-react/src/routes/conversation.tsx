@@ -8,11 +8,14 @@ import {
 import { ConversationShell } from "../components/workbench/ConversationShell";
 import { CandidateDetailDrawer } from "../components/workbench/CandidateDetailDrawer";
 import {
+  useAmendAgentWorkbenchRequirementFromText,
   useConfirmAgentWorkbenchRequirements,
   useAgentWorkbenchCandidateDetail,
   useAgentWorkbenchLiveConversation,
   useSubmitAgentWorkbenchMessage,
+  useUpdateAgentWorkbenchRequirementDraft,
 } from "../lib/api/agentWorkbench";
+import type { AgentWorkbenchRequirementDraftItem } from "../lib/api/agentWorkbenchTypes";
 import { safeErrorMessage } from "../lib/api/client";
 import { rootRoute } from "./root";
 
@@ -31,6 +34,9 @@ function ConversationRoute() {
   const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
     null,
   );
+  const [updatingRequirementItemIds, setUpdatingRequirementItemIds] = useState<
+    string[]
+  >([]);
   const detailQuery = useAgentWorkbenchCandidateDetail(
     conversationId,
     selectedCandidateId,
@@ -38,6 +44,10 @@ function ConversationRoute() {
   const submitMessageMutation = useSubmitAgentWorkbenchMessage(conversationId);
   const confirmRequirementsMutation =
     useConfirmAgentWorkbenchRequirements(conversationId);
+  const updateRequirementMutation =
+    useUpdateAgentWorkbenchRequirementDraft(conversationId);
+  const amendRequirementMutation =
+    useAmendAgentWorkbenchRequirementFromText(conversationId);
   const selectedCandidate = useMemo(
     () =>
       query.data?.candidates.find(
@@ -49,6 +59,7 @@ function ConversationRoute() {
   useEffect(() => {
     setActionErrorMessage(null);
     setSelectedCandidateId(null);
+    setUpdatingRequirementItemIds([]);
   }, [conversationId]);
 
   if (query.isPending) {
@@ -98,20 +109,75 @@ function ConversationRoute() {
       setActionErrorMessage(safeErrorMessage(error));
     }
   };
+  const onToggleRequirementItem = async (
+    item: AgentWorkbenchRequirementDraftItem,
+    selected: boolean,
+  ) => {
+    setActionErrorMessage(null);
+    const draftRevisionId = view.requirementDraft?.draftRevisionId;
+    if (!draftRevisionId) {
+      setActionErrorMessage("当前没有可编辑的需求草稿。");
+      return;
+    }
+    setUpdatingRequirementItemIds((current) =>
+      current.includes(item.itemId) ? current : [...current, item.itemId],
+    );
+    try {
+      await updateRequirementMutation.mutateAsync({
+        draftRevisionId,
+        operations: [
+          {
+            itemId: item.itemId,
+            op: "set_selected",
+            selected,
+          },
+        ],
+      });
+    } catch (error) {
+      setActionErrorMessage(safeErrorMessage(error));
+    } finally {
+      setUpdatingRequirementItemIds((current) =>
+        current.filter((itemId) => itemId !== item.itemId),
+      );
+    }
+  };
+  const onAddOtherRequirement = async (text: string) => {
+    setActionErrorMessage(null);
+    const draftRevisionId = view.requirementDraft?.draftRevisionId;
+    if (!draftRevisionId) {
+      setActionErrorMessage("当前没有可编辑的需求草稿。");
+      throw new Error("Requirement draft is unavailable.");
+    }
+    try {
+      await amendRequirementMutation.mutateAsync({
+        draftRevisionId,
+        text,
+      });
+    } catch (error) {
+      setActionErrorMessage(safeErrorMessage(error));
+      throw error;
+    }
+  };
   return (
     <>
       <ConversationShell
         main={
           <ConversationScreen
             actionErrorMessage={actionErrorMessage}
+            amendingRequirements={amendRequirementMutation.isPending}
             confirmingRequirements={confirmRequirementsMutation.isPending}
+            onAddOtherRequirement={onAddOtherRequirement}
             onConfirmRequirements={() => void onConfirmRequirements()}
             onSubmitMessage={onSubmitMessage}
+            onToggleRequirementItem={(item, selected) => {
+              void onToggleRequirementItem(item, selected);
+            }}
             onViewCandidateDetails={(candidateId) => {
               setActionErrorMessage(null);
               setSelectedCandidateId(candidateId);
             }}
             submittingMessage={submitMessageMutation.isPending}
+            updatingRequirementItemIds={updatingRequirementItemIds}
             view={view}
           />
         }

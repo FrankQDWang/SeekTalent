@@ -1,33 +1,169 @@
 .requirement-review-panel {
-  align-items: center;
-  background: oklch(0.96 0.04 82);
+  background: oklch(0.97 0.032 82);
   border-bottom: 1px solid var(--st-border);
-  display: flex;
+  display: grid;
   gap: var(--st-space-3);
-  justify-content: space-between;
   padding: var(--st-space-3) var(--st-space-4);
 }
 
-.requirement-review-panel > div {
+.requirement-review-panel__header {
   align-items: center;
   display: grid;
   gap: var(--st-space-2);
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   min-width: 0;
 }
 
-.requirement-review-panel span {
+.requirement-review-panel__header span {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.requirement-review-panel strong,
-.requirement-review-panel em {
+.requirement-review-panel__header strong,
+.requirement-review-panel__header em {
   overflow-wrap: anywhere;
 }
 
-.requirement-review-panel em {
+.requirement-review-panel__header em {
   color: var(--st-muted);
   font-style: normal;
+}
+
+.requirement-review-panel__status {
+  align-items: center;
+  background: oklch(0.92 0.055 82);
+  border-radius: 999px;
+  color: oklch(0.38 0.09 82);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 750;
+  min-height: 26px;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+
+.requirement-review-panel__sections {
+  display: grid;
+  gap: var(--st-space-3);
+}
+
+.requirement-review-section {
+  display: grid;
+  gap: var(--st-space-2);
+}
+
+.requirement-review-section__header {
+  align-items: center;
+  display: flex;
+  gap: var(--st-space-2);
+  justify-content: space-between;
+}
+
+.requirement-review-section__header h3 {
+  color: var(--st-ink);
+  font-size: 14px;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.requirement-review-section__header span {
+  color: var(--st-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.requirement-review-section__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--st-space-2);
+}
+
+.requirement-review-item {
+  align-items: center;
+  background: oklch(0.985 0.012 82);
+  border: 0;
+  border-radius: 999px;
+  color: var(--st-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 710;
+  gap: var(--st-space-2);
+  max-width: 100%;
+  min-height: 34px;
+  padding: 7px 11px;
+}
+
+.requirement-review-item[data-selected="true"] {
+  background: var(--st-action);
+  color: var(--st-action-ink);
+}
+
+.requirement-review-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.requirement-review-item span {
+  overflow-wrap: anywhere;
+}
+
+.requirement-review-item em {
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 780;
+  white-space: nowrap;
+}
+
+.requirement-review-panel__other {
+  align-items: end;
+  display: grid;
+  gap: var(--st-space-2);
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.requirement-review-panel__other .st-field {
+  gap: var(--st-space-1);
+}
+
+.requirement-review-panel__other .st-field__control {
+  background: oklch(0.99 0.006 82);
+  border-color: transparent;
+  min-height: 62px;
+}
+
+.requirement-review-panel__other .st-field__control:focus {
+  border-color: var(--st-focus);
+}
+
+.requirement-review-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .requirement-review-panel__header {
+    align-items: flex-start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .requirement-review-panel__status {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .requirement-review-panel__other {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .requirement-review-panel__actions {
+    justify-content: stretch;
+  }
+
+  .requirement-review-panel__actions .st-button,
+  .requirement-review-panel__other .st-button {
+    width: 100%;
+  }
 }

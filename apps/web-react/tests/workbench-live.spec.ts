@@ -142,8 +142,12 @@ test("submits recruiter actions through the Workbench BFF routes", async ({
   page,
 }) => {
   let submittedMessage: Record<string, unknown> | null = null;
+  let requirementOperations: Record<string, unknown> | null = null;
+  let amendedRequirement: Record<string, unknown> | null = null;
   let confirmedRequirements: Record<string, unknown> | null = null;
   const latestSubmittedMessage = () => submittedMessage;
+  const latestRequirementOperations = () => requirementOperations;
+  const latestAmendedRequirement = () => amendedRequirement;
   const latestConfirmedRequirements = () => confirmedRequirements;
 
   await page.route(
@@ -176,6 +180,32 @@ test("submits recruiter actions through the Workbench BFF routes", async ({
             viewRevision: 5,
           },
         },
+      });
+    },
+  );
+  await page.route(
+    "**/api/agent/workbench/conversations/agent_conv_1/requirements/operations",
+    async (route) => {
+      requirementOperations = route.request().postDataJSON() as Record<
+        string,
+        unknown
+      >;
+      await route.fulfill({
+        contentType: "application/json",
+        json: conversationSnapshot,
+      });
+    },
+  );
+  await page.route(
+    "**/api/agent/workbench/conversations/agent_conv_1/requirements/amend-from-text",
+    async (route) => {
+      amendedRequirement = route.request().postDataJSON() as Record<
+        string,
+        unknown
+      >;
+      await route.fulfill({
+        contentType: "application/json",
+        json: conversationSnapshot,
       });
     },
   );
@@ -213,6 +243,45 @@ test("submits recruiter actions through the Workbench BFF routes", async ({
   );
 
   await page.goto("/conversations/agent_conv_1");
+  await page.getByRole("button", { name: /Python 后端平台经验/ }).click();
+
+  await expect
+    .poll(() => latestRequirementOperations())
+    .toMatchObject({
+      draftRevisionId: "draft_1",
+      expectedDraftRevisionId: "draft_1",
+      operations: [
+        {
+          itemId: "item_1",
+          op: "set_selected",
+          selected: false,
+        },
+      ],
+    });
+  const operationsIdempotencyKey =
+    latestRequirementOperations()?.idempotencyKey;
+  expect(
+    typeof operationsIdempotencyKey === "string"
+      ? operationsIdempotencyKey
+      : "",
+  ).toContain("workbench:requirement-update:");
+
+  await page.getByLabel("其他").fill("补充评测平台经验");
+  await page.getByRole("button", { name: "添加" }).click();
+
+  await expect
+    .poll(() => latestAmendedRequirement())
+    .toMatchObject({
+      draftRevisionId: "draft_1",
+      expectedDraftRevisionId: "draft_1",
+      text: "补充评测平台经验",
+    });
+  const amendIdempotencyKey = latestAmendedRequirement()?.idempotencyKey;
+  expect(
+    typeof amendIdempotencyKey === "string" ? amendIdempotencyKey : "",
+  ).toContain("workbench:requirement-amend:");
+  await expect(page.getByLabel("其他")).toHaveValue("");
+
   await page.getByPlaceholder("输入下一步要求").fill("继续补充评测平台经验");
   await page.getByRole("button", { name: "发送" }).click();
 

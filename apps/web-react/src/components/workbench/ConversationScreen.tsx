@@ -1,5 +1,8 @@
 import { useState } from "react";
-import type { AgentWorkbenchConversationResponse } from "../../lib/api/agentWorkbenchTypes";
+import type {
+  AgentWorkbenchConversationResponse,
+  AgentWorkbenchRequirementDraftItem,
+} from "../../lib/api/agentWorkbenchTypes";
 import { Tabs } from "../primitives/Tabs";
 import { MessageComposer } from "./MessageComposer";
 import { RequirementReviewPanel } from "./RequirementReviewPanel";
@@ -10,11 +13,17 @@ import "./ConversationScreen.css";
 
 export type ConversationScreenCallbacks = {
   actionErrorMessage?: string | null | undefined;
+  amendingRequirements?: boolean | undefined;
   confirmingRequirements?: boolean | undefined;
+  onAddOtherRequirement?: ((text: string) => Promise<void> | void) | undefined;
   onConfirmRequirements?: (() => void) | undefined;
   onSubmitMessage?: ((message: string) => Promise<void> | void) | undefined;
+  onToggleRequirementItem?:
+    | ((item: AgentWorkbenchRequirementDraftItem, selected: boolean) => void)
+    | undefined;
   onViewCandidateDetails?: ((candidateId: string) => void) | undefined;
   submittingMessage?: boolean | undefined;
+  updatingRequirementItemIds?: readonly string[] | undefined;
 };
 
 type ConversationScreenProps = ConversationScreenCallbacks & {
@@ -25,11 +34,15 @@ type WorkPanel = "chat" | "graph" | "candidates" | "final";
 
 export function ConversationScreen({
   actionErrorMessage = null,
+  amendingRequirements = false,
   confirmingRequirements = false,
+  onAddOtherRequirement,
   onConfirmRequirements,
   onSubmitMessage,
+  onToggleRequirementItem,
   onViewCandidateDetails,
   submittingMessage = false,
+  updatingRequirementItemIds = [],
   view,
 }: ConversationScreenProps) {
   const [activePanel, setActivePanel] = useState<WorkPanel>("chat");
@@ -49,10 +62,14 @@ export function ConversationScreen({
           </section>
         ) : null}
         <RequirementReviewPanel
+          amending={amendingRequirements}
           confirming={confirmingRequirements}
+          onAddOther={onAddOtherRequirement}
           onConfirm={onConfirmRequirements}
+          onToggleItem={onToggleRequirementItem}
           pendingActions={view.pendingActions}
           requirementDraft={view.requirementDraft}
+          updatingItemIds={updatingRequirementItemIds}
         />
         <Tabs
           ariaLabel="工作区"

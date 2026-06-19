@@ -7,7 +7,9 @@ import {
   type AgentWorkbenchCandidateDetailResponse,
   type AgentWorkbenchConversationListResponse,
   type AgentWorkbenchConversationResponse,
+  type WorkbenchRequirementAmendRequest,
   type WorkbenchRequirementConfirmRequest,
+  type WorkbenchRequirementOperationsRequest,
   type WorkbenchUserTextMessageRequest,
 } from "./agentWorkbenchTypes";
 
@@ -173,6 +175,48 @@ export async function confirmAgentWorkbenchRequirements(
     requireData(
       await api.POST(
         "/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
+        {
+          params: {
+            path: {
+              conversation_id: conversationId,
+            },
+          },
+          body: payload,
+        },
+      ),
+    ),
+  );
+}
+
+export async function updateAgentWorkbenchRequirementDraft(
+  conversationId: string,
+  payload: WorkbenchRequirementOperationsRequest,
+): Promise<AgentWorkbenchConversationResponse> {
+  return normalizeAgentWorkbenchConversation(
+    requireData(
+      await api.POST(
+        "/api/agent/workbench/conversations/{conversation_id}/requirements/operations",
+        {
+          params: {
+            path: {
+              conversation_id: conversationId,
+            },
+          },
+          body: payload,
+        },
+      ),
+    ),
+  );
+}
+
+export async function amendAgentWorkbenchRequirementFromText(
+  conversationId: string,
+  payload: WorkbenchRequirementAmendRequest,
+): Promise<AgentWorkbenchConversationResponse> {
+  return normalizeAgentWorkbenchConversation(
+    requireData(
+      await api.POST(
+        "/api/agent/workbench/conversations/{conversation_id}/requirements/amend-from-text",
         {
           params: {
             path: {

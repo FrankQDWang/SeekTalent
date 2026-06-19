@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  amendAgentWorkbenchRequirementFromText,
   confirmAgentWorkbenchRequirements,
   getAgentWorkbenchCandidateDetail,
   getAgentWorkbenchConversation,
   listAgentWorkbenchConversations,
   submitAgentWorkbenchMessage,
+  updateAgentWorkbenchRequirementDraft,
 } from "./client";
 import { queryKeys } from "../query/keys";
 import { useQueryClient } from "@tanstack/react-query";
@@ -20,7 +22,21 @@ import {
   isSnapshotDependentStreamKind,
   mergeStreamEnvelopesIntoConversation,
 } from "../stream/agentStreamView";
-import type { AgentWorkbenchConversationResponse } from "./agentWorkbenchTypes";
+import type {
+  AgentWorkbenchConversationResponse,
+  RequirementDraftOperationRequest,
+} from "./agentWorkbenchTypes";
+
+type RequirementDraftUpdateInput = {
+  draftRevisionId: string;
+  operations: RequirementDraftOperationRequest[];
+};
+
+type RequirementDraftAmendInput = {
+  draftRevisionId: string;
+  targetSectionHint?: string | null | undefined;
+  text: string;
+};
 
 export function shouldApplyWorkbenchSnapshot(
   current: AgentWorkbenchConversationResponse | undefined,
@@ -121,6 +137,60 @@ export function useConfirmAgentWorkbenchRequirements(conversationId: string) {
         draftRevisionId,
         expectedDraftRevisionId: draftRevisionId,
         idempotencyKey: actionIdempotencyKey("confirm-requirements"),
+      }),
+    onSuccess: (next) => {
+      applyActionSnapshot(queryClient, queryKey, next);
+    },
+  });
+}
+
+export function useUpdateAgentWorkbenchRequirementDraft(
+  conversationId: string,
+) {
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(
+    () => queryKeys.agentConversation(conversationId),
+    [conversationId],
+  );
+
+  return useMutation({
+    mutationFn: ({
+      draftRevisionId,
+      operations,
+    }: RequirementDraftUpdateInput) =>
+      updateAgentWorkbenchRequirementDraft(conversationId, {
+        draftRevisionId,
+        expectedDraftRevisionId: draftRevisionId,
+        idempotencyKey: actionIdempotencyKey("requirement-update"),
+        operations,
+      }),
+    onSuccess: (next) => {
+      applyActionSnapshot(queryClient, queryKey, next);
+    },
+  });
+}
+
+export function useAmendAgentWorkbenchRequirementFromText(
+  conversationId: string,
+) {
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(
+    () => queryKeys.agentConversation(conversationId),
+    [conversationId],
+  );
+
+  return useMutation({
+    mutationFn: ({
+      draftRevisionId,
+      targetSectionHint = null,
+      text,
+    }: RequirementDraftAmendInput) =>
+      amendAgentWorkbenchRequirementFromText(conversationId, {
+        draftRevisionId,
+        expectedDraftRevisionId: draftRevisionId,
+        idempotencyKey: actionIdempotencyKey("requirement-amend"),
+        targetSectionHint,
+        text,
       }),
     onSuccess: (next) => {
       applyActionSnapshot(queryClient, queryKey, next);
