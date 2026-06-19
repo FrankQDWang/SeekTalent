@@ -79,4 +79,26 @@ describe("create Agent Workbench conversation from JD hook", () => {
       ).toBeGreaterThanOrEqual(0);
     });
   });
+
+  it("rejects blank JD input before creating a conversation", async () => {
+    expect.hasAssertions();
+    const queryClient = createWorkbenchQueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => useCreateAgentWorkbenchConversationFromJd(),
+      { wrapper },
+    );
+
+    await expect(
+      result.current.mutateAsync({
+        jobDescription: "   \n\t ",
+        jobTitle: null,
+      }),
+    ).rejects.toThrow("Job description is required.");
+
+    expect(createAgentConversation).not.toHaveBeenCalled();
+    expect(submitAgentWorkbenchMessage).not.toHaveBeenCalled();
+  });
 });
