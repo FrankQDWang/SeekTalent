@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { FilePenLine, PanelRight } from "lucide-react";
+import { Link } from "@tanstack/react-router";
 
 type AppProps = {
   children?: ReactNode;
@@ -12,10 +13,10 @@ export function App({ children }: AppProps) {
         <div aria-label="Wide Talent Search" className="brand-mark">
           WTS
         </div>
-        <button className="rail-action" type="button">
+        <Link className="rail-action" to="/">
           <FilePenLine aria-hidden="true" size={20} />
           <span>新建任务</span>
-        </button>
+        </Link>
         <button aria-label="展开右侧面板" className="rail-icon" type="button">
           <PanelRight aria-hidden="true" size={20} />
         </button>

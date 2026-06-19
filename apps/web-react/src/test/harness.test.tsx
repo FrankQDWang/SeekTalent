@@ -1,9 +1,18 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import type { ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
 import { App } from "../App";
 import { createWorkbenchQueryClient } from "../lib/query/client";
 import { queryKeys } from "../lib/query/keys";
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children, to, ...props }: { children?: ReactNode; to: string }) => (
+    <a href={to} {...props}>
+      {children}
+    </a>
+  ),
+}));
 
 describe("React Workbench shell", () => {
   it("renders a usable workbench scaffold", () => {

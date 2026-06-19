@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   amendAgentWorkbenchRequirementFromText,
   confirmAgentWorkbenchRequirements,
+  createAgentConversation,
   getAgentWorkbenchCandidateDetail,
   getAgentWorkbenchConversation,
   listAgentWorkbenchConversations,
@@ -38,6 +39,16 @@ type RequirementDraftAmendInput = {
   text: string;
 };
 
+export type CreateAgentWorkbenchConversationFromJdInput = {
+  jobDescription: string;
+  jobTitle?: string | null | undefined;
+};
+
+export type CreateAgentWorkbenchConversationFromJdOutput = {
+  conversationId: string;
+  view: AgentWorkbenchConversationResponse;
+};
+
 export function shouldApplyWorkbenchSnapshot(
   current: AgentWorkbenchConversationResponse | undefined,
   next: AgentWorkbenchConversationResponse,
@@ -66,6 +77,46 @@ export function useAgentWorkbenchConversations() {
   return useQuery({
     queryKey: queryKeys.agentConversations,
     queryFn: listAgentWorkbenchConversations,
+  });
+}
+
+export function useCreateAgentWorkbenchConversationFromJd() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    CreateAgentWorkbenchConversationFromJdOutput,
+    Error,
+    CreateAgentWorkbenchConversationFromJdInput
+  >({
+    mutationFn: async ({ jobDescription, jobTitle }) => {
+      const text = jobDescription.trim();
+      if (text.length === 0) {
+        throw new Error("Job description is required.");
+      }
+      const title = conversationTitleFromInput(jobTitle, text);
+      const created = await createAgentConversation({ title });
+      const conversationId = created.conversation.conversationId;
+      const normalizedJobTitle = normalizeOptionalText(jobTitle);
+      const view = await submitAgentWorkbenchMessage(conversationId, {
+        idempotencyKey: actionIdempotencyKey("submit-jd"),
+        jobTitle: normalizedJobTitle,
+        messageType: "submitJd",
+        notes: null,
+        sourceKinds: ["cts"],
+        text,
+      });
+      return { conversationId, view };
+    },
+    onSuccess: ({ conversationId, view }) => {
+      applyActionSnapshot(
+        queryClient,
+        queryKeys.agentConversation(conversationId),
+        view,
+      );
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.agentConversations,
+      });
+    },
   });
 }
 
@@ -331,6 +382,30 @@ function actionIdempotencyKey(action: string): string {
       ? randomUUID.call(globalThis.crypto)
       : `${String(Date.now())}:${Math.random().toString(36).slice(2)}`;
   return `workbench:${action}:${id}`;
+}
+
+function conversationTitleFromInput(
+  jobTitle: string | null | undefined,
+  jobDescription: string,
+): string {
+  const normalizedTitle = normalizeOptionalText(jobTitle);
+  if (normalizedTitle !== null) {
+    return truncateConversationTitle(normalizedTitle);
+  }
+  return truncateConversationTitle(
+    jobDescription.replace(/\s+/g, " ").trim() || "新的寻才任务",
+  );
+}
+
+function normalizeOptionalText(
+  value: string | null | undefined,
+): string | null {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 ? normalized : null;
+}
+
+function truncateConversationTitle(title: string): string {
+  return title.length > 120 ? title.slice(0, 120) : title;
 }
 
 function markConversationDisconnected(
