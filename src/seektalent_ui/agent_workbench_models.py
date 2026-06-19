@@ -113,6 +113,8 @@ class AgentWorkbenchConversationSummaryResponse(BaseModel):
     runtimeRunId: str | None = None
     workbenchSessionId: str | None = None
     workflowStartIntentId: str | None = None
+    workflowStartState: Literal["not_started", "queued", "starting", "running", "failed"] = "not_started"
+    workflowStartReasonCode: str | None = None
     linkedRuntimeRuns: list[AgentWorkbenchLinkedRuntimeRunResponse] = Field(default_factory=list)
     updatedAt: str | None = None
 

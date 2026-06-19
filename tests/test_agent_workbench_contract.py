@@ -35,6 +35,7 @@ from seektalent_ui.agent_workbench_models import (
 )
 from seektalent_ui.agent_workbench_projection import (
     AgentWorkbenchProjectionInput,
+    AgentWorkbenchWorkflowStartIntentProjection,
     build_agent_workbench_projection_input,
 )
 from seektalent_ui.agent_workbench_response import project_agent_workbench_view
@@ -175,6 +176,54 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
     assert "LangChain" in response.thinkingProcess.rounds[0].cards[2].text
     assert "rawPayload" not in serialized
     assert "providerResponse" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("intent_status", "intent_runtime_run_id", "reason_code", "expected_state"),
+    [
+        (None, None, None, "not_started"),
+        ("pending", None, None, "queued"),
+        ("started", None, None, "starting"),
+        ("started", "runtime_started", None, "running"),
+        ("failed", None, "source_policy_disallowed", "failed"),
+        ("cancelled", None, "workflow_cancelled", "failed"),
+    ],
+)
+def test_agent_workbench_projects_workflow_start_state(
+    intent_status: str | None,
+    intent_runtime_run_id: str | None,
+    reason_code: str | None,
+    expected_state: str,
+) -> None:
+    thread = _thread_view()
+    state = thread.conversation_reopen_state.model_copy(
+        update={
+            "runtime_run_id": None,
+            "workflow_start_intent_id": None,
+            "linked_runtime_runs": [],
+        }
+    )
+    intent = None
+    if intent_status is not None:
+        intent = AgentWorkbenchWorkflowStartIntentProjection(
+            workflow_start_intent_id="workflow_intent_1",
+            status=intent_status,
+            runtime_run_id=intent_runtime_run_id,
+            reason_code=reason_code,
+        )
+
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=state,
+            messages=thread.messages,
+            activity_items=thread.activity_items,
+            workflow_start_intent=intent,
+        )
+    )
+
+    assert response.conversation.workflowStartState == expected_state
+    assert response.conversation.workflowStartReasonCode == reason_code
+    assert response.conversation.workflowStartIntentId == ("workflow_intent_1" if intent is not None else None)
 
 
 def test_agent_workbench_projects_canonical_requirement_draft_sections() -> None:
@@ -1267,6 +1316,8 @@ def test_agent_workbench_confirm_route_queues_start_intent_without_sync_runtime_
     assert payload["streamCursor"]["snapshotSeq"] == payload["streamCursor"]["latestStreamSeq"]
     assert payload["streamCursor"]["viewRevision"] == payload["streamCursor"]["snapshotSeq"]
     assert payload["conversation"]["workflowStartIntentId"]
+    assert payload["conversation"]["workflowStartState"] == "queued"
+    assert payload["conversation"]["workflowStartReasonCode"] is None
     assert payload["conversation"]["runtimeRunId"] is None
     assert payload["runtime"] is None
     service = client.app.state.agent_conversation_service
@@ -1274,6 +1325,51 @@ def test_agent_workbench_confirm_route_queues_start_intent_without_sync_runtime_
     assert runtime_store.get_run_by_run_intent_id(
         f"wts:default:{conversation_id}:{draft_id}"
     ) is None
+
+
+def test_agent_workbench_confirm_route_is_idempotent_across_http_keys_for_same_draft(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+    submitted = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "jobTitle": "Python 平台负责人",
+            "text": "需要 Python API、平台工程和检索排序。",
+            "notes": "优先 toB SaaS",
+            "sourceKinds": ["cts", "liepin"],
+            "idempotencyKey": "submit-jd-workbench-confirm-duplicate-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft_id = submitted.json()["requirementDraftRevisionId"]
+
+    first = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
+        json={
+            "draftRevisionId": draft_id,
+            "expectedDraftRevisionId": draft_id,
+            "idempotencyKey": "confirm-workbench-duplicate-1",
+        },
+    )
+    second = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
+        json={
+            "draftRevisionId": draft_id,
+            "expectedDraftRevisionId": draft_id,
+            "idempotencyKey": "confirm-workbench-duplicate-2",
+        },
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert first.json()["conversation"]["workflowStartIntentId"] == second.json()["conversation"]["workflowStartIntentId"]
+    service = client.app.state.agent_conversation_service
+    assert service.workflow_start_intent_store.count_for_draft(draft_id) == 1
 
 
 def test_agent_workbench_confirm_route_rejects_same_key_changed_expected_revision(tmp_path: Path) -> None:
@@ -1341,7 +1437,42 @@ def test_agent_workbench_conversation_list_route_returns_typed_summaries(tmp_pat
     assert summary["isArchived"] is False
     assert summary["runtimeRunId"] is None
     assert summary["workbenchSessionId"] is None
+    assert summary["workflowStartIntentId"] is None
+    assert summary["workflowStartState"] == "not_started"
+    assert summary["workflowStartReasonCode"] is None
     assert isinstance(summary["updatedAt"], str)
+
+    submitted = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "jobTitle": "Python 平台负责人",
+            "text": "需要 Python API、平台工程和检索排序。",
+            "notes": "优先 toB SaaS",
+            "sourceKinds": ["cts"],
+            "idempotencyKey": "submit-jd-workbench-list-summary-1",
+        },
+    )
+    assert submitted.status_code == 200, submitted.text
+    draft_id = submitted.json()["requirementDraftRevisionId"]
+    confirmed = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
+        json={
+            "draftRevisionId": draft_id,
+            "expectedDraftRevisionId": draft_id,
+            "idempotencyKey": "confirm-workbench-list-summary-1",
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
+
+    refreshed = client.get("/api/agent/workbench/conversations")
+
+    assert refreshed.status_code == 200, refreshed.text
+    refreshed_summary = refreshed.json()["conversations"][0]
+    assert refreshed_summary["conversationId"] == conversation_id
+    assert refreshed_summary["workflowStartIntentId"] == confirmed.json()["conversation"]["workflowStartIntentId"]
+    assert refreshed_summary["workflowStartState"] == "queued"
+    assert refreshed_summary["workflowStartReasonCode"] is None
 
 
 def test_agent_workbench_event_replay_route_returns_typed_envelopes(tmp_path: Path) -> None:

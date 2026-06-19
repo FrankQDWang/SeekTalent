@@ -26,12 +26,18 @@ from seektalent_ui.agent_route_deps import (
 )
 from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchConversationListResponse,
-    AgentWorkbenchConversationSummaryResponse,
     AgentWorkbenchConversationResponse,
     AgentWorkbenchStreamReplayResponse,
 )
-from seektalent_ui.agent_workbench_projection import RuntimeProjectionStore, build_agent_workbench_projection_input
-from seektalent_ui.agent_workbench_response import project_agent_workbench_view
+from seektalent_ui.agent_workbench_projection import (
+    AgentWorkbenchWorkflowStartIntentProjection,
+    RuntimeProjectionStore,
+    build_agent_workbench_projection_input,
+)
+from seektalent_ui.agent_workbench_response import (
+    project_agent_workbench_conversation_summary,
+    project_agent_workbench_view,
+)
 from seektalent_ui.agent_workbench_stream import encode_sse_event, replay_stream_envelopes
 from seektalent_ui.agent_workbench_stream_projection import append_projected_stream_events
 from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
@@ -58,21 +64,21 @@ def list_agent_workbench_conversations(
     includeArchived: bool = False,
     user: WorkbenchUser = Depends(local_workbench_read_user),
 ) -> AgentWorkbenchConversationListResponse:
-    conversations = get_agent_service(request).list_conversations(
+    service = get_agent_service(request)
+    conversations = service.list_conversations(
         owner_user_id=user.user_id,
         workspace_id=user.workspace_id,
         include_archived=includeArchived,
     )
     return AgentWorkbenchConversationListResponse(
         conversations=[
-            AgentWorkbenchConversationSummaryResponse(
-                conversationId=conversation.conversation_id,
-                title=conversation.title,
-                status=conversation.status,
-                isArchived=conversation.is_archived,
-                runtimeRunId=conversation.runtime_run_id,
-                workbenchSessionId=conversation.workbench_session_id,
-                updatedAt=conversation.updated_at,
+            project_agent_workbench_conversation_summary(
+                conversation,
+                workflow_start_intent=_latest_workflow_start_intent(
+                    service=service,
+                    workspace_id=user.workspace_id,
+                    conversation_id=conversation.conversation_id,
+                ),
             )
             for conversation in conversations
         ]
@@ -284,6 +290,26 @@ def list_agent_workbench_events(
         latestSeq=stream_store.latest_seq(conversation_id=conversation_id),
         hasMore=has_more,
         nextAfterSeq=events[-1].seq if has_more and events else None,
+    )
+
+
+def _latest_workflow_start_intent(
+    *,
+    service: object,
+    workspace_id: str,
+    conversation_id: str,
+) -> AgentWorkbenchWorkflowStartIntentProjection | None:
+    intent = service.workflow_start_intent_store.get_latest_for_conversation(
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+    )
+    if intent is None:
+        return None
+    return AgentWorkbenchWorkflowStartIntentProjection(
+        workflow_start_intent_id=intent.workflow_start_intent_id,
+        status=intent.status,
+        runtime_run_id=intent.runtime_run_id,
+        reason_code=intent.reason_code,
     )
 
 

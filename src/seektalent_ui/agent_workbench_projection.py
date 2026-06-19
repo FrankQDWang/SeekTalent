@@ -46,6 +46,14 @@ class RuntimeProjectionStore(Protocol):
 
 
 @dataclass(frozen=True)
+class AgentWorkbenchWorkflowStartIntentProjection:
+    workflow_start_intent_id: str
+    status: str
+    runtime_run_id: str | None = None
+    reason_code: str | None = None
+
+
+@dataclass(frozen=True)
 class AgentWorkbenchProjectionInput:
     conversation_reopen_state: ConversationReopenState
     messages: Sequence[TranscriptMessage] = field(default_factory=tuple)
@@ -61,6 +69,7 @@ class AgentWorkbenchProjectionInput:
     detail_approvals: Sequence[AgentWorkbenchDetailApprovalResponse] = field(default_factory=tuple)
     review_artifacts: Sequence[AgentWorkbenchReviewArtifactResponse] = field(default_factory=tuple)
     final_summary: AgentWorkbenchFinalSummaryResponse | None = None
+    workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None = None
 
 
 def projection_input_from_thread_view(thread: ConversationThreadView) -> AgentWorkbenchProjectionInput:
@@ -126,6 +135,11 @@ def build_agent_workbench_projection_input(
         detail_approvals = _detail_approvals(
             workbench_store.list_liepin_detail_open_requests(user=user, session_id=state.workbench_session_id)
         )
+    workflow_start_intent = _workflow_start_intent_projection(
+        service=service,
+        workspace_id=user.workspace_id,
+        conversation_id=conversation_id,
+    )
     return AgentWorkbenchProjectionInput(
         conversation_reopen_state=state,
         messages=tuple(thread.messages),
@@ -141,6 +155,27 @@ def build_agent_workbench_projection_input(
         detail_approvals=tuple(detail_approvals),
         review_artifacts=review_artifacts,
         final_summary=final_summary,
+        workflow_start_intent=workflow_start_intent,
+    )
+
+
+def _workflow_start_intent_projection(
+    *,
+    service: ConversationAgentService,
+    workspace_id: str,
+    conversation_id: str,
+) -> AgentWorkbenchWorkflowStartIntentProjection | None:
+    intent = service.workflow_start_intent_store.get_latest_for_conversation(
+        workspace_id=workspace_id,
+        conversation_id=conversation_id,
+    )
+    if intent is None:
+        return None
+    return AgentWorkbenchWorkflowStartIntentProjection(
+        workflow_start_intent_id=intent.workflow_start_intent_id,
+        status=intent.status,
+        runtime_run_id=intent.runtime_run_id,
+        reason_code=intent.reason_code,
     )
 
 
