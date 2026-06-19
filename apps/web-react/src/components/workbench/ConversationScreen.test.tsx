@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -61,6 +61,19 @@ describe("ConversationScreen", () => {
 
     expect(onConfirmRequirements).toHaveBeenCalledOnce();
     expect(screen.getByText("AI Agent 平台工程师")).toBeVisible();
+  });
+
+  it("keeps requirement review inside the transcript flow", () => {
+    expect.hasAssertions();
+
+    render(
+      <ConversationScreen view={agentWorkbenchRequirementReviewViewFixture} />,
+    );
+
+    const transcript = screen.getByLabelText("Agent transcript");
+    expect(
+      within(transcript).getByRole("button", { name: "确认需求" }),
+    ).toBeVisible();
   });
 
   it("shows permission failure as a stable screen state", () => {
