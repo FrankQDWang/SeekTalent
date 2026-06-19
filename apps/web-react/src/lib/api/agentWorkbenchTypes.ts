@@ -142,6 +142,11 @@ export type AgentWorkbenchCandidateDetailResponse = Omit<
   evidence: string[];
 };
 
+export type WorkbenchUserTextMessageRequest =
+  Schemas["WorkbenchUserTextMessageRequest"];
+export type WorkbenchRequirementConfirmRequest =
+  Schemas["WorkbenchRequirementConfirmRequest"];
+
 type GeneratedConversationResponse =
   Schemas["AgentWorkbenchConversationResponse"];
 type GeneratedConversationListResponse =
