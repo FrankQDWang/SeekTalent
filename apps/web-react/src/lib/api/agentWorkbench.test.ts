@@ -53,6 +53,8 @@ function viewFixture(
       isArchived: false,
       runtimeRunId: "runtime_1",
       workbenchSessionId: "session_1",
+      workflowStartState: "running",
+      workflowStartReasonCode: null,
       updatedAt: "2026-06-12T12:00:00+00:00",
     },
     messages: [],

@@ -1,0 +1,43 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Keep WTS workflow-start state reviewable across the Workbench BFF and React stream fixtures.",
+  "rationale": "The BFF exposes workflow-start state and reason codes in the Workbench conversation contract. The PR must update generated schema, typed React API tests, stream-view tests, and shared fixtures together so each stacked PR can pass Workbench Contract CI against its own parent.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "frontend",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_ui/agent_workbench_models.py",
+    "src/seektalent_ui/agent_workbench_projection.py",
+    "src/seektalent_ui/agent_workbench_response.py",
+    "src/seektalent_ui/agent_workbench_routes.py",
+    "apps/web-react/src/lib/api/agentWorkbench.test.ts",
+    "apps/web-react/src/lib/stream/agentStreamView.test.ts",
+    "apps/web-react/src/test/fixtures/agentWorkbenchBff.ts"
+  ],
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+    "uv run --group dev python tools/check_pr_governance.py --base codex/wts-06-workbench-actions",
+    "SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT=1 scripts/verify-dev-workbench.sh",
+    "git diff --check codex/wts-06-workbench-actions...HEAD"
+  ],
+  "deletion_targets": [
+    "Workflow-start BFF fields that only become typed on the frontend after a later schema-sync PR",
+    "Stream-view tests that ignore workflow-start state changes emitted by the BFF contract",
+    "Shared Workbench fixtures whose conversation object omits workflowStartState and workflowStartReasonCode"
+  ],
+  "risks": [
+    "Workflow-start state must reflect the durable BFF projection without starting duplicate workflow runs.",
+    "Reason codes must stay public and recruiter-safe.",
+    "React stream handling must treat these fields as product state, not developer debug output."
+  ]
+}
