@@ -1496,6 +1496,10 @@ def _assert_wts_columns(conn: sqlite3.Connection) -> None:
         table_name: {row[1] for row in conn.execute(f"PRAGMA table_info({table_name})")}
         for table_name in WTS_TABLES
     }
+    indexes = {
+        table_name: {row[1] for row in conn.execute(f"PRAGMA index_list({table_name})")}
+        for table_name in WTS_TABLES
+    }
     assert {
         "workspace_id",
         "owner_user_id",
@@ -1567,6 +1571,7 @@ def _assert_wts_columns(conn: sqlite3.Connection) -> None:
         "snapshot_json",
         "created_at",
     } <= columns["wts_requirement_transcript_snapshots"]
+    assert "idx_wts_outbox_workflow_aggregate" in indexes["wts_outbox"]
 
 
 def _derive_title(jd_text: str) -> str:
