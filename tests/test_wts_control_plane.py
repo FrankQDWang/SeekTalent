@@ -10,7 +10,7 @@ from seektalent.requirements.normalization import normalize_requirement_draft
 from seektalent_conversation_agent.factory import build_agent_service
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.service import ConversationAgentService
-from seektalent_conversation_agent.store import ConversationStore
+from seektalent_conversation_agent.store import CONVERSATION_AGENT_SCHEMA_VERSION, ConversationStore
 from seektalent_conversation_agent.tools import AgentToolAdapter
 from seektalent_runtime_control.models import RuntimeRunRecord
 from seektalent_runtime_control.service import RuntimeControlService
@@ -355,6 +355,30 @@ def test_submit_jd_idempotency_reuses_same_body_and_rejects_different_body(tmp_p
     assert exc_info.value.reason_code == "idempotency_key_conflict"
 
 
+def test_submit_jd_rejects_same_body_with_new_idempotency_key(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 岗位",
+    )
+    request = {
+        "conversation_id": conversation.conversation_id,
+        "owner_user_id": "user_1",
+        "workspace_id": "workspace_1",
+        "job_title": None,
+        "jd_text": "需要 Python 平台负责人，负责 API 与平台工程。",
+        "notes": "优先华东，接受远程协作",
+        "source_kinds": ["cts", "liepin"],
+    }
+    service.submit_jd(**request, idempotency_key="submit-jd-1")
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        service.submit_jd(**request, idempotency_key="submit-jd-2")
+
+    assert exc_info.value.reason_code == "idempotency_key_conflict"
+
+
 def test_submit_jd_replay_repairs_conversation_after_partial_crash(tmp_path: Path) -> None:
     service, extractor = _service(tmp_path)
     conversation = service.create_conversation(
@@ -406,6 +430,98 @@ def test_submit_jd_replay_repairs_conversation_after_partial_crash(tmp_path: Pat
     assert repaired.status == "awaiting_requirement_confirmation"
     assert repaired.latest_draft_revision_id == first.requirement_draft_revision_id
     assert extractor.received_job_titles == [None]
+
+
+def test_submit_jd_replay_repairs_missing_link_and_review_message_without_duplicates(tmp_path: Path) -> None:
+    service, extractor = _service(tmp_path)
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 岗位",
+    )
+    request = {
+        "conversation_id": conversation.conversation_id,
+        "owner_user_id": "user_1",
+        "workspace_id": "workspace_1",
+        "job_title": None,
+        "jd_text": "需要 Python 平台负责人，负责 API 与平台工程。",
+        "notes": "优先华东，接受远程协作",
+        "source_kinds": ["cts", "liepin"],
+        "idempotency_key": "submit-jd-missing-link-1",
+    }
+    first = service.submit_jd(**request)
+    user_message_count = _message_count(service, conversation.conversation_id, message_type="user_text")
+    tool_call_count = _tool_call_count(service, conversation.conversation_id, tool_name="extract_requirements")
+    with sqlite3.connect(service.store.path) as conn, conn:
+        conn.execute(
+            "DELETE FROM wts_requirement_draft_job_requests WHERE draft_revision_id = ?",
+            (first.requirement_draft_revision_id,),
+        )
+        conn.execute(
+            """
+            DELETE FROM wts_requirement_transcript_snapshots
+            WHERE draft_revision_id = ?
+            """,
+            (first.requirement_draft_revision_id,),
+        )
+        conn.execute(
+            """
+            DELETE FROM agent_transcript_messages
+            WHERE conversation_id = ? AND message_type = 'requirement_review'
+            """,
+            (conversation.conversation_id,),
+        )
+
+    replay = service.submit_jd(**request)
+
+    assert replay.job_request_revision_id == first.job_request_revision_id
+    assert replay.requirement_draft_revision_id == first.requirement_draft_revision_id
+    assert _message_count(service, conversation.conversation_id, message_type="user_text") == user_message_count
+    assert _message_count(service, conversation.conversation_id, message_type="requirement_review") == 1
+    assert _tool_call_count(service, conversation.conversation_id, tool_name="extract_requirements") == tool_call_count
+    assert _requirement_snapshot_count(service, first.requirement_draft_revision_id) == 1
+    assert extractor.received_job_titles == [None]
+
+
+def test_submit_jd_replay_repairs_missing_review_message_when_link_exists(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 岗位",
+    )
+    request = {
+        "conversation_id": conversation.conversation_id,
+        "owner_user_id": "user_1",
+        "workspace_id": "workspace_1",
+        "job_title": None,
+        "jd_text": "需要 Python 平台负责人，负责 API 与平台工程。",
+        "notes": "优先华东，接受远程协作",
+        "source_kinds": ["cts", "liepin"],
+        "idempotency_key": "submit-jd-missing-review-1",
+    }
+    first = service.submit_jd(**request)
+    with sqlite3.connect(service.store.path) as conn, conn:
+        conn.execute(
+            """
+            DELETE FROM wts_requirement_transcript_snapshots
+            WHERE draft_revision_id = ?
+            """,
+            (first.requirement_draft_revision_id,),
+        )
+        conn.execute(
+            """
+            DELETE FROM agent_transcript_messages
+            WHERE conversation_id = ? AND message_type = 'requirement_review'
+            """,
+            (conversation.conversation_id,),
+        )
+
+    replay = service.submit_jd(**request)
+
+    assert replay.requirement_draft_revision_id == first.requirement_draft_revision_id
+    assert _message_count(service, conversation.conversation_id, message_type="requirement_review") == 1
+    assert _requirement_snapshot_count(service, first.requirement_draft_revision_id) == 1
 
 
 def test_submit_jd_replay_preserves_running_workflow_state(tmp_path: Path) -> None:
@@ -1126,7 +1242,7 @@ def test_workflow_start_outbox_claim_blocks_duplicate_executor_entry_and_expires
     assert service.outbox_store.get(outbox_id).status == "done"
 
 
-def test_fresh_conversation_store_initialize_creates_wts_tables_at_version_6(tmp_path: Path) -> None:
+def test_fresh_conversation_store_initialize_creates_wts_tables_at_current_version(tmp_path: Path) -> None:
     db_path = tmp_path / "conversation_agent.sqlite3"
 
     ConversationStore(db_path).initialize()
@@ -1134,10 +1250,10 @@ def test_fresh_conversation_store_initialize_creates_wts_tables_at_version_6(tmp
     with sqlite3.connect(db_path) as conn:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         tables = _tables(conn)
+        _assert_wts_columns(conn)
 
-    assert version == 6
+    assert version == CONVERSATION_AGENT_SCHEMA_VERSION
     assert WTS_TABLES <= tables
-    _assert_wts_columns(conn)
 
 
 def test_conversation_store_migrates_v4_database_to_wts_control_plane(tmp_path: Path) -> None:
@@ -1158,7 +1274,7 @@ def test_conversation_store_migrates_v4_database_to_wts_control_plane(tmp_path: 
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         tables = _tables(conn)
 
-    assert version == 6
+    assert version == CONVERSATION_AGENT_SCHEMA_VERSION
     assert WTS_TABLES <= tables
     _assert_wts_columns(conn)
 
@@ -1181,9 +1297,42 @@ def test_conversation_store_migrates_v5_database_to_confirm_request_table(tmp_pa
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         tables = _tables(conn)
 
-    assert version == 6
+    assert version == CONVERSATION_AGENT_SCHEMA_VERSION
     assert "wts_confirm_requirement_requests" in tables
     _assert_wts_columns(conn)
+
+
+def test_conversation_store_migrates_v6_database_to_workflow_outbox_index(tmp_path: Path) -> None:
+    db_path = tmp_path / "conversation_agent_v6.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE agent_conversations (
+                conversation_id TEXT PRIMARY KEY
+            );
+            CREATE TABLE wts_outbox (
+                outbox_id TEXT PRIMARY KEY,
+                workspace_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                aggregate_id TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            PRAGMA user_version = 6;
+            """
+        )
+
+    ConversationStore(db_path).initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(wts_outbox)")}
+
+    assert version == CONVERSATION_AGENT_SCHEMA_VERSION
+    assert "idx_wts_outbox_workflow_aggregate" in indexes
 
 
 def _service(tmp_path: Path) -> tuple[ConversationAgentService, FakeRequirementExecutor]:
@@ -1362,6 +1511,45 @@ def _approved_requirement_count_for_idempotency(
     return int(row[0])
 
 
+def _message_count(service: ConversationAgentService, conversation_id: str, *, message_type: str) -> int:
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM agent_transcript_messages
+            WHERE conversation_id = ? AND message_type = ?
+            """,
+            (conversation_id, message_type),
+        ).fetchone()
+    return int(row[0])
+
+
+def _tool_call_count(service: ConversationAgentService, conversation_id: str, *, tool_name: str) -> int:
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM agent_tool_calls
+            WHERE conversation_id = ? AND tool_name = ?
+            """,
+            (conversation_id, tool_name),
+        ).fetchone()
+    return int(row[0])
+
+
+def _requirement_snapshot_count(service: ConversationAgentService, draft_revision_id: str) -> int:
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM wts_requirement_transcript_snapshots
+            WHERE draft_revision_id = ?
+            """,
+            (draft_revision_id,),
+        ).fetchone()
+    return int(row[0])
+
+
 def _outbox_id_for_aggregate(service: ConversationAgentService, aggregate_id: str) -> str:
     with sqlite3.connect(service.store.path) as conn:
         row = conn.execute(
@@ -1496,6 +1684,10 @@ def _assert_wts_columns(conn: sqlite3.Connection) -> None:
         table_name: {row[1] for row in conn.execute(f"PRAGMA table_info({table_name})")}
         for table_name in WTS_TABLES
     }
+    indexes = {
+        table_name: {row[1] for row in conn.execute(f"PRAGMA index_list({table_name})")}
+        for table_name in WTS_TABLES
+    }
     assert {
         "workspace_id",
         "owner_user_id",
@@ -1567,6 +1759,7 @@ def _assert_wts_columns(conn: sqlite3.Connection) -> None:
         "snapshot_json",
         "created_at",
     } <= columns["wts_requirement_transcript_snapshots"]
+    assert "idx_wts_outbox_workflow_aggregate" in indexes["wts_outbox"]
 
 
 def _derive_title(jd_text: str) -> str:

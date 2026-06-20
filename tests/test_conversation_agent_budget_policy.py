@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -285,3 +286,150 @@ def test_conversation_agent_service_replays_failed_idempotent_turn_as_same_error
         ).fetchone()[0]
     assert runner.calls == 1
     assert assistant_count == 0
+
+
+def test_conversation_agent_service_resumes_idempotent_turn_after_user_message_only(tmp_path: Path) -> None:
+    service, store, _runtime_store = build_service(tmp_path)
+    runner = CountingRunner()
+    service.agent_runner = runner
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Data Platform Engineer",
+    )
+    store.append_message(
+        conversation_id=conversation.conversation_id,
+        role="user",
+        message_type="user_text",
+        text="请帮我整理候选人总结偏好。",
+        payload={},
+        created_at="2026-06-09T00:00:02.000000Z",
+        message_id="agent_msg_existing_user",
+        token_count=8,
+        idempotency_key="user-text-resume",
+    )
+
+    response = asyncio.run(
+        service.run_agent_turn(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            user_message="请帮我整理候选人总结偏好。",
+            idempotency_key="user-text-resume",
+        )
+    )
+
+    assert runner.calls == 1
+    assert [message.role for message in response.messages] == ["user", "assistant"]
+    with store._connect() as conn:
+        user_count = conn.execute(
+            "SELECT COUNT(*) FROM agent_transcript_messages WHERE role = 'user'"
+        ).fetchone()[0]
+        tool_count = conn.execute(
+            "SELECT COUNT(*) FROM agent_tool_calls WHERE tool_name = 'agent_model_run'"
+        ).fetchone()[0]
+    assert user_count == 1
+    assert tool_count == 1
+
+
+def test_conversation_agent_service_restores_missing_assistant_after_completed_idempotent_turn(
+    tmp_path: Path,
+) -> None:
+    service, store, _runtime_store = build_service(tmp_path)
+    runner = CountingRunner()
+    service.agent_runner = runner
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Data Platform Engineer",
+    )
+    asyncio.run(
+        service.run_agent_turn(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            user_message="请帮我整理候选人总结偏好。",
+            idempotency_key="user-text-restore-assistant",
+        )
+    )
+    with store._connect() as conn, conn:
+        conn.execute("DELETE FROM agent_transcript_messages WHERE role = 'assistant'")
+
+    response = asyncio.run(
+        service.run_agent_turn(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            user_message="请帮我整理候选人总结偏好。",
+            idempotency_key="user-text-restore-assistant",
+        )
+    )
+
+    assert runner.calls == 1
+    assert [message.role for message in response.messages] == ["user", "assistant"]
+    assert response.messages[-1].text == "已收到"
+    with store._connect() as conn:
+        assistant_count = conn.execute(
+            "SELECT COUNT(*) FROM agent_transcript_messages WHERE role = 'assistant'"
+        ).fetchone()[0]
+        completed_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM agent_tool_calls
+            WHERE tool_name = 'agent_model_run' AND status = 'completed'
+            """
+        ).fetchone()[0]
+    assert assistant_count == 1
+    assert completed_count == 1
+
+
+def test_conversation_agent_service_marks_stale_started_idempotent_turn_failed(tmp_path: Path) -> None:
+    service, store, _runtime_store = build_service(tmp_path)
+    runner = CountingRunner()
+    service.agent_runner = runner
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Data Platform Engineer",
+    )
+    store.append_message(
+        conversation_id=conversation.conversation_id,
+        role="user",
+        message_type="user_text",
+        text="请帮我整理候选人总结偏好。",
+        payload={},
+        created_at="2026-06-09T00:00:02.000000Z",
+        message_id="agent_msg_stale_user",
+        token_count=8,
+        idempotency_key="user-text-stale",
+    )
+    store.save_tool_call(
+        tool_call_id="agent_tool_call_stale",
+        conversation_id=conversation.conversation_id,
+        tool_name="agent_model_run",
+        status="started",
+        args={"modelName": "test-model", "idempotencyKey": "user-text-stale"},
+        result=None,
+        reason_code=None,
+        started_at="2026-06-08T00:00:00.000000Z",
+    )
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        asyncio.run(
+            service.run_agent_turn(
+                conversation_id=conversation.conversation_id,
+                owner_user_id="user_1",
+                workspace_id="workspace_1",
+                user_message="请帮我整理候选人总结偏好。",
+                idempotency_key="user-text-stale",
+            )
+        )
+
+    assert exc_info.value.reason_code == "agent_request_stale"
+    assert runner.calls == 0
+    with store._connect() as conn:
+        row = conn.execute(
+            "SELECT status, reason_code FROM agent_tool_calls WHERE tool_call_id = 'agent_tool_call_stale'"
+        ).fetchone()
+    assert row["status"] == "failed"
+    assert row["reason_code"] == "agent_request_stale"

@@ -101,6 +101,9 @@ def migrate_wts_control_plane(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_wts_outbox_status
             ON wts_outbox(status, updated_at);
 
+        CREATE INDEX IF NOT EXISTS idx_wts_outbox_workflow_aggregate
+            ON wts_outbox(event_type, aggregate_id, created_at);
+
         CREATE TABLE IF NOT EXISTS wts_requirement_transcript_snapshots (
             transcript_message_id TEXT PRIMARY KEY,
             workspace_id TEXT NOT NULL,

@@ -32,7 +32,7 @@ from seektalent_conversation_agent.models import (
 )
 
 
-CONVERSATION_AGENT_SCHEMA_VERSION = 6
+CONVERSATION_AGENT_SCHEMA_VERSION = 7
 
 _ACTIVE_ARCHIVE_BLOCKING_STATUSES = {"starting", "running"}
 _RUNTIME_RUN_KINDS = {"primary", "rerun", "fork"}
@@ -72,7 +72,7 @@ class ConversationStore:
                     conn.execute(f"PRAGMA user_version = {CONVERSATION_AGENT_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="conversation-agent", foreign_keys=True)
                 return
-            if version in {2, 3, 4, 5}:
+            if version in {2, 3, 4, 5, 6}:
                 with conn:
                     run_ordered_migrations(
                         conn,
@@ -83,6 +83,7 @@ class ConversationStore:
                             3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
                             4: SQLiteMigrationStep(4, 5, _migrate_v4_to_v5),
                             5: SQLiteMigrationStep(5, 6, _migrate_v5_to_v6),
+                            6: SQLiteMigrationStep(6, 7, _migrate_v6_to_v7),
                         },
                         store_name="conversation-agent",
                     )
@@ -271,6 +272,42 @@ class ConversationStore:
                 (conversation_id,),
             ).fetchall()
         return [_message_from_row(row) for row in rows]
+
+    def ensure_requirement_transcript_snapshot(self, *, message_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    """
+                    SELECT *
+                    FROM agent_transcript_messages
+                    WHERE message_id = ?
+                    """,
+                    (message_id,),
+                ).fetchone()
+                if row is None:
+                    raise ConversationAgentError("message_not_found")
+                existing = conn.execute(
+                    """
+                    SELECT transcript_message_id
+                    FROM wts_requirement_transcript_snapshots
+                    WHERE transcript_message_id = ?
+                    """,
+                    (message_id,),
+                ).fetchone()
+                if existing is None:
+                    conversation = _conversation_row(conn, row["conversation_id"])
+                    if conversation is None:
+                        raise ConversationAgentError("conversation_not_found")
+                    _insert_requirement_transcript_snapshot(
+                        conn,
+                        message=_message_from_row(row),
+                        workspace_id=conversation["workspace_id"],
+                    )
+                conn.commit()
+            except (sqlite3.Error, ConversationAgentError, TypeError, ValueError):
+                conn.rollback()
+                raise
 
     def save_tool_call(
         self,
@@ -1331,6 +1368,10 @@ def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+    migrate_wts_control_plane(conn)
+
+
+def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     migrate_wts_control_plane(conn)
 
 

@@ -1,5 +1,5 @@
 import { QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAgentWorkbenchLiveConversation } from "./agentWorkbench";
 import type { AgentWorkbenchConversationResponse } from "./agentWorkbenchTypes";
@@ -29,6 +29,7 @@ vi.mock("../stream/agentStreamReducer", async (importOriginal) => {
 
 describe("live Agent Workbench conversation hook", () => {
   afterEach(() => {
+    cleanup();
     vi.clearAllMocks();
   });
 
