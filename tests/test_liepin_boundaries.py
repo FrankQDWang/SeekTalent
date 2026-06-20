@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import ast
 import inspect
-import shutil
-import subprocess
 from pathlib import Path
 from typing import get_args, get_origin, get_type_hints
 
@@ -17,17 +15,16 @@ from seektalent.flywheel.runtime import query_hit_rows_from_hits
 from seektalent.models import QueryResumeHit
 from seektalent.providers.liepin.client import LiepinWorkerModeError, build_liepin_worker_client
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
+from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 from seektalent.providers.liepin.security import issue_stream_token
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
-from seektalent.providers.liepin.worker_runtime import ManagedLiepinWorkerRuntime
 from seektalent_ui import models as ui_models
 from seektalent_ui.server import create_app
 from tests.settings_factory import make_settings
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKER = ROOT / "apps" / "liepin-worker"
 SRC = ROOT / "src"
 OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/opencli_browser/__init__.py",
@@ -60,63 +57,6 @@ _ALLOWED_LIEPIN_RESUME_RAW_KEYS = {
     "raw_payload_artifact_ref",
     "score_evidence_source",
 }
-
-
-def test_liepin_worker_boundary_checker_passes_worker_sources():
-    result = _run_worker_boundary_checker()
-
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_liepin_worker_boundary_checker_rejects_forbidden_snippets(tmp_path):
-    forbidden = tmp_path / "forbidden.ts"
-    forbidden.write_text(
-        """
-        import { request, type APIRequestContext } from "playwright";
-        import { request as pwRequest } from "playwright";
-        import * as pw from "playwright";
-        import { OpenCLI } from "@opencli/sdk";
-
-        type InlineClient = import("playwright").APIRequestContext;
-        type InlineTestClient = import("@playwright/test").APIRequestContext;
-
-        export async function run(page: any, browserContext: any, context: any, playwright: any) {
-          const typed: APIRequestContext | null = null;
-          await page.request.get("https://example.test");
-          await browserContext.request.post("https://example.test");
-          await context.request.fetch("https://example.test");
-          await playwright.request.newContext();
-          await pw.request.newContext();
-          await context["request"].post("https://example.test");
-          await browserContext["request"].post("https://example.test");
-          await page["request"].get("https://example.test");
-          await playwright.request.newContext();
-          await request.newContext();
-          await pwRequest.newContext();
-          return [typed, null as InlineClient | null, null as InlineTestClient | null];
-        }
-        """,
-        encoding="utf-8",
-    )
-
-    result = _run_worker_boundary_checker(str(forbidden))
-
-    assert result.returncode == 1
-    output = result.stdout + result.stderr
-    assert "APIRequestContext" in output
-    assert 'import("playwright").APIRequestContext' in output
-    assert 'import("@playwright/test").APIRequestContext' in output
-    assert "page.request" in output
-    assert "browserContext.request" in output
-    assert "context.request" in output
-    assert 'page["request"]' in output
-    assert 'browserContext["request"]' in output
-    assert 'context["request"]' in output
-    assert "playwright.request" in output
-    assert "pw.request" in output
-    assert "request.newContext" in output
-    assert "pwRequest.newContext" in output
-    assert "OpenCLI" in output
 
 
 def test_production_python_does_not_import_opencli():
@@ -477,23 +417,13 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
     assert query_token.status_code == 400
 
 
-def test_managed_local_worker_lifecycle_is_python_owned_and_redacted():
+def test_managed_local_worker_mode_uses_opencli_compatibility_path():
     settings = make_settings(liepin_worker_mode="managed_local")
     client = build_liepin_worker_client(settings)
     client_source = _read_source(SRC / "seektalent" / "providers" / "liepin" / "client.py")
-    runtime_source = _read_source(SRC / "seektalent" / "providers" / "liepin" / "worker_runtime.py")
 
-    assert isinstance(client.runtime, ManagedLiepinWorkerRuntime)
-    assert "ManagedLiepinWorkerRuntime.shared(settings)" in client_source
-    assert "asyncio.to_thread(self.runtime.ensure_started, on_event=on_event)" in client_source
-    assert "setup_status=\"missing_bun\"" in runtime_source
-    assert "setup_status=\"non_loopback_bind_host\"" in runtime_source
-    assert "setup_status=\"port_unavailable\"" in runtime_source
-    assert 'on_event("worker_start_timeout", payload)' in runtime_source
-    assert 'on_event("worker_failed", payload)' in runtime_source
-    assert '"stdout": "[redacted]"' in runtime_source
-    assert '"stderr": "[redacted]"' in runtime_source
-    assert "decode_redacted_diagnostics(" in runtime_source
+    assert isinstance(client, LiepinOpenCliWorkerClient)
+    assert "worker_runtime" not in client_source
 
 
 def test_fake_fixture_mode_is_not_reachable_when_live_enabled():
@@ -562,18 +492,6 @@ def test_detail_enriched_score_evidence_reaches_flywheel_rows():
     assert rows[0]["detail_scorecard_ref"] == "artifact:scorecards/detail/resume-1.json"
     assert "score_evidence:detail_enriched" in outcomes[0]["labels_json"]
     assert "detail_enriched" in outcomes[0]["reasons_json"]
-
-
-def _run_worker_boundary_checker(*paths: str) -> subprocess.CompletedProcess[str]:
-    if shutil.which("bun") is None:
-        pytest.skip("Bun is required for Liepin worker boundary checker tests")
-    return subprocess.run(
-        ["bun", "scripts/checkBoundaries.ts", *paths],
-        cwd=WORKER,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
 
 
 def _api_headers() -> dict[str, str]:

@@ -17,7 +17,6 @@ from seektalent.providers.liepin.client import (
     ExternalHttpLiepinWorkerClient,
     FakeLiepinWorkerClient,
     LiepinWorkerModeError,
-    ManagedLocalLiepinWorkerClient,
     _default_http_json,
     build_liepin_worker_client,
 )
@@ -118,7 +117,7 @@ def test_build_managed_local_client_for_live_capable_local_mode() -> None:
 
     client = build_liepin_worker_client(settings)
 
-    assert isinstance(client, ManagedLocalLiepinWorkerClient)
+    assert isinstance(client, LiepinOpenCliWorkerClient)
 
 
 def test_legacy_pi_agent_mode_is_rejected() -> None:
@@ -176,7 +175,7 @@ def test_external_http_client_requires_external_mode() -> None:
 
 
 def test_missing_external_http_worker_url_fails_before_search_dispatch() -> None:
-    settings = make_settings(liepin_worker_mode="managed_local").model_copy(
+    settings = make_settings(liepin_worker_mode="opencli").model_copy(
         update={"liepin_worker_mode": "external_http", "liepin_worker_base_url": None}
     )
 
@@ -382,23 +381,6 @@ def test_external_http_client_replaces_invalid_success_payload_with_safe_error(
         assert unsafe_fragment not in rendered
 
 
-def test_managed_local_client_uses_runtime_internal_base_url_for_http_calls() -> None:
-    settings = make_settings(liepin_worker_mode="managed_local", liepin_api_token="worker-token")
-    runtime = SimpleNamespace(
-        ensure_started=lambda **_: SimpleNamespace(internal_base_url="http://127.0.0.1:4567")
-    )
-    http_json = RecordingHttpJson(
-        {"connectionId": "conn-1", "status": "login_required", "fixtureOnly": False},
-    )
-    client = ManagedLocalLiepinWorkerClient(settings, runtime=runtime, http_json=http_json)
-
-    status = asyncio.run(client.session_status(connection_id="conn-1"))
-
-    assert status.status == "login_required"
-    assert http_json.calls[0]["url"] == "http://127.0.0.1:4567/internal/session/status?connectionId=conn-1"
-    assert http_json.calls[0]["headers"] == {"Authorization": "Bearer worker-token"}
-
-
 def test_external_http_client_search_posts_safe_body_and_maps_worker_cards() -> None:
     settings = make_settings(
         liepin_worker_mode="external_http",
@@ -473,43 +455,6 @@ def test_external_http_client_search_does_not_block_event_loop_during_sync_http(
         assert len(result.candidates) == 1
 
     asyncio.run(run_search_with_blocking_http())
-
-
-def test_managed_local_client_search_uses_runtime_url_and_maps_worker_cards() -> None:
-    settings = make_settings(liepin_worker_mode="managed_local", liepin_api_token="worker-token")
-    runtime = SimpleNamespace(
-        ensure_started=lambda **_: SimpleNamespace(internal_base_url="http://127.0.0.1:4567")
-    )
-    http_json = RecordingHttpJson(_worker_card_search_response())
-    client = ManagedLocalLiepinWorkerClient(settings, runtime=runtime, http_json=http_json)
-
-    result = asyncio.run(
-        client.search(
-            _request(),
-            round_no=3,
-            trace_id="trace-3",
-            provider_account_hash="acct-hash",
-        )
-    )
-
-    assert len(result.candidates) == 1
-    assert result.provider_snapshots[0].synthetic_candidate_fingerprint == "liepin:candidate-1"
-    assert result.request_payload == {
-        "keyword": "python",
-        "pageSize": 10,
-        "cursor": "cursor-1",
-        "round": 3,
-        "traceId": "trace-3",
-    }
-    assert http_json.calls == [
-        {
-            "method": "POST",
-            "url": "http://127.0.0.1:4567/internal/search/cards",
-            "headers": {"Authorization": "Bearer worker-token"},
-            "json_body": _expected_search_body(),
-            "timeout": settings.liepin_worker_timeout_seconds,
-        }
-    ]
 
 
 def test_default_http_json_decodes_worker_json_error_without_leaking_internals(

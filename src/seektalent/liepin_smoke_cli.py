@@ -216,7 +216,7 @@ def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
     if configured_mode in {"fake_fixture", "managed_local", "external_http", "opencli"}:
         worker_mode = configured_mode
     else:
-        worker_mode = "managed_local"
+        worker_mode = "opencli"
     settings_data: dict[str, object] = {
         "provider_name": "liepin",
         "liepin_live_enabled": True,

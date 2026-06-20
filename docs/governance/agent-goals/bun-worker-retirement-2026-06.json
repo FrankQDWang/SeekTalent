@@ -1,0 +1,88 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "governance-bootstrap-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Remove the retired Bun-based Liepin worker surface.",
+  "rationale": "SeekTalent now uses the Python/OpenCLI Liepin path and pnpm/Vite for frontend work. The old apps/liepin-worker package, Python-managed worker launcher, Bun verification commands, and Dependabot Bun configuration are stale maintenance surface.",
+  "touched_layers": [
+    "dependencies",
+    "docs",
+    "governance",
+    "other",
+    "provider",
+    "tests"
+  ],
+  "red_files": [
+    ".env.example",
+    ".github/CODEOWNERS",
+    ".github/dependabot.yml",
+    "apps/liepin-worker/bun.lock",
+    "apps/liepin-worker/fixtures/cards.dom.redacted.html",
+    "apps/liepin-worker/fixtures/cards.network.redacted.json",
+    "apps/liepin-worker/fixtures/detail.network.redacted.json",
+    "apps/liepin-worker/package.json",
+    "apps/liepin-worker/scripts/checkBoundaries.ts",
+    "apps/liepin-worker/scripts/compatibilityGate.ts",
+    "apps/liepin-worker/src/browserPool.ts",
+    "apps/liepin-worker/src/cardSearch.ts",
+    "apps/liepin-worker/src/contracts.ts",
+    "apps/liepin-worker/src/detail.ts",
+    "apps/liepin-worker/src/extraction.ts",
+    "apps/liepin-worker/src/loginRelay.ts",
+    "apps/liepin-worker/src/payload.ts",
+    "apps/liepin-worker/src/redaction.ts",
+    "apps/liepin-worker/src/server.ts",
+    "apps/liepin-worker/src/session.ts",
+    "apps/liepin-worker/src/sessionStore.ts",
+    "apps/liepin-worker/tests/boundaries.test.ts",
+    "apps/liepin-worker/tests/compatibility-gate.test.ts",
+    "apps/liepin-worker/tests/detail.test.ts",
+    "apps/liepin-worker/tests/extraction.test.ts",
+    "apps/liepin-worker/tests/harness.test.ts",
+    "apps/liepin-worker/tests/helpers/networkCapture.ts",
+    "apps/liepin-worker/tests/network-capture.test.ts",
+    "apps/liepin-worker/tests/payload.test.ts",
+    "apps/liepin-worker/tests/redaction.test.ts",
+    "apps/liepin-worker/tests/security-boundaries.test.ts",
+    "apps/liepin-worker/tests/server.test.ts",
+    "apps/liepin-worker/tests/session-store.test.ts",
+    "apps/liepin-worker/tests/session.test.ts",
+    "apps/liepin-worker/tsconfig.json",
+    "scripts/verify-red-zone.sh",
+    "src/seektalent/providers/liepin/client.py",
+    "src/seektalent/providers/liepin/worker_runtime.py",
+    "tools/check_liepin_browser_boundaries.py",
+    "tools/check_pr_governance.py",
+    "tools/check_react_workbench_cutover.py"
+  ],
+  "dependency_files": [
+    "apps/liepin-worker/bun.lock",
+    "apps/liepin-worker/package.json"
+  ],
+  "dependency_rationale": "The deleted package.json belongs to the retired Bun worker package. Active frontend dependency management remains pnpm/Vite under apps/web-react.",
+  "config_env_files": [
+    ".env.example"
+  ],
+  "config_behavior_rationale": "The example environment now documents OpenCLI as the local Liepin path while preserving managed_local only as a compatibility alias.",
+  "verification": [
+    "uv run pytest tests/test_pr_governance.py -q",
+    "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py tests/test_pr_governance.py tests/test_react_workbench_cutover_gate.py tests/test_ai_bad_smell_gate.py tests/test_privacy_gate.py -q",
+    "uv run pytest tests/test_liepin_runtime_source_lane.py tests/test_liepin_provider_source_composition.py tests/test_runtime_source_adapter_boundary.py tests/test_runtime_public_event_contract.py tests/test_provider_registry.py -q",
+    "uv run python tools/check_react_workbench_cutover.py",
+    "uv run python tools/check_pr_governance.py --base origin/main"
+  ],
+  "deletion_targets": [
+    "apps/liepin-worker/**",
+    "src/seektalent/providers/liepin/worker_runtime.py",
+    "tests/test_liepin_worker_runtime.py",
+    "seektalent liepin-replay-fixtures",
+    "seektalent liepin-bun-compatibility-gate"
+  ],
+  "risks": [
+    "Live Liepin local execution must continue through OpenCLI.",
+    "External HTTP worker mode must remain available for explicitly configured endpoints.",
+    "Historical managed_local configuration values must not crash existing local env files."
+  ]
+}

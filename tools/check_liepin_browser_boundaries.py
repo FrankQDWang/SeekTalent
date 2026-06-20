@@ -15,7 +15,6 @@ _PYTHON_SCAN_ROOTS = (
 )
 _LOCAL_WORKER_TRANSPORT_FILES = {
     "src/seektalent/providers/liepin/client.py",
-    "src/seektalent/providers/liepin/worker_runtime.py",
 }
 _FORBIDDEN_IMPORTS = set(PYTHON_FORBIDDEN_IMPORTS)
 _FORBIDDEN_OPERATION_MARKERS: tuple[str, ...] = tuple(

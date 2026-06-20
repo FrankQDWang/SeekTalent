@@ -71,7 +71,6 @@ def _major_refactor_goal_payload(
         "scripts/verify-dev-workbench.sh",
         "uv run pytest",
         "cd apps/web-react && pnpm test",
-        "cd apps/liepin-worker && bun test",
     ]
     bootstrap_verification = [
         "uv run pytest tests/test_pr_governance.py -q",
@@ -180,10 +179,6 @@ def test_classify_path_red_provider_registry() -> None:
     assert classify_path("src/seektalent/providers/registry.py") == "red"
 
 
-def test_classify_path_red_liepin_worker() -> None:
-    assert classify_path("apps/liepin-worker/src/server.ts") == "red"
-
-
 def test_classify_path_red_conversation_agent() -> None:
     assert classify_path("src/seektalent_conversation_agent/service.py") == "red"
 
@@ -203,7 +198,6 @@ def test_gitignore_is_governance_layer() -> None:
 def test_dependency_control_files_are_dependency_layer() -> None:
     assert layer_for_path("pyproject.toml") == "dependencies"
     assert layer_for_path("apps/web-react/package.json") == "dependencies"
-    assert is_dependency_control_file("apps/liepin-worker/bun.lock")
     assert is_dependency_control_file("requirements-dev.txt")
 
 
@@ -431,8 +425,8 @@ def test_evaluate_changed_files_allows_valid_security_remediation_manifest(tmp_p
     manifest_path = "docs/security/remediations/2026-05-31-liepin-boundaries.json"
     paths = [
         manifest_path,
-        "apps/liepin-worker/src/server.ts",
         "src/seektalent/providers/liepin/store.py",
+        "src/seektalent/providers/liepin/security.py",
         "src/seektalent_ui/workbench_routes.py",
     ]
     manifest = tmp_path / manifest_path
@@ -443,8 +437,8 @@ def test_evaluate_changed_files_allows_valid_security_remediation_manifest(tmp_p
                 "schema_version": "seektalent.security_remediation.v1",
                 "findings": [{"id": "ST-SEC-002", "title": "Caller-provided account hash approval"}],
                 "remediated_files": [
-                    "apps/liepin-worker/src/server.ts",
                     "src/seektalent/providers/liepin/store.py",
+                    "src/seektalent/providers/liepin/security.py",
                 ],
             }
         ),
@@ -460,7 +454,7 @@ def test_evaluate_changed_files_does_not_count_security_manifest_against_file_bu
     manifest_path = "docs/security/remediations/2026-05-31-liepin-boundaries.json"
     paths = [
         manifest_path,
-        "apps/liepin-worker/src/server.ts",
+        "src/seektalent/providers/liepin/security.py",
         *[f"tests/test_security_remediation_{index}.py" for index in range(14)],
     ]
     manifest = tmp_path / manifest_path
@@ -470,7 +464,7 @@ def test_evaluate_changed_files_does_not_count_security_manifest_against_file_bu
             {
                 "schema_version": "seektalent.security_remediation.v1",
                 "findings": [{"id": "ST-SEC-002", "title": "Caller-provided account hash approval"}],
-                "remediated_files": ["apps/liepin-worker/src/server.ts"],
+                "remediated_files": ["src/seektalent/providers/liepin/security.py"],
             }
         ),
         encoding="utf-8",
@@ -499,7 +493,7 @@ def test_evaluate_changed_files_blocks_security_remediation_missing_red_file(tmp
     result = evaluate_changed_files(
         [
             manifest_path,
-            "apps/liepin-worker/src/server.ts",
+            "src/seektalent/providers/liepin/security.py",
             "src/seektalent/providers/liepin/store.py",
         ],
         max_files=15,
@@ -667,7 +661,6 @@ def test_evaluate_changed_files_allows_source_decoupling_major_refactor_manifest
         "src/seektalent/runtime/orchestrator.py",
         "src/seektalent/providers/registry.py",
         "src/seektalent/providers/liepin/filter_compiler.py",
-        "apps/liepin-worker/src/server.ts",
         "scripts/verify-red-zone.sh",
     ]
     _write_json(tmp_path / manifest_path, _major_refactor_goal_payload(red_files=red_files))

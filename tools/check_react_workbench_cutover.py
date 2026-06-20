@@ -78,8 +78,8 @@ def _stale_reference_violations(path: str, text: str) -> list[CutoverViolation]:
     for line_no, line in enumerate(text.splitlines(), start=1):
         if any(pattern.search(line) for pattern in STALE_REFERENCE_PATTERNS):
             violations.append(CutoverViolation(path=path, line_no=line_no, reason="stale legacy UI reference", line=line))
-        if BUN_PATTERN.search(line) and not _allowed_bun_reference(path, line):
-            violations.append(CutoverViolation(path=path, line_no=line_no, reason="Bun reference outside Liepin worker allowlist", line=line))
+        if BUN_PATTERN.search(line):
+            violations.append(CutoverViolation(path=path, line_no=line_no, reason="stale Bun reference", line=line))
     return violations
 
 
@@ -123,20 +123,6 @@ def _is_active_cutover_surface(path: str) -> bool:
         or path.startswith("tools/")
         or path.startswith(".github/")
     )
-
-
-def _allowed_bun_reference(path: str, line: str) -> bool:
-    if "apps/liepin-worker" in line:
-        return True
-    if path in {"scripts/verify-red-zone.sh", "tools/check_pr_governance.py", ".github/dependabot.yml"}:
-        return True
-    if path in {
-        "docs/architecture-dependencies.md",
-        "docs/configuration.md",
-        "docs/references/pinpin-liepin-mapping-notes.md",
-    }:
-        return "liepin" in line.casefold() or "worker" in line.casefold()
-    return False
 
 
 if __name__ == "__main__":
