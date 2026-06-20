@@ -1,0 +1,27 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "governance-bootstrap-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Pause Dependabot version-update PR generation while dependency maintenance is handled manually.",
+  "rationale": "The repository is clearing an accumulated Dependabot backlog and should not immediately recreate dependency PR branches. Setting active ecosystems to open-pull-requests-limit=0 keeps maintenance explicit until a controlled update PR is planned.",
+  "touched_layers": [
+    "docs",
+    "governance"
+  ],
+  "red_files": [
+    ".github/dependabot.yml"
+  ],
+  "verification": [
+    "uv run pytest tests/test_pr_governance.py -q",
+    "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "automatic Dependabot version-update PR backlog"
+  ],
+  "risks": [
+    "Dependency updates will need to be handled by an explicit maintenance PR while Dependabot PR generation is paused."
+  ]
+}
