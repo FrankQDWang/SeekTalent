@@ -90,6 +90,13 @@ export function connectAgentStream({
       batcher.push(envelope);
     });
 
+    nextSource.addEventListener("agent_workbench_error", (message) => {
+      const error = parseStreamError((message as MessageEvent<string>).data);
+      if (error?.reasonCode === "stream_replay_gap") {
+        onGap();
+      }
+    });
+
     nextSource.onerror = () => {
       if (
         typeof document !== "undefined" &&
@@ -133,6 +140,27 @@ export function connectAgentStream({
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     }
   };
+}
+
+function parseStreamError(data: string): { reasonCode: string } | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data);
+  } catch {
+    return null;
+  }
+
+  if (!isJsonObject(parsed)) {
+    return null;
+  }
+  if (
+    parsed.schemaVersion !== "agent.workbench.stream.error.v1" ||
+    typeof parsed.reasonCode !== "string"
+  ) {
+    return null;
+  }
+
+  return { reasonCode: parsed.reasonCode };
 }
 
 function streamUrl(conversationId: string, afterSeq: number): string {

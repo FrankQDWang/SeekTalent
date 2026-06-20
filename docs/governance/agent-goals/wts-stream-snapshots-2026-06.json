@@ -1,0 +1,43 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Make Agent Workbench view snapshots and stream replay safe across the BFF and React consumer.",
+  "rationale": "Task 0C intentionally changes the Workbench BFF view cursor contract and the React stream/cache consumer together. The backend must expose a consistent snapshotSeq/viewRevision watermark, and the frontend must start SSE and guard cache replacement from that same boundary.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "frontend",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_ui/agent_workbench_models.py",
+    "src/seektalent_ui/agent_workbench_routes.py",
+    "src/seektalent_ui/agent_workbench_stream_store.py",
+    "apps/web-react/src/lib/api/agentWorkbench.ts",
+    "apps/web-react/src/lib/stream/agentStream.ts"
+  ],
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+    "uv run pytest tests/test_agent_workbench_stream_consistency.py tests/test_agent_workbench_contract.py -q",
+    "pnpm --dir apps/web-react test -- src/lib/api/agentWorkbench.test.ts",
+    "uv run ruff check src/seektalent_ui tests/test_agent_workbench_stream_consistency.py tests/test_agent_workbench_contract.py",
+    "uv run python tools/check_pr_governance.py --base codex/wts-02-confirm-start",
+    "git diff --check codex/wts-02-confirm-start...HEAD"
+  ],
+  "deletion_targets": [
+    "post-build latest_seq reads that can skip events inserted during snapshot construction",
+    "silent replay gap events returned as successful HTTP replay responses",
+    "frontend stream starts from latestStreamSeq instead of the stable snapshotSeq watermark"
+  ],
+  "risks": [
+    "Mutation responses must not replace a newer cached Workbench view with an older snapshot.",
+    "SSE replay gaps must refetch the Workbench view instead of merging partial stream state.",
+    "View v2 must remain bounded to the existing Workbench response surface and avoid Task 0D error-normalization scope."
+  ]
+}

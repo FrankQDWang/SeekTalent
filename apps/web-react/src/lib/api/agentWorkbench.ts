@@ -19,6 +19,30 @@ import {
 } from "../stream/agentStreamView";
 import type { AgentWorkbenchConversationResponse } from "./agentWorkbenchTypes";
 
+export function shouldApplyWorkbenchSnapshot(
+  current: AgentWorkbenchConversationResponse | undefined,
+  next: AgentWorkbenchConversationResponse,
+): boolean {
+  if (current === undefined) {
+    return true;
+  }
+  const currentAppliedStreamSeq = Math.max(
+    current.streamCursor.snapshotSeq,
+    current.streamCursor.latestStreamSeq,
+  );
+  const nextAppliedStreamSeq = Math.max(
+    next.streamCursor.snapshotSeq,
+    next.streamCursor.latestStreamSeq,
+  );
+  return nextAppliedStreamSeq >= currentAppliedStreamSeq;
+}
+
+export function workbenchStreamStartSeq(
+  view: AgentWorkbenchConversationResponse,
+): number {
+  return view.streamCursor.snapshotSeq;
+}
+
 export function useAgentWorkbenchConversations() {
   return useQuery({
     queryKey: queryKeys.agentConversations,
@@ -27,9 +51,18 @@ export function useAgentWorkbenchConversations() {
 }
 
 export function useAgentWorkbenchConversation(conversationId: string) {
-  return useQuery({
+  return useQuery<AgentWorkbenchConversationResponse>({
     queryKey: queryKeys.agentConversation(conversationId),
     queryFn: () => getAgentWorkbenchConversation(conversationId),
+    structuralSharing: (current, next) => {
+      const currentSnapshot = current as
+        | AgentWorkbenchConversationResponse
+        | undefined;
+      const nextSnapshot = next as AgentWorkbenchConversationResponse;
+      return shouldApplyWorkbenchSnapshot(currentSnapshot, nextSnapshot)
+        ? nextSnapshot
+        : currentSnapshot;
+    },
   });
 }
 
@@ -40,6 +73,8 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
     () => queryKeys.agentConversation(conversationId),
     [conversationId],
   );
+  const snapshotSeq = query.data?.streamCursor.snapshotSeq;
+  const viewRevision = query.data?.streamCursor.viewRevision;
   const streamState = useRef<AgentStreamState>(
     initialAgentStreamState(conversationId),
   );
@@ -49,18 +84,22 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
   }, [conversationId]);
 
   useEffect(() => {
-    if (!query.isSuccess) {
+    if (
+      !query.isSuccess ||
+      snapshotSeq === undefined ||
+      viewRevision === undefined
+    ) {
       return;
     }
-    const latestStreamSeq = query.data.streamCursor.latestStreamSeq;
+    const streamStartSeq = snapshotSeq;
     streamState.current = initialAgentStreamState(
       conversationId,
-      latestStreamSeq,
+      streamStartSeq,
     );
 
     const cleanup = connectAgentStream({
       conversationId,
-      afterSeq: latestStreamSeq,
+      afterSeq: streamStartSeq,
       onBatch: (events) => {
         let next = streamState.current;
         const acceptedEvents: AgentStreamEnvelope[] = [];
@@ -114,7 +153,14 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
     });
 
     return cleanup;
-  }, [conversationId, query.isSuccess, queryClient, queryKey]);
+  }, [
+    conversationId,
+    query.isSuccess,
+    queryClient,
+    queryKey,
+    snapshotSeq,
+    viewRevision,
+  ]);
 
   return query;
 }

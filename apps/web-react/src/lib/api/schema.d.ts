@@ -1440,10 +1440,10 @@ export interface components {
     AgentWorkbenchConversationResponse: {
       /**
        * Schemaversion
-       * @default agent.workbench.view.v1
+       * @default agent.workbench.view.v2
        * @constant
        */
-      schemaVersion: "agent.workbench.view.v1";
+      schemaVersion: "agent.workbench.view.v2";
       conversation: components["schemas"]["AgentWorkbenchConversationSummaryResponse"];
       /** Messages */
       messages?: components["schemas"]["AgentWorkbenchMessageResponse"][];
@@ -1822,17 +1822,36 @@ export interface components {
     };
     /** AgentWorkbenchStreamCursorResponse */
     AgentWorkbenchStreamCursorResponse: {
-      /** Latestmessageseq */
+      /**
+       * Latestmessageseq
+       * @default 0
+       */
       latestMessageSeq: number;
-      /** Latestactivityseq */
+      /**
+       * Latestactivityseq
+       * @default 0
+       */
       latestActivitySeq: number;
-      /** Latestruntimeeventseq */
+      /**
+       * Latestruntimeeventseq
+       * @default 0
+       */
       latestRuntimeEventSeq: number;
       /**
        * Lateststreamseq
        * @default 0
        */
       latestStreamSeq: number;
+      /**
+       * Snapshotseq
+       * @default 0
+       */
+      snapshotSeq: number;
+      /**
+       * Viewrevision
+       * @default 0
+       */
+      viewRevision: number;
     };
     /** AgentWorkbenchStreamEnvelopeResponse */
     AgentWorkbenchStreamEnvelopeResponse: {
