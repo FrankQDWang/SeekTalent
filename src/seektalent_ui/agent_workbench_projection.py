@@ -16,6 +16,8 @@ from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_conversation_agent.store import ConversationStore
 from seektalent_runtime_control.requirements import RequirementDraft
 from seektalent_ui.agent_workbench_models import (
+    AgentWorkbenchCandidateDetailResponse,
+    AgentWorkbenchCandidateDetailSectionResponse,
     AgentWorkbenchCandidateSummaryResponse,
     AgentWorkbenchDetailApprovalResponse,
     AgentWorkbenchDetailApprovalStatus,
@@ -129,9 +131,18 @@ def build_agent_workbench_projection_input(
     candidates: Sequence[AgentWorkbenchCandidateSummaryResponse] = ()
     detail_approvals: Sequence[AgentWorkbenchDetailApprovalResponse] = ()
     if state.workbench_session_id is not None:
-        candidates = _candidate_summaries(
-            workbench_store.list_candidate_review_items(user=user, session_id=state.workbench_session_id) or ()
+        runtime_final_top = workbench_store.list_runtime_final_top_review_items(
+            user=user,
+            session_id=state.workbench_session_id,
         )
+        if runtime_final_top is not None:
+            _, runtime_items = runtime_final_top
+            candidates = _candidate_summaries(runtime_items, preserve_order=True)
+        else:
+            candidates = _candidate_summaries(
+                workbench_store.list_candidate_review_items(user=user, session_id=state.workbench_session_id, limit=10)
+                or ()
+            )
         detail_approvals = _detail_approvals(
             workbench_store.list_liepin_detail_open_requests(user=user, session_id=state.workbench_session_id)
         )
@@ -230,17 +241,88 @@ def _source_connections(items: Iterable[object]) -> tuple[AgentWorkbenchSourceCo
     )
 
 
-def _candidate_summaries(items: Iterable[object]) -> tuple[AgentWorkbenchCandidateSummaryResponse, ...]:
+def _candidate_summaries(
+    items: Iterable[object],
+    *,
+    preserve_order: bool = False,
+) -> tuple[AgentWorkbenchCandidateSummaryResponse, ...]:
+    if preserve_order:
+        ranked = list(items)[:10]
+    else:
+        ranked = sorted(
+            items,
+            key=lambda item: (
+                -_candidate_score_for_sort(item),
+                _str_or_none(_attr(item, "created_at")) or "",
+                _str_or_none(_attr(item, "review_item_id")) or "",
+            ),
+        )[:10]
     return tuple(
         AgentWorkbenchCandidateSummaryResponse(
+            candidateId=_str_or_none(_attr(item, "review_item_id")) or f"candidate_{index}",
+            rank=index,
+            displayName=_str_or_none(_attr(item, "display_name")) or f"Candidate {index}",
+            headline=_str_or_none(_attr(item, "title")),
+            company=_str_or_none(_attr(item, "company")),
+            location=_str_or_none(_attr(item, "location")),
+            education=_str_or_none(_attr(item, "education")),
+            experienceYears=_int_or_none(_attr(item, "experience_years")),
+            sourceKinds=_candidate_source_kinds(item),
+            matchScore=_bounded_score(_attr(item, "aggregate_score")),
+            matchSummary=_str_or_none(_attr(item, "summary")) or _str_or_none(_attr(item, "why_selected")),
+            status=_str_or_none(_attr(item, "status")) or "new",
+            detailAvailability=_candidate_detail_availability(item),
+            accessState=_candidate_access_state(item),
+            evidenceLevel=_candidate_evidence_level(item),
+        )
+        for index, item in enumerate(ranked, start=1)
+    )
+
+
+def candidate_detail_response_from_review_item(item: object) -> AgentWorkbenchCandidateDetailResponse:
+    access_state = _candidate_access_state(item)
+    evidence_level = _candidate_evidence_level(item)
+    if access_state in {"denied", "approval_required"}:
+        return AgentWorkbenchCandidateDetailResponse(
             candidateId=_str_or_none(_attr(item, "review_item_id")) or "candidate",
             displayName=_str_or_none(_attr(item, "display_name")) or "Candidate",
-            headline=_headline(item),
-            matchSummary=_str_or_none(_attr(item, "summary")) or _str_or_none(_attr(item, "why_selected")),
-            sourceKind=_candidate_source_kind(item),
-            status=_str_or_none(_attr(item, "status")) or "new",
+            headline=_str_or_none(_attr(item, "title")),
+            sourceKinds=_candidate_source_kinds(item),
+            matchScore=_bounded_score(_attr(item, "aggregate_score")),
+            sections=[],
+            evidence=[],
+            detailAvailability="unavailable" if access_state == "denied" else "approval_required",
+            accessState=access_state,
+            evidenceLevel=evidence_level,
+            reasonCode=_candidate_detail_reason_code(item),
         )
-        for item in items
+
+    sections = [
+        AgentWorkbenchCandidateDetailSectionResponse(
+            title="匹配亮点",
+            items=_string_list(_attr(item, "strengths")) or _string_list(_attr(item, "matched_must_haves")),
+        ),
+        AgentWorkbenchCandidateDetailSectionResponse(
+            title="加分项",
+            items=_string_list(_attr(item, "matched_preferences")),
+        ),
+        AgentWorkbenchCandidateDetailSectionResponse(
+            title="风险点",
+            items=_string_list(_attr(item, "missing_risks")) or _string_list(_attr(item, "weaknesses")),
+        ),
+    ]
+    return AgentWorkbenchCandidateDetailResponse(
+        candidateId=_str_or_none(_attr(item, "review_item_id")) or "candidate",
+        displayName=_str_or_none(_attr(item, "display_name")) or "Candidate",
+        headline=_str_or_none(_attr(item, "title")),
+        sourceKinds=_candidate_source_kinds(item),
+        matchScore=_bounded_score(_attr(item, "aggregate_score")),
+        sections=[section for section in sections if section.items],
+        evidence=_source_badges(item),
+        detailAvailability=_candidate_detail_availability(item),
+        accessState=access_state,
+        evidenceLevel=evidence_level,
+        reasonCode=_candidate_detail_reason_code(item),
     )
 
 
@@ -333,23 +415,106 @@ def _final_summary(
     )
 
 
-def _headline(item: object) -> str | None:
-    parts = [
-        _str_or_none(_attr(item, "title")),
-        _str_or_none(_attr(item, "company")),
-        _str_or_none(_attr(item, "location")),
-    ]
-    return " / ".join(part for part in parts if part) or None
+def _candidate_score_for_sort(item: object) -> int:
+    score = _bounded_score(_attr(item, "aggregate_score"))
+    return score if score is not None else -1
 
 
-def _candidate_source_kind(item: object) -> Literal["cts", "liepin", "all"]:
+def _candidate_source_kinds(item: object) -> list[Literal["cts", "liepin"]]:
+    kinds: list[Literal["cts", "liepin"]] = []
+    evidence = _attr(item, "evidence")
+    if isinstance(evidence, Iterable) and not isinstance(evidence, str | bytes | bytearray):
+        for evidence_item in evidence:
+            _append_source_kind(kinds, _str_or_none(_attr(evidence_item, "source_kind")))
     badges = _attr(item, "source_badges")
-    if isinstance(badges, list):
-        if "liepin" in badges:
-            return "liepin"
-        if "cts" in badges:
-            return "cts"
-    return "all"
+    if isinstance(badges, Iterable) and not isinstance(badges, str | bytes | bytearray):
+        for badge in badges:
+            text = _str_or_none(badge)
+            if text is None:
+                continue
+            lowered = text.casefold()
+            if "cts" in lowered:
+                _append_source_kind(kinds, "cts")
+            if "liepin" in lowered:
+                _append_source_kind(kinds, "liepin")
+    return kinds
+
+
+def _append_source_kind(kinds: list[Literal["cts", "liepin"]], value: str | None) -> None:
+    if value == "cts" and "cts" not in kinds:
+        kinds.append("cts")
+    if value == "liepin" and "liepin" not in kinds:
+        kinds.append("liepin")
+
+
+def _candidate_evidence_level(item: object) -> Literal["summary", "detail", "final", "unknown"]:
+    raw = _str_or_none(_attr(item, "evidence_level"))
+    if raw == "final":
+        return "final"
+    if raw == "detail":
+        return "detail"
+    if raw in {"card", "summary"}:
+        return "summary"
+    return "unknown"
+
+
+def _candidate_access_state(item: object) -> Literal["allowed", "redacted", "approval_required", "denied"]:
+    explicit = _str_or_none(_attr(item, "access_state"))
+    if explicit in {"allowed", "redacted", "approval_required", "denied"}:
+        return cast(Literal["allowed", "redacted", "approval_required", "denied"], explicit)
+    evidence_level = _candidate_evidence_level(item)
+    if evidence_level in {"detail", "final"}:
+        return "allowed"
+    if "liepin" in _candidate_source_kinds(item):
+        return "approval_required"
+    if evidence_level == "summary":
+        return "redacted"
+    return "denied"
+
+
+def _candidate_detail_availability(
+    item: object,
+) -> Literal["available", "redacted", "approval_required", "unavailable"]:
+    access_state = _candidate_access_state(item)
+    if access_state == "allowed":
+        return "available"
+    if access_state == "redacted":
+        return "redacted"
+    if access_state == "approval_required":
+        return "approval_required"
+    return "unavailable"
+
+
+def _candidate_detail_reason_code(item: object) -> str | None:
+    explicit = _str_or_none(_attr(item, "reason_code"))
+    if explicit is not None:
+        return explicit
+    access_state = _candidate_access_state(item)
+    if access_state == "denied":
+        return "permission_denied"
+    if access_state == "approval_required":
+        return "candidate_detail_requires_approval"
+    if access_state == "redacted":
+        return "candidate_detail_redacted"
+    return None
+
+
+def _source_badges(item: object) -> list[str]:
+    badges = _string_list(_attr(item, "source_badges"))
+    if badges:
+        return badges
+    return list(_candidate_source_kinds(item))
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, Iterable) or isinstance(value, str | bytes | bytearray):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = _str_or_none(item)
+        if text is not None and text not in result:
+            result.append(text)
+    return result
 
 
 def _source_kind(value: object) -> Literal["cts", "liepin"]:
@@ -392,6 +557,13 @@ def _int_or_none(value: object) -> int | None:
     if isinstance(value, bool):
         return None
     return value if isinstance(value, int) else None
+
+
+def _bounded_score(value: object) -> int | None:
+    score = _int_or_none(value)
+    if score is None or score < 0 or score > 100:
+        return None
+    return score
 
 
 def _attr(value: object, name: str) -> object:

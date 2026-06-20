@@ -4,6 +4,9 @@ import { Button } from "../primitives/Button";
 import "./CandidateQueue.css";
 
 export type CandidateCardCandidate = AgentWorkbenchCandidateSummary;
+type CandidateSourceKind = NonNullable<
+  CandidateCardCandidate["sourceKinds"]
+>[number];
 
 type CandidateCardProps = {
   candidate: CandidateCardCandidate;
@@ -11,16 +14,20 @@ type CandidateCardProps = {
   onViewDetails?: ((candidateId: string) => void) | undefined;
 };
 
+const sourceLabels: Record<CandidateSourceKind, string> = {
+  cts: "本地",
+  liepin: "猎聘",
+};
+
 function sourceBadgeLabel(
-  sourceKind: CandidateCardCandidate["sourceKind"],
+  sourceKinds: readonly CandidateSourceKind[] | null | undefined,
 ): string {
-  if (sourceKind === "liepin") {
-    return "猎聘";
+  const uniqueKinds = [...new Set(sourceKinds ?? [])];
+  if (uniqueKinds.length > 1) {
+    return "多来源";
   }
-  if (sourceKind === "cts") {
-    return "本地";
-  }
-  return "多来源";
+  const [sourceKind] = uniqueKinds;
+  return sourceKind ? sourceLabels[sourceKind] : "来源待确认";
 }
 
 function statusLabel(status: string): string {
@@ -39,16 +46,49 @@ function statusLabel(status: string): string {
   return status;
 }
 
+function detailAvailabilityLabel(
+  detailAvailability: CandidateCardCandidate["detailAvailability"],
+): string {
+  if (detailAvailability === "available") {
+    return "详情可读";
+  }
+  if (detailAvailability === "approval_required") {
+    return "需审批";
+  }
+  if (detailAvailability === "redacted") {
+    return "已脱敏";
+  }
+  return "详情不可用";
+}
+
+function matchScoreLabel(matchScore: number | null | undefined): string | null {
+  if (typeof matchScore !== "number" || !Number.isFinite(matchScore)) {
+    return null;
+  }
+  const normalized = matchScore <= 1 ? matchScore * 100 : matchScore;
+  return `${String(Math.round(normalized))}%`;
+}
+
 export function CandidateCard({
   candidate,
   onViewDetails,
   selected = false,
 }: CandidateCardProps) {
+  const scoreLabel = matchScoreLabel(candidate.matchScore);
+  const facts = [
+    candidate.company,
+    candidate.location,
+    candidate.education,
+    typeof candidate.experienceYears === "number"
+      ? `${String(candidate.experienceYears)} 年经验`
+      : null,
+  ].filter((fact): fact is string => Boolean(fact));
+
   return (
     <article
       aria-label={candidate.displayName}
       className="candidate-card"
-      data-source={candidate.sourceKind}
+      data-source={candidate.sourceKinds?.join(" ") ?? "unknown"}
       data-selected={selected ? "true" : "false"}
     >
       <div className="candidate-card__header">
@@ -67,9 +107,23 @@ export function CandidateCard({
       </div>
 
       <div className="candidate-card__meta" aria-label="候选人摘要指标">
-        <span>{sourceBadgeLabel(candidate.sourceKind)}</span>
-        <span>{candidate.status}</span>
+        <span>#{candidate.rank}</span>
+        {scoreLabel ? (
+          <span className="candidate-card__score">
+            匹配 <strong>{scoreLabel}</strong>
+          </span>
+        ) : null}
+        <span>{sourceBadgeLabel(candidate.sourceKinds)}</span>
+        <span>{detailAvailabilityLabel(candidate.detailAvailability)}</span>
       </div>
+
+      {facts.length > 0 ? (
+        <div className="candidate-card__chips" aria-label="候选人基础信息">
+          {facts.map((fact) => (
+            <span key={fact}>{fact}</span>
+          ))}
+        </div>
+      ) : null}
 
       <p className="candidate-card__summary">
         {candidate.matchSummary ?? "BFF 尚未返回匹配摘要。"}

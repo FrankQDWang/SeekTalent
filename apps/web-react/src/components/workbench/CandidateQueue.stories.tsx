@@ -1,24 +1,43 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import type { CandidateCardCandidate } from "./CandidateCard";
 import { CandidateQueue } from "./CandidateQueue";
 
 const candidates = [
   {
     candidateId: "candidate_001",
+    rank: 1,
     displayName: "候选人 A",
     headline: "平台后端负责人 / 某 AI Infra 公司 / 上海",
+    company: "某 AI Infra 公司",
+    location: "上海",
+    education: "本科",
+    experienceYears: 10,
+    sourceKinds: ["liepin"],
+    matchScore: 92,
     matchSummary: "有 Agent 工具调用平台和 RAG 检索链路经验。",
-    sourceKind: "liepin",
     status: "reviewing",
+    detailAvailability: "approval_required",
+    accessState: "approval_required",
+    evidenceLevel: "summary",
   },
   {
     candidateId: "candidate_002",
+    rank: 2,
     displayName: "候选人 B",
     headline: "高级后端工程师 / 某企业协作产品 / 上海",
+    company: "某企业协作产品",
+    location: "上海",
+    education: "硕士",
+    experienceYears: 8,
+    sourceKinds: ["cts"],
+    matchScore: 84,
     matchSummary: "RAG 和搜索经验强，Agent 平台经验较少。",
-    sourceKind: "cts",
     status: "new",
+    detailAvailability: "redacted",
+    accessState: "redacted",
+    evidenceLevel: "summary",
   },
-] as const;
+] satisfies readonly CandidateCardCandidate[];
 
 const meta = {
   title: "Workbench/CandidateQueue",

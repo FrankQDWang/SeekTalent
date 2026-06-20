@@ -222,6 +222,8 @@ class WorkbenchCandidateReviewItem:
     title: str
     company: str
     location: str
+    education: str | None
+    experience_years: int | None
     summary: str
     aggregate_score: int | None
     fit_bucket: str | None
@@ -277,6 +279,8 @@ class WorkbenchDetailOpenCandidateSnapshot:
     title: str
     company: str
     location: str
+    education: str | None
+    experience_years: int | None
     summary: str
     aggregate_score: int | None
     evidence_level: CandidateEvidenceLevel

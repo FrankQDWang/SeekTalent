@@ -6,10 +6,20 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from seektalent.models import RequirementSheet
+from seektalent_ui.workbench_candidate_display import (
+    candidate_education as _candidate_education,
+    candidate_experience_years as _candidate_experience_years,
+    finalizer_candidate_by_resume_id as _finalizer_candidate_by_resume_id,
+    liepin_card_display_fields as _liepin_card_display_fields,
+    mapping_items as _mapping_items,
+    mapping_payload as _mapping_payload,
+    runtime_fallback_final_evidence as _runtime_fallback_final_evidence,
+    safe_string_list as _safe_string_list,
+    snapshot_payload as _snapshot_payload,
+)
 from seektalent_ui.workbench_store_helpers import (
     attr as _attr,
     first as _first,
@@ -330,6 +340,8 @@ class WorkbenchCandidateStore:
                         _safe_candidate_text(_attr(identity, "title"), 240) or "",
                         _safe_candidate_text(_attr(identity, "company"), 240) or "",
                         _safe_candidate_text(_attr(identity, "location"), 160) or "",
+                        _candidate_education(identity),
+                        _candidate_experience_years(identity),
                         _safe_candidate_text(_attr(identity, "summary"), 1000) or "",
                         _int_or_none(_attr(identity, "score")),
                         _safe_candidate_text(_attr(identity, "fit_bucket"), 64),
@@ -419,17 +431,20 @@ class WorkbenchCandidateStore:
                     """
                     INSERT INTO candidate_review_items (
                         review_item_id, tenant_id, workspace_id, user_id, session_id,
-                        primary_evidence_id, display_name, title, company, location, summary,
+                        primary_evidence_id, display_name, title, company, location, education,
+                        experience_years, summary,
                         aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
                         created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
                     ON CONFLICT(review_item_id) DO UPDATE SET
                         primary_evidence_id = excluded.primary_evidence_id,
                         display_name = excluded.display_name,
                         title = excluded.title,
                         company = excluded.company,
                         location = excluded.location,
+                        education = excluded.education,
+                        experience_years = excluded.experience_years,
                         summary = excluded.summary,
                         aggregate_score = excluded.aggregate_score,
                         fit_bucket = excluded.fit_bucket,
@@ -653,6 +668,8 @@ class WorkbenchCandidateStore:
                 or _safe_candidate_text(_attr(raw_candidate, "now_location"), 160)
                 or ""
             )
+            education = _candidate_education(raw_candidate, normalized)
+            experience_years = _candidate_experience_years(raw_candidate, normalized)
             score = _int_or_none(_attr(finalizer_candidate, "final_score"))
             scorecard = _mapping_get(getattr(run_state, "scorecards_by_resume_id", {}) or {}, canonical_resume_id)
             if score is None:
@@ -685,6 +702,8 @@ class WorkbenchCandidateStore:
                     title,
                     company,
                     location,
+                    education,
+                    experience_years,
                     summary,
                     score,
                     fit_bucket,
@@ -771,17 +790,20 @@ class WorkbenchCandidateStore:
                 """
                 INSERT INTO candidate_review_items (
                     review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    primary_evidence_id, display_name, title, company, location, summary,
+                    primary_evidence_id, display_name, title, company, location, education,
+                    experience_years, summary,
                     aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
                 ON CONFLICT(review_item_id) DO UPDATE SET
                     primary_evidence_id = excluded.primary_evidence_id,
                     display_name = excluded.display_name,
                     title = excluded.title,
                     company = excluded.company,
                     location = excluded.location,
+                    education = excluded.education,
+                    experience_years = excluded.experience_years,
                     summary = excluded.summary,
                     aggregate_score = excluded.aggregate_score,
                     fit_bucket = excluded.fit_bucket,
@@ -1065,6 +1087,8 @@ class WorkbenchCandidateStore:
                 title = _safe_candidate_text(_attr(normalized, "headline"), 240) or ""
             company = _safe_candidate_text(_attr(normalized, "current_company"), 240) or ""
             location = _safe_candidate_text(_first(_attr(normalized, "locations")), 160) or ""
+            education = _candidate_education(raw_candidate, normalized)
+            experience_years = _candidate_experience_years(raw_candidate, normalized)
             why_selected = _safe_candidate_text(_attr(candidate, "why_selected"), 1000)
             summary = _safe_candidate_text(_attr(candidate, "match_summary"), 1000) or why_selected or ""
             score = _int_or_none(_attr(candidate, "final_score"))
@@ -1084,17 +1108,20 @@ class WorkbenchCandidateStore:
                 """
                 INSERT INTO candidate_review_items (
                     review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    primary_evidence_id, display_name, title, company, location, summary,
+                    primary_evidence_id, display_name, title, company, location, education,
+                    experience_years, summary,
                     aggregate_score, fit_bucket, why_selected, source_round, review_status, note,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
                 ON CONFLICT(review_item_id) DO UPDATE SET
                     primary_evidence_id = excluded.primary_evidence_id,
                     display_name = excluded.display_name,
                     title = excluded.title,
                     company = excluded.company,
                     location = excluded.location,
+                    education = excluded.education,
+                    experience_years = excluded.experience_years,
                     summary = excluded.summary,
                     aggregate_score = excluded.aggregate_score,
                     fit_bucket = excluded.fit_bucket,
@@ -1113,6 +1140,8 @@ class WorkbenchCandidateStore:
                     title,
                     company,
                     location,
+                    education,
+                    experience_years,
                     summary,
                     score,
                     fit_bucket,
@@ -1248,6 +1277,8 @@ class WorkbenchCandidateStore:
                 payload=payload,
                 workbench_resume_id=workbench_resume_id,
             )
+            education = _candidate_education(candidate, payload=payload)
+            experience_years = _candidate_experience_years(candidate, payload=payload)
             card_text = " ".join([display_name, title, company, location, summary])
             sheet = _requirement_sheet_for_projection(context)
             matched_must_haves = _matched_terms(sheet.must_have_capabilities, card_text)
@@ -1288,16 +1319,19 @@ class WorkbenchCandidateStore:
                 """
                 INSERT INTO candidate_review_items (
                     review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    primary_evidence_id, display_name, title, company, location, summary,
+                    primary_evidence_id, display_name, title, company, location, education,
+                    experience_years, summary,
                     aggregate_score, fit_bucket, review_status, note, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new', '', ?, ?)
                 ON CONFLICT(review_item_id) DO UPDATE SET
                     primary_evidence_id = excluded.primary_evidence_id,
                     display_name = excluded.display_name,
                     title = excluded.title,
                     company = excluded.company,
                     location = excluded.location,
+                    education = excluded.education,
+                    experience_years = excluded.experience_years,
                     summary = excluded.summary,
                     aggregate_score = excluded.aggregate_score,
                     fit_bucket = excluded.fit_bucket,
@@ -1314,6 +1348,8 @@ class WorkbenchCandidateStore:
                     title,
                     company,
                     location,
+                    education,
+                    experience_years,
                     summary,
                     auto_score,
                     "card_recommended" if should_request_detail else "card",
@@ -1412,22 +1448,49 @@ class WorkbenchCandidateStore:
         *,
         user: WorkbenchUser,
         session_id: str,
+        limit: int | None = None,
     ) -> list[WorkbenchCandidateReviewItem] | None:
         self._initialize()
         with self._connect() as conn:
             if not self._session_exists_for_user_conn(conn, user=user, session_id=session_id):
                 return None
-            rows = conn.execute(
-                """
+            sql = """
                 SELECT *
                 FROM candidate_review_items
                 WHERE workspace_id = ? AND user_id = ? AND session_id = ?
                 ORDER BY COALESCE(aggregate_score, -1) DESC, created_at ASC, review_item_id ASC
-                """,
-                (user.workspace_id, user.user_id, session_id),
-            ).fetchall()
+                """
+            params: list[object] = [user.workspace_id, user.user_id, session_id]
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(limit)
+            rows = conn.execute(sql, tuple(params)).fetchall()
             evidence_by_review = _evidence_by_review_item(conn, [row["review_item_id"] for row in rows])
         return [_review_item_from_row(row, evidence_by_review.get(row["review_item_id"], [])) for row in rows]
+
+    def get_candidate_review_item(
+        self,
+        *,
+        user: WorkbenchUser,
+        session_id: str,
+        review_item_id: str,
+    ) -> WorkbenchCandidateReviewItem | None:
+        self._initialize()
+        with self._connect() as conn:
+            if not self._session_exists_for_user_conn(conn, user=user, session_id=session_id):
+                return None
+            row = conn.execute(
+                """
+                SELECT *
+                FROM candidate_review_items
+                WHERE workspace_id = ? AND user_id = ? AND session_id = ? AND review_item_id = ?
+                """,
+                (user.workspace_id, user.user_id, session_id, review_item_id),
+            ).fetchone()
+            if row is None:
+                return None
+            evidence = _evidence_by_review_item(conn, [review_item_id]).get(review_item_id, [])
+        return _review_item_from_row(row, evidence)
 
 
     def update_candidate_review_item(
@@ -1557,6 +1620,10 @@ class WorkbenchCandidateStore:
             )
             company = _safe_candidate_text(_attr(raw, "current_company"), 240) or existing["company"]
             location = _safe_candidate_text(_attr(candidate, "now_location"), 160) or existing["location"]
+            education = _candidate_education(candidate) or existing["education"]
+            experience_years = _candidate_experience_years(candidate)
+            if experience_years is None:
+                experience_years = existing["experience_years"]
             summary = _safe_candidate_text(_attr(candidate, "search_text"), 1000) or existing["summary"]
             detail_text = " ".join([display_name, title, company, location, summary])
             sheet = _requirement_sheet_for_projection(context)
@@ -1581,6 +1648,8 @@ class WorkbenchCandidateStore:
                     title = ?,
                     company = ?,
                     location = ?,
+                    education = ?,
+                    experience_years = ?,
                     summary = ?,
                     aggregate_score = ?,
                     fit_bucket = ?,
@@ -1593,6 +1662,8 @@ class WorkbenchCandidateStore:
                     title,
                     company,
                     location,
+                    education,
+                    experience_years,
                     summary,
                     score,
                     fit_bucket,
@@ -1760,6 +1831,8 @@ class WorkbenchCandidateStore:
             or _safe_candidate_text(_attr(raw_payload, "summary"), 1000)
             or ""
         )
+        education = _candidate_education(candidate, normalized)
+        experience_years = _candidate_experience_years(candidate, normalized)
         card_text = " ".join([display_name, title, company, location, summary])
         sheet = _requirement_sheet_for_projection(context)
         matched_must_haves = _matched_terms(sheet.must_have_capabilities, card_text)
@@ -1781,10 +1854,11 @@ class WorkbenchCandidateStore:
                 """
                 INSERT INTO candidate_review_items (
                     review_item_id, tenant_id, workspace_id, user_id, session_id,
-                    primary_evidence_id, display_name, title, company, location, summary,
+                    primary_evidence_id, display_name, title, company, location, education,
+                    experience_years, summary,
                     aggregate_score, fit_bucket, source_round, review_status, note, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'card_recommended', ?, 'new', '', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'card_recommended', ?, 'new', '', ?, ?)
                 """,
                 (
                     review_item_id,
@@ -1797,6 +1871,8 @@ class WorkbenchCandidateStore:
                     title,
                     company,
                     location,
+                    education,
+                    experience_years,
                     summary,
                     score,
                     source_round,
@@ -1975,6 +2051,8 @@ def _review_item_from_row(
         title=row["title"],
         company=row["company"],
         location=row["location"],
+        education=row["education"],
+        experience_years=row["experience_years"],
         summary=row["summary"],
         aggregate_score=row["aggregate_score"],
         fit_bucket=row["fit_bucket"],
@@ -2015,6 +2093,8 @@ def _detail_open_candidate_snapshot_conn(
         title=item.title,
         company=item.company,
         location=item.location,
+        education=item.education,
+        experience_years=item.experience_years,
         summary=item.summary,
         aggregate_score=item.aggregate_score,
         evidence_level=item.evidence_level,
@@ -2058,15 +2138,6 @@ def _runtime_identity_by_resume_id_from_artifacts(artifacts: object) -> dict[str
         if safe_resume_id and safe_identity_id:
             result[safe_resume_id] = safe_identity_id
     return result
-
-
-@dataclass(frozen=True)
-class _RuntimeFallbackEvidence:
-    evidence_id: str
-    source: str
-    evidence_level: str
-    candidate_resume_id: str
-    provider_candidate_key_hash: str
 
 
 def _runtime_final_identity_order_from_artifacts(artifacts: object) -> list[str]:
@@ -2391,65 +2462,6 @@ def _runtime_detail_recommendation_note(recommendation: Mapping[str, object]) ->
     return " ".join(parts)
 
 
-def _finalizer_candidate_by_resume_id(artifacts: object) -> dict[str, object]:
-    final_result = getattr(artifacts, "final_result", None)
-    result: dict[str, object] = {}
-    for candidate in list(getattr(final_result, "candidates", []) or []):
-        resume_id = _safe_candidate_text(_attr(candidate, "resume_id"), 128)
-        if resume_id:
-            result[resume_id] = candidate
-    return result
-
-
-def _runtime_fallback_final_evidence(
-    *,
-    identity_id: str,
-    canonical_resume_id: str,
-    source_kind: str,
-    evidence_id: str,
-) -> _RuntimeFallbackEvidence:
-    return _RuntimeFallbackEvidence(
-        evidence_id=evidence_id,
-        source=source_kind,
-        evidence_level="final",
-        candidate_resume_id=canonical_resume_id,
-        provider_candidate_key_hash=_sha256_text(f"{identity_id}:{canonical_resume_id}"),
-    )
-
-
-def _snapshot_payload(snapshot: object) -> Mapping[str, object]:
-    payload = _attr(snapshot, "raw_payload")
-    if not isinstance(payload, Mapping):
-        return {}
-    return {str(key): value for key, value in payload.items()}
-
-
-def _liepin_card_display_fields(
-    *,
-    candidate: object,
-    payload: Mapping[str, object],
-    workbench_resume_id: str,
-) -> tuple[str, str, str, str, str]:
-    display_name = (
-        _safe_candidate_text(payload.get("name"), 160)
-        or _safe_candidate_text(payload.get("candidateName"), 160)
-        or f"Candidate {workbench_resume_id[-8:]}"
-    )
-    title = (
-        _safe_candidate_text(payload.get("title"), 240)
-        or _safe_candidate_text(_attr(candidate, "expected_job_category"), 240)
-        or "Liepin candidate card"
-    )
-    company = _safe_candidate_text(payload.get("company"), 240) or ""
-    location = _safe_candidate_text(payload.get("location"), 160) or _safe_candidate_text(_attr(candidate, "now_location"), 160) or ""
-    summary = (
-        _safe_candidate_text(payload.get("summary"), 1000)
-        or _safe_candidate_text(_attr(candidate, "search_text"), 1000)
-        or ""
-    )
-    return display_name, title, company, location, summary
-
-
 def _requirement_sheet_for_projection(
     context: WorkbenchSourceRunJobContext | WorkbenchRuntimeSourcingJobContext | WorkbenchLiepinDetailOpenJobContext,
 ) -> RequirementSheet:
@@ -2488,37 +2500,3 @@ def _source_run_by_kind_conn(conn: sqlite3.Connection, *, session_id: str) -> di
         if isinstance(row["source_kind"], str) and isinstance(row["source_run_id"], str)
     }
 
-
-def _safe_string_list(value: object, *, max_items: int = 100, max_length: int = 256) -> list[str]:
-    if not isinstance(value, Iterable) or isinstance(value, str | bytes | bytearray):
-        return []
-    items: list[str] = []
-    for item in value:
-        text = _safe_candidate_text(item, max_length)
-        if text is not None:
-            items.append(text)
-        if len(items) >= max_items:
-            break
-    return items
-
-
-def _mapping_payload(value: object) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        return {}
-    payload: dict[str, object] = {}
-    for key, item in value.items():
-        if not isinstance(key, str):
-            continue
-        if isinstance(item, str | int | float | bool) or item is None:
-            payload[key] = item
-        elif isinstance(item, Mapping):
-            payload[key] = _mapping_payload(item)
-        elif isinstance(item, Iterable) and not isinstance(item, str | bytes | bytearray):
-            payload[key] = _safe_string_list(item)
-    return payload
-
-
-def _mapping_items(value: object) -> list[tuple[object, object]]:
-    if not isinstance(value, Mapping):
-        return []
-    return list(value.items())

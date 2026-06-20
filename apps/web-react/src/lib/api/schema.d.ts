@@ -1013,6 +1013,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/agent/workbench/conversations/{conversation_id}/candidates/{candidate_id}/detail": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Agent Workbench Candidate Detail */
+    get: operations["get_agent_workbench_candidate_detail_api_agent_workbench_conversations__conversation_id__candidates__candidate_id__detail_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/agent/workbench/conversations/{conversation_id}/messages": {
     parameters: {
       query?: never;
@@ -1480,24 +1497,96 @@ export interface components {
       /** Summary */
       summary?: string | null;
     };
-    /** AgentWorkbenchCandidateSummaryResponse */
-    AgentWorkbenchCandidateSummaryResponse: {
+    /** AgentWorkbenchCandidateDetailResponse */
+    AgentWorkbenchCandidateDetailResponse: {
       /** Candidateid */
       candidateId: string;
       /** Displayname */
       displayName: string;
       /** Headline */
       headline?: string | null;
-      /** Matchsummary */
-      matchSummary?: string | null;
+      /** Sourcekinds */
+      sourceKinds?: ("cts" | "liepin")[];
+      /** Matchscore */
+      matchScore?: number | null;
+      /** Sections */
+      sections?: components["schemas"]["AgentWorkbenchCandidateDetailSectionResponse"][];
+      /** Evidence */
+      evidence?: string[];
       /**
-       * Sourcekind
-       * @default all
+       * Detailavailability
        * @enum {string}
        */
-      sourceKind: "cts" | "liepin" | "all";
+      detailAvailability:
+        | "available"
+        | "redacted"
+        | "approval_required"
+        | "unavailable";
+      /**
+       * Accessstate
+       * @enum {string}
+       */
+      accessState: "allowed" | "redacted" | "approval_required" | "denied";
+      /**
+       * Evidencelevel
+       * @enum {string}
+       */
+      evidenceLevel: "summary" | "detail" | "final" | "unknown";
+      /** Reasoncode */
+      reasonCode?: string | null;
+    };
+    /** AgentWorkbenchCandidateDetailSectionResponse */
+    AgentWorkbenchCandidateDetailSectionResponse: {
+      /** Title */
+      title: string;
+      /** Items */
+      items?: string[];
+    };
+    /** AgentWorkbenchCandidateSummaryResponse */
+    AgentWorkbenchCandidateSummaryResponse: {
+      /** Candidateid */
+      candidateId: string;
+      /** Rank */
+      rank: number;
+      /** Displayname */
+      displayName: string;
+      /** Headline */
+      headline?: string | null;
+      /** Company */
+      company?: string | null;
+      /** Location */
+      location?: string | null;
+      /** Education */
+      education?: string | null;
+      /** Experienceyears */
+      experienceYears?: number | null;
+      /** Sourcekinds */
+      sourceKinds?: ("cts" | "liepin")[];
+      /** Matchscore */
+      matchScore?: number | null;
+      /** Matchsummary */
+      matchSummary?: string | null;
       /** Status */
       status: string;
+      /**
+       * Detailavailability
+       * @enum {string}
+       */
+      detailAvailability:
+        | "available"
+        | "redacted"
+        | "approval_required"
+        | "unavailable";
+      /**
+       * Accessstate
+       * @enum {string}
+       */
+      accessState: "allowed" | "redacted" | "approval_required" | "denied";
+      /**
+       * Evidencelevel
+       * @enum {string}
+       */
+      evidenceLevel: "summary" | "detail" | "final" | "unknown";
     };
     /** AgentWorkbenchConversationListResponse */
     AgentWorkbenchConversationListResponse: {
@@ -6289,6 +6378,38 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
+        };
+      };
+      /** @description Validation Error */
+      422: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["HTTPValidationError"];
+        };
+      };
+    };
+  };
+  get_agent_workbench_candidate_detail_api_agent_workbench_conversations__conversation_id__candidates__candidate_id__detail_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+        candidate_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentWorkbenchCandidateDetailResponse"];
         };
       };
       /** @description Validation Error */

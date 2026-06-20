@@ -37,11 +37,20 @@ const thinkingProcess: AgentWorkbenchThinkingProcess = {
 const candidates: AgentWorkbenchCandidateSummary[] = [
   {
     candidateId: "candidate_001",
+    rank: 1,
     displayName: "候选人 A",
     headline: "平台后端负责人",
+    company: "某 AI Infra 公司",
+    location: "上海",
+    education: "本科",
+    experienceYears: 10,
+    sourceKinds: ["cts"],
+    matchScore: 92,
     matchSummary: "Agent 工具调用平台和 RAG 检索链路经验匹配。",
-    sourceKind: "cts",
     status: "reviewing",
+    detailAvailability: "redacted",
+    accessState: "redacted",
+    evidenceLevel: "summary",
   },
 ];
 

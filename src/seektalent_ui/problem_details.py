@@ -62,6 +62,7 @@ def problem_http_error_from_reason(
     correlation_id: str,
     detail: str | None = None,
     regions: Sequence[ProblemRegion] | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> HTTPException:
     problem = problem_from_reason(
         reason_code=reason_code,
@@ -71,7 +72,11 @@ def problem_http_error_from_reason(
         detail=detail,
         regions=regions,
     )
-    return HTTPException(status_code=status, detail=problem.model_dump(mode="json", exclude_none=True))
+    return HTTPException(
+        status_code=status,
+        detail=problem.model_dump(mode="json", exclude_none=True),
+        headers=dict(headers or {}),
+    )
 
 
 def problem_from_conversation_error(
