@@ -1,5 +1,6 @@
 import { createRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ConversationList } from "../components/workbench/ConversationList";
 import {
   ConversationScreen,
@@ -16,8 +17,12 @@ import {
   useSubmitAgentWorkbenchMessage,
   useUpdateAgentWorkbenchRequirementDraft,
 } from "../lib/api/agentWorkbench";
-import type { AgentWorkbenchRequirementDraftItem } from "../lib/api/agentWorkbenchTypes";
+import type {
+  AgentWorkbenchConversationResponse,
+  AgentWorkbenchRequirementDraftItem,
+} from "../lib/api/agentWorkbenchTypes";
 import { safeErrorMessage } from "../lib/api/client";
+import { queryKeys } from "../lib/query/keys";
 import { rootRoute } from "./root";
 
 export const conversationRoute = createRoute({
@@ -28,7 +33,13 @@ export const conversationRoute = createRoute({
 
 function ConversationRoute() {
   const { conversationId } = conversationRoute.useParams();
+  const queryClient = useQueryClient();
   const query = useAgentWorkbenchLiveConversation(conversationId);
+  const queryKey = useMemo(
+    () => queryKeys.agentConversation(conversationId),
+    [conversationId],
+  );
+  const requirementMutationChainRef = useRef<Promise<void>>(Promise.resolve());
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
     null,
   );
@@ -56,8 +67,19 @@ function ConversationRoute() {
       ) ?? null,
     [selectedCandidateId, query.data?.candidates],
   );
+  const closeCandidateDrawer = useCallback(() => {
+    setSelectedCandidateId(null);
+  }, []);
+  const retryCandidateDetail = useCallback(() => {
+    void detailQuery.refetch();
+  }, [detailQuery]);
+  const viewCandidateDetails = useCallback((candidateId: string) => {
+    setActionErrorMessage(null);
+    setSelectedCandidateId(candidateId);
+  }, []);
 
   useEffect(() => {
+    requirementMutationChainRef.current = Promise.resolve();
     setActionErrorMessage(null);
     setSelectedCandidateId(null);
     setUpdatingRequirementItemIds([]);
@@ -87,6 +109,17 @@ function ConversationRoute() {
 
   const view = query.data;
   const workflowSurfaceVisible = hasConversationWorkflowSurface(view);
+  const latestRequirementDraftRevisionId = () =>
+    queryClient.getQueryData<AgentWorkbenchConversationResponse>(queryKey)
+      ?.requirementDraft?.draftRevisionId ??
+    view.requirementDraft?.draftRevisionId;
+  const enqueueRequirementMutation = (run: () => Promise<void>) => {
+    const next = requirementMutationChainRef.current
+      .catch(() => undefined)
+      .then(run);
+    requirementMutationChainRef.current = next.catch(() => undefined);
+    return next;
+  };
   const onSubmitMessage = async (message: string) => {
     setActionErrorMessage(null);
     try {
@@ -98,7 +131,8 @@ function ConversationRoute() {
   };
   const onConfirmRequirements = async () => {
     setActionErrorMessage(null);
-    const draftRevisionId = view.requirementDraft?.draftRevisionId;
+    await requirementMutationChainRef.current.catch(() => undefined);
+    const draftRevisionId = latestRequirementDraftRevisionId();
     if (!draftRevisionId) {
       setActionErrorMessage("当前没有可确认的需求草稿。");
       return;
@@ -114,24 +148,25 @@ function ConversationRoute() {
     selected: boolean,
   ) => {
     setActionErrorMessage(null);
-    const draftRevisionId = view.requirementDraft?.draftRevisionId;
-    if (!draftRevisionId) {
-      setActionErrorMessage("当前没有可编辑的需求草稿。");
-      return;
-    }
     setUpdatingRequirementItemIds((current) =>
       current.includes(item.itemId) ? current : [...current, item.itemId],
     );
     try {
-      await updateRequirementMutation.mutateAsync({
-        draftRevisionId,
-        operations: [
-          {
-            itemId: item.itemId,
-            op: "set_selected",
-            selected,
-          },
-        ],
+      await enqueueRequirementMutation(async () => {
+        const draftRevisionId = latestRequirementDraftRevisionId();
+        if (!draftRevisionId) {
+          throw new Error("Requirement draft is unavailable.");
+        }
+        await updateRequirementMutation.mutateAsync({
+          draftRevisionId,
+          operations: [
+            {
+              itemId: item.itemId,
+              op: "set_selected",
+              selected,
+            },
+          ],
+        });
       });
     } catch (error) {
       setActionErrorMessage(safeErrorMessage(error));
@@ -143,15 +178,16 @@ function ConversationRoute() {
   };
   const onAddOtherRequirement = async (text: string) => {
     setActionErrorMessage(null);
-    const draftRevisionId = view.requirementDraft?.draftRevisionId;
-    if (!draftRevisionId) {
-      setActionErrorMessage("当前没有可编辑的需求草稿。");
-      throw new Error("Requirement draft is unavailable.");
-    }
     try {
-      await amendRequirementMutation.mutateAsync({
-        draftRevisionId,
-        text,
+      await enqueueRequirementMutation(async () => {
+        const draftRevisionId = latestRequirementDraftRevisionId();
+        if (!draftRevisionId) {
+          throw new Error("Requirement draft is unavailable.");
+        }
+        await amendRequirementMutation.mutateAsync({
+          draftRevisionId,
+          text,
+        });
       });
     } catch (error) {
       setActionErrorMessage(safeErrorMessage(error));
@@ -172,10 +208,7 @@ function ConversationRoute() {
             onToggleRequirementItem={(item, selected) => {
               void onToggleRequirementItem(item, selected);
             }}
-            onViewCandidateDetails={(candidateId) => {
-              setActionErrorMessage(null);
-              setSelectedCandidateId(candidateId);
-            }}
+            onViewCandidateDetails={viewCandidateDetails}
             submittingMessage={submitMessageMutation.isPending}
             updatingRequirementItemIds={updatingRequirementItemIds}
             view={view}
@@ -185,10 +218,7 @@ function ConversationRoute() {
         side={
           workflowSurfaceVisible ? (
             <ConversationScreenSide
-              onViewCandidateDetails={(candidateId) => {
-                setActionErrorMessage(null);
-                setSelectedCandidateId(candidateId);
-              }}
+              onViewCandidateDetails={viewCandidateDetails}
               view={view}
             />
           ) : null
@@ -200,8 +230,8 @@ function ConversationRoute() {
         errorMessage={
           detailQuery.isError ? safeErrorMessage(detailQuery.error) : undefined
         }
-        onClose={() => setSelectedCandidateId(null)}
-        onRetry={() => void detailQuery.refetch()}
+        onClose={closeCandidateDrawer}
+        onRetry={retryCandidateDetail}
         open={selectedCandidateId !== null}
         status={
           selectedCandidateId === null

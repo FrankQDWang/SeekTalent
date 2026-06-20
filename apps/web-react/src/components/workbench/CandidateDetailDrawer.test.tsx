@@ -142,6 +142,43 @@ describe("CandidateDetailDrawer", () => {
     await user.keyboard("{Escape}");
     expect(trigger).toHaveFocus();
   });
+
+  it("does not recapture focus when an open drawer rerenders with a new close handler", async () => {
+    expect.hasAssertions();
+    const user = userEvent.setup();
+    const firstClose = vi.fn();
+    const secondClose = vi.fn();
+    const { rerender } = render(
+      <CandidateDetailDrawer
+        candidate={candidate}
+        errorMessage="请求失败，状态码 404"
+        onClose={firstClose}
+        onRetry={() => undefined}
+        open
+        status="error"
+      />,
+    );
+    const retryButton = screen.getByRole("button", { name: "重试" });
+
+    await user.tab();
+    expect(retryButton).toHaveFocus();
+
+    rerender(
+      <CandidateDetailDrawer
+        candidate={candidate}
+        errorMessage="请求失败，状态码 404"
+        onClose={secondClose}
+        onRetry={() => undefined}
+        open
+        status="error"
+      />,
+    );
+
+    expect(retryButton).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(firstClose).not.toHaveBeenCalled();
+    expect(secondClose).toHaveBeenCalledOnce();
+  });
 });
 
 function CandidateDetailDrawerHarness() {

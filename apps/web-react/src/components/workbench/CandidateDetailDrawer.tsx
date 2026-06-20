@@ -55,7 +55,12 @@ export function CandidateDetailDrawer({
   status,
 }: CandidateDetailDrawerProps) {
   const drawerRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) {
@@ -71,7 +76,7 @@ export function CandidateDetailDrawer({
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") {
@@ -98,7 +103,7 @@ export function CandidateDetailDrawer({
       previousFocusRef.current?.focus();
       previousFocusRef.current = null;
     };
-  }, [onClose, open]);
+  }, [open]);
 
   if (!open) {
     return null;
