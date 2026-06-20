@@ -794,12 +794,15 @@ class ConversationAgentService:
             parsed = TypeAdapter(list[DraftOperation]).validate_python(operations)
         except ValidationError as exc:
             raise ConversationAgentError("agent_request_invalid", payload={"errors": exc.errors()}) from exc
-        draft = self.tool_adapter.update_requirement_draft(
-            draft_revision_id=draft_revision_id,
-            base_revision_id=base_revision_id,
-            operations=parsed,
-            idempotency_key=idempotency_key,
-        )
+        try:
+            draft = self.tool_adapter.update_requirement_draft(
+                draft_revision_id=draft_revision_id,
+                base_revision_id=base_revision_id,
+                operations=parsed,
+                idempotency_key=idempotency_key,
+            )
+        except RuntimeControlError as exc:
+            raise _conversation_error_from_runtime_control(exc) from exc
         return self._persist_draft_response(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -823,13 +826,16 @@ class ConversationAgentService:
     ) -> ConversationAgentResponse:
         self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
         safe_text = screen_requirement_text(text)
-        draft = self.tool_adapter.amend_requirement_draft_from_text(
-            draft_revision_id=draft_revision_id,
-            base_revision_id=base_revision_id,
-            text=safe_text,
-            target_section_hint=target_section_hint,
-            idempotency_key=idempotency_key,
-        )
+        try:
+            draft = self.tool_adapter.amend_requirement_draft_from_text(
+                draft_revision_id=draft_revision_id,
+                base_revision_id=base_revision_id,
+                text=safe_text,
+                target_section_hint=target_section_hint,
+                idempotency_key=idempotency_key,
+            )
+        except RuntimeControlError as exc:
+            raise _conversation_error_from_runtime_control(exc) from exc
         return self._persist_draft_response(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -856,13 +862,16 @@ class ConversationAgentService:
             parsed = TypeAdapter(list[ReviewResolutionOperation]).validate_python(operations)
         except ValidationError as exc:
             raise ConversationAgentError("agent_request_invalid", payload={"errors": exc.errors()}) from exc
-        draft = self.tool_adapter.resolve_requirement_review(
-            draft_revision_id=draft_revision_id,
-            base_revision_id=base_revision_id,
-            amendment_id=amendment_id,
-            operations=parsed,
-            idempotency_key=idempotency_key,
-        )
+        try:
+            draft = self.tool_adapter.resolve_requirement_review(
+                draft_revision_id=draft_revision_id,
+                base_revision_id=base_revision_id,
+                amendment_id=amendment_id,
+                operations=parsed,
+                idempotency_key=idempotency_key,
+            )
+        except RuntimeControlError as exc:
+            raise _conversation_error_from_runtime_control(exc) from exc
         return self._persist_draft_response(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -1087,11 +1096,14 @@ class ConversationAgentService:
                 if approved.draft_revision_id != draft_revision_id:
                     raise ConversationAgentError("idempotency_key_conflict")
                 return approved
-        return self.tool_adapter.confirm_requirements(
-            draft_revision_id=draft_revision_id,
-            base_revision_id=base_revision_id,
-            idempotency_key=idempotency_key,
-        )
+        try:
+            return self.tool_adapter.confirm_requirements(
+                draft_revision_id=draft_revision_id,
+                base_revision_id=base_revision_id,
+                idempotency_key=idempotency_key,
+            )
+        except RuntimeControlError as exc:
+            raise _conversation_error_from_runtime_control(exc) from exc
 
     def process_workflow_start_outbox_item(self, outbox_id: str) -> WorkflowStartIntent:
         current_item = self.outbox_store.get(outbox_id)
@@ -1443,26 +1455,29 @@ class ConversationAgentService:
             workspace_id=workspace_id,
             runtime_run_id=runtime_run_id,
         )
-        if command_type == "pause":
-            command = self.tool_adapter.request_pause(
-                runtime_run_id=target.runtime_run_id,
-                requested_by=owner_user_id,
-                idempotency_key=idempotency_key,
-            )
-        elif command_type == "cancel":
-            command = self.tool_adapter.request_cancel(
-                runtime_run_id=target.runtime_run_id,
-                requested_by=owner_user_id,
-                idempotency_key=idempotency_key,
-            )
-        elif command_type == "resume":
-            command = self.tool_adapter.resume_workflow(
-                runtime_run_id=target.runtime_run_id,
-                requested_by=owner_user_id,
-                idempotency_key=idempotency_key,
-            )
-        else:
-            raise ConversationAgentError("agent_command_type_invalid")
+        try:
+            if command_type == "pause":
+                command = self.tool_adapter.request_pause(
+                    runtime_run_id=target.runtime_run_id,
+                    requested_by=owner_user_id,
+                    idempotency_key=idempotency_key,
+                )
+            elif command_type == "cancel":
+                command = self.tool_adapter.request_cancel(
+                    runtime_run_id=target.runtime_run_id,
+                    requested_by=owner_user_id,
+                    idempotency_key=idempotency_key,
+                )
+            elif command_type == "resume":
+                command = self.tool_adapter.resume_workflow(
+                    runtime_run_id=target.runtime_run_id,
+                    requested_by=owner_user_id,
+                    idempotency_key=idempotency_key,
+                )
+            else:
+                raise ConversationAgentError("agent_command_type_invalid")
+        except RuntimeControlError as exc:
+            raise _conversation_error_from_runtime_control(exc) from exc
         self.store.append_message(
             conversation_id=conversation_id,
             role="assistant",
@@ -1504,12 +1519,15 @@ class ConversationAgentService:
             runtime_run_id=runtime_run_id,
         )
         safe_text = screen_requirement_text(text)
-        result = self.tool_adapter.submit_next_round_requirement(
-            runtime_run_id=target.runtime_run_id,
-            text=safe_text,
-            target_section_hint=target_section_hint,
-            idempotency_key=idempotency_key,
-        )
+        try:
+            result = self.tool_adapter.submit_next_round_requirement(
+                runtime_run_id=target.runtime_run_id,
+                text=safe_text,
+                target_section_hint=target_section_hint,
+                idempotency_key=idempotency_key,
+            )
+        except RuntimeControlError as exc:
+            raise _conversation_error_from_runtime_control(exc) from exc
         target_round_no = getattr(result, "target_round_no")
         status = str(getattr(result, "status"))
         review_required = bool(getattr(result, "review_required", False))
@@ -1952,6 +1970,10 @@ def _conversation_status_from_run(run_status: str) -> str:
     if run_status == "paused":
         return "paused"
     return "running"
+
+
+def _conversation_error_from_runtime_control(exc: RuntimeControlError) -> ConversationAgentError:
+    return ConversationAgentError(exc.reason_code, payload=exc.payload)
 
 
 def _should_repair_submit_replay_status(conversation: ConversationRecord) -> bool:

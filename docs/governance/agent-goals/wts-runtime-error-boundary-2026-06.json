@@ -1,0 +1,32 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Keep runtime-control errors behind the conversation-agent service boundary.",
+  "rationale": "Workbench action routes must return normalized conversation-agent Problem Details instead of leaking runtime-control exceptions as HTTP 500 responses. This layer converts runtime-control reason codes at the conversation-agent service boundary before the BFF wrapper layer consumes the service, and the manifest covers the resulting stacked gate when this support layer is reviewed together with the BFF wrapper layer.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/service.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run pytest tests/test_conversation_agent_service.py::test_requirement_update_stale_runtime_error_is_conversation_agent_error tests/test_conversation_agent_service.py -q",
+    "uv run ruff check src/seektalent_conversation_agent/service.py tests/test_conversation_agent_service.py",
+    "uv run python tools/check_pr_governance.py --base codex/wts-05d-requirement-schema-sync",
+    "git diff --check codex/wts-05d-requirement-schema-sync...HEAD"
+  ],
+  "deletion_targets": [
+    "runtime-control exceptions escaping conversation-agent service methods used by Workbench actions"
+  ],
+  "risks": [
+    "A stale or invalid runtime-control mutation can otherwise bypass Workbench Problem Details normalization and surface as a generic server error.",
+    "The service boundary must preserve runtime-control reason codes and payloads so BFF routes can map them without string parsing."
+  ]
+}
