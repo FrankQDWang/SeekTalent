@@ -1,60 +1,64 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import type { CandidateCardCandidate } from "./CandidateCard";
-import { CandidateCard } from "./CandidateCard";
-import { DetailApprovalQueue } from "./DetailApprovalQueue";
+import {
+  agentWorkbenchCandidateApprovalRequiredDetailFixture,
+  agentWorkbenchCandidateDetailFixture,
+  agentWorkbenchRunningViewFixture,
+} from "../../test/fixtures/agentWorkbenchBff";
+import { CandidateDetailDrawer } from "./CandidateDetailDrawer";
 
-function CandidateDetailDrawerSummary() {
-  const candidate = {
-    candidateId: "candidate_001",
-    rank: 1,
-    displayName: "候选人 A",
-    headline: "平台后端负责人 / 某 AI Infra 公司 / 上海",
-    company: "某 AI Infra 公司",
-    location: "上海",
-    education: "本科",
-    experienceYears: 10,
-    sourceKinds: ["liepin"],
-    matchScore: 92,
-    matchSummary: "主导过 Agent 工具调用平台和 RAG 检索链路。",
-    status: "reviewing",
-    detailAvailability: "approval_required",
-    accessState: "approval_required",
-    evidenceLevel: "summary",
-  } satisfies CandidateCardCandidate;
-  return (
-    <aside
-      aria-label="候选人详情"
-      style={{
-        background: "var(--st-panel)",
-        border: "1px solid var(--st-border)",
-        borderRadius: "var(--st-radius-md)",
-        maxWidth: 420,
-        padding: "16px",
-      }}
-    >
-      <CandidateCard candidate={candidate} selected />
-      <DetailApprovalQueue
-        approvals={[
-          {
-            approvalId: "approval_001",
-            candidateId: "candidate_001",
-            reason: "读取完整简历以确认最近项目职责。",
-            status: "pending",
-          },
-        ]}
-        candidates={[candidate]}
-      />
-    </aside>
-  );
-}
+const candidate = agentWorkbenchRunningViewFixture.candidates[0] ?? null;
 
 const meta = {
   title: "Workbench/CandidateDetailDrawer",
-  component: CandidateDetailDrawerSummary,
-} satisfies Meta<typeof CandidateDetailDrawerSummary>;
+  component: CandidateDetailDrawer,
+  args: {
+    candidate,
+    onClose: () => undefined,
+    open: true,
+  },
+  render: (args) => (
+    <div
+      style={{
+        minHeight: "720px",
+        position: "relative",
+        width: "100%",
+      }}
+    >
+      <CandidateDetailDrawer {...args} />
+    </div>
+  ),
+} satisfies Meta<typeof CandidateDetailDrawer>;
 
 export default meta;
 
 type Story = StoryObj<typeof meta>;
 
-export const Summary: Story = {};
+export const Summary: Story = {
+  args: {
+    detail: agentWorkbenchCandidateDetailFixture,
+    status: "ready",
+  },
+};
+
+export const ApprovalRequired: Story = {
+  args: {
+    detail: agentWorkbenchCandidateApprovalRequiredDetailFixture,
+    status: "ready",
+  },
+};
+
+export const Loading: Story = {
+  args: {
+    detail: null,
+    status: "loading",
+  },
+};
+
+export const Error: Story = {
+  args: {
+    detail: null,
+    errorMessage: "候选人详情读取失败，请稍后重试。",
+    onRetry: () => undefined,
+    status: "error",
+  },
+};

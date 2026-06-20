@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
+  getAgentWorkbenchCandidateDetail,
   getAgentWorkbenchConversation,
   listAgentWorkbenchConversations,
 } from "./client";
@@ -62,6 +63,25 @@ export function useAgentWorkbenchConversation(conversationId: string) {
       return shouldApplyWorkbenchSnapshot(currentSnapshot, nextSnapshot)
         ? nextSnapshot
         : currentSnapshot;
+    },
+  });
+}
+
+export function useAgentWorkbenchCandidateDetail(
+  conversationId: string,
+  candidateId: string | null,
+) {
+  return useQuery({
+    enabled: candidateId !== null,
+    queryKey:
+      candidateId === null
+        ? queryKeys.agentCandidateDetails(conversationId)
+        : queryKeys.agentCandidateDetail(conversationId, candidateId),
+    queryFn: () => {
+      if (candidateId === null) {
+        throw new Error("Candidate detail query requires a candidate id.");
+      }
+      return getAgentWorkbenchCandidateDetail(conversationId, candidateId);
     },
   });
 }
@@ -128,6 +148,11 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
             queryKey,
           });
         }
+        if (acceptedEvents.some(isCandidateDetailDependentStreamKind)) {
+          void queryClient.invalidateQueries({
+            queryKey: queryKeys.agentCandidateDetails(conversationId),
+          });
+        }
       },
       onGap: () => {
         streamState.current = {
@@ -163,6 +188,15 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
   ]);
 
   return query;
+}
+
+function isCandidateDetailDependentStreamKind(
+  envelope: Pick<AgentStreamEnvelope, "kind">,
+): boolean {
+  return (
+    envelope.kind === "candidate.upserted" ||
+    envelope.kind === "detailApproval.changed"
+  );
 }
 
 function markConversationDisconnected(

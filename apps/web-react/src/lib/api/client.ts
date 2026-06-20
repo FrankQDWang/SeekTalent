@@ -1,8 +1,10 @@
 import createClient from "openapi-fetch";
 import type { paths } from "./schema";
 import {
+  normalizeAgentWorkbenchCandidateDetail,
   normalizeAgentWorkbenchConversation,
   normalizeAgentWorkbenchConversationList,
+  type AgentWorkbenchCandidateDetailResponse,
   type AgentWorkbenchConversationListResponse,
   type AgentWorkbenchConversationResponse,
 } from "./agentWorkbenchTypes";
@@ -115,6 +117,27 @@ export async function getAgentWorkbenchConversation(
           },
         },
       }),
+    ),
+  );
+}
+
+export async function getAgentWorkbenchCandidateDetail(
+  conversationId: string,
+  candidateId: string,
+): Promise<AgentWorkbenchCandidateDetailResponse> {
+  return normalizeAgentWorkbenchCandidateDetail(
+    requireData(
+      await api.GET(
+        "/api/agent/workbench/conversations/{conversation_id}/candidates/{candidate_id}/detail",
+        {
+          params: {
+            path: {
+              conversation_id: conversationId,
+              candidate_id: candidateId,
+            },
+          },
+        },
+      ),
     ),
   );
 }

@@ -1,11 +1,16 @@
 import { createRoute } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
 import { ConversationList } from "../components/workbench/ConversationList";
 import {
   ConversationScreen,
   ConversationScreenSide,
 } from "../components/workbench/ConversationScreen";
 import { ConversationShell } from "../components/workbench/ConversationShell";
-import { useAgentWorkbenchLiveConversation } from "../lib/api/agentWorkbench";
+import { CandidateDetailDrawer } from "../components/workbench/CandidateDetailDrawer";
+import {
+  useAgentWorkbenchCandidateDetail,
+  useAgentWorkbenchLiveConversation,
+} from "../lib/api/agentWorkbench";
 import { safeErrorMessage } from "../lib/api/client";
 import { rootRoute } from "./root";
 
@@ -18,6 +23,20 @@ export const conversationRoute = createRoute({
 function ConversationRoute() {
   const { conversationId } = conversationRoute.useParams();
   const query = useAgentWorkbenchLiveConversation(conversationId);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    null,
+  );
+  const detailQuery = useAgentWorkbenchCandidateDetail(
+    conversationId,
+    selectedCandidateId,
+  );
+  const selectedCandidate = useMemo(
+    () =>
+      query.data?.candidates.find(
+        (candidate) => candidate.candidateId === selectedCandidateId,
+      ) ?? null,
+    [selectedCandidateId, query.data?.candidates],
+  );
 
   if (query.isPending) {
     return (
@@ -45,10 +64,41 @@ function ConversationRoute() {
 
   const view = query.data;
   return (
-    <ConversationShell
-      main={<ConversationScreen view={view} />}
-      rail={<ConversationList selectedConversationId={conversationId} />}
-      side={<ConversationScreenSide view={view} />}
-    />
+    <>
+      <ConversationShell
+        main={
+          <ConversationScreen
+            onViewCandidateDetails={setSelectedCandidateId}
+            view={view}
+          />
+        }
+        rail={<ConversationList selectedConversationId={conversationId} />}
+        side={
+          <ConversationScreenSide
+            onViewCandidateDetails={setSelectedCandidateId}
+            view={view}
+          />
+        }
+      />
+      <CandidateDetailDrawer
+        candidate={selectedCandidate}
+        detail={detailQuery.data ?? null}
+        errorMessage={
+          detailQuery.isError ? safeErrorMessage(detailQuery.error) : undefined
+        }
+        onClose={() => setSelectedCandidateId(null)}
+        onRetry={() => void detailQuery.refetch()}
+        open={selectedCandidateId !== null}
+        status={
+          selectedCandidateId === null
+            ? "idle"
+            : detailQuery.isPending
+              ? "loading"
+              : detailQuery.isError
+                ? "error"
+                : "ready"
+        }
+      />
+    </>
   );
 }

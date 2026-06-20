@@ -1,0 +1,208 @@
+.candidate-detail-drawer__backdrop {
+  align-items: stretch;
+  background: oklch(0.2 0.025 260 / 0.18);
+  display: flex;
+  inset: 0;
+  justify-content: flex-end;
+  position: fixed;
+  z-index: 50;
+}
+
+.candidate-detail-drawer {
+  background: var(--st-surface);
+  box-shadow: -18px 0 44px oklch(0.24 0.04 260 / 0.18);
+  color: var(--st-ink);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  max-width: min(520px, 100%);
+  min-width: min(420px, 100%);
+  overflow: hidden;
+  width: 34vw;
+}
+
+.candidate-detail-drawer__header {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--st-border);
+  display: flex;
+  gap: var(--st-space-3);
+  justify-content: space-between;
+  padding: var(--st-space-5);
+}
+
+.candidate-detail-drawer__header div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.candidate-detail-drawer__header p,
+.candidate-detail-drawer__header h2,
+.candidate-detail-drawer__header span {
+  margin: 0;
+}
+
+.candidate-detail-drawer__header p {
+  color: var(--st-muted);
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.candidate-detail-drawer__header h2 {
+  color: var(--st-ink);
+  font-size: 20px;
+  font-weight: 790;
+  line-height: 1.2;
+}
+
+.candidate-detail-drawer__header span {
+  color: var(--st-muted);
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.candidate-detail-drawer__close {
+  flex: 0 0 auto;
+}
+
+.candidate-detail-drawer__body {
+  align-content: start;
+  display: grid;
+  gap: var(--st-space-4);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--st-space-5);
+}
+
+.candidate-detail-drawer__summary,
+.candidate-detail-drawer__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--st-space-2);
+}
+
+.candidate-detail-drawer__summary div,
+.candidate-detail-drawer__chips span {
+  align-items: center;
+  background: var(--st-surface-raised);
+  border-radius: var(--st-radius-sm);
+  color: var(--st-muted);
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 710;
+  gap: 7px;
+  min-height: 30px;
+  padding: 6px 9px;
+}
+
+.candidate-detail-drawer__summary svg {
+  color: var(--st-action);
+}
+
+.candidate-detail-drawer__access,
+.candidate-detail-drawer__state {
+  align-items: flex-start;
+  background: oklch(0.97 0.018 82);
+  border-radius: var(--st-radius-md);
+  color: oklch(0.38 0.08 82);
+  display: flex;
+  gap: var(--st-space-3);
+  padding: var(--st-space-4);
+}
+
+.candidate-detail-drawer__state {
+  align-items: center;
+  background: var(--st-surface-raised);
+  color: var(--st-muted);
+  flex-direction: column;
+  justify-content: center;
+  min-height: 220px;
+  text-align: center;
+}
+
+.candidate-detail-drawer__state strong,
+.candidate-detail-drawer__access strong {
+  color: var(--st-ink);
+}
+
+.candidate-detail-drawer__state p,
+.candidate-detail-drawer__access p {
+  margin: 4px 0 0;
+}
+
+.candidate-detail-drawer__sections {
+  display: grid;
+  gap: var(--st-space-4);
+}
+
+.candidate-detail-section,
+.candidate-detail-evidence {
+  display: grid;
+  gap: var(--st-space-3);
+}
+
+.candidate-detail-section h3,
+.candidate-detail-evidence h3 {
+  color: var(--st-ink);
+  font-size: 15px;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.candidate-detail-section ul,
+.candidate-detail-evidence ul {
+  display: grid;
+  gap: var(--st-space-2);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.candidate-detail-section li,
+.candidate-detail-evidence li {
+  background: var(--st-surface-raised);
+  border-radius: var(--st-radius-sm);
+  color: var(--st-muted);
+  line-height: 1.45;
+  padding: var(--st-space-3);
+}
+
+.candidate-detail-evidence li {
+  color: var(--st-ink);
+}
+
+.candidate-detail-drawer__skeleton {
+  display: grid;
+  gap: var(--st-space-4);
+  padding: var(--st-space-5);
+}
+
+.candidate-detail-drawer__skeleton span {
+  background: oklch(0.93 0.014 262);
+  border-radius: var(--st-radius-sm);
+  display: block;
+  height: 18px;
+}
+
+.candidate-detail-drawer__skeleton span:first-child {
+  height: 84px;
+}
+
+.candidate-detail-drawer__skeleton span:nth-child(2) {
+  width: 78%;
+}
+
+.candidate-detail-drawer__skeleton span:nth-child(3) {
+  width: 92%;
+}
+
+.candidate-detail-drawer__skeleton span:last-child {
+  width: 64%;
+}
+
+@media (max-width: 720px) {
+  .candidate-detail-drawer {
+    min-width: 100%;
+    width: 100%;
+  }
+}
