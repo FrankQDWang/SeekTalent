@@ -80,6 +80,7 @@ button {
   gap: var(--st-space-1);
   min-height: 58px;
   padding: var(--st-space-2);
+  text-decoration: none;
   width: 58px;
 }
 

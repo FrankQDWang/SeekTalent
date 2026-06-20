@@ -11,5 +11,8 @@ test("renders the workbench shell", async ({ page }, testInfo) => {
       page.getByRole("complementary", { name: "会话列表" }),
     ).toBeVisible();
   }
-  await expect(page.getByRole("region", { name: "任务状态" })).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "新建招聘任务" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("职位描述")).toBeVisible();
 });

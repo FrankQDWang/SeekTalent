@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import {
   createRootRoute,
   createRoute,
@@ -8,7 +7,16 @@ import {
 import { App } from "../App";
 import { ConversationList } from "../components/workbench/ConversationList";
 import { ConversationShell } from "../components/workbench/ConversationShell";
-import { useAgentWorkbenchConversations } from "../lib/api/agentWorkbench";
+import {
+  HomeStartPanel,
+  type HomeStartPanelSubmitInput,
+} from "../components/workbench/HomeStartPanel";
+import {
+  useAgentWorkbenchConversations,
+  useCreateAgentWorkbenchConversationFromJd,
+} from "../lib/api/agentWorkbench";
+import { safeErrorMessage } from "../lib/api/client";
+import { useState } from "react";
 
 export const rootRoute = createRootRoute({
   component: () => (
@@ -27,31 +35,38 @@ export const indexRoute = createRoute({
 function WorkbenchIndexRoute() {
   const navigate = useNavigate({ from: "/" });
   const query = useAgentWorkbenchConversations();
-  const firstConversation = query.data?.conversations[0];
-
-  useEffect(() => {
-    if (firstConversation !== undefined) {
-      void navigate({
-        params: { conversationId: firstConversation.conversationId },
-        replace: true,
+  const createConversationMutation =
+    useCreateAgentWorkbenchConversationFromJd();
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const conversations = query.data?.conversations ?? [];
+  const onSubmit = async ({
+    jobDescription,
+    jobTitle,
+  }: HomeStartPanelSubmitInput) => {
+    setErrorMessage(null);
+    try {
+      const result = await createConversationMutation.mutateAsync({
+        jobDescription,
+        jobTitle,
+      });
+      await navigate({
+        params: { conversationId: result.conversationId },
         to: "/conversations/$conversationId",
       });
+    } catch (error) {
+      setErrorMessage(safeErrorMessage(error));
+      throw error;
     }
-  }, [firstConversation, navigate]);
-
-  const conversations = query.data?.conversations ?? [];
-  const stateText = query.isPending
-    ? "读取任务"
-    : query.isError
-      ? "无法加载任务"
-      : "暂无任务";
+  };
 
   return (
     <ConversationShell
       main={
-        <section aria-label="任务状态" className="workbench-index-state">
-          <h2>{stateText}</h2>
-        </section>
+        <HomeStartPanel
+          errorMessage={errorMessage}
+          loading={createConversationMutation.isPending}
+          onSubmit={onSubmit}
+        />
       }
       rail={
         query.isSuccess ? (

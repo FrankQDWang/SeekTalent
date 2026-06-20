@@ -311,6 +311,97 @@ test("submits recruiter actions through the Workbench BFF routes", async ({
   ).toContain("workbench:confirm-requirements:");
 });
 
+test("starts a new workbench conversation from the home JD entry", async ({
+  page,
+}) => {
+  let createdConversationRequest: Record<string, unknown> | null = null;
+  let submittedJdRequest: Record<string, unknown> | null = null;
+  const latestCreatedConversationRequest = () => createdConversationRequest;
+  const latestSubmittedJdRequest = () => submittedJdRequest;
+  const createdConversationSnapshot = {
+    ...conversationSnapshot,
+    conversation: {
+      ...conversationSnapshot.conversation,
+      conversationId: "agent_conv_created",
+      runtimeRunId: null,
+      status: "needs_confirmation",
+      title: "AI Agent 平台工程师",
+    },
+    candidates: [],
+    runtime: null,
+    strategyGraph: { edges: [], nodes: [] },
+    thinkingProcess: { activeRoundNo: null, rounds: [] },
+  };
+
+  await page.route("**/api/agent/conversations", async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fallback();
+      return;
+    }
+    createdConversationRequest = route.request().postDataJSON() as Record<
+      string,
+      unknown
+    >;
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        conversation: {
+          conversationId: "agent_conv_created",
+          title: "AI Agent 平台工程师",
+        },
+      },
+      status: 201,
+    });
+  });
+  await page.route(
+    "**/api/agent/workbench/conversations/agent_conv_created",
+    async (route) => {
+      await route.fulfill({
+        contentType: "application/json",
+        json: createdConversationSnapshot,
+      });
+    },
+  );
+  await page.route(
+    "**/api/agent/workbench/conversations/agent_conv_created/messages",
+    async (route) => {
+      submittedJdRequest = route.request().postDataJSON() as Record<
+        string,
+        unknown
+      >;
+      await route.fulfill({
+        contentType: "application/json",
+        json: createdConversationSnapshot,
+      });
+    },
+  );
+
+  await page.goto("/");
+  await page.getByLabel("职位名称").fill("AI Agent 平台工程师");
+  await page
+    .getByLabel("职位描述")
+    .fill("寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。");
+  await page.getByRole("button", { name: "开始寻才" }).click();
+
+  await expect
+    .poll(() => latestCreatedConversationRequest())
+    .toMatchObject({ title: "AI Agent 平台工程师" });
+  await expect
+    .poll(() => latestSubmittedJdRequest())
+    .toMatchObject({
+      jobTitle: "AI Agent 平台工程师",
+      messageType: "submitJd",
+      sourceKinds: ["cts"],
+      text: "寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。",
+    });
+  const idempotencyKey = latestSubmittedJdRequest()?.idempotencyKey;
+  expect(typeof idempotencyKey === "string" ? idempotencyKey : "").toContain(
+    "workbench:submit-jd:",
+  );
+  await expect(page).toHaveURL(/\/conversations\/agent_conv_created$/);
+  await expect(page.getByRole("button", { name: "确认需求" })).toBeVisible();
+});
+
 declare global {
   interface Window {
     __agentWorkbenchEventSources: Array<EventSource & { closed?: boolean }>;

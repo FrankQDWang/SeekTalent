@@ -2,15 +2,18 @@ import createClient from "openapi-fetch";
 import type { paths } from "./schema";
 import {
   normalizeAgentWorkbenchCandidateDetail,
+  normalizeAgentConversationCreateResponse,
   normalizeAgentWorkbenchConversation,
   normalizeAgentWorkbenchConversationList,
+  type AgentConversationCreateRequest,
+  type AgentConversationCreateResponse,
   type AgentWorkbenchCandidateDetailResponse,
   type AgentWorkbenchConversationListResponse,
   type AgentWorkbenchConversationResponse,
+  type WorkbenchAgentMessageRequest,
   type WorkbenchRequirementAmendRequest,
   type WorkbenchRequirementConfirmRequest,
   type WorkbenchRequirementOperationsRequest,
-  type WorkbenchUserTextMessageRequest,
 } from "./agentWorkbenchTypes";
 
 export const api = createClient<paths>({ baseUrl: "" });
@@ -109,6 +112,18 @@ export async function listAgentWorkbenchConversations(): Promise<AgentWorkbenchC
   );
 }
 
+export async function createAgentConversation(
+  payload: AgentConversationCreateRequest,
+): Promise<AgentConversationCreateResponse> {
+  return normalizeAgentConversationCreateResponse(
+    requireData(
+      await api.POST("/api/agent/conversations", {
+        body: payload,
+      }),
+    ),
+  );
+}
+
 export async function getAgentWorkbenchConversation(
   conversationId: string,
 ): Promise<AgentWorkbenchConversationResponse> {
@@ -148,7 +163,7 @@ export async function getAgentWorkbenchCandidateDetail(
 
 export async function submitAgentWorkbenchMessage(
   conversationId: string,
-  payload: WorkbenchUserTextMessageRequest,
+  payload: WorkbenchAgentMessageRequest,
 ): Promise<AgentWorkbenchConversationResponse> {
   return normalizeAgentWorkbenchConversation(
     requireData(
