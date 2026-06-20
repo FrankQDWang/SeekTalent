@@ -25,8 +25,6 @@ export type AgentWorkbenchDetailApproval =
   Schemas["AgentWorkbenchDetailApprovalResponse"];
 export type AgentWorkbenchFinalSummary =
   Schemas["AgentWorkbenchFinalSummaryResponse"];
-export type AgentWorkbenchRequirementDraft =
-  Schemas["AgentWorkbenchRequirementDraftResponse"];
 export type AgentWorkbenchRuntime = Schemas["AgentWorkbenchRuntimeResponse"];
 export type AgentWorkbenchSourceConnection =
   Schemas["AgentWorkbenchSourceConnectionResponse"];
@@ -103,11 +101,33 @@ export type AgentWorkbenchThinkingProcess = Omit<
   rounds: AgentWorkbenchThinkingProcessRound[];
 };
 
+export type AgentWorkbenchRequirementDraftItem = Omit<
+  Schemas["AgentWorkbenchRequirementDraftItemResponse"],
+  "allowedActions"
+> & {
+  allowedActions: string[];
+};
+
+export type AgentWorkbenchRequirementDraftSection = Omit<
+  Schemas["AgentWorkbenchRequirementDraftSectionResponse"],
+  "items"
+> & {
+  items: AgentWorkbenchRequirementDraftItem[];
+};
+
+export type AgentWorkbenchRequirementDraft = Omit<
+  Schemas["AgentWorkbenchRequirementDraftResponse"],
+  "sections"
+> & {
+  sections: AgentWorkbenchRequirementDraftSection[];
+};
+
 export type AgentWorkbenchConversationResponse = Omit<
   Schemas["AgentWorkbenchConversationResponse"],
   | "messages"
   | "activities"
   | "transcriptGroups"
+  | "requirementDraft"
   | "strategyGraph"
   | "thinkingProcess"
   | "sourceConnections"
@@ -120,6 +140,7 @@ export type AgentWorkbenchConversationResponse = Omit<
   messages: AgentWorkbenchMessage[];
   activities: AgentWorkbenchActivity[];
   transcriptGroups: AgentWorkbenchTranscriptGroup[];
+  requirementDraft: AgentWorkbenchRequirementDraft | null;
   strategyGraph: AgentWorkbenchStrategyGraph;
   thinkingProcess: AgentWorkbenchThinkingProcess;
   sourceConnections: AgentWorkbenchSourceConnection[];
@@ -146,6 +167,12 @@ export type WorkbenchUserTextMessageRequest =
   Schemas["WorkbenchUserTextMessageRequest"];
 export type WorkbenchRequirementConfirmRequest =
   Schemas["WorkbenchRequirementConfirmRequest"];
+export type WorkbenchRequirementOperationsRequest =
+  Schemas["WorkbenchRequirementOperationsRequest"];
+export type WorkbenchRequirementAmendRequest =
+  Schemas["WorkbenchRequirementAmendRequest"];
+export type RequirementDraftOperationRequest =
+  Schemas["RequirementDraftOperationRequest"];
 
 type GeneratedConversationResponse =
   Schemas["AgentWorkbenchConversationResponse"];
@@ -173,6 +200,7 @@ export function normalizeAgentWorkbenchConversation(
     transcriptGroups: normalizeTranscriptGroups(
       response.transcriptGroups ?? [],
     ),
+    requirementDraft: normalizeRequirementDraft(response.requirementDraft),
     strategyGraph: {
       nodes: response.strategyGraph.nodes ?? [],
       edges: response.strategyGraph.edges ?? [],
@@ -232,6 +260,27 @@ function normalizeThinkingProcess(
       cards: (round.cards ?? []).map((card) => ({
         ...card,
         terms: card.terms ?? [],
+      })),
+    })),
+  };
+}
+
+function normalizeRequirementDraft(
+  requirementDraft:
+    | Schemas["AgentWorkbenchRequirementDraftResponse"]
+    | null
+    | undefined,
+): AgentWorkbenchRequirementDraft | null {
+  if (!requirementDraft) {
+    return null;
+  }
+  return {
+    ...requirementDraft,
+    sections: (requirementDraft.sections ?? []).map((section) => ({
+      ...section,
+      items: (section.items ?? []).map((item) => ({
+        ...item,
+        allowedActions: item.allowedActions ?? [],
       })),
     })),
   };
