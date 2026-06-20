@@ -3,7 +3,6 @@ import {
   fireEvent,
   render,
   screen,
-  waitFor,
   within,
 } from "@testing-library/react";
 import {
@@ -134,7 +133,7 @@ describe("StrategyGraph", () => {
     cleanup();
   });
 
-  it("renders a nonblank accessible React Flow graph with fit controls", async () => {
+  it("renders a nonblank accessible read-only React Flow graph", async () => {
     expect.hasAssertions();
 
     const { container } = render(<StrategyGraph graph={graph} />);
@@ -144,27 +143,21 @@ describe("StrategyGraph", () => {
     expect(await screen.findByText("需求拆解")).toBeVisible();
     expect(screen.getByText("第 1 轮 · 查询包")).toBeVisible();
     expect(container.querySelector(".react-flow")).toBeInTheDocument();
-    expect(screen.getByLabelText("检索策略图控制")).toBeVisible();
+    expect(screen.queryByLabelText("检索策略图控制")).not.toBeInTheDocument();
   });
 
-  it("highlights a clicked node without opening node detail UI", async () => {
+  it("does not select nodes or open detail UI when clicked", async () => {
     expect.hasAssertions();
 
     render(<StrategyGraph graph={graph} />);
 
     const region = screen.getByRole("region", { name: "检索策略图" });
-    const node = await within(region).findByRole("button", {
-      name: /第 1 轮 · 查询包/,
-    });
+    await within(region).findByText("第 1 轮 · 查询包");
+    const node = screen.getByTestId("strategy-node-round_1_query");
 
     fireEvent.click(node);
 
-    await waitFor(() =>
-      expect(screen.getByTestId("strategy-node-round_1_query")).toHaveAttribute(
-        "data-selected",
-        "true",
-      ),
-    );
+    expect(node).toHaveAttribute("data-selected", "false");
     expect(
       screen.queryByRole("complementary", { name: /节点详情/ }),
     ).not.toBeInTheDocument();

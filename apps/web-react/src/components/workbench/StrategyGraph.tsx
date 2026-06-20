@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Background,
-  Controls,
   ReactFlow,
   type FitViewOptions,
   type NodeTypes,
@@ -41,16 +40,12 @@ export function StrategyGraph({ graph }: StrategyGraphProps) {
   const [layoutState, setLayoutState] = useState<LayoutState>(
     graph.nodes.length === 0 ? { status: "empty" } : { status: "loading" },
   );
-  const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(
-    null,
-  );
 
   useEffect(() => {
     let cancelled = false;
 
     if (graph.nodes.length === 0) {
       setLayoutState({ status: "empty" });
-      setHighlightedNodeId(null);
       return () => {
         cancelled = true;
       };
@@ -83,17 +78,8 @@ export function StrategyGraph({ graph }: StrategyGraphProps) {
     };
   }, [graph]);
 
-  const nodes = useMemo<StrategyFlowNode[]>(() => {
-    if (layoutState.status !== "ready") {
-      return [];
-    }
-
-    return layoutState.projected.nodes.map((node) => ({
-      ...node,
-      selected: node.id === highlightedNodeId,
-    }));
-  }, [highlightedNodeId, layoutState]);
-
+  const nodes =
+    layoutState.status === "ready" ? layoutState.projected.nodes : [];
   const edges =
     layoutState.status === "ready" ? layoutState.projected.edges : [];
 
@@ -114,9 +100,11 @@ export function StrategyGraph({ graph }: StrategyGraphProps) {
       <ReactFlow<StrategyFlowNode, StrategyFlowEdge>
         ariaLabelConfig={{
           "node.a11yDescription.default":
-            "按 Enter 选择检索策略节点，选择只会高亮节点，不会打开详情面板。",
+            "检索策略节点仅用于展示后端运行流程。",
         }}
         edges={edges}
+        edgesFocusable={false}
+        elementsSelectable={false}
         fitView
         fitViewOptions={fitViewOptions}
         maxZoom={1.45}
@@ -125,17 +113,16 @@ export function StrategyGraph({ graph }: StrategyGraphProps) {
         nodes={nodes}
         nodesConnectable={false}
         nodesDraggable={false}
-        onNodeClick={(_, node) => setHighlightedNodeId(node.id)}
-        onPaneClick={() => setHighlightedNodeId(null)}
+        nodesFocusable={false}
+        panOnDrag={false}
+        panOnScroll={false}
         proOptions={{ hideAttribution: true }}
         selectNodesOnDrag={false}
+        zoomOnDoubleClick={false}
+        zoomOnPinch={false}
+        zoomOnScroll={false}
       >
         <Background color="var(--st-border-strong)" gap={28} size={1} />
-        <Controls
-          aria-label="检索策略图控制"
-          position="bottom-right"
-          showInteractive={false}
-        />
       </ReactFlow>
     </section>
   );
