@@ -536,6 +536,41 @@ def test_workbench_view_enforces_product_payload_budgets() -> None:
     assert len(response.model_dump_json()) <= 750_000
 
 
+def test_workbench_view_projects_recent_runtime_event_window() -> None:
+    thread = _thread_view()
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=thread.conversation_reopen_state,
+            messages=[],
+            activity_items=[],
+            runtime_events=[
+                RuntimeControlEvent(
+                    event_id=f"runtime_event_{event_seq}",
+                    runtime_run_id="runtime_1",
+                    event_seq=event_seq,
+                    event_type="runtime_round",
+                    stage="round",
+                    round_no=event_seq,
+                    source_id="liepin",
+                    status="completed",
+                    summary=f"Round {event_seq}",
+                    payload={"query_terms": ["AI agent"]},
+                    payload_size_bytes=0,
+                    created_at=_now(),
+                )
+                for event_seq in range(1, 321)
+            ],
+        )
+    )
+
+    transcript_events = [event for group in response.transcriptGroups for event in group.events]
+    transcript_item_ids = {event.itemId for event in transcript_events}
+    assert len(transcript_events) == 300
+    assert "runtime_event_20" not in transcript_item_ids
+    assert "runtime_event_21" in transcript_item_ids
+    assert "runtime_event_320" in transcript_item_ids
+
+
 def test_detail_approval_status_schema_uses_public_design_vocabulary() -> None:
     status_schema = AgentWorkbenchDetailApprovalResponse.model_json_schema()["properties"]["status"]
 
@@ -1131,10 +1166,10 @@ def test_projection_input_aggregator_reads_recent_runtime_event_window() -> None
         ),
     )
 
-    assert runtime_store.calls[0] == (150, 100)
-    assert len(projection_input.runtime_events) == 100
+    assert runtime_store.calls[0] == (150, 300)
+    assert len(projection_input.runtime_events) == 300
     assert projection_input.runtime_events[0].event_seq == 151
-    assert projection_input.runtime_events[-1].event_seq == 250
+    assert projection_input.runtime_events[-1].event_seq == 450
 
 
 def test_transcript_groups_split_on_user_turns_and_context_compactions() -> None:
@@ -2276,8 +2311,8 @@ class _LargeRuntimeStore(_FakeRuntimeStore):
             approved_requirement_revision_id="approved_1",
             status="running",
             current_stage="round",
-            current_round=250,
-            latest_event_seq=250,
+            current_round=450,
+            latest_event_seq=450,
             source_ids=["liepin"],
             created_at=_now(),
             updated_at=_now(),
@@ -2286,8 +2321,9 @@ class _LargeRuntimeStore(_FakeRuntimeStore):
     def list_events(self, *, runtime_run_id: str, after_seq: int, limit: int) -> RuntimeControlEventPage:
         assert runtime_run_id == "runtime_1"
         self.calls.append((after_seq, limit))
-        if after_seq >= 250:
+        if after_seq >= 450:
             return RuntimeControlEventPage(events=[], next_cursor=after_seq)
+        last_event_seq = min(after_seq + limit, 450)
         events = [
             RuntimeControlEvent(
                 event_id=f"runtime_event_{event_seq}",
@@ -2303,9 +2339,9 @@ class _LargeRuntimeStore(_FakeRuntimeStore):
                 payload_size_bytes=0,
                 created_at=_now(),
             )
-            for event_seq in range(151, 251)
+            for event_seq in range(after_seq + 1, last_event_seq + 1)
         ]
-        return RuntimeControlEventPage(events=events, next_cursor=250)
+        return RuntimeControlEventPage(events=events, next_cursor=last_event_seq)
 
 
 class _FakeWorkbenchStore:
