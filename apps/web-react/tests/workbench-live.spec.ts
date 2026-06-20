@@ -138,6 +138,110 @@ test("renders live workbench graph and opens semantic stream", async ({
   });
 });
 
+test("submits recruiter actions through the Workbench BFF routes", async ({
+  page,
+}) => {
+  let submittedMessage: Record<string, unknown> | null = null;
+  let confirmedRequirements: Record<string, unknown> | null = null;
+  const latestSubmittedMessage = () => submittedMessage;
+  const latestConfirmedRequirements = () => confirmedRequirements;
+
+  await page.route(
+    "**/api/agent/workbench/conversations/agent_conv_1/messages",
+    async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      const text = typeof body.text === "string" ? body.text : "";
+      submittedMessage = body;
+      await route.fulfill({
+        contentType: "application/json",
+        json: {
+          ...conversationSnapshot,
+          messages: [
+            ...conversationSnapshot.messages,
+            {
+              createdAt: "2026-06-12T12:02:00+00:00",
+              messageId: "msg_2",
+              messageType: "userText",
+              payload: { kind: "empty" },
+              role: "user",
+              seq: 2,
+              text,
+            },
+          ],
+          streamCursor: {
+            ...conversationSnapshot.streamCursor,
+            latestMessageSeq: 2,
+            latestStreamSeq: 5,
+            snapshotSeq: 5,
+            viewRevision: 5,
+          },
+        },
+      });
+    },
+  );
+  await page.route(
+    "**/api/agent/workbench/conversations/agent_conv_1/requirements/confirm",
+    async (route) => {
+      confirmedRequirements = route.request().postDataJSON() as Record<
+        string,
+        unknown
+      >;
+      await route.fulfill({
+        contentType: "application/json",
+        json: {
+          ...conversationSnapshot,
+          conversation: {
+            ...conversationSnapshot.conversation,
+            workflowStartIntentId: "workflow_intent_1",
+            workflowStartReasonCode: null,
+            workflowStartState: "queued",
+          },
+          pendingActions: {
+            ...conversationSnapshot.pendingActions,
+            allowed: ["submit_message"],
+            primary: "workflow_start_queued",
+          },
+          streamCursor: {
+            ...conversationSnapshot.streamCursor,
+            latestStreamSeq: 6,
+            snapshotSeq: 6,
+            viewRevision: 6,
+          },
+        },
+      });
+    },
+  );
+
+  await page.goto("/conversations/agent_conv_1");
+  await page.getByPlaceholder("输入下一步要求").fill("继续补充评测平台经验");
+  await page.getByRole("button", { name: "发送" }).click();
+
+  await expect
+    .poll(() => submittedMessage)
+    .toMatchObject({
+      messageType: "userText",
+      text: "继续补充评测平台经验",
+    });
+  const messageIdempotencyKey = latestSubmittedMessage()?.idempotencyKey;
+  expect(
+    typeof messageIdempotencyKey === "string" ? messageIdempotencyKey : "",
+  ).toContain("workbench:message:");
+  await expect(page.getByPlaceholder("输入下一步要求")).toHaveValue("");
+
+  await page.getByRole("button", { name: "确认需求" }).click();
+
+  await expect
+    .poll(() => confirmedRequirements)
+    .toMatchObject({
+      draftRevisionId: "draft_1",
+      expectedDraftRevisionId: "draft_1",
+    });
+  const confirmIdempotencyKey = latestConfirmedRequirements()?.idempotencyKey;
+  expect(
+    typeof confirmIdempotencyKey === "string" ? confirmIdempotencyKey : "",
+  ).toContain("workbench:confirm-requirements:");
+});
+
 declare global {
   interface Window {
     __agentWorkbenchEventSources: Array<EventSource & { closed?: boolean }>;
@@ -207,7 +311,35 @@ const conversationSnapshot = {
       ],
     },
   ],
-  requirementDraft: null,
+  requirementDraft: {
+    canConfirm: true,
+    draftRevisionId: "draft_1",
+    otherInputPrompt: "其他",
+    sections: [
+      {
+        backendField: "must_have_capabilities",
+        displayName: "必须满足",
+        items: [
+          {
+            allowedActions: ["set_selected"],
+            editable: true,
+            enabled: true,
+            itemId: "item_1",
+            sectionId: "must_have_capabilities",
+            selected: true,
+            source: "extracted",
+            status: "resolved",
+            text: "Python 后端平台经验",
+          },
+        ],
+        sectionId: "must_have_capabilities",
+      },
+    ],
+    status: "needs_review",
+    summary: "Python 后端 / RAG / 平台工程",
+    title: "资深 Python 后端",
+    unresolvedReviewItemCount: 0,
+  },
   runtime: {
     runtimeRunId: "runtime_1",
     status: "running",
@@ -294,8 +426,8 @@ const conversationSnapshot = {
   reviewArtifacts: [],
   finalSummary: null,
   pendingActions: {
-    primary: null,
-    allowed: ["submit_message"],
+    primary: "确认需求后开始检索",
+    allowed: ["submit_message", "confirm_requirements"],
     pendingCommandCount: 0,
     pendingRequirementReviewCount: 0,
     pendingMemoryReviewCount: 0,

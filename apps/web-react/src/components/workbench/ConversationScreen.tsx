@@ -9,9 +9,12 @@ import { Transcript } from "./Transcript";
 import "./ConversationScreen.css";
 
 export type ConversationScreenCallbacks = {
+  actionErrorMessage?: string | null | undefined;
+  confirmingRequirements?: boolean | undefined;
   onConfirmRequirements?: (() => void) | undefined;
-  onSubmitMessage?: ((message: string) => void) | undefined;
+  onSubmitMessage?: ((message: string) => Promise<void> | void) | undefined;
   onViewCandidateDetails?: ((candidateId: string) => void) | undefined;
+  submittingMessage?: boolean | undefined;
 };
 
 type ConversationScreenProps = ConversationScreenCallbacks & {
@@ -21,9 +24,12 @@ type ConversationScreenProps = ConversationScreenCallbacks & {
 type WorkPanel = "chat" | "graph" | "candidates" | "final";
 
 export function ConversationScreen({
+  actionErrorMessage = null,
+  confirmingRequirements = false,
   onConfirmRequirements,
   onSubmitMessage,
   onViewCandidateDetails,
+  submittingMessage = false,
   view,
 }: ConversationScreenProps) {
   const [activePanel, setActivePanel] = useState<WorkPanel>("chat");
@@ -32,7 +38,18 @@ export function ConversationScreen({
     <>
       <div className="conversation-view">
         <ConversationStatusNotice view={view} />
+        {actionErrorMessage ? (
+          <section
+            className="conversation-view__notice"
+            data-tone="warning"
+            role="alert"
+          >
+            <strong>操作失败</strong>
+            <span>{actionErrorMessage}</span>
+          </section>
+        ) : null}
         <RequirementReviewPanel
+          confirming={confirmingRequirements}
           onConfirm={onConfirmRequirements}
           pendingActions={view.pendingActions}
           requirementDraft={view.requirementDraft}
@@ -99,6 +116,7 @@ export function ConversationScreen({
         </div>
         <MessageComposer
           disabled={!view.pendingActions.allowed.includes("submit_message")}
+          loading={submittingMessage}
           onSubmit={onSubmitMessage}
         />
       </div>

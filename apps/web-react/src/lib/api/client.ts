@@ -7,6 +7,8 @@ import {
   type AgentWorkbenchCandidateDetailResponse,
   type AgentWorkbenchConversationListResponse,
   type AgentWorkbenchConversationResponse,
+  type WorkbenchRequirementConfirmRequest,
+  type WorkbenchUserTextMessageRequest,
 } from "./agentWorkbenchTypes";
 
 export const api = createClient<paths>({ baseUrl: "" });
@@ -136,6 +138,48 @@ export async function getAgentWorkbenchCandidateDetail(
               candidate_id: candidateId,
             },
           },
+        },
+      ),
+    ),
+  );
+}
+
+export async function submitAgentWorkbenchMessage(
+  conversationId: string,
+  payload: WorkbenchUserTextMessageRequest,
+): Promise<AgentWorkbenchConversationResponse> {
+  return normalizeAgentWorkbenchConversation(
+    requireData(
+      await api.POST(
+        "/api/agent/workbench/conversations/{conversation_id}/messages",
+        {
+          params: {
+            path: {
+              conversation_id: conversationId,
+            },
+          },
+          body: payload,
+        },
+      ),
+    ),
+  );
+}
+
+export async function confirmAgentWorkbenchRequirements(
+  conversationId: string,
+  payload: WorkbenchRequirementConfirmRequest,
+): Promise<AgentWorkbenchConversationResponse> {
+  return normalizeAgentWorkbenchConversation(
+    requireData(
+      await api.POST(
+        "/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
+        {
+          params: {
+            path: {
+              conversation_id: conversationId,
+            },
+          },
+          body: payload,
         },
       ),
     ),

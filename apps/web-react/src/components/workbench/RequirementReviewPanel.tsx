@@ -7,12 +7,14 @@ import { Button } from "../primitives/Button";
 import "./RequirementReviewPanel.css";
 
 type RequirementReviewPanelProps = {
+  confirming?: boolean;
   onConfirm?: (() => void) | undefined;
   pendingActions: AgentWorkbenchPendingActions;
   requirementDraft: AgentWorkbenchRequirementDraft | null | undefined;
 };
 
 export function RequirementReviewPanel({
+  confirming = false,
   onConfirm,
   pendingActions,
   requirementDraft,
@@ -31,7 +33,7 @@ export function RequirementReviewPanel({
         </span>
       </div>
       {pendingActions.allowed.includes("confirm_requirements") ? (
-        <Button onClick={onConfirm} tone="primary">
+        <Button loading={confirming} onClick={onConfirm} tone="primary">
           确认需求
         </Button>
       ) : null}

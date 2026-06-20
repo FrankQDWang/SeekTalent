@@ -6,32 +6,39 @@ import "./MessageComposer.css";
 
 type MessageComposerProps = {
   disabled?: boolean;
-  onSubmit?: ((message: string) => void) | undefined;
+  loading?: boolean;
+  onSubmit?: ((message: string) => Promise<void> | void) | undefined;
   placeholder?: string;
 };
 
 export function MessageComposer({
   disabled = false,
+  loading = false,
   onSubmit,
   placeholder = "输入下一步要求",
 }: MessageComposerProps) {
   const [message, setMessage] = useState("");
   const trimmed = message.trim();
+  const submitDisabled = disabled || loading;
 
   return (
     <form
       className="message-composer"
-      onSubmit={(event) => {
+      onSubmit={async (event) => {
         event.preventDefault();
-        if (trimmed.length === 0 || disabled) {
+        if (trimmed.length === 0 || submitDisabled) {
           return;
         }
-        onSubmit?.(trimmed);
-        setMessage("");
+        try {
+          await onSubmit?.(trimmed);
+          setMessage("");
+        } catch {
+          // The route-level mutation error keeps the text available for retry.
+        }
       }}
     >
       <FieldTextarea
-        disabled={disabled}
+        disabled={submitDisabled}
         hideLabel
         label="下一步要求"
         onChange={(event) => setMessage(event.currentTarget.value)}
@@ -40,8 +47,9 @@ export function MessageComposer({
         value={message}
       />
       <Button
-        disabled={disabled || trimmed.length === 0}
+        disabled={submitDisabled || trimmed.length === 0}
         icon={<Send aria-hidden="true" size={16} />}
+        loading={loading}
         tone="primary"
         type="submit"
       >

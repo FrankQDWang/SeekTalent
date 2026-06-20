@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  confirmAgentWorkbenchRequirements,
   getAgentWorkbenchCandidateDetail,
   getAgentWorkbenchConversation,
   listAgentWorkbenchConversations,
+  submitAgentWorkbenchMessage,
 } from "./client";
 import { queryKeys } from "../query/keys";
 import { useQueryClient } from "@tanstack/react-query";
@@ -82,6 +84,46 @@ export function useAgentWorkbenchCandidateDetail(
         throw new Error("Candidate detail query requires a candidate id.");
       }
       return getAgentWorkbenchCandidateDetail(conversationId, candidateId);
+    },
+  });
+}
+
+export function useSubmitAgentWorkbenchMessage(conversationId: string) {
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(
+    () => queryKeys.agentConversation(conversationId),
+    [conversationId],
+  );
+
+  return useMutation({
+    mutationFn: (message: string) =>
+      submitAgentWorkbenchMessage(conversationId, {
+        idempotencyKey: actionIdempotencyKey("message"),
+        messageType: "userText",
+        text: message,
+      }),
+    onSuccess: (next) => {
+      applyActionSnapshot(queryClient, queryKey, next);
+    },
+  });
+}
+
+export function useConfirmAgentWorkbenchRequirements(conversationId: string) {
+  const queryClient = useQueryClient();
+  const queryKey = useMemo(
+    () => queryKeys.agentConversation(conversationId),
+    [conversationId],
+  );
+
+  return useMutation({
+    mutationFn: (draftRevisionId: string) =>
+      confirmAgentWorkbenchRequirements(conversationId, {
+        draftRevisionId,
+        expectedDraftRevisionId: draftRevisionId,
+        idempotencyKey: actionIdempotencyKey("confirm-requirements"),
+      }),
+    onSuccess: (next) => {
+      applyActionSnapshot(queryClient, queryKey, next);
     },
   });
 }
@@ -197,6 +239,28 @@ function isCandidateDetailDependentStreamKind(
     envelope.kind === "candidate.upserted" ||
     envelope.kind === "detailApproval.changed"
   );
+}
+
+function applyActionSnapshot(
+  queryClient: ReturnType<typeof useQueryClient>,
+  queryKey: ReturnType<typeof queryKeys.agentConversation>,
+  next: AgentWorkbenchConversationResponse,
+) {
+  queryClient.setQueryData<AgentWorkbenchConversationResponse>(
+    queryKey,
+    (current) => (shouldApplyWorkbenchSnapshot(current, next) ? next : current),
+  );
+  void queryClient.invalidateQueries({ queryKey });
+}
+
+function actionIdempotencyKey(action: string): string {
+  const randomUUID = (globalThis.crypto as { randomUUID?: () => string })
+    .randomUUID;
+  const id =
+    typeof randomUUID === "function"
+      ? randomUUID.call(globalThis.crypto)
+      : `${String(Date.now())}:${Math.random().toString(36).slice(2)}`;
+  return `workbench:${action}:${id}`;
 }
 
 function markConversationDisconnected(
