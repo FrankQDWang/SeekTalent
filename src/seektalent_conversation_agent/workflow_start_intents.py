@@ -639,6 +639,29 @@ class WorkbenchOutboxStore:
             ).fetchone()
         return _outbox_from_row(row) if row is not None else None
 
+    def list_claimable_workflow_start_items(
+        self,
+        *,
+        reclaim_before: str,
+        limit: int,
+    ) -> list[WorkbenchOutboxItem]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM wts_outbox
+                WHERE event_type = 'workflow_start_requested'
+                  AND (
+                    status = 'pending'
+                    OR (status = 'in_progress' AND updated_at < ?)
+                  )
+                ORDER BY created_at ASC, outbox_id ASC
+                LIMIT ?
+                """,
+                (reclaim_before, limit),
+            ).fetchall()
+        return [_outbox_from_row(row) for row in rows]
+
     def mark_done(self, outbox_id: str, *, updated_at: str) -> WorkbenchOutboxItem:
         with self._connect() as conn, conn:
             conn.execute(
@@ -646,6 +669,18 @@ class WorkbenchOutboxStore:
                 UPDATE wts_outbox
                 SET status = 'done', updated_at = ?
                 WHERE outbox_id = ? AND status IN ('in_progress', 'done')
+                """,
+                (updated_at, outbox_id),
+            )
+        return self.get(outbox_id)
+
+    def mark_pending_retry(self, outbox_id: str, *, updated_at: str) -> WorkbenchOutboxItem:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE wts_outbox
+                SET status = 'pending', updated_at = ?
+                WHERE outbox_id = ? AND status = 'in_progress'
                 """,
                 (updated_at, outbox_id),
             )

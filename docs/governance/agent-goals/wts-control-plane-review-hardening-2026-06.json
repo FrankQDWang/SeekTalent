@@ -2,29 +2,45 @@
   "schema_version": "seektalent.major_refactor_goal.v1",
   "goal_id": "runtime-control-plane-2026-06",
   "change_type": "major_refactor",
-  "summary": "Harden WTS control-plane outbox lookup performance after review.",
-  "rationale": "The Workbench runtime projection reads WTS outbox rows by event type and aggregate identity. This narrow red-zone follow-up adds the missing index to keep review-discovered production lookup paths bounded without changing payload shape or workflow behavior.",
+  "summary": "Harden WTS control-plane durability, idempotency, outbox lookup paths, and contract-test stability after review.",
+  "rationale": "The Workbench runtime projection reads WTS outbox rows by event type and aggregate identity, and the conversation-agent submit-JD path is the durable product control-plane entrypoint for requirement extraction. This red-zone follow-up keeps outbox lookup paths bounded, repairs replayed submit-JD state, records claimable workflow-start intents, keeps requirement-review transcript snapshots available without changing raw provider payload storage policy, and stabilizes the React live-stream contract test that this stack's generated Workbench schema checks execute.",
   "touched_layers": [
     "docs",
+    "frontend",
     "other",
     "tests"
   ],
   "red_files": [
-    "src/seektalent_conversation_agent/control_plane_schema.py"
+    "src/seektalent_conversation_agent/control_plane_schema.py",
+    "src/seektalent_conversation_agent/job_request_store.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/store.py",
+    "src/seektalent_conversation_agent/submit_jd_recovery.py",
+    "src/seektalent_conversation_agent/workflow_start_intents.py"
   ],
   "verification": [
     "uv run pytest tests/test_runtime_control_*.py -q",
     "uv run python tools/check_source_boundaries.py",
     "uv run pytest",
     "uv run pytest tests/test_wts_control_plane.py::test_fresh_conversation_store_initialize_creates_wts_tables_at_version_6 -q",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_conversation_agent_budget_policy.py tests/test_wts_control_plane.py -q -p no:cacheprovider",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/api/agentWorkbenchLive.test.tsx --run",
+    "uv run --group dev ruff check src/seektalent_conversation_agent/job_request_store.py src/seektalent_conversation_agent/service.py src/seektalent_conversation_agent/store.py src/seektalent_conversation_agent/workflow_start_intents.py src/seektalent_conversation_agent/submit_jd_recovery.py tests/test_conversation_agent_budget_policy.py tests/test_wts_control_plane.py",
+    "uv run --group dev ty check src/seektalent_conversation_agent/job_request_store.py src/seektalent_conversation_agent/service.py src/seektalent_conversation_agent/store.py src/seektalent_conversation_agent/workflow_start_intents.py src/seektalent_conversation_agent/submit_jd_recovery.py tests/test_conversation_agent_budget_policy.py tests/test_wts_control_plane.py",
     "uv run python tools/check_pr_governance.py --base codex/wts-17-home-jd-entry",
     "git diff --check codex/wts-17-home-jd-entry...HEAD"
   ],
   "deletion_targets": [
-    "full outbox scans for workflow aggregate projection reads"
+    "full outbox scans for workflow aggregate projection reads",
+    "submit-JD replay states that leave durable requirement drafts without a review transcript",
+    "workflow-start intents that cannot be claimed safely after process restart",
+    "React live-stream tests that leave scheduled work past jsdom teardown"
   ],
   "risks": [
     "The migration must stay idempotent for existing local SQLite databases.",
-    "The new index must match the Workbench projection lookup shape without creating a second schema authority."
+    "The new index must match the Workbench projection lookup shape without creating a second schema authority.",
+    "Replay repair must not create duplicate job-request links, tool calls, transcript messages, or workflow-start intents.",
+    "Requirement-review snapshots must remain recruiter-safe product state and must not store raw prompt or provider payloads.",
+    "Frontend test cleanup must remain test-only and must not change Workbench runtime behavior."
   ]
 }

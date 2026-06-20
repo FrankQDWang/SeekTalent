@@ -18,6 +18,7 @@ from seektalent_conversation_agent.job_requests import (
     normalize_source_kinds,
 )
 from seektalent_conversation_agent.models import (
+    AgentToolCallRecord,
     ConversationAgentResponse,
     ConversationRecord,
     ConversationRuntimeRunLink,
@@ -32,6 +33,15 @@ from seektalent_conversation_agent.source_selection import (
     SourceSelectionError,
 )
 from seektalent_conversation_agent.store import ConversationStore
+from seektalent_conversation_agent.submit_jd_recovery import (
+    assistant_message_idempotency_key as _assistant_message_idempotency_key,
+    extracted_job_title_from_runtime_control as _extracted_job_title_from_runtime_control,
+    normalize_optional_job_title as _normalize_optional_job_title,
+    requirement_review_message_idempotency_key as _requirement_review_message_idempotency_key,
+    requirement_review_payload as _requirement_review_payload,
+    should_repair_submit_replay_status as _should_repair_submit_replay_status,
+    tool_call_draft_revision_id as _tool_call_draft_revision_id,
+)
 from seektalent_conversation_agent.tools import AgentToolAdapter
 from seektalent_conversation_agent.workflow_start_intents import (
     WorkbenchOutboxStore,
@@ -51,6 +61,7 @@ _TERMINAL_RUN_STATUS_TO_CONVERSATION = {
     "failed": "failed",
     "cancelled": "cancelled",
 }
+_AGENT_TURN_STARTED_STALE_SECONDS = 15 * 60
 _WORKFLOW_START_OUTBOX_CLAIM_TIMEOUT_SECONDS = 60
 
 
@@ -165,15 +176,15 @@ class ConversationAgentService:
                 idempotency_key=idempotency_key,
             )
             if existing is not None:
-                return self._replay_idempotent_agent_turn(
+                if existing.role != "user" or existing.text != user_message:
+                    raise ConversationAgentError("idempotency_key_conflict")
+                return await self._replay_idempotent_agent_turn(
                     conversation_id=conversation_id,
                     owner_user_id=owner_user_id,
                     workspace_id=workspace_id,
+                    user_message_record=existing,
                     idempotency_key=idempotency_key,
                 )
-        conversation_tokens_before_turn = _conversation_token_count(
-            self.store.get_messages(conversation_id=conversation_id)
-        )
         user_token_estimate = _rough_token_estimate(user_message)
         try:
             message = self.store.append_message(
@@ -188,17 +199,48 @@ class ConversationAgentService:
                 idempotency_key=idempotency_key,
             )
         except sqlite3.IntegrityError:
-            if idempotency_key is not None and self.store.get_message_by_idempotency(
-                conversation_id=conversation_id,
-                idempotency_key=idempotency_key,
-            ):
-                return self._replay_idempotent_agent_turn(
+            if idempotency_key is not None:
+                existing = self.store.get_message_by_idempotency(
                     conversation_id=conversation_id,
-                    owner_user_id=owner_user_id,
-                    workspace_id=workspace_id,
                     idempotency_key=idempotency_key,
                 )
+                if existing is not None:
+                    if existing.role != "user" or existing.text != user_message:
+                        raise ConversationAgentError("idempotency_key_conflict")
+                    return await self._replay_idempotent_agent_turn(
+                        conversation_id=conversation_id,
+                        owner_user_id=owner_user_id,
+                        workspace_id=workspace_id,
+                        user_message_record=existing,
+                        idempotency_key=idempotency_key,
+                    )
             raise
+        return await self._run_agent_model_after_user_message(
+            conversation_id=conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+            message=message,
+            user_message=user_message,
+            idempotency_key=idempotency_key,
+        )
+
+    async def _run_agent_model_after_user_message(
+        self,
+        *,
+        conversation_id: str,
+        owner_user_id: str,
+        workspace_id: str,
+        message: TranscriptMessage,
+        user_message: str,
+        idempotency_key: str | None,
+    ) -> ConversationAgentResponse:
+        prior_messages = [
+            item
+            for item in self.store.get_messages(conversation_id=conversation_id)
+            if item.message_seq < message.message_seq
+        ]
+        conversation_tokens_before_turn = _conversation_token_count(prior_messages)
+        user_token_estimate = message.token_count or _rough_token_estimate(user_message)
         advisory_context = ""
         if self.memory_service is not None:
             memory_context = self.memory_service.recall_for_conversation(
@@ -262,6 +304,8 @@ class ConversationAgentService:
                 usage["outputTokens"] = estimated_output_tokens
                 usage["totalTokens"] = estimated_input_tokens + estimated_output_tokens
             usage_result: dict[str, object] = {
+                "assistantText": result_text,
+                "assistantPayload": _object_payload(result),
                 "estimatedInputTokens": estimated_input_tokens,
                 "estimatedOutputTokens": estimated_output_tokens,
                 "reportedInputTokens": usage["inputTokens"],
@@ -302,6 +346,7 @@ class ConversationAgentService:
                 "modelName": self.agent_model_name,
                 "estimatedInputTokens": estimated_input_tokens,
                 "conversationTokensBeforeTurn": conversation_tokens_before_turn,
+                "idempotencyKey": idempotency_key,
             },
             result=usage_result,
             reason_code=None,
@@ -318,6 +363,8 @@ class ConversationAgentService:
             message_id=self.message_id_factory(),
             token_count=estimated_output_tokens,
             source_tool_call_id=tool_call_id,
+            idempotency_key=_assistant_message_idempotency_key(idempotency_key),
+            return_existing_on_idempotency=idempotency_key is not None,
         )
         reopened = self.reopen_conversation(
             conversation_id=conversation_id,
@@ -330,19 +377,38 @@ class ConversationAgentService:
             activity_items=reopened.activity_items,
         )
 
-    def _replay_idempotent_agent_turn(
+    async def _replay_idempotent_agent_turn(
         self,
         *,
         conversation_id: str,
         owner_user_id: str,
         workspace_id: str,
+        user_message_record: TranscriptMessage,
         idempotency_key: str,
     ) -> ConversationAgentResponse:
         tool_call = self._agent_model_run_by_idempotency(
             conversation_id=conversation_id,
             idempotency_key=idempotency_key,
         )
-        if tool_call is None or tool_call.status == "started":
+        if tool_call is None:
+            return await self._run_agent_model_after_user_message(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                message=user_message_record,
+                user_message=user_message_record.text,
+                idempotency_key=idempotency_key,
+            )
+        if tool_call.status == "started":
+            if self._agent_tool_call_is_stale(tool_call):
+                self._mark_agent_model_run_failed(
+                    tool_call_id=tool_call.tool_call_id,
+                    conversation_id=conversation_id,
+                    started_at=tool_call.started_at,
+                    reason_code="agent_request_stale",
+                    result={"idempotencyKey": idempotency_key},
+                )
+                raise ConversationAgentError("agent_request_stale")
             raise ConversationAgentError("agent_request_in_progress")
         if tool_call.status == "failed":
             raise ConversationAgentError(
@@ -358,7 +424,24 @@ class ConversationAgentService:
                 owner_user_id=owner_user_id,
                 workspace_id=workspace_id,
             )
-        raise ConversationAgentError("agent_request_in_progress")
+        if tool_call.status == "completed" and self._restore_assistant_message_from_tool_call(
+            conversation_id=conversation_id,
+            tool_call=tool_call,
+            idempotency_key=idempotency_key,
+        ):
+            return self._reopened_response(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+            )
+        self._mark_agent_model_run_failed(
+            tool_call_id=tool_call.tool_call_id,
+            conversation_id=conversation_id,
+            started_at=tool_call.started_at,
+            reason_code="agent_request_recovery_failed",
+            result={"idempotencyKey": idempotency_key},
+        )
+        raise ConversationAgentError("agent_request_recovery_failed")
 
     def _agent_model_run_by_idempotency(
         self,
@@ -377,6 +460,39 @@ class ConversationAgentService:
         return any(
             message.role == "assistant" and message.source_tool_call_id == tool_call_id
             for message in self.store.get_messages(conversation_id=conversation_id)
+        )
+
+    def _restore_assistant_message_from_tool_call(
+        self,
+        *,
+        conversation_id: str,
+        tool_call: AgentToolCallRecord,
+        idempotency_key: str,
+    ) -> bool:
+        result = tool_call.result or {}
+        assistant_text = result.get("assistantText")
+        if not isinstance(assistant_text, str):
+            return False
+        assistant_payload = result.get("assistantPayload")
+        token_count = result.get("estimatedOutputTokens")
+        self.store.append_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            message_type="assistant_text",
+            text=assistant_text,
+            payload={"agentResult": assistant_payload if isinstance(assistant_payload, dict) else {}},
+            created_at=self.now(),
+            message_id=self.message_id_factory(),
+            token_count=token_count if isinstance(token_count, int) else _rough_token_estimate(assistant_text),
+            source_tool_call_id=tool_call.tool_call_id,
+            idempotency_key=_assistant_message_idempotency_key(idempotency_key),
+            return_existing_on_idempotency=True,
+        )
+        return True
+
+    def _agent_tool_call_is_stale(self, tool_call: AgentToolCallRecord) -> bool:
+        return _parse_time(self.now()) - _parse_time(tool_call.started_at) > timedelta(
+            seconds=_AGENT_TURN_STARTED_STALE_SECONDS
         )
 
     def _reopened_response(
@@ -630,6 +746,11 @@ class ConversationAgentService:
                 conversation_id=conversation_id,
                 draft_revision_id=existing_link.draft_revision_id,
             )
+            tool_call = self._ensure_submit_jd_extract_tool_call_completed(
+                conversation_id=conversation_id,
+                job_request=job_request,
+                draft_revision_id=existing_link.draft_revision_id,
+            )
             conversation_after_draft_repair = self.store.link_requirement_draft(
                 conversation_id=conversation_id,
                 draft_revision_id=existing_link.draft_revision_id,
@@ -642,6 +763,12 @@ class ConversationAgentService:
                     status="awaiting_requirement_confirmation",
                     updated_at=self.now(),
                 )
+            self._ensure_requirement_review_message(
+                conversation_id=conversation_id,
+                draft=draft,
+                source_tool_call_id=tool_call.tool_call_id,
+                idempotency_key=idempotency_key,
+            )
             reopened = self.reopen_conversation(
                 conversation_id=conversation_id,
                 owner_user_id=owner_user_id,
@@ -655,43 +782,22 @@ class ConversationAgentService:
                 job_request_revision_id=job_request.job_request_revision_id,
                 requirement_draft_revision_id=existing_link.draft_revision_id,
             )
-        user_message = self.store.append_message(
+        user_message = self._ensure_submit_jd_user_message(
             conversation_id=conversation_id,
-            role="user",
-            message_type="user_text",
-            text=jd_text,
-            payload={
-                "jobTitle": user_job_title,
-                "notes": notes,
-                "sourceKinds": list(normalized_source_kinds),
-                "jobRequestRevisionId": job_request.job_request_revision_id,
-            },
-            created_at=self.now(),
-            message_id=self.message_id_factory(),
-        )
-        tool_call_id = self.tool_call_id_factory()
-        self.store.save_tool_call(
-            tool_call_id=tool_call_id,
-            conversation_id=conversation_id,
-            tool_name="extract_requirements",
-            status="started",
-            args={
-                "jobTitle": user_job_title,
-                "sourceKinds": list(normalized_source_kinds),
-                "jobRequestRevisionId": job_request.job_request_revision_id,
-            },
-            result=None,
-            reason_code=None,
-            started_at=self.now(),
-        )
-        draft = self.tool_adapter.extract_requirements(
-            conversation_id=conversation_id,
-            job_title=user_job_title,
-            jd_text=jd_text,
-            notes=notes,
-            source_ids=list(normalized_source_kinds),
+            job_request=job_request,
             idempotency_key=idempotency_key,
         )
+        tool_call = self._extract_requirements_tool_call_for_job_request(
+            conversation_id=conversation_id,
+            job_request=job_request,
+        )
+        draft = self._extract_or_recover_requirement_draft(
+            conversation_id=conversation_id,
+            job_request=job_request,
+            tool_call=tool_call,
+            idempotency_key=idempotency_key,
+        )
+        tool_call_id = tool_call.tool_call_id
         extracted_job_title = _extracted_job_title_from_runtime_control(
             self.tool_adapter,
             draft_revision_id=draft.draft_revision_id,
@@ -719,22 +825,13 @@ class ConversationAgentService:
                 completed_at=self.now(),
             )
             raise ConversationAgentError("job_request_title_required")
-        self.store.save_tool_call(
-            tool_call_id=tool_call_id,
+        self._mark_submit_jd_extract_tool_call_completed(
             conversation_id=conversation_id,
-            tool_name="extract_requirements",
-            status="completed",
-            args={
-                "jobTitle": user_job_title,
-                "extractedJobTitle": extracted_job_title,
-                "effectiveJobTitle": effective_job_title,
-                "sourceKinds": list(normalized_source_kinds),
-                "jobRequestRevisionId": job_request.job_request_revision_id,
-            },
-            result={"draftRevisionId": draft.draft_revision_id},
-            reason_code=None,
-            started_at=self.now(),
-            completed_at=self.now(),
+            job_request=job_request,
+            tool_call_id=tool_call_id,
+            extracted_job_title=extracted_job_title,
+            effective_job_title=effective_job_title,
+            draft_revision_id=draft.draft_revision_id,
         )
         self.job_request_store.link_requirement_draft_job_request(
             draft_revision_id=draft.draft_revision_id,
@@ -754,15 +851,11 @@ class ConversationAgentService:
             status="awaiting_requirement_confirmation",
             updated_at=self.now(),
         )
-        assistant_message = self.store.append_message(
+        assistant_message = self._ensure_requirement_review_message(
             conversation_id=conversation_id,
-            role="assistant",
-            message_type="requirement_review",
-            text="已拆解岗位需求，请确认后再启动检索。",
-            payload=_requirement_review_payload(draft),
             source_tool_call_id=tool_call_id,
-            created_at=self.now(),
-            message_id=self.message_id_factory(),
+            draft=draft,
+            idempotency_key=idempotency_key,
         )
         reopened = self.reopen_conversation(
             conversation_id=conversation_id,
@@ -777,6 +870,223 @@ class ConversationAgentService:
             job_request_revision_id=job_request.job_request_revision_id,
             requirement_draft_revision_id=draft.draft_revision_id,
         )
+
+    def _ensure_submit_jd_user_message(
+        self,
+        *,
+        conversation_id: str,
+        job_request: JobRequestRevision,
+        idempotency_key: str,
+    ) -> TranscriptMessage:
+        existing = self._submit_jd_user_message_for_job_request(
+            conversation_id=conversation_id,
+            job_request_revision_id=job_request.job_request_revision_id,
+        )
+        if existing is not None:
+            return existing
+        return self.store.append_message(
+            conversation_id=conversation_id,
+            role="user",
+            message_type="user_text",
+            text=job_request.jd_text,
+            payload={
+                "jobTitle": job_request.user_job_title,
+                "notes": job_request.notes,
+                "sourceKinds": list(job_request.source_kinds),
+                "jobRequestRevisionId": job_request.job_request_revision_id,
+            },
+            created_at=self.now(),
+            message_id=self.message_id_factory(),
+            idempotency_key=f"{idempotency_key}:user",
+            return_existing_on_idempotency=True,
+        )
+
+    def _submit_jd_user_message_for_job_request(
+        self,
+        *,
+        conversation_id: str,
+        job_request_revision_id: str,
+    ) -> TranscriptMessage | None:
+        for message in self.store.get_messages(conversation_id=conversation_id):
+            if message.role != "user" or message.message_type != "user_text":
+                continue
+            if message.payload.get("jobRequestRevisionId") == job_request_revision_id:
+                return message
+        return None
+
+    def _extract_requirements_tool_call_for_job_request(
+        self,
+        *,
+        conversation_id: str,
+        job_request: JobRequestRevision,
+    ) -> AgentToolCallRecord:
+        existing = self._find_extract_requirements_tool_call(
+            conversation_id=conversation_id,
+            job_request_revision_id=job_request.job_request_revision_id,
+        )
+        if existing is not None:
+            return existing
+        return self.store.save_tool_call(
+            tool_call_id=self.tool_call_id_factory(),
+            conversation_id=conversation_id,
+            tool_name="extract_requirements",
+            status="started",
+            args={
+                "jobTitle": job_request.user_job_title,
+                "sourceKinds": list(job_request.source_kinds),
+                "jobRequestRevisionId": job_request.job_request_revision_id,
+            },
+            result=None,
+            reason_code=None,
+            started_at=self.now(),
+        )
+
+    def _find_extract_requirements_tool_call(
+        self,
+        *,
+        conversation_id: str,
+        job_request_revision_id: str,
+    ) -> AgentToolCallRecord | None:
+        matching = [
+            call
+            for call in self.store.list_tool_calls(conversation_id=conversation_id)
+            if call.tool_name == "extract_requirements"
+            and call.args.get("jobRequestRevisionId") == job_request_revision_id
+        ]
+        if not matching:
+            return None
+        completed = [call for call in matching if call.status == "completed"]
+        return (completed or matching)[-1]
+
+    def _extract_or_recover_requirement_draft(
+        self,
+        *,
+        conversation_id: str,
+        job_request: JobRequestRevision,
+        tool_call: AgentToolCallRecord,
+        idempotency_key: str,
+    ) -> DraftProtocol:
+        if tool_call.status == "completed":
+            draft_revision_id = _tool_call_draft_revision_id(tool_call)
+            if draft_revision_id is not None:
+                return self.tool_adapter.get_requirement_draft(
+                    conversation_id=conversation_id,
+                    draft_revision_id=draft_revision_id,
+                )
+        return self.tool_adapter.extract_requirements(
+            conversation_id=conversation_id,
+            job_title=job_request.user_job_title,
+            jd_text=job_request.jd_text,
+            notes=job_request.notes,
+            source_ids=list(job_request.source_kinds),
+            idempotency_key=idempotency_key,
+        )
+
+    def _ensure_submit_jd_extract_tool_call_completed(
+        self,
+        *,
+        conversation_id: str,
+        job_request: JobRequestRevision,
+        draft_revision_id: str,
+    ) -> AgentToolCallRecord:
+        tool_call = self._extract_requirements_tool_call_for_job_request(
+            conversation_id=conversation_id,
+            job_request=job_request,
+        )
+        if tool_call.status == "completed" and _tool_call_draft_revision_id(tool_call) == draft_revision_id:
+            return tool_call
+        effective_job_title = job_request.effective_job_title
+        if effective_job_title is None:
+            effective_job_title = _extracted_job_title_from_runtime_control(
+                self.tool_adapter,
+                draft_revision_id=draft_revision_id,
+            )
+        if effective_job_title is None:
+            effective_job_title = job_request.user_job_title
+        if effective_job_title is None:
+            return tool_call
+        return self._mark_submit_jd_extract_tool_call_completed(
+            conversation_id=conversation_id,
+            job_request=job_request,
+            tool_call_id=tool_call.tool_call_id,
+            extracted_job_title=job_request.extracted_job_title,
+            effective_job_title=effective_job_title,
+            draft_revision_id=draft_revision_id,
+        )
+
+    def _mark_submit_jd_extract_tool_call_completed(
+        self,
+        *,
+        conversation_id: str,
+        job_request: JobRequestRevision,
+        tool_call_id: str,
+        extracted_job_title: str | None,
+        effective_job_title: str,
+        draft_revision_id: str,
+    ) -> AgentToolCallRecord:
+        return self.store.save_tool_call(
+            tool_call_id=tool_call_id,
+            conversation_id=conversation_id,
+            tool_name="extract_requirements",
+            status="completed",
+            args={
+                "jobTitle": job_request.user_job_title,
+                "extractedJobTitle": extracted_job_title,
+                "effectiveJobTitle": effective_job_title,
+                "sourceKinds": list(job_request.source_kinds),
+                "jobRequestRevisionId": job_request.job_request_revision_id,
+            },
+            result={"draftRevisionId": draft_revision_id},
+            reason_code=None,
+            started_at=self.now(),
+            completed_at=self.now(),
+        )
+
+    def _ensure_requirement_review_message(
+        self,
+        *,
+        conversation_id: str,
+        draft: DraftProtocol,
+        source_tool_call_id: str,
+        idempotency_key: str,
+    ) -> TranscriptMessage:
+        existing = self._requirement_review_message_for_draft(
+            conversation_id=conversation_id,
+            draft_revision_id=str(getattr(draft, "draft_revision_id")),
+        )
+        if existing is not None:
+            self.store.ensure_requirement_transcript_snapshot(message_id=existing.message_id)
+            return existing
+        message = self.store.append_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            message_type="requirement_review",
+            text="已拆解岗位需求，请确认后再启动检索。",
+            payload=_requirement_review_payload(draft),
+            source_tool_call_id=source_tool_call_id,
+            created_at=self.now(),
+            message_id=self.message_id_factory(),
+            idempotency_key=f"{idempotency_key}:requirement-review",
+            return_existing_on_idempotency=True,
+        )
+        self.store.ensure_requirement_transcript_snapshot(message_id=message.message_id)
+        return message
+
+    def _requirement_review_message_for_draft(
+        self,
+        *,
+        conversation_id: str,
+        draft_revision_id: str,
+    ) -> TranscriptMessage | None:
+        for message in self.store.get_messages(conversation_id=conversation_id):
+            if message.role != "assistant" or message.message_type != "requirement_review":
+                continue
+            payload_draft_id = message.payload.get("requirementDraftId")
+            snapshot = message.payload.get("requirementDraftSnapshot")
+            snapshot_draft_id = _mapping_value(snapshot, "draftRevisionId")
+            if payload_draft_id == draft_revision_id or snapshot_draft_id == draft_revision_id:
+                return message
+        return None
 
     def update_requirement_draft(
         self,
@@ -1976,17 +2286,6 @@ def _conversation_error_from_runtime_control(exc: RuntimeControlError) -> Conver
     return ConversationAgentError(exc.reason_code, payload=exc.payload)
 
 
-def _should_repair_submit_replay_status(conversation: ConversationRecord) -> bool:
-    return conversation.runtime_run_id is None and conversation.status in {"draft", "awaiting_requirement_confirmation"}
-
-
-def _normalize_optional_job_title(job_title: str | None) -> str | None:
-    if job_title is None:
-        return None
-    normalized = job_title.strip()
-    return normalized or None
-
-
 def _resolve_submit_jd_source_kinds(
     *,
     source_kinds: Sequence[str] | None,
@@ -2009,22 +2308,6 @@ def _resolve_submit_jd_source_kinds(
             },
         )
     return list(normalized_source_kinds)
-
-
-def _extracted_job_title_from_runtime_control(
-    tool_adapter: AgentToolAdapter,
-    *,
-    draft_revision_id: str,
-) -> str | None:
-    runtime_store = tool_adapter.runtime_store
-    if runtime_store is None:
-        return None
-    payload = runtime_store.get_extracted_requirement_sheet_json(draft_revision_id)
-    job_title = payload.get("job_title")
-    if not isinstance(job_title, str):
-        return None
-    normalized = job_title.strip()
-    return normalized or None
 
 
 def _compact_summary_text(messages: list[TranscriptMessage]) -> str:
@@ -2063,78 +2346,6 @@ def _json_safe_value(value: object) -> object | None:
         dumped = model_dump(mode="json")
         return _json_safe_value(dumped)
     return str(value)
-
-
-def _requirement_review_payload(draft: object) -> dict[str, object]:
-    draft_revision_id = str(getattr(draft, "draft_revision_id"))
-    return {
-        "requirementDraft": {"draftRevisionId": draft_revision_id},
-        "requirementDraftSnapshot": _requirement_draft_snapshot(draft),
-    }
-
-
-def _requirement_review_message_idempotency_key(
-    *,
-    draft_revision_id: str,
-    idempotency_key: str | None,
-) -> str | None:
-    if not idempotency_key:
-        return None
-    return f"requirement_review:{draft_revision_id}:{idempotency_key}"
-
-
-def _requirement_draft_snapshot(draft: object) -> dict[str, object]:
-    sections = list(getattr(draft, "sections", ()) or ())
-    return {
-        "draftRevisionId": str(getattr(draft, "draft_revision_id")),
-        "parentDraftRevisionId": _str_or_none(getattr(draft, "base_revision_id", None)),
-        "status": str(getattr(draft, "status", "unknown")),
-        "title": "需求确认",
-        "summary": _requirement_draft_snapshot_summary(sections),
-        "canConfirm": bool(getattr(draft, "can_confirm", False)),
-        "unresolvedReviewItemCount": int(getattr(draft, "unresolved_review_item_count", 0) or 0),
-        "sections": [_requirement_draft_section_snapshot(section) for section in sections],
-        "otherInputPrompt": "其他",
-    }
-
-
-def _requirement_draft_section_snapshot(section: object) -> dict[str, object]:
-    section_id = str(getattr(section, "section_id"))
-    return {
-        "sectionId": section_id,
-        "displayName": str(getattr(section, "display_name", section_id)),
-        "backendField": str(getattr(section, "backend_field", section_id)),
-        "items": [_requirement_draft_item_snapshot(section_id, item) for item in getattr(section, "items", ()) or ()],
-    }
-
-
-def _requirement_draft_item_snapshot(section_id: str, item: object) -> dict[str, object]:
-    status = str(getattr(item, "status", "unknown"))
-    return {
-        "itemId": str(getattr(item, "item_id")),
-        "sectionId": section_id,
-        "selected": bool(getattr(item, "selected", False)),
-        "enabled": bool(getattr(item, "enabled", False)),
-        "editable": bool(getattr(item, "editable", False)),
-        "text": str(getattr(item, "text", "")),
-        "status": status if status in {"resolved", "needs_review", "deleted", "moved", "rejected"} else "unknown",
-        "source": str(getattr(item, "source", "unknown")),
-        "allowedActions": [str(action) for action in getattr(item, "allowed_actions", ()) or ()],
-    }
-
-
-def _requirement_draft_snapshot_summary(sections: list[object]) -> str:
-    selected_count = sum(
-        1
-        for section in sections
-        for item in getattr(section, "items", ()) or ()
-        if bool(getattr(item, "selected", False)) and getattr(item, "status", "") == "resolved"
-    )
-    return f"已生成 {selected_count} 条已选择需求，请确认后启动检索。"
-
-
-def _str_or_none(value: object) -> str | None:
-    return value if isinstance(value, str) and value else None
 
 
 def _agent_result_text(value: object) -> str:
@@ -2222,6 +2433,15 @@ def _usage_int(value: object, *field_names: str) -> int:
 
 def _dict_value(value: object, field_name: str) -> object | None:
     if not isinstance(value, dict):
+        return None
+    for key, item in value.items():
+        if str(key) == field_name:
+            return item
+    return None
+
+
+def _mapping_value(value: object, field_name: str) -> object | None:
+    if not isinstance(value, Mapping):
         return None
     for key, item in value.items():
         if str(key) == field_name:

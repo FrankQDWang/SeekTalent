@@ -59,6 +59,8 @@ class JobRequestStore:
             request_hash=request_hash,
         )
         if existing is not None:
+            if existing.idempotency_key != idempotency_key:
+                raise ConversationAgentError("idempotency_key_conflict")
             return existing
 
         revision = JobRequestRevision(
@@ -120,6 +122,8 @@ class JobRequestStore:
                     request_hash=request_hash,
                 )
                 if existing is not None:
+                    if existing.idempotency_key != idempotency_key:
+                        raise ConversationAgentError("idempotency_key_conflict")
                     return existing
                 raise
         return revision
