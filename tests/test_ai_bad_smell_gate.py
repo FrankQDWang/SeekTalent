@@ -104,7 +104,7 @@ def test_ai_bad_smell_gate_ignores_tests_and_generated_paths() -> None:
     findings = check_added_lines(
         [
             AddedLine("tests/test_example.py", 50, "except Exception as exc:"),
-            AddedLine("apps/liepin-worker/tests/example.test.ts", 51, "value = cast(dict, payload)"),
+            AddedLine("apps/web-react/tests/example.test.ts", 51, "value = cast(dict, payload)"),
             AddedLine("docs/superpowers/plan.md", 52, "best effort fallback"),
             AddedLine("src/seektalent_ui/static/workbench/_app/index.js", 53, "payload: Any"),
         ],

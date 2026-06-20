@@ -62,7 +62,7 @@ Do not copy Pinpin source code into SeekTalent.
 Do not replicate Pinpin's direct cookie/header replay model as the SeekTalent production path. The existing SeekTalent boundary remains:
 
 - users log into Liepin inside the managed browser page;
-- the Bun worker drives the real page and passively observes page-triggered network responses;
+- the OpenCLI browser workflow drives the real page and passively observes page-triggered network responses;
 - no production code path uses Playwright `APIRequestContext`, `page.request`, `browserContext.request`, or equivalent direct authenticated HTTP calls to Liepin endpoints;
 - no extension, cookie export, token paste, or user-side local daemon is required;
 - no cookies, auth headers, storage state, CDP endpoints, raw provider payloads, or auth-bearing URLs appear in external API responses, events, logs, ordinary artifacts, or fixtures.

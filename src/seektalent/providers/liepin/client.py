@@ -37,7 +37,6 @@ from seektalent.providers.liepin.worker_contracts import decode_login_relay_inpu
 from seektalent.providers.liepin.worker_contracts import decode_login_relay_snapshot
 from seektalent.providers.liepin.worker_contracts import decode_session_status
 from seektalent.providers.liepin.worker_contracts import decode_worker_health
-from seektalent.providers.liepin.worker_runtime import ManagedLiepinWorkerRuntime
 
 
 EventCallback = Callable[[str, dict[str, object]], None]
@@ -179,188 +178,6 @@ class FakeLiepinWorkerClient:
 
     async def complete_login_relay(self, *, connection_id: str) -> LoginRelayCompleteResult:
         raise LiepinWorkerModeError("Fake Liepin fixture worker does not complete live login relay.")
-
-
-class ManagedLocalLiepinWorkerClient:
-    def __init__(
-        self,
-        settings: AppSettings,
-        *,
-        runtime: ManagedLiepinWorkerRuntime | None = None,
-        http_json: Callable[..., dict[str, object]] | None = None,
-    ) -> None:
-        if settings.liepin_worker_mode != "managed_local":
-            raise LiepinWorkerModeError("Managed local Liepin worker requires liepin_worker_mode=managed_local.")
-        self.settings = settings
-        self.runtime = runtime or ManagedLiepinWorkerRuntime.shared(settings)
-        self.http_json = http_json or _default_http_json
-
-    async def ensure_ready(self, *, on_event: EventCallback | None = None) -> None:
-        await asyncio.to_thread(self.runtime.ensure_started, on_event=on_event)
-
-    async def session_status(
-        self,
-        *,
-        connection_id: str,
-        tenant: str | None = None,
-        workspace: str | None = None,
-        provider_account_hash: str | None = None,
-    ) -> SessionStatus:
-        base_url = await self._internal_base_url_async()
-        return _decode_worker_response(
-            decode_session_status,
-            await self._request_json_async(
-                "GET",
-                _session_status_url(
-                    base_url,
-                    connection_id=connection_id,
-                    tenant=tenant,
-                    workspace=workspace,
-                    provider_account_hash=provider_account_hash,
-                ),
-            )
-        )
-
-    async def login_handoff(
-        self,
-        *,
-        connection_id: str,
-        tenant_id: str | None = None,
-        workspace_id: str | None = None,
-        provider_account_hash: str | None = None,
-    ) -> LoginHandoff:
-        base_url = await self._internal_base_url_async()
-        return _decode_worker_response(
-            decode_login_handoff,
-            await self._request_json_async(
-                "POST",
-                f"{base_url}/internal/session/login-handoff",
-                json_body=_login_handoff_body(
-                    connection_id=connection_id,
-                    tenant_id=tenant_id,
-                    workspace_id=workspace_id,
-                    provider_account_hash=provider_account_hash,
-                ),
-            )
-        )
-
-    async def login_relay_snapshot(self, *, connection_id: str) -> LoginRelaySnapshot:
-        base_url = await self._internal_base_url_async()
-        return _decode_worker_response(
-            decode_login_relay_snapshot,
-            await self._request_json_async(
-                "GET",
-                f"{base_url}/internal/session/login-relay/snapshot?{parse.urlencode({'connectionId': connection_id})}",
-            ),
-        )
-
-    async def submit_login_relay_input(
-        self,
-        *,
-        connection_id: str,
-        action: str,
-        x: float | None = None,
-        y: float | None = None,
-        text: str | None = None,
-        key: str | None = None,
-    ) -> LoginRelayInputResult:
-        base_url = await self._internal_base_url_async()
-        return _decode_worker_response(
-            decode_login_relay_input_result,
-            await self._request_json_async(
-                "POST",
-                f"{base_url}/internal/session/login-relay/input",
-                json_body=_login_relay_input_body(
-                    connection_id=connection_id,
-                    action=action,
-                    x=x,
-                    y=y,
-                    text=text,
-                    key=key,
-                ),
-            ),
-        )
-
-    async def complete_login_relay(self, *, connection_id: str) -> LoginRelayCompleteResult:
-        base_url = await self._internal_base_url_async()
-        return _decode_worker_response(
-            decode_login_relay_complete_result,
-            await self._request_json_async(
-                "POST",
-                f"{base_url}/internal/session/login-relay/complete",
-                json_body={"connectionId": connection_id},
-            ),
-        )
-
-    async def search(
-        self,
-        request: SearchRequest,
-        *,
-        round_no: int,
-        trace_id: str,
-        provider_account_hash: str | None = None,
-    ) -> SearchResult:
-        await self.ensure_ready()
-        base_url = await self._internal_base_url_async()
-        return liepin_card_search_response_to_search_result(
-            _decode_worker_response(
-                decode_card_search_response,
-                await self._request_json_async(
-                    "POST",
-                    f"{base_url}/internal/search/cards",
-                    json_body=_search_request_body(
-                        request,
-                        round_no=round_no,
-                        trace_id=trace_id,
-                        provider_account_hash=provider_account_hash,
-                    ),
-                ),
-            )
-        )
-
-    async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse:
-        await self.ensure_ready()
-        base_url = await self._internal_base_url_async()
-        return _decode_worker_response(
-            decode_detail_open_response,
-            await self._request_json_async(
-                "POST",
-                f"{base_url}/internal/details/open",
-                json_body=request.model_dump(mode="json", by_alias=True),
-            ),
-        )
-
-    def _internal_base_url(self) -> str:
-        handle = self.runtime.ensure_started()
-        return handle.internal_base_url.rstrip("/")
-
-    async def _internal_base_url_async(self) -> str:
-        handle = await asyncio.to_thread(self.runtime.ensure_started)
-        return handle.internal_base_url.rstrip("/")
-
-    async def _request_json_async(
-        self,
-        method: str,
-        url: str,
-        *,
-        json_body: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        return await asyncio.to_thread(self._request_json, method, url, json_body=json_body)
-
-    def _request_json(
-        self,
-        method: str,
-        url: str,
-        *,
-        json_body: dict[str, object] | None = None,
-    ) -> dict[str, object]:
-        return self.http_json(
-            method,
-            url,
-            headers={"Authorization": f"Bearer {self.settings.liepin_api_token}"},
-            json_body=json_body,
-            timeout=self.settings.liepin_worker_timeout_seconds,
-        )
 
 
 class ExternalHttpLiepinWorkerClient:
@@ -541,7 +358,12 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
     if settings.liepin_worker_mode == "fake_fixture":
         return FakeLiepinWorkerClient(settings)
     if settings.liepin_worker_mode == "managed_local":
-        return ManagedLocalLiepinWorkerClient(settings)
+        return build_liepin_opencli_worker_client(
+            settings.with_overrides(
+                liepin_worker_mode="opencli",
+                liepin_browser_action_backend="opencli",
+            )
+        )
     if settings.liepin_worker_mode == "external_http":
         return ExternalHttpLiepinWorkerClient(settings)
     if settings.liepin_worker_mode == "opencli":

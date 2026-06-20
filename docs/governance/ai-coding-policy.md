@@ -14,7 +14,6 @@ Red-zone paths require owner review and focused verification:
 - `src/seektalent/prompts/**`
 - `src/seektalent/providers/**`
 - `src/seektalent/core/retrieval/**`
-- `apps/liepin-worker/**`
 - `src/seektalent_ui/workbench_store.py`
 - `src/seektalent_ui/runtime_bridge.py`
 - `src/seektalent_ui/runtime_graph.py`

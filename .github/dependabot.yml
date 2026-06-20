@@ -35,15 +35,3 @@ updates:
     labels:
       - dependencies
       - security
-
-  - package-ecosystem: bun
-    directory: "/apps/liepin-worker"
-    schedule:
-      interval: weekly
-      day: monday
-      time: "10:30"
-      timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
-    labels:
-      - dependencies
-      - security

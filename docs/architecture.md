@@ -218,7 +218,7 @@ See [Outputs](outputs.md) for the full file reference.
 - Provider-specific request details stay under `src/seektalent/providers/`. Providers may depend on clients, core retrieval contracts, retrieval primitives, and source contracts, but not runtime DTOs.
 - Provider registry construction is outside runtime in `src/seektalent/retrieval/service_factory.py`; runtime receives provider access through retrieval/source boundaries.
 - CTS transport details stay inside `src/seektalent/clients/cts_client.py`, behind `src/seektalent/providers/cts/adapter.py`.
-- Liepin transport, OpenCLI, worker contracts, browser automation, and provider safety details stay inside `src/seektalent/providers/liepin/` and `apps/liepin-worker/`, behind the Liepin source adapter.
+- Liepin transport, OpenCLI, worker contracts, browser automation, and provider safety details stay inside `src/seektalent/providers/liepin/`, behind the Liepin source adapter.
 - Mock CTS is for source-checkout development and tests; the published CLI rejects it.
 - Optional rescue lanes are runtime decisions. They can broaden the term pool, inject candidate feedback, run company discovery, or try anchor-only retrieval when quality gates require more search.
 - LLM structured output retries are local to Pydantic AI calls. The runtime does not add fallback model chains.

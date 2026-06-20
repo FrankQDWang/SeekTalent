@@ -77,7 +77,7 @@ def test_privacy_gate_ignores_tests_and_generated_paths() -> None:
     findings = check_added_lines(
         [
             AddedLine("tests/test_example.py", 50, "logger.info(response.text)"),
-            AddedLine("apps/liepin-worker/tests/example.test.ts", 51, "logger.info(response.text)"),
+            AddedLine("apps/web-react/tests/example.test.ts", 51, "logger.info(response.text)"),
             AddedLine("docs/superpowers/plan.md", 52, "logger.info(response.text)"),
         ]
     )

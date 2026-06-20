@@ -287,7 +287,7 @@ Local Liepin retrieval uses deterministic OpenCLI browser actions by default in 
 | `SEEKTALENT_LIEPIN_EXPLORE_DETAIL_TARGET=1` | Maximum detail-backed resumes opened per explore query. |
 | `SEEKTALENT_LIEPIN_OPENCLI_MAX_CARDS_PER_TASK=10` | Maximum search cards scanned by one OpenCLI task before detail-open caps are applied. |
 
-`managed_local` and `external_http` remain worker compatibility modes for the Bun `apps/liepin-worker` connector. They are not legacy browser fallbacks.
+`opencli` is the local Liepin execution path. `external_http` remains available only for an explicitly supplied worker-compatible HTTP endpoint.
 
 Local drift smoke should be operator-triggered and low volume. Search/card probes are the default bounded checks. Filter probes and detail probes must remain opt-in because they interact with provider UI state, and detail probes open candidate detail pages and consume risk budget.
 

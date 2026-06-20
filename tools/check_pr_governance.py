@@ -17,7 +17,6 @@ RED_PREFIXES = (
     "src/seektalent/providers/",
     "src/seektalent_conversation_agent/",
     "src/seektalent/core/retrieval/",
-    "apps/liepin-worker/",
 )
 
 RED_FILES = {
@@ -62,8 +61,6 @@ ARCHITECTURE_RADAR_FILES = {
 }
 
 DEPENDENCY_CONTROL_FILE_NAMES = {
-    "bun.lock",
-    "bun.lockb",
     "package-lock.json",
     "package.json",
     "pnpm-lock.yaml",
@@ -82,7 +79,6 @@ CONFIG_ENV_FILES = {
 }
 
 BEHAVIOR_PREFIXES = (
-    "apps/liepin-worker/",
     "src/seektalent/core/retrieval/",
     "src/seektalent/prompts/",
     "src/seektalent/providers/",
@@ -146,7 +142,6 @@ MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
         "scripts/verify-red-zone.sh",
         "scripts/verify-dev-workbench.sh",
         "uv run pytest",
-        "cd apps/liepin-worker && bun test",
     ),
     "governance-bootstrap-2026-06": (
         "uv run pytest tests/test_pr_governance.py -q",

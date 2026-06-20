@@ -44,7 +44,7 @@ def test_cutover_gate_rejects_retired_frontend_references() -> None:
     ]
 
 
-def test_cutover_gate_allows_liepin_worker_bun_only() -> None:
+def test_cutover_gate_rejects_bun_references() -> None:
     violations = collect_violations(
         [
             ("docs/configuration.md", "The Bun apps/liepin-worker connector remains supported."),
@@ -52,4 +52,4 @@ def test_cutover_gate_allows_liepin_worker_bun_only() -> None:
         ]
     )
 
-    assert [violation.path for violation in violations] == ["README.md"]
+    assert [violation.path for violation in violations] == ["docs/configuration.md", "README.md"]

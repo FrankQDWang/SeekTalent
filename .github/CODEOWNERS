@@ -12,7 +12,6 @@
 # Provider, retrieval, and browser automation boundaries
 /src/seektalent/providers/ @FrankQDWang
 /src/seektalent/core/retrieval/ @FrankQDWang
-/apps/liepin-worker/ @FrankQDWang
 
 # Workbench backend persistence and runtime projections
 /src/seektalent_ui/workbench_store.py @FrankQDWang

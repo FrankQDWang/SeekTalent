@@ -177,8 +177,6 @@ KNOWN_COMMANDS = {
     "update",
     "inspect",
     "liepin-compliance-gate",
-    "liepin-replay-fixtures",
-    "liepin-bun-compatibility-gate",
     "liepin-smoke",
 }
 _NO_ARG_DEFAULT = object()
@@ -1036,7 +1034,6 @@ def _inspect_payload() -> dict[str, object]:
             ],
             "examples": [
                 "seektalent liepin-smoke --live --tenant-id tenant-a --workspace-id workspace-a --actor-id actor-a --connection-id conn_x --compliance-gate-ref gate_x --worker-mode opencli",
-                "seektalent liepin-smoke --live --tenant-id tenant-a --workspace-id workspace-a --actor-id actor-a --connection-id conn_x --compliance-gate-ref gate_x --worker-mode managed_local",
                 "seektalent liepin-smoke --live --tenant-id tenant-a --workspace-id workspace-a --actor-id actor-a --connection-id conn_x --compliance-gate-ref gate_x --worker-mode external_http --worker-base-url http://127.0.0.1:8123",
             ],
             "outputs": "Human-readable smoke status on stdout; validation errors are written to stderr.",
@@ -1848,57 +1845,6 @@ def _liepin_compliance_gate_verify_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def _liepin_replay_fixtures_command(args: argparse.Namespace) -> int:
-    del args
-    worker_dir = _liepin_worker_package_dir()
-    if not worker_dir.is_dir():
-        print(
-            "validation failed: Liepin Bun worker package not found; "
-            "liepin-replay-fixtures requires a source checkout",
-            file=sys.stderr,
-        )
-        return 1
-    return _run_liepin_replay_fixtures_process(
-        ["bun", "test", "tests/extraction.test.ts", "tests/redaction.test.ts"],
-        cwd=worker_dir,
-    )
-
-
-def _liepin_bun_compatibility_gate_command(args: argparse.Namespace) -> int:
-    del args
-    worker_dir = _liepin_worker_package_dir()
-    if not worker_dir.is_dir():
-        print(
-            "validation failed: Liepin Bun worker package not found; "
-            "liepin-bun-compatibility-gate requires a source checkout",
-            file=sys.stderr,
-        )
-        return 1
-    return _run_liepin_bun_compatibility_gate_process(["bun", "run", "compatibility-gate"], cwd=worker_dir)
-
-
-def _liepin_worker_package_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "apps" / "liepin-worker"
-
-
-def _run_liepin_replay_fixtures_process(command: list[str], *, cwd: Path) -> int:
-    try:
-        completed = subprocess.run(command, cwd=cwd, check=False)
-    except FileNotFoundError:
-        print("validation failed: Bun executable not found for liepin fixture replay", file=sys.stderr)
-        return 1
-    return completed.returncode
-
-
-def _run_liepin_bun_compatibility_gate_process(command: list[str], *, cwd: Path) -> int:
-    try:
-        completed = subprocess.run(command, cwd=cwd, check=False)
-    except FileNotFoundError:
-        print("validation failed: Bun executable not found for liepin compatibility gate", file=sys.stderr)
-        return 1
-    return completed.returncode
-
-
 def _liepin_cli_db_path(args: argparse.Namespace) -> Path:
     if args.db_path is not None:
         return Path(args.db_path)
@@ -2166,18 +2112,6 @@ def build_exec_parser() -> argparse.ArgumentParser:
     gate_verify_parser.add_argument("--purpose", default="search")
     gate_verify_parser.add_argument("--db-path")
     gate_verify_parser.set_defaults(handler=_liepin_compliance_gate_command)
-
-    liepin_replay_parser = subparsers.add_parser(
-        "liepin-replay-fixtures",
-        help="Replay redacted Liepin worker fixtures without live Liepin access.",
-    )
-    liepin_replay_parser.set_defaults(handler=_liepin_replay_fixtures_command)
-
-    liepin_bun_gate_parser = subparsers.add_parser(
-        "liepin-bun-compatibility-gate",
-        help="Run the local Bun Playwright compatibility gate without live Liepin access.",
-    )
-    liepin_bun_gate_parser.set_defaults(handler=_liepin_bun_compatibility_gate_command)
 
     liepin_smoke_parser = subparsers.add_parser(
         "liepin-smoke",

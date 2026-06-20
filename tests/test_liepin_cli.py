@@ -533,91 +533,6 @@ def test_liepin_compliance_gate_verify_rejects_missing_wrong_account_and_no_sear
     assert "requires --purpose search" in capsys.readouterr().err
 
 
-def test_liepin_replay_fixtures_runs_without_live_account(monkeypatch) -> None:
-    calls: list[dict[str, object]] = []
-
-    def fake_runner(command: list[str], *, cwd: Path) -> int:
-        calls.append({"command": command, "cwd": cwd})
-        return 0
-
-    monkeypatch.setattr(cli, "_run_liepin_replay_fixtures_process", fake_runner, raising=False)
-
-    status = cli.main(["liepin-replay-fixtures"])
-
-    assert status == 0
-    assert calls == [
-        {
-            "command": ["bun", "test", "tests/extraction.test.ts", "tests/redaction.test.ts"],
-            "cwd": Path(cli.__file__).resolve().parents[2] / "apps" / "liepin-worker",
-        }
-    ]
-    assert all("live" not in part for part in calls[0]["command"])
-
-
-def test_liepin_bun_compatibility_gate_command(monkeypatch) -> None:
-    calls: list[dict[str, object]] = []
-
-    def fake_runner(command: list[str], *, cwd: Path) -> int:
-        calls.append({"command": command, "cwd": cwd})
-        return 7
-
-    monkeypatch.setattr(cli, "_run_liepin_bun_compatibility_gate_process", fake_runner, raising=False)
-
-    status = cli.main(["liepin-bun-compatibility-gate"])
-
-    assert status == 7
-    assert calls == [
-        {
-            "command": ["bun", "run", "compatibility-gate"],
-            "cwd": Path(cli.__file__).resolve().parents[2] / "apps" / "liepin-worker",
-        }
-    ]
-
-
-def test_liepin_bun_compatibility_gate_requires_source_worker_package(
-    capsys, monkeypatch, tmp_path: Path
-) -> None:
-    calls: list[dict[str, object]] = []
-
-    monkeypatch.setattr(cli, "_liepin_worker_package_dir", lambda: tmp_path / "missing-worker", raising=False)
-    monkeypatch.setattr(
-        cli,
-        "_run_liepin_bun_compatibility_gate_process",
-        lambda command, *, cwd: calls.append({"command": command, "cwd": cwd}) or 99,
-    )
-
-    status = cli.main(["liepin-bun-compatibility-gate"])
-    captured = capsys.readouterr()
-
-    assert status == 1
-    assert calls == []
-    assert "worker package" in captured.err
-    assert "source checkout" in captured.err
-    assert "Bun executable" not in captured.err
-
-
-def test_liepin_bun_compatibility_gate_reports_missing_bun_when_worker_package_exists(
-    capsys, monkeypatch, tmp_path: Path
-) -> None:
-    worker_dir = tmp_path / "apps" / "liepin-worker"
-    worker_dir.mkdir(parents=True)
-    (worker_dir / "package.json").write_text('{"scripts":{"compatibility-gate":"bun test"}}\n', encoding="utf-8")
-
-    monkeypatch.setattr(cli, "_liepin_worker_package_dir", lambda: worker_dir, raising=False)
-
-    def missing_bun(command: list[str], *, cwd: Path, check: bool):
-        raise FileNotFoundError(command[0])
-
-    monkeypatch.setattr(cli.subprocess, "run", missing_bun)
-
-    status = cli.main(["liepin-bun-compatibility-gate"])
-    captured = capsys.readouterr()
-
-    assert status == 1
-    assert "Bun executable" in captured.err
-    assert "worker package" not in captured.err
-
-
 def test_liepin_smoke_requires_live_flag(capsys) -> None:
     status = cli.main(["liepin-smoke"])
 
@@ -638,7 +553,7 @@ def test_liepin_smoke_live_requires_scope_gate_and_connection(capsys) -> None:
     assert "compliance-gate-ref" in captured.err
 
 
-def test_liepin_smoke_live_verifies_connection_gate_and_uses_managed_local_budget(
+def test_liepin_smoke_live_verifies_connection_gate_and_uses_opencli_budget(
     capsys, monkeypatch, tmp_path: Path
 ) -> None:
     db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
@@ -701,7 +616,7 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_managed_local_budge
 
     captured = capsys.readouterr()
     assert status == 0
-    assert built_settings[0].liepin_worker_mode == "managed_local"
+    assert built_settings[0].liepin_worker_mode == "opencli"
     assert built_settings[0].liepin_live_enabled is True
     assert worker.ensure_ready_called is True
     assert worker.session_status_calls == [
@@ -727,7 +642,7 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_managed_local_budge
     assert smoke_candidates[0].candidate_id == "worker-candidate-1"
     assert smoke_candidates[0].stable_provider_id == "provider-subject-1"
     assert "compliance: approved" in captured.out
-    assert "worker setup: managed_local" in captured.out
+    assert "worker setup: opencli" in captured.out
     assert "worker health: ok" in captured.out
     assert "session: ready" in captured.out
     assert "card_count: 1" in captured.out
@@ -942,7 +857,7 @@ def test_liepin_smoke_opencli_override_revalidates_settings(
     assert "liepin_opencli_allowed_hosts_json must not be empty" in capsys.readouterr().err
 
 
-def test_liepin_smoke_worker_base_url_overrides_managed_local_mode(
+def test_liepin_smoke_worker_base_url_overrides_local_mode(
     monkeypatch, tmp_path: Path
 ) -> None:
     db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
@@ -1117,7 +1032,7 @@ def test_liepin_smoke_live_reports_worker_failure_without_raw_streams(
 
     captured = capsys.readouterr()
     assert status == 1
-    assert "worker setup: managed_local" in captured.out
+    assert "worker setup: opencli" in captured.out
     assert "worker_failed" in captured.err
     assert provider_account_hash not in captured.out
     assert provider_account_hash not in captured.err
@@ -1244,7 +1159,7 @@ class FailingSmokeWorker:
             on_event(
                 "worker_failed",
                 {
-                    "mode": "managed_local",
+                    "mode": "opencli",
                     "setup_status": "worker_failed",
                     "diagnostics": {
                         "stdout": "stdout secret",
