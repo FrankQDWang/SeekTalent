@@ -58,20 +58,21 @@ CHINESE_DIGITS = {
 }
 
 
-def build_input_truth(*, job_title: str, jd: str, notes: str) -> InputTruth:
+def build_input_truth(*, job_title: str | None, jd: str, notes: str) -> InputTruth:
+    normalized_job_title = _clean_text(job_title or "")
     return InputTruth(
-        job_title=job_title,
+        job_title=normalized_job_title,
         jd=jd,
         notes=notes,
-        job_title_sha256=hashlib.sha256(job_title.encode("utf-8")).hexdigest(),
+        job_title_sha256=hashlib.sha256(normalized_job_title.encode("utf-8")).hexdigest(),
         jd_sha256=hashlib.sha256(jd.encode("utf-8")).hexdigest(),
         notes_sha256=hashlib.sha256(notes.encode("utf-8")).hexdigest(),
     )
 
 
-def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title: str) -> RequirementSheet:
-    normalized_job_title = _clean_text(job_title)
+def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title: str | None) -> RequirementSheet:
     title_anchor_terms = _normalize_title_anchor_terms(draft.title_anchor_terms)
+    normalized_job_title = _clean_text(job_title or "") or (title_anchor_terms[0] if title_anchor_terms else "")
     title_anchor_rationale = _clean_text(draft.title_anchor_rationale)
     role_summary = _clean_text(draft.role_summary)
     scoring_rationale = _clean_text(draft.scoring_rationale)

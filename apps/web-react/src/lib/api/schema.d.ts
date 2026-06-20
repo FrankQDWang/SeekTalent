@@ -1301,6 +1301,8 @@ export interface components {
       notes?: string | null;
       /** Sourceids */
       sourceIds?: string[];
+      /** Sourcekinds */
+      sourceKinds?: string[] | null;
       /** Idempotencykey */
       idempotencyKey: string;
     };

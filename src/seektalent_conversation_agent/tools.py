@@ -56,7 +56,7 @@ class AgentToolAdapter:
         self,
         *,
         conversation_id: str,
-        job_title: str,
+        job_title: str | None,
         jd_text: str,
         notes: str | None,
         source_ids: list[str],

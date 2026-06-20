@@ -501,7 +501,7 @@ class WorkflowRuntime:
     def extract_requirements(
         self,
         *,
-        job_title: str,
+        job_title: str | None,
         jd: str,
         notes: str,
         progress_callback: ProgressCallback | None = None,
@@ -720,7 +720,7 @@ class WorkflowRuntime:
     async def extract_requirements_async(
         self,
         *,
-        job_title: str,
+        job_title: str | None,
         jd: str,
         notes: str,
         progress_callback: ProgressCallback | None = None,
@@ -1053,7 +1053,7 @@ class WorkflowRuntime:
     async def _build_run_state(
         self,
         *,
-        job_title: str,
+        job_title: str | None,
         jd: str,
         notes: str,
         tracer: RunTracer,
@@ -1078,17 +1078,17 @@ class WorkflowRuntime:
             run_stage_error_factory=RunStageError,
         )
 
-    def _write_run_preamble(self, *, tracer: RunTracer, job_title: str, jd: str, notes: str) -> None:
+    def _write_run_preamble(self, *, tracer: RunTracer, job_title: str | None, jd: str, notes: str) -> None:
         tracer.write_json("runtime.run_config", self._build_public_run_config())
         self._write_prompt_snapshots(tracer)
         input_snapshot = {
-            "job_title_chars": len(job_title),
+            "job_title_chars": len(job_title or ""),
             "jd_chars": len(jd),
             "notes_chars": len(notes),
-            "job_title_sha256": hashlib.sha256(job_title.encode("utf-8")).hexdigest(),
+            "job_title_sha256": hashlib.sha256((job_title or "").encode("utf-8")).hexdigest(),
             "jd_sha256": hashlib.sha256(jd.encode("utf-8")).hexdigest(),
             "notes_sha256": hashlib.sha256(notes.encode("utf-8")).hexdigest(),
-            "job_title_preview": self._preview_text(job_title, limit=120),
+            "job_title_preview": self._preview_text(job_title or "", limit=120),
             "jd_preview": self._preview_text(jd, limit=180),
             "notes_preview": self._preview_text(notes, limit=180),
         }
@@ -3413,10 +3413,10 @@ class WorkflowRuntime:
             return str(truth.get("job_title", ""))
         return ""
 
-    def _input_text_refs(self, *, job_title: str, jd: str, notes: str) -> dict[str, object]:
+    def _input_text_refs(self, *, job_title: str | None, jd: str, notes: str) -> dict[str, object]:
         return {
             "input_truth_ref": "input_truth.json",
-            "job_title": job_title,
+            "job_title": job_title or "",
             "jd_sha256": hashlib.sha256(jd.encode("utf-8")).hexdigest(),
             "notes_sha256": hashlib.sha256(notes.encode("utf-8")).hexdigest(),
             "jd_chars": len(jd),

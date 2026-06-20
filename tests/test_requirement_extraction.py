@@ -72,6 +72,28 @@ def test_normalize_requirement_draft_sets_job_title_from_input_truth() -> None:
     assert legacy_title_key not in sheet.model_dump(mode="json")
 
 
+def test_requirement_input_truth_accepts_missing_job_title() -> None:
+    input_truth = build_input_truth(job_title=None, jd="Build retrieval systems in Python.", notes="")
+
+    assert input_truth.job_title == ""
+    assert input_truth.job_title_sha256 == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
+
+def test_normalize_requirement_draft_uses_anchor_when_job_title_is_missing() -> None:
+    draft = RequirementExtractionDraft(
+        title_anchor_terms=["Python"],
+        title_anchor_rationale="title has one stable technical anchor",
+        jd_query_terms=["retrieval"],
+        role_summary="Build retrieval systems.",
+        must_have_capabilities=["Python"],
+        scoring_rationale="Prioritize Python retrieval experience.",
+    )
+
+    sheet = normalize_requirement_draft(draft, job_title=None)
+
+    assert sheet.job_title == "Python"
+
+
 def _fake_usage_result(output: RequirementExtractionDraft):
     class FakeUsage:
         input_tokens = 12

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from seektalent.config import AppSettings
 from seektalent_agent_memory.privacy import MemoryPrivacyError
@@ -70,13 +70,8 @@ class AgentMessageRequest(BaseModel):
     jobTitle: str | None = Field(default=None, min_length=1, max_length=256)
     notes: str | None = Field(default=None, max_length=5000)
     sourceIds: list[str] = Field(default_factory=lambda: ["cts"], min_length=1, max_length=2)
+    sourceKinds: list[str] | None = Field(default=None, min_length=1, max_length=2)
     idempotencyKey: str = Field(min_length=1, max_length=160)
-
-    @model_validator(mode="after")
-    def require_submit_jd_fields(self) -> "AgentMessageRequest":
-        if self.messageType == "submitJd" and self.jobTitle is None:
-            raise ValueError("jobTitle is required for submitJd messages")
-        return self
 
 
 class RequirementDraftOperationRequest(BaseModel):
@@ -332,8 +327,6 @@ async def submit_message(
     service = get_agent_service(request)
     try:
         if payload.messageType == "submitJd":
-            if payload.jobTitle is None:
-                raise ConversationAgentError("agent_request_invalid")
             response = service.submit_jd(
                 conversation_id=conversation_id,
                 owner_user_id=user.user_id,
@@ -341,7 +334,10 @@ async def submit_message(
                 job_title=payload.jobTitle,
                 jd_text=payload.text,
                 notes=payload.notes,
-                source_ids=payload.sourceIds,
+                source_kinds=payload.sourceKinds,
+                source_ids=None
+                if payload.sourceKinds is not None and "sourceIds" not in payload.model_fields_set
+                else payload.sourceIds,
                 idempotency_key=payload.idempotencyKey,
             )
         else:
