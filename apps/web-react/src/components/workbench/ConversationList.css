@@ -66,3 +66,31 @@
   color: var(--st-muted);
   font-style: normal;
 }
+
+.conversation-shell[data-rail="compact"] .conversation-list {
+  gap: var(--st-space-2);
+  padding: var(--st-space-2);
+}
+
+.conversation-shell[data-rail="compact"] .conversation-list__header {
+  justify-content: center;
+}
+
+.conversation-shell[data-rail="compact"] .conversation-list__header h2,
+.conversation-shell[data-rail="compact"] .conversation-list__header span,
+.conversation-shell[data-rail="compact"] .conversation-list__item span {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.conversation-shell[data-rail="compact"] .conversation-list__item {
+  grid-template-columns: 1fr;
+  justify-items: center;
+  min-height: 44px;
+  padding: var(--st-space-2) 0;
+}

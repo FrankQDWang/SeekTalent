@@ -7,13 +7,29 @@
       380px
     );
   min-height: 0;
+  position: relative;
 }
 
 .conversation-shell[data-side="hidden"] {
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
 }
 
-.conversation-shell__rail,
+.conversation-shell[data-rail="compact"] {
+  grid-template-columns: 72px minmax(0, 1fr) minmax(300px, 380px);
+}
+
+.conversation-shell[data-side="hidden"][data-rail="compact"] {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.conversation-shell[data-rail="closed"] {
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+}
+
+.conversation-shell[data-side="hidden"][data-rail="closed"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .conversation-shell__side {
   min-height: 0;
   overflow: auto;
@@ -22,6 +38,63 @@
 .conversation-shell__rail {
   background: var(--st-panel);
   border-right: 1px solid var(--st-border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.conversation-shell__rail-toolbar {
+  align-items: center;
+  background: var(--st-panel);
+  border-bottom: 1px solid var(--st-border);
+  display: flex;
+  gap: var(--st-space-1);
+  justify-content: flex-end;
+  min-height: 44px;
+  padding: 0 var(--st-space-3);
+}
+
+.conversation-shell__rail-control,
+.conversation-shell__rail-opener {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--st-radius-sm);
+  color: var(--st-muted);
+  cursor: pointer;
+  display: inline-flex;
+  height: 32px;
+  justify-content: center;
+  width: 32px;
+}
+
+.conversation-shell__rail-control:hover,
+.conversation-shell__rail-opener:hover {
+  background: var(--st-surface);
+  color: var(--st-ink);
+}
+
+.conversation-shell__rail-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.conversation-shell[data-rail="compact"] .conversation-shell__rail-toolbar {
+  flex-direction: column;
+  justify-content: center;
+  min-height: 84px;
+  padding: var(--st-space-2) 0;
+}
+
+.conversation-shell__rail-opener {
+  background: var(--st-panel);
+  border: 1px solid var(--st-border);
+  left: var(--st-space-3);
+  position: absolute;
+  top: var(--st-space-3);
+  z-index: 2;
 }
 
 .conversation-shell__main {
@@ -50,7 +123,8 @@
     display: none;
   }
 
-  .conversation-shell__rail {
+  .conversation-shell__rail,
+  .conversation-shell__rail-opener {
     display: none;
   }
 }
