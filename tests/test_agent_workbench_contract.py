@@ -228,6 +228,7 @@ def test_agent_workbench_projects_workflow_start_state(
     assert response.conversation.workflowStartState == expected_state
     assert response.conversation.workflowStartReasonCode == reason_code
     assert response.conversation.workflowStartIntentId == ("workflow_intent_1" if intent is not None else None)
+    assert response.conversation.runtimeRunId == intent_runtime_run_id
 
 
 def test_agent_workbench_projects_canonical_requirement_draft_sections() -> None:
@@ -1879,7 +1880,7 @@ def test_agent_workbench_conversation_list_route_returns_typed_summaries(tmp_pat
     refreshed_summary = refreshed.json()["conversations"][0]
     assert refreshed_summary["conversationId"] == conversation_id
     assert refreshed_summary["workflowStartIntentId"] == confirmed.json()["conversation"]["workflowStartIntentId"]
-    assert refreshed_summary["workflowStartState"] in {"queued", "running"}
+    assert refreshed_summary["workflowStartState"] in {"queued", "starting", "running"}
     if refreshed_summary["workflowStartState"] == "running":
         assert refreshed_summary["runtimeRunId"]
     assert refreshed_summary["workflowStartReasonCode"] is None
