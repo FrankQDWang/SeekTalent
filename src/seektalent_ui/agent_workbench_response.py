@@ -63,6 +63,7 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
     messages = _latest(input.messages, MAX_WORKBENCH_MESSAGES)
     activities = [_activity_response(activity) for activity in bounded_input.activity_items]
     reason_code = state.reason_code
+    runtime_run_id = _workflow_runtime_run_id(state.runtime_run_id, input.workflow_start_intent)
     if input.requirement_draft_missing and reason_code is None:
         reason_code = "runtime_projection_unavailable"
     response = AgentWorkbenchConversationResponse(
@@ -71,11 +72,11 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
             title=state.title,
             status=state.status,
             isArchived=state.is_archived,
-            runtimeRunId=state.runtime_run_id,
+            runtimeRunId=runtime_run_id,
             workbenchSessionId=state.workbench_session_id,
             workflowStartIntentId=_workflow_start_intent_id(input),
             workflowStartState=_workflow_start_state(
-                runtime_run_id=state.runtime_run_id,
+                runtime_run_id=runtime_run_id,
                 linked_runtime_runs=state.linked_runtime_runs,
                 workflow_start_intent=input.workflow_start_intent,
             ),
@@ -136,16 +137,20 @@ def project_agent_workbench_conversation_summary(
     *,
     workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None = None,
 ) -> AgentWorkbenchConversationSummaryResponse:
+    runtime_run_id = _workflow_runtime_run_id(
+        cast(str | None, getattr(state, "runtime_run_id", None)),
+        workflow_start_intent,
+    )
     return AgentWorkbenchConversationSummaryResponse(
         conversationId=str(getattr(state, "conversation_id")),
         title=str(getattr(state, "title")),
         status=str(getattr(state, "status")),
         isArchived=bool(getattr(state, "is_archived")),
-        runtimeRunId=cast(str | None, getattr(state, "runtime_run_id", None)),
+        runtimeRunId=runtime_run_id,
         workbenchSessionId=cast(str | None, getattr(state, "workbench_session_id", None)),
         workflowStartIntentId=_workflow_start_intent_id_from_state(state, workflow_start_intent),
         workflowStartState=_workflow_start_state(
-            runtime_run_id=cast(str | None, getattr(state, "runtime_run_id", None)),
+            runtime_run_id=runtime_run_id,
             linked_runtime_runs=(),
             workflow_start_intent=workflow_start_intent,
         ),
@@ -185,6 +190,17 @@ def _workflow_start_state(
     if intent.status in {"failed", "cancelled"}:
         return "failed"
     return "not_started"
+
+
+def _workflow_runtime_run_id(
+    state_runtime_run_id: str | None,
+    workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None,
+) -> str | None:
+    if state_runtime_run_id is not None:
+        return state_runtime_run_id
+    if workflow_start_intent is not None and workflow_start_intent.status == "started":
+        return workflow_start_intent.runtime_run_id
+    return None
 
 
 def _workflow_start_reason_code(workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None) -> str | None:

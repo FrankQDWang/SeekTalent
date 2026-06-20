@@ -14,6 +14,7 @@ from seektalent_ui.workbench_store import WorkbenchUser
 @dataclass
 class LocalAgentRateLimiter:
     max_writes_per_minute: int = 60
+    window_seconds: int = 60
     now: Callable[[], float] = time.monotonic
 
     def __post_init__(self) -> None:
@@ -27,7 +28,7 @@ class LocalAgentRateLimiter:
     def _check_bucket(self, key: tuple[str, str]) -> None:
         bucket = self._hits[key]
         current = self.now()
-        while bucket and current - bucket[0] >= 60:
+        while bucket and current - bucket[0] >= self.window_seconds:
             bucket.popleft()
         if len(bucket) >= self.max_writes_per_minute:
             raise ConversationAgentError("agent_rate_limited")

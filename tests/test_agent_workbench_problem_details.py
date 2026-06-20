@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
+import pytest
 
 from seektalent.config import AppSettings
 from seektalent_conversation_agent.errors import ConversationAgentError
@@ -74,6 +75,81 @@ def test_workbench_validation_errors_use_problem_details(tmp_path: Path) -> None
     body = response.json()
     assert body["reasonCode"] == "agent_request_invalid"
     assert body["correlationId"] == "corr-validation"
+    assert body["regions"]
+
+
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        (
+            "/api/agent/workbench/conversations/agent_conv_1/messages",
+            {
+                "messageType": "userText",
+                "text": "   \n\t ",
+                "idempotencyKey": "message-1",
+            },
+        ),
+        (
+            "/api/agent/workbench/conversations/agent_conv_1/messages",
+            {
+                "messageType": "submitJd",
+                "text": "JD 正文",
+                "sourceKinds": ["cts"],
+                "idempotencyKey": "   ",
+            },
+        ),
+        (
+            "/api/agent/workbench/conversations/agent_conv_1/requirements/confirm",
+            {
+                "draftRevisionId": "   ",
+                "expectedDraftRevisionId": "draft_1",
+                "idempotencyKey": "confirm-1",
+            },
+        ),
+        (
+            "/api/agent/workbench/conversations/agent_conv_1/requirements/operations",
+            {
+                "draftRevisionId": "draft_1",
+                "expectedDraftRevisionId": "draft_1",
+                "idempotencyKey": "update-1",
+                "operations": [
+                    {
+                        "op": "edit_text",
+                        "itemId": "item_1",
+                        "text": "   ",
+                    }
+                ],
+            },
+        ),
+        (
+            "/api/agent/workbench/conversations/agent_conv_1/requirements/amend-from-text",
+            {
+                "draftRevisionId": "draft_1",
+                "expectedDraftRevisionId": "draft_1",
+                "text": "   ",
+                "idempotencyKey": "amend-1",
+            },
+        ),
+    ],
+)
+def test_workbench_validation_rejects_whitespace_only_strings(
+    tmp_path: Path,
+    path: str,
+    payload: dict[str, object],
+) -> None:
+    client = _client(tmp_path)
+    client.app.state.workbench_store.ensure_local_actor()
+
+    response = client.post(
+        path,
+        json=payload,
+        headers={"X-Correlation-ID": "corr-blank"},
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["reasonCode"] == "agent_request_invalid"
+    assert body["correlationId"] == "corr-blank"
     assert body["regions"]
 
 
