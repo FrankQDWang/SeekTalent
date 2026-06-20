@@ -27,6 +27,9 @@ from seektalent_ui.workbench_store import WorkbenchStore
 from seektalent_ui.workbench_store_types import WorkbenchUser
 
 
+MAX_WORKBENCH_RUNTIME_EVENT_PAGE = 100
+
+
 class RuntimeEventPageLike(Protocol):
     events: Sequence[object]
     reason_code: str | None
@@ -139,21 +142,29 @@ def _runtime_inputs(
     tuple[AgentWorkbenchReviewArtifactResponse, ...],
 ]:
     try:
-        runtime = runtime_response_from_run(runtime_store.get_run(runtime_run_id))
-        runtime_events = tuple(_list_all_runtime_events(runtime_store=runtime_store, runtime_run_id=runtime_run_id))
+        run = runtime_store.get_run(runtime_run_id)
+        runtime = runtime_response_from_run(run)
+        runtime_events = tuple(
+            _list_recent_runtime_events(runtime_store=runtime_store, runtime_run_id=runtime_run_id, run=run)
+        )
     except LookupError:
         return None, (), ()
     return runtime, runtime_events, tuple(_review_artifacts(runtime_store=runtime_store, runtime_run_id=runtime_run_id))
 
 
-def _list_all_runtime_events(
+def _list_recent_runtime_events(
     *,
     runtime_store: RuntimeProjectionStore,
     runtime_run_id: str,
+    run: object,
 ) -> Iterable[object]:
-    after_seq = 0
+    after_seq = max(0, (_int_or_none(_attr(run, "latest_event_seq")) or 0) - MAX_WORKBENCH_RUNTIME_EVENT_PAGE)
     while True:
-        page = runtime_store.list_events(runtime_run_id=runtime_run_id, after_seq=after_seq, limit=500)
+        page = runtime_store.list_events(
+            runtime_run_id=runtime_run_id,
+            after_seq=after_seq,
+            limit=MAX_WORKBENCH_RUNTIME_EVENT_PAGE,
+        )
         yield from page.events
         if page.reason_code is not None or not page.events or page.next_cursor <= after_seq:
             return

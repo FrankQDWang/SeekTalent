@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Literal, cast
 
 from seektalent_conversation_agent.models import TranscriptActivityItem, TranscriptMessage
@@ -26,12 +27,30 @@ from seektalent_ui.agent_workbench_models import (
 )
 from seektalent_ui.agent_workbench_projection import AgentWorkbenchProjectionInput
 from seektalent_ui.agent_workbench_transcript import build_transcript_groups
+from seektalent_ui.workbench_observability import record_workbench_payload_bytes
+
+
+MAX_WORKBENCH_MESSAGES = 100
+MAX_WORKBENCH_ACTIVITIES = 100
+MAX_WORKBENCH_TOOL_CALLS = 100
+MAX_WORKBENCH_CONTEXT_COMPACTIONS = 20
+MAX_WORKBENCH_RUNTIME_EVENTS = 100
+MAX_WORKBENCH_GRAPH_NODES = 80
+MAX_WORKBENCH_GRAPH_EDGES = 120
+MAX_WORKBENCH_THINKING_ROUNDS = 50
+MAX_WORKBENCH_CANDIDATES = 10
+MAX_WORKBENCH_DETAIL_APPROVALS = 50
+MAX_WORKBENCH_REVIEW_ARTIFACTS = 20
+MAX_WORKBENCH_SOURCE_CONNECTIONS = 20
+MAX_WORKBENCH_LINKED_RUNTIME_RUNS = 20
 
 
 def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchConversationResponse:
     state = input.conversation_reopen_state
-    activities = [_activity_response(activity) for activity in input.activity_items]
-    return AgentWorkbenchConversationResponse(
+    bounded_input = _bounded_projection_input(input)
+    messages = _latest(input.messages, MAX_WORKBENCH_MESSAGES)
+    activities = [_activity_response(activity) for activity in bounded_input.activity_items]
+    response = AgentWorkbenchConversationResponse(
         conversation=AgentWorkbenchConversationSummaryResponse(
             conversationId=state.conversation_id,
             title=state.title,
@@ -57,21 +76,21 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
                     completedAt=link.completed_at,
                     isActive=link.is_active,
                 )
-                for link in state.linked_runtime_runs
+                for link in _latest(state.linked_runtime_runs, MAX_WORKBENCH_LINKED_RUNTIME_RUNS)
             ],
             updatedAt=state.last_opened_at,
         ),
-        messages=[_message_response(message) for message in input.messages],
+        messages=[_message_response(message) for message in messages],
         activities=activities,
-        transcriptGroups=build_transcript_groups(input),
+        transcriptGroups=build_transcript_groups(bounded_input),
         requirementDraft=_requirement_draft(state.latest_draft_revision_id, input.messages),
         runtime=input.runtime or _runtime_from_state(input),
-        strategyGraph=_strategy_graph(input.activity_items),
-        thinkingProcess=_thinking_process(input),
-        sourceConnections=list(input.source_connections),
-        candidates=list(input.candidates),
-        detailApprovals=list(input.detail_approvals),
-        reviewArtifacts=list(input.review_artifacts),
+        strategyGraph=_strategy_graph(bounded_input.activity_items),
+        thinkingProcess=_thinking_process(bounded_input),
+        sourceConnections=list(_latest(input.source_connections, MAX_WORKBENCH_SOURCE_CONNECTIONS)),
+        candidates=list(input.candidates[:MAX_WORKBENCH_CANDIDATES]),
+        detailApprovals=list(_latest(input.detail_approvals, MAX_WORKBENCH_DETAIL_APPROVALS)),
+        reviewArtifacts=list(_latest(input.review_artifacts, MAX_WORKBENCH_REVIEW_ARTIFACTS)),
         finalSummary=input.final_summary,
         pendingActions=AgentWorkbenchPendingActionsResponse(
             primary=state.pending_user_action,
@@ -86,6 +105,19 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
             latestRuntimeEventSeq=state.latest_rendered_runtime_event_seq,
         ),
         reasonCode=state.reason_code,
+    )
+    record_workbench_payload_bytes(len(response.model_dump_json()))
+    return response
+
+
+def _bounded_projection_input(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchProjectionInput:
+    return replace(
+        input,
+        messages=tuple(_latest(input.messages, MAX_WORKBENCH_MESSAGES)),
+        activity_items=tuple(_latest(input.activity_items, MAX_WORKBENCH_ACTIVITIES)),
+        tool_call_records=tuple(_latest(input.tool_call_records, MAX_WORKBENCH_TOOL_CALLS)),
+        context_compactions=tuple(_latest(input.context_compactions, MAX_WORKBENCH_CONTEXT_COMPACTIONS)),
+        runtime_events=tuple(_latest(input.runtime_events, MAX_WORKBENCH_RUNTIME_EVENTS)),
     )
 
 
@@ -196,6 +228,7 @@ def _runtime_from_state(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchR
 
 
 def _strategy_graph(activity_items: Sequence[TranscriptActivityItem]) -> AgentWorkbenchStrategyGraphResponse:
+    activity_items = _latest(activity_items, MAX_WORKBENCH_GRAPH_NODES - 1)
     nodes = [
         AgentWorkbenchGraphNodeResponse(
             nodeId="requirements",
@@ -227,7 +260,10 @@ def _strategy_graph(activity_items: Sequence[TranscriptActivityItem]) -> AgentWo
             )
         )
         previous_node_id = node_id
-    return AgentWorkbenchStrategyGraphResponse(nodes=nodes, edges=edges)
+    return AgentWorkbenchStrategyGraphResponse(
+        nodes=nodes[:MAX_WORKBENCH_GRAPH_NODES],
+        edges=edges[:MAX_WORKBENCH_GRAPH_EDGES],
+    )
 
 
 def _thinking_process(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchThinkingProcessResponse:
@@ -263,6 +299,7 @@ def _thinking_process(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchThi
                 cards=cards,
             )
         )
+    rounds = _latest(rounds, MAX_WORKBENCH_THINKING_ROUNDS)
     active_round = rounds[-1].roundNo if rounds else None
     return AgentWorkbenchThinkingProcessResponse(activeRoundNo=active_round, rounds=rounds)
 
@@ -394,3 +431,11 @@ def _status(value: str | None) -> AgentWorkbenchStatus:
     if normalized in {"cancelled", "canceled", "superseded"}:
         return "cancelled"
     return "pending"
+
+
+def _latest[T](items: Sequence[T], limit: int) -> list[T]:
+    if limit <= 0:
+        return []
+    if len(items) <= limit:
+        return list(items)
+    return list(items[-limit:])
