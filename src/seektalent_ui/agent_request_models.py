@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 SourceKind = Literal["cts", "liepin"]
@@ -18,7 +18,33 @@ MAX_SECTION_ID_CHARS = 120
 MAX_REASON_CODE_CHARS = 160
 
 
-class AgentMessageRequest(BaseModel):
+class RequestModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    @field_validator(
+        "amendmentId",
+        "baseRevisionId",
+        "draftRevisionId",
+        "expectedDraftRevisionId",
+        "idempotencyKey",
+        "itemId",
+        "jobTitle",
+        "notes",
+        "reasonCode",
+        "reviewItemId",
+        "runtimeRunId",
+        "targetSection",
+        "targetSectionHint",
+        "text",
+        mode="before",
+        check_fields=False,
+    )
+    @classmethod
+    def trim_string_fields(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
+class AgentMessageRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     messageType: Literal["submitJd", "userText"]
@@ -30,7 +56,7 @@ class AgentMessageRequest(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class WorkbenchSubmitJdMessageRequest(BaseModel):
+class WorkbenchSubmitJdMessageRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     messageType: Literal["submitJd"]
@@ -41,7 +67,7 @@ class WorkbenchSubmitJdMessageRequest(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class WorkbenchUserTextMessageRequest(BaseModel):
+class WorkbenchUserTextMessageRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     messageType: Literal["userText"]
@@ -55,7 +81,7 @@ WorkbenchAgentMessageRequest = Annotated[
 ]
 
 
-class RequirementDraftOperationRequest(BaseModel):
+class RequirementDraftOperationRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     op: Literal["set_selected", "edit_text", "delete_item", "move_item", "set_enabled"]
@@ -90,7 +116,7 @@ class RequirementDraftOperationRequest(BaseModel):
         return payload
 
 
-class RequirementOperationsRequest(BaseModel):
+class RequirementOperationsRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
@@ -102,7 +128,7 @@ class RequirementOperationsRequest(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class WorkbenchRequirementOperationsRequest(BaseModel):
+class WorkbenchRequirementOperationsRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
@@ -114,7 +140,7 @@ class WorkbenchRequirementOperationsRequest(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class ReviewResolutionOperationRequest(BaseModel):
+class ReviewResolutionOperationRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     op: Literal["accept_candidate", "edit_candidate", "move_candidate", "reject_candidate", "reject_fragment"]
@@ -134,7 +160,7 @@ class ReviewResolutionOperationRequest(BaseModel):
         return payload
 
 
-class RequirementAmendRequest(BaseModel):
+class RequirementAmendRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
@@ -144,7 +170,7 @@ class RequirementAmendRequest(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class WorkbenchRequirementAmendRequest(BaseModel):
+class WorkbenchRequirementAmendRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
@@ -154,7 +180,7 @@ class WorkbenchRequirementAmendRequest(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class RequirementReviewResolveRequest(BaseModel):
+class RequirementReviewResolveRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
@@ -167,7 +193,7 @@ class RequirementReviewResolveRequest(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class RequirementConfirmRequest(BaseModel):
+class RequirementConfirmRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
@@ -175,7 +201,7 @@ class RequirementConfirmRequest(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class WorkbenchRequirementConfirmRequest(BaseModel):
+class WorkbenchRequirementConfirmRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     draftRevisionId: str = Field(min_length=1, max_length=MAX_REQUEST_ID_CHARS)
@@ -183,7 +209,7 @@ class WorkbenchRequirementConfirmRequest(BaseModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class WorkflowCommandRequest(BaseModel):
+class WorkflowCommandRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
     runtimeRunId: str | None = Field(default=None, min_length=1, max_length=MAX_REQUEST_ID_CHARS)

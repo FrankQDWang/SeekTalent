@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -26,6 +27,7 @@ from seektalent_conversation_agent.models import (
     TranscriptMessage,
 )
 from seektalent_runtime_control.models import RuntimeControlEvent, RuntimeControlEventPage, RuntimeRunRecord
+from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_ui.agent_routes import LocalAgentRateLimiter
 from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchCandidateSummaryResponse,
@@ -1541,6 +1543,31 @@ def test_workbench_message_action_rejects_source_ids_only_submit_jd_contract(tmp
     assert {region["field"] for region in problem["regions"]} >= {"submitJd.sourceIds", "submitJd.sourceKinds"}
 
 
+def test_agent_message_route_rejects_explicit_source_alias_conflict(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+
+    response = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "jobTitle": "Python 平台负责人",
+            "text": "需要 Python API、平台工程和检索排序。",
+            "notes": "优先 toB SaaS",
+            "sourceKinds": ["liepin"],
+            "sourceIds": ["cts"],
+            "idempotencyKey": "submit-jd-source-alias-conflict-1",
+        },
+    )
+
+    assert response.status_code == 400, response.text
+    assert response.json()["reasonCode"] == "job_request_source_kinds_conflict"
+
+
 def test_workbench_submit_jd_route_offloads_sync_work_to_threadpool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import seektalent_ui.agent_workbench_routes as routes
 
@@ -1649,52 +1676,63 @@ def test_workbench_requirement_amend_empty_expected_revision_returns_validation_
     assert problem["regions"][0]["field"] == "expectedDraftRevisionId"
 
 
-def test_agent_workbench_confirm_route_queues_start_intent_without_sync_runtime_start(tmp_path: Path) -> None:
+def test_agent_workbench_confirm_route_wakes_outbox_runner_and_starts_runtime_once(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
-    conversation_id = client.post(
-        "/api/agent/conversations",
-        json={"title": "资深 Python 后端"},
-    ).json()["conversation"]["conversationId"]
-    submitted = client.post(
-        f"/api/agent/conversations/{conversation_id}/messages",
-        json={
-            "messageType": "submitJd",
-            "jobTitle": "Python 平台负责人",
-            "text": "需要 Python API、平台工程和检索排序。",
-            "notes": "优先 toB SaaS",
-            "sourceKinds": ["cts"],
-            "idempotencyKey": "submit-jd-workbench-confirm-1",
-        },
-    )
-    assert submitted.status_code == 200, submitted.text
-    draft_id = submitted.json()["requirementDraftRevisionId"]
+    try:
+        conversation_id = client.post(
+            "/api/agent/conversations",
+            json={"title": "资深 Python 后端"},
+        ).json()["conversation"]["conversationId"]
+        submitted = client.post(
+            f"/api/agent/conversations/{conversation_id}/messages",
+            json={
+                "messageType": "submitJd",
+                "jobTitle": "Python 平台负责人",
+                "text": "需要 Python API、平台工程和检索排序。",
+                "notes": "优先 toB SaaS",
+                "sourceKinds": ["cts"],
+                "idempotencyKey": "submit-jd-workbench-confirm-1",
+            },
+        )
+        assert submitted.status_code == 200, submitted.text
+        draft_id = submitted.json()["requirementDraftRevisionId"]
 
-    confirmed = client.post(
-        f"/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
-        json={
-            "draftRevisionId": draft_id,
-            "expectedDraftRevisionId": draft_id,
-            "idempotencyKey": "confirm-workbench-1",
-        },
-    )
+        confirmed = client.post(
+            f"/api/agent/workbench/conversations/{conversation_id}/requirements/confirm",
+            json={
+                "draftRevisionId": draft_id,
+                "expectedDraftRevisionId": draft_id,
+                "idempotencyKey": "confirm-workbench-1",
+            },
+        )
 
-    assert confirmed.status_code == 200, confirmed.text
-    payload = confirmed.json()
-    assert payload["schemaVersion"] == "agent.workbench.view.v2"
-    assert payload["conversation"]["conversationId"] == conversation_id
-    assert payload["streamCursor"]["snapshotSeq"] == payload["streamCursor"]["latestStreamSeq"]
-    assert payload["streamCursor"]["viewRevision"] == payload["streamCursor"]["snapshotSeq"]
-    assert payload["conversation"]["workflowStartIntentId"]
-    assert payload["conversation"]["workflowStartState"] == "queued"
-    assert payload["conversation"]["workflowStartReasonCode"] is None
-    assert payload["conversation"]["runtimeRunId"] is None
-    assert payload["runtime"] is None
-    service = client.app.state.agent_conversation_service
-    runtime_store = service.tool_adapter.runtime_store
-    assert runtime_store.get_run_by_run_intent_id(
-        f"wts:default:{conversation_id}:{draft_id}"
-    ) is None
+        assert confirmed.status_code == 200, confirmed.text
+        payload = confirmed.json()
+        assert payload["schemaVersion"] == "agent.workbench.view.v2"
+        assert payload["conversation"]["conversationId"] == conversation_id
+        assert payload["streamCursor"]["snapshotSeq"] == payload["streamCursor"]["latestStreamSeq"]
+        assert payload["streamCursor"]["viewRevision"] == payload["streamCursor"]["snapshotSeq"]
+        assert payload["conversation"]["workflowStartIntentId"]
+        assert payload["conversation"]["workflowStartReasonCode"] is None
+        service = client.app.state.agent_conversation_service
+        runtime_store = service.tool_adapter.runtime_store
+        assert runtime_store is not None
+        run_intent_id = f"wts:default:{conversation_id}:{draft_id}"
+        runtime_run = _wait_for_runtime_run(runtime_store, run_intent_id=run_intent_id)
+        assert runtime_run is not None
+        assert _runtime_run_count_for_intent(runtime_store.path, run_intent_id) == 1
+
+        projected_payload = _wait_for_projected_runtime_run(
+            client,
+            conversation_id=conversation_id,
+            runtime_run_id=runtime_run.runtime_run_id,
+        )
+        assert projected_payload["conversation"]["runtimeRunId"] == runtime_run.runtime_run_id
+        assert projected_payload["conversation"]["workflowStartState"] == "running"
+        assert projected_payload["runtime"]["runtimeRunId"] == runtime_run.runtime_run_id
+    finally:
+        client.app.state.workflow_start_outbox_runner.stop()
 
 
 def test_agent_workbench_confirm_route_is_idempotent_across_http_keys_for_same_draft(tmp_path: Path) -> None:
@@ -1841,7 +1879,9 @@ def test_agent_workbench_conversation_list_route_returns_typed_summaries(tmp_pat
     refreshed_summary = refreshed.json()["conversations"][0]
     assert refreshed_summary["conversationId"] == conversation_id
     assert refreshed_summary["workflowStartIntentId"] == confirmed.json()["conversation"]["workflowStartIntentId"]
-    assert refreshed_summary["workflowStartState"] == "queued"
+    assert refreshed_summary["workflowStartState"] in {"queued", "running"}
+    if refreshed_summary["workflowStartState"] == "running":
+        assert refreshed_summary["runtimeRunId"]
     assert refreshed_summary["workflowStartReasonCode"] is None
 
 
@@ -2606,6 +2646,58 @@ def _ensure_local_actor(client: TestClient) -> dict:
             "workspaceId": user.workspace_id,
         }
     }
+
+
+def _wait_for_runtime_run(
+    runtime_store: RuntimeControlStore,
+    *,
+    run_intent_id: str,
+    timeout_seconds: float = 2.0,
+) -> RuntimeRunRecord | None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        run = runtime_store.get_run_by_run_intent_id(run_intent_id)
+        if run is not None:
+            return run
+        time.sleep(0.02)
+    return runtime_store.get_run_by_run_intent_id(run_intent_id)
+
+
+def _wait_for_projected_runtime_run(
+    client: TestClient,
+    *,
+    conversation_id: str,
+    runtime_run_id: str,
+    timeout_seconds: float = 2.0,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_payload: dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        projected = client.get(f"/api/agent/workbench/conversations/{conversation_id}")
+        assert projected.status_code == 200, projected.text
+        last_payload = projected.json()
+        if (
+            last_payload["conversation"]["runtimeRunId"] == runtime_run_id
+            and last_payload["runtime"] is not None
+            and last_payload["runtime"]["runtimeRunId"] == runtime_run_id
+        ):
+            return last_payload
+        time.sleep(0.02)
+    assert last_payload is not None
+    return last_payload
+
+
+def _runtime_run_count_for_intent(db_path: Path, run_intent_id: str) -> int:
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM runtime_control_runs
+            WHERE run_intent_id = ?
+            """,
+            (run_intent_id,),
+        ).fetchone()
+    return int(row[0])
 
 
 def _now() -> str:

@@ -6,6 +6,7 @@ import json
 import os
 import secrets
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, cast
@@ -60,6 +61,7 @@ from seektalent_ui.liepin_security import reject_unsafe_liepin_control_plane
 from seektalent_ui.resources import frontend_available, package_frontend_dir
 from seektalent_ui.workbench_observability import correlation_id_from_request
 from seektalent_ui.workbench_store import WorkbenchStore
+from seektalent_ui.workflow_start_outbox_runner import WorkflowStartOutboxRunner
 
 
 @dataclass(frozen=True)
@@ -82,7 +84,7 @@ def create_app(
     if serve_frontend and app_settings.runtime_mode == "prod":
         cleanup_runtime_artifacts(app_settings)
     store = LiepinStore(_liepin_db_path(app_settings))
-    app = FastAPI(title="SeekTalent UI API")
+    app = FastAPI(title="SeekTalent UI API", lifespan=_lifespan)
     app.state.settings = app_settings
     app.state.dev_mode_env_diagnostics = dev_mode_env_diagnostics
     app.state.workbench_graph_secret = secrets.token_urlsafe(32)
@@ -96,6 +98,9 @@ def create_app(
     app.state.agent_conversation_store = app.state.agent_conversation_service.store
     app.state.runtime_control_store = app.state.agent_conversation_service.tool_adapter.runtime_store
     app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
+    app.state.workflow_start_outbox_runner = WorkflowStartOutboxRunner(
+        service=app.state.agent_conversation_service,
+    )
     app.state.workbench_job_runner = WorkbenchJobRunner(
         store=app.state.workbench_store,
         settings=app_settings,
@@ -104,6 +109,7 @@ def create_app(
     )
     app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
+
     app.state.workbench_store.record_security_audit_event(
         actor_user_id=None,
         actor_role="system",
@@ -454,6 +460,19 @@ def create_app(
 
     _install_custom_openapi(app)
     return app
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    runner = getattr(app.state, "workflow_start_outbox_runner", None)
+    if runner is not None:
+        runner.start()
+        runner.wake()
+    try:
+        yield
+    finally:
+        if runner is not None:
+            runner.stop()
 
 
 def _install_custom_openapi(app: FastAPI) -> None:

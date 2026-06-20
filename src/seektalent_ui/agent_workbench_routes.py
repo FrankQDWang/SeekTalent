@@ -290,7 +290,8 @@ def confirm_agent_workbench_requirements(
             draft_revision_id=payload.draftRevisionId,
             expected_draft_revision_id=payload.expectedDraftRevisionId,
             idempotency_key=payload.idempotencyKey,
-    )
+        )
+        request.app.state.workflow_start_outbox_runner.wake()
     except ConversationAgentError as exc:
         raise _agent_workbench_error(exc, request) from exc
     return _build_agent_workbench_snapshot(request=request, conversation_id=conversation_id, user=user)
