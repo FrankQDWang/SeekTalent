@@ -1,0 +1,38 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "governance-bootstrap-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Reduce Workbench Contract wall time by reusing one static Storybook server for all Storybook checks.",
+  "rationale": "The required Workbench Contract gate built Storybook, then each Storybook Playwright suite managed its own Storybook server lifecycle. CI evidence showed per-suite server startup dominated the wall time when static serving was delegated to Playwright. This change keeps the same macOS runner, visual baselines, and full accessibility, interaction, and visual verification content, but serves the static Storybook build once and reuses that server across the Storybook suites.",
+  "touched_layers": [
+    "docs",
+    "frontend",
+    "governance",
+    "tests"
+  ],
+  "red_files": [
+    "scripts/verify-dev-workbench.sh"
+  ],
+  "verification": [
+    "uv run pytest tests/test_pr_governance.py -q",
+    "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run --group dev python -m pytest tests/test_workbench_contract_ci_optimization.py -q",
+    "uv run --group dev ruff check tests/test_workbench_contract_ci_optimization.py",
+    "SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT=1 scripts/verify-dev-workbench.sh",
+    "pnpm --dir apps/web-react check",
+    "pnpm --dir apps/web-react lint",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "per-suite Storybook server startup inside the required Workbench Contract Storybook suites",
+    "duplicated Storybook transform work after the static Storybook build has already succeeded",
+    "pnpm cache upload overhead in a job whose dependency install is already fast"
+  ],
+  "risks": [
+    "Static Storybook serving must stay behaviorally equivalent for the Storybook Playwright suites.",
+    "The external static Storybook server must be cleaned up when any suite fails.",
+    "The visual suite must stay on macOS because existing screenshot baselines are OS-specific.",
+    "The required Workbench Contract check must continue to fail if any Storybook suite fails."
+  ]
+}

@@ -21,10 +21,42 @@ def test_workbench_contract_ci_skips_duplicate_python_preflight():
     assert 'SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT: "1"' in workflow
 
 
+def test_workbench_contract_ci_does_not_use_slow_pnpm_cache_post_step():
+    workflow = (ROOT / ".github/workflows/workbench-contract.yml").read_text(encoding="utf-8")
+
+    assert "pnpm/action-setup" not in workflow
+    assert 'cache: "pnpm"' not in workflow
+    assert "corepack enable && corepack prepare pnpm@11.6.0 --activate" in workflow
+
+
 def test_verify_workbench_supports_python_preflight_skip_mode():
     script = (ROOT / "scripts" / "verify-dev-workbench.sh").read_text(encoding="utf-8")
 
     assert "SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT" in script
+
+
+def test_storybook_contract_runs_against_static_ci_build():
+    script = (ROOT / "scripts" / "verify-dev-workbench.sh").read_text(encoding="utf-8")
+
+    assert "pnpm storybook:build --test --quiet --disable-telemetry" in script
+    assert "python3 -m http.server 6006" in script
+    assert "curl -fsS \"http://127.0.0.1:6006/iframe.html\"" in script
+    assert "SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:a11y" in script
+    assert "SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:interactions" in script
+    assert "SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:visual" in script
+
+    for relative_path in (
+        "apps/web-react/playwright.storybook.config.ts",
+        "apps/web-react/playwright.storybook-visual.config.ts",
+    ):
+        config = (ROOT / relative_path).read_text(encoding="utf-8")
+
+        assert "SEEKTALENT_STORYBOOK_STATIC" in config, relative_path
+        assert "SEEKTALENT_STORYBOOK_EXTERNAL" in config, relative_path
+        assert "python3 -m http.server 6006" in config, relative_path
+        assert "storybook-static" in config, relative_path
+        assert "pnpm exec storybook dev" in config, relative_path
+        assert "...storybookWebServer" in config, relative_path
 
 
 def test_verify_workbench_forbidden_copy_gate_does_not_require_rg():
