@@ -46,6 +46,18 @@ export function ConversationScreen({
   view,
 }: ConversationScreenProps) {
   const [activePanel, setActivePanel] = useState<WorkPanel>("chat");
+  const requirementReviewPanel = (
+    <RequirementReviewPanel
+      amending={amendingRequirements}
+      confirming={confirmingRequirements}
+      onAddOther={onAddOtherRequirement}
+      onConfirm={onConfirmRequirements}
+      onToggleItem={onToggleRequirementItem}
+      pendingActions={view.pendingActions}
+      requirementDraft={view.requirementDraft}
+      updatingItemIds={updatingRequirementItemIds}
+    />
+  );
 
   return (
     <>
@@ -61,16 +73,6 @@ export function ConversationScreen({
             <span>{actionErrorMessage}</span>
           </section>
         ) : null}
-        <RequirementReviewPanel
-          amending={amendingRequirements}
-          confirming={confirmingRequirements}
-          onAddOther={onAddOtherRequirement}
-          onConfirm={onConfirmRequirements}
-          onToggleItem={onToggleRequirementItem}
-          pendingActions={view.pendingActions}
-          requirementDraft={view.requirementDraft}
-          updatingItemIds={updatingRequirementItemIds}
-        />
         <Tabs
           ariaLabel="工作区"
           className="conversation-view__tabs"
@@ -95,7 +97,9 @@ export function ConversationScreen({
             id="conversation-panel-chat"
             role="tabpanel"
           >
-            <Transcript groups={view.transcriptGroups} />
+            <Transcript groups={view.transcriptGroups}>
+              {requirementReviewPanel}
+            </Transcript>
           </section>
           <section
             aria-labelledby="conversation-graph-tab"

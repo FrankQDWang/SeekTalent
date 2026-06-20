@@ -1,6 +1,6 @@
 .requirement-review-panel {
   background: oklch(0.97 0.032 82);
-  border-bottom: 1px solid var(--st-border);
+  border-radius: var(--st-radius-md);
   display: grid;
   gap: var(--st-space-3);
   padding: var(--st-space-3) var(--st-space-4);

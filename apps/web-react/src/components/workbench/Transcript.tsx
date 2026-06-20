@@ -1,15 +1,17 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { AgentWorkbenchTranscriptGroup } from "../../lib/api/agentWorkbenchTypes";
 import { TranscriptContextDivider } from "./TranscriptContextDivider";
 import { TranscriptRunGroup } from "./TranscriptRunGroup";
 import "./Transcript.css";
 
 type TranscriptProps = {
+  children?: ReactNode;
   defaultCollapsedGroupIds?: readonly string[];
   groups: readonly AgentWorkbenchTranscriptGroup[];
 };
 
 export function Transcript({
+  children,
   defaultCollapsedGroupIds = [],
   groups,
 }: TranscriptProps) {
@@ -31,7 +33,7 @@ export function Transcript({
     });
   }
 
-  if (groups.length === 0) {
+  if (groups.length === 0 && !children) {
     return (
       <section
         aria-label="Agent transcript"
@@ -59,6 +61,7 @@ export function Transcript({
           />
         ),
       )}
+      {children}
     </section>
   );
 }
