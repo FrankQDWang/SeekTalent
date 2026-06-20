@@ -46,6 +46,7 @@ export function ConversationScreen({
   view,
 }: ConversationScreenProps) {
   const [activePanel, setActivePanel] = useState<WorkPanel>("chat");
+  const workflowSurfaceVisible = hasConversationWorkflowSurface(view);
   const requirementReviewPanel = (
     <RequirementReviewPanel
       amending={amendingRequirements}
@@ -73,22 +74,25 @@ export function ConversationScreen({
             <span>{actionErrorMessage}</span>
           </section>
         ) : null}
-        <Tabs
-          ariaLabel="工作区"
-          className="conversation-view__tabs"
-          getPanelId={(panel) => `conversation-panel-${panel}`}
-          idPrefix="conversation"
-          onValueChange={setActivePanel}
-          tabClassName="conversation-view__tab"
-          tabs={workPanels.map((panel) => ({
-            label: panel.label,
-            value: panel.id,
-          }))}
-          value={activePanel}
-        />
+        {workflowSurfaceVisible ? (
+          <Tabs
+            ariaLabel="工作区"
+            className="conversation-view__tabs"
+            getPanelId={(panel) => `conversation-panel-${panel}`}
+            idPrefix="conversation"
+            onValueChange={setActivePanel}
+            tabClassName="conversation-view__tab"
+            tabs={workPanels.map((panel) => ({
+              label: panel.label,
+              value: panel.id,
+            }))}
+            value={activePanel}
+          />
+        ) : null}
         <div
           className="conversation-view__workspace"
           data-active-panel={activePanel}
+          data-workflow-surface={workflowSurfaceVisible ? "visible" : "hidden"}
         >
           <section
             aria-labelledby="conversation-chat-tab"
@@ -101,39 +105,45 @@ export function ConversationScreen({
               {requirementReviewPanel}
             </Transcript>
           </section>
-          <section
-            aria-labelledby="conversation-graph-tab"
-            className="conversation-view__panel conversation-view__panel--graph"
-            data-panel="graph"
-            id="conversation-panel-graph"
-            role="tabpanel"
-          >
-            <StrategyGraph
-              graph={view.strategyGraph}
-              key={activePanel === "graph" ? "graph-active" : "graph-inactive"}
-            />
-          </section>
-          <section
-            aria-labelledby="conversation-candidates-tab"
-            className="conversation-view__panel conversation-view__panel--candidates"
-            data-panel="candidates"
-            id="conversation-panel-candidates"
-            role="tabpanel"
-          >
-            <ConversationScreenSide
-              onViewCandidateDetails={onViewCandidateDetails}
-              view={view}
-            />
-          </section>
-          <section
-            aria-labelledby="conversation-final-tab"
-            className="conversation-view__panel conversation-view__panel--final"
-            data-panel="final"
-            id="conversation-panel-final"
-            role="tabpanel"
-          >
-            <FinalReviewPanel view={view} />
-          </section>
+          {workflowSurfaceVisible ? (
+            <>
+              <section
+                aria-labelledby="conversation-graph-tab"
+                className="conversation-view__panel conversation-view__panel--graph"
+                data-panel="graph"
+                id="conversation-panel-graph"
+                role="tabpanel"
+              >
+                <StrategyGraph
+                  graph={view.strategyGraph}
+                  key={
+                    activePanel === "graph" ? "graph-active" : "graph-inactive"
+                  }
+                />
+              </section>
+              <section
+                aria-labelledby="conversation-candidates-tab"
+                className="conversation-view__panel conversation-view__panel--candidates"
+                data-panel="candidates"
+                id="conversation-panel-candidates"
+                role="tabpanel"
+              >
+                <ConversationScreenSide
+                  onViewCandidateDetails={onViewCandidateDetails}
+                  view={view}
+                />
+              </section>
+              <section
+                aria-labelledby="conversation-final-tab"
+                className="conversation-view__panel conversation-view__panel--final"
+                data-panel="final"
+                id="conversation-panel-final"
+                role="tabpanel"
+              >
+                <FinalReviewPanel view={view} />
+              </section>
+            </>
+          ) : null}
         </div>
         <MessageComposer
           disabled={!view.pendingActions.allowed.includes("submit_message")}
@@ -142,6 +152,20 @@ export function ConversationScreen({
         />
       </div>
     </>
+  );
+}
+
+export function hasConversationWorkflowSurface(
+  view: AgentWorkbenchConversationResponse,
+): boolean {
+  return (
+    view.strategyGraph.nodes.length > 0 ||
+    view.strategyGraph.edges.length > 0 ||
+    view.thinkingProcess.rounds.length > 0 ||
+    view.candidates.length > 0 ||
+    view.detailApprovals.length > 0 ||
+    view.reviewArtifacts.length > 0 ||
+    view.finalSummary != null
   );
 }
 

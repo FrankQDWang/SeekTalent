@@ -417,13 +417,24 @@ export const agentWorkbenchInitialViewFixture: AgentWorkbenchConversationRespons
 
 export const agentWorkbenchRequirementReviewViewFixture: AgentWorkbenchConversationResponse =
   workbenchView({
-    conversation: { status: "needs_confirmation" },
+    candidates: [],
+    conversation: {
+      runtimeRunId: null,
+      status: "needs_confirmation",
+      workflowStartState: "not_started",
+    },
+    detailApprovals: [],
+    finalSummary: null,
     pendingActions: {
       allowed: ["confirm_requirements"],
       pendingMemoryReviewCount: 0,
       pendingRequirementReviewCount: 1,
       primary: "确认需求后开始检索",
     },
+    reviewArtifacts: [],
+    runtime: null,
+    strategyGraph: emptyStrategyGraph,
+    thinkingProcess: { activeRoundNo: null, rounds: [] },
   });
 
 export const agentWorkbenchRunningViewFixture: AgentWorkbenchConversationResponse =
