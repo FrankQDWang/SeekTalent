@@ -6,8 +6,12 @@ import re
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from tools.check_pr_governance import (
     LineCountChange,
+    MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID,
+    RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION,
     classify_path,
     evaluate_changed_files,
     is_active_dependency_control_file,
@@ -19,6 +23,7 @@ from tools.check_pr_governance import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_PRODUCTION_READINESS_GOAL_ID = "runtime-production-readiness-2026-06"
 
 
 def _module_exists(name: str) -> bool:
@@ -115,6 +120,8 @@ def _major_refactor_goal_payload(
         if goal_id == "goal-2-agent-safety-gate-2026-06"
         else runtime_control_verification
         if goal_id == "runtime-control-plane-2026-06"
+        else list(MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID[RUNTIME_PRODUCTION_READINESS_GOAL_ID])
+        if goal_id == RUNTIME_PRODUCTION_READINESS_GOAL_ID
         else react_workbench_verification
         if goal_id == "react-agent-workbench-rebuild-2026-06"
         else source_verification
@@ -169,6 +176,18 @@ def test_tach_config_tracks_provider_boundary() -> None:
     assert "seektalent.providers" in module_paths
     assert "Provider boundary is a red-zone integration surface" in tach_config
     assert "Red-zone refactors require a structured review manifest" in tach_config
+
+
+def test_runtime_production_readiness_bootstrap_manifest_uses_canonical_verification() -> None:
+    manifest_path = (
+        PROJECT_ROOT
+        / "docs/governance/agent-goals/runtime-production-readiness-bootstrap-2026-06.json"
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["verification"] == list(
+        MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID[RUNTIME_PRODUCTION_READINESS_GOAL_ID]
+    )
 
 
 def test_classify_path_red_runtime() -> None:
@@ -1018,6 +1037,359 @@ def test_evaluate_changed_files_allows_runtime_control_major_refactor_manifest(t
     )
 
     assert result.ok
+
+
+def test_evaluate_changed_files_allows_runtime_production_readiness_goal_id(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-bootstrap-2026-06.json"
+    red_files = ["tools/check_pr_governance.py"]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+            red_files=red_files,
+            touched_layers=["docs", "governance", "tests"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "docs/governance/runtime-production-readiness-matrix.md",
+            *red_files,
+            "tests/test_pr_governance.py",
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_allows_prompt_layer_major_refactor_manifest(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-prompt-2026-06.json"
+    red_files = ["src/seektalent/prompts/source_planning.py"]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+            red_files=red_files,
+            touched_layers=["prompts"],
+            verification=[
+                *MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID[
+                    RUNTIME_PRODUCTION_READINESS_GOAL_ID
+                ],
+                RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION,
+            ],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_rejects_unsupported_informal_major_refactor_layers(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-bootstrap-2026-06.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+            red_files=["tools/check_pr_governance.py"],
+            touched_layers=["api", "settings", "ui", "cli", "governance"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any(
+        "major refactor goal manifest cannot cover layers: api, cli, settings, ui" in message
+        for message in result.messages
+    )
+
+
+@pytest.mark.parametrize(
+    "missing_command",
+    MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID[RUNTIME_PRODUCTION_READINESS_GOAL_ID],
+)
+def test_evaluate_changed_files_enforces_runtime_production_readiness_full_gate(
+    tmp_path: Path,
+    missing_command: str,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-bootstrap-2026-06.json"
+    verification = [
+        command
+        for command in MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID[
+            RUNTIME_PRODUCTION_READINESS_GOAL_ID
+        ]
+        if command != missing_command
+    ]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+            red_files=["tools/check_pr_governance.py"],
+            touched_layers=["docs", "governance", "tests"],
+            verification=verification,
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "docs/governance/runtime-production-readiness-matrix.md",
+            "tools/check_pr_governance.py",
+            "tests/test_pr_governance.py",
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any(
+        f"major refactor goal manifest must include verification `{missing_command}`" in message
+        for message in result.messages
+    )
+
+
+def test_evaluate_changed_files_enforces_runtime_production_readiness_file_budget(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-bootstrap-2026-06.json"
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+            red_files=["tools/check_pr_governance.py"],
+            touched_layers=["docs", "governance", "tests"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "tools/check_pr_governance.py",
+            *[f"docs/governance/runtime-readiness-{index}.md" for index in range(60)],
+        ],
+        max_files=1,
+        max_major_refactor_files=5,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor changes too many non-generated files: 61 > 60" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_blocks_major_refactor_without_deletion_targets(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-bootstrap-2026-06.json"
+    payload = _major_refactor_goal_payload(
+        goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+        red_files=["tools/check_pr_governance.py"],
+        touched_layers=["docs", "governance", "tests"],
+    )
+    del payload["deletion_targets"]
+    _write_json(tmp_path / manifest_path, payload)
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "docs/governance/runtime-production-readiness-matrix.md",
+            "tools/check_pr_governance.py",
+            "tests/test_pr_governance.py",
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor goal manifest must list deletion_targets" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_blocks_major_refactor_without_risks(tmp_path: Path) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-bootstrap-2026-06.json"
+    payload = _major_refactor_goal_payload(
+        goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+        red_files=["tools/check_pr_governance.py"],
+        touched_layers=["docs", "governance", "tests"],
+    )
+    del payload["risks"]
+    _write_json(tmp_path / manifest_path, payload)
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            "docs/governance/runtime-production-readiness-matrix.md",
+            "tools/check_pr_governance.py",
+            "tests/test_pr_governance.py",
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any("major refactor goal manifest must list risks" in message for message in result.messages)
+
+
+def test_evaluate_changed_files_allows_runtime_production_readiness_prompt_only_diff(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-prompt-2026-06.json"
+    red_files = ["src/seektalent/prompts/runtime_contract.py"]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+            red_files=red_files,
+            touched_layers=["prompts"],
+            verification=[
+                *MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID[
+                    RUNTIME_PRODUCTION_READINESS_GOAL_ID
+                ],
+                RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION,
+            ],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_requires_prompt_safety_gate_for_runtime_readiness_prompt_diff(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-prompt-2026-06.json"
+    red_files = ["src/seektalent/prompts/runtime_contract.py"]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+            red_files=red_files,
+            touched_layers=["prompts"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any(
+        f"major refactor goal manifest must include verification `{RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION}`"
+        in message
+        for message in result.messages
+    )
+
+
+def test_evaluate_changed_files_requires_prompt_safety_gate_for_any_major_refactor_prompt_diff(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/source-decoupling-prompts-2026-06.json"
+    red_files = ["src/seektalent/prompts/controller.md"]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id="source-decoupling-2026-06",
+            red_files=red_files,
+            touched_layers=["prompts"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert any(
+        f"major refactor goal manifest must include verification `{RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION}`"
+        in message
+        for message in result.messages
+    )
+
+
+def test_evaluate_changed_files_blocks_runtime_production_readiness_prompt_runtime_diff(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/runtime-production-readiness-bootstrap-2026-06.json"
+    red_files = [
+        "src/seektalent/prompts/runtime_contract.py",
+        "src/seektalent/runtime/orchestrator.py",
+    ]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id=RUNTIME_PRODUCTION_READINESS_GOAL_ID,
+            red_files=red_files,
+            touched_layers=["prompts", "runtime"],
+            verification=[
+                *MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID[
+                    RUNTIME_PRODUCTION_READINESS_GOAL_ID
+                ],
+                RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION,
+            ],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+        ],
+        max_files=1,
+        max_layers=1,
+        project_root=tmp_path,
+    )
+
+    assert not result.ok
+    assert (
+        "prompt and runtime files touched together: "
+        "src/seektalent/prompts/runtime_contract.py, src/seektalent/runtime/orchestrator.py"
+    ) in result.messages
 
 
 def test_evaluate_changed_files_blocks_major_refactor_line_count_exemption_without_rationale(

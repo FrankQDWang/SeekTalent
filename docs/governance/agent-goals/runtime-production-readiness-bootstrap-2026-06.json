@@ -1,0 +1,30 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Bootstrap governance support for runtime production readiness before 1.0.",
+  "rationale": "This first slice adds the tracking matrix and the governance goal id used by later runtime production readiness slices. It intentionally covers only the files changed in this PR so the slice remains independently green.",
+  "touched_layers": ["docs", "governance", "tests"],
+  "red_files": ["tools/check_pr_governance.py"],
+  "verification": [
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "untracked reviewer issue mapping outside governance",
+    "per-PR production readiness gates hidden in ignored planning files"
+  ],
+  "risks": [
+    "Later stack slices must use their lane-specific manifest when they add red-zone, dependency, config/env, behavior, or line-count-sensitive files.",
+    "The manifest must never list future red files before those files are part of the branch diff, because stale red-file references fail governance."
+  ]
+}

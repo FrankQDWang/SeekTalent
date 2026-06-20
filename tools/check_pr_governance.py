@@ -130,11 +130,15 @@ MAJOR_REFACTOR_ALLOWED_LAYERS = {
     "frontend",
     "governance",
     "other",
+    "prompts",
     "provider",
     "runtime",
     "sources",
     "tests",
 }
+RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION = (
+    "uv run pytest tests/test_prompt_safety.py tests/test_llm_input_prompts.py -q"
+)
 MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
     "source-decoupling-2026-06": (
         "uv run python tools/check_source_boundaries.py",
@@ -161,6 +165,22 @@ MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
         "uv run python tools/check_source_boundaries.py",
         "uv run pytest",
     ),
+    "runtime-production-readiness-2026-06": (
+        "uv run pytest",
+        "uv run ruff check",
+        "uv run ty check src tests tools",
+        "uv run python tools/check_source_boundaries.py",
+        "uv run python tools/check_arch_imports.py",
+        "uv run python tools/check_tach_baseline.py",
+        "uv run python tools/check_pr_governance.py --base origin/main",
+        "scripts/verify-source-decoupling.sh",
+        "scripts/verify-red-zone.sh",
+        "scripts/verify-dev-workbench.sh",
+        (
+            "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py "
+            "tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+        ),
+    ),
     "react-agent-workbench-rebuild-2026-06": (
         "scripts/verify-dev-workbench.sh",
         "uv run python scripts/build_packaged_workbench.py",
@@ -170,8 +190,14 @@ MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
         "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
     ),
 }
+MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_LAYER = {
+    "prompts": (
+        RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION,
+    ),
+}
 MAJOR_REFACTOR_FILE_BUDGET_BY_GOAL_ID = {
     "react-agent-workbench-rebuild-2026-06": 500,
+    "runtime-production-readiness-2026-06": 60,
 }
 
 CODE_EXTENSIONS = {
@@ -563,6 +589,12 @@ def validate_major_refactor_goal_manifests(
                     messages.append(
                         f"major refactor goal manifest must include verification `{command}`: {manifest_path}"
                     )
+            for layer in sorted(touched_layers):
+                for command in MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_LAYER.get(layer, ()):
+                    if command not in verification:
+                        messages.append(
+                            f"major refactor goal manifest must include verification `{command}`: {manifest_path}"
+                        )
 
         if not _string_list(_mapping_value(raw_payload, "deletion_targets")):
             messages.append(f"major refactor goal manifest must list deletion_targets: {manifest_path}")
