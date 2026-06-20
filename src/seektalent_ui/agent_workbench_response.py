@@ -39,6 +39,7 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
             isArchived=state.is_archived,
             runtimeRunId=state.runtime_run_id,
             workbenchSessionId=state.workbench_session_id,
+            workflowStartIntentId=state.workflow_start_intent_id,
             linkedRuntimeRuns=[
                 AgentWorkbenchLinkedRuntimeRunResponse(
                     runtimeRunId=link.runtime_run_id,

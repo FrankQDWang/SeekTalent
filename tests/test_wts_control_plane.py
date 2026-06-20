@@ -12,6 +12,7 @@ from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_conversation_agent.store import ConversationStore
 from seektalent_conversation_agent.tools import AgentToolAdapter
+from seektalent_runtime_control.models import RuntimeRunRecord
 from seektalent_runtime_control.service import RuntimeControlService
 from seektalent_runtime_control.store import RuntimeControlStore
 from tests.conversation_agent_test_support import build_service as build_full_service
@@ -21,6 +22,7 @@ from tests.settings_factory import make_settings
 WTS_TABLES = {
     "wts_job_request_revisions",
     "wts_requirement_draft_job_requests",
+    "wts_confirm_requirement_requests",
     "wts_workflow_start_intents",
     "wts_outbox",
     "wts_requirement_transcript_snapshots",
@@ -93,6 +95,34 @@ class FactoryRuntimeDerivingTitle:
         type(self).received_job_titles.append(job_title)
         title = job_title.strip() if isinstance(job_title, str) and job_title.strip() else _derive_title(jd)
         return _requirement_sheet(job_title=title)
+
+
+class CapturingWorkflowExecutor:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def enqueue_workflow_run(self, **kwargs: object) -> RuntimeRunRecord:
+        self.calls.append(kwargs)
+        approved_requirement = kwargs["approved_requirement"]
+        return RuntimeRunRecord(
+            runtime_run_id="runtime_run_from_intent_1",
+            run_intent_id=str(kwargs["run_intent_id"]),
+            start_idempotency_key=str(kwargs["start_idempotency_key"]),
+            run_kind="primary",
+            agent_conversation_id=str(kwargs["conversation_id"]),
+            workbench_session_id=None,
+            approved_requirement_revision_id=approved_requirement.approved_requirement_revision_id,
+            status="queued",
+            current_stage="queued",
+            current_round=None,
+            latest_checkpoint_id=None,
+            latest_event_seq=0,
+            source_ids=list(kwargs["source_ids"]),
+            stop_reason_code=None,
+            created_at="2026-06-09T00:01:00.000000Z",
+            updated_at="2026-06-09T00:01:00.000000Z",
+            completed_at=None,
+        )
 
 
 def test_submit_jd_persists_canonical_job_request_revision(tmp_path: Path) -> None:
@@ -432,7 +462,515 @@ def test_confirm_requirements_reads_job_request_link_and_returns_typed_ids(tmp_p
     assert link.job_request_revision_id == submitted.job_request_revision_id
 
 
-def test_fresh_conversation_store_initialize_creates_wts_tables_at_version_5(tmp_path: Path) -> None:
+def test_confirm_creates_one_workflow_start_intent_for_same_draft(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-atomic-1")
+
+    first = _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-1")
+    second = _confirm(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-2",
+    )
+
+    assert first.workflow_start_intent_id == second.workflow_start_intent_id
+    assert first.workflow_start_intent_id
+    assert first.job_request_revision_id == submitted.job_request_revision_id
+    assert first.requirement_draft_revision_id == submitted.requirement_draft_revision_id
+    assert _workflow_start_intent_count_for_draft(service, submitted.requirement_draft_revision_id) == 1
+    assert _outbox_count_for_aggregate(service, first.workflow_start_intent_id) == 1
+    intent = _workflow_start_intent_row(service, first.workflow_start_intent_id)
+    assert intent["approved_requirement_revision_id"]
+    approved = service.tool_adapter.runtime_store.get_approved_requirement(intent["approved_requirement_revision_id"])
+    assert approved.draft_revision_id == submitted.requirement_draft_revision_id
+    assert intent["job_request_revision_id"] == submitted.job_request_revision_id
+    assert intent["status"] == "pending"
+    assert intent["deterministic_run_key"] == (
+        f"wts:workspace_1:{conversation.conversation_id}:{submitted.requirement_draft_revision_id}"
+    )
+
+
+def test_confirm_idempotency_key_rejects_different_request_hash(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-conflict-1")
+    _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-1")
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        service.confirm_requirements(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            draft_revision_id="different_draft",
+            base_revision_id="different_draft",
+            idempotency_key="confirm-1",
+        )
+
+    assert exc_info.value.reason_code == "idempotency_key_conflict"
+
+
+def test_confirm_old_draft_with_fresh_key_after_newer_draft_is_stale(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-old-draft-1")
+    original_draft_id = submitted.requirement_draft_revision_id
+    original_item_id = submitted.requirement_draft.sections[0].items[0].item_id
+    confirmed = _confirm(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-old-draft-1",
+    )
+    updated = service.update_requirement_draft(
+        conversation_id=conversation.conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        draft_revision_id=original_draft_id,
+        base_revision_id=original_draft_id,
+        operations=[{"op": "edit_text", "item_id": original_item_id, "text": "Python API 与平台工程负责人"}],
+        idempotency_key="update-after-confirm-1",
+    )
+
+    replay = _confirm(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-old-draft-1",
+    )
+    assert replay.workflow_start_intent_id == confirmed.workflow_start_intent_id
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        service.confirm_requirements(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            draft_revision_id=original_draft_id,
+            base_revision_id=original_draft_id,
+            idempotency_key="confirm-old-draft-fresh-1",
+        )
+
+    assert exc_info.value.reason_code == "requirement_draft_stale"
+    assert exc_info.value.payload["latestDraftRevisionId"] == updated.requirement_draft_revision_id
+    assert _workflow_start_intent_count_for_draft(service, original_draft_id) == 1
+    assert _outbox_count_for_aggregate(service, confirmed.workflow_start_intent_id) == 1
+    assert _confirm_request_count(service) == 1
+
+
+def test_confirm_recovers_intent_and_outbox_after_approved_requirement_crash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-crash-1")
+    original_create = service.workflow_start_intent_store.create_or_get_confirmed_draft_intent
+
+    def crash_after_runtime_confirm(**kwargs: object):
+        del kwargs
+        raise ConversationAgentError("simulated_crash_after_approval")
+
+    service.workflow_start_intent_store.create_or_get_confirmed_draft_intent = crash_after_runtime_confirm
+    with pytest.raises(ConversationAgentError) as crash:
+        _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-crash-1")
+    assert crash.value.reason_code == "simulated_crash_after_approval"
+    service.workflow_start_intent_store.create_or_get_confirmed_draft_intent = original_create
+
+    assert _approved_requirement_count_for_idempotency(
+        service,
+        conversation_id=conversation.conversation_id,
+        idempotency_key="confirm-crash-1",
+    ) == 1
+    assert _workflow_start_intent_count_for_draft(service, submitted.requirement_draft_revision_id) == 0
+    assert _outbox_count(service) == 0
+
+    def fail_if_reconfirming(
+        self: AgentToolAdapter,
+        *,
+        draft_revision_id: str,
+        base_revision_id: str,
+        idempotency_key: str,
+    ):
+        del self, draft_revision_id, base_revision_id, idempotency_key
+        raise AssertionError("retry should recover the approved requirement without re-confirming")
+
+    monkeypatch.setattr(AgentToolAdapter, "confirm_requirements", fail_if_reconfirming)
+
+    recovered = _confirm(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-crash-1",
+    )
+
+    assert recovered.workflow_start_intent_id
+    assert _approved_requirement_count_for_idempotency(
+        service,
+        conversation_id=conversation.conversation_id,
+        idempotency_key="confirm-crash-1",
+    ) == 1
+    assert _workflow_start_intent_count_for_draft(service, submitted.requirement_draft_revision_id) == 1
+    assert _outbox_count_for_aggregate(service, recovered.workflow_start_intent_id) == 1
+    intent = service.workflow_start_intent_store.get(recovered.workflow_start_intent_id)
+    approved = service.tool_adapter.runtime_store.get_approved_requirement_by_idempotency(
+        conversation_id=conversation.conversation_id,
+        idempotency_key="confirm-crash-1",
+    )
+    assert approved is not None
+    assert intent.approved_requirement_revision_id == approved.approved_requirement_revision_id
+
+
+def test_confirm_recovery_same_key_after_newer_draft_creates_missing_intent_outbox(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-crash-newer-1")
+    original_draft_id = submitted.requirement_draft_revision_id
+    original_item_id = submitted.requirement_draft.sections[0].items[0].item_id
+
+    _simulate_crash_after_runtime_approval(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-crash-newer-1",
+    )
+    updated = service.update_requirement_draft(
+        conversation_id=conversation.conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        draft_revision_id=original_draft_id,
+        base_revision_id=original_draft_id,
+        operations=[{"op": "edit_text", "item_id": original_item_id, "text": "Python API 与平台工程负责人"}],
+        idempotency_key="update-after-crash-1",
+    )
+
+    with pytest.raises(ConversationAgentError) as stale:
+        service.confirm_requirements(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            draft_revision_id=original_draft_id,
+            base_revision_id=original_draft_id,
+            idempotency_key="confirm-crash-newer-fresh-1",
+        )
+    assert stale.value.reason_code == "requirement_draft_stale"
+    assert stale.value.payload["latestDraftRevisionId"] == updated.requirement_draft_revision_id
+    assert _confirm_request_count(service) == 1
+    assert _workflow_start_intent_count_for_draft(service, original_draft_id) == 0
+    assert _outbox_count(service) == 0
+
+    recovered = _confirm(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-crash-newer-1",
+    )
+
+    assert recovered.workflow_start_intent_id
+    assert _confirm_request_count(service) == 1
+    assert _approved_requirement_count_for_idempotency(
+        service,
+        conversation_id=conversation.conversation_id,
+        idempotency_key="confirm-crash-newer-1",
+    ) == 1
+    assert _workflow_start_intent_count_for_draft(service, original_draft_id) == 1
+    assert _outbox_count_for_aggregate(service, recovered.workflow_start_intent_id) == 1
+    intent = service.workflow_start_intent_store.get(recovered.workflow_start_intent_id)
+    approved = service.tool_adapter.runtime_store.get_approved_requirement_by_idempotency(
+        conversation_id=conversation.conversation_id,
+        idempotency_key="confirm-crash-newer-1",
+    )
+    assert approved is not None
+    assert intent.approved_requirement_revision_id == approved.approved_requirement_revision_id
+
+
+def test_confirm_idempotency_key_rejects_same_draft_changed_expected_revision(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-base-hash-1")
+    _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-base-hash-1")
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        service.confirm_requirements(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            draft_revision_id=submitted.requirement_draft_revision_id,
+            base_revision_id="stale-base-revision",
+            idempotency_key="confirm-base-hash-1",
+        )
+
+    assert exc_info.value.reason_code == "idempotency_key_conflict"
+
+
+def test_confirm_idempotency_key_rejects_same_draft_changed_source_selection(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-source-hash-1")
+    _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-source-hash-1")
+    _set_job_request_sources(service, submitted.job_request_revision_id, source_kinds_json='["liepin"]')
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        _confirm(
+            service,
+            conversation_id=conversation.conversation_id,
+            submitted=submitted,
+            idempotency_key="confirm-source-hash-1",
+        )
+
+    assert exc_info.value.reason_code == "idempotency_key_conflict"
+
+
+def test_confirm_idempotency_key_rejects_same_draft_changed_job_request_body_identity(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-body-hash-1")
+    _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-body-hash-1")
+    _mutate_job_request_body_identity(service, submitted.job_request_revision_id)
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        _confirm(
+            service,
+            conversation_id=conversation.conversation_id,
+            submitted=submitted,
+            idempotency_key="confirm-body-hash-1",
+        )
+
+    assert exc_info.value.reason_code == "idempotency_key_conflict"
+
+
+def test_confirm_recovery_rejects_changed_expected_revision_after_approved_requirement_crash(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-crash-base-1")
+
+    _simulate_crash_after_runtime_approval(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-crash-base-1",
+    )
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        service.confirm_requirements(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            draft_revision_id=submitted.requirement_draft_revision_id,
+            base_revision_id="changed-base-revision",
+            idempotency_key="confirm-crash-base-1",
+        )
+
+    assert exc_info.value.reason_code == "idempotency_key_conflict"
+    assert _workflow_start_intent_count_for_draft(service, submitted.requirement_draft_revision_id) == 0
+    assert _outbox_count(service) == 0
+
+
+def test_confirm_recovery_rejects_changed_job_request_hash_after_approved_requirement_crash(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-crash-body-1")
+
+    _simulate_crash_after_runtime_approval(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-crash-body-1",
+    )
+    _mutate_job_request_body_identity(service, submitted.job_request_revision_id)
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        _confirm(
+            service,
+            conversation_id=conversation.conversation_id,
+            submitted=submitted,
+            idempotency_key="confirm-crash-body-1",
+        )
+
+    assert exc_info.value.reason_code == "idempotency_key_conflict"
+    assert _workflow_start_intent_count_for_draft(service, submitted.requirement_draft_revision_id) == 0
+    assert _outbox_count(service) == 0
+
+
+def test_confirm_missing_effective_title_does_not_create_intent_or_outbox(tmp_path: Path) -> None:
+    service, _extractor = _service(tmp_path)
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-title-1")
+    with sqlite3.connect(service.store.path) as conn, conn:
+        conn.execute(
+            """
+            UPDATE wts_job_request_revisions
+            SET user_job_title = NULL, extracted_job_title = NULL
+            WHERE job_request_revision_id = ?
+            """,
+            (submitted.job_request_revision_id,),
+        )
+
+    with pytest.raises(ConversationAgentError) as exc_info:
+        _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-title-1")
+
+    assert exc_info.value.reason_code == "job_title_missing"
+    assert _workflow_start_intent_count_for_draft(service, submitted.requirement_draft_revision_id) == 0
+    assert _outbox_count(service) == 0
+    approved = service.tool_adapter.runtime_store.get_approved_requirement_by_idempotency(
+        conversation_id=conversation.conversation_id,
+        idempotency_key="confirm-title-1",
+    )
+    assert approved is None
+
+
+def test_source_selection_rejects_missing_duplicate_and_disallowed_source_state() -> None:
+    from seektalent_conversation_agent.source_selection import SourceSelectionError, resolve_runtime_source_selection
+
+    with pytest.raises(SourceSelectionError) as missing:
+        resolve_runtime_source_selection(
+            source_kinds=[],
+            workspace_source_policy_id=None,
+            registered_runtime_source_ids={"cts", "liepin"},
+        )
+    assert missing.value.reason_code == "source_policy_missing"
+
+    with pytest.raises(SourceSelectionError) as duplicate:
+        resolve_runtime_source_selection(
+            source_kinds=["cts", "cts"],
+            workspace_source_policy_id=None,
+            registered_runtime_source_ids={"cts", "liepin"},
+        )
+    assert duplicate.value.reason_code == "duplicate_source_kind"
+
+    with pytest.raises(SourceSelectionError) as disallowed:
+        resolve_runtime_source_selection(
+            source_kinds=["liepin"],
+            workspace_source_policy_id=None,
+            registered_runtime_source_ids={"cts"},
+        )
+    assert disallowed.value.reason_code == "source_policy_disallowed"
+
+
+def test_workflow_start_resolves_source_kinds_to_runtime_source_ids(tmp_path: Path) -> None:
+    workflow_executor = CapturingWorkflowExecutor()
+    service, _extractor = _service_with_workflow_executor(
+        tmp_path,
+        workflow_executor=workflow_executor,
+        registered_runtime_source_ids={"cts", "liepin"},
+    )
+    conversation = _conversation(service)
+    submitted = _submit_jd(
+        service,
+        conversation_id=conversation.conversation_id,
+        idempotency_key="submit-source-1",
+        source_kinds=["liepin"],
+    )
+    confirmed = _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-source-1")
+    outbox_id = _outbox_id_for_aggregate(service, confirmed.workflow_start_intent_id)
+
+    intent = service.process_workflow_start_outbox_item(outbox_id)
+
+    assert intent.status == "started"
+    assert intent.runtime_run_id == "runtime_run_from_intent_1"
+    assert len(workflow_executor.calls) == 1
+    call = workflow_executor.calls[0]
+    assert tuple(call["source_ids"]) == ("liepin",)
+    assert not isinstance(call["approved_requirement"], str)
+    assert call["approved_requirement"].approved_requirement_revision_id == intent.approved_requirement_revision_id
+    assert call["run_intent_id"] == intent.deterministic_run_key
+    assert call["start_idempotency_key"] == intent.deterministic_run_key
+    assert service.outbox_store.get(outbox_id).status == "done"
+    reopened = service.reopen_conversation(
+        conversation_id=conversation.conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+    )
+    assert reopened.conversation_reopen_state.runtime_run_id == "runtime_run_from_intent_1"
+
+
+def test_workflow_start_marks_intent_failed_when_source_disallowed(tmp_path: Path) -> None:
+    workflow_executor = CapturingWorkflowExecutor()
+    service, _extractor = _service_with_workflow_executor(
+        tmp_path,
+        workflow_executor=workflow_executor,
+        registered_runtime_source_ids={"cts"},
+    )
+    conversation = _conversation(service)
+    submitted = _submit_jd(
+        service,
+        conversation_id=conversation.conversation_id,
+        idempotency_key="submit-disallowed-1",
+        source_kinds=["liepin"],
+    )
+    confirmed = _confirm(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-disallowed-1",
+    )
+    outbox_id = _outbox_id_for_aggregate(service, confirmed.workflow_start_intent_id)
+
+    intent = service.process_workflow_start_outbox_item(outbox_id)
+
+    assert intent.status == "failed"
+    assert intent.reason_code == "source_policy_disallowed"
+    assert workflow_executor.calls == []
+    assert service.outbox_store.get(outbox_id).status == "done"
+
+
+def test_workflow_start_outbox_retry_after_started_intent_does_not_enqueue_twice(tmp_path: Path) -> None:
+    workflow_executor = CapturingWorkflowExecutor()
+    service, _extractor = _service_with_workflow_executor(
+        tmp_path,
+        workflow_executor=workflow_executor,
+        registered_runtime_source_ids={"cts", "liepin"},
+    )
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-retry-1")
+    confirmed = _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-retry-1")
+    outbox_id = _outbox_id_for_aggregate(service, confirmed.workflow_start_intent_id)
+
+    first = service.process_workflow_start_outbox_item(outbox_id)
+    _reset_outbox_to_pending(service, outbox_id)
+    second = service.process_workflow_start_outbox_item(outbox_id)
+
+    assert first.workflow_start_intent_id == second.workflow_start_intent_id
+    assert second.status == "started"
+    assert len(workflow_executor.calls) == 1
+    assert service.outbox_store.get(outbox_id).status == "done"
+
+
+def test_workflow_start_outbox_claim_blocks_duplicate_executor_entry_and_expires(tmp_path: Path) -> None:
+    workflow_executor = CapturingWorkflowExecutor()
+    service, _extractor = _service_with_workflow_executor(
+        tmp_path,
+        workflow_executor=workflow_executor,
+        registered_runtime_source_ids={"cts", "liepin"},
+    )
+    conversation = _conversation(service)
+    submitted = _submit_jd(service, conversation_id=conversation.conversation_id, idempotency_key="submit-claim-1")
+    confirmed = _confirm(service, conversation_id=conversation.conversation_id, submitted=submitted, idempotency_key="confirm-claim-1")
+    outbox_id = _outbox_id_for_aggregate(service, confirmed.workflow_start_intent_id)
+
+    claimed = service.outbox_store.claim_for_processing(
+        outbox_id,
+        claimed_at="2026-06-09T00:00:10.000000Z",
+        reclaim_before=None,
+    )
+    assert claimed is not None
+    assert claimed.status == "in_progress"
+
+    blocked = service.process_workflow_start_outbox_item(outbox_id)
+
+    assert blocked.workflow_start_intent_id == confirmed.workflow_start_intent_id
+    assert blocked.status == "pending"
+    assert workflow_executor.calls == []
+
+    _expire_outbox_claim(service, outbox_id)
+    started = service.process_workflow_start_outbox_item(outbox_id)
+
+    assert started.status == "started"
+    assert len(workflow_executor.calls) == 1
+    assert service.outbox_store.get(outbox_id).status == "done"
+
+
+def test_fresh_conversation_store_initialize_creates_wts_tables_at_version_6(tmp_path: Path) -> None:
     db_path = tmp_path / "conversation_agent.sqlite3"
 
     ConversationStore(db_path).initialize()
@@ -441,7 +979,7 @@ def test_fresh_conversation_store_initialize_creates_wts_tables_at_version_5(tmp
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         tables = _tables(conn)
 
-    assert version == 5
+    assert version == 6
     assert WTS_TABLES <= tables
     _assert_wts_columns(conn)
 
@@ -464,8 +1002,31 @@ def test_conversation_store_migrates_v4_database_to_wts_control_plane(tmp_path: 
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         tables = _tables(conn)
 
-    assert version == 5
+    assert version == 6
     assert WTS_TABLES <= tables
+    _assert_wts_columns(conn)
+
+
+def test_conversation_store_migrates_v5_database_to_confirm_request_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "conversation_agent_v5.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE agent_conversations (
+                conversation_id TEXT PRIMARY KEY
+            );
+            PRAGMA user_version = 5;
+            """
+        )
+
+    ConversationStore(db_path).initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        tables = _tables(conn)
+
+    assert version == 6
+    assert "wts_confirm_requirement_requests" in tables
     _assert_wts_columns(conn)
 
 
@@ -491,6 +1052,259 @@ def _service(tmp_path: Path) -> tuple[ConversationAgentService, FakeRequirementE
         tool_call_id_factory=_sequence("agent_tool_call"),
     )
     return service, executor
+
+
+def _service_with_workflow_executor(
+    tmp_path: Path,
+    *,
+    workflow_executor: CapturingWorkflowExecutor,
+    registered_runtime_source_ids: set[str],
+) -> tuple[ConversationAgentService, FakeRequirementExecutor]:
+    from seektalent_conversation_agent.source_selection import RuntimeSourceSelectionResolver
+
+    conversation_store = ConversationStore(tmp_path / "conversation_agent.sqlite3")
+    conversation_store.initialize()
+    runtime_store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    runtime_store.initialize()
+    executor = FakeRequirementExecutor()
+    requirement_service = RuntimeControlService(
+        store=runtime_store,
+        executor=executor,
+    )
+    service = ConversationAgentService(
+        store=conversation_store,
+        tool_adapter=AgentToolAdapter(
+            runtime_store=runtime_store,
+            requirement_service=requirement_service,
+            workflow_executor=workflow_executor,
+        ),
+        now=_clock(),
+        conversation_id_factory=lambda: "agent_conv_1",
+        message_id_factory=_sequence("agent_msg"),
+        tool_call_id_factory=_sequence("agent_tool_call"),
+        source_selection_resolver=RuntimeSourceSelectionResolver(
+            registered_runtime_source_ids=registered_runtime_source_ids
+        ),
+    )
+    return service, executor
+
+
+def _conversation(service: ConversationAgentService):
+    return service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 岗位",
+    )
+
+
+def _submit_jd(
+    service: ConversationAgentService,
+    *,
+    conversation_id: str,
+    idempotency_key: str,
+    source_kinds: list[str] | None = None,
+):
+    return service.submit_jd(
+        conversation_id=conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        job_title=None,
+        jd_text="需要 Python 平台负责人，负责 API 与平台工程。",
+        notes="优先华东，接受远程协作",
+        source_kinds=source_kinds or ["cts", "liepin"],
+        idempotency_key=idempotency_key,
+    )
+
+
+def _confirm(
+    service: ConversationAgentService,
+    *,
+    conversation_id: str,
+    submitted,
+    idempotency_key: str,
+):
+    return service.confirm_requirements(
+        conversation_id=conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        draft_revision_id=submitted.requirement_draft_revision_id,
+        base_revision_id=submitted.requirement_draft_revision_id,
+        idempotency_key=idempotency_key,
+    )
+
+
+def _workflow_start_intent_count_for_draft(service: ConversationAgentService, draft_revision_id: str) -> int:
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM wts_workflow_start_intents
+            WHERE draft_revision_id = ?
+            """,
+            (draft_revision_id,),
+        ).fetchone()
+    return int(row[0])
+
+
+def _workflow_start_intent_row(service: ConversationAgentService, workflow_start_intent_id: str) -> sqlite3.Row:
+    with sqlite3.connect(service.store.path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT *
+            FROM wts_workflow_start_intents
+            WHERE workflow_start_intent_id = ?
+            """,
+            (workflow_start_intent_id,),
+        ).fetchone()
+    assert row is not None
+    return row
+
+
+def _outbox_count_for_aggregate(service: ConversationAgentService, aggregate_id: str) -> int:
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM wts_outbox
+            WHERE aggregate_id = ?
+            """,
+            (aggregate_id,),
+        ).fetchone()
+    return int(row[0])
+
+
+def _outbox_count(service: ConversationAgentService) -> int:
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM wts_outbox").fetchone()
+    return int(row[0])
+
+
+def _confirm_request_count(service: ConversationAgentService) -> int:
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM wts_confirm_requirement_requests").fetchone()
+    return int(row[0])
+
+
+def _approved_requirement_count_for_idempotency(
+    service: ConversationAgentService,
+    *,
+    conversation_id: str,
+    idempotency_key: str,
+) -> int:
+    runtime_store = service.tool_adapter.runtime_store
+    assert runtime_store is not None
+    with sqlite3.connect(runtime_store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM runtime_approved_requirements
+            WHERE agent_conversation_id = ? AND idempotency_key = ?
+            """,
+            (conversation_id, idempotency_key),
+        ).fetchone()
+    return int(row[0])
+
+
+def _outbox_id_for_aggregate(service: ConversationAgentService, aggregate_id: str) -> str:
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT outbox_id
+            FROM wts_outbox
+            WHERE aggregate_id = ?
+            ORDER BY created_at ASC
+            LIMIT 1
+            """,
+            (aggregate_id,),
+        ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+def _reset_outbox_to_pending(service: ConversationAgentService, outbox_id: str) -> None:
+    with sqlite3.connect(service.store.path) as conn, conn:
+        conn.execute(
+            """
+            UPDATE wts_outbox
+            SET status = 'pending'
+            WHERE outbox_id = ?
+            """,
+            (outbox_id,),
+        )
+
+
+def _expire_outbox_claim(service: ConversationAgentService, outbox_id: str) -> None:
+    with sqlite3.connect(service.store.path) as conn, conn:
+        conn.execute(
+            """
+            UPDATE wts_outbox
+            SET status = 'in_progress', updated_at = '2026-06-08T23:59:00.000000Z'
+            WHERE outbox_id = ?
+            """,
+            (outbox_id,),
+        )
+
+
+def _set_job_request_sources(
+    service: ConversationAgentService,
+    job_request_revision_id: str,
+    *,
+    source_kinds_json: str,
+) -> None:
+    with sqlite3.connect(service.store.path) as conn, conn:
+        conn.execute(
+            """
+            UPDATE wts_job_request_revisions
+            SET source_kinds_json = ?, updated_at = '2026-06-09T00:00:00.000000Z'
+            WHERE job_request_revision_id = ?
+            """,
+            (source_kinds_json, job_request_revision_id),
+        )
+
+
+def _mutate_job_request_body_identity(service: ConversationAgentService, job_request_revision_id: str) -> None:
+    with sqlite3.connect(service.store.path) as conn, conn:
+        conn.execute(
+            """
+            UPDATE wts_job_request_revisions
+            SET jd_text = 'mutated canonical JD body',
+                request_hash = 'mutated-job-request-request-hash',
+                updated_at = '2026-06-09T00:00:00.000000Z'
+            WHERE job_request_revision_id = ?
+            """,
+            (job_request_revision_id,),
+        )
+
+
+def _simulate_crash_after_runtime_approval(
+    service: ConversationAgentService,
+    *,
+    conversation_id: str,
+    submitted,
+    idempotency_key: str,
+) -> None:
+    original_create = service.workflow_start_intent_store.create_or_get_confirmed_draft_intent
+
+    def crash_after_runtime_confirm(**kwargs: object):
+        del kwargs
+        raise ConversationAgentError("simulated_crash_after_approval")
+
+    service.workflow_start_intent_store.create_or_get_confirmed_draft_intent = crash_after_runtime_confirm
+    try:
+        with pytest.raises(ConversationAgentError) as crash:
+            _confirm(service, conversation_id=conversation_id, submitted=submitted, idempotency_key=idempotency_key)
+        assert crash.value.reason_code == "simulated_crash_after_approval"
+    finally:
+        service.workflow_start_intent_store.create_or_get_confirmed_draft_intent = original_create
+
+    assert _approved_requirement_count_for_idempotency(
+        service,
+        conversation_id=conversation_id,
+        idempotency_key=idempotency_key,
+    ) == 1
+    assert _workflow_start_intent_count_for_draft(service, submitted.requirement_draft_revision_id) == 0
+    assert _outbox_count(service) == 0
 
 
 def _requirement_sheet(*, job_title: str) -> RequirementSheet:
@@ -547,6 +1361,21 @@ def _assert_wts_columns(conn: sqlite3.Connection) -> None:
         "job_request_revision_id",
         "created_at",
     } <= columns["wts_requirement_draft_job_requests"]
+    assert {
+        "confirm_request_id",
+        "workspace_id",
+        "owner_user_id",
+        "conversation_id",
+        "draft_revision_id",
+        "expected_draft_revision_id",
+        "job_request_revision_id",
+        "approved_requirement_revision_id",
+        "idempotency_key",
+        "request_hash",
+        "status",
+        "created_at",
+        "updated_at",
+    } <= columns["wts_confirm_requirement_requests"]
     assert {
         "workspace_id",
         "owner_user_id",
