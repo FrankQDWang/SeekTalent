@@ -153,14 +153,39 @@ done
 
 (
   cd apps/web-react
+  storybook_pid=""
+  storybook_log="/tmp/seektalent-storybook-static-server.log"
+  cleanup_storybook() {
+    if [[ -n "$storybook_pid" ]]; then
+      kill "$storybook_pid" 2>/dev/null || true
+      wait "$storybook_pid" 2>/dev/null || true
+    fi
+  }
+  trap cleanup_storybook EXIT
+
   pnpm check
   pnpm lint
   pnpm test
   pnpm build
-  pnpm storybook:build
-  pnpm storybook:a11y
-  pnpm storybook:interactions
-  pnpm storybook:visual
+  pnpm storybook:build --test --quiet --disable-telemetry
+  rm -f "$storybook_log"
+  python3 -m http.server 6006 --bind 127.0.0.1 --directory storybook-static >"$storybook_log" 2>&1 &
+  storybook_pid=$!
+  for _ in {1..150}; do
+    if ! kill -0 "$storybook_pid" 2>/dev/null; then
+      cat "$storybook_log" >&2 || true
+      echo "Static Storybook server exited before it became ready." >&2
+      exit 1
+    fi
+    if curl -fsS "http://127.0.0.1:6006/iframe.html" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.2
+  done
+  curl -fsS "http://127.0.0.1:6006/iframe.html" >/dev/null
+  SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:a11y
+  SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:interactions
+  SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:visual
   pnpm test:e2e
 )
 

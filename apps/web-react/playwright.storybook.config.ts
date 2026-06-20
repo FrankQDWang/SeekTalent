@@ -1,5 +1,21 @@
 import { defineConfig, devices } from "@playwright/test";
 
+const useStaticStorybook = process.env.SEEKTALENT_STORYBOOK_STATIC === "1";
+const useExternalStorybook = process.env.SEEKTALENT_STORYBOOK_EXTERNAL === "1";
+const storybookServerCommand = useStaticStorybook
+  ? "python3 -m http.server 6006 --bind 127.0.0.1 --directory storybook-static >/tmp/seektalent-storybook-static-server.log 2>&1"
+  : "pnpm exec storybook dev -p 6006 --host 127.0.0.1 --ci";
+const storybookWebServer = useExternalStorybook
+  ? {}
+  : {
+      webServer: {
+        command: storybookServerCommand,
+        reuseExistingServer: !process.env.CI && !useStaticStorybook,
+        timeout: 120_000,
+        url: "http://127.0.0.1:6006",
+      },
+    };
+
 export default defineConfig({
   testDir: "./tests",
   testMatch: /storybook-(a11y|interactions)\.spec\.ts/,
@@ -39,10 +55,5 @@ export default defineConfig({
       },
     },
   ],
-  webServer: {
-    command: "pnpm exec storybook dev -p 6006 --host 127.0.0.1 --ci",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    url: "http://127.0.0.1:6006",
-  },
+  ...storybookWebServer,
 });
