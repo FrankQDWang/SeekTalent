@@ -1756,14 +1756,73 @@ export interface components {
       /** Idempotencykey */
       idempotencyKey: string;
     };
+    /** AgentWorkbenchRequirementDraftItemResponse */
+    AgentWorkbenchRequirementDraftItemResponse: {
+      /** Itemid */
+      itemId: string;
+      /** Sectionid */
+      sectionId: string;
+      /** Selected */
+      selected: boolean;
+      /** Enabled */
+      enabled: boolean;
+      /** Editable */
+      editable: boolean;
+      /** Text */
+      text: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        | "resolved"
+        | "needs_review"
+        | "deleted"
+        | "moved"
+        | "rejected"
+        | "unknown";
+      /** Source */
+      source: string;
+      /** Allowedactions */
+      allowedActions?: string[];
+    };
     /** AgentWorkbenchRequirementDraftResponse */
     AgentWorkbenchRequirementDraftResponse: {
       /** Draftrevisionid */
       draftRevisionId: string;
+      /** Parentdraftrevisionid */
+      parentDraftRevisionId?: string | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "draft_ready" | "needs_review" | "unknown";
       /** Title */
       title: string;
       /** Summary */
       summary: string;
+      /** Canconfirm */
+      canConfirm: boolean;
+      /** Unresolvedreviewitemcount */
+      unresolvedReviewItemCount: number;
+      /** Sections */
+      sections?: components["schemas"]["AgentWorkbenchRequirementDraftSectionResponse"][];
+      /**
+       * Otherinputprompt
+       * @default 其他
+       */
+      otherInputPrompt: string;
+    };
+    /** AgentWorkbenchRequirementDraftSectionResponse */
+    AgentWorkbenchRequirementDraftSectionResponse: {
+      /** Sectionid */
+      sectionId: string;
+      /** Displayname */
+      displayName: string;
+      /** Backendfield */
+      backendField: string;
+      /** Items */
+      items?: components["schemas"]["AgentWorkbenchRequirementDraftItemResponse"][];
     };
     /** AgentWorkbenchReviewArtifactResponse */
     AgentWorkbenchReviewArtifactResponse: {

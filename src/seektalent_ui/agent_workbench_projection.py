@@ -14,6 +14,7 @@ from seektalent_conversation_agent.models import (
 )
 from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_conversation_agent.store import ConversationStore
+from seektalent_runtime_control.requirements import RequirementDraft
 from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchCandidateSummaryResponse,
     AgentWorkbenchDetailApprovalResponse,
@@ -41,6 +42,8 @@ class RuntimeProjectionStore(Protocol):
 
     def list_events(self, *, runtime_run_id: str, after_seq: int, limit: int) -> RuntimeEventPageLike: ...
 
+    def get_requirement_draft(self, draft_revision_id: str) -> RequirementDraft | None: ...
+
 
 @dataclass(frozen=True)
 class AgentWorkbenchProjectionInput:
@@ -50,6 +53,8 @@ class AgentWorkbenchProjectionInput:
     tool_call_records: Sequence[AgentToolCallRecord] = field(default_factory=tuple)
     context_compactions: Sequence[ContextCompactionRecord] = field(default_factory=tuple)
     runtime_events: Sequence[object] = field(default_factory=tuple)
+    requirement_draft: RequirementDraft | None = None
+    requirement_draft_missing: bool = False
     source_connections: Sequence[AgentWorkbenchSourceConnectionResponse] = field(default_factory=tuple)
     runtime: AgentWorkbenchRuntimeResponse | None = None
     candidates: Sequence[AgentWorkbenchCandidateSummaryResponse] = field(default_factory=tuple)
@@ -106,6 +111,11 @@ def build_agent_workbench_projection_input(
             runtime_store=runtime_store,
             runtime_run_id=state.runtime_run_id,
         )
+    requirement_draft = None
+    requirement_draft_missing = False
+    if state.latest_draft_revision_id is not None:
+        requirement_draft = runtime_store.get_requirement_draft(state.latest_draft_revision_id)
+        requirement_draft_missing = requirement_draft is None
     final_summary = _final_summary(runtime_store=runtime_store, summary_id=state.final_summary_id)
     candidates: Sequence[AgentWorkbenchCandidateSummaryResponse] = ()
     detail_approvals: Sequence[AgentWorkbenchDetailApprovalResponse] = ()
@@ -123,6 +133,8 @@ def build_agent_workbench_projection_input(
         tool_call_records=tuple(conversation_store.list_tool_calls(conversation_id=conversation_id)),
         context_compactions=tuple(conversation_store.list_context_compactions(conversation_id=conversation_id)),
         runtime_events=runtime_events,
+        requirement_draft=requirement_draft,
+        requirement_draft_missing=requirement_draft_missing,
         source_connections=_source_connections(workbench_store.list_source_connections(user=user)),
         runtime=runtime,
         candidates=tuple(candidates),

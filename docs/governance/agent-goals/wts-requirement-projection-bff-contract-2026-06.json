@@ -1,0 +1,41 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Keep WTS requirement draft projection reviewable across the Workbench BFF and React contract fixtures.",
+  "rationale": "The requirement projection adds structured draft sections, selectable items, confirmation state, and other-input prompt fields to the BFF contract. The generated schema and typed React fixtures must move in the same PR so Workbench Contract CI can validate this branch independently.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "frontend",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_ui/agent_workbench_models.py",
+    "src/seektalent_ui/agent_workbench_projection.py",
+    "src/seektalent_ui/agent_workbench_response.py",
+    "apps/web-react/src/components/workbench/RequirementReviewPanel.stories.tsx",
+    "apps/web-react/src/test/fixtures/agentWorkbenchBff.ts"
+  ],
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+    "uv run --group dev python tools/check_pr_governance.py --base codex/wts-04-problem-ops",
+    "SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT=1 scripts/verify-dev-workbench.sh",
+    "git diff --check codex/wts-04-problem-ops...HEAD"
+  ],
+  "deletion_targets": [
+    "Requirement draft BFF fields that only become valid after a later schema-sync PR",
+    "React requirement fixtures that omit required draft review fields",
+    "Workbench stories that no longer match the generated requirement draft schema"
+  ],
+  "risks": [
+    "Requirement projection must stay recruiter-safe and avoid raw extraction payloads.",
+    "The generated schema must remain deterministic and reviewed with the BFF projection.",
+    "This PR should only update fixtures needed for contract compatibility, not the full interactive requirement review UI."
+  ]
+}
