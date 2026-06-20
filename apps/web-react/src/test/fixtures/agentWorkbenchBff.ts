@@ -274,6 +274,8 @@ function workbenchView(
       title: "AI Agent 平台工程师",
       updatedAt: now,
       workbenchSessionId: "session_001",
+      workflowStartState: "running",
+      workflowStartReasonCode: null,
       ...conversation,
     },
     pendingActions: {

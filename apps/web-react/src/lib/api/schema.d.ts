@@ -1557,6 +1557,19 @@ export interface components {
       workbenchSessionId?: string | null;
       /** Workflowstartintentid */
       workflowStartIntentId?: string | null;
+      /**
+       * Workflowstartstate
+       * @default not_started
+       * @enum {string}
+       */
+      workflowStartState:
+        | "not_started"
+        | "queued"
+        | "starting"
+        | "running"
+        | "failed";
+      /** Workflowstartreasoncode */
+      workflowStartReasonCode?: string | null;
       /** Linkedruntimeruns */
       linkedRuntimeRuns?: components["schemas"]["AgentWorkbenchLinkedRuntimeRunResponse"][];
       /** Updatedat */

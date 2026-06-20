@@ -31,7 +31,10 @@ from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchThinkingProcessResponse,
     AgentWorkbenchThinkingProcessRoundResponse,
 )
-from seektalent_ui.agent_workbench_projection import AgentWorkbenchProjectionInput
+from seektalent_ui.agent_workbench_projection import (
+    AgentWorkbenchProjectionInput,
+    AgentWorkbenchWorkflowStartIntentProjection,
+)
 from seektalent_ui.agent_workbench_transcript import build_transcript_groups
 from seektalent_ui.workbench_observability import (
     record_requirement_snapshot_invalid,
@@ -70,7 +73,13 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
             isArchived=state.is_archived,
             runtimeRunId=state.runtime_run_id,
             workbenchSessionId=state.workbench_session_id,
-            workflowStartIntentId=state.workflow_start_intent_id,
+            workflowStartIntentId=_workflow_start_intent_id(input),
+            workflowStartState=_workflow_start_state(
+                runtime_run_id=state.runtime_run_id,
+                linked_runtime_runs=state.linked_runtime_runs,
+                workflow_start_intent=input.workflow_start_intent,
+            ),
+            workflowStartReasonCode=_workflow_start_reason_code(input.workflow_start_intent),
             linkedRuntimeRuns=[
                 AgentWorkbenchLinkedRuntimeRunResponse(
                     runtimeRunId=link.runtime_run_id,
@@ -120,6 +129,66 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
     )
     record_workbench_payload_bytes(len(response.model_dump_json()))
     return response
+
+
+def project_agent_workbench_conversation_summary(
+    state: object,
+    *,
+    workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None = None,
+) -> AgentWorkbenchConversationSummaryResponse:
+    return AgentWorkbenchConversationSummaryResponse(
+        conversationId=str(getattr(state, "conversation_id")),
+        title=str(getattr(state, "title")),
+        status=str(getattr(state, "status")),
+        isArchived=bool(getattr(state, "is_archived")),
+        runtimeRunId=cast(str | None, getattr(state, "runtime_run_id", None)),
+        workbenchSessionId=cast(str | None, getattr(state, "workbench_session_id", None)),
+        workflowStartIntentId=_workflow_start_intent_id_from_state(state, workflow_start_intent),
+        workflowStartState=_workflow_start_state(
+            runtime_run_id=cast(str | None, getattr(state, "runtime_run_id", None)),
+            linked_runtime_runs=(),
+            workflow_start_intent=workflow_start_intent,
+        ),
+        workflowStartReasonCode=_workflow_start_reason_code(workflow_start_intent),
+        updatedAt=cast(str | None, getattr(state, "updated_at", None)),
+    )
+
+
+def _workflow_start_intent_id(input: AgentWorkbenchProjectionInput) -> str | None:
+    return _workflow_start_intent_id_from_state(input.conversation_reopen_state, input.workflow_start_intent)
+
+
+def _workflow_start_intent_id_from_state(
+    state: object,
+    workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None,
+) -> str | None:
+    if workflow_start_intent is not None:
+        return workflow_start_intent.workflow_start_intent_id
+    return cast(str | None, getattr(state, "workflow_start_intent_id", None))
+
+
+def _workflow_start_state(
+    *,
+    runtime_run_id: str | None,
+    linked_runtime_runs: Sequence[object],
+    workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None,
+) -> Literal["not_started", "queued", "starting", "running", "failed"]:
+    intent = workflow_start_intent
+    if runtime_run_id is not None or any(bool(getattr(link, "is_active", False)) for link in linked_runtime_runs):
+        return "running"
+    if intent is None:
+        return "not_started"
+    if intent.status == "pending":
+        return "queued"
+    if intent.status == "started":
+        return "running" if intent.runtime_run_id is not None else "starting"
+    if intent.status in {"failed", "cancelled"}:
+        return "failed"
+    return "not_started"
+
+
+def _workflow_start_reason_code(workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None) -> str | None:
+    return workflow_start_intent.reason_code if workflow_start_intent is not None else None
 
 
 def _bounded_projection_input(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchProjectionInput:
