@@ -217,7 +217,7 @@ describe("live Agent Workbench conversation hook", () => {
     expect(client.getQueryData(queryKey)).toBe(current);
   });
 
-  it("invalidates the snapshot only for stream events that depend on durable view data", async () => {
+  it("invalidates durable view data without surfacing a stream disconnect", async () => {
     expect.hasAssertions();
     const client = createWorkbenchQueryClient();
     const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -256,8 +256,8 @@ describe("live Agent Workbench conversation hook", () => {
         queryKeys.agentConversation("agent_conv_1"),
       );
       expect(updated?.streamCursor.latestStreamSeq).toBe(1);
-      expect(updated?.conversation.status).toBe("disconnected");
-      expect(updated?.reasonCode).toBe("stream_recovery");
+      expect(updated?.conversation.status).toBe("running");
+      expect(updated?.reasonCode).toBeNull();
       expect(invalidate).toHaveBeenCalledWith({
         queryKey: queryKeys.agentConversation("agent_conv_1"),
       });

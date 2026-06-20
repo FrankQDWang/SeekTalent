@@ -51,19 +51,19 @@ export function mergeStreamEnvelopesIntoConversation(
   if (lastEnvelope === undefined) {
     return view;
   }
-  const needsSnapshotRecovery = accepted.some(isSnapshotDependentStreamKind);
+  const hasStreamGap = accepted.some(
+    (envelope) => envelope.kind === "stream.gap",
+  );
 
   return {
     ...view,
     activities: mergeActivitySummaries(view.activities, accepted),
     conversation: {
       ...view.conversation,
-      status: needsSnapshotRecovery ? "disconnected" : view.conversation.status,
+      status: hasStreamGap ? "disconnected" : view.conversation.status,
       updatedAt: lastEnvelope.createdAt,
     },
-    reasonCode: needsSnapshotRecovery
-      ? "stream_recovery"
-      : (view.reasonCode ?? null),
+    reasonCode: hasStreamGap ? "stream_recovery" : (view.reasonCode ?? null),
     transcriptGroups: appendLiveTranscriptEvents(view, accepted),
     streamCursor: {
       ...view.streamCursor,
