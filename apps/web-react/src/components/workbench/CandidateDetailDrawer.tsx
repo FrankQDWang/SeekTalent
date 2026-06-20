@@ -7,7 +7,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type {
   AgentWorkbenchCandidateDetailResponse,
   AgentWorkbenchCandidateSummary,
@@ -36,6 +36,15 @@ const sourceLabels: Record<CandidateSourceKind, string> = {
   liepin: "猎聘",
 };
 
+const focusableSelector = [
+  "button:not([disabled])",
+  "a[href]",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  '[tabindex]:not([tabindex="-1"])',
+].join(",");
+
 export function CandidateDetailDrawer({
   candidate = null,
   detail = null,
@@ -45,19 +54,56 @@ export function CandidateDetailDrawer({
   open,
   status,
 }: CandidateDetailDrawerProps) {
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!open) {
       return;
     }
+    previousFocusRef.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+
+    const focusable = () => focusableDrawerElements(drawerRef.current);
+    focusable()[0]?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onClose();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab") {
+        return;
+      }
+      const elements = focusable();
+      if (elements.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
       }
     };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [onClose, open]);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      previousFocusRef.current?.focus();
+      previousFocusRef.current = null;
+    };
+  }, [open]);
 
   if (!open) {
     return null;
@@ -72,7 +118,9 @@ export function CandidateDetailDrawer({
         aria-label="候选人详情"
         aria-modal="true"
         className="candidate-detail-drawer"
+        ref={drawerRef}
         role="dialog"
+        tabIndex={-1}
       >
         <header className="candidate-detail-drawer__header">
           <div>
@@ -95,7 +143,7 @@ export function CandidateDetailDrawer({
         ) : detail ? (
           <CandidateDetailBody candidate={candidate} detail={detail} />
         ) : (
-          <CandidateDetailError message="候选人详情响应为空。" />
+          <CandidateDetailError message="候选人详情暂时不可用。" />
         )}
       </aside>
     </div>
@@ -220,7 +268,7 @@ function CandidateDetailBody({
         <section className="candidate-detail-drawer__state" role="status">
           <FileText aria-hidden="true" size={22} />
           <strong>暂无详情段落</strong>
-          <p>后端尚未返回可展示的简历段落。</p>
+          <p>暂时没有可展示的简历段落。</p>
         </section>
       ) : null}
 
@@ -297,12 +345,23 @@ function accessStateCopy(
   }
   if (reasonCode) {
     return {
-      title: "详情不可读取",
-      text: `后端返回原因：${reasonCode}`,
+      title: "详情暂时不可用",
+      text: "请重试或检查来源权限。",
     };
   }
   return {
     title: "详情不可读取",
     text: "当前候选人没有可展示的详情权限或详情证据。",
   };
+}
+
+function focusableDrawerElements(drawer: HTMLElement | null): HTMLElement[] {
+  if (drawer === null) {
+    return [];
+  }
+  return Array.from(
+    drawer.querySelectorAll<HTMLElement>(focusableSelector),
+  ).filter(
+    (element) => !element.hasAttribute("disabled") && element.tabIndex !== -1,
+  );
 }

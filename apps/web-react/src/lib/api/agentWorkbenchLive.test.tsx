@@ -268,6 +268,60 @@ describe("live Agent Workbench conversation hook", () => {
     });
   });
 
+  it("does not reconnect the EventSource when a durable snapshot refetch advances the cursor", async () => {
+    expect.hasAssertions();
+    const client = createWorkbenchQueryClient();
+    const queryKey = queryKeys.agentConversation("agent_conv_1");
+    const refetchedSnapshot = {
+      ...conversationSnapshot,
+      streamCursor: {
+        ...conversationSnapshot.streamCursor,
+        latestStreamSeq: 2,
+        snapshotSeq: 2,
+        viewRevision: 2,
+      },
+    };
+    vi.mocked(getAgentWorkbenchConversation).mockResolvedValueOnce(
+      refetchedSnapshot,
+    );
+    client.setQueryData(queryKey, conversationSnapshot);
+
+    render(
+      <QueryClientProvider client={client}>
+        <ConversationProbe conversationId="agent_conv_1" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(connectAgentStream).toHaveBeenCalledOnce());
+    const options = vi.mocked(connectAgentStream).mock.calls[0]?.[0];
+    expect(options).toBeDefined();
+
+    options?.onBatch([
+      {
+        schemaVersion: "agent.workbench.stream.v1",
+        conversationId: "agent_conv_1",
+        seq: 1,
+        kind: "candidate.upserted",
+        payload: {
+          payloadType: "candidate.upserted",
+          kind: "candidate",
+          itemId: "candidate_1",
+        },
+        createdAt: "2026-06-12T12:00:00+00:00",
+      },
+    ]);
+
+    await waitFor(() => {
+      expect(getAgentWorkbenchConversation).toHaveBeenCalledWith(
+        "agent_conv_1",
+      );
+      expect(
+        client.getQueryData<AgentWorkbenchConversationResponse>(queryKey)
+          ?.streamCursor.snapshotSeq,
+      ).toBe(2);
+    });
+    expect(connectAgentStream).toHaveBeenCalledOnce();
+  });
+
   it("surfaces visible stream disconnects in the active snapshot cache", async () => {
     expect.hasAssertions();
     const client = createWorkbenchQueryClient();

@@ -79,4 +79,83 @@ describe("create Agent Workbench conversation from JD hook", () => {
       ).toBeGreaterThanOrEqual(0);
     });
   });
+
+  it("rejects blank JD input before creating a conversation", async () => {
+    expect.hasAssertions();
+    const queryClient = createWorkbenchQueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => useCreateAgentWorkbenchConversationFromJd(),
+      { wrapper },
+    );
+
+    await expect(
+      result.current.mutateAsync({
+        jobDescription: "   \n\t ",
+        jobTitle: null,
+      }),
+    ).rejects.toThrow("Job description is required.");
+
+    expect(createAgentConversation).not.toHaveBeenCalled();
+    expect(submitAgentWorkbenchMessage).not.toHaveBeenCalled();
+  });
+
+  it("reuses the created conversation and submit idempotency key when JD submit is retried", async () => {
+    expect.hasAssertions();
+    const queryClient = createWorkbenchQueryClient();
+    vi.mocked(createAgentConversation).mockResolvedValueOnce({
+      conversation: {
+        conversationId: "agent_conv_retry",
+        title: "AI Agent 平台工程师",
+      },
+    });
+    vi.mocked(submitAgentWorkbenchMessage)
+      .mockRejectedValueOnce(new Error("submit failed"))
+      .mockResolvedValueOnce({
+        ...agentWorkbenchRequirementReviewViewFixture,
+        conversation: {
+          ...agentWorkbenchRequirementReviewViewFixture.conversation,
+          conversationId: "agent_conv_retry",
+          title: "AI Agent 平台工程师",
+        },
+      });
+
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(
+      () => useCreateAgentWorkbenchConversationFromJd(),
+      { wrapper },
+    );
+    const input = {
+      jobDescription:
+        "寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。",
+      jobTitle: "AI Agent 平台工程师",
+    };
+
+    await expect(result.current.mutateAsync(input)).rejects.toThrow(
+      "submit failed",
+    );
+    const firstPayload = vi.mocked(submitAgentWorkbenchMessage).mock
+      .calls[0]?.[1];
+    const output = await result.current.mutateAsync(input);
+    const secondPayload = vi.mocked(submitAgentWorkbenchMessage).mock
+      .calls[1]?.[1];
+
+    expect(createAgentConversation).toHaveBeenCalledOnce();
+    expect(submitAgentWorkbenchMessage).toHaveBeenNthCalledWith(
+      1,
+      "agent_conv_retry",
+      expect.any(Object),
+    );
+    expect(submitAgentWorkbenchMessage).toHaveBeenNthCalledWith(
+      2,
+      "agent_conv_retry",
+      expect.any(Object),
+    );
+    expect(secondPayload?.idempotencyKey).toBe(firstPayload?.idempotencyKey);
+    expect(output.conversationId).toBe("agent_conv_retry");
+  });
 });

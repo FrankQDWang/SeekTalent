@@ -39,6 +39,17 @@ type RequirementDraftAmendInput = {
   text: string;
 };
 
+type PendingOperationKey = {
+  signature: string;
+  idempotencyKey: string;
+};
+
+type PendingCreateFromJdOperation = {
+  signature: string;
+  conversationId: string | null;
+  submitIdempotencyKey: string;
+};
+
 export type CreateAgentWorkbenchConversationFromJdInput = {
   jobDescription: string;
   jobTitle?: string | null | undefined;
@@ -82,6 +93,7 @@ export function useAgentWorkbenchConversations() {
 
 export function useCreateAgentWorkbenchConversationFromJd() {
   const queryClient = useQueryClient();
+  const pendingCreate = useRef<PendingCreateFromJdOperation | null>(null);
 
   return useMutation<
     CreateAgentWorkbenchConversationFromJdOutput,
@@ -93,12 +105,28 @@ export function useCreateAgentWorkbenchConversationFromJd() {
       if (text.length === 0) {
         throw new Error("Job description is required.");
       }
-      const title = conversationTitleFromInput(jobTitle, text);
-      const created = await createAgentConversation({ title });
-      const conversationId = created.conversation.conversationId;
       const normalizedJobTitle = normalizeOptionalText(jobTitle);
+      const signature = operationSignature("create-from-jd", {
+        jobTitle: normalizedJobTitle,
+        text,
+      });
+      if (pendingCreate.current?.signature !== signature) {
+        pendingCreate.current = {
+          signature,
+          conversationId: null,
+          submitIdempotencyKey: actionIdempotencyKey("submit-jd"),
+        };
+      }
+      const pending = pendingCreate.current;
+      let conversationId = pending.conversationId;
+      if (conversationId === null) {
+        const title = conversationTitleFromInput(jobTitle, text);
+        const created = await createAgentConversation({ title });
+        conversationId = created.conversation.conversationId;
+        pending.conversationId = conversationId;
+      }
       const view = await submitAgentWorkbenchMessage(conversationId, {
-        idempotencyKey: actionIdempotencyKey("submit-jd"),
+        idempotencyKey: pending.submitIdempotencyKey,
         jobTitle: normalizedJobTitle,
         messageType: "submitJd",
         notes: null,
@@ -108,6 +136,7 @@ export function useCreateAgentWorkbenchConversationFromJd() {
       return { conversationId, view };
     },
     onSuccess: ({ conversationId, view }) => {
+      pendingCreate.current = null;
       applyActionSnapshot(
         queryClient,
         queryKeys.agentConversation(conversationId),
@@ -157,19 +186,31 @@ export function useAgentWorkbenchCandidateDetail(
 
 export function useSubmitAgentWorkbenchMessage(conversationId: string) {
   const queryClient = useQueryClient();
+  const operationKey = useStableOperationKey("message");
   const queryKey = useMemo(
     () => queryKeys.agentConversation(conversationId),
     [conversationId],
   );
 
   return useMutation({
-    mutationFn: (message: string) =>
-      submitAgentWorkbenchMessage(conversationId, {
-        idempotencyKey: actionIdempotencyKey("message"),
+    mutationFn: (message: string) => {
+      const signature = operationSignature("message", {
+        conversationId,
+        message,
+      });
+      return submitAgentWorkbenchMessage(conversationId, {
+        idempotencyKey: operationKey.keyFor(signature),
         messageType: "userText",
         text: message,
-      }),
-    onSuccess: (next) => {
+      });
+    },
+    onSuccess: (next, message) => {
+      operationKey.clear(
+        operationSignature("message", {
+          conversationId,
+          message,
+        }),
+      );
       applyActionSnapshot(queryClient, queryKey, next);
     },
   });
@@ -177,19 +218,31 @@ export function useSubmitAgentWorkbenchMessage(conversationId: string) {
 
 export function useConfirmAgentWorkbenchRequirements(conversationId: string) {
   const queryClient = useQueryClient();
+  const operationKey = useStableOperationKey("confirm-requirements");
   const queryKey = useMemo(
     () => queryKeys.agentConversation(conversationId),
     [conversationId],
   );
 
   return useMutation({
-    mutationFn: (draftRevisionId: string) =>
-      confirmAgentWorkbenchRequirements(conversationId, {
+    mutationFn: (draftRevisionId: string) => {
+      const signature = operationSignature("confirm-requirements", {
+        conversationId,
+        draftRevisionId,
+      });
+      return confirmAgentWorkbenchRequirements(conversationId, {
         draftRevisionId,
         expectedDraftRevisionId: draftRevisionId,
-        idempotencyKey: actionIdempotencyKey("confirm-requirements"),
-      }),
-    onSuccess: (next) => {
+        idempotencyKey: operationKey.keyFor(signature),
+      });
+    },
+    onSuccess: (next, draftRevisionId) => {
+      operationKey.clear(
+        operationSignature("confirm-requirements", {
+          conversationId,
+          draftRevisionId,
+        }),
+      );
       applyActionSnapshot(queryClient, queryKey, next);
     },
   });
@@ -199,6 +252,7 @@ export function useUpdateAgentWorkbenchRequirementDraft(
   conversationId: string,
 ) {
   const queryClient = useQueryClient();
+  const operationKey = useStableOperationKey("requirement-update");
   const queryKey = useMemo(
     () => queryKeys.agentConversation(conversationId),
     [conversationId],
@@ -208,14 +262,27 @@ export function useUpdateAgentWorkbenchRequirementDraft(
     mutationFn: ({
       draftRevisionId,
       operations,
-    }: RequirementDraftUpdateInput) =>
-      updateAgentWorkbenchRequirementDraft(conversationId, {
+    }: RequirementDraftUpdateInput) => {
+      const signature = operationSignature("requirement-update", {
+        conversationId,
+        draftRevisionId,
+        operations,
+      });
+      return updateAgentWorkbenchRequirementDraft(conversationId, {
         draftRevisionId,
         expectedDraftRevisionId: draftRevisionId,
-        idempotencyKey: actionIdempotencyKey("requirement-update"),
+        idempotencyKey: operationKey.keyFor(signature),
         operations,
-      }),
-    onSuccess: (next) => {
+      });
+    },
+    onSuccess: (next, variables) => {
+      operationKey.clear(
+        operationSignature("requirement-update", {
+          conversationId,
+          draftRevisionId: variables.draftRevisionId,
+          operations: variables.operations,
+        }),
+      );
       applyActionSnapshot(queryClient, queryKey, next);
     },
   });
@@ -225,6 +292,7 @@ export function useAmendAgentWorkbenchRequirementFromText(
   conversationId: string,
 ) {
   const queryClient = useQueryClient();
+  const operationKey = useStableOperationKey("requirement-amend");
   const queryKey = useMemo(
     () => queryKeys.agentConversation(conversationId),
     [conversationId],
@@ -235,15 +303,30 @@ export function useAmendAgentWorkbenchRequirementFromText(
       draftRevisionId,
       targetSectionHint = null,
       text,
-    }: RequirementDraftAmendInput) =>
-      amendAgentWorkbenchRequirementFromText(conversationId, {
+    }: RequirementDraftAmendInput) => {
+      const signature = operationSignature("requirement-amend", {
+        conversationId,
         draftRevisionId,
-        expectedDraftRevisionId: draftRevisionId,
-        idempotencyKey: actionIdempotencyKey("requirement-amend"),
         targetSectionHint,
         text,
-      }),
-    onSuccess: (next) => {
+      });
+      return amendAgentWorkbenchRequirementFromText(conversationId, {
+        draftRevisionId,
+        expectedDraftRevisionId: draftRevisionId,
+        idempotencyKey: operationKey.keyFor(signature),
+        targetSectionHint,
+        text,
+      });
+    },
+    onSuccess: (next, variables) => {
+      operationKey.clear(
+        operationSignature("requirement-amend", {
+          conversationId,
+          draftRevisionId: variables.draftRevisionId,
+          targetSectionHint: variables.targetSectionHint ?? null,
+          text: variables.text,
+        }),
+      );
       applyActionSnapshot(queryClient, queryKey, next);
     },
   });
@@ -258,9 +341,16 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
   );
   const snapshotSeq = query.data?.streamCursor.snapshotSeq;
   const viewRevision = query.data?.streamCursor.viewRevision;
+  const latestSnapshotSeq = useRef<number | undefined>(undefined);
+  const latestViewRevision = useRef<number | undefined>(undefined);
   const streamState = useRef<AgentStreamState>(
     initialAgentStreamState(conversationId),
   );
+
+  useEffect(() => {
+    latestSnapshotSeq.current = snapshotSeq;
+    latestViewRevision.current = viewRevision;
+  }, [snapshotSeq, viewRevision]);
 
   useEffect(() => {
     streamState.current = initialAgentStreamState(conversationId);
@@ -269,12 +359,12 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
   useEffect(() => {
     if (
       !query.isSuccess ||
-      snapshotSeq === undefined ||
-      viewRevision === undefined
+      latestSnapshotSeq.current === undefined ||
+      latestViewRevision.current === undefined
     ) {
       return;
     }
-    const streamStartSeq = snapshotSeq;
+    const streamStartSeq = latestSnapshotSeq.current;
     streamState.current = initialAgentStreamState(
       conversationId,
       streamStartSeq,
@@ -341,14 +431,7 @@ export function useAgentWorkbenchLiveConversation(conversationId: string) {
     });
 
     return cleanup;
-  }, [
-    conversationId,
-    query.isSuccess,
-    queryClient,
-    queryKey,
-    snapshotSeq,
-    viewRevision,
-  ]);
+  }, [conversationId, query.isSuccess, queryClient, queryKey]);
 
   return query;
 }
@@ -382,6 +465,30 @@ function actionIdempotencyKey(action: string): string {
       ? randomUUID.call(globalThis.crypto)
       : `${String(Date.now())}:${Math.random().toString(36).slice(2)}`;
   return `workbench:${action}:${id}`;
+}
+
+function useStableOperationKey(action: string) {
+  const pending = useRef<PendingOperationKey | null>(null);
+  return {
+    keyFor(signature: string): string {
+      if (pending.current?.signature !== signature) {
+        pending.current = {
+          signature,
+          idempotencyKey: actionIdempotencyKey(action),
+        };
+      }
+      return pending.current.idempotencyKey;
+    },
+    clear(signature: string) {
+      if (pending.current?.signature === signature) {
+        pending.current = null;
+      }
+    },
+  };
+}
+
+function operationSignature(action: string, payload: unknown): string {
+  return JSON.stringify([action, payload]);
 }
 
 function conversationTitleFromInput(

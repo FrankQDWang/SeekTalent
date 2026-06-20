@@ -4,6 +4,7 @@ import {
   workbenchStreamStartSeq,
 } from "./agentWorkbench";
 import type { AgentWorkbenchConversationResponse } from "./agentWorkbenchTypes";
+import { ApiRequestError, requireData } from "./client";
 
 describe("Agent Workbench snapshot helpers", () => {
   it("does not replace a newer cached view with an older mutation snapshot", () => {
@@ -36,6 +37,40 @@ describe("Agent Workbench snapshot helpers", () => {
         viewFixture({ latestStreamSeq: 12, snapshotSeq: 9 }),
       ),
     ).toBe(9);
+  });
+});
+
+describe("API error parsing", () => {
+  it("preserves Workbench Problem Details reason and correlation ids", () => {
+    expect.hasAssertions();
+
+    try {
+      requireData({
+        error: {
+          detail: "Requirement draft changed.",
+          reasonCode: "requirement_draft_stale",
+          correlationId: "corr_1",
+        },
+        response: new Response(null, { status: 409 }),
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(ApiRequestError);
+      expect(error).toMatchObject({
+        message: "Requirement draft changed.",
+        status: 409,
+        reasonCode: "requirement_draft_stale",
+        correlationId: "corr_1",
+      });
+    }
+  });
+
+  it("uses a safe fallback for malformed API errors", () => {
+    expect(() =>
+      requireData({
+        error: { unexpected: "shape" },
+        response: new Response(null, { status: 502 }),
+      }),
+    ).toThrow(new ApiRequestError("Request failed.", 502));
   });
 });
 
