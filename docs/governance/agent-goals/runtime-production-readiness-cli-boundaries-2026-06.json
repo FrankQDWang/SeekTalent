@@ -1,0 +1,39 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Keep the published CLI entrypoint from importing behavior subsystems at module import time.",
+  "rationale": "This slice preserves the existing CLI command surface while moving runtime, provider, evaluation, corpus, flywheel, workbench, and live-smoke behavior imports behind command execution wrappers. The CLI remains a parser/router boundary instead of eagerly loading production subsystems on import.",
+  "touched_layers": ["docs", "other", "tests"],
+  "red_files": [
+    "src/seektalent/__init__.py",
+    "src/seektalent/cli.py",
+    "src/seektalent/cli_basic_commands.py",
+    "src/seektalent/version.py",
+    "tests/test_cli_import_boundaries.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_cli_import_boundaries.py tests/test_cli_basic_commands.py tests/test_cli.py tests/test_cli_packaging.py tests/test_api.py tests/test_evaluation.py -q",
+    "uv run ruff check src/seektalent/__init__.py src/seektalent/version.py src/seektalent/cli.py src/seektalent/cli_basic_commands.py tests/test_cli_import_boundaries.py",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "top-level CLI imports of runtime execution, provider, evaluation, corpus, flywheel, workbench, and live-smoke behavior subsystems",
+    "package initializer eager imports that load API/runtime dependencies before the CLI module can stay lightweight",
+    "published CLI tests depending on eager behavior imports instead of stable command execution seams"
+  ],
+  "risks": [
+    "The existing run_match and remote-eval monkeypatch seams are intentionally preserved as lazy wrappers for current tests and downstream command extensions.",
+    "This slice does not move all command bodies out of cli.py; UI server and CTS client decomposition are separate Task 9 stacked PRs."
+  ]
+}

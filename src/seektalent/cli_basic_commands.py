@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 
-from seektalent import __version__
 from seektalent.resources import read_env_example_template, resolve_user_path
+from seektalent.version import __version__
 
 
 def init_command(args: argparse.Namespace) -> int:

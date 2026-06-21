@@ -12,12 +12,11 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from typing import Any, Callable, Protocol, cast
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Callable, cast
 
 from pydantic import ValidationError
 
-from seektalent import __version__
-from seektalent.api import MatchRunResult, run_match_debug as run_match
 from seektalent.artifacts import ArtifactSession, ArtifactStore
 from seektalent.artifacts.legacy import execute_archive_migration
 from seektalent.config import (
@@ -39,25 +38,17 @@ from seektalent.cli_basic_commands import (
     update_command as _update_command,
     version_command as _version_command,
 )
-from seektalent.corpus.runtime import materialize_corpus_artifacts
-from seektalent.corpus.store import CorpusStore
-from seektalent.evaluation import AsyncJudgeLimiter, _upsert_wandb_report, log_evaluation_remotely
-from seektalent.flywheel.datasets import export_query_rewriting_dataset
-from seektalent.flywheel.store import FlywheelStore
-from seektalent.providers.liepin.compliance import ComplianceGate
-from seektalent.liepin_smoke_cli import liepin_smoke_command as _liepin_smoke_command
-from seektalent.providers.liepin.store import LiepinStore
 from seektalent.resources import (
     REQUIRED_PROMPTS,
     package_prompt_dir,
     package_spec_file,
     resolve_user_path,
 )
-from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
-from seektalent.product_env import build_workbench_command_env
 from seektalent.text_inputs import read_optional_inline_or_file_text, read_required_inline_or_file_text
+from seektalent.version import __version__
 
-del Protocol
+if TYPE_CHECKING:
+    from seektalent.api import MatchRunResult
 
 PROVIDER_ENV_VAR_BY_PROTOCOL_FAMILY = {
     "openai_chat_completions_compatible": "SEEKTALENT_TEXT_LLM_API_KEY",
@@ -217,11 +208,72 @@ def _error_text(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+def run_match(
+    *,
+    job_title: str,
+    jd: str,
+    notes: str = "",
+    settings: AppSettings | None = None,
+    env_file: str | Path | None = ".env",
+    judge_limiter: object | None = None,
+    eval_remote_logging: bool = True,
+    artifact_session: ArtifactSession | None = None,
+) -> MatchRunResult:
+    from seektalent.api import run_match_debug
+    from seektalent.evaluation import AsyncJudgeLimiter
+
+    if judge_limiter is not None and not isinstance(judge_limiter, AsyncJudgeLimiter):
+        raise TypeError("judge_limiter must be an AsyncJudgeLimiter")
+    return run_match_debug(
+        job_title=job_title,
+        jd=jd,
+        notes=notes,
+        settings=settings,
+        env_file=env_file,
+        judge_limiter=judge_limiter,
+        eval_remote_logging=eval_remote_logging,
+        artifact_session=artifact_session,
+    )
+
+
+def log_evaluation_remotely(
+    *,
+    settings: AppSettings,
+    artifact_root: Path,
+    evaluation: object,
+    rounds_executed: int,
+    terminal_stop_guidance: object | None = None,
+    update_report: bool = True,
+) -> dict[str, object] | None:
+    from seektalent.evaluation import log_evaluation_remotely as _log_evaluation_remotely
+    from seektalent.evaluation import EvaluationResult
+    from seektalent.models import StopGuidance
+
+    if not isinstance(evaluation, EvaluationResult):
+        raise TypeError("evaluation must be an EvaluationResult")
+    if terminal_stop_guidance is not None and not isinstance(terminal_stop_guidance, StopGuidance):
+        raise TypeError("terminal_stop_guidance must be a StopGuidance")
+    return _log_evaluation_remotely(
+        settings=settings,
+        artifact_root=artifact_root,
+        evaluation=evaluation,
+        rounds_executed=rounds_executed,
+        terminal_stop_guidance=terminal_stop_guidance,
+        update_report=update_report,
+    )
+
+
+def _upsert_wandb_report(settings: AppSettings, extra_rows: Sequence[dict[str, object]] = ()) -> None:
+    from seektalent.evaluation import _upsert_wandb_report as upsert_wandb_report
+
+    upsert_wandb_report(settings, extra_rows=extra_rows)
+
+
 class BenchmarkUploader:
     def __init__(self, *, settings: AppSettings, retries: int) -> None:
         self.settings = settings
         self.retries = retries
-        self.report_rows: list[dict[str, Any]] = []
+        self.report_rows: list[dict[str, object]] = []
         self.uploaded_result_rows: list[dict[str, object]] = []
         self.queue: Queue[BenchmarkUploadTask | None] = Queue()
         self.thread = threading.Thread(target=self._work, name="seektalent-benchmark-uploader")
@@ -1220,6 +1272,8 @@ def _inspect_payload() -> dict[str, object]:
 
 
 def _run_command(args: argparse.Namespace) -> int:
+    from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
+
     job_title = read_required_inline_or_file_text(
         inline_value=args.job_title,
         file_value=args.job_title_file,
@@ -1255,6 +1309,9 @@ def _run_command(args: argparse.Namespace) -> int:
 
 
 def _benchmark_command(args: argparse.Namespace) -> int:
+    from seektalent.evaluation import AsyncJudgeLimiter
+    from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
+
     load_process_env(args.env_file)
     if args.benchmark_max_concurrency < 1:
         raise ValueError("benchmark_max_concurrency must be >= 1")
@@ -1453,6 +1510,9 @@ def _archive_legacy_artifacts_command(args: argparse.Namespace) -> int:
 
 
 def _flywheel_export_command(args: argparse.Namespace) -> int:
+    from seektalent.flywheel.datasets import export_query_rewriting_dataset
+    from seektalent.flywheel.store import FlywheelStore
+
     settings = _build_settings(args)
     builder_config = json.loads(args.builder_config_json) if args.builder_config_json else {}
     store = FlywheelStore(settings.flywheel_path)
@@ -1479,6 +1539,9 @@ def _flywheel_export_command(args: argparse.Namespace) -> int:
 
 
 def _corpus_export_command(args: argparse.Namespace) -> int:
+    from seektalent.corpus.runtime import materialize_corpus_artifacts
+    from seektalent.corpus.store import CorpusStore
+
     settings = AppSettings()
     settings = settings.with_overrides(
         corpus_db_path=args.corpus_db,
@@ -1687,6 +1750,8 @@ def _doctor_command(args: argparse.Namespace) -> int:
 
 
 def _workbench_command(args: argparse.Namespace) -> int:
+    from seektalent.product_env import build_workbench_command_env
+
     env = build_workbench_command_env(os.environ)
     argv = [
         _console_script_path("seektalent-ui-api"),
@@ -1748,6 +1813,9 @@ def _liepin_compliance_gate_command(args: argparse.Namespace) -> int:
 
 
 def _liepin_compliance_gate_create_command(args: argparse.Namespace) -> int:
+    from seektalent.providers.liepin.compliance import ComplianceGate
+    from seektalent.providers.liepin.store import LiepinStore
+
     if args.purpose != "search":
         print("validation failed: liepin-compliance-gate create requires --purpose search", file=sys.stderr)
         return 1
@@ -1787,6 +1855,8 @@ def _liepin_compliance_gate_create_command(args: argparse.Namespace) -> int:
 
 
 def _liepin_compliance_gate_bind_account_command(args: argparse.Namespace) -> int:
+    from seektalent.providers.liepin.store import LiepinStore
+
     store = LiepinStore(_liepin_cli_db_path(args))
     gate = store.get_compliance_gate(
         gate_ref=args.gate_ref,
@@ -1824,6 +1894,8 @@ def _reject_raw_account_identity_hint(value: str) -> str:
 
 
 def _liepin_compliance_gate_verify_command(args: argparse.Namespace) -> int:
+    from seektalent.providers.liepin.store import LiepinStore
+
     if args.purpose != "search":
         print("validation failed: liepin-compliance-gate verify requires --purpose search", file=sys.stderr)
         return 1
@@ -1853,6 +1925,12 @@ def _liepin_cli_db_path(args: argparse.Namespace) -> Path:
     if path.is_absolute() or settings.workspace_root is None:
         return path
     return Path(settings.workspace_root) / path
+
+
+def _liepin_smoke_command(args: argparse.Namespace) -> int:
+    from seektalent.liepin_smoke_cli import liepin_smoke_command
+
+    return liepin_smoke_command(args)
 
 
 def build_exec_parser() -> argparse.ArgumentParser:
@@ -2196,6 +2274,8 @@ def main(argv: list[str] | None = None) -> int:
     args_list = list(sys.argv[1:] if argv is None else argv)
     if not args_list:
         if _is_interactive_terminal():
+            from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
+
             load_process_env()
             cleanup_runtime_artifacts(AppSettings())
             return _launch_tui()
