@@ -3,17 +3,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from time import perf_counter
-from typing import Any, TypedDict
 
 from seektalent.config import AppSettings
 from seektalent.finalize.finalizer import render_finalize_prompt
 from seektalent.llm import resolve_stage_model_config
 from seektalent.models import FinalResult, FinalizeContext
 from seektalent.progress import ProgressCallback
-from seektalent.tracing import RunTracer
+from seektalent.runtime.stage_contracts import FinalizerStageState
+from seektalent.tracing import LLMCallSnapshot, RunTracer
 
 
-type BuildSnapshot = Callable[..., Any]
+type BuildSnapshot = Callable[..., LLMCallSnapshot]
 type EmitLLMEvent = Callable[..., None]
 type EmitProgress = Callable[..., None]
 type RenderFinalMarkdown = Callable[[FinalResult], str]
@@ -40,12 +40,6 @@ def _register_runtime_artifacts(tracer: RunTracer) -> None:
         content_type="text/markdown",
         schema_version=None,
     )
-
-
-class FinalizerStageState(TypedDict):
-    call_id: str
-    artifacts: list[str]
-    latency_ms: int
 
 
 def _finalize_model_id(settings: AppSettings) -> str:

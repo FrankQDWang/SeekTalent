@@ -1,0 +1,53 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Make runtime composition, provider plugins, settings sections, and stage contracts explicit.",
+  "rationale": "This slice moves runtime assembly into a dedicated composition root, introduces a provider adapter plugin registry, exposes typed settings section views without changing the environment boundary, and shares runtime stage state contracts across stage modules.",
+  "touched_layers": ["docs", "other", "provider", "runtime", "tests"],
+  "config_env_files": ["src/seektalent/config.py"],
+  "config_behavior_rationale": "The config change only adds immutable typed section projections over existing validated AppSettings fields; runtime/provider behavior changes consume existing settings through explicit composition boundaries.",
+  "red_files": [
+    "src/seektalent/config.py",
+    "src/seektalent/providers/plugins.py",
+    "src/seektalent/providers/registry.py",
+    "src/seektalent/runtime/composition.py",
+    "src/seektalent/runtime/controller_runtime.py",
+    "src/seektalent/runtime/finalize_runtime.py",
+    "src/seektalent/runtime/stage_contracts.py",
+    "src/seektalent/source_adapters/runtime_factory.py",
+    "src/seektalent/source_adapters/runtime_composition.py",
+    "tests/test_composition_boundaries.py",
+    "tests/test_provider_plugins.py",
+    "tests/test_runtime_stage_contracts.py",
+    "tests/test_settings_sections.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_composition_boundaries.py tests/test_provider_plugins.py tests/test_settings_sections.py tests/test_runtime_stage_contracts.py -q",
+    "uv run pytest tests/test_provider_registry.py tests/test_runtime_services.py tests/test_runtime_production_contract.py -q",
+    "uv run ruff check src/seektalent/config.py src/seektalent/providers/plugins.py src/seektalent/providers/registry.py src/seektalent/runtime/composition.py src/seektalent/runtime/controller_runtime.py src/seektalent/runtime/finalize_runtime.py src/seektalent/runtime/stage_contracts.py src/seektalent/source_adapters/runtime_factory.py src/seektalent/source_adapters/runtime_composition.py tests/test_composition_boundaries.py tests/test_provider_plugins.py tests/test_runtime_stage_contracts.py tests/test_settings_sections.py",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_pr_governance.py --base codex/runtime-prod-constraints-v1",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "source adapter runtime factory acting as the composition root",
+    "runtime package importing concrete provider/source adapter assembly",
+    "provider selection hidden behind hard-coded branch logic",
+    "large untyped AppSettings clusters at internal runtime call sites",
+    "runtime stage TypedDict contracts duplicated inside individual stage modules"
+  ],
+  "risks": [
+    "This is an explicit boundary slice, not a plugin discovery system; default provider plugins remain locally registered.",
+    "AppSettings remains the env parsing boundary; typed section views are immutable projections to avoid speculative settings hierarchy churn."
+  ]
+}
