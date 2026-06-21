@@ -14,7 +14,7 @@ from typing import TextIO
 import fcntl
 from ulid import ULID
 
-from .models import ArtifactKind, ArtifactManifest, ChildArtifactRef, LogicalArtifactEntry
+from .models import ArtifactKind, ArtifactManifest, ArtifactStatus, ChildArtifactRef, LogicalArtifactEntry
 from .registry import resolve_descriptor, top_level_entry
 
 
@@ -262,7 +262,8 @@ class ArtifactSession:
             if status == "running":
                 raise ValueError("Finalization requires a terminal artifact status")
             raise ValueError(f"Invalid artifact status: {status}")
-        self.manifest.status = status
+        final_status: ArtifactStatus = "completed" if status == "completed" else "failed"
+        self.manifest.status = final_status
         self.manifest.updated_at = utc_now()
         self.manifest.completed_at = self.manifest.updated_at
         if failure_summary:
@@ -304,7 +305,7 @@ class ArtifactSession:
                         continue
                     row = json.loads(line)
                     rows_by_id[str(row["artifact_id"])] = row
-            row = {
+            row: dict[str, object] = {
                 "artifact_id": self.manifest.artifact_id,
                 "artifact_kind": self.manifest.artifact_kind.value,
                 "created_at": self.manifest.created_at,

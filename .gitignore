@@ -30,7 +30,7 @@ obsidian/
 .seektalent/
 wandb/
 tea_debug.log
-artifacts/
+/artifacts/
 
 # Local execution plans and historical Superpowers scratch material
 docs/superpowers/
