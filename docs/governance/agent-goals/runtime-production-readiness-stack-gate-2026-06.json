@@ -1,0 +1,33 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Document the stack-aware production readiness gate.",
+  "rationale": "The readiness matrix must distinguish current Graphite parent-branch governance from the post-restack origin/main governance check. This keeps the final gate accurate while the runtime production readiness work lands as stacked PRs.",
+  "touched_layers": ["docs", "governance"],
+  "red_files": [
+    "docs/governance/runtime-production-readiness-matrix.md",
+    "docs/governance/agent-goals/runtime-production-readiness-stack-gate-2026-06.json"
+  ],
+  "verification": [
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base codex/runtime-prod-cts-client-split-v1",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "ambiguous full production gate that treats the whole unmerged stack as one PR"
+  ],
+  "risks": [
+    "Reviewers could run the origin/main governance gate before lower stacked PRs land and misclassify the expected large diff as a slice failure.",
+    "The final top-of-stack quality gate must remain separate from per-PR path governance."
+  ]
+}
