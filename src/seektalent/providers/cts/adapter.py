@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from seektalent.clients.cts_client import CTSClient
-from seektalent.clients.cts_client import CTSClientProtocol
-from seektalent.clients.cts_client import MockCTSClient
+from seektalent.clients.cts_contracts import CTSClientProtocol
+from seektalent.clients.cts_mock_client import MockCTSClient
+from seektalent.clients.cts_response import CTSResponseError
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import ProviderCapabilities
+from seektalent.core.retrieval.provider_contract import ProviderSearchError
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import CTSQuery
@@ -54,7 +56,10 @@ class CTSProviderAdapter:
                 f"CTS query_role {cts_query_role} mapped from provider role {request.query_role}.",
             ],
         )
-        result = await self.client.search(cts_query, round_no=round_no, trace_id=trace_id)
+        try:
+            result = await self.client.search(cts_query, round_no=round_no, trace_id=trace_id)
+        except CTSResponseError as exc:
+            raise ProviderSearchError(reason_code=exc.reason_code, message=exc.safe_message) from exc
         candidates = [build_provider_candidate(candidate) for candidate in result.candidates]
         exhausted = len(candidates) < request.page_size
         return SearchResult(

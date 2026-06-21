@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from experiments.openclaw_baseline import OPENCLAW_MAX_ROUNDS
 from experiments.openclaw_baseline.adapters import candidate_brief
-from seektalent.clients.cts_client import CTSClient, CTSClientProtocol, MockCTSClient
+from seektalent.clients.cts_client import CTSClient
+from seektalent.clients.cts_contracts import CTSClientProtocol
+from seektalent.clients.cts_mock_client import MockCTSClient
 from seektalent.config import AppSettings
 from seektalent.evaluation import TOP_K
 from seektalent.models import CTSQuery, ConstraintValue, ResumeCandidate, unique_strings
@@ -100,7 +102,7 @@ class SearchCandidatesTool:
         self.calls_used += 1
         next_total_calls = self.total_calls + 1
         if next_total_calls > OPENCLAW_MAX_ROUNDS or self.calls_used > self.max_attempts or args.page > self.max_pages:
-            payload = {
+            payload: dict[str, object] = {
                 "status": "budget_exhausted",
                 "round_no": self.round_no,
                 "attempt_no": self.calls_used,
@@ -126,7 +128,10 @@ class SearchCandidatesTool:
             rationale=f"OpenClaw baseline CTS round {cts_round_no}.",
         )
         started = perf_counter()
-        result = await self.client.search(
+        client = self.client
+        if client is None:
+            raise RuntimeError("CTS client is not configured.")
+        result = await client.search(
             query,
             round_no=cts_round_no,
             trace_id=f"openclaw-cts{cts_round_no:02d}",
@@ -139,7 +144,7 @@ class SearchCandidatesTool:
                 new_resume_ids.append(candidate.resume_id)
                 self.round_new_resume_ids.append(candidate.resume_id)
             self.candidate_store[candidate.resume_id] = candidate
-        payload = {
+        payload: dict[str, object] = {
             "status": "ok",
             "round_no": self.round_no,
             "attempt_no": self.calls_used,

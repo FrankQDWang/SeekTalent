@@ -80,6 +80,13 @@ class SearchResult:
     latency_ms: int | None = None
 
 
+class ProviderSearchError(RuntimeError):
+    def __init__(self, *, reason_code: str, message: str) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.safe_message = message
+
+
 class ProviderAdapter(Protocol):
     name: str
 

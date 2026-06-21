@@ -12,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from experiments.claude_code_baseline import CLAUDE_CODE_MAX_ROUNDS
 from experiments.claude_code_baseline.adapters import candidate_brief
-from seektalent.clients.cts_client import CTSClient, CTSClientProtocol, MockCTSClient
+from seektalent.clients.cts_client import CTSClient
+from seektalent.clients.cts_contracts import CTSClientProtocol
+from seektalent.clients.cts_mock_client import MockCTSClient
 from seektalent.config import AppSettings, load_process_env
 from seektalent.evaluation import TOP_K, persist_raw_resume_snapshot
 from seektalent.models import CTSQuery, ConstraintValue, ResumeCandidate, unique_strings
@@ -149,7 +151,7 @@ class CTSToolSession:
             self.candidate_store[candidate.resume_id] = candidate
             persist_raw_resume_snapshot(run_dir=self.run_dir, candidate=candidate)
 
-        payload = {
+        payload: dict[str, object] = {
             "status": "ok",
             "attempt_no": self.total_calls,
             "latency_ms": max(1, int((perf_counter() - started) * 1000)),

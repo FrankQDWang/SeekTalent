@@ -1,0 +1,56 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Split CTS client transport from request building, response mapping, and mock search behavior.",
+  "rationale": "This slice keeps the live CTS client focused on HTTP transport while moving native filter request compilation, CTS candidate normalization, shared result contracts, and mock corpus search into dedicated modules. Provider adapter behavior remains covered through the existing CTS adapter tests plus the new client-split contract tests.",
+  "touched_layers": ["docs", "other", "provider", "tests"],
+  "red_files": [
+    "src/seektalent/clients/cts_client.py",
+    "src/seektalent/clients/cts_contracts.py",
+    "src/seektalent/clients/cts_request.py",
+    "src/seektalent/clients/cts_response.py",
+    "src/seektalent/clients/cts_mock_client.py",
+    "src/seektalent/core/retrieval/provider_contract.py",
+    "src/seektalent/providers/cts/adapter.py",
+    "experiments/claude_code_baseline/cts_mcp.py",
+    "experiments/jd_text_baseline/cts_search.py",
+    "experiments/openclaw_baseline/cts_tools.py",
+    "tests/test_cts_client_split.py",
+    "tests/test_cts_provider_adapter.py",
+    "tests/test_location_normalization.py",
+    "tests/test_runtime_multi_source_round_dispatch.py",
+    "docs/governance/agent-goals/runtime-production-readiness-cts-client-2026-06.json"
+  ],
+  "verification": [
+    "uv run pytest tests/test_cts_client_split.py tests/test_cts_provider_adapter.py tests/test_runtime_multi_source_round_dispatch.py -q",
+    "uv run pytest tests/test_cts_client_split.py tests/test_cts_provider_adapter.py tests/test_location_normalization.py -q",
+    "uv run pytest tests/test_claude_code_baseline.py tests/test_jd_text_baseline.py tests/test_openclaw_baseline.py -q",
+    "uv run pytest tests/test_cli_import_boundaries.py tests/test_ui_server_decomposition.py tests/test_cts_client_split.py -q",
+    "uv run ruff check src/seektalent/clients/cts_client.py src/seektalent/clients/cts_contracts.py src/seektalent/clients/cts_request.py src/seektalent/clients/cts_response.py src/seektalent/clients/cts_mock_client.py src/seektalent/providers/cts/adapter.py experiments/claude_code_baseline/cts_mcp.py experiments/jd_text_baseline/cts_search.py experiments/openclaw_baseline/cts_tools.py tests/test_cts_client_split.py tests/test_cts_provider_adapter.py tests/test_location_normalization.py",
+    "uv run ty check src/seektalent/clients/cts_client.py src/seektalent/clients/cts_contracts.py src/seektalent/clients/cts_request.py src/seektalent/clients/cts_response.py src/seektalent/clients/cts_mock_client.py src/seektalent/providers/cts/adapter.py experiments/claude_code_baseline/cts_mcp.py experiments/jd_text_baseline/cts_search.py experiments/openclaw_baseline/cts_tools.py tests/test_cts_client_split.py tests/test_cts_provider_adapter.py tests/test_location_normalization.py",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base codex/runtime-prod-ui-server-decomposition-v1",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "CTS request payload compilation embedded in the HTTP client",
+    "CTS response normalization embedded in the HTTP client",
+    "mock corpus search behavior embedded in the live CTS client module",
+    "provider and experiment imports that source mock, protocol, or normalization helpers from the live transport module"
+  ],
+  "risks": [
+    "The live CTS HTTP path must preserve credentials, endpoint, latency, and response message behavior.",
+    "Mock CTS search must continue to share the same request payload validation as the live client.",
+    "Candidate normalization must preserve provider/source raw metadata and stable resume id fallback semantics."
+  ]
+}

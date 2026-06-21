@@ -1,6 +1,6 @@
 import asyncio
 
-from seektalent.clients.cts_client import MockCTSClient
+from seektalent.clients.cts_mock_client import MockCTSClient
 from seektalent.models import CTSQuery, ResumeCandidate
 from seektalent.normalization import normalize_resume
 from tests.settings_factory import make_settings

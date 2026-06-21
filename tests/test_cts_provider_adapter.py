@@ -2,7 +2,9 @@ import asyncio
 
 import pytest
 
-from seektalent.clients.cts_client import CTSFetchResult
+from seektalent.clients.cts_contracts import CTSFetchResult
+from seektalent.clients.cts_response import CTSResponseError
+from seektalent.core.retrieval.provider_contract import ProviderSearchError
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.models import CTSQuery
 from seektalent.models import ResumeCandidate
@@ -97,6 +99,34 @@ def test_cts_provider_adapter_rejects_detail_fetch_mode() -> None:
 
     with pytest.raises(ValueError, match="does not support fetch_mode=detail"):
         asyncio.run(provider.search(request, round_no=1, trace_id="trace-1"))
+
+
+def test_cts_provider_adapter_translates_business_errors_to_provider_errors() -> None:
+    class FailingCTSClient:
+        async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
+            del query, round_no, trace_id
+            raise CTSResponseError(
+                reason_code="cts_auth_failed",
+                message="CTS search returned business error code=10001 status='error'.",
+            )
+
+    provider = CTSProviderAdapter(make_settings(mock_cts=True), client=FailingCTSClient())
+    request = SearchRequest(
+        query_terms=["python"],
+        query_role="primary",
+        keyword_query="python",
+        adapter_notes=[],
+        provider_filters={},
+        runtime_constraints=[],
+        fetch_mode="summary",
+        page_size=10,
+    )
+
+    with pytest.raises(ProviderSearchError) as exc_info:
+        asyncio.run(provider.search(request, round_no=1, trace_id="trace-1"))
+
+    assert exc_info.value.reason_code == "cts_auth_failed"
+    assert exc_info.value.safe_message == "CTS search returned business error code=10001 status='error'."
 
 
 def test_cts_provider_adapter_does_not_forward_runtime_constraints_as_native_filters() -> None:
