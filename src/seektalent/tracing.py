@@ -8,7 +8,7 @@ from datetime import datetime
 from hashlib import sha256
 from io import StringIO
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from typing import SupportsInt
 from typing import TextIO
 
@@ -17,6 +17,9 @@ from seektalent.artifacts import ArtifactStore
 from seektalent.artifacts.models import ArtifactKind, ArtifactManifest, LogicalArtifactEntry
 from seektalent.artifacts.store import ArtifactSession
 from seektalent_runtime_control.artifact_policy import RuntimeArtifactPolicy, normalize_artifact_output_mode
+
+if TYPE_CHECKING:
+    from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
 
 EVENT_STRING_LIMIT = 60
 EVENT_LIST_LIMIT = 5
@@ -446,6 +449,11 @@ class RunTracer:
         if not self.artifact_policy.writes_runtime_public_event_mirror:
             return self.run_dir / "runtime" / "public_events.jsonl"
         return self.append_jsonl("runtime/public_events.jsonl", row)
+
+    def artifact_lifecycle_ref(self) -> RuntimeArtifactLifecycleRef:
+        from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
+
+        return RuntimeArtifactLifecycleRef.from_policy(artifact_id=self.run_id, policy=self.artifact_policy)
 
     def write_text(self, logical_name: str, content: str) -> Path:
         if not self.artifact_policy.writes_local_debug_artifacts:

@@ -35,6 +35,24 @@ class PublicArtifactRefV1(StrictModel):
     artifact_id: str
     artifact_uri: str | None = None
     retention_policy: str
+    debug_artifacts_available: bool = False
+    delete_eligible: bool = False
+    safety_class: str = "product_db_only"
+    max_bytes: int = 0
+    support_bundle_only: bool = False
+
+    @classmethod
+    def from_lifecycle_ref(cls, lifecycle_ref) -> "PublicArtifactRefV1":
+        return cls(
+            artifact_id=lifecycle_ref.artifact_id,
+            artifact_uri=lifecycle_ref.artifact_uri,
+            retention_policy=lifecycle_ref.retention_policy,
+            debug_artifacts_available=lifecycle_ref.debug_artifacts_available,
+            delete_eligible=lifecycle_ref.delete_eligible,
+            safety_class=lifecycle_ref.safety_class,
+            max_bytes=lifecycle_ref.max_bytes,
+            support_bundle_only=lifecycle_ref.support_bundle_only,
+        )
 
 
 class SourceSelectionV1(StrictModel):
@@ -197,11 +215,7 @@ class ProductionMatchResultV1(StrictModel):
                 else None
             ),
             prf_summary=_prf_summary_from_debug_result(debug_result),
-            artifact_ref=PublicArtifactRefV1(
-                artifact_id=debug_result.run_id,
-                artifact_uri=None,
-                retention_policy="local_runtime_artifact",
-            ),
+            artifact_ref=_public_artifact_ref_from_debug_result(debug_result),
         )
 
 
@@ -268,3 +282,15 @@ def digest_model_payload(payload: object | None) -> str | None:
     return hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()
+
+
+def _public_artifact_ref_from_debug_result(debug_result) -> PublicArtifactRefV1:
+    lifecycle_ref = getattr(debug_result, "artifact_lifecycle_ref", None)
+    if lifecycle_ref is None:
+        from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
+
+        lifecycle_ref = RuntimeArtifactLifecycleRef.from_output_mode(
+            artifact_id=debug_result.run_id,
+            output_mode="prod",
+        )
+    return PublicArtifactRefV1.from_lifecycle_ref(lifecycle_ref)

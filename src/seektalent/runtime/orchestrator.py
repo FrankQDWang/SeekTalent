@@ -32,7 +32,6 @@ from seektalent.candidate_feedback import (
     select_feedback_seed_resumes,
 )
 from seektalent.candidate_feedback.llm_prf import (
-    LLMPRFExtractor,
     build_llm_prf_failure_call_artifact,
     build_llm_prf_success_call_artifact,
     render_llm_prf_prompt,
@@ -46,18 +45,16 @@ from seektalent.candidate_feedback.policy import (
     build_prf_policy_decision,
 )
 from seektalent.config import AppSettings
-from seektalent.controller import ReActController
 from seektalent.corpus.documents import build_jd_document_row
 from seektalent.corpus.runtime import (
     ProviderReturnedCandidate,
     record_corpus_provider_results,
     write_corpus_ingest_manifest,
 )
-from seektalent.corpus.store import DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID, CorpusStore
+from seektalent.corpus.store import DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID
 from seektalent.core.retrieval.provider_contract import ProviderCapabilities, SearchRequest, SearchResult
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.evaluation import TOP_K, AsyncJudgeLimiter, EvaluationResult, evaluate_run
-from seektalent.finalize.finalizer import Finalizer
 from seektalent.flywheel.outcomes import (
     build_rejected_prf_term_event,
     build_runtime_query_outcome_row,
@@ -108,16 +105,15 @@ from seektalent.models import (
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.progress import ProgressCallback, ProgressEvent
+from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates, select_identity_top_candidates
 from seektalent.reflection.critic import ReflectionCritic
-from seektalent.requirements import RequirementExtractor
 from seektalent.retrieval import (
     build_location_execution_plan,
     build_round_retrieval_plan,
 )
 from seektalent.retrieval.query_identity import build_job_intent_fingerprint
 from seektalent.resumes.snapshots import canonical_resume_snapshot_payload
-from seektalent.resume_quality import ResumeQualityCommenter
 from seektalent.runtime.context_views import top_candidates
 from seektalent.runtime import controller_runtime
 from seektalent.runtime import finalize_runtime
@@ -158,6 +154,7 @@ from seektalent.runtime.runtime_reports import (
     render_run_finished_summary as render_run_finished_summary_direct,
     render_run_summary as render_run_summary_direct,
 )
+from seektalent.runtime.services import build_runtime_services
 from seektalent.runtime.source_lanes import (
     RuntimeDetailEnrichmentResult,
     RuntimeSourceLaneEvent,
@@ -178,7 +175,6 @@ from seektalent.runtime.public_events import RuntimePublicEvent, make_runtime_pu
 from seektalent.runtime.retrieval_runtime import (
     LogicalQueryState,
     RetrievalExecutionResult,
-    RetrievalRuntime,
     allocate_initial_lane_targets,
     build_logical_query_state,
 )
@@ -200,7 +196,6 @@ from seektalent.runtime.source_query_intent import (
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.runtime.scoring_runtime import score_round as score_round_direct
-from seektalent.scoring.scorer import ResumeScorer
 from seektalent.source_contracts import (
     SourceBudget,
     SourceLaneRequest as ContractSourceLaneRequest,
@@ -274,6 +269,7 @@ class RunArtifacts:
     normalized_store: dict[str, NormalizedResume]
     evaluation_result: EvaluationResult | None
     terminal_stop_guidance: StopGuidance | None
+    artifact_lifecycle_ref: RuntimeArtifactLifecycleRef | None = None
     finalization_revision: RuntimeFinalizationRevision | None = None
     source_coverage_summary: RuntimeSourceCoverageSummary | None = None
     run_state: RunState | None = None
@@ -423,40 +419,29 @@ class WorkflowRuntime:
                 "repair_reflection",
             ]
         )
-        self.requirement_extractor = RequirementExtractor(
-            settings,
-            prompt_map["requirements"],
-            repair_prompt=prompt_map["repair_requirements"],
-        )
-        self.controller = ReActController(
-            settings,
-            prompt_map["controller"],
-            repair_prompt=prompt_map["repair_controller"],
-        )
-        self.resume_scorer = ResumeScorer(settings, prompt_map["scoring"])
-        self.resume_quality_commenter = ResumeQualityCommenter(settings, prompt_map["tui_summary"])
-        self.reflection_critic = ReflectionCritic(
-            settings,
-            prompt_map["reflection"],
-            repair_prompt=prompt_map["repair_reflection"],
-        )
-        self.finalizer = Finalizer(settings, prompt_map["finalize"])
-        self.llm_prf_extractor = LLMPRFExtractor(settings, prompt_map["prf_probe_phrase_proposal"])
         self.judge_prompt = prompt_map["judge"]
         self.evaluation_runner = evaluate_run
         retrieval_service = retrieval_service or RetrievalService(provider=_UnavailableRetrievalProvider())
-        self.provider = retrieval_service.provider
-        self.retrieval_runtime = RetrievalRuntime(
+        self.services = build_runtime_services(
             settings=settings,
+            prompt_map=prompt_map,
             retrieval_service=retrieval_service,
         )
-        self.retrieval_service = retrieval_service
+        self.requirement_extractor = self.services.requirement_extractor
+        self.controller = self.services.controller
+        self.resume_scorer = self.services.resume_scorer
+        self.resume_quality_commenter = self.services.resume_quality_commenter
+        self.reflection_critic = self.services.reflection_critic
+        self.finalizer = self.services.finalizer
+        self.llm_prf_extractor = self.services.llm_prf_extractor
+        self.retrieval_runtime = self.services.retrieval_runtime
+        self.retrieval_service = self.services.retrieval_service
         self.flywheel_store: FlywheelStore | None = (
             FlywheelStore(settings.flywheel_path) if settings.enable_flywheel else None
         )
         self._active_flywheel_task_id: str | None = None
         self._active_flywheel_run_id: str | None = None
-        self.corpus_store = CorpusStore(settings.corpus_path)
+        self.corpus_store = self.services.corpus_store
         self._active_corpus_session: ArtifactSession | None = None
 
     @property
@@ -466,6 +451,11 @@ class WorkflowRuntime:
     @retrieval_service.setter
     def retrieval_service(self, retrieval_service: RetrievalService) -> None:
         self._retrieval_service = retrieval_service
+        provider = getattr(retrieval_service, "provider", None)
+        if provider is not None:
+            self.provider = provider
+        if hasattr(self, "services"):
+            self.services.retrieval_service = retrieval_service
         if hasattr(self, "retrieval_runtime"):
             object.__setattr__(self.retrieval_runtime, "retrieval_service", retrieval_service)
 
@@ -911,6 +901,7 @@ class WorkflowRuntime:
                 terminal_stop_guidance=(
                     terminal_controller_round.stop_guidance if terminal_controller_round is not None else None
                 ),
+                artifact_lifecycle_ref=tracer.artifact_lifecycle_ref(),
                 finalization_revision=run_state.finalization_revisions[-1] if run_state.finalization_revisions else None,
                 source_coverage_summary=run_state.source_coverage_summary,
                 run_state=run_state,

@@ -12,6 +12,7 @@ from seektalent.evaluation import AsyncJudgeLimiter, EvaluationResult
 from seektalent.models import FinalResult, RequirementSheet, StopGuidance
 from seektalent.progress import ProgressCallback
 from seektalent.runtime import RunArtifacts
+from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
 from seektalent.runtime.production_contract import (
     ProductionMatchResultV1,
     SourceSelectionV1,
@@ -36,6 +37,7 @@ class MatchRunResult:
     evaluation_result: EvaluationResult | None
     terminal_stop_guidance: StopGuidance | None = None
     run_state: object | None = None
+    artifact_lifecycle_ref: RuntimeArtifactLifecycleRef | None = None
 
     @classmethod
     def from_artifacts(cls, artifacts: RunArtifacts) -> "MatchRunResult":
@@ -48,6 +50,7 @@ class MatchRunResult:
             evaluation_result=artifacts.evaluation_result,
             terminal_stop_guidance=artifacts.terminal_stop_guidance,
             run_state=artifacts.run_state,
+            artifact_lifecycle_ref=artifacts.artifact_lifecycle_ref,
         )
 
 
