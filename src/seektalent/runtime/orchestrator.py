@@ -1989,7 +1989,7 @@ class WorkflowRuntime:
                 f"round.{round_no:02d}.retrieval.second_lane_decision",
                 second_lane_decision.model_dump(mode="json"),
             )
-
+            run_state.retrieval_state.second_lane_decision_history.append(second_lane_decision)
             self._emit_progress(
                 progress_callback,
                 "search_started",

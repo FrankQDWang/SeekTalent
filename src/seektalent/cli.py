@@ -17,7 +17,7 @@ from typing import Any, Callable, Protocol, cast
 from pydantic import ValidationError
 
 from seektalent import __version__
-from seektalent.api import MatchRunResult, run_match
+from seektalent.api import MatchRunResult, run_match_debug as run_match
 from seektalent.artifacts import ArtifactSession, ArtifactStore
 from seektalent.artifacts.legacy import execute_archive_migration
 from seektalent.config import (

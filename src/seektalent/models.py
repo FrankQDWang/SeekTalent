@@ -563,6 +563,7 @@ class RetrievalState(BaseModel):
     rescue_lane_history: list[dict[str, object]] = Field(default_factory=list)
     query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
+    second_lane_decision_history: list[SecondLaneDecision] = Field(default_factory=list)
     reflection_keyword_advice_history: list[ReflectionKeywordAdvice] = Field(default_factory=list)
     reflection_filter_advice_history: list[ReflectionFilterAdvice] = Field(default_factory=list)
     last_projection_result: ConstraintProjectionResult | None = None
@@ -823,6 +824,7 @@ class ScoredCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     resume_id: str = Field(description="Stable resume identifier from the candidate source.")
+    source_provider: str | None = None
     fit_bucket: FitBucket = Field(description="Top-level keep-or-drop decision for this resume.")
     overall_score: int = Field(ge=0, le=100, description="Overall role-fit score.")
     must_have_match_score: int = Field(ge=0, le=100, description="Score for critical must-have alignment.")
@@ -1012,6 +1014,14 @@ class FinalCandidate(BaseModel):
     rank: int = Field(description="Final shortlist rank, contiguous and starting at 1.")
     final_score: int = Field(description="Final score surfaced in the shortlist.")
     fit_bucket: FitBucket = Field(description="Top-level fit decision copied from scoring.")
+    source_provider: str | None = Field(default=None, description="Provider that supplied the candidate evidence.")
+    evidence_level: RuntimeEvidenceLevel | None = Field(default=None, description="Highest evidence level used for final scoring.")
+    detail_open_status: str | None = Field(default=None, description="Public-safe detail-open status for this candidate.")
+    score_evidence_source: str | None = None
+    card_scorecard_ref: str | None = None
+    detail_scorecard_ref: str | None = None
+    detail_open_reason: str | None = None
+    detail_open_policy_version: str | None = None
     match_summary: str = Field(min_length=1, description="Short presentation summary of the candidate match.")
     strengths: list[str] = Field(default_factory=list, description="Strengths kept for reviewer display.")
     weaknesses: list[str] = Field(default_factory=list, description="Weaknesses kept for reviewer display.")

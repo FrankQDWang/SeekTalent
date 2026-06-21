@@ -10,6 +10,7 @@ from pydantic_ai import Agent
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import (
+    NormalizedResume,
     ScoredCandidate,
     ScoredCandidateDraft,
     ScoringConfidence,
@@ -284,7 +285,10 @@ class ResumeScorer:
         started_at_clock = perf_counter()
         try:
             if cached_payload is not None:
-                result = ScoredCandidate.model_validate(cached_payload)
+                result = _attach_runtime_scoring_metadata(
+                    ScoredCandidate.model_validate(cached_payload),
+                    candidate=candidate,
+                )
                 latency_ms = max(1, int((perf_counter() - started_at_clock) * 1000))
                 snapshot = LLMCallSnapshot(
                     stage="scoring",
@@ -360,6 +364,7 @@ class ResumeScorer:
                 draft=draft,
                 resume_id=candidate.resume_id,
                 source_round=candidate.source_round or context.round_no,
+                source_provider=candidate.source_provider,
                 score_evidence_source=candidate.score_evidence_source,
                 card_scorecard_ref=candidate.card_scorecard_ref,
                 detail_scorecard_ref=candidate.detail_scorecard_ref,
@@ -604,6 +609,7 @@ def _materialize_scored_candidate(
     draft: ScoredCandidateDraft,
     resume_id: str,
     source_round: int,
+    source_provider: str | None = None,
     score_evidence_source: str | None = None,
     card_scorecard_ref: str | None = None,
     detail_scorecard_ref: str | None = None,
@@ -613,6 +619,7 @@ def _materialize_scored_candidate(
 ) -> ScoredCandidate:
     return ScoredCandidate(
         resume_id=resume_id,
+        source_provider=source_provider,
         source_round=source_round,
         fit_bucket=draft.fit_bucket,
         overall_score=draft.overall_score,
@@ -661,12 +668,27 @@ def _timeout_scored_candidate(*, context: ScoringContext, timeout_seconds: float
         strengths=[],
         weaknesses=["Scoring did not complete within the configured timeout."],
         source_round=candidate.source_round or context.round_no,
+        source_provider=candidate.source_provider,
         score_evidence_source=candidate.score_evidence_source,
         card_scorecard_ref=candidate.card_scorecard_ref,
         detail_scorecard_ref=candidate.detail_scorecard_ref,
         score_delta=candidate.score_delta,
         detail_open_reason=candidate.detail_open_reason,
         detail_open_policy_version=candidate.detail_open_policy_version,
+    )
+
+
+def _attach_runtime_scoring_metadata(result: ScoredCandidate, *, candidate: NormalizedResume) -> ScoredCandidate:
+    return result.model_copy(
+        update={
+            "source_provider": candidate.source_provider,
+            "score_evidence_source": candidate.score_evidence_source,
+            "card_scorecard_ref": candidate.card_scorecard_ref,
+            "detail_scorecard_ref": candidate.detail_scorecard_ref,
+            "score_delta": candidate.score_delta,
+            "detail_open_reason": candidate.detail_open_reason,
+            "detail_open_policy_version": candidate.detail_open_policy_version,
+        }
     )
 
 

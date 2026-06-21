@@ -22,6 +22,7 @@ from tests.settings_factory import make_settings
 def _scored_candidate(resume_id: str, *, source_round: int, score: int) -> ScoredCandidate:
     return ScoredCandidate(
         resume_id=resume_id,
+        source_provider="cts",
         fit_bucket="fit",
         overall_score=score,
         must_have_match_score=score,
@@ -334,6 +335,9 @@ def test_finalizer_materializes_public_result_from_draft(monkeypatch: pytest.Mon
     assert [candidate.rank for candidate in result.candidates] == [1, 2]
     assert [candidate.final_score for candidate in result.candidates] == [95, 90]
     assert result.candidates[0].fit_bucket == "fit"
+    assert result.candidates[0].source_provider == "cts"
+    assert result.candidates[0].evidence_level == "card"
+    assert result.candidates[0].detail_open_status == "not_supported"
     assert result.candidates[0].strengths == ["Relevant backend work."]
     assert result.candidates[0].matched_must_haves == ["python"]
     assert result.candidates[0].matched_preferences == ["trace"]
@@ -364,6 +368,7 @@ def test_finalizer_keeps_materialized_scorecard_explanations(monkeypatch: pytest
         ),
         resume_id="r-1",
         source_round=1,
+        source_provider="cts",
     )
     monkeypatch.setattr(
         finalizer,

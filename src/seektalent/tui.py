@@ -18,7 +18,7 @@ from rich.live import Live
 from rich.markup import escape
 from rich.text import Text
 
-from seektalent.api import MatchRunResult, run_match_async
+from seektalent.api import MatchRunResult, run_match_debug_async
 from seektalent.progress import ProgressEvent
 
 COMPOSER_MIN_LINES = 3
@@ -34,7 +34,7 @@ def run_chat_session(
     *,
     ask: PromptFn | None = None,
     console: Console | None = None,
-    run_search: RunSearchFn = run_match_async,
+    run_search: RunSearchFn = run_match_debug_async,
     cwd: Path | None = None,
 ) -> int:
     console = console or Console()
