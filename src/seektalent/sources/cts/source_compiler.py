@@ -5,12 +5,14 @@ from typing import Protocol
 
 from seektalent.core.filter_plan import DISABLED_FILTER_FIELDS
 from seektalent.models import ConstraintValue, FilterField, RuntimeConstraint
+from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS
 from seektalent.sources.cts.filter_projection import (
     ENUM_NATIVE_FIELDS,
     TEXT_NATIVE_FIELDS,
     _is_unlimited_value,
     _project_enum_filter,
     _project_text_filter,
+    _source_for_field,
 )
 
 
@@ -53,6 +55,21 @@ def _compile_cts_source_query_intent(intent: CtsSourceQueryIntent) -> CtsCompile
         value = filter_intent.value
         if field in DISABLED_FILTER_FIELDS:
             adapter_notes.append(f"{field} filter is disabled and was not sent to CTS.")
+            continue
+        if field in PROTECTED_ATTRIBUTE_FIELDS:
+            if _is_unlimited_value(value):
+                adapter_notes.append(f"{field} is explicitly unlimited and was not sent to CTS.")
+                continue
+            runtime_only_constraints.append(
+                RuntimeConstraint(
+                    field=field,
+                    normalized_value=value,
+                    source=_source_for_field(field),
+                    rationale="Protected attribute stays runtime-only because CTS native filters must not receive protected attributes.",
+                    blocking=filter_intent.required,
+                )
+            )
+            adapter_notes.append(f"{field} stayed runtime-only because protected attributes are not sent to CTS.")
             continue
         if field in TEXT_NATIVE_FIELDS:
             projected = _project_text_filter(field, value)

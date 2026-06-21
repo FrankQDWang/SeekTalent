@@ -28,6 +28,16 @@ def test_untrusted_text_block_delimits_and_neutralizes_injection_text() -> None:
     assert block.count("END_SEEKTALENT_UNTRUSTED_") == 1
 
 
+def test_untrusted_text_block_rejects_embedded_generated_boundary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "seektalent.prompt_safety._boundary_for",
+        lambda label, text: "SEEKTALENT_UNTRUSTED_FORCED",
+    )
+
+    with pytest.raises(UnsafePromptSnapshotError, match="contains its prompt boundary"):
+        render_untrusted_text_block("JOB_DESCRIPTION", "payload SEEKTALENT_UNTRUSTED_FORCED")
+
+
 def test_untrusted_json_block_uses_canonical_json_inside_delimiters() -> None:
     block = render_untrusted_json_block("PROVIDER_TEXT", {"b": 2, "a": "resume text"})
 

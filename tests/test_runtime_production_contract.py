@@ -84,7 +84,7 @@ def test_production_projection_excludes_debug_paths_and_payloads(tmp_path: Path)
     result = ProductionMatchResultV1.from_debug_result(
         _debug_result(tmp_path),
         input_digest="input-hash",
-        source_selection=SourceSelectionV1(required=("cts",), optional=("liepin",)),
+        source_selection=SourceSelectionV1(),
     )
 
     payload = result.model_dump_json()
@@ -179,3 +179,22 @@ def test_production_projection_projects_prf_fallback_reason_from_runtime_state(t
     assert result.prf_summary.selected is False
     assert result.prf_summary.status == "degraded"
     assert result.prf_summary.reason_code == "no_safe_llm_prf_expression"
+
+
+def test_production_projection_fails_closed_when_required_source_coverage_is_missing(tmp_path: Path) -> None:
+    result = ProductionMatchResultV1.from_debug_result(
+        _debug_result(tmp_path),
+        input_digest="input-hash",
+        source_selection=SourceSelectionV1(required=("cts",), optional=("liepin",)),
+    )
+
+    assert result.completion_status == "failed"
+    assert result.source_selection.required == ("cts",)
+    assert result.source_coverage.required[0].source_kind == "cts"
+    assert result.source_coverage.required[0].status == "failed"
+    assert result.source_coverage.required[0].operator_action == "check_source_configuration"
+    assert result.source_coverage.optional[0].source_kind == "liepin"
+    assert result.source_coverage.optional[0].status == "failed"
+    assert result.warnings[0].source == "liepin"
+    assert result.public_error is not None
+    assert result.public_error.code == "required_sources_unavailable"

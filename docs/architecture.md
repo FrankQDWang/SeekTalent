@@ -7,7 +7,7 @@
 | Entrypoint | Files | Role |
 | --- | --- | --- |
 | CLI | `src/seektalent/cli.py` | Primary user-facing `seektalent` command, env loading, argument parsing, human and JSON output. |
-| Python API | `src/seektalent/api.py` | Stable wrapper functions: `run_match(...)` and `run_match_async(...)`. |
+| Python API | `src/seektalent/api.py` | Production wrapper functions: `run_match(...)` and `run_match_async(...)` return `ProductionMatchResultV1`; debug entrypoints `run_match_debug(...)` and `run_match_debug_async(...)` return `MatchRunResult`. |
 | Local UI API | `src/seektalent_ui/server.py` | Local HTTP API over the conversation agent, runtime-control store, worker, Workbench projection, and maintenance surfaces. |
 | Web UI | `apps/web-react/` | React Agent Workbench shell over the local UI BFF. |
 
@@ -145,7 +145,8 @@ sequenceDiagram
     LLM-->>Finalizer: structured final draft
     Finalizer-->>Runtime: FinalResult
     Runtime->>Runs: final_candidates.json, final_answer.md, run_summary.md
-    Runtime-->>Entry: MatchRunResult
+    Runtime-->>Entry: MatchRunResult debug payload
+    Entry-->>Entry: project ProductionMatchResultV1 for default Python API
     Entry-->>User: human text or JSON payload
 ```
 

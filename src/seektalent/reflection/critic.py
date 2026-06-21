@@ -15,13 +15,13 @@ from seektalent.models import (
     ReflectionFilterAdvice,
     ReflectionKeywordAdvice,
 )
+from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS, PROTECTED_ATTRIBUTE_FILTER_ADVICE_TEXT
 from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_reflection_draft, unpack_repair_result
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
-PROTECTED_FILTER_FIELDS = frozenset({"age_requirement", "gender_requirement", "school_names"})
-DISABLED_FILTER_FIELDS = frozenset({"position", *PROTECTED_FILTER_FIELDS})
+DISABLED_FILTER_FIELDS = frozenset({"position", *PROTECTED_ATTRIBUTE_FIELDS})
 PUBLIC_REFLECTION_CONTINUE_REASON = "reflection_continue"
 PUBLIC_REFLECTION_STOP_REASON = "reflection_stop"
 
@@ -112,7 +112,7 @@ def _drop_disabled_filter_fields(fields: Iterable[FilterField]) -> list[FilterFi
 
 
 def _prompt_safe_constraints(payload: dict[str, object]) -> dict[str, object]:
-    return {key: value for key, value in payload.items() if key not in PROTECTED_FILTER_FIELDS}
+    return {key: value for key, value in payload.items() if key not in PROTECTED_ATTRIBUTE_FIELDS}
 
 
 def _term_bank_rows(context: ReflectionContext) -> str:
@@ -185,7 +185,7 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
         f"- Preferred:\n{_join_terms(context.requirement_sheet.preferred_capabilities) or '(none)'}\n"
         f"- Hard constraints: {_prompt_safe_constraints(context.requirement_sheet.hard_constraints.model_dump(mode='json'))}\n"
         f"- Preferences: {context.requirement_sheet.preferences.model_dump(mode='json')}\n"
-        "- Protected attributes: age_requirement, gender_requirement, and school_names are excluded from LLM filter advice.\n"
+        f"- Protected attributes: {PROTECTED_ATTRIBUTE_FILTER_ADVICE_TEXT}\n"
         f"- JD:\n{render_untrusted_text_block('JOB_DESCRIPTION', context.full_jd)}\n"
         f"- Notes:\n{render_untrusted_text_block('SOURCING_NOTES', context.full_notes or '(none)')}"
     )

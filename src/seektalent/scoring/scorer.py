@@ -19,6 +19,7 @@ from seektalent.models import (
     ScoringPolicy,
     unique_strings,
 )
+from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS, PROTECTED_ATTRIBUTE_SCORING_TEXT
 from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.cache.exact_llm_cache import get_cached_json, put_cached_json, stable_cache_key
@@ -27,7 +28,6 @@ from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
 SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v1"
-PROTECTED_CONSTRAINT_FIELDS = frozenset({"age_requirement", "gender_requirement", "school_names"})
 
 
 def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
@@ -40,7 +40,7 @@ def _lines(values: list[str], *, limit: int | None = None) -> str:
 
 
 def _prompt_safe_constraints(payload: dict[str, object]) -> dict[str, object]:
-    return {key: value for key, value in payload.items() if key not in PROTECTED_CONSTRAINT_FIELDS}
+    return {key: value for key, value in payload.items() if key not in PROTECTED_ATTRIBUTE_FIELDS}
 
 
 def _known_protected_terms(policy: ScoringPolicy) -> tuple[str, ...]:
@@ -80,7 +80,7 @@ def render_scoring_prompt(context: ScoringContext) -> str:
     runtime_only_constraints = [
         item.model_dump(mode="json")
         for item in context.runtime_only_constraints
-        if item.field not in PROTECTED_CONSTRAINT_FIELDS
+        if item.field not in PROTECTED_ATTRIBUTE_FIELDS
     ]
     scoring_policy_text = (
         f"- Job Title: {policy.job_title}\n"
@@ -91,7 +91,7 @@ def render_scoring_prompt(context: ScoringContext) -> str:
         f"- Hard constraints: {_prompt_safe_constraints(policy.hard_constraints.model_dump(mode='json'))}\n"
         f"- Preferences: {policy.preferences.model_dump(mode='json')}\n"
         f"- Runtime-only constraints: {runtime_only_constraints or '(none)'}\n"
-        "- Protected attributes: age_requirement, gender_requirement, and school_names are excluded from LLM scoring.\n"
+        f"- Protected attributes: {PROTECTED_ATTRIBUTE_SCORING_TEXT}\n"
         f"- Rationale: {policy.scoring_rationale}"
     )
     resume_card_text = (

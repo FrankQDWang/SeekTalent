@@ -24,6 +24,13 @@ from seektalent_ui.models import (
 )
 from seektalent_ui.workbench_paths import liepin_db_path
 
+LIEPIN_STREAM_TOKEN_COOKIE_NAME = "liepin_stream_token"
+LIEPIN_STREAM_TOKEN_COOKIE_MAX_AGE_SECONDS = 60
+LIEPIN_SSE_PING_SECONDS = 15
+LIEPIN_SSE_SEND_TIMEOUT_SECONDS = 5
+LIEPIN_EVENT_BATCH_LIMIT = 100
+LIEPIN_EVENT_POLL_INTERVAL_SECONDS = 0.25
+
 
 @dataclass(frozen=True)
 class LiepinScope:
@@ -252,9 +259,9 @@ def create_liepin_router(*, settings: AppSettings) -> APIRouter:
             subject_id=connection.connection_id,
         )
         response.set_cookie(
-            "liepin_stream_token",
+            LIEPIN_STREAM_TOKEN_COOKIE_NAME,
             token,
-            max_age=60,
+            max_age=LIEPIN_STREAM_TOKEN_COOKIE_MAX_AGE_SECONDS,
             httponly=True,
             samesite="lax",
             secure=_stream_cookie_secure(request),
@@ -286,8 +293,8 @@ def create_liepin_router(*, settings: AppSettings) -> APIRouter:
                 subject_id=connection_id,
                 after_sequence=_sequence_from_header(last_event_id),
             ),
-            ping=15,
-            send_timeout=5,
+            ping=LIEPIN_SSE_PING_SECONDS,
+            send_timeout=LIEPIN_SSE_SEND_TIMEOUT_SECONDS,
         )
 
     return router
@@ -357,7 +364,7 @@ async def _event_generator(
             subject_type=subject_type,
             subject_id=subject_id,
             after_sequence=sequence,
-            limit=100,
+            limit=LIEPIN_EVENT_BATCH_LIMIT,
         )
         if rows:
             for row in rows:
@@ -370,7 +377,7 @@ async def _event_generator(
                 if row.event_name == "stream_end":
                     return
             continue
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(LIEPIN_EVENT_POLL_INTERVAL_SECONDS)
 
 
 def _sequence_from_header(last_event_id: str | None) -> int:
