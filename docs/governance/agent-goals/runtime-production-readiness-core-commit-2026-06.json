@@ -1,0 +1,41 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add production core commit receipts and explicit runtime side-effect policy.",
+  "rationale": "This slice projects a path-free production commit receipt from RuntimeFinalizationRevision and separates prod side-effect behavior from dev artifact and learning-state writes.",
+  "touched_layers": ["docs", "other", "runtime", "tests"],
+  "red_files": [
+    "src/seektalent/artifacts/side_effects.py",
+    "src/seektalent/api.py",
+    "src/seektalent/runtime/core_commit.py",
+    "src/seektalent/runtime/production_contract.py",
+    "src/seektalent/runtime/side_effects.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_core_commit.py tests/test_runtime_side_effects.py -q",
+    "uv run pytest tests/test_runtime_core_commit.py tests/test_runtime_side_effects.py tests/test_runtime_production_contract.py tests/test_api_production_contract.py -q",
+    "uv run ruff check src/seektalent/runtime/core_commit.py src/seektalent/runtime/side_effects.py src/seektalent/runtime/production_contract.py src/seektalent/api.py tests/test_runtime_core_commit.py tests/test_runtime_side_effects.py",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "uv run python tools/check_pr_governance.py --base codex/runtime-prod-services-v1",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "production result contracts that omit the runtime finalization commit receipt",
+    "core commit receipts that expose local filesystem paths or debug artifact locations",
+    "implicit runtime side-effect behavior that treats prod and dev writes the same"
+  ],
+  "risks": [
+    "The core commit receipt is intentionally derived from RuntimeFinalizationRevision; later persistence slices must keep the same idempotency key shape when writing to durable stores.",
+    "The side-effect policy is a production-facing decision surface only; later runtime wiring must use it without reintroducing debug or flywheel writes in prod."
+  ]
+}
