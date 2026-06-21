@@ -7,7 +7,7 @@ from pydantic_ai.exceptions import ModelRetry
 
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
-from seektalent.models import FinalCandidate, FinalResult, FinalResultDraft, FinalizeContext, ScoredCandidate
+from seektalent.models import FinalCandidate, FinalResult, FinalResultDraft, FinalizeContext, RuntimeEvidenceLevel, ScoredCandidate
 from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
@@ -171,6 +171,14 @@ def _materialize_final_result(
             rank=rank,
             final_score=source.overall_score,
             fit_bucket=source.fit_bucket,
+            source_provider=_final_source_provider(source),
+            evidence_level=_final_evidence_level(source),
+            detail_open_status=_final_detail_open_status(source),
+            score_evidence_source=source.score_evidence_source,
+            card_scorecard_ref=source.card_scorecard_ref,
+            detail_scorecard_ref=source.detail_scorecard_ref,
+            detail_open_reason=source.detail_open_reason,
+            detail_open_policy_version=source.detail_open_policy_version,
             match_summary=draft_candidate.match_summary,
             strengths=source.strengths,
             weaknesses=source.weaknesses,
@@ -190,3 +198,21 @@ def _materialize_final_result(
         candidates=candidates,
         summary=draft.summary,
     )
+
+
+def _final_source_provider(candidate: ScoredCandidate) -> str | None:
+    return candidate.source_provider
+
+
+def _final_evidence_level(candidate: ScoredCandidate) -> RuntimeEvidenceLevel:
+    if candidate.detail_scorecard_ref or candidate.score_evidence_source == "detail_enriched":
+        return "detail"
+    return "card"
+
+
+def _final_detail_open_status(candidate: ScoredCandidate) -> str:
+    if candidate.detail_scorecard_ref or candidate.score_evidence_source == "detail_enriched":
+        return "opened"
+    if candidate.source_provider == "cts":
+        return "not_supported"
+    return "not_opened"

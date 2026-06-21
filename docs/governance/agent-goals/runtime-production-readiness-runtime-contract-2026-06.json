@@ -1,0 +1,36 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Production runtime API contract v1 for production readiness.",
+  "rationale": "This runtime slice makes the default Python API return a production-safe contract while preserving explicit debug APIs for CLI, TUI, and local artifact workflows. It intentionally follows the prompt-safety lane so prompt/runtime governance remains separable.",
+  "touched_layers": ["docs", "other", "runtime", "tests"],
+  "red_files": [
+    "src/seektalent/models.py",
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent/runtime/production_contract.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_production_contract.py tests/test_api_production_contract.py tests/test_api.py tests/test_cli.py tests/test_tui.py -q",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "public API responses that expose local run directories, trace paths, or debug artifact internals by default",
+    "implicit source selection in the production API surface",
+    "unversioned production result payloads"
+  ],
+  "risks": [
+    "This runtime lane is based on the prompt-safety lane until that PR lands; governance against origin/main should be re-run after restacking onto the updated main.",
+    "Later runtime slices must enrich source coverage, core commit receipts, degradation semantics, and constraint decisions rather than overloading this API-contract slice."
+  ]
+}

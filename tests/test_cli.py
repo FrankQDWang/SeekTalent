@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from seektalent import __version__
-from seektalent.api import MatchRunResult, run_match as api_run_match
+from seektalent.api import MatchRunResult, run_match_debug as api_run_match
 from seektalent.artifacts import ArtifactResolver, ArtifactStore
 from seektalent.cli import (
     _build_settings,

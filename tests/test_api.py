@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import cast
 
-from seektalent import AppSettings, MatchRunResult, run_match, run_match_async
+from seektalent import AppSettings, MatchRunResult, run_match_debug, run_match_debug_async
 from seektalent.evaluation import AsyncJudgeLimiter
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
 from seektalent.models import FinalResult
@@ -81,7 +81,7 @@ def test_run_match_returns_stable_result(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: captured.setdefault("env_file", env_file))
 
-    result = run_match(
+    result = run_match_debug(
         job_title="Python Engineer",
         jd="JD",
         notes="Notes",
@@ -126,7 +126,7 @@ def test_run_match_passes_progress_callback(monkeypatch, tmp_path: Path) -> None
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
-    run_match(
+    run_match_debug(
         job_title="Python Engineer",
         jd="JD",
         settings=make_settings(mock_cts=True),
@@ -154,7 +154,7 @@ def test_run_match_passes_eval_options_to_runtime(monkeypatch, tmp_path: Path) -
 
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
 
-    run_match(
+    run_match_debug(
         job_title="Role",
         jd="JD",
         settings=make_settings(mock_cts=True),
@@ -183,7 +183,7 @@ def test_run_match_uses_explicit_workspace_root_for_artifacts_dir(monkeypatch, t
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
-    run_match(
+    run_match_debug(
         job_title="Python Engineer",
         jd="JD",
         settings=make_settings(runs_dir="runs", mock_cts=True),
@@ -242,7 +242,7 @@ def test_run_match_defaults_notes_to_empty_string(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
-    result = run_match(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True), env_file=None)
+    result = run_match_debug(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True), env_file=None)
 
     assert isinstance(result, MatchRunResult)
     assert captured == {"job_title": "Python Engineer", "jd": "JD", "notes": ""}
@@ -270,7 +270,7 @@ def test_run_match_async_returns_stable_result(monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     result = asyncio.run(
-        run_match_async(
+        run_match_debug_async(
             job_title="Python Engineer",
             jd="JD",
             notes="Notes",
@@ -307,7 +307,7 @@ def test_run_match_async_passes_progress_callback(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     result = asyncio.run(
-        run_match_async(
+        run_match_debug_async(
             job_title="Python Engineer",
             jd="JD",
             settings=make_settings(mock_cts=True),
@@ -336,7 +336,7 @@ def test_run_match_async_uses_explicit_workspace_root(monkeypatch, tmp_path: Pat
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     asyncio.run(
-        run_match_async(
+        run_match_debug_async(
             job_title="Python Engineer",
             jd="JD",
             settings=make_settings(runs_dir="runs", mock_cts=True),
@@ -371,7 +371,7 @@ def test_run_match_async_defaults_notes_to_empty_string(monkeypatch, tmp_path: P
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
     result = asyncio.run(
-        run_match_async(
+        run_match_debug_async(
             job_title="Python Engineer",
             jd="JD",
             settings=make_settings(mock_cts=True),
@@ -404,7 +404,7 @@ def test_run_match_allows_missing_evaluation_result(monkeypatch, tmp_path: Path)
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
-    result = run_match(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True), env_file=None)
+    result = run_match_debug(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True), env_file=None)
 
     assert result.evaluation_result is None
 
