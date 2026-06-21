@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import cast
 
 from pydantic_ai import Agent
@@ -8,6 +7,7 @@ from pydantic_ai import Agent
 from seektalent.candidate_feedback.models import CandidateFeedbackModelRanking, FeedbackCandidateTerm
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
+from seektalent.prompt_safety import render_template_version_block, render_untrusted_json_block
 from seektalent.prompting import LoadedPrompt
 
 
@@ -65,9 +65,15 @@ def _rank_prompt(
         "existing_terms": existing_terms,
         "candidate_terms": [item.model_dump(mode="json") for item in candidates],
     }
-    return (
-        "Rank only the candidate terms that already exist in candidate_terms. "
-        "accepted_terms must be copied exactly from candidate_terms[*].term. "
-        "Do not generate new terms or query rewrites. "
-        f"{json.dumps(payload, ensure_ascii=False)}"
+    return "\n\n".join(
+        [
+            render_template_version_block("candidate_feedback"),
+            (
+                "TASK\n"
+                "Rank only the candidate terms that already exist in candidate_terms. "
+                "accepted_terms must be copied exactly from candidate_terms[*].term. "
+                "Do not generate new terms or query rewrites."
+            ),
+            "PAYLOAD\n" + render_untrusted_json_block("CANDIDATE_FEEDBACK_PAYLOAD", payload),
+        ]
     )

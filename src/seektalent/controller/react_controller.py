@@ -13,12 +13,19 @@ from seektalent.models import (
     SearchControllerDecision,
     StopControllerDecision,
 )
+from seektalent.prompt_safety import (
+    render_template_version_block,
+    render_untrusted_json_block,
+    render_untrusted_text_block,
+    validate_allowed_actions,
+)
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_controller_decision, unpack_repair_result
 from seektalent.retrieval.query_plan import canonicalize_controller_query_terms, normalize_term
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
-DISABLED_FILTER_FIELDS = frozenset({"position"})
+PROTECTED_FILTER_FIELDS = frozenset({"age_requirement", "gender_requirement", "school_names"})
+DISABLED_FILTER_FIELDS = frozenset({"position", *PROTECTED_FILTER_FIELDS})
 
 
 def _items(values: list[str]) -> str:
@@ -44,6 +51,10 @@ def _allowed_filter_fields() -> list[str]:
     return [field for field in get_args(FilterField) if field not in DISABLED_FILTER_FIELDS]
 
 
+def _prompt_safe_constraints(payload: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in payload.items() if key not in PROTECTED_FILTER_FIELDS}
+
+
 def _disabled_filter_fields_in(decision: SearchControllerDecision) -> list[str]:
     fields = [
         *decision.proposed_filter_plan.pinned_filters,
@@ -54,6 +65,7 @@ def _disabled_filter_fields_in(decision: SearchControllerDecision) -> list[str]:
 
 
 def render_controller_prompt(context: ControllerContext) -> str:
+    validate_allowed_actions(["search_cts", "stop"], allowed={"search_cts", "stop"})
     sheet = context.requirement_sheet
     admitted_terms = [item for item in context.query_term_pool if item.queryability == "admitted"]
     term_rows = [
@@ -101,6 +113,7 @@ def render_controller_prompt(context: ControllerContext) -> str:
         )
     else:
         previous_reflection = f"{context.previous_reflection.decision}: {context.previous_reflection.reflection_summary}"
+    previous_reflection_block = render_untrusted_text_block("PREVIOUS_REFLECTION", previous_reflection)
     reflection_advice = {
         "keyword_advice": (
             context.latest_reflection_keyword_advice.model_dump(mode="json")
@@ -117,24 +130,41 @@ def render_controller_prompt(context: ControllerContext) -> str:
         ),
     }
     structured_constraints = {
-        "hard_constraints": sheet.hard_constraints.model_dump(mode="json"),
+        "hard_constraints": _prompt_safe_constraints(sheet.hard_constraints.model_dump(mode="json")),
         "preferences": sheet.preferences.model_dump(mode="json"),
+        "protected_attributes": "age_requirement, gender_requirement, and school_names are excluded from LLM filter advice.",
     }
+    requirement_sheet_text = (
+        f"- Job Title: {sheet.job_title}\n"
+        f"- Summary: {sheet.role_summary}\n"
+        f"- Must have:\n{_items(sheet.must_have_capabilities)}\n"
+        f"- Preferred:\n{_items(sheet.preferred_capabilities)}\n"
+        f"- Scoring rationale: {sheet.scoring_rationale}"
+    )
+    stop_guidance_text = (
+        f"- Can stop: {context.stop_guidance.can_stop}\n"
+        f"- Reason: {context.stop_guidance.reason}\n"
+        f"- Top pool strength: {context.stop_guidance.top_pool_strength}\n"
+        f"- Fit count: {context.stop_guidance.fit_count}\n"
+        f"- Strong fit count: {context.stop_guidance.strong_fit_count}\n"
+        f"- High-risk fit count: {context.stop_guidance.high_risk_fit_count}\n"
+        f"- Productive rounds: {context.stop_guidance.productive_round_count}\n"
+        f"- Zero-gain rounds: {context.stop_guidance.zero_gain_round_count}\n"
+        f"- Quality gate status: {context.stop_guidance.quality_gate_status}\n"
+        f"- Broadening attempted: {context.stop_guidance.broadening_attempted}\n"
+        f"- Continue reasons: {', '.join(context.stop_guidance.continue_reasons) or '(none)'}\n"
+        f"- Untried admitted families: {', '.join(context.stop_guidance.untried_admitted_families) or '(none)'}"
+    )
     exact_data = {
         "round_no": context.round_no,
         "action_options": ["search_cts", "stop"],
         "allowed_filter_fields": _allowed_filter_fields(),
-        "admitted_terms": [item.term for item in admitted_terms],
-        "role_anchor_terms": [
-            item.term
-            for item in admitted_terms
-            if item.retrieval_role in {"role_anchor", "primary_role_anchor", "secondary_title_anchor"}
-        ],
         "stop_guidance_can_stop": context.stop_guidance.can_stop,
         "quality_gate_status": context.stop_guidance.quality_gate_status,
     }
     return "\n\n".join(
         [
+            render_template_version_block("controller"),
             "TASK\nChoose the next retrieval action. Return one ControllerDecision.",
             (
                 "DECISION STATE\n"
@@ -149,38 +179,22 @@ def render_controller_prompt(context: ControllerContext) -> str:
                 f"- Shortage history: {context.shortage_history}\n"
                 f"- Budget reminder: {context.budget_reminder or '(none)'}"
             ),
-            (
-                "STOP GUIDANCE\n"
-                f"- Can stop: {context.stop_guidance.can_stop}\n"
-                f"- Reason: {context.stop_guidance.reason}\n"
-                f"- Top pool strength: {context.stop_guidance.top_pool_strength}\n"
-                f"- Fit count: {context.stop_guidance.fit_count}\n"
-                f"- Strong fit count: {context.stop_guidance.strong_fit_count}\n"
-                f"- High-risk fit count: {context.stop_guidance.high_risk_fit_count}\n"
-                f"- Productive rounds: {context.stop_guidance.productive_round_count}\n"
-                f"- Zero-gain rounds: {context.stop_guidance.zero_gain_round_count}\n"
-                f"- Quality gate status: {context.stop_guidance.quality_gate_status}\n"
-                f"- Broadening attempted: {context.stop_guidance.broadening_attempted}\n"
-                f"- Continue reasons: {', '.join(context.stop_guidance.continue_reasons) or '(none)'}\n"
-                f"- Untried admitted families: {', '.join(context.stop_guidance.untried_admitted_families) or '(none)'}"
-            ),
+            "STOP GUIDANCE\n" + render_untrusted_text_block("STOP_GUIDANCE", stop_guidance_text),
             (
                 "REQUIREMENTS\n"
-                f"- Job Title: {sheet.job_title}\n"
-                f"- Summary: {sheet.role_summary}\n"
-                f"- Must have:\n{_items(sheet.must_have_capabilities)}\n"
-                f"- Preferred:\n{_items(sheet.preferred_capabilities)}\n"
-                f"- Scoring rationale: {sheet.scoring_rationale}\n"
-                f"- JD: {context.full_jd}\n"
-                f"- Notes: {context.full_notes or '(none)'}"
+                f"{render_untrusted_text_block('REQUIREMENT_SHEET', requirement_sheet_text)}\n"
+                f"- JD:\n{render_untrusted_text_block('JOB_DESCRIPTION', context.full_jd)}\n"
+                f"- Notes:\n{render_untrusted_text_block('SOURCING_NOTES', context.full_notes or '(none)')}"
             ),
-            "TERM BANK\n" + "\n".join(term_rows),
-            "SENT QUERY HISTORY\n" + ("\n".join(query_history) if query_history else "- (none)"),
-            f"LATEST SEARCH OBSERVATION\n{latest_search}",
-            "CURRENT TOP POOL\n" + ("\n".join(top_pool) if top_pool else "- (empty)"),
-            json_block("STRUCTURED CONSTRAINTS", structured_constraints),
-            json_block("REFLECTION ADVICE", reflection_advice),
-            f"PREVIOUS REFLECTION\n{previous_reflection}",
+            "TERM BANK\n" + render_untrusted_text_block("TERM_BANK", "\n".join(term_rows)),
+            "SENT QUERY HISTORY\n"
+            + render_untrusted_text_block("SENT_QUERY_HISTORY", "\n".join(query_history) if query_history else "- (none)"),
+            "LATEST SEARCH OBSERVATION\n" + render_untrusted_text_block("LATEST_SEARCH_OBSERVATION", latest_search),
+            "CURRENT TOP POOL\n"
+            + render_untrusted_text_block("CURRENT_TOP_POOL", "\n".join(top_pool) if top_pool else "- (empty)"),
+            "STRUCTURED CONSTRAINTS\n" + render_untrusted_json_block("STRUCTURED_CONSTRAINTS", structured_constraints),
+            "REFLECTION ADVICE\n" + render_untrusted_json_block("REFLECTION_ADVICE", reflection_advice),
+            f"PREVIOUS REFLECTION\n{previous_reflection_block}",
             json_block("EXACT DATA", exact_data),
         ]
     )

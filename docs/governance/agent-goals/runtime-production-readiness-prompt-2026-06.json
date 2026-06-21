@@ -1,0 +1,41 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Prompt-safety rendering for production readiness.",
+  "rationale": "This sibling lane hardens prompt rendering, template versioning, redaction, injection boundaries, and protected-attribute prompt handling without touching runtime files, so the prompt/runtime governance rule remains enforceable.",
+  "touched_layers": ["docs", "other", "prompts", "tests"],
+  "red_files": [
+    "src/seektalent/prompts/requirements.md",
+    "src/seektalent/prompts/controller.md",
+    "src/seektalent/prompts/scoring.md",
+    "src/seektalent/prompts/reflection.md",
+    "src/seektalent/prompts/finalize.md",
+    "src/seektalent/prompts/tui_summary.md",
+    "src/seektalent/prompts/candidate_feedback.md",
+    "src/seektalent/prompts/prf_probe_phrase_proposal.md"
+  ],
+  "verification": [
+    "uv run pytest tests/test_prompt_safety.py tests/test_llm_input_prompts.py -q",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "free-form untrusted data interpolation in prompt templates",
+    "prompt-safety assumptions that are not covered by injection fixtures",
+    "protected-attribute prompt instructions that ask an LLM to filter or rank by age, gender, or school names"
+  ],
+  "risks": [
+    "This prompt lane must never include src/seektalent/runtime/ files.",
+    "Runtime-lane work must restack on the updated main after this prompt lane lands so prompt files are not part of the runtime branch diff."
+  ]
+}

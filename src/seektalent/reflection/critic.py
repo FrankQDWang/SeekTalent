@@ -15,11 +15,13 @@ from seektalent.models import (
     ReflectionFilterAdvice,
     ReflectionKeywordAdvice,
 )
+from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_reflection_draft, unpack_repair_result
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
-DISABLED_FILTER_FIELDS = frozenset({"position"})
+PROTECTED_FILTER_FIELDS = frozenset({"age_requirement", "gender_requirement", "school_names"})
+DISABLED_FILTER_FIELDS = frozenset({"position", *PROTECTED_FILTER_FIELDS})
 PUBLIC_REFLECTION_CONTINUE_REASON = "reflection_continue"
 PUBLIC_REFLECTION_STOP_REASON = "reflection_stop"
 
@@ -109,6 +111,10 @@ def _drop_disabled_filter_fields(fields: Iterable[FilterField]) -> list[FilterFi
     return [field for field in fields if field not in DISABLED_FILTER_FIELDS]
 
 
+def _prompt_safe_constraints(payload: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in payload.items() if key not in PROTECTED_FILTER_FIELDS}
+
+
 def _term_bank_rows(context: ReflectionContext) -> str:
     tried_terms = {_term_key(term) for record in context.sent_query_history for term in record.query_terms}
     term_pool = context.query_term_pool or context.requirement_sheet.initial_query_term_pool
@@ -167,54 +173,67 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
     ]
     exact_data = {
         "round_no": context.round_no,
-        "current_query_terms": plan.query_terms,
         "projected_filter_fields": sorted(plan.projected_provider_filters),
         "top_candidate_ids": [item.resume_id for item in context.top_candidates[:8]],
         "dropped_candidate_ids": [item.resume_id for item in context.dropped_candidates[:5]],
         "stop_advice_fields": ["suggest_stop", "suggested_stop_reason"],
     }
+    requirements_text = (
+        f"- Job Title: {context.requirement_sheet.job_title}\n"
+        f"- Summary: {context.requirement_sheet.role_summary}\n"
+        f"- Must have:\n{_join_terms(context.requirement_sheet.must_have_capabilities) or '(none)'}\n"
+        f"- Preferred:\n{_join_terms(context.requirement_sheet.preferred_capabilities) or '(none)'}\n"
+        f"- Hard constraints: {_prompt_safe_constraints(context.requirement_sheet.hard_constraints.model_dump(mode='json'))}\n"
+        f"- Preferences: {context.requirement_sheet.preferences.model_dump(mode='json')}\n"
+        "- Protected attributes: age_requirement, gender_requirement, and school_names are excluded from LLM filter advice.\n"
+        f"- JD:\n{render_untrusted_text_block('JOB_DESCRIPTION', context.full_jd)}\n"
+        f"- Notes:\n{render_untrusted_text_block('SOURCING_NOTES', context.full_notes or '(none)')}"
+    )
+    round_result_text = (
+        f"- Round: {context.round_no}\n"
+        f"- Requested: {observation.requested_count}\n"
+        f"- Counts: raw={observation.raw_candidate_count}, new={observation.unique_new_count}, "
+        f"shortage={observation.shortage_count}\n"
+        f"- Fetch attempts: {observation.fetch_attempt_count}\n"
+        f"- Exhausted reason: {observation.exhausted_reason or '(none)'}\n"
+        f"- Adapter notes: {', '.join(observation.adapter_notes) or '(none)'}"
+    )
+    current_query_text = (
+        f"- Terms: {', '.join(plan.query_terms) or '(none)'}\n"
+        f"- Keyword query: {plan.keyword_query}\n"
+        f"- Projected provider filters: {plan.projected_provider_filters or {}}\n"
+        f"- Rationale: {plan.rationale}"
+    )
     return "\n\n".join(
         [
+            render_template_version_block("reflection"),
             (
                 "TASK\n"
                 "Review this retrieval round and return structured keyword/filter advice, "
                 "a reflection_rationale explanation, and stop advice."
             ),
-            (
-                "REQUIREMENTS\n"
-                f"- Job Title: {context.requirement_sheet.job_title}\n"
-                f"- Summary: {context.requirement_sheet.role_summary}\n"
-                f"- Must have:\n{_join_terms(context.requirement_sheet.must_have_capabilities) or '(none)'}\n"
-                f"- Preferred:\n{_join_terms(context.requirement_sheet.preferred_capabilities) or '(none)'}\n"
-                f"- Hard constraints: {context.requirement_sheet.hard_constraints.model_dump(mode='json')}\n"
-                f"- Preferences: {context.requirement_sheet.preferences.model_dump(mode='json')}\n"
-                f"- JD: {context.full_jd}\n"
-                f"- Notes: {context.full_notes or '(none)'}"
+            "REQUIREMENTS\n" + render_untrusted_text_block("REQUIREMENT_SHEET", requirements_text),
+            "TERM BANK\n" + render_untrusted_text_block("TERM_BANK", _term_bank_rows(context)),
+            "ROUND RESULT\n" + render_untrusted_text_block("ROUND_RESULT_TEXT", round_result_text),
+            "CURRENT QUERY\n" + render_untrusted_text_block("CURRENT_QUERY_TEXT", current_query_text),
+            "SEARCH ATTEMPTS\n"
+            + render_untrusted_text_block("SEARCH_ATTEMPTS", "\n".join(attempts) if attempts else "- (none)"),
+            "SENT QUERY HISTORY\n"
+            + render_untrusted_text_block("SENT_QUERY_HISTORY", "\n".join(sent_queries) if sent_queries else "- (none)"),
+            "TOP CANDIDATES\n"
+            + render_untrusted_text_block("TOP_CANDIDATES", "\n".join(top_candidates) if top_candidates else "- (empty)"),
+            "DROPPED CANDIDATES\n"
+            + render_untrusted_text_block(
+                "DROPPED_CANDIDATES",
+                "\n".join(dropped_candidates) if dropped_candidates else "- (none)",
             ),
-            "TERM BANK\n" + _term_bank_rows(context),
-            (
-                "ROUND RESULT\n"
-                f"- Round: {context.round_no}\n"
-                f"- Requested: {observation.requested_count}\n"
-                f"- Counts: raw={observation.raw_candidate_count}, new={observation.unique_new_count}, "
-                f"shortage={observation.shortage_count}\n"
-                f"- Fetch attempts: {observation.fetch_attempt_count}\n"
-                f"- Exhausted reason: {observation.exhausted_reason or '(none)'}\n"
-                f"- Adapter notes: {', '.join(observation.adapter_notes) or '(none)'}"
+            "SCORING FAILURES\n"
+            + render_untrusted_text_block("SCORING_FAILURES", "\n".join(failures) if failures else "- (none)"),
+            "UNTRIED ADMITTED TERMS\n"
+            + render_untrusted_text_block(
+                "UNTRIED_ADMITTED_TERMS",
+                _join_terms(_untried_admitted_terms(context)) or "(none)",
             ),
-            (
-                "CURRENT QUERY\n"
-                f"- Terms: {', '.join(plan.query_terms) or '(none)'}\n"
-                f"- Keyword query: {plan.keyword_query}\n"
-                f"- Projected provider filters: {plan.projected_provider_filters or {}}\n"
-                f"- Rationale: {plan.rationale}"
-            ),
-            "SEARCH ATTEMPTS\n" + ("\n".join(attempts) if attempts else "- (none)"),
-            "SENT QUERY HISTORY\n" + ("\n".join(sent_queries) if sent_queries else "- (none)"),
-            "TOP CANDIDATES\n" + ("\n".join(top_candidates) if top_candidates else "- (empty)"),
-            "DROPPED CANDIDATES\n" + ("\n".join(dropped_candidates) if dropped_candidates else "- (none)"),
-            "SCORING FAILURES\n" + ("\n".join(failures) if failures else "- (none)"),
-            "UNTRIED ADMITTED TERMS\n" + (_join_terms(_untried_admitted_terms(context)) or "(none)"),
             json_block("EXACT DATA", exact_data),
         ]
     )

@@ -33,6 +33,7 @@ from seektalent.candidate_feedback.llm_prf import (
 from seektalent.candidate_feedback.policy import PRFGateInput, build_prf_policy_decision
 from seektalent.config import AppSettings
 from seektalent.models import FitBucket, NormalizedExperience, NormalizedResume, ScoredCandidate
+from seektalent.prompt_safety import assert_prompt_snapshot_safe, prompt_template_version
 from seektalent.prompting import LoadedPrompt
 from seektalent.tracing import ProviderUsageSnapshot
 
@@ -1066,8 +1067,11 @@ def test_render_llm_prf_prompt_uses_compact_json_and_names_json() -> None:
     prompt = llm_prf.render_llm_prf_prompt(_payload_for_extractor())
 
     assert "json" in prompt.casefold()
+    assert prompt_template_version("prf_probe_phrase_proposal") in prompt
+    assert 'UNTRUSTED DATA "PRF_PHRASE_PROPOSAL_PAYLOAD"' in prompt
     assert '"schema_version":"llm-prf-v2"' in prompt
     assert '"source_text_raw":"Built Flink CDC pipelines."' in prompt
+    assert_prompt_snapshot_safe(prompt)
 
 
 def test_llm_prf_extractor_provider_failure_calls_model_once_without_internal_retry(

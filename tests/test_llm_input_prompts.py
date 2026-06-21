@@ -38,6 +38,7 @@ from seektalent.models import (
     StopGuidance,
     TopPoolEntryView,
 )
+from seektalent.prompt_safety import assert_prompt_snapshot_safe, prompt_template_version
 from seektalent.prompting import PromptRegistry
 from seektalent.reflection.critic import render_reflection_prompt
 from seektalent.requirements.extractor import render_requirements_prompt
@@ -161,6 +162,10 @@ def test_requirements_prompt_is_readable_text_not_full_input_truth_json() -> Non
     )
 
     assert "TASK" in prompt
+    assert prompt_template_version("requirements") in prompt
+    assert 'UNTRUSTED DATA "JOB_TITLE"' in prompt
+    assert 'UNTRUSTED DATA "JOB_DESCRIPTION"' in prompt
+    assert 'UNTRUSTED DATA "SOURCING_NOTES"' in prompt
     assert "JOB TITLE" in prompt
     assert "JOB DESCRIPTION" in prompt
     assert "SOURCING NOTES" in prompt
@@ -168,6 +173,7 @@ def test_requirements_prompt_is_readable_text_not_full_input_truth_json() -> Non
     assert "Build Python retrieval systems." in prompt
     assert "INPUT_TRUTH" not in prompt
     assert '"job_title_sha256"' not in prompt
+    assert_prompt_snapshot_safe(prompt)
 
 
 def test_requirements_prompt_describes_one_or_two_title_anchors() -> None:
@@ -248,6 +254,17 @@ def test_controller_prompt_contains_decision_brief_and_exact_data() -> None:
     )
 
     assert "TASK" in prompt
+    assert prompt_template_version("controller") in prompt
+    assert 'UNTRUSTED DATA "REQUIREMENT_SHEET"' in prompt
+    assert 'UNTRUSTED DATA "JOB_DESCRIPTION"' in prompt
+    assert 'UNTRUSTED DATA "SOURCING_NOTES"' in prompt
+    assert 'UNTRUSTED DATA "TERM_BANK"' in prompt
+    assert 'UNTRUSTED DATA "PREVIOUS_REFLECTION"' in prompt
+    assert 'UNTRUSTED DATA "SENT_QUERY_HISTORY"' in prompt
+    assert 'UNTRUSTED DATA "LATEST_SEARCH_OBSERVATION"' in prompt
+    assert 'UNTRUSTED DATA "CURRENT_TOP_POOL"' in prompt
+    assert 'UNTRUSTED DATA "REFLECTION_ADVICE"' in prompt
+    assert 'UNTRUSTED DATA "STRUCTURED_CONSTRAINTS"' in prompt
     assert "DECISION STATE" in prompt
     assert "TERM BANK" in prompt
     assert "CURRENT TOP POOL" in prompt
@@ -267,8 +284,10 @@ def test_controller_prompt_contains_decision_brief_and_exact_data() -> None:
     assert "retrieval" in prompt
     assert "Activate retrieval and continue." in prompt
     assert '"action_options"' in prompt
-    assert '"admitted_terms"' in prompt
+    assert '"admitted_terms"' not in prompt
+    assert '"role_anchor_terms"' not in prompt
     assert "CONTROLLER_CONTEXT" not in prompt
+    assert_prompt_snapshot_safe(prompt)
 
 
 def test_controller_prompt_prefers_title_title_round_one_pairing() -> None:
@@ -390,6 +409,19 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     )
 
     assert "TASK" in prompt
+    assert prompt_template_version("reflection") in prompt
+    assert 'UNTRUSTED DATA "REQUIREMENT_SHEET"' in prompt
+    assert 'UNTRUSTED DATA "JOB_DESCRIPTION"' in prompt
+    assert 'UNTRUSTED DATA "SOURCING_NOTES"' in prompt
+    assert 'UNTRUSTED DATA "TERM_BANK"' in prompt
+    assert 'UNTRUSTED DATA "ROUND_RESULT_TEXT"' in prompt
+    assert 'UNTRUSTED DATA "CURRENT_QUERY_TEXT"' in prompt
+    assert 'UNTRUSTED DATA "SEARCH_ATTEMPTS"' in prompt
+    assert 'UNTRUSTED DATA "SENT_QUERY_HISTORY"' in prompt
+    assert 'UNTRUSTED DATA "TOP_CANDIDATES"' in prompt
+    assert 'UNTRUSTED DATA "DROPPED_CANDIDATES"' in prompt
+    assert 'UNTRUSTED DATA "SCORING_FAILURES"' in prompt
+    assert 'UNTRUSTED DATA "UNTRIED_ADMITTED_TERMS"' in prompt
     assert "reflection_rationale" in prompt
     assert "ROUND RESULT" in prompt
     assert "CURRENT QUERY" in prompt
@@ -401,7 +433,8 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     assert "skill.retrieval" in prompt
     assert "skill.vector_search" in prompt
     assert "Vector Search" in prompt
-    assert "UNTRIED ADMITTED TERMS\nbackend engineer, Vector Search" in prompt
+    assert "UNTRIED ADMITTED TERMS" in prompt
+    assert "backend engineer, Vector Search" in prompt
     assert "| Graph Search | skill.graph_search | framework_tool | admitted | True | 3 | reflection | yes |" in prompt
     assert "active" in prompt
     assert "TOP CANDIDATES" in prompt
@@ -413,7 +446,9 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     assert "resume-1" in prompt
     assert "resume-2" in prompt
     assert "schema parse failed" in prompt
+    assert '"current_query_terms"' not in prompt
     assert "REFLECTION_CONTEXT" not in prompt
+    assert_prompt_snapshot_safe(prompt)
 
 
 def test_reflection_prompt_mentions_rationale_schema_budget() -> None:
@@ -460,7 +495,7 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
                 current_company="Example Co",
                 years_of_experience=5,
                 locations=["上海市"],
-                education_summary="本科",
+                education_summary="复旦大学 计算机 本科",
                 skills=["python", "rag"],
                 recent_experiences=[
                     NormalizedExperience(
@@ -470,7 +505,7 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
                         summary="Built retrieval APIs.",
                     )
                 ],
-                raw_text_excerpt="Python retrieval trace",
+                raw_text_excerpt="复旦大学背景，Python retrieval trace",
                 completeness_score=90,
                 source_round=2,
             ),
@@ -488,6 +523,11 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     )
 
     assert "TASK" in prompt
+    assert prompt_template_version("scoring") in prompt
+    assert 'UNTRUSTED DATA "SCORING_POLICY_TEXT"' in prompt
+    assert 'UNTRUSTED DATA "RESUME_CARD_TEXT"' in prompt
+    assert 'UNTRUSTED DATA "RECENT_EXPERIENCE"' in prompt
+    assert 'UNTRUSTED DATA "RESUME_RAW_EXCERPT"' in prompt
     assert "SCORING POLICY" in prompt
     assert "RESUME CARD" in prompt
     assert "RECENT EXPERIENCE" in prompt
@@ -496,15 +536,21 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert "Hard constraints" in prompt
     assert "本科及以上" in prompt
     assert "3-5年" in prompt
-    assert "35岁以下" in prompt
+    assert "35岁以下" not in prompt
+    assert "男性优先" not in prompt
+    assert "复旦大学" not in prompt
     assert "阿里巴巴" in prompt
     assert "Preferences" in prompt
     assert "字节跳动" in prompt
     assert "Runtime-only constraints" in prompt
     assert "age_requirement" in prompt
+    assert "gender_requirement" in prompt
+    assert "school_names" in prompt
+    assert "are excluded from LLM scoring" in prompt
     assert "Python retrieval trace" in prompt
     assert '"resume_id": "resume-1"' in prompt
     assert "SCORING_CONTEXT" not in prompt
+    assert_prompt_snapshot_safe(prompt)
 
 
 def test_finalizer_prompt_contains_ranked_list_and_exact_order() -> None:
@@ -517,6 +563,8 @@ def test_finalizer_prompt_contains_ranked_list_and_exact_order() -> None:
     )
 
     assert "TASK" in prompt
+    assert prompt_template_version("finalize") in prompt
+    assert 'UNTRUSTED DATA "RANKED_CANDIDATES"' in prompt
     assert "FINALIZATION STATE" in prompt
     assert "RANKED CANDIDATES" in prompt
     assert "EXACT DATA" in prompt
@@ -530,7 +578,10 @@ def test_finalizer_prompt_contains_ranked_list_and_exact_order() -> None:
     assert "short tenure" in prompt
     assert '"candidate_order"' in prompt
     assert '"stop_reason": "controller_stop"' in prompt
+    assert '"run_dir"' not in prompt
+    assert "/tmp/run-1" not in prompt
     assert "FINALIZATION_CONTEXT" not in prompt
+    assert_prompt_snapshot_safe(prompt)
 
 
 def test_judge_prompt_uses_readable_resume_snapshot_without_raw_dump() -> None:

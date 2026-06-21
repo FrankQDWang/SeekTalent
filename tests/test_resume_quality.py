@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import cast
 
 from seektalent.models import NormalizedResume, ScoredCandidate
+from seektalent.prompt_safety import assert_prompt_snapshot_safe, prompt_template_version
 from seektalent.prompting import LoadedPrompt
 from seektalent.resume_quality import ResumeQualityCommenter
 from seektalent.resume_quality import build_quality_comment_payload, clean_quality_comment
@@ -125,3 +128,35 @@ def test_resume_quality_commenter_builds_agent_with_loaded_prompt(monkeypatch) -
     assert commenter._model_config is resolved_config
     assert captured["model"] == ("model", resolved_config)
     assert captured["model_settings"] == {"config": resolved_config}
+
+
+def test_resume_quality_commenter_wraps_user_prompt_payload(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    class FakeAgent:
+        async def run(self, user_prompt: str) -> SimpleNamespace:
+            captured["user_prompt"] = user_prompt
+            return SimpleNamespace(output="整体质量较好，建议优先查看高分候选人。")
+
+    commenter = ResumeQualityCommenter(
+        make_settings(),
+        LoadedPrompt(name="tui_summary", path=Path("tui_summary.md"), content="summary system prompt", sha256="hash"),
+    )
+    monkeypatch.setattr(commenter, "_build_agent", lambda: FakeAgent())
+    candidates = [_scored_candidate("resume-1", score=95)]
+    normalized_store = {"resume-1": _normalized_resume("resume-1")}
+
+    asyncio.run(
+        commenter.comment(
+            round_no=2,
+            query_terms=["python", "llm"],
+            candidates=candidates,
+            normalized_store=normalized_store,
+        )
+    )
+
+    user_prompt = captured["user_prompt"]
+    assert prompt_template_version("tui_summary") in user_prompt
+    assert 'UNTRUSTED DATA "ROUND_RESUME_QUALITY_CONTEXT"' in user_prompt
+    assert "resume-1" in user_prompt
+    assert_prompt_snapshot_safe(user_prompt)

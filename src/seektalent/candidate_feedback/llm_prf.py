@@ -15,6 +15,7 @@ from seektalent.candidate_feedback.models import CandidateTermType, FeedbackCand
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import NormalizedResume, ScoredCandidate, unique_strings
+from seektalent.prompt_safety import render_template_version_block, render_untrusted_json_block
 from seektalent.prompting import LoadedPrompt
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 
@@ -267,22 +268,22 @@ class LLMPRFExtractor:
 
 
 def render_llm_prf_prompt(payload: LLMPRFInput) -> str:
-    payload_json = json.dumps(
-        payload.model_dump(mode="json"),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return (
-        "Return valid json for this PRF phrase proposal payload.\n"
-        "Hard constraints:\n"
-        "- Return at most 4 candidates.\n"
-        "- Only include candidates supported by at least two distinct fit seed resumes.\n"
-        "- candidate.surface must be copied exactly from every referenced source_text_raw.\n"
-        "- Do not propose existing_query_terms, sent_query_terms, or tried_term_family_ids.\n"
-        "- Do not synthesize descriptive phrases; use the shortest exact shared phrase.\n"
-        "- Prefer an empty candidates list over ungrounded or generic candidates.\n"
-        f"Payload:\n{payload_json}"
+    return "\n\n".join(
+        [
+            render_template_version_block(LLM_PRF_STAGE),
+            (
+                "TASK\n"
+                "Return valid json for this PRF phrase proposal payload.\n"
+                "Hard constraints:\n"
+                "- Return at most 4 candidates.\n"
+                "- Only include candidates supported by at least two distinct fit seed resumes.\n"
+                "- candidate.surface must be copied exactly from every referenced source_text_raw.\n"
+                "- Do not propose existing_query_terms, sent_query_terms, or tried_term_family_ids.\n"
+                "- Do not synthesize descriptive phrases; use the shortest exact shared phrase.\n"
+                "- Prefer an empty candidates list over ungrounded or generic candidates."
+            ),
+            "PAYLOAD\n" + render_untrusted_json_block("PRF_PHRASE_PROPOSAL_PAYLOAD", payload.model_dump(mode="json")),
+        ]
     )
 
 

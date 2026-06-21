@@ -8,6 +8,7 @@ from pydantic_ai.exceptions import ModelRetry
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import FinalCandidate, FinalResult, FinalResultDraft, FinalizeContext, ScoredCandidate
+from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 
@@ -35,13 +36,13 @@ def render_finalize_prompt(
     ]
     exact_data = {
         "run_id": run_id,
-        "run_dir": run_dir,
         "rounds_executed": rounds_executed,
         "stop_reason": stop_reason,
         "candidate_order": [candidate.resume_id for candidate in ranked_candidates],
     }
     return "\n\n".join(
         [
+            render_template_version_block("finalize"),
             "TASK\nWrite final shortlist presentation text. Return one FinalResultDraft.",
             (
                 "FINALIZATION STATE\n"
@@ -49,7 +50,11 @@ def render_finalize_prompt(
                 f"- Rounds executed: {rounds_executed}\n"
                 f"- Stop reason: {stop_reason}"
             ),
-            "RANKED CANDIDATES\n" + ("\n".join(candidate_lines) if candidate_lines else "- (none)"),
+            "RANKED CANDIDATES\n"
+            + render_untrusted_text_block(
+                "RANKED_CANDIDATES",
+                "\n".join(candidate_lines) if candidate_lines else "- (none)",
+            ),
             json_block("EXACT DATA", exact_data),
         ]
     )
