@@ -393,7 +393,10 @@ def _project_source_coverage(
     source_selection: SourceSelectionV1,
 ) -> SourceCoverageSummaryV1:
     if coverage_summary is None:
-        return SourceCoverageSummaryV1()
+        return SourceCoverageSummaryV1(
+            required=tuple(_missing_source_coverage_entry(source_kind) for source_kind in source_selection.required),
+            optional=tuple(_missing_source_coverage_entry(source_kind) for source_kind in source_selection.optional),
+        )
 
     return SourceCoverageSummaryV1(
         required=tuple(
@@ -404,6 +407,15 @@ def _project_source_coverage(
             _project_source_coverage_entry(source_kind, coverage_summary)
             for source_kind in source_selection.optional
         ),
+    )
+
+
+def _missing_source_coverage_entry(source_kind: str) -> SourceCoverageV1:
+    return SourceCoverageV1(
+        source_kind=source_kind,
+        status="failed",
+        retryable=False,
+        operator_action="check_source_configuration",
     )
 
 
@@ -479,13 +491,17 @@ def _source_coverage_warnings(
     source_coverage: SourceCoverageSummaryV1,
     completion_status: Literal["succeeded", "degraded", "failed"],
 ) -> tuple[PublicRuntimeWarningV1, ...]:
-    if completion_status != "degraded":
+    if completion_status == "succeeded":
         return ()
 
-    degraded_sources = tuple(
-        source
-        for source in (*source_coverage.required, *source_coverage.optional)
-        if source.status != "succeeded"
+    warning_sources = (
+        tuple(source for source in source_coverage.optional if source.status != "succeeded")
+        if completion_status == "failed"
+        else tuple(
+            source
+            for source in (*source_coverage.required, *source_coverage.optional)
+            if source.status != "succeeded"
+        )
     )
     return tuple(
         PublicRuntimeWarningV1(
@@ -495,7 +511,7 @@ def _source_coverage_warnings(
             retryable=source.retryable,
             operator_action=source.operator_action,
         )
-        for source in degraded_sources
+        for source in warning_sources
     )
 
 

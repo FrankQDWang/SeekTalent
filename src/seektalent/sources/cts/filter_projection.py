@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import TypeGuard, get_args
+
+from seektalent.cts_filter_policy import (
+    CTS_ENUM_NATIVE_FIELDS_BY_FILTER_FIELD,
+    CTS_TEXT_NATIVE_FIELDS_BY_FILTER_FIELD,
+)
 from seektalent.models import (
     ConditionSource,
     ConstraintProjectionResult,
@@ -9,21 +16,26 @@ from seektalent.models import (
     RuntimeConstraint,
     unique_strings,
 )
+from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS
 from seektalent.core.filter_plan import UNLIMITED, canonicalize_filter_plan
 from seektalent.core.range_overlap import range_overlap
 
-TEXT_NATIVE_FIELDS: dict[FilterField, str] = {
-    "company_names": "company",
-    "school_names": "school",
-    "work_content": "workContent",
-}
-ENUM_NATIVE_FIELDS: dict[FilterField, str] = {
-    "degree_requirement": "degree",
-    "school_type_requirement": "schoolType",
-    "experience_requirement": "workExperienceRange",
-    "gender_requirement": "gender",
-    "age_requirement": "age",
-}
+
+def _typed_filter_field_map(mapping: Mapping[str, str]) -> dict[FilterField, str]:
+    output: dict[FilterField, str] = {}
+    for field, native_field in mapping.items():
+        if not _is_filter_field(field):
+            raise ValueError(f"unsupported CTS filter field policy key: {field}")
+        output[field] = native_field
+    return output
+
+
+def _is_filter_field(value: str) -> TypeGuard[FilterField]:
+    return value in get_args(FilterField)
+
+
+TEXT_NATIVE_FIELDS: dict[FilterField, str] = _typed_filter_field_map(CTS_TEXT_NATIVE_FIELDS_BY_FILTER_FIELD)
+ENUM_NATIVE_FIELDS: dict[FilterField, str] = _typed_filter_field_map(CTS_ENUM_NATIVE_FIELDS_BY_FILTER_FIELD)
 EXPERIENCE_BUCKETS = (
     ("1年以下", 1, 0, 1),
     ("1-3年", 2, 1, 3),
@@ -85,6 +97,21 @@ def project_constraints_to_cts(
     merged = {**canonical_plan.pinned_filters, **canonical_plan.optional_filters}
 
     for field, value in merged.items():
+        if field in PROTECTED_ATTRIBUTE_FIELDS:
+            if _is_unlimited_value(value):
+                adapter_notes.append(f"{field} is explicitly unlimited and was not sent to CTS.")
+                continue
+            runtime_only_constraints.append(
+                RuntimeConstraint(
+                    field=field,
+                    normalized_value=value,
+                    source=_source_for_field(field),
+                    rationale="Protected attribute stays runtime-only because CTS native filters must not receive protected attributes.",
+                    blocking=field in canonical_plan.pinned_filters,
+                )
+            )
+            adapter_notes.append(f"{field} stayed runtime-only because protected attributes are not sent to CTS.")
+            continue
         if field == "company_names" and field not in canonical_plan.pinned_filters:
             runtime_only_constraints.append(
                 RuntimeConstraint(

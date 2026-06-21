@@ -171,19 +171,17 @@ def test_project_constraints_to_cts_projects_text_and_keeps_enums_runtime_only()
     )
 
     assert projection.provider_filters == {
-        "school": "复旦大学 | 上海交通大学",
         "degree": 2,
         "schoolType": 2,
         "workExperienceRange": 3,
-        "gender": 1,
     }
     runtime_fields = {item.field for item in projection.runtime_only_constraints}
-    assert runtime_fields == {"company_names"}
+    assert runtime_fields == {"company_names", "school_names", "gender_requirement", "age_requirement"}
     assert any("degree_requirement mapped to CTS code 2 (本科及以上)." == note for note in projection.adapter_notes)
     assert any("school_type_requirement mapped to CTS code 2 (211)." == note for note in projection.adapter_notes)
     assert any("experience_requirement mapped to CTS code 3 (3-5年)." == note for note in projection.adapter_notes)
-    assert any("gender_requirement mapped to CTS code 1 (男)." == note for note in projection.adapter_notes)
-    assert any("age_requirement spans 3 or more CTS ranges" in note for note in projection.adapter_notes)
+    assert any("gender_requirement stayed runtime-only because protected attributes are not sent to CTS." == note for note in projection.adapter_notes)
+    assert any("age_requirement stayed runtime-only because protected attributes are not sent to CTS." == note for note in projection.adapter_notes)
 
 
 def test_project_constraints_skips_explicit_unlimited_enums() -> None:
@@ -327,7 +325,7 @@ def test_project_constraints_to_cts_keeps_optional_company_and_open_min_experien
     assert any("open-ended minimum ranges" in note for note in projection.adapter_notes)
 
 
-def test_project_constraints_to_cts_uses_age_tie_break_order() -> None:
+def test_project_constraints_to_cts_keeps_age_runtime_only_even_when_range_maps() -> None:
     requirement_sheet = RequirementSheet(
         job_title="Python Engineer",
         title_anchor_terms=["python"],
@@ -346,11 +344,12 @@ def test_project_constraints_to_cts_uses_age_tie_break_order() -> None:
         filter_plan=filter_plan,
     )
 
-    assert projection.provider_filters == {"age": 3}
-    assert projection.runtime_only_constraints == []
+    assert projection.provider_filters == {}
+    assert [item.field for item in projection.runtime_only_constraints] == ["age_requirement"]
+    assert any("age_requirement stayed runtime-only because protected attributes are not sent to CTS." == note for note in projection.adapter_notes)
 
 
-def test_cts_filter_projection_projects_age_and_school_type() -> None:
+def test_cts_filter_projection_keeps_age_runtime_only_and_projects_school_type() -> None:
     requirement_sheet = _requirement_sheet()
     requirement_sheet.hard_constraints.age_requirement = AgeRequirement(
         min_age=25,
@@ -368,5 +367,5 @@ def test_cts_filter_projection_projects_age_and_school_type() -> None:
         ),
     )
 
-    assert projection.provider_filters["age"] == 2
-    assert projection.provider_filters["schoolType"] == 2
+    assert projection.provider_filters == {"schoolType": 2}
+    assert [item.field for item in projection.runtime_only_constraints] == ["age_requirement"]

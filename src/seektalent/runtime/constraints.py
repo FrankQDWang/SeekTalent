@@ -3,18 +3,18 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from seektalent.models import RuntimeConstraint, RunState
+from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS
 from seektalent.runtime.stop_reasons import PUBLIC_STOP_REASON_ALLOWLIST
 
 RUNTIME_CONSTRAINTS_POLICY_VERSION = "runtime-constraints.v1"
 NEAR_BUDGET_THRESHOLD_RATIO = 0.8
-
-PROTECTED_ATTRIBUTE_FIELDS: frozenset[str] = frozenset(
-    {
-        "age_requirement",
-        "gender_requirement",
-        "school_names",
-    }
-)
+__all__ = [
+    "NEAR_BUDGET_THRESHOLD_RATIO",
+    "PROTECTED_ATTRIBUTE_FIELDS",
+    "RUNTIME_CONSTRAINTS_POLICY_VERSION",
+    "RuntimeConstraintsContractV1",
+    "runtime_constraints_from_run_state",
+]
 
 
 class RuntimeConstraintsContractV1(BaseModel):

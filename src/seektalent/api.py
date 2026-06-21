@@ -131,6 +131,27 @@ def _effective_settings(
     )
 
 
+def _production_match_result_from_debug(
+    debug_result: MatchRunResult,
+    *,
+    job_title: str,
+    jd: str,
+    notes: str,
+    approved_requirement_sheet: RequirementSheet | None,
+    source_selection: SourceSelectionV1,
+    runtime_profile: Literal["prod_core", "development", "workbench"],
+    settings: AppSettings,
+) -> ProductionMatchResultV1:
+    return ProductionMatchResultV1.from_debug_result(
+        debug_result,
+        input_digest=digest_text_parts(job_title, jd, notes),
+        approved_requirement_sheet_digest=digest_model_payload(approved_requirement_sheet),
+        source_selection=source_selection,
+        runtime_profile=runtime_profile,
+        runtime_constraints_contract=RuntimeConstraintsContractV1.from_settings(settings),
+    )
+
+
 def run_match(
     *,
     job_title: str,
@@ -165,13 +186,15 @@ def run_match(
         source_context=source_context,
         approved_requirement_sheet=approved_requirement_sheet,
     )
-    return ProductionMatchResultV1.from_debug_result(
+    return _production_match_result_from_debug(
         debug_result,
-        input_digest=digest_text_parts(job_title, jd, notes),
-        approved_requirement_sheet_digest=digest_model_payload(approved_requirement_sheet),
+        job_title=job_title,
+        jd=jd,
+        notes=notes,
+        approved_requirement_sheet=approved_requirement_sheet,
         source_selection=selection,
         runtime_profile=runtime_profile,
-        runtime_constraints_contract=RuntimeConstraintsContractV1.from_settings(effective_settings),
+        settings=effective_settings,
     )
 
 
@@ -253,13 +276,15 @@ async def run_match_async(
         source_context=source_context,
         approved_requirement_sheet=approved_requirement_sheet,
     )
-    return ProductionMatchResultV1.from_debug_result(
+    return _production_match_result_from_debug(
         debug_result,
-        input_digest=digest_text_parts(job_title, jd, notes),
-        approved_requirement_sheet_digest=digest_model_payload(approved_requirement_sheet),
+        job_title=job_title,
+        jd=jd,
+        notes=notes,
+        approved_requirement_sheet=approved_requirement_sheet,
         source_selection=selection,
         runtime_profile=runtime_profile,
-        runtime_constraints_contract=RuntimeConstraintsContractV1.from_settings(effective_settings),
+        settings=effective_settings,
     )
 
 

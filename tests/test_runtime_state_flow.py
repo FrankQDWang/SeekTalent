@@ -1863,7 +1863,7 @@ def test_workflow_runtime_search_once_delegates_to_retrieval_runtime(tmp_path: P
         query_role="exploit",
         query_terms=["python", "resume matching"],
         keyword_query="python resume matching",
-        native_filters={"age": 3},
+        native_filters={"schoolType": 2},
         page=2,
         page_size=5,
         rationale="runtime seam test",
@@ -2242,7 +2242,7 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
         round_no=1,
         query_terms=["python"],
         keyword_query="python",
-        projected_provider_filters={"age": 3},
+        projected_provider_filters={"schoolType": 2},
         runtime_only_constraints=[],
         location_execution_plan=LocationExecutionPlan(
             mode="none",
@@ -2270,7 +2270,7 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
                 round_no=1,
                 retrieval_plan=retrieval_plan,
                 query_states=query_states,
-                base_adapter_notes=["projection: age mapped to CTS code 3"],
+                base_adapter_notes=["projection: school_type_requirement mapped to CTS code 2"],
                 target_new=1,
                 seen_resume_ids=set(),
                 seen_dedup_keys=set(),
@@ -2281,7 +2281,7 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
         tracer.close()
 
     assert len(captured) == 1
-    assert captured[0].base_filters == {"age": 3}
+    assert captured[0].base_filters == {"schoolType": 2}
     assert captured[0].city is None
 
 
@@ -4292,7 +4292,7 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
             return SearchResult(
                 candidates=[_make_candidate("resume-1")],
                 diagnostics=["provider search"],
-                request_payload={"page": 2, "pageSize": 5, "age": 3},
+                request_payload={"page": 2, "pageSize": 5, "schoolType": 2},
                 raw_candidate_count=1,
                 latency_ms=7,
             )
@@ -4302,7 +4302,7 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
         query_role="exploit",
         query_terms=["python", "resume matching"],
         keyword_query="python resume matching",
-        native_filters={"age": 3},
+        native_filters={"schoolType": 2},
         page=2,
         page_size=5,
         rationale="runtime seam test",
@@ -4327,7 +4327,7 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
     assert captured["query_role"] == "primary"
     assert captured["keyword_query"] == "python resume matching"
     assert captured["adapter_notes"] == ["runtime location dispatch: 上海"]
-    assert captured["provider_filters"] == {"age": 3}
+    assert captured["provider_filters"] == {"schoolType": 2}
     assert captured["runtime_constraints"] == runtime_constraints
     assert captured["page_size"] == 5
     assert captured["round_no"] == 1
@@ -4335,7 +4335,7 @@ def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_
     assert captured["cursor"] == "2"
     assert isinstance(captured["trace_id"], str)
     assert captured["trace_id"].endswith("-r1-a2")
-    assert result.request_payload == {"page": 2, "pageSize": 5, "age": 3}
+    assert result.request_payload == {"page": 2, "pageSize": 5, "schoolType": 2}
     assert result.raw_candidate_count == 1
     assert result.latency_ms == 7
 

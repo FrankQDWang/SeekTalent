@@ -1,0 +1,39 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Apply review-driven hardening for the runtime production readiness stack.",
+  "rationale": "The final fw-review pass found small cross-layer drift and coverage gaps around production API projection, prompt safety boundaries, CTS request/response contracts, protected-attribute policy sharing, mock CTS constants, and Liepin SSE stream constants. Keeping these changes in a dedicated top-of-stack slice preserves the earlier docs-only stack-gate PR while making the review hardening explicit.",
+  "touched_layers": ["bff", "other", "runtime", "sources"],
+  "red_files": [
+    "src/seektalent/runtime/constraints.py",
+    "src/seektalent/runtime/production_contract.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_prompt_safety.py tests/test_api_production_contract.py tests/test_cts_client_split.py tests/test_cts_provider_adapter.py tests/test_runtime_multi_source_round_dispatch.py tests/test_filter_projection.py tests/test_cts_source_compiler.py tests/test_liepin_boundaries.py tests/test_llm_input_prompts.py -q",
+    "uv run ruff check src/seektalent/protected_attributes.py src/seektalent/cts_filter_policy.py src/seektalent/api.py src/seektalent/clients/cts_mock_client.py src/seektalent/clients/cts_request.py src/seektalent/controller/react_controller.py src/seektalent/reflection/critic.py src/seektalent/runtime/constraints.py src/seektalent/scoring/scorer.py src/seektalent/sources/cts/filter_projection.py src/seektalent_ui/liepin_routes.py tests/test_api_production_contract.py tests/test_cts_client_split.py tests/test_liepin_boundaries.py tests/test_prompt_safety.py",
+    "uv run ty check src/seektalent/protected_attributes.py src/seektalent/cts_filter_policy.py src/seektalent/api.py src/seektalent/clients/cts_mock_client.py src/seektalent/clients/cts_request.py src/seektalent/controller/react_controller.py src/seektalent/reflection/critic.py src/seektalent/runtime/constraints.py src/seektalent/scoring/scorer.py src/seektalent/sources/cts/filter_projection.py src/seektalent_ui/liepin_routes.py tests/test_api_production_contract.py tests/test_cts_client_split.py tests/test_liepin_boundaries.py tests/test_prompt_safety.py",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "uv run python tools/check_pr_governance.py --base codex/runtime-prod-stack-gate-v1",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "duplicated protected-attribute policy literals",
+    "duplicated CTS native filter allowlist literals",
+    "unnamed review-sensitive timing and scoring constants"
+  ],
+  "risks": [
+    "This slice intentionally spans several layers because it collects review fixes that would otherwise contaminate earlier scoped PRs.",
+    "The runtime constraints file is touched only to re-export the shared protected-attribute policy.",
+    "The production contract file is touched only to fail closed when selected source coverage is absent."
+  ]
+}

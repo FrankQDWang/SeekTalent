@@ -118,6 +118,18 @@ def test_cts_request_builder_preserves_payload_contract() -> None:
     with pytest.raises(ValueError, match="Unsupported native filter"):
         build_cts_request_payload(bad_native_filter)
 
+    bad_integer_code_filter = query.model_copy(update={"native_filters": {"degree": "本科"}})
+    with pytest.raises(ValueError, match="must be an integer code"):
+        build_cts_request_payload(bad_integer_code_filter)
+
+    bool_code_filter = query.model_copy(update={"native_filters": {"degree": True}})
+    with pytest.raises(ValueError, match="must be an integer code"):
+        build_cts_request_payload(bool_code_filter)
+
+    protected_attribute_filter = query.model_copy(update={"native_filters": {"age": 3}})
+    with pytest.raises(ValueError, match="Unsupported native filter"):
+        build_cts_request_payload(protected_attribute_filter)
+
 
 def test_cts_response_mapper_preserves_resume_candidate_semantics() -> None:
     assert CTS_RESPONSE_PATH.is_file()
@@ -185,3 +197,21 @@ def test_cts_response_parser_rejects_business_errors_and_malformed_payloads(
         parse_cts_search_response_body(body)
 
     assert exc_info.value.reason_code == reason_code
+
+
+def test_cts_response_mapper_uses_stable_fallback_resume_id() -> None:
+    from seektalent.clients.cts_response import normalize_cts_candidate
+
+    candidate = Candidate(
+        candidateName="Candidate A",
+        expectedJobCategory="Backend Engineer",
+        nowLocation="上海",
+    )
+
+    normalized = normalize_cts_candidate(candidate, round_no=1)
+    repeated = normalize_cts_candidate(candidate, round_no=2)
+
+    assert normalized.used_fallback_id is True
+    assert normalized.source_resume_id is None
+    assert normalized.resume_id.startswith("fallback-")
+    assert repeated.resume_id == normalized.resume_id

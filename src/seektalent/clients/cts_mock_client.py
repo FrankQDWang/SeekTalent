@@ -7,6 +7,11 @@ from seektalent.locations import normalize_location, normalize_locations
 from seektalent.mock_data import load_mock_resume_corpus
 from seektalent.models import CTSQuery, ResumeCandidate
 
+KEYWORD_MATCH_SCORE = 6
+FILTER_MATCH_SCORE = 4
+FILTER_MISMATCH_SCORE = -999
+MOCK_LATENCY_MS = 1
+
 
 class MockCTSClient:
     def __init__(self, settings: AppSettings) -> None:
@@ -42,11 +47,11 @@ class MockCTSClient:
         score = 0
         for keyword in query.query_terms:
             if keyword.casefold() in text:
-                score += 6
+                score += KEYWORD_MATCH_SCORE
         for field, value in query.native_filters.items():
             if not self._matches_filter(candidate, field, value):
-                return -999
-            score += 4
+                return FILTER_MISMATCH_SCORE
+            score += FILTER_MATCH_SCORE
         return score
 
     async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:
@@ -56,7 +61,7 @@ class MockCTSClient:
             (self._retrieval_score(candidate, query), index, candidate)
             for index, candidate in enumerate(self.corpus)
         ]
-        scored = [item for item in scored if item[0] > -999]
+        scored = [item for item in scored if item[0] > FILTER_MISMATCH_SCORE]
         scored.sort(key=lambda item: (-item[0], item[1], item[2].resume_id))
         page = max(query.page, 1)
         start = (page - 1) * query.page_size
@@ -70,6 +75,6 @@ class MockCTSClient:
             candidates=selected,
             raw_candidate_count=len(selected),
             adapter_notes=notes,
-            latency_ms=1,
+            latency_ms=MOCK_LATENCY_MS,
             response_message="mock search completed",
         )

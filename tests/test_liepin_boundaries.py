@@ -20,7 +20,13 @@ from seektalent.providers.liepin.security import issue_stream_token
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
 from seektalent_ui import models as ui_models
-from seektalent_ui.liepin_routes import create_liepin_router
+from seektalent_ui.liepin_routes import (
+    LIEPIN_EVENT_BATCH_LIMIT,
+    LIEPIN_EVENT_POLL_INTERVAL_SECONDS,
+    LIEPIN_STREAM_TOKEN_COOKIE_MAX_AGE_SECONDS,
+    LIEPIN_STREAM_TOKEN_COOKIE_NAME,
+    create_liepin_router,
+)
 from seektalent_ui.server import create_app
 from tests.settings_factory import make_settings
 
@@ -300,15 +306,17 @@ def test_sse_routes_use_persisted_scoped_bounded_event_streams():
     assert "EventSourceResponse(" in router_source
     assert 'Header(alias="Last-Event-ID")' in router_source
     assert "_scope_from_stream_cookie(" in router_source
-    assert "liepin_stream_token" in router_source
+    assert LIEPIN_STREAM_TOKEN_COOKIE_NAME in router_source
     assert "StreamingResponse" not in router_source
     assert "asyncio.Queue" not in router_source
     assert "queue.Queue" not in router_source
 
     assert "store.iter_events_after(" in generator_source
-    assert "limit=100" in generator_source
+    assert LIEPIN_EVENT_BATCH_LIMIT == 100
+    assert "limit=LIEPIN_EVENT_BATCH_LIMIT" in generator_source
     assert "json.dumps(row.payload" in generator_source
-    assert "await asyncio.sleep(0.25)" in generator_source
+    assert LIEPIN_EVENT_POLL_INTERVAL_SECONDS == 0.25
+    assert "await asyncio.sleep(LIEPIN_EVENT_POLL_INTERVAL_SECONDS)" in generator_source
     assert "liepin_events" in store_source
     assert "LIMIT ?" in store_source
     assert "with self._connect() as conn" in store_source
@@ -330,7 +338,8 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
     assert "status_code=204" in router_source
     assert "response.set_cookie(" in router_source
     assert "httponly=True" in router_source
-    assert "max_age=60" in router_source
+    assert LIEPIN_STREAM_TOKEN_COOKIE_MAX_AGE_SECONDS == 60
+    assert "max_age=LIEPIN_STREAM_TOKEN_COOKIE_MAX_AGE_SECONDS" in router_source
     assert 'path="/api/liepin/connections"' in router_source
     assert "subject_id=connection.connection_id" in router_source
     assert "subject_id=connection_id,\n        )\n        response.set_cookie(" not in router_source

@@ -131,7 +131,7 @@ def test_cts_provider_adapter_translates_business_errors_to_provider_errors() ->
 
 def test_cts_provider_adapter_does_not_forward_runtime_constraints_as_native_filters() -> None:
     captured_query: CTSQuery | None = None
-    provider_filters = {"age": 3, "schoolType": 2}
+    provider_filters = {"schoolType": 2, "workExperienceRange": 3}
 
     class FakeCTSClient:
         async def search(self, query: CTSQuery, *, round_no: int, trace_id: str) -> CTSFetchResult:

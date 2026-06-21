@@ -13,6 +13,7 @@ from seektalent.models import (
     SearchControllerDecision,
     StopControllerDecision,
 )
+from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS, PROTECTED_ATTRIBUTE_FILTER_ADVICE_TEXT
 from seektalent.prompt_safety import (
     render_template_version_block,
     render_untrusted_json_block,
@@ -24,8 +25,7 @@ from seektalent.repair import RepairCallError, repair_controller_decision, unpac
 from seektalent.retrieval.query_plan import canonicalize_controller_query_terms, normalize_term
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
-PROTECTED_FILTER_FIELDS = frozenset({"age_requirement", "gender_requirement", "school_names"})
-DISABLED_FILTER_FIELDS = frozenset({"position", *PROTECTED_FILTER_FIELDS})
+DISABLED_FILTER_FIELDS = frozenset({"position", *PROTECTED_ATTRIBUTE_FIELDS})
 
 
 def _items(values: list[str]) -> str:
@@ -52,7 +52,7 @@ def _allowed_filter_fields() -> list[str]:
 
 
 def _prompt_safe_constraints(payload: dict[str, object]) -> dict[str, object]:
-    return {key: value for key, value in payload.items() if key not in PROTECTED_FILTER_FIELDS}
+    return {key: value for key, value in payload.items() if key not in PROTECTED_ATTRIBUTE_FIELDS}
 
 
 def _disabled_filter_fields_in(decision: SearchControllerDecision) -> list[str]:
@@ -132,7 +132,7 @@ def render_controller_prompt(context: ControllerContext) -> str:
     structured_constraints = {
         "hard_constraints": _prompt_safe_constraints(sheet.hard_constraints.model_dump(mode="json")),
         "preferences": sheet.preferences.model_dump(mode="json"),
-        "protected_attributes": "age_requirement, gender_requirement, and school_names are excluded from LLM filter advice.",
+        "protected_attributes": PROTECTED_ATTRIBUTE_FILTER_ADVICE_TEXT,
     }
     requirement_sheet_text = (
         f"- Job Title: {sheet.job_title}\n"
