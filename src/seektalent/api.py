@@ -9,7 +9,13 @@ from typing import Literal
 from seektalent.artifacts import ArtifactSession, ArtifactStore
 from seektalent.config import AppSettings, load_process_env
 from seektalent.evaluation import AsyncJudgeLimiter, EvaluationResult
-from seektalent.models import FinalResult, RequirementSheet, RuntimeFinalizationRevision, StopGuidance
+from seektalent.models import (
+    FinalResult,
+    RequirementSheet,
+    RuntimeFinalizationRevision,
+    RuntimeSourceCoverageSummary,
+    StopGuidance,
+)
 from seektalent.progress import ProgressCallback
 from seektalent.runtime import RunArtifacts
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
@@ -39,6 +45,7 @@ class MatchRunResult:
     run_state: object | None = None
     artifact_lifecycle_ref: RuntimeArtifactLifecycleRef | None = None
     finalization_revision: RuntimeFinalizationRevision | None = None
+    source_coverage_summary: RuntimeSourceCoverageSummary | None = None
 
     @classmethod
     def from_artifacts(cls, artifacts: RunArtifacts) -> "MatchRunResult":
@@ -53,6 +60,7 @@ class MatchRunResult:
             run_state=artifacts.run_state,
             artifact_lifecycle_ref=artifacts.artifact_lifecycle_ref,
             finalization_revision=artifacts.finalization_revision,
+            source_coverage_summary=artifacts.source_coverage_summary,
         )
 
 
