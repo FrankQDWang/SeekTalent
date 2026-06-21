@@ -1,0 +1,39 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Project runtime source degradation semantics into the production match contract.",
+  "rationale": "This slice makes the production contract expose safe, path-free source coverage, degraded completion, and required-source failure semantics from existing runtime coverage summaries without changing round dispatch behavior.",
+  "touched_layers": ["docs", "other", "runtime", "tests"],
+  "red_files": [
+    "src/seektalent/api.py",
+    "src/seektalent/runtime/production_contract.py",
+    "tests/test_runtime_source_degradation.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_source_degradation.py -q",
+    "uv run pytest tests/test_runtime_source_degradation.py tests/test_runtime_production_contract.py tests/test_api_production_contract.py tests/test_runtime_core_commit.py -q",
+    "uv run ruff check src/seektalent/api.py src/seektalent/runtime/production_contract.py tests/test_runtime_source_degradation.py",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "uv run python tools/check_pr_governance.py --base codex/runtime-prod-core-commit-v1",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "production contract source coverage that always reports empty succeeded coverage when runtime coverage is available",
+    "required source failures that are hidden behind a succeeded production completion status",
+    "source degradation diagnostics that expose local filesystem paths or debug artifact locations"
+  ],
+  "risks": [
+    "This slice only projects existing runtime coverage summaries; later runtime slices must preserve the same safe public contract if dispatch behavior changes.",
+    "Source status mappings are intentionally small and explicit; adding new runtime coverage categories should update this projection and its tests."
+  ]
+}

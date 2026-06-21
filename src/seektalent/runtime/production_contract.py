@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from seektalent.models import FinalCandidate, RuntimeFinalizationRevision
+from seektalent.models import FinalCandidate, RuntimeFinalizationRevision, RuntimeSourceCoverageSummary
 
 SCHEMA_VERSION = "seektalent.production_match_result.v1"
 
@@ -192,17 +192,21 @@ class ProductionMatchResultV1(StrictModel):
         runtime_profile: Literal["prod_core", "development", "workbench"] = "prod_core",
     ) -> "ProductionMatchResultV1":
         final_result = debug_result.final_result
+        coverage_summary = _source_coverage_summary_from_debug_result(debug_result)
+        effective_source_selection = _effective_source_selection(source_selection, coverage_summary)
+        source_coverage = _project_source_coverage(coverage_summary, effective_source_selection)
+        completion_status = _completion_status_from_coverage(source_coverage)
         return cls(
             run_id=debug_result.run_id,
             runtime_profile=runtime_profile,
-            completion_status="succeeded",
+            completion_status=completion_status,
             input_digest=input_digest,
             approved_requirement_sheet_digest=approved_requirement_sheet_digest,
             requirement_profile_version="requirements.v1",
             policy_version="production-contract.v1",
             model_policy_version="model-policy.v1",
-            source_selection=source_selection,
-            source_coverage=SourceCoverageSummaryV1(),
+            source_selection=effective_source_selection,
+            source_coverage=source_coverage,
             final_candidates=tuple(
                 ProductionCandidateV1.from_final_candidate(candidate)
                 for candidate in final_result.candidates
@@ -215,8 +219,10 @@ class ProductionMatchResultV1(StrictModel):
                 else None
             ),
             prf_summary=_prf_summary_from_debug_result(debug_result),
+            warnings=_source_coverage_warnings(source_coverage, completion_status),
             artifact_ref=_public_artifact_ref_from_debug_result(debug_result),
             core_commit=_core_commit_from_debug_result(debug_result),
+            public_error=_source_coverage_error(source_coverage, completion_status),
         )
 
 
@@ -319,3 +325,141 @@ def _core_commit_from_debug_result(debug_result) -> CoreCommitReceiptV1 | None:
         return None
 
     return core_commit_receipt_from_finalization_revision(finalization_revision)
+
+
+def _source_coverage_summary_from_debug_result(debug_result) -> RuntimeSourceCoverageSummary | None:
+    coverage_summary = getattr(debug_result, "source_coverage_summary", None)
+    if coverage_summary is not None:
+        return coverage_summary
+
+    finalization_revision = getattr(debug_result, "finalization_revision", None)
+    if finalization_revision is None:
+        return None
+    return finalization_revision.coverage_summary
+
+
+def _project_source_coverage(
+    coverage_summary: RuntimeSourceCoverageSummary | None,
+    source_selection: SourceSelectionV1,
+) -> SourceCoverageSummaryV1:
+    if coverage_summary is None:
+        return SourceCoverageSummaryV1()
+
+    return SourceCoverageSummaryV1(
+        required=tuple(
+            _project_source_coverage_entry(source_kind, coverage_summary)
+            for source_kind in source_selection.required
+        ),
+        optional=tuple(
+            _project_source_coverage_entry(source_kind, coverage_summary)
+            for source_kind in source_selection.optional
+        ),
+    )
+
+
+def _effective_source_selection(
+    source_selection: SourceSelectionV1,
+    coverage_summary: RuntimeSourceCoverageSummary | None,
+) -> SourceSelectionV1:
+    if source_selection.source_kinds or coverage_summary is None or not coverage_summary.selected_source_kinds:
+        return source_selection
+    return SourceSelectionV1(required=tuple(str(source) for source in coverage_summary.selected_source_kinds))
+
+
+def _project_source_coverage_entry(
+    source_kind: str,
+    coverage_summary: RuntimeSourceCoverageSummary,
+) -> SourceCoverageV1:
+    return SourceCoverageV1(
+        source_kind=source_kind,
+        status=_source_coverage_status(source_kind, coverage_summary),
+        retryable=source_kind in coverage_summary.failed_source_kinds
+        or source_kind in coverage_summary.partial_source_kinds,
+        operator_action=_source_operator_action(source_kind, coverage_summary),
+    )
+
+
+def _source_coverage_status(
+    source_kind: str,
+    coverage_summary: RuntimeSourceCoverageSummary,
+) -> SourceCoverageStatusV1:
+    if source_kind in coverage_summary.completed_source_kinds:
+        return "succeeded"
+    if source_kind in coverage_summary.empty_source_kinds:
+        return "empty"
+    if source_kind in coverage_summary.partial_source_kinds:
+        return "partial"
+    if source_kind in coverage_summary.blocked_source_kinds:
+        return "blocked"
+    if source_kind in coverage_summary.failed_source_kinds or source_kind in coverage_summary.missing_source_kinds:
+        return "failed"
+    return "failed"
+
+
+def _source_operator_action(
+    source_kind: str,
+    coverage_summary: RuntimeSourceCoverageSummary,
+) -> str | None:
+    if source_kind in coverage_summary.empty_source_kinds:
+        return "adjust_query_or_source_configuration"
+    if (
+        source_kind in coverage_summary.failed_source_kinds
+        or source_kind in coverage_summary.partial_source_kinds
+        or source_kind in coverage_summary.blocked_source_kinds
+    ):
+        return "retry_source_or_continue_with_available_results"
+    if source_kind in coverage_summary.missing_source_kinds:
+        return "check_source_configuration"
+    if source_kind not in coverage_summary.completed_source_kinds:
+        return "check_source_configuration"
+    return None
+
+
+def _completion_status_from_coverage(
+    source_coverage: SourceCoverageSummaryV1,
+) -> Literal["succeeded", "degraded", "failed"]:
+    if any(source.status in {"blocked", "empty", "failed"} for source in source_coverage.required):
+        return "failed"
+    if any(source.status != "succeeded" for source in (*source_coverage.required, *source_coverage.optional)):
+        return "degraded"
+    return "succeeded"
+
+
+def _source_coverage_warnings(
+    source_coverage: SourceCoverageSummaryV1,
+    completion_status: Literal["succeeded", "degraded", "failed"],
+) -> tuple[PublicRuntimeWarningV1, ...]:
+    if completion_status != "degraded":
+        return ()
+
+    degraded_sources = tuple(
+        source
+        for source in (*source_coverage.required, *source_coverage.optional)
+        if source.status != "succeeded"
+    )
+    return tuple(
+        PublicRuntimeWarningV1(
+            code="source_degraded",
+            message=f"Source {source.source_kind} returned degraded coverage.",
+            source=source.source_kind,
+            retryable=source.retryable,
+            operator_action=source.operator_action,
+        )
+        for source in degraded_sources
+    )
+
+
+def _source_coverage_error(
+    source_coverage: SourceCoverageSummaryV1,
+    completion_status: Literal["succeeded", "degraded", "failed"],
+) -> PublicRuntimeErrorV1 | None:
+    if completion_status != "failed":
+        return None
+
+    return PublicRuntimeErrorV1(
+        code="required_sources_unavailable",
+        message="One or more required sources did not return usable coverage.",
+        http_status=424,
+        cli_exit_code=2,
+        retryable=False,
+    )
