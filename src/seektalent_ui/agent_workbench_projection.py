@@ -30,7 +30,7 @@ from seektalent_ui.workbench_store import WorkbenchStore
 from seektalent_ui.workbench_store_types import WorkbenchUser
 
 
-MAX_WORKBENCH_RUNTIME_EVENT_PAGE = 100
+MAX_WORKBENCH_RUNTIME_EVENT_PAGE = 300
 
 
 class RuntimeEventPageLike(Protocol):
