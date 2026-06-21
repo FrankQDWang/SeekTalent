@@ -6,7 +6,14 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from seektalent.models import FinalCandidate, RuntimeFinalizationRevision, RuntimeSourceCoverageSummary
+from seektalent.models import (
+    FinalCandidate,
+    RuntimeFinalizationRevision,
+    RuntimeSourceCoverageSummary,
+    StopQualityGateStatus,
+)
+from seektalent.runtime.constraints import PROTECTED_ATTRIBUTE_FIELDS, RuntimeConstraintsContractV1
+from seektalent.runtime.stop_reasons import normalize_stop_reason
 
 SCHEMA_VERSION = "seektalent.production_match_result.v1"
 
@@ -119,7 +126,12 @@ class ProductionCandidateV1(StrictModel):
     public_fit_summary: str | None = None
 
     @classmethod
-    def from_final_candidate(cls, candidate: FinalCandidate) -> "ProductionCandidateV1":
+    def from_final_candidate(
+        cls,
+        candidate: FinalCandidate,
+        *,
+        constraint_decisions: tuple[ConstraintDecisionV1, ...] = (),
+    ) -> "ProductionCandidateV1":
         return cls(
             candidate_id=candidate.resume_id,
             rank=candidate.rank,
@@ -132,6 +144,7 @@ class ProductionCandidateV1(StrictModel):
             detail_scorecard_ref=candidate.detail_scorecard_ref,
             detail_open_reason=candidate.detail_open_reason,
             detail_open_policy_version=candidate.detail_open_policy_version,
+            constraint_decisions=constraint_decisions,
             public_fit_summary=candidate.match_summary,
         )
 
@@ -171,10 +184,11 @@ class ProductionMatchResultV1(StrictModel):
     model_policy_version: str
     source_selection: SourceSelectionV1
     source_coverage: SourceCoverageSummaryV1
+    runtime_constraints: RuntimeConstraintsContractV1 | None = None
     final_candidates: tuple[ProductionCandidateV1, ...]
     stop_reason: StopReasonV1
     rounds_executed: int
-    terminal_stop_guidance: str | None = None
+    terminal_quality_gate_status: StopQualityGateStatus | None = None
     prf_summary: PrfSummaryV1
     warnings: tuple[PublicRuntimeWarningV1, ...] = Field(default_factory=tuple)
     artifact_ref: PublicArtifactRefV1 | None = None
@@ -190,12 +204,15 @@ class ProductionMatchResultV1(StrictModel):
         source_selection: SourceSelectionV1,
         approved_requirement_sheet_digest: str | None = None,
         runtime_profile: Literal["prod_core", "development", "workbench"] = "prod_core",
+        runtime_constraints_contract: RuntimeConstraintsContractV1 | None = None,
     ) -> "ProductionMatchResultV1":
         final_result = debug_result.final_result
         coverage_summary = _source_coverage_summary_from_debug_result(debug_result)
         effective_source_selection = _effective_source_selection(source_selection, coverage_summary)
         source_coverage = _project_source_coverage(coverage_summary, effective_source_selection)
         completion_status = _completion_status_from_coverage(source_coverage)
+        stop_reason = normalize_stop_reason(final_result.stop_reason)
+        constraint_decisions = _constraint_decisions_from_debug_result(debug_result)
         return cls(
             run_id=debug_result.run_id,
             runtime_profile=runtime_profile,
@@ -207,17 +224,17 @@ class ProductionMatchResultV1(StrictModel):
             model_policy_version="model-policy.v1",
             source_selection=effective_source_selection,
             source_coverage=source_coverage,
+            runtime_constraints=runtime_constraints_contract,
             final_candidates=tuple(
-                ProductionCandidateV1.from_final_candidate(candidate)
+                ProductionCandidateV1.from_final_candidate(
+                    candidate,
+                    constraint_decisions=constraint_decisions,
+                )
                 for candidate in final_result.candidates
             ),
-            stop_reason=StopReasonV1(code=final_result.stop_reason, message=final_result.stop_reason),
+            stop_reason=StopReasonV1(code=stop_reason, message=stop_reason),
             rounds_executed=final_result.rounds_executed,
-            terminal_stop_guidance=(
-                debug_result.terminal_stop_guidance.reason
-                if debug_result.terminal_stop_guidance is not None
-                else None
-            ),
+            terminal_quality_gate_status=_terminal_quality_gate_status_from_debug_result(debug_result),
             prf_summary=_prf_summary_from_debug_result(debug_result),
             warnings=_source_coverage_warnings(source_coverage, completion_status),
             artifact_ref=_public_artifact_ref_from_debug_result(debug_result),
@@ -277,6 +294,13 @@ def _public_prf_reason_code(decision) -> str:
     return "prf_not_selected"
 
 
+def _terminal_quality_gate_status_from_debug_result(debug_result) -> StopQualityGateStatus | None:
+    terminal_stop_guidance = getattr(debug_result, "terminal_stop_guidance", None)
+    if terminal_stop_guidance is None:
+        return None
+    return terminal_stop_guidance.quality_gate_status
+
+
 def digest_text_parts(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
 
@@ -325,6 +349,32 @@ def _core_commit_from_debug_result(debug_result) -> CoreCommitReceiptV1 | None:
         return None
 
     return core_commit_receipt_from_finalization_revision(finalization_revision)
+
+
+def _constraint_decisions_from_debug_result(debug_result) -> tuple[ConstraintDecisionV1, ...]:
+    runtime_constraints = getattr(debug_result, "runtime_constraints", ())
+    return tuple(
+        _constraint_decision_from_runtime_constraint(constraint)
+        for constraint in runtime_constraints
+        if constraint.blocking or constraint.field in PROTECTED_ATTRIBUTE_FIELDS
+    )
+
+
+def _constraint_decision_from_runtime_constraint(constraint) -> ConstraintDecisionV1:
+    provenance = f"runtime_constraint:{constraint.source}"
+    if constraint.field in PROTECTED_ATTRIBUTE_FIELDS:
+        return ConstraintDecisionV1(
+            rule_id=constraint.field,
+            decision="not_applicable",
+            reason_code="protected_attribute_excluded_from_candidate_scoring",
+            provenance=provenance,
+        )
+    return ConstraintDecisionV1(
+        rule_id=constraint.field,
+        decision="unknown",
+        reason_code="runtime_constraint_requires_non_llm_verification",
+        provenance=provenance,
+    )
 
 
 def _source_coverage_summary_from_debug_result(debug_result) -> RuntimeSourceCoverageSummary | None:

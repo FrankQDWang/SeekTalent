@@ -63,11 +63,13 @@ def test_run_match_defaults_to_prod_core_contract(monkeypatch, tmp_path: Path) -
 
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
 
+    settings = make_settings(mock_cts=True, max_rounds=6, search_max_pages_per_round=3)
+
     result = run_match(
         job_title="Python Engineer",
         jd="JD",
         notes="Notes",
-        settings=make_settings(mock_cts=True),
+        settings=settings,
         env_file=None,
         source_selection=SourceSelectionV1(required=("cts",), optional=("liepin",)),
     )
@@ -76,6 +78,9 @@ def test_run_match_defaults_to_prod_core_contract(monkeypatch, tmp_path: Path) -
     assert result.runtime_profile == "prod_core"
     assert result.input_digest
     assert result.final_candidates[0].candidate_id == "resume-1"
+    assert result.runtime_constraints is not None
+    assert result.runtime_constraints.max_rounds == 6
+    assert result.runtime_constraints.search_max_pages_per_round == 3
     assert captured["source_kinds"] == ("cts", "liepin")
     assert "run_dir" not in result.model_dump()
 

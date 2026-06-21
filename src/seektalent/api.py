@@ -12,6 +12,7 @@ from seektalent.evaluation import AsyncJudgeLimiter, EvaluationResult
 from seektalent.models import (
     FinalResult,
     RequirementSheet,
+    RuntimeConstraint,
     RuntimeFinalizationRevision,
     RuntimeSourceCoverageSummary,
     StopGuidance,
@@ -19,6 +20,7 @@ from seektalent.models import (
 from seektalent.progress import ProgressCallback
 from seektalent.runtime import RunArtifacts
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
+from seektalent.runtime.constraints import RuntimeConstraintsContractV1, runtime_constraints_from_run_state
 from seektalent.runtime.production_contract import (
     ProductionMatchResultV1,
     SourceSelectionV1,
@@ -46,6 +48,7 @@ class MatchRunResult:
     artifact_lifecycle_ref: RuntimeArtifactLifecycleRef | None = None
     finalization_revision: RuntimeFinalizationRevision | None = None
     source_coverage_summary: RuntimeSourceCoverageSummary | None = None
+    runtime_constraints: tuple[RuntimeConstraint, ...] = ()
 
     @classmethod
     def from_artifacts(cls, artifacts: RunArtifacts) -> "MatchRunResult":
@@ -61,6 +64,7 @@ class MatchRunResult:
             artifact_lifecycle_ref=artifacts.artifact_lifecycle_ref,
             finalization_revision=artifacts.finalization_revision,
             source_coverage_summary=artifacts.source_coverage_summary,
+            runtime_constraints=runtime_constraints_from_run_state(artifacts.run_state),
         )
 
 
@@ -145,13 +149,14 @@ def run_match(
     approved_requirement_sheet: RequirementSheet | None = None,
 ) -> ProductionMatchResultV1:
     selection = source_selection or SourceSelectionV1()
+    effective_settings = _effective_settings(settings=settings, env_file=env_file, workspace_root=workspace_root)
     debug_result = run_match_debug(
         job_title=job_title,
         jd=jd,
         notes=notes,
-        settings=settings,
-        env_file=env_file,
-        workspace_root=workspace_root,
+        settings=effective_settings,
+        env_file=None,
+        workspace_root=None,
         progress_callback=progress_callback,
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
@@ -166,6 +171,7 @@ def run_match(
         approved_requirement_sheet_digest=digest_model_payload(approved_requirement_sheet),
         source_selection=selection,
         runtime_profile=runtime_profile,
+        runtime_constraints_contract=RuntimeConstraintsContractV1.from_settings(effective_settings),
     )
 
 
@@ -231,13 +237,14 @@ async def run_match_async(
     approved_requirement_sheet: RequirementSheet | None = None,
 ) -> ProductionMatchResultV1:
     selection = source_selection or SourceSelectionV1()
+    effective_settings = _effective_settings(settings=settings, env_file=env_file, workspace_root=workspace_root)
     debug_result = await run_match_debug_async(
         job_title=job_title,
         jd=jd,
         notes=notes,
-        settings=settings,
-        env_file=env_file,
-        workspace_root=workspace_root,
+        settings=effective_settings,
+        env_file=None,
+        workspace_root=None,
         progress_callback=progress_callback,
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
@@ -252,6 +259,7 @@ async def run_match_async(
         approved_requirement_sheet_digest=digest_model_payload(approved_requirement_sheet),
         source_selection=selection,
         runtime_profile=runtime_profile,
+        runtime_constraints_contract=RuntimeConstraintsContractV1.from_settings(effective_settings),
     )
 
 

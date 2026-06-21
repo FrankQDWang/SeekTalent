@@ -196,6 +196,7 @@ from seektalent.runtime.source_query_intent import (
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.runtime.scoring_runtime import score_round as score_round_direct
+from seektalent.runtime.stop_reasons import normalize_stop_reason
 from seektalent.source_contracts import (
     SourceBudget,
     SourceLaneRequest as ContractSourceLaneRequest,
@@ -206,18 +207,6 @@ from seektalent.source_contracts import (
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
-
-CANONICAL_STOP_REASONS = {
-    "enough_high_fit_candidates",
-    "insufficient_new_candidates",
-    "no_progress_repeated_results",
-    "max_rounds_reached",
-    "controller_stop",
-    "target_satisfied",
-    "provider_exhausted",
-    "max_pages_reached",
-    "max_attempts_reached",
-}
 
 LOGGER = logging.getLogger(__name__)
 _T = TypeVar("_T")
@@ -3729,9 +3718,7 @@ class WorkflowRuntime:
         *,
         proposed: str | None,
     ) -> str:
-        if proposed in CANONICAL_STOP_REASONS:
-            return proposed
-        return "controller_stop"
+        return normalize_stop_reason(proposed)
 
     def _latest_search_observation(self, run_state: RunState) -> SearchObservation | None:
         if not run_state.round_history:
