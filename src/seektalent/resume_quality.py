@@ -9,7 +9,8 @@ from pydantic_ai import Agent
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, resolve_stage_model_config
 from seektalent.models import NormalizedResume, ScoredCandidate
-from seektalent.prompting import LoadedPrompt, json_block
+from seektalent.prompt_safety import render_template_version_block, render_untrusted_json_block
+from seektalent.prompting import LoadedPrompt
 from seektalent.tracing import provider_usage_from_result
 
 
@@ -81,7 +82,13 @@ class ResumeQualityCommenter:
         )
         if not payload["candidates"]:
             return ""
-        user_prompt = json_block("ROUND_RESUME_QUALITY_CONTEXT", payload)
+        user_prompt = "\n\n".join(
+            [
+                render_template_version_block("tui_summary"),
+                "TASK\nWrite one display-safe round resume quality comment from the provided context.",
+                render_untrusted_json_block("ROUND_RESUME_QUALITY_CONTEXT", payload),
+            ]
+        )
         started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         started_clock = perf_counter()
         try:

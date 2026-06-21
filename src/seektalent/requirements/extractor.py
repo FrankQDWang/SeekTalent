@@ -8,6 +8,7 @@ from pydantic_ai import Agent
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import InputTruth, RequirementExtractionDraft, RequirementSheet
+from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
 from seektalent.prompting import LoadedPrompt
 from seektalent.repair import RepairCallError, repair_requirement_draft, unpack_repair_result
 from seektalent.requirements.normalization import normalize_requirement_draft
@@ -19,10 +20,11 @@ def render_requirements_prompt(input_truth: InputTruth) -> str:
     notes = input_truth.notes.strip() or "(none)"
     return "\n\n".join(
         [
+            render_template_version_block("requirements"),
             "TASK\nExtract one RequirementExtractionDraft from the job title, JD, and sourcing notes. Return one or two title_anchor_terms and a non-empty title_anchor_rationale.",
-            f"JOB TITLE\n{input_truth.job_title}",
-            f"JOB DESCRIPTION\n{input_truth.jd}",
-            f"SOURCING NOTES\n{notes}",
+            f"JOB TITLE\n{render_untrusted_text_block('JOB_TITLE', input_truth.job_title)}",
+            f"JOB DESCRIPTION\n{render_untrusted_text_block('JOB_DESCRIPTION', input_truth.jd)}",
+            f"SOURCING NOTES\n{render_untrusted_text_block('SOURCING_NOTES', notes)}",
         ]
     )
 

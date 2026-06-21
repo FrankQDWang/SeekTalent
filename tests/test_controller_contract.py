@@ -362,7 +362,7 @@ def test_controller_prompt_mentions_schema_budget_and_few_shot_term_rules() -> N
     assert "not a step-by-step reasoning transcript" in prompt
 
 
-def test_controller_prompt_bridges_compiled_title_anchors_into_role_anchor_terms() -> None:
+def test_controller_prompt_bridges_compiled_title_anchors_into_untrusted_term_bank() -> None:
     requirement_sheet = RequirementSheet(
         job_title="Backend Platform Engineer",
         title_anchor_terms=["Backend Engineer", "Platform Engineer"],
@@ -399,9 +399,10 @@ def test_controller_prompt_bridges_compiled_title_anchors_into_role_anchor_terms
 
     prompt = render_controller_prompt(_controller_context(requirement_sheet=requirement_sheet))
 
-    assert '"role_anchor_terms": [' in prompt
-    assert '"Backend"' in prompt
-    assert '"Platform"' in prompt
+    assert 'UNTRUSTED DATA "TERM_BANK"' in prompt
+    assert '"role_anchor_terms": [' not in prompt
+    assert "| Backend | role.backend | primary_role_anchor |" in prompt
+    assert "| Platform | role.platform | secondary_title_anchor |" in prompt
     assert '"allowed_filter_fields": [' in prompt
     assert '"position"' not in prompt
 

@@ -15,8 +15,10 @@ from seektalent.models import (
     ScoringConfidence,
     ScoringFailure,
     ScoringContext,
+    ScoringPolicy,
     unique_strings,
 )
+from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.cache.exact_llm_cache import get_cached_json, put_cached_json, stable_cache_key
 from seektalent.tracing import LLMCallSnapshot, RunTracer
@@ -24,6 +26,7 @@ from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
 SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v1"
+PROTECTED_CONSTRAINT_FIELDS = frozenset({"age_requirement", "gender_requirement", "school_names"})
 
 
 def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
@@ -33,6 +36,32 @@ def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str 
 def _lines(values: list[str], *, limit: int | None = None) -> str:
     items = values[:limit] if limit is not None else values
     return "\n".join(f"- {value}" for value in items) if items else "- (none)"
+
+
+def _prompt_safe_constraints(payload: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in payload.items() if key not in PROTECTED_CONSTRAINT_FIELDS}
+
+
+def _known_protected_terms(policy: ScoringPolicy) -> tuple[str, ...]:
+    terms: list[str] = [school for school in policy.hard_constraints.school_names if school]
+    gender_requirement = policy.hard_constraints.gender_requirement
+    if gender_requirement is not None:
+        for value in [gender_requirement.raw_text, gender_requirement.canonical_gender]:
+            if isinstance(value, str) and value:
+                terms.append(value)
+    age_requirement = policy.hard_constraints.age_requirement
+    if age_requirement is not None and age_requirement.raw_text:
+        terms.append(age_requirement.raw_text)
+    return tuple(sorted(set(terms), key=lambda item: len(item), reverse=True))
+
+
+def _redact_known_protected_terms(value: str | None, *, policy: ScoringPolicy) -> str:
+    if not value:
+        return "(none)"
+    redacted = value
+    for term in _known_protected_terms(policy):
+        redacted = redacted.replace(term, "[redacted_protected_attribute]")
+    return redacted
 
 
 def render_scoring_prompt(context: ScoringContext) -> str:
@@ -47,36 +76,47 @@ def render_scoring_prompt(context: ScoringContext) -> str:
         "resume_id": resume.resume_id,
         "source_round": resume.source_round,
     }
+    runtime_only_constraints = [
+        item.model_dump(mode="json")
+        for item in context.runtime_only_constraints
+        if item.field not in PROTECTED_CONSTRAINT_FIELDS
+    ]
+    scoring_policy_text = (
+        f"- Job Title: {policy.job_title}\n"
+        f"- Summary: {policy.role_summary}\n"
+        f"- Must have:\n{_lines(policy.must_have_capabilities)}\n"
+        f"- Preferred:\n{_lines(policy.preferred_capabilities)}\n"
+        f"- Exclusions:\n{_lines(policy.exclusion_signals)}\n"
+        f"- Hard constraints: {_prompt_safe_constraints(policy.hard_constraints.model_dump(mode='json'))}\n"
+        f"- Preferences: {policy.preferences.model_dump(mode='json')}\n"
+        f"- Runtime-only constraints: {runtime_only_constraints or '(none)'}\n"
+        "- Protected attributes: age_requirement, gender_requirement, and school_names are excluded from LLM scoring.\n"
+        f"- Rationale: {policy.scoring_rationale}"
+    )
+    resume_card_text = (
+        f"- Name: {resume.candidate_name or '(unknown)'}\n"
+        f"- Title: {resume.current_title or resume.headline or '(unknown)'}\n"
+        f"- Company: {resume.current_company or '(unknown)'}\n"
+        f"- Experience: {resume.years_of_experience if resume.years_of_experience is not None else '(unknown)'} years\n"
+        f"- Locations: {', '.join(resume.locations) or '(none)'}\n"
+        "- Education: (excluded from LLM scoring; protected attributes are handled by deterministic runtime policy)\n"
+        f"- Skills:\n{_lines(resume.skills, limit=16)}\n"
+        f"- Achievements:\n{_lines(resume.key_achievements, limit=5)}\n"
+        f"- Completeness: {resume.completeness_score}"
+    )
     return "\n\n".join(
         [
+            render_template_version_block("scoring"),
             "TASK\nScore this one resume against the role. Return one ScoredCandidateDraft.",
-            (
-                "SCORING POLICY\n"
-                f"- Job Title: {policy.job_title}\n"
-                f"- Summary: {policy.role_summary}\n"
-                f"- Must have:\n{_lines(policy.must_have_capabilities)}\n"
-                f"- Preferred:\n{_lines(policy.preferred_capabilities)}\n"
-                f"- Exclusions:\n{_lines(policy.exclusion_signals)}\n"
-                f"- Hard constraints: {policy.hard_constraints.model_dump(mode='json')}\n"
-                f"- Preferences: {policy.preferences.model_dump(mode='json')}\n"
-                f"- Runtime-only constraints: "
-                f"{[item.model_dump(mode='json') for item in context.runtime_only_constraints] or '(none)'}\n"
-                f"- Rationale: {policy.scoring_rationale}"
+            "SCORING POLICY\n" + render_untrusted_text_block("SCORING_POLICY_TEXT", scoring_policy_text),
+            "RESUME CARD\n" + render_untrusted_text_block("RESUME_CARD_TEXT", resume_card_text),
+            "RECENT EXPERIENCE\n"
+            + render_untrusted_text_block("RECENT_EXPERIENCE", "\n".join(experiences) if experiences else "- (none)"),
+            "RAW EXCERPT\n"
+            + render_untrusted_text_block(
+                "RESUME_RAW_EXCERPT",
+                _redact_known_protected_terms(resume.raw_text_excerpt, policy=policy),
             ),
-            (
-                "RESUME CARD\n"
-                f"- Name: {resume.candidate_name or '(unknown)'}\n"
-                f"- Title: {resume.current_title or resume.headline or '(unknown)'}\n"
-                f"- Company: {resume.current_company or '(unknown)'}\n"
-                f"- Experience: {resume.years_of_experience if resume.years_of_experience is not None else '(unknown)'} years\n"
-                f"- Locations: {', '.join(resume.locations) or '(none)'}\n"
-                f"- Education: {resume.education_summary or '(none)'}\n"
-                f"- Skills:\n{_lines(resume.skills, limit=16)}\n"
-                f"- Achievements:\n{_lines(resume.key_achievements, limit=5)}\n"
-                f"- Completeness: {resume.completeness_score}"
-            ),
-            "RECENT EXPERIENCE\n" + ("\n".join(experiences) if experiences else "- (none)"),
-            f"RAW EXCERPT\n{resume.raw_text_excerpt or '(none)'}",
             json_block("EXACT DATA", exact_data),
         ]
     )
