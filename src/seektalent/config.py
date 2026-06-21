@@ -173,6 +173,95 @@ class LocalDataRootPolicy:
     posture: LocalDataRootPosture
 
 
+@dataclass(frozen=True)
+class RuntimeLimitsSettings:
+    min_rounds: int
+    max_rounds: int
+    scoring_max_concurrency: int
+    scoring_timeout_seconds: float
+    judge_max_concurrency: int
+    search_max_pages_per_round: int
+    search_max_attempts_per_round: int
+    search_no_progress_limit: int
+
+
+@dataclass(frozen=True)
+class SourceProviderSettings:
+    provider_name: ProviderName
+    cts_base_url: str
+    cts_tenant_key: str | None
+    cts_tenant_secret: str | None
+    cts_timeout_seconds: float
+    cts_spec_path: str
+    liepin_worker_mode: LiepinWorkerMode
+    liepin_allow_fake_fixture_worker: bool
+    liepin_worker_base_url: str | None
+    liepin_browser_action_backend: LiepinBrowserActionBackend
+    liepin_opencli_command: str
+    liepin_opencli_session: str
+    liepin_opencli_allowed_hosts_json: str
+    liepin_opencli_allowed_start_urls_json: str
+    liepin_opencli_max_actions_per_task: int
+    liepin_opencli_max_pages_per_task: int
+    liepin_opencli_max_cards_per_task: int
+    liepin_opencli_timeout_seconds: int
+    liepin_opencli_detail_open_timeout_seconds: int
+    liepin_opencli_idle_close_seconds: int
+    liepin_opencli_close_blank_window: bool
+    liepin_opencli_pacing_enabled: bool
+    liepin_opencli_pacing_min_ms: int
+    liepin_opencli_pacing_max_ms: int
+    liepin_worker_host: str
+    liepin_worker_port: int
+    liepin_worker_startup_timeout_seconds: float
+    liepin_worker_timeout_seconds: float
+    liepin_connector_db_path: str
+    liepin_session_store_dir: str
+    liepin_session_store_key_id: str
+    liepin_api_token: str
+    liepin_account_binding_secret: str | None
+    liepin_stream_token_secret: str | None
+    liepin_detail_open_approval_secret: str | None
+    liepin_default_daily_detail_budget: int
+    liepin_exploit_detail_target: int
+    liepin_explore_detail_target: int
+    liepin_live_enabled: bool
+
+
+@dataclass(frozen=True)
+class TextLLMSettings:
+    protocol_family: TextLLMProtocolFamily
+    provider_label: TextLLMProviderLabel
+    endpoint_kind: TextLLMEndpointKind
+    endpoint_region: TextLLMEndpointRegion
+    base_url_override: str | None
+    api_key: str | None
+    requirements_model_id: str
+    controller_model_id: str
+    scoring_model_id: str
+    finalize_model_id: str
+    reflection_model_id: str
+    requirements_enable_thinking: bool
+    structured_repair_model_id: str
+    structured_repair_reasoning_effort: ReasoningEffort
+    judge_model_id: str
+    tui_summary_model_id: str | None
+    reasoning_effort: ReasoningEffort
+    judge_reasoning_effort: ReasoningEffort | None
+    controller_enable_thinking: bool
+    reflection_enable_thinking: bool
+    candidate_feedback_enabled: bool
+    candidate_feedback_model_id: str
+    candidate_feedback_reasoning_effort: ReasoningEffort
+    prf_probe_phrase_proposal_model_id: str
+    prf_probe_phrase_proposal_reasoning_effort: ReasoningEffortName
+    workbench_note_writer_model_id: str
+    workbench_note_writer_reasoning_effort: ReasoningEffort
+    prf_probe_phrase_proposal_timeout_seconds: float
+    prf_probe_phrase_proposal_live_harness_timeout_seconds: float
+    prf_probe_phrase_proposal_max_output_tokens: int
+
+
 def classify_local_data_root(path: Path) -> LocalDataRootPosture:
     resolved = path.expanduser().resolve(strict=False)
     if (resolved / "pyproject.toml").exists() or (resolved / ".git").exists():
@@ -686,6 +775,100 @@ class AppSettings(BaseSettings):
                 f"({self.text_llm_protocol_family} -> {expected_endpoint_kind})"
             )
         return self
+
+    @property
+    def runtime_limits(self) -> RuntimeLimitsSettings:
+        return RuntimeLimitsSettings(
+            min_rounds=self.min_rounds,
+            max_rounds=self.max_rounds,
+            scoring_max_concurrency=self.scoring_max_concurrency,
+            scoring_timeout_seconds=self.scoring_timeout_seconds,
+            judge_max_concurrency=self.judge_max_concurrency,
+            search_max_pages_per_round=self.search_max_pages_per_round,
+            search_max_attempts_per_round=self.search_max_attempts_per_round,
+            search_no_progress_limit=self.search_no_progress_limit,
+        )
+
+    @property
+    def source_providers(self) -> SourceProviderSettings:
+        return SourceProviderSettings(
+            provider_name=self.provider_name,
+            cts_base_url=self.cts_base_url,
+            cts_tenant_key=self.cts_tenant_key,
+            cts_tenant_secret=self.cts_tenant_secret,
+            cts_timeout_seconds=self.cts_timeout_seconds,
+            cts_spec_path=self.cts_spec_path,
+            liepin_worker_mode=self.liepin_worker_mode,
+            liepin_allow_fake_fixture_worker=self.liepin_allow_fake_fixture_worker,
+            liepin_worker_base_url=self.liepin_worker_base_url,
+            liepin_browser_action_backend=self.liepin_browser_action_backend,
+            liepin_opencli_command=self.liepin_opencli_command,
+            liepin_opencli_session=self.liepin_opencli_session,
+            liepin_opencli_allowed_hosts_json=self.liepin_opencli_allowed_hosts_json,
+            liepin_opencli_allowed_start_urls_json=self.liepin_opencli_allowed_start_urls_json,
+            liepin_opencli_max_actions_per_task=self.liepin_opencli_max_actions_per_task,
+            liepin_opencli_max_pages_per_task=self.liepin_opencli_max_pages_per_task,
+            liepin_opencli_max_cards_per_task=self.liepin_opencli_max_cards_per_task,
+            liepin_opencli_timeout_seconds=self.liepin_opencli_timeout_seconds,
+            liepin_opencli_detail_open_timeout_seconds=self.liepin_opencli_detail_open_timeout_seconds,
+            liepin_opencli_idle_close_seconds=self.liepin_opencli_idle_close_seconds,
+            liepin_opencli_close_blank_window=self.liepin_opencli_close_blank_window,
+            liepin_opencli_pacing_enabled=self.liepin_opencli_pacing_enabled,
+            liepin_opencli_pacing_min_ms=self.liepin_opencli_pacing_min_ms,
+            liepin_opencli_pacing_max_ms=self.liepin_opencli_pacing_max_ms,
+            liepin_worker_host=self.liepin_worker_host,
+            liepin_worker_port=self.liepin_worker_port,
+            liepin_worker_startup_timeout_seconds=self.liepin_worker_startup_timeout_seconds,
+            liepin_worker_timeout_seconds=self.liepin_worker_timeout_seconds,
+            liepin_connector_db_path=self.liepin_connector_db_path,
+            liepin_session_store_dir=self.liepin_session_store_dir,
+            liepin_session_store_key_id=self.liepin_session_store_key_id,
+            liepin_api_token=self.liepin_api_token,
+            liepin_account_binding_secret=self.liepin_account_binding_secret,
+            liepin_stream_token_secret=self.liepin_stream_token_secret,
+            liepin_detail_open_approval_secret=self.liepin_detail_open_approval_secret,
+            liepin_default_daily_detail_budget=self.liepin_default_daily_detail_budget,
+            liepin_exploit_detail_target=self.liepin_exploit_detail_target,
+            liepin_explore_detail_target=self.liepin_explore_detail_target,
+            liepin_live_enabled=self.liepin_live_enabled,
+        )
+
+    @property
+    def text_llm(self) -> TextLLMSettings:
+        return TextLLMSettings(
+            protocol_family=self.text_llm_protocol_family,
+            provider_label=self.text_llm_provider_label,
+            endpoint_kind=self.text_llm_endpoint_kind,
+            endpoint_region=self.text_llm_endpoint_region,
+            base_url_override=self.text_llm_base_url_override,
+            api_key=self.text_llm_api_key,
+            requirements_model_id=self.requirements_model_id,
+            controller_model_id=self.controller_model_id,
+            scoring_model_id=self.scoring_model_id,
+            finalize_model_id=self.finalize_model_id,
+            reflection_model_id=self.reflection_model_id,
+            requirements_enable_thinking=self.requirements_enable_thinking,
+            structured_repair_model_id=self.structured_repair_model_id,
+            structured_repair_reasoning_effort=self.structured_repair_reasoning_effort,
+            judge_model_id=self.judge_model_id,
+            tui_summary_model_id=self.tui_summary_model_id,
+            reasoning_effort=self.reasoning_effort,
+            judge_reasoning_effort=self.judge_reasoning_effort,
+            controller_enable_thinking=self.controller_enable_thinking,
+            reflection_enable_thinking=self.reflection_enable_thinking,
+            candidate_feedback_enabled=self.candidate_feedback_enabled,
+            candidate_feedback_model_id=self.candidate_feedback_model_id,
+            candidate_feedback_reasoning_effort=self.candidate_feedback_reasoning_effort,
+            prf_probe_phrase_proposal_model_id=self.prf_probe_phrase_proposal_model_id,
+            prf_probe_phrase_proposal_reasoning_effort=self.prf_probe_phrase_proposal_reasoning_effort,
+            workbench_note_writer_model_id=self.workbench_note_writer_model_id,
+            workbench_note_writer_reasoning_effort=self.workbench_note_writer_reasoning_effort,
+            prf_probe_phrase_proposal_timeout_seconds=self.prf_probe_phrase_proposal_timeout_seconds,
+            prf_probe_phrase_proposal_live_harness_timeout_seconds=(
+                self.prf_probe_phrase_proposal_live_harness_timeout_seconds
+            ),
+            prf_probe_phrase_proposal_max_output_tokens=self.prf_probe_phrase_proposal_max_output_tokens,
+        )
 
     @property
     def project_root(self) -> Path:

@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from time import perf_counter
-from typing import Any, TypedDict
 
 from seektalent.config import AppSettings
 from seektalent.controller import ReActController
@@ -11,10 +10,11 @@ from seektalent.controller.react_controller import render_controller_prompt
 from seektalent.llm import resolve_stage_model_config
 from seektalent.models import ControllerContext, ControllerDecision, SearchControllerDecision, StopControllerDecision
 from seektalent.progress import ProgressCallback
-from seektalent.tracing import RunTracer, json_sha256
+from seektalent.runtime.stage_contracts import ControllerStageState
+from seektalent.tracing import LLMCallSnapshot, RunTracer, json_sha256
 
 
-type BuildSnapshot = Callable[..., Any]
+type BuildSnapshot = Callable[..., LLMCallSnapshot]
 type EmitLLMEvent = Callable[..., None]
 type EmitProgress = Callable[..., None]
 type PromptCacheKey = Callable[..., str | None]
@@ -24,17 +24,6 @@ type WriteAuxCallArtifact = Callable[..., None]
 
 def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
     return f"rounds/{round_no:02d}/{subsystem}/{name}.{extension}"
-
-
-class ControllerStageState(TypedDict):
-    call_id: str
-    call_payload: dict[str, Any]
-    prompt: str
-    prompt_cache_key: str | None
-    prompt_cache_retention: str | None
-    artifacts: list[str]
-    started_at: str
-    controller_latency_ms: int
 
 
 def _resolved_stage_model_id(settings: AppSettings, *, stage: str) -> str:

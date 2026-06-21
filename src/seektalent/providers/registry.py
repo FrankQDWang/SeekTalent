@@ -1,14 +1,15 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import ProviderAdapter
-from seektalent.providers.cts import CTSProviderAdapter
-from seektalent.providers.liepin import LiepinProviderAdapter
-from seektalent.providers.liepin.client import build_liepin_worker_client
-from seektalent.providers.liepin.client import LiepinWorkerClient
-from seektalent.providers.liepin.client import is_live_liepin_worker_mode
-from seektalent.providers.liepin.store import LiepinStore
-from seektalent.providers.liepin.adapter import ProviderConnectionSafetyResolver
+from seektalent.providers.plugins import ProviderAdapterBuildContext, build_default_provider_adapter_registry
+
+if TYPE_CHECKING:
+    from seektalent.providers.liepin.adapter import ProviderConnectionSafetyResolver
+    from seektalent.providers.liepin.client import LiepinWorkerClient
+    from seektalent.providers.liepin.store import LiepinStore
 
 
 def get_provider_adapter(settings: AppSettings) -> ProviderAdapter:
@@ -23,18 +24,13 @@ def get_provider_adapter_for_source(
     liepin_store: LiepinStore | None = None,
     liepin_connection_safety_resolver: ProviderConnectionSafetyResolver | None = None,
 ) -> ProviderAdapter:
-    if source == "cts":
-        return CTSProviderAdapter(settings)
-    if source == "liepin":
-        if settings.liepin_worker_mode == "disabled":
-            raise ValueError("Liepin provider cannot be selected while liepin_worker_mode is disabled.")
-        store = liepin_store
-        if store is None and is_live_liepin_worker_mode(settings.liepin_worker_mode):
-            store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
-        return LiepinProviderAdapter(
-            settings,
-            worker_client=liepin_worker_client or build_liepin_worker_client(settings),
-            store=store,
-            connection_safety_resolver=liepin_connection_safety_resolver,
-        )
-    raise ValueError(f"Unsupported source: {source}")
+    registry = build_default_provider_adapter_registry()
+    return registry.build_adapter(
+        source,
+        ProviderAdapterBuildContext(
+            settings=settings,
+            liepin_worker_client=liepin_worker_client,
+            liepin_store=liepin_store,
+            liepin_connection_safety_resolver=liepin_connection_safety_resolver,
+        ),
+    )
