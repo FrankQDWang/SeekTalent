@@ -20,6 +20,7 @@ from seektalent.providers.liepin.security import issue_stream_token
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
 from seektalent_ui import models as ui_models
+from seektalent_ui.liepin_routes import create_liepin_router
 from seektalent_ui.server import create_app
 from tests.settings_factory import make_settings
 
@@ -292,17 +293,17 @@ def test_liepin_api_is_fastapi_uvicorn_and_not_legacy_stdlib_routes(tmp_path):
 
 
 def test_sse_routes_use_persisted_scoped_bounded_event_streams():
-    app_source = inspect.getsource(create_app)
-    generator_source = _function_source(SRC / "seektalent_ui" / "server.py", "_event_generator")
+    router_source = inspect.getsource(create_liepin_router)
+    generator_source = _function_source(SRC / "seektalent_ui" / "liepin_routes.py", "_event_generator")
     store_source = _read_source(SRC / "seektalent" / "providers" / "liepin" / "store.py")
 
-    assert "EventSourceResponse(" in app_source
-    assert 'Header(alias="Last-Event-ID")' in app_source
-    assert "_scope_from_stream_cookie(" in app_source
-    assert "liepin_stream_token" in app_source
-    assert "StreamingResponse" not in app_source
-    assert "asyncio.Queue" not in app_source
-    assert "queue.Queue" not in app_source
+    assert "EventSourceResponse(" in router_source
+    assert 'Header(alias="Last-Event-ID")' in router_source
+    assert "_scope_from_stream_cookie(" in router_source
+    assert "liepin_stream_token" in router_source
+    assert "StreamingResponse" not in router_source
+    assert "asyncio.Queue" not in router_source
+    assert "queue.Queue" not in router_source
 
     assert "store.iter_events_after(" in generator_source
     assert "limit=100" in generator_source
@@ -324,15 +325,17 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
         mock_cts=True,
     )
     client = TestClient(create_app(settings=settings))
-    app_source = inspect.getsource(create_app)
+    router_source = inspect.getsource(create_liepin_router)
 
-    assert "status_code=204" in app_source
-    assert "response.set_cookie(" in app_source
-    assert "httponly=True" in app_source
-    assert "max_age=60" in app_source
-    assert 'path=f"/api/liepin/connections/{connection_id}/events"' in app_source
+    assert "status_code=204" in router_source
+    assert "response.set_cookie(" in router_source
+    assert "httponly=True" in router_source
+    assert "max_age=60" in router_source
+    assert 'path="/api/liepin/connections"' in router_source
+    assert "subject_id=connection.connection_id" in router_source
+    assert "subject_id=connection_id,\n        )\n        response.set_cookie(" not in router_source
     assert "Stream tokens are not accepted in URL query parameters." in _read_source(
-        SRC / "seektalent_ui" / "server.py"
+        SRC / "seektalent_ui" / "liepin_routes.py"
     )
 
     gate = client.post("/api/liepin/compliance-gates", headers=_api_headers(), json=_gate_payload())

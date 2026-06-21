@@ -9,7 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from seektalent.providers.liepin.store import LiepinStore
-from seektalent_ui.server import LiepinScope, _event_generator, create_app
+from seektalent_ui.liepin_routes import LiepinScope, _event_generator
+from seektalent_ui.server import create_app
 from tests.settings_factory import make_settings
 
 
@@ -287,7 +288,7 @@ def test_connection_stream_token_cookie_and_scoped_sse_events(tmp_path: Path) ->
     set_cookie = token_response.headers["set-cookie"]
     assert "liepin_stream_token=" in set_cookie
     assert "HttpOnly" in set_cookie
-    assert f"Path=/api/liepin/connections/{connection_id}/events" in set_cookie
+    assert "Path=/api/liepin/connections" in set_cookie
     assert "Secure" not in set_cookie
     assert "unit-api-token" not in set_cookie
 

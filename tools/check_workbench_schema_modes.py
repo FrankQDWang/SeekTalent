@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 
 import seektalent_ui.maintenance as maintenance
 from seektalent.config import AppSettings
-from seektalent_ui.server import _workbench_db_path
+from seektalent_ui.workbench_paths import workbench_db_path
 from seektalent_ui.workbench_store import WorkbenchStore
 
 
@@ -66,14 +66,14 @@ def _initialized_workbench_schema(database_path: Path) -> SchemaSignature:
 
 def _dev_workbench_db(workspace_root: Path) -> Path:
     settings = AppSettings(runtime_mode="dev", workspace_root=str(workspace_root), _env_file=None)
-    database_path = _workbench_db_path(settings)
+    database_path = workbench_db_path(settings)
     WorkbenchStore(database_path).list_security_audit_events()
     return database_path
 
 
 def _prod_workbench_db() -> Path:
     settings = AppSettings(runtime_mode="prod", _env_file=None)
-    database_path = _workbench_db_path(settings)
+    database_path = workbench_db_path(settings)
     WorkbenchStore(database_path).list_security_audit_events()
     return database_path
 

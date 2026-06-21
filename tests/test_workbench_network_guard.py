@@ -73,7 +73,7 @@ def test_host_guard_rejects_unknown_hosts_for_packaged_frontend_routes(tmp_path,
     frontend_root = tmp_path / "frontend"
     (frontend_root / "_app" / "immutable").mkdir(parents=True)
     (frontend_root / "200.html").write_text("<html>SeekTalent Workbench</html>", encoding="utf-8")
-    monkeypatch.setattr("seektalent_ui.server.package_frontend_dir", lambda: frontend_root)
+    monkeypatch.setattr("seektalent_ui.static_frontend.package_frontend_dir", lambda: frontend_root)
     settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
     guard = build_network_guard(
         bind_host="0.0.0.0",
