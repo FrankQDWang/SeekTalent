@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from seektalent.models import FinalCandidate
+from seektalent.models import FinalCandidate, RuntimeFinalizationRevision
 
 SCHEMA_VERSION = "seektalent.production_match_result.v1"
 
@@ -216,6 +216,7 @@ class ProductionMatchResultV1(StrictModel):
             ),
             prf_summary=_prf_summary_from_debug_result(debug_result),
             artifact_ref=_public_artifact_ref_from_debug_result(debug_result),
+            core_commit=_core_commit_from_debug_result(debug_result),
         )
 
 
@@ -284,6 +285,22 @@ def digest_model_payload(payload: object | None) -> str | None:
     ).hexdigest()
 
 
+CORE_COMMIT_ID_PREFIX = "runtime-finalization:"
+
+
+def core_commit_receipt_from_finalization_revision(
+    revision: RuntimeFinalizationRevision,
+) -> CoreCommitReceiptV1:
+    payload = revision.to_public_payload()
+    payload_digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return CoreCommitReceiptV1(
+        commit_id=f"{CORE_COMMIT_ID_PREFIX}{payload_digest}",
+        idempotency_key=f"{revision.runtime_run_id}:finalization:{revision.revision}",
+    )
+
+
 def _public_artifact_ref_from_debug_result(debug_result) -> PublicArtifactRefV1:
     lifecycle_ref = getattr(debug_result, "artifact_lifecycle_ref", None)
     if lifecycle_ref is None:
@@ -294,3 +311,11 @@ def _public_artifact_ref_from_debug_result(debug_result) -> PublicArtifactRefV1:
             output_mode="prod",
         )
     return PublicArtifactRefV1.from_lifecycle_ref(lifecycle_ref)
+
+
+def _core_commit_from_debug_result(debug_result) -> CoreCommitReceiptV1 | None:
+    finalization_revision = getattr(debug_result, "finalization_revision", None)
+    if finalization_revision is None:
+        return None
+
+    return core_commit_receipt_from_finalization_revision(finalization_revision)
