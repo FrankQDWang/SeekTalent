@@ -1,0 +1,43 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Publish runtime constraints and safe constraint decision projection in the production contract.",
+  "rationale": "This slice adds an explicit runtime constraints contract, centralizes public stop-reason normalization in a shared runtime policy, and projects existing runtime-only constraints into candidate-level public decisions without changing orchestrator flow or provider behavior.",
+  "touched_layers": ["docs", "other", "runtime", "tests"],
+  "red_files": [
+    "src/seektalent/api.py",
+    "src/seektalent/runtime/constraints.py",
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent/runtime/production_contract.py",
+    "src/seektalent/runtime/stop_reasons.py",
+    "tests/test_api_production_contract.py",
+    "tests/test_runtime_constraints.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_constraints.py tests/test_api_production_contract.py -q",
+    "uv run pytest tests/test_runtime_constraints.py tests/test_runtime_production_contract.py tests/test_api_production_contract.py tests/test_runtime_source_degradation.py tests/test_runtime_core_commit.py -q",
+    "uv run ruff check src/seektalent/api.py src/seektalent/runtime/constraints.py src/seektalent/runtime/production_contract.py src/seektalent/runtime/stop_reasons.py src/seektalent/runtime/orchestrator.py tests/test_runtime_constraints.py tests/test_api_production_contract.py",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_pr_governance.py --base codex/runtime-prod-source-degradation-v1",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "production stop reasons that leak raw controller or provider text",
+    "runtime-only constraints that are invisible in the production candidate contract",
+    "hard runtime limits that are implicit in settings but absent from a public runtime constraints contract"
+  ],
+  "risks": [
+    "This slice intentionally projects only existing runtime-only constraints; provider verification behavior remains owned by later runtime/provider slices.",
+    "The stop reason allowlist is centralized in a shared runtime policy and consumed by both the orchestrator and production projection."
+  ]
+}
