@@ -6,8 +6,8 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field
 
-from seektalent.clients.cts_client import BaseCTSClient
 from seektalent.clients.cts_models import CandidateSearchResponse
+from seektalent.clients.cts_response import normalize_cts_response_candidates
 from seektalent.config import AppSettings
 from seektalent.evaluation import TOP_K
 from seektalent.models import ResumeCandidate
@@ -24,9 +24,9 @@ class JDTextSearchResult(BaseModel):
     response_message: str | None = None
 
 
-class JDTextCTSClient(BaseCTSClient):
+class JDTextCTSClient:
     def __init__(self, settings: AppSettings, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        super().__init__(settings)
+        self.settings = settings
         self.transport = transport
 
     async def search_by_jd(self, *, jd: str, trace_id: str) -> JDTextSearchResult:
@@ -50,7 +50,7 @@ class JDTextCTSClient(BaseCTSClient):
         parsed = CandidateSearchResponse.model_validate(body)
         if parsed.data is None:
             raise ValueError("CTS JD search returned data:null.")
-        candidates = [self._normalize_candidate(item, round_no=1) for item in parsed.data.candidates]
+        candidates = normalize_cts_response_candidates(parsed, round_no=1)
         return JDTextSearchResult(
             request_payload=payload,
             response_body=body,

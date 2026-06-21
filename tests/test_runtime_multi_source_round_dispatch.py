@@ -9,7 +9,7 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchResult
+from seektalent.core.retrieval.provider_contract import ProviderSearchError, ProviderSnapshot, SearchResult
 from seektalent.corpus.store import DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID, CorpusStore
 from seektalent.models import (
     CTSQuery,
@@ -1018,6 +1018,53 @@ def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> Non
     assert result.safe_reason_code == "source_provider_failed"
     assert result.candidates == ()
     assert result.raw_candidate_count == 0
+
+
+def test_cts_adapter_converts_business_error_to_failed_source_result(tmp_path) -> None:
+    class BusinessErrorRetrievalRuntime:
+        async def execute_logical_dispatch_search(self, **kwargs) -> object:
+            del kwargs
+            raise ProviderSearchError(
+                reason_code="cts_auth_failed",
+                message="CTS search returned business error code=10001 status='error'.",
+            )
+
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime.retrieval_runtime = BusinessErrorRetrievalRuntime()  # type: ignore[assignment]
+    tracer = RunTracer(tmp_path / "trace-cts-business-error")
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=(_dispatch("exploit", 7),),
+        selected_sources=("cts",),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+    )
+    source_plan = RuntimeSourceLanePlan(
+        source_plan_id="plan-cts",
+        runtime_run_id="run-1",
+        source="cts",
+        label="CTS",
+    )
+
+    try:
+        result = asyncio.run(
+            _run_cts_source_round(
+                runtime=runtime,
+                context=_source_round_context(source_plan=source_plan, tracer=tracer),
+                request=request,
+                source_id="cts",
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.source == "cts"
+    assert result.status == "failed"
+    assert result.safe_reason_code == "cts_auth_failed"
+    assert result.diagnostics == ("CTS search returned business error code=10001 status='error'.",)
+    assert result.candidates == ()
 
 
 def test_liepin_backend_blocked_stays_blocked_when_cts_is_also_selected(monkeypatch, tmp_path) -> None:

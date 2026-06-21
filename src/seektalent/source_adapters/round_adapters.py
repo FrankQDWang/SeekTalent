@@ -4,6 +4,7 @@ from collections.abc import Mapping
 
 import httpx
 
+from seektalent.core.retrieval.provider_contract import ProviderSearchError
 from seektalent.models import QueryOutcomeThresholds
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext, WorkflowRuntime
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
@@ -84,6 +85,15 @@ async def _run_cts_source_round(
                 tracer=context.tracer,
                 returned_candidates=batch,
             ),
+        )
+    except ProviderSearchError as exc:
+        return SourceRoundAdapterResult(
+            source=source_id,
+            status="failed",
+            candidates=(),
+            raw_candidate_count=0,
+            safe_reason_code=exc.reason_code,
+            diagnostics=(exc.safe_message,),
         )
     except (TimeoutError, httpx.HTTPError):
         return SourceRoundAdapterResult(
