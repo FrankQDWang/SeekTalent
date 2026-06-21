@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from seektalent.workbench_internal_secrets import INTERNAL_LIEPIN_ENV_VARS
 from seektalent_ui import server
 from seektalent_ui.resources import (
     frontend_available,
@@ -11,6 +12,7 @@ from seektalent_ui.resources import (
     package_frontend_fallback_file,
 )
 from seektalent_ui.server import create_app
+from seektalent_ui.workbench_paths import agent_workbench_stream_db_path, liepin_db_path, workbench_db_path
 from tests.settings_factory import make_settings
 
 
@@ -38,17 +40,22 @@ def test_create_app_serves_packaged_frontend_shell(tmp_path: Path, monkeypatch) 
     (frontend_root / "_app" / "immutable").mkdir(parents=True)
     (frontend_root / "_app" / "immutable" / "entry.js").write_text("console.log('ok')", encoding="utf-8")
     (frontend_root / "200.html").write_text("<html>SeekTalent Workbench</html>", encoding="utf-8")
-    monkeypatch.setattr("seektalent_ui.server.package_frontend_dir", lambda: frontend_root)
+    (frontend_root / "secret.txt").write_text("do not serve through catch-all", encoding="utf-8")
+    monkeypatch.setattr("seektalent_ui.static_frontend.package_frontend_dir", lambda: frontend_root)
 
     app = create_app(settings=make_settings(workspace_root=str(tmp_path), mock_cts=True), serve_frontend=True)
     client = TestClient(app)
 
     shell = client.get("/")
+    catch_all = client.get("/secret.txt")
     asset = client.get("/_app/immutable/entry.js")
     api_404 = client.get("/api/not-a-real-route")
 
     assert shell.status_code == 200
     assert "SeekTalent Workbench" in shell.text
+    assert catch_all.status_code == 200
+    assert "SeekTalent Workbench" in catch_all.text
+    assert "do not serve through catch-all" not in catch_all.text
     assert asset.status_code == 200
     assert "console.log" in asset.text
     assert api_404.status_code == 404
@@ -60,6 +67,7 @@ def test_packaged_workbench_startup_runs_prod_cleanup(tmp_path: Path, monkeypatc
     def fake_cleanup(settings):
         calls.append((settings.runtime_mode, settings.enable_flywheel))
 
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setattr("seektalent_ui.server.cleanup_runtime_artifacts", fake_cleanup)
     create_app(
         settings=make_settings(
@@ -85,8 +93,9 @@ def test_prod_workbench_databases_use_user_data_root(tmp_path: Path, monkeypatch
         liepin_connector_db_path=".seektalent/liepin_connector.sqlite3",
     )
 
-    assert server._workbench_db_path(settings) == home / ".seektalent" / "workbench.sqlite3"
-    assert server._liepin_db_path(settings) == home / ".seektalent" / "liepin_connector.sqlite3"
+    assert workbench_db_path(settings) == home / ".seektalent" / "workbench.sqlite3"
+    assert agent_workbench_stream_db_path(settings) == home / ".seektalent" / "agent_workbench_stream.sqlite3"
+    assert liepin_db_path(settings) == home / ".seektalent" / "liepin_connector.sqlite3"
 
 
 def test_dev_workbench_databases_use_workspace_root(tmp_path: Path, monkeypatch) -> None:
@@ -99,8 +108,9 @@ def test_dev_workbench_databases_use_workspace_root(tmp_path: Path, monkeypatch)
         liepin_connector_db_path=".seektalent/liepin_connector.sqlite3",
     )
 
-    assert server._workbench_db_path(settings) == workspace / ".seektalent" / "workbench.sqlite3"
-    assert server._liepin_db_path(settings) == workspace / ".seektalent" / "liepin_connector.sqlite3"
+    assert workbench_db_path(settings) == workspace / ".seektalent" / "workbench.sqlite3"
+    assert agent_workbench_stream_db_path(settings) == workspace / ".seektalent" / "agent_workbench_stream.sqlite3"
+    assert liepin_db_path(settings) == workspace / ".seektalent" / "liepin_connector.sqlite3"
 
 
 def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatch) -> None:
@@ -125,6 +135,8 @@ def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatc
         encoding="utf-8",
     )
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    for name in INTERNAL_LIEPIN_ENV_VARS:
+        monkeypatch.setenv(name, "local-development")
     monkeypatch.setattr(server, "create_app", fake_create_app)
     monkeypatch.setattr(server.uvicorn, "run", fake_run)
 

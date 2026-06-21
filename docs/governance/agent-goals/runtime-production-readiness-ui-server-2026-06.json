@@ -1,0 +1,51 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-production-readiness-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Split UI server responsibilities into explicit Liepin route, static frontend, and Workbench path modules.",
+  "rationale": "This slice keeps create_app as the BFF composition boundary while moving provider-specific Liepin API behavior, packaged frontend routing, and database path policy into focused modules. The public HTTP behavior, host/origin guard, SSE stream semantics, and prod/dev storage roots remain covered by focused tests.",
+  "touched_layers": ["bff", "docs", "governance", "tests"],
+  "red_files": [
+    "src/seektalent_ui/server.py",
+    "src/seektalent_ui/liepin_routes.py",
+    "src/seektalent_ui/static_frontend.py",
+    "src/seektalent_ui/workbench_paths.py",
+    "tests/test_ui_server_decomposition.py",
+    "tests/test_liepin_api_scope.py",
+    "tests/test_liepin_boundaries.py",
+    "tests/test_workbench_static_frontend.py",
+    "tests/test_workbench_network_guard.py",
+    "tools/check_workbench_schema_modes.py",
+    "docs/governance/agent-goals/runtime-production-readiness-ui-server-2026-06.json"
+  ],
+  "verification": [
+    "uv run pytest tests/test_ui_server_decomposition.py tests/test_liepin_api_scope.py tests/test_liepin_boundaries.py tests/test_workbench_static_frontend.py tests/test_workbench_network_guard.py -q",
+    "uv run ruff check src/seektalent_ui/server.py src/seektalent_ui/liepin_routes.py src/seektalent_ui/static_frontend.py src/seektalent_ui/workbench_paths.py tests/test_ui_server_decomposition.py tests/test_liepin_api_scope.py tests/test_liepin_boundaries.py tests/test_workbench_static_frontend.py tests/test_workbench_network_guard.py",
+    "uv run ty check src/seektalent_ui/server.py src/seektalent_ui/liepin_routes.py src/seektalent_ui/static_frontend.py src/seektalent_ui/workbench_paths.py tests/test_ui_server_decomposition.py tests/test_liepin_api_scope.py tests/test_liepin_boundaries.py tests/test_workbench_static_frontend.py tests/test_workbench_network_guard.py",
+    "uv run python tools/check_workbench_schema_modes.py",
+    "uv run pytest",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base codex/runtime-prod-cli-boundaries-v1",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_cli.py tests/test_liepin_boundaries.py -q"
+  ],
+  "deletion_targets": [
+    "provider-specific Liepin route handlers and SSE helpers embedded in server.py",
+    "packaged frontend StaticFiles routing embedded in server.py",
+    "Workbench and Liepin database path policy embedded in server.py",
+    "tooling imports of server.py private Workbench path helpers",
+    "tests depending on server.py private helpers for Liepin streaming or storage path behavior"
+  ],
+  "risks": [
+    "Liepin API routes must remain protected by the existing host/origin guard after moving to APIRouter.",
+    "Static frontend mounting must remain after API routers and continue returning 404 for api paths.",
+    "Prod packaged frontend startup intentionally mutates Liepin internal env secrets; tests must isolate that process-wide env behavior."
+  ]
+}
