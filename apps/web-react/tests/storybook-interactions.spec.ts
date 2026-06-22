@@ -36,9 +36,25 @@ test("transcript tool row exposes stable details", async ({ page }) => {
 test("candidate queue story renders populated candidates", async ({ page }) => {
   await openStory(page, "/iframe.html?id=workbench-candidatequeue--populated");
 
-  const queue = page.getByRole("region", { name: "候选人队列" });
+  let candidateScope = page.locator("body");
+  if ((page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 1080) {
+    const candidatesTab = page.locator("#conversation-candidates-tab");
+    await candidatesTab.click();
+    await expect(candidatesTab).toHaveAttribute("aria-selected", "true");
+    candidateScope = page.locator("#conversation-panel-candidates");
+    await expect(candidateScope).toBeVisible();
+  }
+  const innerCandidatesTab = candidateScope
+    .getByRole("tab", { name: "候选人" })
+    .first();
+  if ((await innerCandidatesTab.count()) > 0) {
+    await innerCandidatesTab.click();
+    await expect(innerCandidatesTab).toHaveAttribute("aria-selected", "true");
+  }
+
+  const queue = candidateScope.getByRole("region", { name: "候选人队列" });
   await expect(queue).toBeVisible();
-  await expect(queue.getByRole("article", { name: "候选人 A" })).toBeVisible();
+  await expect(queue.getByRole("article", { name: "吴所谓" })).toBeVisible();
   await expect(queue.getByRole("article", { name: "候选人 B" })).toBeVisible();
   await expect(
     queue.getByRole("button", { name: "查看详情" }).first(),

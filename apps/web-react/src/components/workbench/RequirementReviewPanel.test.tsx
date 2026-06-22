@@ -36,43 +36,49 @@ describe("RequirementReviewPanel", () => {
     );
   });
 
-  it("submits other requirement text only after the mutation succeeds", async () => {
+  it("submits other requirement text before confirming when the amendment succeeds", async () => {
     expect.hasAssertions();
     const user = userEvent.setup();
     const onAddOther = vi.fn(() => Promise.resolve());
+    const onConfirm = vi.fn();
 
     render(
       <RequirementReviewPanel
         onAddOther={onAddOther}
+        onConfirm={onConfirm}
         pendingActions={pendingActions}
         requirementDraft={draft}
       />,
     );
 
     await user.type(screen.getByLabelText("其他补充要求"), "补充评测平台经验");
-    await user.click(screen.getByRole("button", { name: "添加" }));
+    await user.click(screen.getByRole("button", { name: "确认需求" }));
 
     expect(onAddOther).toHaveBeenCalledWith("补充评测平台经验");
+    expect(onConfirm).toHaveBeenCalledOnce();
     expect(screen.getByLabelText("其他补充要求")).toHaveValue("");
   });
 
-  it("keeps other requirement text when mutation fails", async () => {
+  it("keeps other requirement text and does not confirm when amendment fails", async () => {
     expect.hasAssertions();
     const user = userEvent.setup();
     const onAddOther = vi.fn(() => Promise.reject(new Error("failed")));
+    const onConfirm = vi.fn();
 
     render(
       <RequirementReviewPanel
         onAddOther={onAddOther}
+        onConfirm={onConfirm}
         pendingActions={pendingActions}
         requirementDraft={draft}
       />,
     );
 
     await user.type(screen.getByLabelText("其他补充要求"), "补充评测平台经验");
-    await user.click(screen.getByRole("button", { name: "添加" }));
+    await user.click(screen.getByRole("button", { name: "确认需求" }));
 
     expect(onAddOther).toHaveBeenCalledWith("补充评测平台经验");
+    expect(onConfirm).not.toHaveBeenCalled();
     expect(screen.getByLabelText("其他补充要求")).toHaveValue(
       "补充评测平台经验",
     );

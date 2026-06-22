@@ -272,20 +272,6 @@ test("submits recruiter actions through the Workbench BFF routes", async ({
   ).toContain("workbench:requirement-update:");
 
   await page.getByLabel("其他").fill("补充评测平台经验");
-  await page.getByRole("button", { name: "添加" }).click();
-
-  await expect
-    .poll(() => latestAmendedRequirement())
-    .toMatchObject({
-      draftRevisionId: "draft_1",
-      expectedDraftRevisionId: "draft_1",
-      text: "补充评测平台经验",
-    });
-  const amendIdempotencyKey = latestAmendedRequirement()?.idempotencyKey;
-  expect(
-    typeof amendIdempotencyKey === "string" ? amendIdempotencyKey : "",
-  ).toContain("workbench:requirement-amend:");
-  await expect(page.getByLabel("其他")).toHaveValue("");
 
   await page.getByPlaceholder("输入下一步要求").fill("继续补充评测平台经验");
   await page.getByRole("button", { name: "发送" }).click();
@@ -303,6 +289,18 @@ test("submits recruiter actions through the Workbench BFF routes", async ({
   await expect(page.getByPlaceholder("输入下一步要求")).toHaveValue("");
 
   await page.getByRole("button", { name: "确认需求" }).click();
+
+  await expect
+    .poll(() => latestAmendedRequirement())
+    .toMatchObject({
+      draftRevisionId: "draft_1",
+      expectedDraftRevisionId: "draft_1",
+      text: "补充评测平台经验",
+    });
+  const amendIdempotencyKey = latestAmendedRequirement()?.idempotencyKey;
+  expect(
+    typeof amendIdempotencyKey === "string" ? amendIdempotencyKey : "",
+  ).toContain("workbench:requirement-amend:");
 
   await expect
     .poll(() => confirmedRequirements)
@@ -381,22 +379,20 @@ test("starts a new workbench conversation from the home JD entry", async ({
     },
   );
 
-  const jobTitle = "AI Agent 平台工程师";
   const jobDescription =
-    "寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。";
+    "AI Agent 平台工程师 寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。";
 
   await page.goto("/");
-  await page.getByLabel("职位名称").fill(jobTitle);
-  await page.getByLabel("职位描述").fill(jobDescription);
+  await page.getByLabel("岗位名称和岗位JD").fill(jobDescription);
   await page.getByRole("button", { name: "开始寻才" }).click();
 
   await expect
     .poll(() => latestCreatedConversationRequest())
-    .toMatchObject({ title: jobTitle });
+    .toMatchObject({ title: jobDescription });
   await expect
     .poll(() => latestSubmittedJdRequest())
     .toMatchObject({
-      jobTitle,
+      jobTitle: null,
       messageType: "submitJd",
       sourceKinds: ["liepin"],
       text: jobDescription,

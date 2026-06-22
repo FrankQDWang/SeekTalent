@@ -24,7 +24,7 @@ const candidateFixture = {
 describe("CandidateCard", () => {
   afterEach(() => cleanup());
 
-  it("renders the safe candidate summary and evidence", () => {
+  it("renders a compact safe candidate profile", () => {
     expect.hasAssertions();
 
     render(<CandidateCard candidate={candidateFixture} />);
@@ -35,14 +35,11 @@ describe("CandidateCard", () => {
     expect(
       screen.getByText("平台后端负责人 / 某 AI Infra 公司 / 上海"),
     ).toBeInTheDocument();
-    expect(
-      screen.getAllByText("有 Agent 工具调用平台和 RAG 检索链路经验。"),
-    ).toHaveLength(2);
     expect(screen.getByText("猎聘")).toBeInTheDocument();
-    expect(screen.getByText("#1")).toBeInTheDocument();
-    expect(screen.getByText("92%")).toBeInTheDocument();
-    expect(screen.getByText("需审批")).toBeInTheDocument();
-    expect(screen.getByText("10 年经验")).toBeInTheDocument();
+    expect(screen.getByText("工作10年")).toBeInTheDocument();
+    expect(
+      screen.queryByText("有 Agent 工具调用平台和 RAG 检索链路经验。"),
+    ).not.toBeInTheDocument();
   });
 
   it("ignores forbidden raw provider, auth, and resume fields when present", () => {

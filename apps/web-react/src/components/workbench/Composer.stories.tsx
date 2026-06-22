@@ -1,28 +1,30 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { MessageComposer } from "./MessageComposer";
+import { ConversationList } from "./ConversationList";
+import { ConversationShell } from "./ConversationShell";
+import { HomeStartPanel } from "./HomeStartPanel";
 
 function ComposerRequirementDraft() {
   return (
-    <section
-      aria-label="需求草稿"
-      style={{
-        background: "var(--st-panel)",
-        border: "1px solid var(--st-border)",
-        borderRadius: "var(--st-radius-md)",
-        maxWidth: 760,
-        padding: "20px",
-      }}
-    >
-      <h2>资深 Python Agent 平台后端</h2>
-      <p>硬性条件：Python、RAG、工具调用平台、上海。</p>
-      <MessageComposer placeholder="继续补充岗位要求" />
-    </section>
+    <ConversationShell
+      main={
+        <HomeStartPanel
+          initialJobDescription={
+            "1. 高级后端开发工程师\n2. 负责 AI Agent 平台后端服务和工具调用链路，要求熟悉 Python、RAG、工作流编排和工程化评测。\n3. 有搜索、推荐或候选人排序经验优先，上海团队协作。"
+          }
+          onSubmit={() => undefined}
+        />
+      }
+      rail={<ConversationList conversations={[]} />}
+    />
   );
 }
 
 const meta = {
   title: "Workbench/Composer",
   component: ComposerRequirementDraft,
+  parameters: {
+    layout: "fullscreen",
+  },
 } satisfies Meta<typeof ComposerRequirementDraft>;
 
 export default meta;
