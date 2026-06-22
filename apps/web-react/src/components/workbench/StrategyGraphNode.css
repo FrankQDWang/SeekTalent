@@ -1,66 +1,82 @@
 .strategy-graph-node {
-  --strategy-node-accent: var(--st-subtle);
-  --strategy-node-tint: var(--st-surface-raised);
-  background: var(--st-surface);
-  border: 1px solid
-    color-mix(in oklch, var(--strategy-node-accent) 48%, var(--st-border));
-  border-radius: var(--st-radius-md);
-  box-shadow: var(--st-shadow-tight);
+  --strategy-node-accent: #8a80ff;
+  --strategy-node-tint: #f1efff;
+  background: #fff;
+  border: 1px solid #d7d3ff;
+  border-radius: 12px;
+  box-shadow:
+    0 12px 24px rgb(59 72 112 / 0.08),
+    0 2px 5px rgb(59 72 112 / 0.05);
   color: var(--st-ink);
   display: grid;
-  gap: 7px;
-  min-height: 96px;
-  padding: 12px;
-  width: 232px;
+  gap: 8px;
+  overflow: hidden;
+  padding: 13px 14px;
+  position: absolute;
 }
 
-.strategy-graph-node[data-selected="true"],
-.react-flow__node:focus-visible .strategy-graph-node {
-  border-color: var(--st-action);
-  outline: 2px solid color-mix(in oklch, var(--st-action) 42%, transparent);
-  outline-offset: 2px;
-}
-
-.strategy-graph-node[data-status="completed"],
-.strategy-graph-node[data-status="succeeded"] {
-  --strategy-node-accent: var(--st-success);
-  --strategy-node-tint: oklch(0.94 0.035 152);
+.strategy-graph-node[data-status="completed"] {
+  --strategy-node-accent: #21b76f;
+  --strategy-node-tint: #e9f8ef;
+  border-color: #c7ebd5;
 }
 
 .strategy-graph-node[data-status="running"] {
-  --strategy-node-accent: var(--st-action);
-  --strategy-node-tint: oklch(0.94 0.04 268);
+  --strategy-node-accent: #3588ff;
+  --strategy-node-tint: #eaf3ff;
+  border-color: #bcd4ff;
+  box-shadow:
+    0 14px 28px rgb(53 136 255 / 0.12),
+    0 0 0 3px rgb(53 136 255 / 0.1);
 }
 
-.strategy-graph-node[data-status="waiting-for-user"],
-.strategy-graph-node[data-status="waiting_for_user"] {
-  --strategy-node-accent: var(--st-warning);
-  --strategy-node-tint: oklch(0.95 0.05 82);
+.strategy-graph-node[data-status="partial"] {
+  --strategy-node-accent: #ff9f1c;
+  --strategy-node-tint: #fff4df;
+  border-color: #f8d391;
 }
 
 .strategy-graph-node[data-status="blocked"],
-.strategy-graph-node[data-status="cancelled"],
-.strategy-graph-node[data-status="superseded"] {
-  --strategy-node-accent: var(--st-muted);
-  --strategy-node-tint: var(--st-surface-raised);
+.strategy-graph-node[data-status="cancelled"] {
+  --strategy-node-accent: #7c8497;
+  --strategy-node-tint: #f3f5f9;
+  border-color: #cfd5e2;
 }
 
 .strategy-graph-node[data-status="failed"] {
-  --strategy-node-accent: var(--st-danger);
-  --strategy-node-tint: oklch(0.95 0.04 28);
+  --strategy-node-accent: #e45757;
+  --strategy-node-tint: #fff0f0;
+  border-color: #f4b9b9;
+}
+
+.strategy-graph-node[data-status="pending"] {
+  --strategy-node-accent: #9ca5b8;
+  --strategy-node-tint: #f5f7fb;
+  color: #65718a;
+}
+
+.strategy-graph-node[data-source="liepin"] {
+  --strategy-node-accent: #8a80ff;
+  --strategy-node-tint: #f1efff;
+}
+
+.strategy-graph-node[data-stage="scoring"] {
+  --strategy-node-accent: #ff9f1c;
+  --strategy-node-tint: #fff4df;
 }
 
 .strategy-graph-node__heading {
   align-items: center;
   display: flex;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
 }
 
 .strategy-graph-node__heading strong {
-  font-size: 13px;
-  font-weight: 760;
-  line-height: 1.25;
+  color: #19233b;
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -68,23 +84,42 @@
 
 .strategy-graph-node__kind {
   align-items: center;
-  background: var(--strategy-node-tint);
-  border: 1px solid
-    color-mix(in oklch, var(--strategy-node-accent) 36%, transparent);
-  border-radius: var(--st-radius-sm);
-  color: var(--strategy-node-accent);
+  background: var(--strategy-node-accent);
+  border-radius: 7px;
+  color: #fff;
   display: inline-flex;
   flex: 0 0 auto;
-  height: 24px;
+  height: 25px;
   justify-content: center;
-  width: 24px;
+  width: 25px;
+}
+
+.strategy-graph-node[data-kind="requirements"] .strategy-graph-node__kind {
+  background: #22b8d7;
+}
+
+.strategy-graph-node[data-stage="round_query"] .strategy-graph-node__kind {
+  background: #3588ff;
+}
+
+.strategy-graph-node[data-stage="source_result"] .strategy-graph-node__kind {
+  background: #8a80ff;
+}
+
+.strategy-graph-node[data-stage="scoring"] .strategy-graph-node__kind {
+  background: #ff9f1c;
+}
+
+.strategy-graph-node[data-stage="feedback"] .strategy-graph-node__kind {
+  background: #27be6f;
 }
 
 .strategy-graph-node p {
-  color: var(--st-muted);
+  color: #5d687f;
   display: -webkit-box;
   font-size: 12px;
-  line-height: 1.45;
+  font-weight: 620;
+  line-height: 1.4;
   margin: 0;
   overflow: hidden;
   -webkit-box-orient: vertical;
@@ -93,41 +128,32 @@
 
 .strategy-graph-node__meta {
   align-items: center;
-  color: var(--st-muted);
+  color: #4f5d73;
   display: flex;
   flex-wrap: wrap;
-  font-size: 11px;
-  font-weight: 680;
-  gap: 6px;
+  font-size: 12px;
+  font-weight: 720;
+  gap: 7px;
 }
 
 .strategy-graph-node__meta span {
   align-items: center;
-  background: var(--st-surface-raised);
+  background: #f3f6fb;
   border-radius: 999px;
   display: inline-flex;
   gap: 4px;
-  min-height: 20px;
-  padding: 0 7px;
+  min-height: 21px;
+  padding: 0 8px;
 }
 
 .strategy-graph-node__status {
-  color: color-mix(in oklch, var(--strategy-node-accent) 72%, var(--st-ink));
+  background: var(--strategy-node-tint) !important;
+  color: #26334f;
 }
 
-.strategy-graph-node__handle {
-  opacity: 0;
-}
-
-@media (prefers-reduced-motion: no-preference) {
+@media (max-width: 760px) {
   .strategy-graph-node {
-    transition:
-      border-color 160ms ease-out,
-      outline-color 160ms ease-out,
-      transform 160ms ease-out;
-  }
-
-  .strategy-graph-node[data-selected="true"] {
-    transform: translateY(-1px);
+    border-radius: 14px;
+    padding: 13px 14px;
   }
 }

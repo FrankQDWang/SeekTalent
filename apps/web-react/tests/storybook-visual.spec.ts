@@ -1,4 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
+import { failOnPageProblems } from "./pageProblems";
+
+test.beforeEach(({ page }) => {
+  failOnPageProblems(page);
+});
 
 const visualStories = [
   {
@@ -30,6 +35,10 @@ const visualStories = [
     url: "/iframe.html?id=workbench-strategygraphcanvas--search-strategy",
   },
   {
+    name: "workbench-strategy-graph-canonical",
+    url: "/iframe.html?id=workbench-strategygraphcanvas--canonical-runtime-swimlanes",
+  },
+  {
     name: "workbench-strategy-graph-large",
     url: "/iframe.html?id=workbench-strategygraphcanvas--large-search-strategy",
   },
@@ -44,6 +53,14 @@ const visualStories = [
   {
     name: "workbench-candidates-list",
     url: "/iframe.html?id=workbench-candidatequeue--populated",
+  },
+  {
+    name: "workbench-candidates-loading",
+    url: "/iframe.html?id=workbench-candidatequeue--loading",
+  },
+  {
+    name: "workbench-candidates-error",
+    url: "/iframe.html?id=workbench-candidatequeue--error",
   },
   {
     name: "workbench-candidate-detail",
@@ -132,7 +149,7 @@ async function waitForStoryRendered(page: Page) {
         "svg",
         "textarea",
         "[role='dialog']",
-        ".react-flow",
+        ".strategy-graph",
       ].join(",");
       const hasStoryContent =
         root.textContent.trim().length > 0 ||
@@ -171,18 +188,12 @@ async function waitForStoryReady(page: Page) {
     return;
   }
 
-  await expect(firstGraph).toHaveAttribute("aria-busy", "false", {
-    timeout: 15_000,
-  });
-
   const graphHasTerminalState =
-    (await firstGraph
-      .locator(".strategy-graph__empty, .strategy-graph__error")
-      .count()) > 0;
+    (await firstGraph.locator(".strategy-graph__empty").count()) > 0;
 
   if (!graphHasTerminalState) {
-    await expect(page.locator(".react-flow__node").first()).toBeVisible({
-      timeout: 15_000,
-    });
+    await expect(
+      firstGraph.locator(".strategy-graph-node").first(),
+    ).toBeVisible({ timeout: 15_000 });
   }
 }

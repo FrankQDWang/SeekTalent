@@ -1,6 +1,6 @@
 .thinking-process-rail {
-  background: var(--st-bg);
-  border-left: 1px solid var(--st-border);
+  background: #fff;
+  border-left: 1px solid #dfe5f2;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -8,30 +8,36 @@
 }
 
 .thinking-process-rail__tabs {
+  background: #eef1f6;
+  border-radius: 12px;
   display: grid;
-  gap: 8px;
+  gap: 4px;
   grid-template-columns: 1fr 1fr;
-  padding: 18px 16px 12px;
+  margin: 18px 18px 14px;
+  padding: 5px;
 }
 
 .thinking-process-rail__tab {
   align-items: center;
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--st-radius-sm);
-  color: var(--st-muted);
+  border: 0;
+  border-radius: 9px;
+  color: #24314b;
   cursor: pointer;
   display: inline-flex;
-  font-weight: 720;
+  font-size: 15px;
+  font-weight: 760;
   gap: var(--st-space-2);
   justify-content: center;
-  min-height: 32px;
+  min-height: 36px;
 }
 
 .thinking-process-rail__tab[aria-selected="true"] {
-  background: oklch(0.97 0.018 262);
-  border-color: var(--st-border);
-  color: var(--st-ink);
+  background: #fff;
+  box-shadow:
+    0 1px 2px rgb(35 45 68 / 0.08),
+    inset 0 0 0 1px #d7dfed;
+  color: #172036;
 }
 
 .thinking-process-rail__tab svg {
@@ -41,7 +47,7 @@
 .thinking-process-rail__panel {
   min-height: 0;
   overflow: auto;
-  padding: 0 16px 20px;
+  padding: 0 18px 24px;
 }
 
 .thinking-process-rail__panel .candidate-queue {
@@ -55,61 +61,87 @@
 
 .thinking-timeline {
   display: grid;
-  gap: var(--st-space-3);
+  gap: 28px;
+  padding: 22px 0 0 30px;
+  position: relative;
+}
+
+.thinking-timeline::before {
+  border-left: 2px dashed #67b9ff;
+  bottom: 10px;
+  content: "";
+  left: 11px;
+  position: absolute;
+  top: 30px;
 }
 
 .thinking-timeline__empty {
   align-items: center;
-  background: var(--st-surface);
-  border: 1px dashed var(--st-border);
-  border-radius: var(--st-radius-md);
-  color: var(--st-muted);
+  background: #f5f7fb;
+  border: 1px dashed #d8dfed;
+  border-radius: 14px;
+  color: #77839a;
   display: flex;
+  font-weight: 700;
   justify-content: center;
   min-height: 180px;
 }
 
 .thinking-round {
-  background: var(--st-bg);
-  border: 0;
-  border-radius: 0;
   display: grid;
-  gap: var(--st-space-3);
-  padding: 0;
+  gap: 12px;
+  position: relative;
 }
 
-.thinking-round[data-active="true"] {
-  border-color: transparent;
+.thinking-round__dot {
+  background: #5ab8ff;
+  border-radius: 999px;
+  box-shadow: 0 0 0 5px rgb(90 184 255 / 0.18);
+  height: 14px;
+  left: -25px;
+  position: absolute;
+  top: 5px;
+  width: 14px;
+}
+
+.thinking-round[data-active="true"] .thinking-round__dot {
+  background: #348dff;
+  box-shadow: 0 0 0 6px rgb(52 141 255 / 0.2);
 }
 
 .thinking-round__header {
   align-items: center;
   display: flex;
+  gap: 12px;
   justify-content: space-between;
+  min-height: 28px;
 }
 
 .thinking-round__header span {
-  font-weight: 760;
+  color: #172036;
+  font-size: 18px;
+  font-weight: 800;
 }
 
 .thinking-round__header em {
-  color: var(--st-action);
+  color: #275dff;
+  font-size: 13px;
   font-style: normal;
-  font-weight: 720;
+  font-weight: 760;
 }
 
 .thinking-round__cards {
   display: grid;
-  gap: var(--st-space-3);
+  gap: 12px;
 }
 
 .thinking-card {
-  background: oklch(0.98 0.006 262);
-  border-top: 0;
-  border-radius: var(--st-radius-md);
+  background: #f5f5f7;
+  border: 0;
+  border-radius: 14px;
   display: grid;
-  gap: var(--st-space-2);
-  padding: 12px;
+  gap: 8px;
+  padding: 16px;
 }
 
 .thinking-card h3,
@@ -118,26 +150,45 @@
 }
 
 .thinking-card h3 {
+  color: #5d687f;
   font-size: 14px;
   font-weight: 760;
 }
 
 .thinking-card p {
-  color: var(--st-muted);
+  color: #2a3550;
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.5;
   text-wrap: pretty;
 }
 
 .thinking-card__terms {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--st-space-2);
+  gap: 8px;
 }
 
 .thinking-card__terms span {
-  background: var(--st-surface-raised);
-  border: 1px solid var(--st-border);
+  background: #eef3fb;
+  border: 1px solid #d9e2f0;
   border-radius: 999px;
+  color: #283650;
   font-size: 12px;
-  font-weight: 680;
-  padding: 3px 8px;
+  font-weight: 720;
+  padding: 4px 8px;
+}
+
+@media (max-width: 760px) {
+  .thinking-process-rail__tabs {
+    margin: 14px 14px 12px;
+  }
+
+  .thinking-process-rail__panel {
+    padding: 0 14px 18px;
+  }
+
+  .thinking-timeline {
+    padding-left: 26px;
+  }
 }

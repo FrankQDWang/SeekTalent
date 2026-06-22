@@ -121,6 +121,7 @@ function ThinkingRound({
 }) {
   return (
     <article className="thinking-round" data-active={active ? "true" : "false"}>
+      <span className="thinking-round__dot" aria-hidden="true" />
       <div className="thinking-round__header">
         <span>第 {round.roundNo} 轮</span>
         <em>
@@ -149,6 +150,12 @@ function ThinkingRound({
 function statusLabel(status: string): string {
   if (status === "completed") {
     return "已完成";
+  }
+  if (status === "blocked") {
+    return "已阻塞";
+  }
+  if (status === "partial") {
+    return "部分完成";
   }
   if (status === "failed") {
     return "失败";

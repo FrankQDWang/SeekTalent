@@ -19,6 +19,7 @@ vi.mock("./StrategyGraph", () => ({
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("ConversationScreen", () => {
@@ -97,6 +98,36 @@ describe("ConversationScreen", () => {
     expect(
       screen.getAllByText("第一轮推荐 2 位候选人，候选人 A 为强匹配。").length,
     ).toBeGreaterThan(0);
+  });
+
+  it("mounts the strategy graph only when the compact graph panel is active", async () => {
+    expect.hasAssertions();
+    const user = userEvent.setup();
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      addEventListener,
+      addListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      matches: true,
+      media: query,
+      onchange: null,
+      removeEventListener,
+      removeListener: vi.fn(),
+    }));
+
+    render(<ConversationScreen view={agentWorkbenchRunningViewFixture} />);
+
+    expect(screen.queryByLabelText("检索策略图")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Graph" }));
+
+    expect(screen.getByLabelText("检索策略图")).toBeVisible();
+    expect(addEventListener).toHaveBeenCalledWith(
+      "change",
+      expect.any(Function),
+    );
   });
 });
 

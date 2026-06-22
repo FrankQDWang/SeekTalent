@@ -50,7 +50,7 @@ Desktop shell:
 | Top bar: workspace, source status, run status, pending action, user controls      |
 +-------------+------------------------------+------------------+------------------+
 | Conversation| Transcript + composer         | Strategy graph   | Right rail       |
-| list        | Requirement confirmation      | React Flow       | 候选人 / 思考过程 |
+| list        | Requirement confirmation      | Strategy timeline| 候选人 / 思考过程 |
 | Runs        | Codex-style run groups        | Workflow stages  | Candidate/detail |
 | History     | Attachments and approvals     | Search strategy  | Timeline cards   |
 +-------------+------------------------------+------------------+------------------+
@@ -82,7 +82,7 @@ Mobile shell:
 +----------------------------------------+
 | Active panel                            |
 | - Chat: transcript + composer           |
-| - Graph: React Flow canvas + legend     |
+| - Graph: read-only strategy timeline    |
 | - Candidates: list, detail, approvals   |
 | - Final: shortlist and export           |
 +----------------------------------------+
@@ -123,7 +123,7 @@ Every manifest row must map to one owner above. Unowned design assets fail the d
 - `Composer`: user input, attachments, submit state, stop/regenerate controls when supported by BFF.
 - `RequirementReviewPanel`: requirement draft, confirmation, missing fields, approval controls.
 - `ActivityTimeline`: compact runtime progress outside the main transcript when needed.
-- `StrategyGraphCanvas`: React Flow strategy graph, workflow stages, source/search nodes, fit-to-screen controls.
+- `StrategyGraphCanvas`: read-only strategy timeline graph, workflow stages, source/search nodes, and backend progress state. Nodes are not selectable and the surface has no pan, zoom, drag, or detail-drawer interaction.
 - `ThinkingProcessRail`: round timeline cards for `关键词`, `observation`, and `反思和下一轮变更`.
 - `CandidateQueue`: candidate list, filters, score summaries, selection state.
 - `CandidateDetailDrawer`: candidate summary, evidence, approval actions, resume-safe refs.
@@ -144,7 +144,7 @@ Every manifest row must map to one owner above. Unowned design assets fail the d
 | transcript collapse/expand       | React local                     | store by stable `groupId` and `eventId`                     |
 | active stream cursor             | BFF stream ledger               | send Last-Event-ID, hold gap state without advancing cursor |
 | tool/source/command lifecycle    | BFF semantic events             | render status and details, no raw payload parsing           |
-| strategy graph nodes/edges       | BFF projection                  | layout and viewport controls only                           |
+| strategy graph nodes/edges       | BFF projection                  | render read-only timeline/swimlane structure only           |
 | thinking process                 | BFF `thinkingProcess` model     | render round cards, no runtime payload parsing              |
 | candidate queue                  | BFF                             | render, sort/filter locally only when BFF allows            |
 | detail approval                  | BFF                             | render pending/accepted/rejected/applied state              |
@@ -171,7 +171,7 @@ Every manifest row must map to one owner above. Unowned design assets fail the d
 
 ## Strategy Graph And Thinking Process
 
-`WTS/检索策略图.png` constrains the React Flow canvas. It is the search strategy and runtime stage surface. It is not a details drawer.
+`WTS/检索策略图.png` constrains the read-only strategy timeline surface. It is the search strategy and runtime stage surface. It is not a details drawer, selectable node graph, pan/zoom canvas, or debug topology explorer.
 
 `WTS/思考过程.png` constrains the right rail. The prior node-detail area becomes a `候选人 / 思考过程` segmented rail. The `思考过程` tab renders a round-based timeline from BFF `thinkingProcess`.
 
@@ -225,7 +225,7 @@ If transcript lifecycle, active-cell behavior, grouping, details, or stream repl
 | web search reference | `webSearch.started`, `webSearch.completed`                                      | web/source row                 | yes           |
 | command lifecycle    | `command.started`, `command.outputDelta`, `command.completed`, `command.failed` | command row and bounded output | yes           |
 | runtime stage        | `runtime.stageChanged`                                                          | graph and activity state       | yes           |
-| strategy graph       | `strategyGraph.changed`                                                         | React Flow canvas              | yes           |
+| strategy graph       | `strategyGraph.changed`                                                         | read-only strategy timeline    | yes           |
 | thinking process     | `thinkingProcess.changed`                                                       | right rail timeline            | yes           |
 | candidate            | `candidate.upserted`                                                            | candidate queue/detail         | yes           |
 | detail approval      | `detailApproval.changed`                                                        | approval panel                 | yes           |
@@ -240,9 +240,9 @@ If transcript lifecycle, active-cell behavior, grouping, details, or stream repl
 - Cards use 8px radius or less unless a component already has a tighter system token.
 - Use icons for tool buttons and status rows where a familiar icon exists.
 - Keep hero-scale typography out of tool panels, cards, sidebars, transcript rows, and graph labels.
-- Fixed-format controls such as graph controls, tabs, icon buttons, score chips, and candidate rows need stable dimensions.
+- Fixed-format controls such as tabs, icon buttons, score chips, and candidate rows need stable dimensions.
 - Text must not overflow buttons, pills, graph nodes, or status rows at 375px.
-- The graph canvas must have explicit fit, zoom, pan, reset, and keyboard focus behavior.
+- The graph canvas is read-only: it must fit the visible viewport without drag, pan, zoom, reset controls, selectable nodes, or clickable node details.
 - The right rail must preserve tab state while graph and transcript stream.
 - Candidate detail surfaces must keep source/evidence references separate from raw resume/provider payloads.
 
@@ -311,4 +311,4 @@ The build gate fails if a registered visual reference lacks a route, component, 
 
 Supplemental non-asset regression coverage:
 
-- `StrategyGraphCanvas/LargeSearchStrategy` exercises a dense React Flow graph with requirement, source search, source_result, scoring, reflection, detail_approval, and final_summary coverage. Playwright owner: `workbench-strategy-graph-large`.
+- `StrategyGraphCanvas/LargeSearchStrategy` exercises the dense read-only strategy timeline with requirements, round query, Liepin source_result, Top Pool, feedback, and final_summary coverage. Playwright owner: `workbench-strategy-graph-large`.

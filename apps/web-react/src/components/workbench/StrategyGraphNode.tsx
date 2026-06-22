@@ -1,38 +1,41 @@
-import { Handle, Position, type NodeProps } from "@xyflow/react";
 import {
+  BriefcaseBusiness,
   CheckCircle2,
   CircleDashed,
   ClipboardCheck,
   Clock3,
   FileCheck2,
+  Globe2,
   ListChecks,
-  MessageSquareText,
   PauseCircle,
   Search,
-  ShieldCheck,
-  Sparkles,
   Star,
-  UsersRound,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import type { StrategyFlowNode } from "../../lib/strategy-graph/graphProjection";
+import type { StrategyTimelineNode } from "../../lib/strategy-graph/graphProjection";
 import "./StrategyGraphNode.css";
-
-const sourceLabels = {
-  all: "全来源",
-  cts: "CTS",
-  liepin: "猎聘",
-} as const;
 
 const kindIcons: Record<string, LucideIcon> = {
   activity: Search,
-  approval: ShieldCheck,
-  candidate: UsersRound,
+  approval: FileCheck2,
+  candidate: Star,
   final: FileCheck2,
-  final_summary: ListChecks,
-  message: MessageSquareText,
+  lane: ListChecks,
+  message: BriefcaseBusiness,
+  phase: Search,
   requirements: ClipboardCheck,
+  round: CircleDashed,
+};
+
+const stageIcons: Record<string, LucideIcon> = {
+  feedback: ListChecks,
+  final: FileCheck2,
+  final_summary: FileCheck2,
+  merge: ListChecks,
+  round_query: Search,
+  scoring: Star,
+  source_result: Globe2,
 };
 
 const statusIcons: Record<string, LucideIcon> = {
@@ -40,72 +43,48 @@ const statusIcons: Record<string, LucideIcon> = {
   cancelled: PauseCircle,
   completed: CheckCircle2,
   failed: XCircle,
-  "not-started": CircleDashed,
+  partial: PauseCircle,
   pending: CircleDashed,
   running: Clock3,
-  succeeded: CheckCircle2,
-  superseded: PauseCircle,
-  "waiting-for-user": Star,
-  waiting_for_user: Star,
 };
 
-const statusLabels: Record<string, string> = {
-  blocked: "已阻塞",
-  cancelled: "已取消",
-  completed: "已完成",
-  failed: "失败",
-  "not-started": "未开始",
-  pending: "未开始",
-  running: "运行中",
-  succeeded: "已完成",
-  superseded: "已替换",
-  "waiting-for-user": "等待确认",
-  waiting_for_user: "等待确认",
-};
-
-function normalizedStatus(status: string): string {
-  return status in statusLabels ? status : "pending";
-}
-
-export function StrategyGraphNode({
-  data,
-  selected,
-}: NodeProps<StrategyFlowNode>) {
-  const status = normalizedStatus(data.status);
-  const StatusIcon = statusIcons[status] ?? Sparkles;
-  const KindIcon = kindIcons[data.kind] ?? Sparkles;
+export function StrategyGraphNode({ item }: { item: StrategyTimelineNode }) {
+  const node = item.node;
+  const Icon = stageIcons[node.stage ?? ""] ?? kindIcons[node.kind] ?? Search;
+  const StatusIcon = statusIcons[node.status] ?? CircleDashed;
 
   return (
     <article
+      aria-label={`${item.displayTitle}: ${node.summary}`}
       className="strategy-graph-node"
-      data-selected={selected ? "true" : "false"}
-      data-status={status}
-      data-testid={`strategy-node-${data.nodeId}`}
+      data-kind={node.kind}
+      data-source={node.sourceKind}
+      data-stage={node.stage ?? node.phase ?? ""}
+      data-status={node.status}
+      data-testid={`strategy-node-${node.nodeId}`}
+      style={{
+        height: item.height,
+        left: item.x,
+        top: item.y,
+        width: item.width,
+      }}
     >
-      <Handle
-        className="strategy-graph-node__handle"
-        type="target"
-        position={Position.Left}
-      />
       <div className="strategy-graph-node__heading">
         <span className="strategy-graph-node__kind" aria-hidden="true">
-          <KindIcon size={15} strokeWidth={2.3} />
+          <Icon size={16} strokeWidth={2.3} />
         </span>
-        <strong>{data.label}</strong>
+        <strong>{item.displayTitle}</strong>
       </div>
-      <p>{data.summary}</p>
+      <p>{node.summary}</p>
       <div className="strategy-graph-node__meta">
         <span className="strategy-graph-node__status">
           <StatusIcon size={13} strokeWidth={2.4} aria-hidden="true" />
-          {statusLabels[status]}
+          {item.metadata[0]}
         </span>
-        <span>{sourceLabels[data.sourceKind]}</span>
+        {item.metadata.slice(1).map((item) => (
+          <span key={item}>{item}</span>
+        ))}
       </div>
-      <Handle
-        className="strategy-graph-node__handle"
-        type="source"
-        position={Position.Right}
-      />
     </article>
   );
 }

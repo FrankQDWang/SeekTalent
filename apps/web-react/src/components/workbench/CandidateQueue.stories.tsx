@@ -3,6 +3,7 @@ import {
   agentWorkbenchRunningViewFixture,
   wtsStoryConversationSummariesFixture,
 } from "../../test/fixtures/agentWorkbenchBff";
+import { CandidateQueue } from "./CandidateQueue";
 import { ConversationList } from "./ConversationList";
 import {
   ConversationScreen,
@@ -10,13 +11,28 @@ import {
 } from "./ConversationScreen";
 import { ConversationShell } from "./ConversationShell";
 
-function CandidateQueueStory({ empty = false }: { empty?: boolean }) {
-  const view = empty
-    ? {
-        ...agentWorkbenchRunningViewFixture,
-        candidates: [],
-      }
-    : agentWorkbenchRunningViewFixture;
+type CandidateQueueStoryMode = "empty" | "error" | "loading" | "populated";
+
+function CandidateQueueStory({
+  mode = "populated",
+}: {
+  mode?: CandidateQueueStoryMode;
+}) {
+  if (mode === "loading" || mode === "error") {
+    return (
+      <div style={{ maxWidth: "420px", padding: "24px" }}>
+        <CandidateQueue candidates={[]} status={mode} />
+      </div>
+    );
+  }
+
+  const view =
+    mode === "empty"
+      ? {
+          ...agentWorkbenchRunningViewFixture,
+          candidates: [],
+        }
+      : agentWorkbenchRunningViewFixture;
 
   return (
     <ConversationShell
@@ -48,18 +64,18 @@ export const Populated: Story = {};
 
 export const Empty: Story = {
   args: {
-    empty: true,
+    mode: "empty",
   },
 };
 
 export const Loading: Story = {
   args: {
-    empty: true,
+    mode: "loading",
   },
 };
 
 export const Error: Story = {
   args: {
-    empty: true,
+    mode: "error",
   },
 };

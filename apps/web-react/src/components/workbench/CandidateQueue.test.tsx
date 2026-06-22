@@ -30,7 +30,7 @@ const candidates = [
     location: "上海",
     education: "硕士",
     experienceYears: 8,
-    sourceKinds: ["cts"],
+    sourceKinds: ["liepin"],
     matchScore: 84,
     matchSummary: "RAG 和搜索经验强，Agent 平台经验较少。",
     status: "new",

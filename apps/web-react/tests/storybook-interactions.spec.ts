@@ -1,4 +1,77 @@
 import { expect, type Page, test } from "@playwright/test";
+import { failOnPageProblems } from "./pageProblems";
+
+test.beforeEach(({ page }) => {
+  failOnPageProblems(page);
+});
+
+test("strategy graph story covers canonical runtime swimlanes", async ({
+  page,
+}) => {
+  await openStory(
+    page,
+    "/iframe.html?id=workbench-strategygraphcanvas--canonical-runtime-swimlanes",
+  );
+
+  const graph = page.getByRole("region", { name: "检索策略图" });
+  await expect(graph).toBeVisible();
+  await expect(graph.getByText("AI Agent 平台工程师")).toBeVisible();
+  await expect(graph.getByText("第 1 轮 · 查询包")).toBeVisible();
+  await expect(graph.getByText("第 3 轮 · 猎聘检索")).toBeVisible();
+  await expect(graph.getByText("第 4 轮 · Top Pool")).toBeVisible();
+  await expect(graph.getByText("第 4 轮 · 下一轮策略")).toBeVisible();
+  await expect(
+    graph.locator('.strategy-graph-node[data-source="liepin"]'),
+  ).toHaveCount(4);
+  await expect
+    .poll(async () =>
+      graph
+        .getByLabel("检索策略图画布")
+        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+    )
+    .toBe(true);
+  await expect(graph.getByText(/CTS/i)).toHaveCount(0);
+  await expect(page.getByLabel("检索策略图控制")).toHaveCount(0);
+});
+
+test("thinking process rail story switches between candidate and thinking tabs", async ({
+  page,
+}) => {
+  await openStory(
+    page,
+    "/iframe.html?id=workbench-thinkingprocessrail--round-timeline",
+  );
+
+  const rail = page.getByRole("complementary", { name: "运行右栏" });
+  await expect(rail).toBeVisible();
+  await expect(rail.getByText("第 1 轮")).toBeVisible();
+  await expect(rail.getByText("第 3 轮")).toBeVisible();
+  await expect(rail.getByText("第 4 轮")).toBeVisible();
+
+  await rail.getByRole("tab", { name: "候选人" }).click();
+  await expect(rail.getByRole("region", { name: "候选人队列" })).toBeVisible();
+  await expect(rail.getByRole("article", { name: "吴所谓" })).toBeVisible();
+
+  await rail.getByRole("tab", { name: "思考过程" }).click();
+  await expect(rail.getByRole("tabpanel", { name: "思考过程" })).toBeVisible();
+  await expect(rail.getByText("反思和下一轮变更").first()).toBeVisible();
+});
+
+test("candidate queue loading and error stories render real states", async ({
+  page,
+}) => {
+  await openStory(page, "/iframe.html?id=workbench-candidatequeue--loading");
+  const loadingQueue = page.getByRole("region", { name: "候选人队列" });
+  await expect(loadingQueue).toHaveAttribute("data-state", "loading");
+  await expect(loadingQueue.getByText("读取中")).toBeVisible();
+
+  await openStory(page, "/iframe.html?id=workbench-candidatequeue--error");
+  const errorQueue = page.getByRole("region", { name: "候选人队列" });
+  await expect(errorQueue).toHaveAttribute("data-state", "error");
+  await expect(errorQueue.getByRole("alert")).toContainText(
+    "候选人列表暂时不可用",
+  );
+});
 
 test("transcript collapsed run group expands and collapses", async ({
   page,
