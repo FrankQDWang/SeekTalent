@@ -1,0 +1,36 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Make Conversation Agent model input cache-ready while preserving append-only transcript audit state.",
+  "rationale": "The Conversation Agent now sends the model a stable registered prompt, latest summary, included recent transcript, advisory memory, runtime facts, and the current user message. The full transcript remains append-only for UI and audit, and compaction marks summarized messages as excluded from future model input in the same store transaction.",
+  "touched_layers": [
+    "docs",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/runtime.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/store.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "deletion_targets": [
+    "raw user text used as the whole model prompt",
+    "conversation compaction split across summary and message-inclusion writes",
+    "advisory memory text interpolated without data-only JSON escaping"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_conversation_agent/service.py"
+  ],
+  "line_count_rationale": "service.py is already a pre-existing oversized Conversation Agent orchestration module. This PR keeps the model input builder call, token accounting, runtime-facts path, and compaction transaction at the existing orchestration boundary so the cache-ready input contract is tested without introducing a speculative service split.",
+  "risks": [
+    "Prompt-marker text inside user messages or memory must remain JSON data, not executable prompt structure.",
+    "Compaction must update summary, compaction row, and model_input_included flags atomically.",
+    "Runtime fact answers must use the same registered instructions as normal Conversation Agent turns."
+  ]
+}

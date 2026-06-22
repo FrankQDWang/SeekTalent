@@ -28,7 +28,13 @@ from seektalent_conversation_agent.models import (
     TranscriptMessage,
 )
 from seektalent_conversation_agent.projection import project_runtime_event
-from seektalent_conversation_agent.runtime import AgentRunner, AgentRuntime
+from seektalent_conversation_agent.runtime import (
+    AgentRunner,
+    AgentRuntime,
+    ModelInputTranscriptMessage,
+    _model_input_json,
+    build_cache_ready_model_input,
+)
 from seektalent_conversation_agent.safety import sanitize_summary_text, screen_requirement_text
 from seektalent_conversation_agent.source_selection import (
     RuntimeSourceSelectionResolver,
@@ -258,17 +264,16 @@ class ConversationAgentService:
         message: TranscriptMessage,
         user_message: str,
         idempotency_key: str | None,
-        model_prompt: str | None = None,
         source_runtime_run_id: str | None = None,
+        runtime_task: str | None = None,
+        runtime_facts: dict[str, object] | None = None,
     ) -> ConversationAgentResponse:
-        prompt_text = model_prompt or user_message
         prior_messages = [
             item
             for item in self.store.get_messages(conversation_id=conversation_id)
             if item.message_seq < message.message_seq
         ]
         conversation_tokens_before_turn = _conversation_token_count(prior_messages)
-        user_token_estimate = _rough_token_estimate(prompt_text)
         advisory_context = ""
         if self.memory_service is not None:
             memory_context = self.memory_service.recall_for_conversation(
@@ -278,7 +283,34 @@ class ConversationAgentService:
                 turn_id=message.message_id,
             )
             advisory_context = memory_context.context_text
-        estimated_input_tokens = user_token_estimate + _rough_token_estimate(advisory_context)
+        latest_summary = self.store.get_latest_context_summary(conversation_id=conversation_id)
+        included_recent_messages = [item for item in prior_messages if item.model_input_included]
+        model_input = build_cache_ready_model_input(
+            registered_prompt=self.agent_instructions,
+            latest_context_summary=latest_summary.summary_text if latest_summary is not None else None,
+            recent_transcript=[
+                ModelInputTranscriptMessage(
+                    message_seq=item.message_seq,
+                    role=item.role,
+                    message_type=item.message_type,
+                    text=item.text,
+                )
+                for item in included_recent_messages
+            ],
+            advisory_memory_context=advisory_context,
+            current_user_message=user_message,
+            runtime_task=runtime_task,
+            runtime_facts=runtime_facts,
+        )
+        estimated_input_tokens = _model_input_content_token_estimate(
+            registered_prompt=self.agent_instructions,
+            latest_context_summary=latest_summary.summary_text if latest_summary is not None else None,
+            recent_messages=included_recent_messages,
+            advisory_context=advisory_context,
+            current_user_message=user_message,
+            runtime_task=runtime_task,
+            runtime_facts=runtime_facts,
+        )
         tool_call_id = self.tool_call_id_factory()
         started_at = self.now()
         self.store.save_tool_call(
@@ -323,7 +355,7 @@ class ConversationAgentService:
             runner=self.agent_runner,
         )
         try:
-            result = await runtime.run(prompt_text, advisory_memory_context=advisory_context)
+            result = await runtime.run(model_input)
             result_text = _agent_result_text(result)
             usage = _extract_provider_usage(result)
             estimated_output_tokens = _rough_token_estimate(result_text)
@@ -1995,8 +2027,12 @@ class ConversationAgentService:
                 message=message,
                 user_message=user_message,
                 idempotency_key=idempotency_key,
-                model_prompt=_read_only_runtime_prompt(user_message=user_message, runtime_facts=runtime_facts),
                 source_runtime_run_id=target.runtime_run_id,
+                runtime_task=(
+                    "Use the registered Conversation Agent instructions to answer this read-only runtime question. "
+                    "Use only the active runtime facts below. If the facts are insufficient, say what is not available."
+                ),
+                runtime_facts=runtime_facts,
             )
         if decision.intent == "next_round_requirement":
             requirement_text = (decision.requirement_text or user_message).strip()
@@ -2305,9 +2341,11 @@ class ConversationAgentService:
                 if item.status not in {"completed", "failed", "cancelled", "superseded"}
             ],
         }
-        self.store.create_context_summary(
+        compaction = self.store.complete_context_compaction(
             summary_id=summary_id,
+            compaction_id=compaction_id,
             conversation_id=conversation_id,
+            trigger_reason_code=trigger_reason_code,
             source_message_seq_start=first_seq,
             source_message_seq_end=last_seq,
             source_activity_seq_start=activity_items[0].activity_seq if activity_items else None,
@@ -2317,20 +2355,9 @@ class ConversationAgentService:
             quality_status="passed",
             quality_evidence=evidence,
             token_count=sum(len(message.text) for message in messages),
-            created_at=self.now(),
-        )
-        compaction = self.store.save_context_compaction(
-            compaction_id=compaction_id,
-            conversation_id=conversation_id,
-            status="completed",
-            trigger_reason_code=trigger_reason_code,
-            summary_id=summary_id,
-            source_message_seq_start=first_seq,
-            source_message_seq_end=last_seq,
-            source_activity_seq_start=activity_items[0].activity_seq if activity_items else None,
-            source_activity_seq_end=activity_items[-1].activity_seq if activity_items else None,
             quality_reason_code="agent_compaction_quality_passed",
-            created_at=created_at,
+            compaction_created_at=created_at,
+            summary_created_at=self.now(),
             completed_at=self.now(),
         )
         self.store.upsert_activity_item(
@@ -2698,22 +2725,7 @@ def _intent_routing_prompt(*, user_message: str, runtime_facts: dict[str, object
             json.dumps(_json_safe_value(runtime_facts), ensure_ascii=False, sort_keys=True),
             "[RUNTIME_FACTS_END]",
             "[USER_MESSAGE_START]",
-            user_message,
-            "[USER_MESSAGE_END]",
-        ]
-    )
-
-
-def _read_only_runtime_prompt(*, user_message: str, runtime_facts: dict[str, object]) -> str:
-    return "\n".join(
-        [
-            "Use the registered Conversation Agent instructions to answer this read-only runtime question.",
-            "Use only the active runtime facts below. If the facts are insufficient, say what is not available.",
-            "[RUNTIME_FACTS_START]",
-            json.dumps(_json_safe_value(runtime_facts), ensure_ascii=False, sort_keys=True),
-            "[RUNTIME_FACTS_END]",
-            "[USER_MESSAGE_START]",
-            user_message,
+            _model_input_json(user_message),
             "[USER_MESSAGE_END]",
         ]
     )
@@ -2764,6 +2776,27 @@ def _agent_result_text(value: object) -> str:
 
 def _conversation_token_count(messages: list[TranscriptMessage]) -> int:
     return sum(message.token_count or _rough_token_estimate(message.text) for message in messages)
+
+
+def _model_input_content_token_estimate(
+    *,
+    registered_prompt: str,
+    latest_context_summary: str | None,
+    recent_messages: list[TranscriptMessage],
+    advisory_context: str,
+    current_user_message: str,
+    runtime_task: str | None = None,
+    runtime_facts: dict[str, object] | None = None,
+) -> int:
+    return (
+        _rough_token_estimate(registered_prompt)
+        + _rough_token_estimate(latest_context_summary or "")
+        + sum(message.token_count or _rough_token_estimate(message.text) for message in recent_messages)
+        + _rough_token_estimate(advisory_context)
+        + _rough_token_estimate(runtime_task or "")
+        + _rough_token_estimate(json.dumps(_json_safe_value(runtime_facts), ensure_ascii=False) if runtime_facts else "")
+        + _rough_token_estimate(current_user_message)
+    )
 
 
 def _rough_token_estimate(text: str) -> int:

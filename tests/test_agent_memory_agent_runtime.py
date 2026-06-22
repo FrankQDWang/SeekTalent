@@ -20,9 +20,11 @@ def test_advisory_memory_context_is_wrapped_for_agent_runtime() -> None:
 class CapturingAgentRunner:
     def __init__(self) -> None:
         self.last_agent = None
+        self.last_prompt: str | None = None
 
     async def run(self, agent, prompt: str) -> object:
         self.last_agent = agent
+        self.last_prompt = prompt
         return {"status": "ok"}
 
 
@@ -58,8 +60,10 @@ def test_conversation_agent_recall_injects_memory_before_agent_run(tmp_path) -> 
     )
 
     assert runner.last_agent is not None
-    assert "[ADVISORY_MEMORY_CONTEXT_START]" in runner.last_agent.instructions
-    assert "先讲业务匹配" in runner.last_agent.instructions
+    assert runner.last_prompt is not None
+    assert "[ADVISORY_MEMORY_CONTEXT_START]" in runner.last_prompt
+    assert "先讲业务匹配" in runner.last_prompt
+    assert "先讲业务匹配" not in runner.last_agent.instructions
 
 
 def test_agent_memory_package_does_not_construct_agents_sdk_directly() -> None:
