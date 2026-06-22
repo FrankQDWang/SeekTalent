@@ -14,7 +14,14 @@ from seektalent_conversation_agent.models import (
 )
 from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_conversation_agent.store import ConversationStore
+from seektalent_runtime_control.models import RuntimeStageOutput
 from seektalent_runtime_control.requirements import RequirementDraft
+from seektalent_ui.agent_workbench_rounds import (
+    AgentWorkbenchRoundSummaryProjection,
+    AgentWorkbenchRunFinalizationProjection,
+    deterministic_finalization_from_stage_outputs,
+    round_summaries_from_stage_outputs,
+)
 from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchCandidateDetailResponse,
     AgentWorkbenchCandidateDetailSectionResponse,
@@ -44,6 +51,15 @@ class RuntimeProjectionStore(Protocol):
 
     def list_events(self, *, runtime_run_id: str, after_seq: int, limit: int) -> RuntimeEventPageLike: ...
 
+    def list_stage_outputs(
+        self,
+        *,
+        runtime_run_id: str,
+        stage: str | None = None,
+        round_no: int | None = None,
+        output_kind: str | None = None,
+    ) -> Sequence[RuntimeStageOutput]: ...
+
     def get_requirement_draft(self, draft_revision_id: str) -> RequirementDraft | None: ...
 
 
@@ -63,6 +79,8 @@ class AgentWorkbenchProjectionInput:
     tool_call_records: Sequence[AgentToolCallRecord] = field(default_factory=tuple)
     context_compactions: Sequence[ContextCompactionRecord] = field(default_factory=tuple)
     runtime_events: Sequence[object] = field(default_factory=tuple)
+    round_summaries: Sequence[AgentWorkbenchRoundSummaryProjection] = field(default_factory=tuple)
+    deterministic_finalization: AgentWorkbenchRunFinalizationProjection | None = None
     requirement_draft: RequirementDraft | None = None
     requirement_draft_missing: bool = False
     source_connections: Sequence[AgentWorkbenchSourceConnectionResponse] = field(default_factory=tuple)
@@ -116,9 +134,11 @@ def build_agent_workbench_projection_input(
     state = thread.conversation_reopen_state
     runtime = None
     runtime_events: tuple[object, ...] = ()
+    round_summaries: tuple[AgentWorkbenchRoundSummaryProjection, ...] = ()
+    deterministic_finalization: AgentWorkbenchRunFinalizationProjection | None = None
     review_artifacts: tuple[AgentWorkbenchReviewArtifactResponse, ...] = ()
     if state.runtime_run_id is not None:
-        runtime, runtime_events, review_artifacts = _runtime_inputs(
+        runtime, runtime_events, round_summaries, deterministic_finalization, review_artifacts = _runtime_inputs(
             runtime_store=runtime_store,
             runtime_run_id=state.runtime_run_id,
         )
@@ -158,6 +178,8 @@ def build_agent_workbench_projection_input(
         tool_call_records=tuple(conversation_store.list_tool_calls(conversation_id=conversation_id)),
         context_compactions=tuple(conversation_store.list_context_compactions(conversation_id=conversation_id)),
         runtime_events=runtime_events,
+        round_summaries=round_summaries,
+        deterministic_finalization=deterministic_finalization,
         requirement_draft=requirement_draft,
         requirement_draft_missing=requirement_draft_missing,
         source_connections=_source_connections(workbench_store.list_source_connections(user=user)),
@@ -197,6 +219,8 @@ def _runtime_inputs(
 ) -> tuple[
     AgentWorkbenchRuntimeResponse | None,
     tuple[object, ...],
+    tuple[AgentWorkbenchRoundSummaryProjection, ...],
+    AgentWorkbenchRunFinalizationProjection | None,
     tuple[AgentWorkbenchReviewArtifactResponse, ...],
 ]:
     try:
@@ -205,9 +229,42 @@ def _runtime_inputs(
         runtime_events = tuple(
             _list_recent_runtime_events(runtime_store=runtime_store, runtime_run_id=runtime_run_id, run=run)
         )
+        stage_outputs = _public_product_stage_outputs(runtime_store=runtime_store, runtime_run_id=runtime_run_id)
+        round_summaries = round_summaries_from_stage_outputs(stage_outputs, expected_runtime_run_id=runtime_run_id)
+        deterministic_finalization = deterministic_finalization_from_stage_outputs(
+            stage_outputs,
+            expected_runtime_run_id=runtime_run_id,
+        )
     except LookupError:
-        return None, (), ()
-    return runtime, runtime_events, tuple(_review_artifacts(runtime_store=runtime_store, runtime_run_id=runtime_run_id))
+        return None, (), (), None, ()
+    return (
+        runtime,
+        runtime_events,
+        round_summaries,
+        deterministic_finalization,
+        tuple(_review_artifacts(runtime_store=runtime_store, runtime_run_id=runtime_run_id)),
+    )
+
+
+_PUBLIC_PRODUCT_OUTPUT_KINDS = (
+    "runtime_public_round_query",
+    "runtime_public_source_result",
+    "runtime_public_merge",
+    "runtime_public_scoring",
+    "runtime_public_feedback",
+    "runtime_public_finalization",
+)
+
+
+def _public_product_stage_outputs(
+    *,
+    runtime_store: RuntimeProjectionStore,
+    runtime_run_id: str,
+) -> tuple[RuntimeStageOutput, ...]:
+    outputs: list[RuntimeStageOutput] = []
+    for output_kind in _PUBLIC_PRODUCT_OUTPUT_KINDS:
+        outputs.extend(runtime_store.list_stage_outputs(runtime_run_id=runtime_run_id, output_kind=output_kind))
+    return tuple(outputs)
 
 
 def _list_recent_runtime_events(

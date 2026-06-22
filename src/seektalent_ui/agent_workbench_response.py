@@ -18,12 +18,14 @@ from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchMessagePayloadResponse,
     AgentWorkbenchMessageResponse,
     AgentWorkbenchPendingActionsResponse,
+    AgentWorkbenchQueryPackageResponse,
     AgentWorkbenchRequirementDraftItemResponse,
     AgentWorkbenchRequirementDraftResponse,
     AgentWorkbenchRequirementDraftSectionResponse,
     AgentWorkbenchRequirementDraftStatus,
     AgentWorkbenchRequirementItemStatus,
     AgentWorkbenchRuntimeResponse,
+    AgentWorkbenchRunFinalizationResponse,
     AgentWorkbenchStatus,
     AgentWorkbenchStrategyGraphResponse,
     AgentWorkbenchStreamCursorResponse,
@@ -113,6 +115,7 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
         candidates=list(input.candidates[:MAX_WORKBENCH_CANDIDATES]),
         detailApprovals=list(_latest(input.detail_approvals, MAX_WORKBENCH_DETAIL_APPROVALS)),
         reviewArtifacts=list(_latest(input.review_artifacts, MAX_WORKBENCH_REVIEW_ARTIFACTS)),
+        runtimeFinalization=_runtime_finalization_response(input.deterministic_finalization),
         finalSummary=input.final_summary,
         pendingActions=AgentWorkbenchPendingActionsResponse(
             primary=state.pending_user_action,
@@ -172,6 +175,17 @@ def _workflow_start_intent_id_from_state(
     return cast(str | None, getattr(state, "workflow_start_intent_id", None))
 
 
+def _runtime_finalization_response(finalization: object | None) -> AgentWorkbenchRunFinalizationResponse | None:
+    if finalization is None:
+        return None
+    return AgentWorkbenchRunFinalizationResponse(
+        selectedIdentityCount=_int_or_none(_attr(finalization, "selected_identity_count")),
+        revision=_int_or_none(_attr(finalization, "revision")),
+        reasonCode=_str_or_none(_attr(finalization, "reason_code")),
+        status=_status(_str_or_none(_attr(finalization, "status"))),
+    )
+
+
 def _workflow_start_state(
     *,
     runtime_run_id: str | None,
@@ -215,6 +229,7 @@ def _bounded_projection_input(input: AgentWorkbenchProjectionInput) -> AgentWork
         tool_call_records=tuple(_latest(input.tool_call_records, MAX_WORKBENCH_TOOL_CALLS)),
         context_compactions=tuple(_latest(input.context_compactions, MAX_WORKBENCH_CONTEXT_COMPACTIONS)),
         runtime_events=tuple(_latest(input.runtime_events, MAX_WORKBENCH_RUNTIME_EVENTS)),
+        round_summaries=tuple(_latest(tuple(input.round_summaries), MAX_WORKBENCH_THINKING_ROUNDS)),
     )
 
 
@@ -441,11 +456,12 @@ def _thinking_process(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchThi
             AgentWorkbenchThinkingProcessCardResponse(
                 title="关键词",
                 text=payload.keywordQuery or "No query has been projected yet.",
-                terms=payload.queryTerms,
+                terms=[*payload.queryTerms, *_query_package_terms(payload.plannedQueries)],
             ),
             AgentWorkbenchThinkingProcessCardResponse(
                 title="observation",
                 text=_observation_text(payload),
+                terms=_query_package_terms(payload.executedQueries),
             ),
             AgentWorkbenchThinkingProcessCardResponse(
                 title="反思和下一轮变更",
@@ -473,21 +489,71 @@ def _thinking_process(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchThi
 def _thinking_round_payloads(
     input: AgentWorkbenchProjectionInput,
 ) -> list[tuple[AgentWorkbenchActivityPayloadResponse, str | None]]:
-    runtime_payloads: list[tuple[AgentWorkbenchActivityPayloadResponse, str | None]] = []
-    for event in input.runtime_events:
-        if _int_or_none(_attr(event, "round_no")) is None:
-            continue
-        status = _str_or_none(_attr(event, "status"))
-        payload = {
-            **_mapping_or_empty(_attr(event, "payload")),
-            "stage": _str_or_none(_attr(event, "stage")),
-            "source_id": _str_or_none(_attr(event, "source_id")),
-            "round_no": _int_or_none(_attr(event, "round_no")),
-        }
-        runtime_payloads.append((_activity_payload_from_mapping(payload, status=status), status))
-    if runtime_payloads:
-        return runtime_payloads
-    return [(_activity_payload(activity), activity.status) for activity in input.activity_items]
+    return [
+        (_round_summary_payload(summary), _str_or_none(_attr(summary, "status")))
+        for summary in input.round_summaries
+    ]
+
+
+def _round_summary_payload(summary: object) -> AgentWorkbenchActivityPayloadResponse:
+    return AgentWorkbenchActivityPayloadResponse(
+        kind="runtime_round",
+        stage="round_summary",
+        status=_status(_str_or_none(_attr(summary, "status"))),
+        roundNo=_int_or_none(_attr(summary, "round_no")),
+        queryTerms=[item for item in _sequence_or_empty(_attr(summary, "query_terms")) if isinstance(item, str)],
+        keywordQuery=_str_or_none(_attr(summary, "keyword_query")),
+        plannedQueries=[_query_package_response(item) for item in _sequence_or_empty(_attr(summary, "planned_queries"))],
+        executedQueries=[_query_package_response(item) for item in _sequence_or_empty(_attr(summary, "executed_queries"))],
+        rawCandidateCount=_int_or_none(_attr(summary, "raw_candidate_count")),
+        uniqueNewCount=_int_or_none(_attr(summary, "unique_new_count")),
+        totalMergedIdentityCount=_int_or_none(_attr(summary, "total_merged_identity_count")),
+        newlyScoredCount=_int_or_none(_attr(summary, "newly_scored_count")),
+        topPoolCount=_int_or_none(_attr(summary, "top_pool_count")),
+        resumeQualityComment=_str_or_none(_attr(summary, "resume_quality_comment")),
+        reflectionSummary=_str_or_none(_attr(summary, "reflection_summary")),
+        reflectionRationale=_str_or_none(_attr(summary, "reflection_rationale")),
+        suggestedActivateTerms=[
+            item for item in _sequence_or_empty(_attr(summary, "suggested_activate_terms")) if isinstance(item, str)
+        ],
+        suggestedKeepTerms=[
+            item for item in _sequence_or_empty(_attr(summary, "suggested_keep_terms")) if isinstance(item, str)
+        ],
+        suggestedDeprioritizeTerms=[
+            item for item in _sequence_or_empty(_attr(summary, "suggested_deprioritize_terms")) if isinstance(item, str)
+        ],
+        suggestedDropTerms=[
+            item for item in _sequence_or_empty(_attr(summary, "suggested_drop_terms")) if isinstance(item, str)
+        ],
+        suggestedAddFilterFields=[
+            item for item in _sequence_or_empty(_attr(summary, "suggested_add_filter_fields")) if isinstance(item, str)
+        ],
+        suggestedKeepFilterFields=[
+            item for item in _sequence_or_empty(_attr(summary, "suggested_keep_filter_fields")) if isinstance(item, str)
+        ],
+        suggestedDropFilterFields=[
+            item for item in _sequence_or_empty(_attr(summary, "suggested_drop_filter_fields")) if isinstance(item, str)
+        ],
+    )
+
+
+def _query_package_response(package: object) -> AgentWorkbenchQueryPackageResponse:
+    return AgentWorkbenchQueryPackageResponse(
+        sourceKind=_str_or_none(_attr(package, "source_kind")),
+        queryRole=_str_or_none(_attr(package, "query_role")),
+        laneType=_str_or_none(_attr(package, "lane_type")),
+        queryTerms=[item for item in _sequence_or_empty(_attr(package, "query_terms")) if isinstance(item, str)],
+        keywordQuery=_str_or_none(_attr(package, "keyword_query")),
+    )
+
+
+def _query_package_terms(packages: Sequence[AgentWorkbenchQueryPackageResponse]) -> list[str]:
+    terms: list[str] = []
+    for package in packages:
+        if package.sourceKind and package.keywordQuery:
+            terms.append(f"{package.sourceKind}: {package.keywordQuery}")
+        terms.extend(package.queryTerms)
+    return terms
 
 
 def _observation_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
@@ -504,7 +570,19 @@ def _observation_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
 
 def _reflection_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
     parts = [item for item in [payload.reflectionSummary, payload.reflectionRationale] if item]
+    parts.extend(_filter_suggestion_lines(payload))
     return " ".join(parts) if parts else "No reflection has been projected yet."
+
+
+def _filter_suggestion_lines(payload: AgentWorkbenchActivityPayloadResponse) -> list[str]:
+    lines: list[str] = []
+    if payload.suggestedAddFilterFields:
+        lines.append("新增筛选: " + ", ".join(payload.suggestedAddFilterFields))
+    if payload.suggestedKeepFilterFields:
+        lines.append("保留筛选: " + ", ".join(payload.suggestedKeepFilterFields))
+    if payload.suggestedDropFilterFields:
+        lines.append("移除筛选: " + ", ".join(payload.suggestedDropFilterFields))
+    return lines
 
 
 def _count_text(label: str, value: int | None) -> str | None:
@@ -555,6 +633,12 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, str) and item]
+
+
+def _sequence_or_empty(value: object) -> Sequence[object]:
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return value
+    return ()
 
 
 def _source_kinds(value: object) -> list[Literal["cts", "liepin"]]:

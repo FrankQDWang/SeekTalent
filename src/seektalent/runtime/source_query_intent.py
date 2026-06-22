@@ -4,14 +4,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Literal
 
-from seektalent.models import LaneType, QueryRole, RuntimeSourceKind
+from seektalent.models import LaneType, ProviderQuery, QueryRole, RuntimeSourceKind
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.source_filters import (
     RuntimeAgeExecutionIntent,
     RuntimeFilterIntent,
     RuntimeLocationExecutionIntent,
 )
-from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy
+from seektalent.source_contracts import RuntimeQueryPackage, RuntimeSourceBudgetPolicy
 
 SourceSearchAction = Literal["source_search", "stop"]
 
@@ -44,6 +44,26 @@ class RuntimeSourceQueryIntent:
             raise ValueError("runtime_source_query_intent_missing_query_instance_id")
         if not self.query_fingerprint:
             raise ValueError("runtime_source_query_intent_missing_query_fingerprint")
+
+
+def query_package_from_intent(intent: RuntimeSourceQueryIntent) -> RuntimeQueryPackage:
+    return RuntimeQueryPackage(
+        source_kind=intent.source_kind,
+        query_role=intent.query_role,
+        lane_type=intent.lane_type,
+        query_terms=tuple(intent.query_terms),
+        keyword_query=intent.keyword_query,
+    )
+
+
+def query_package_from_provider_query(*, source_kind: RuntimeSourceKind | str, query: ProviderQuery) -> RuntimeQueryPackage:
+    return RuntimeQueryPackage(
+        source_kind=source_kind,
+        query_role=query.query_role,
+        lane_type=query.lane_type,
+        query_terms=tuple(query.query_terms),
+        keyword_query=query.keyword_query,
+    )
 
 
 @dataclass(frozen=True)

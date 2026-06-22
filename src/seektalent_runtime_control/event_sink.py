@@ -11,7 +11,7 @@ from seektalent_runtime_control.store import RuntimeControlStore
 
 
 RUNTIME_PUBLIC_STAGE_OUTPUT_SCHEMA_VERSION = "runtime-public-stage-output/v1"
-_PUBLIC_STAGE_OUTPUT_BOUNDARIES = {"source_result", "merge", "scoring", "finalization"}
+_PUBLIC_STAGE_OUTPUT_BOUNDARIES = {"round_query", "source_result", "merge", "scoring", "feedback", "finalization"}
 
 
 class RuntimeEventSink(Protocol):

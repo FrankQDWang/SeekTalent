@@ -63,6 +63,12 @@ _REQUIRED_STAGE_OUTPUT_KINDS = {
     "final_candidates",
     "final_shortlist",
     "final_summary",
+    "runtime_public_round_query",
+    "runtime_public_source_result",
+    "runtime_public_merge",
+    "runtime_public_scoring",
+    "runtime_public_feedback",
+    "runtime_public_finalization",
     "shortlist",
 }
 
@@ -1493,16 +1499,6 @@ class RuntimeControlStore:
     ) -> RuntimeStageOutput:
         node_key = _node_key(output.node_id)
         round_key = _round_key(output.round_no)
-        safe_output = sanitize_stage_output_payload(
-            output_kind=output.output_kind,
-            schema_version=output.schema_version,
-            output=output.output,
-        )
-        output_json, payload_size_bytes = _json_with_size(
-            safe_output,
-            reason_code="runtime_stage_output_payload_too_large",
-        )
-        payload_hash = sha256(output_json.encode("utf-8")).hexdigest()
         with self._connect() as conn, conn:
             if _run_row(conn, output.runtime_run_id) is None:
                 raise RuntimeControlLookupError("runtime_run_not_found")
@@ -1514,6 +1510,19 @@ class RuntimeControlStore:
                     attempt_no=attempt_no,
                     observed_at=output.created_at,
                 )
+            safe_output = sanitize_stage_output_payload(
+                output_kind=output.output_kind,
+                schema_version=output.schema_version,
+                output=output.output,
+                stage=output.stage,
+                round_no=output.round_no,
+                node_id=output.node_id,
+            )
+            output_json, payload_size_bytes = _json_with_size(
+                safe_output,
+                reason_code="runtime_stage_output_payload_too_large",
+            )
+            payload_hash = sha256(output_json.encode("utf-8")).hexdigest()
             existing = _stage_output_row(
                 conn,
                 runtime_run_id=output.runtime_run_id,

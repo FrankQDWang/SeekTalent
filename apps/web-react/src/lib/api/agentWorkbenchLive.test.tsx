@@ -268,6 +268,51 @@ describe("live Agent Workbench conversation hook", () => {
     });
   });
 
+  it("invalidates durable view data for runtime finalization changes", async () => {
+    expect.hasAssertions();
+    const client = createWorkbenchQueryClient();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    client.setQueryData(
+      queryKeys.agentConversation("agent_conv_1"),
+      conversationSnapshot,
+    );
+
+    render(
+      <QueryClientProvider client={client}>
+        <ConversationProbe conversationId="agent_conv_1" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(connectAgentStream).toHaveBeenCalledOnce());
+    const options = vi.mocked(connectAgentStream).mock.calls[0]?.[0];
+    expect(options).toBeDefined();
+
+    options?.onBatch([
+      {
+        schemaVersion: "agent.workbench.stream.v1",
+        conversationId: "agent_conv_1",
+        seq: 1,
+        kind: "runtimeFinalization.changed",
+        payload: {
+          payloadType: "runtimeFinalization.changed",
+          kind: "runtime_finalization",
+          itemId: "runtimeFinalization",
+          summary: "target_satisfied",
+        },
+        createdAt: "2026-06-12T12:00:00+00:00",
+      },
+    ]);
+
+    await waitFor(() => {
+      const updated = client.getQueryData<AgentWorkbenchConversationResponse>(
+        queryKeys.agentConversation("agent_conv_1"),
+      );
+      expect(updated?.streamCursor.latestStreamSeq).toBe(1);
+      expect(invalidate).toHaveBeenCalledWith({
+        queryKey: queryKeys.agentConversation("agent_conv_1"),
+      });
+    });
+  });
+
   it("does not reconnect the EventSource when a durable snapshot refetch advances the cursor", async () => {
     expect.hasAssertions();
     const client = createWorkbenchQueryClient();

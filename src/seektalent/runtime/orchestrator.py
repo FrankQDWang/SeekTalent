@@ -189,8 +189,11 @@ from seektalent.runtime.source_round_dispatch import (
 )
 from seektalent.runtime.source_filters import build_runtime_filter_intents, build_runtime_location_execution_intent
 from seektalent.runtime.source_query_intent import (
+    RuntimeQueryPackage,
     RuntimeSourceQueryPolicy,
+    RuntimeSourceQueryIntent,
     build_runtime_source_query_intents,
+    query_package_from_intent,
     source_requested_count,
 )
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
@@ -370,6 +373,53 @@ def _source_round_status_from_lane_status(status: str) -> SourceRoundDispatchSta
     if status == "failed":
         return "failed"
     return "partial"
+
+
+def _planned_query_packages_from_intents(
+    source_query_intents_by_source: Mapping[SourceKind, tuple[RuntimeSourceQueryIntent, ...]],
+) -> tuple[RuntimeQueryPackage, ...]:
+    packages: list[RuntimeQueryPackage] = []
+    for _source_kind, intents in sorted(source_query_intents_by_source.items(), key=lambda item: item[0]):
+        packages.extend(query_package_from_intent(intent) for intent in intents)
+    return tuple(packages)
+
+
+def _query_package_summaries(packages: Sequence[RuntimeQueryPackage]) -> list[dict[str, object]]:
+    summaries: list[dict[str, object]] = []
+    for package in packages:
+        item: dict[str, object] = {}
+        if package.source_kind is not None:
+            item["sourceKind"] = str(package.source_kind)
+        if package.query_role is not None:
+            item["queryRole"] = package.query_role
+        if package.lane_type is not None:
+            item["laneType"] = package.lane_type
+        if package.query_terms:
+            item["queryTerms"] = list(package.query_terms)
+        if package.keyword_query is not None:
+            item["keywordQuery"] = package.keyword_query
+        if item:
+            summaries.append(item)
+    return summaries
+
+
+def _round_unique_identity_count(
+    *,
+    dispatch_result: SourceRoundDispatchResult,
+    run_state: RunState,
+    pre_round_seen_resume_ids: frozenset[str],
+) -> int:
+    touched_identity_ids = {
+        identity_id
+        for candidate in dispatch_result.candidates
+        if (identity_id := run_state.candidate_identity_by_resume_id.get(candidate.resume_id)) is not None
+    }
+    new_identity_ids = {
+        identity_id
+        for identity_id in touched_identity_ids
+        if not (set(run_state.candidate_identities[identity_id].resume_ids) & pre_round_seen_resume_ids)
+    }
+    return len(new_identity_ids)
 
 
 class WorkflowRuntime:
@@ -876,6 +926,12 @@ class WorkflowRuntime:
                             else run_state.top_pool_ids
                         )
                     },
+                    details={
+                        "finalizationRevision": run_state.finalization_revisions[-1].revision,
+                        "finalizationReasonCode": run_state.finalization_revisions[-1].reason_code,
+                    }
+                    if run_state.finalization_revisions
+                    else {},
                 ),
             )
             return RunArtifacts(
@@ -1488,6 +1544,7 @@ class WorkflowRuntime:
             lane.source: sum(intent.requested_count for intent in source_query_intents_by_source.get(lane.source, ()))
             for lane in source_plan
         }
+        planned_query_packages = _planned_query_packages_from_intents(source_query_intents_by_source)
         self._emit_runtime_public_event(
             tracer=tracer,
             progress_callback=progress_callback,
@@ -1497,6 +1554,11 @@ class WorkflowRuntime:
                 event_seq=round_no * 100 + 1,
                 round_no=round_no,
                 counts={"topPoolCount": len(run_state.top_pool_ids)},
+                details={
+                    "queryTerms": retrieval_plan.query_terms,
+                    "keywordQuery": retrieval_plan.keyword_query,
+                    "plannedQueries": _query_package_summaries(planned_query_packages),
+                },
             ),
         )
         for source_index, lane in enumerate(source_plan, start=1):
@@ -1570,6 +1632,7 @@ class WorkflowRuntime:
             if self.source_round_adapter_provider is not None
             else {}
         )
+        pre_round_seen_resume_ids = frozenset(run_state.seen_resume_ids)
         dispatch_result = await dispatch_source_rounds(
             request=SourceRoundDispatchRequest(
                 runtime_run_id=tracer.run_id,
@@ -1599,7 +1662,14 @@ class WorkflowRuntime:
                 stage="merge",
                 event_seq=round_no * 100 + 50,
                 round_no=round_no,
-                counts={"mergedIdentities": len(run_state.candidate_identities)},
+                counts={
+                    "roundUniqueIdentities": _round_unique_identity_count(
+                        dispatch_result=dispatch_result,
+                        run_state=run_state,
+                        pre_round_seen_resume_ids=pre_round_seen_resume_ids,
+                    ),
+                    "mergedIdentities": len(run_state.candidate_identities),
+                },
             ),
         )
         if run_state.source_coverage_summary is None:
@@ -1719,6 +1789,7 @@ class WorkflowRuntime:
             search_attempts=search_attempts,
             query_resume_hits=query_resume_hits,
             provider_returned_candidates=provider_returned_candidates,
+            executed_query_packages=dispatch_result.executed_query_packages,
         )
 
     def _source_coverage_summary_from_dispatch(
@@ -2019,6 +2090,7 @@ class WorkflowRuntime:
                 )
                 raise RunStageError("source_search", str(exc)) from exc
             executed_queries = retrieval_result.executed_queries
+            executed_query_packages = retrieval_result.executed_query_packages
             sent_query_records = retrieval_result.sent_query_records
             new_candidates = retrieval_result.new_candidates
             search_observation = retrieval_result.search_observation
@@ -2253,6 +2325,8 @@ class WorkflowRuntime:
                     round_no=round_no,
                     counts={"feedbackCandidateCount": len(pool_decisions)},
                     details={
+                        "executedQueries": _query_package_summaries(executed_query_packages),
+                        "resumeQualityComment": resume_quality_comment,
                         "reflectionSummary": reflection_advice.reflection_summary,
                         "reflectionRationale": reflection_advice.reflection_rationale,
                         "suggestStop": reflection_advice.suggest_stop,

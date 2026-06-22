@@ -34,6 +34,7 @@ AgentWorkbenchStreamKind = Literal[
     "candidate.upserted",
     "detailApproval.changed",
     "finalSummary.updated",
+    "runtimeFinalization.changed",
     "pendingAction.changed",
     "sourceConnection.changed",
     "context.compacted",
@@ -65,6 +66,7 @@ AgentWorkbenchItemStreamPayloadType = Literal[
     "candidate.upserted",
     "detailApproval.changed",
     "finalSummary.updated",
+    "runtimeFinalization.changed",
     "pendingAction.changed",
     "sourceConnection.changed",
     "context.compacted",
@@ -137,6 +139,16 @@ class AgentWorkbenchMessageResponse(BaseModel):
     createdAt: str
 
 
+class AgentWorkbenchQueryPackageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceKind: str | None = None
+    queryRole: str | None = None
+    laneType: str | None = None
+    queryTerms: list[str] = Field(default_factory=list)
+    keywordQuery: str | None = None
+
+
 class AgentWorkbenchActivityPayloadResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -147,10 +159,14 @@ class AgentWorkbenchActivityPayloadResponse(BaseModel):
     roundNo: int | None = None
     queryTerms: list[str] = Field(default_factory=list)
     keywordQuery: str | None = None
+    plannedQueries: list[AgentWorkbenchQueryPackageResponse] = Field(default_factory=list)
+    executedQueries: list[AgentWorkbenchQueryPackageResponse] = Field(default_factory=list)
     executedQueryTerms: list[list[str]] = Field(default_factory=list)
     rawCandidateCount: int | None = None
     uniqueNewCount: int | None = None
+    totalMergedIdentityCount: int | None = None
     newlyScoredCount: int | None = None
+    topPoolCount: int | None = None
     resumeQualityComment: str | None = None
     reflectionSummary: str | None = None
     reflectionRationale: str | None = None
@@ -158,6 +174,9 @@ class AgentWorkbenchActivityPayloadResponse(BaseModel):
     suggestedKeepTerms: list[str] = Field(default_factory=list)
     suggestedDeprioritizeTerms: list[str] = Field(default_factory=list)
     suggestedDropTerms: list[str] = Field(default_factory=list)
+    suggestedAddFilterFields: list[str] = Field(default_factory=list)
+    suggestedKeepFilterFields: list[str] = Field(default_factory=list)
+    suggestedDropFilterFields: list[str] = Field(default_factory=list)
 
 
 class AgentWorkbenchActivityResponse(BaseModel):
@@ -188,6 +207,7 @@ class AgentWorkbenchTranscriptPayloadResponse(BaseModel):
         "approval",
         "artifact",
         "final_summary",
+        "runtime_finalization",
         "strategy_graph",
         "pending_action",
         "source_connection",
@@ -243,6 +263,7 @@ class AgentWorkbenchItemStreamPayloadResponse(BaseModel):
         "approval",
         "artifact",
         "final_summary",
+        "runtime_finalization",
         "strategy_graph",
         "pending_action",
         "source_connection",
@@ -377,6 +398,8 @@ def _item_stream_payload_type(stream_kind: AgentWorkbenchStreamKind) -> AgentWor
             return "detailApproval.changed"
         case "finalSummary.updated":
             return "finalSummary.updated"
+        case "runtimeFinalization.changed":
+            return "runtimeFinalization.changed"
         case "pendingAction.changed":
             return "pendingAction.changed"
         case "sourceConnection.changed":
@@ -423,6 +446,7 @@ def _item_payload_kind_for_stream_kind(stream_kind: AgentWorkbenchStreamKind) ->
     "approval",
     "artifact",
     "final_summary",
+    "runtime_finalization",
     "strategy_graph",
     "pending_action",
     "source_connection",
@@ -443,6 +467,8 @@ def _item_payload_kind_for_stream_kind(stream_kind: AgentWorkbenchStreamKind) ->
         return "approval"
     if stream_kind == "finalSummary.updated":
         return "final_summary"
+    if stream_kind == "runtimeFinalization.changed":
+        return "runtime_finalization"
     if stream_kind == "strategyGraph.changed":
         return "strategy_graph"
     if stream_kind == "pendingAction.changed":
@@ -642,6 +668,15 @@ class AgentWorkbenchFinalSummaryResponse(BaseModel):
     text: str
 
 
+class AgentWorkbenchRunFinalizationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selectedIdentityCount: int | None = None
+    revision: int | None = None
+    reasonCode: str | None = None
+    status: AgentWorkbenchStatus = "completed"
+
+
 class AgentWorkbenchReviewArtifactResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -697,6 +732,7 @@ class AgentWorkbenchConversationResponse(BaseModel):
     candidates: list[AgentWorkbenchCandidateSummaryResponse] = Field(default_factory=list)
     detailApprovals: list[AgentWorkbenchDetailApprovalResponse] = Field(default_factory=list)
     reviewArtifacts: list[AgentWorkbenchReviewArtifactResponse] = Field(default_factory=list)
+    runtimeFinalization: AgentWorkbenchRunFinalizationResponse | None = None
     finalSummary: AgentWorkbenchFinalSummaryResponse | None = None
     pendingActions: AgentWorkbenchPendingActionsResponse
     streamCursor: AgentWorkbenchStreamCursorResponse

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Literal
 
 from seektalent.models import ResumeCandidate
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
-from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
+from seektalent.runtime.source_query_intent import RuntimeQueryPackage, RuntimeSourceQueryIntent
 
 if TYPE_CHECKING:
     from seektalent.models import RequirementSheet
@@ -58,6 +58,7 @@ class SourceRoundAdapterResult:
     diagnostics: tuple[str, ...] = ()
     retrieval_result: "RetrievalExecutionResult | None" = None
     lane_result: "RuntimeSourceLaneResult | None" = None
+    executed_query_packages: tuple[RuntimeQueryPackage, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,7 @@ class SourceRoundDispatchResult:
     source_results: tuple[SourceRoundAdapterResult, ...]
     candidates: tuple[ResumeCandidate, ...]
     raw_candidate_count: int
+    executed_query_packages: tuple[RuntimeQueryPackage, ...] = ()
 
 
 async def dispatch_source_rounds(
@@ -111,6 +113,9 @@ async def dispatch_source_rounds(
         source_results=source_results,
         candidates=tuple(candidates),
         raw_candidate_count=raw_candidate_count,
+        executed_query_packages=tuple(
+            package for result in source_results for package in result.executed_query_packages
+        ),
     )
 
 

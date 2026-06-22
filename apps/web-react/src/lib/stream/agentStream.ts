@@ -47,6 +47,7 @@ const STREAM_KINDS = new Set<AgentStreamKind>([
   "candidate.upserted",
   "detailApproval.changed",
   "finalSummary.updated",
+  "runtimeFinalization.changed",
   "pendingAction.changed",
   "sourceConnection.changed",
   "context.compacted",

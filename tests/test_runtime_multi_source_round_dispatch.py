@@ -19,6 +19,7 @@ from seektalent.models import (
     QueryResumeHit,
     RequirementSheet,
     ResumeCandidate,
+    RuntimeCandidateIdentity,
     RetrievalState,
     RoundRetrievalPlan,
     RunState,
@@ -375,6 +376,45 @@ def test_logical_query_dispatch_rejects_missing_requested_count() -> None:
             lane_requested_counts={},
             source_plan_version="2",
         )
+
+
+def test_round_unique_identities_counts_only_new_identity_membership() -> None:
+    from seektalent.runtime.orchestrator import _round_unique_identity_count
+
+    run_state = SimpleNamespace(
+        candidate_identity_by_resume_id={
+            "old-merge-resume": "identity-a",
+            "same-round-a": "identity-b",
+            "same-round-b": "identity-b",
+        },
+        candidate_identities={
+            "identity-a": RuntimeCandidateIdentity(
+                identity_id="identity-a",
+                canonical_identity_id="identity-a",
+                resume_ids=["old-resume", "old-merge-resume"],
+            ),
+            "identity-b": RuntimeCandidateIdentity(
+                identity_id="identity-b",
+                canonical_identity_id="identity-b",
+                resume_ids=["same-round-a", "same-round-b"],
+            ),
+        },
+    )
+    dispatch_result = SourceRoundDispatchResult(
+        source_results=(),
+        candidates=(
+            _candidate("old-merge-resume", "liepin"),
+            _candidate("same-round-a", "cts"),
+            _candidate("same-round-b", "liepin"),
+        ),
+        raw_candidate_count=3,
+    )
+
+    assert _round_unique_identity_count(
+        dispatch_result=dispatch_result,
+        run_state=run_state,
+        pre_round_seen_resume_ids=frozenset({"old-resume"}),
+    ) == 1
 
 
 def test_multisource_uses_existing_70_30_query_allocation() -> None:
@@ -1134,14 +1174,23 @@ def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_sourc
     monkeypatch.setattr("seektalent.source_adapters.run_liepin_logical_query_bundle", blocked_liepin_bundle)
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
     tracer = RunTracer(tmp_path / "trace-liepin-single")
+    dispatches = (_dispatch("exploit", 7),)
     request = SourceRoundDispatchRequest(
         runtime_run_id="run-1",
         round_no=1,
-        logical_queries=(_dispatch("exploit", 7),),
+        logical_queries=dispatches,
         selected_sources=("liepin",),
         seen_resume_ids=frozenset(),
         seen_dedup_keys=frozenset(),
         requirement_sheet=_requirement_sheet(),
+        source_query_intents_by_source=build_runtime_source_query_intents(
+            source_kinds=("liepin",),
+            logical_dispatches=dispatches,
+            filter_intents=(),
+            location_intent=None,
+            age_intent=None,
+            source_budget_policy=RuntimeSourceBudgetPolicy(),
+        ),
     )
 
     try:
@@ -1167,6 +1216,7 @@ def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_sourc
 
     assert result.status == "blocked"
     assert result.safe_reason_code == "blocked_backend_unavailable"
+    assert result.executed_query_packages == ()
 
 
 def test_liepin_source_adapter_records_provider_snapshots_to_corpus(monkeypatch, tmp_path) -> None:

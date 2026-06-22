@@ -85,6 +85,40 @@ describe("agent stream client", () => {
     expect(onBatch).not.toHaveBeenCalled();
   });
 
+  it("accepts runtime finalization stream envelopes", () => {
+    expect.hasAssertions();
+
+    const frame = installAnimationFrame();
+    const eventSources = installEventSource();
+    const onBatch = vi.fn();
+
+    connectAgentStream({
+      conversationId: "agent_conv_1",
+      afterSeq: 0,
+      onBatch,
+      onGap: vi.fn(),
+    });
+    const source = onlyEventSource(eventSources);
+    const runtimeFinalization = envelope({
+      seq: 1,
+      kind: "runtimeFinalization.changed",
+      payload: {
+        payloadType: "runtimeFinalization.changed",
+        kind: "runtime_finalization",
+        itemId: "runtimeFinalization",
+        summary: "target_satisfied",
+      },
+    });
+
+    source.dispatch(
+      "agent_workbench_event",
+      JSON.stringify(runtimeFinalization),
+    );
+    frame.flush();
+
+    expect(onBatch).toHaveBeenCalledWith([runtimeFinalization]);
+  });
+
   it("calls onGap for stream.gap and cancels queued batches on cleanup", () => {
     expect.hasAssertions();
 
