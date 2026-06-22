@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from seektalent_conversation_agent.service import ConversationAgentIntentDecision
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_runtime_control.models import RuntimeControlEventInput, RuntimeRunRecord, RuntimeRunSnapshot
 from tests.conversation_agent_test_support import build_service, save_approved_requirement
@@ -159,6 +162,263 @@ def test_polling_historical_runtime_run_uses_its_own_rendered_cursor(tmp_path: P
         if link.runtime_run_id == "runtime_run_historical"
     )
     assert historical_link.latest_event_seq == 1
+
+
+def test_agent_turn_routes_active_runtime_read_only_question_with_runtime_facts(tmp_path: Path) -> None:
+    service, _conversation_store, runtime_store = build_service(tmp_path)
+    runner = RoutedAgentRunner(
+        ConversationAgentIntentDecision(intent="read_only_question"),
+        answer="当前正在第 1 轮检索。",
+    )
+    service.agent_runner = runner
+    service.agent_instructions = "REGISTERED CONVERSATION AGENT PROMPT"
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 平台负责人",
+    )
+    _create_runtime_run(
+        service=service,
+        runtime_store=runtime_store,
+        conversation_id=conversation.conversation_id,
+        runtime_run_id="runtime_run_active",
+        event_id="rtevt_active",
+        snapshot_status="running",
+        linked_at="2026-06-09T00:00:01.000000Z",
+        make_active=True,
+    )
+
+    response = asyncio.run(
+        service.run_agent_turn(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            user_message="现在进度到哪里了？",
+            idempotency_key="agent-turn-readonly-1",
+        )
+    )
+
+    assert len(runner.calls) == 2
+    decision_call = runner.calls[0]
+    answer_call = runner.calls[1]
+    assert decision_call["output_type"] is ConversationAgentIntentDecision
+    assert "REGISTERED CONVERSATION AGENT PROMPT" in decision_call["instructions"]
+    assert "[RUNTIME_FACTS_START]" in decision_call["prompt"]
+    assert "runtime_run_active" in decision_call["prompt"]
+    assert "[RUNTIME_FACTS_START]" in answer_call["prompt"]
+    messages = service.store.get_messages(conversation_id=conversation.conversation_id)
+    assert messages[0].role == "user"
+    assert messages[0].source_runtime_run_id == "runtime_run_active"
+    assert messages[-1].text == "当前正在第 1 轮检索。"
+    assert messages[-1].source_runtime_run_id == "runtime_run_active"
+    assert response.messages[-1].text == "当前正在第 1 轮检索。"
+    route_calls = [
+        call
+        for call in service.store.list_tool_calls(conversation_id=conversation.conversation_id)
+        if call.tool_name == "agent_intent_route"
+    ]
+    assert len(route_calls) == 1
+    assert route_calls[0].status == "completed"
+    assert route_calls[0].runtime_run_id == "runtime_run_active"
+    assert route_calls[0].result["intentDecision"]["intent"] == "read_only_question"
+
+
+def test_agent_turn_routes_next_round_requirement_to_runtime_command(tmp_path: Path) -> None:
+    service, _conversation_store, runtime_store = build_service(tmp_path)
+    runner = RoutedAgentRunner(
+        ConversationAgentIntentDecision(
+            intent="next_round_requirement",
+            requirement_text="新增平台治理经验",
+        )
+    )
+    service.agent_runner = runner
+    service.agent_instructions = "REGISTERED CONVERSATION AGENT PROMPT"
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 平台负责人",
+    )
+    _create_runtime_run(
+        service=service,
+        runtime_store=runtime_store,
+        conversation_id=conversation.conversation_id,
+        runtime_run_id="runtime_run_active",
+        event_id="rtevt_active",
+        snapshot_status="running",
+        linked_at="2026-06-09T00:00:01.000000Z",
+        make_active=True,
+    )
+
+    asyncio.run(
+        service.run_agent_turn(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            user_message="我突然想到一点",
+            idempotency_key="agent-turn-next-requirement-1",
+        )
+    )
+
+    assert len(runner.calls) == 1
+    amendments = runtime_store.list_runtime_requirement_amendments(
+        runtime_run_id="runtime_run_active",
+        target_round_no=2,
+        statuses={"pending_target_round"},
+    )
+    assert [item.input_text for item in amendments] == ["新增平台治理经验"]
+    messages = service.store.get_messages(conversation_id=conversation.conversation_id)
+    command_messages = [message for message in messages if message.message_type == "command_state"]
+    assert command_messages
+    assert command_messages[-1].source_runtime_run_id == "runtime_run_active"
+    route_calls = [
+        call
+        for call in service.store.list_tool_calls(conversation_id=conversation.conversation_id)
+        if call.tool_name == "agent_intent_route"
+    ]
+    assert len(route_calls) == 1
+    assert route_calls[0].result["intentDecision"]["intent"] == "next_round_requirement"
+
+
+def test_agent_turn_replays_next_round_requirement_without_rerouting(tmp_path: Path) -> None:
+    service, _conversation_store, runtime_store = build_service(tmp_path)
+    runner = RoutedAgentRunner(
+        ConversationAgentIntentDecision(
+            intent="next_round_requirement",
+            requirement_text="新增平台治理经验",
+        )
+    )
+    service.agent_runner = runner
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 平台负责人",
+    )
+    _create_runtime_run(
+        service=service,
+        runtime_store=runtime_store,
+        conversation_id=conversation.conversation_id,
+        runtime_run_id="runtime_run_active",
+        event_id="rtevt_active",
+        snapshot_status="running",
+        linked_at="2026-06-09T00:00:01.000000Z",
+        make_active=True,
+    )
+
+    asyncio.run(
+        service.run_agent_turn(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            user_message="我突然想到一点",
+            idempotency_key="agent-turn-next-requirement-replay",
+        )
+    )
+    _create_runtime_run(
+        service=service,
+        runtime_store=runtime_store,
+        conversation_id=conversation.conversation_id,
+        runtime_run_id="runtime_run_replacement",
+        event_id="rtevt_replacement",
+        snapshot_status="running",
+        linked_at="2026-06-09T00:00:02.000000Z",
+        make_active=True,
+        run_kind="rerun",
+        link_reason="rerun",
+    )
+    asyncio.run(
+        service.run_agent_turn(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            user_message="我突然想到一点",
+            idempotency_key="agent-turn-next-requirement-replay",
+        )
+    )
+
+    assert len(runner.calls) == 1
+    amendments = runtime_store.list_runtime_requirement_amendments(
+        runtime_run_id="runtime_run_active",
+        target_round_no=2,
+        statuses={"pending_target_round"},
+    )
+    assert [item.input_text for item in amendments] == ["新增平台治理经验"]
+    replacement_amendments = runtime_store.list_runtime_requirement_amendments(
+        runtime_run_id="runtime_run_replacement",
+        target_round_no=2,
+        statuses={"pending_target_round"},
+    )
+    assert replacement_amendments == []
+    route_calls = [
+        call
+        for call in service.store.list_tool_calls(conversation_id=conversation.conversation_id)
+        if call.tool_name == "agent_intent_route"
+    ]
+    assert len(route_calls) == 1
+    command_messages = [
+        message
+        for message in service.store.get_messages(conversation_id=conversation.conversation_id)
+        if message.message_type == "command_state"
+    ]
+    assert len(command_messages) == 1
+
+
+def test_agent_turn_refuses_unsupported_runtime_write_intent(tmp_path: Path) -> None:
+    service, _conversation_store, runtime_store = build_service(tmp_path)
+    runner = RoutedAgentRunner(ConversationAgentIntentDecision(intent="unsupported_write"))
+    service.agent_runner = runner
+    service.agent_instructions = "REGISTERED CONVERSATION AGENT PROMPT"
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 平台负责人",
+    )
+    _create_runtime_run(
+        service=service,
+        runtime_store=runtime_store,
+        conversation_id=conversation.conversation_id,
+        runtime_run_id="runtime_run_active",
+        event_id="rtevt_active",
+        snapshot_status="running",
+        linked_at="2026-06-09T00:00:01.000000Z",
+        make_active=True,
+    )
+
+    asyncio.run(
+        service.run_agent_turn(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            user_message="暂停这个 workflow",
+            idempotency_key="agent-turn-unsupported-write-1",
+        )
+    )
+
+    assert len(runner.calls) == 1
+    assert runtime_store.list_commands(runtime_run_id="runtime_run_active", statuses={"accepted"}) == []
+    messages = service.store.get_messages(conversation_id=conversation.conversation_id)
+    assert messages[-1].message_type == "assistant_text"
+    assert "只支持只读问题或新增下一轮需求" in messages[-1].text
+    assert messages[-1].source_runtime_run_id == "runtime_run_active"
+
+
+class RoutedAgentRunner:
+    def __init__(self, decision: ConversationAgentIntentDecision, *, answer: str = "已收到。") -> None:
+        self.decision = decision
+        self.answer = answer
+        self.calls: list[dict[str, object]] = []
+
+    async def run(self, agent, prompt: str) -> object:
+        output_type = getattr(agent, "output_type", None)
+        self.calls.append(
+            {
+                "instructions": agent.instructions,
+                "prompt": prompt,
+                "output_type": output_type,
+            }
+        )
+        if output_type is not None:
+            return SimpleNamespace(final_output=self.decision)
+        return SimpleNamespace(final_output=self.answer)
 
 
 def _create_runtime_run(

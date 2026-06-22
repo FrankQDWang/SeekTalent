@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 
 from seektalent.config import AppSettings
 from seektalent.models import RequirementSheet
+from seektalent.prompting import PromptRegistry
 from seektalent_conversation_agent.budget import AgentBudgetPolicy
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.service import ConversationAgentService
@@ -14,7 +15,6 @@ from seektalent_conversation_agent.tools import AgentToolAdapter
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
-from seektalent_runtime_control.requirements import RequirementDraft
 from seektalent_runtime_control.service import RuntimeControlService
 from seektalent_runtime_control.store import RuntimeControlStore
 
@@ -50,16 +50,6 @@ class RuntimeRequirementExecutor:
             raise ConversationAgentError("agent_requirement_extractor_invalid_result")
         return result
 
-    def normalize_requirement_text(
-        self,
-        *,
-        text: str,
-        target_section_hint: str | None,
-        current_draft: RequirementDraft,
-    ) -> dict[str, object]:
-        section_id = target_section_hint or "must_have_capabilities"
-        return {"additions": [{"sectionId": section_id, "text": text, "source": "runtime_normalized"}]}
-
 
 def build_agent_service(
     *,
@@ -70,17 +60,20 @@ def build_agent_service(
     conversation_store.initialize()
     runtime_store = RuntimeControlStore(settings.runtime_control_path)
     runtime_store.initialize()
+    requirement_executor = RuntimeRequirementExecutor(settings=settings, runtime_factory=runtime_factory)
     requirement_service = RuntimeControlService(
         store=runtime_store,
-        executor=RuntimeRequirementExecutor(settings=settings, runtime_factory=runtime_factory),
+        executor=requirement_executor,
     )
-    command_service = RuntimeCommandService(store=runtime_store)
+    command_service = RuntimeCommandService(store=runtime_store, requirement_extractor=requirement_executor)
     workflow_executor = WorkflowRuntimeExecutor(
         store=runtime_store,
         settings=settings,
         runtime_factory=lambda: RuntimeLikeAdapter(runtime_factory(settings)),
+        command_service=command_service,
     )
     detail_service = RuntimeDetailService(store=runtime_store)
+    agent_prompt = PromptRegistry(settings.prompt_dir).load("conversation_agent")
     return ConversationAgentService(
         store=conversation_store,
         tool_adapter=AgentToolAdapter(
@@ -92,6 +85,7 @@ def build_agent_service(
         ),
         now=_now,
         agent_model_name=settings.controller_model_id,
+        agent_instructions=agent_prompt.content,
         budget_policy=AgentBudgetPolicy(
             turn_input_token_budget=settings.agent_turn_input_token_budget,
             turn_output_token_budget=settings.agent_turn_output_token_budget,

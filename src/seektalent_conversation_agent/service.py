@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import uuid4
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from seektalent_conversation_agent.budget import AgentBudgetPolicy
 from seektalent_conversation_agent.errors import ConversationAgentError
@@ -87,6 +89,15 @@ class MemoryServiceProtocol(Protocol):
     ) -> AdvisoryMemoryContextProtocol: ...
 
 
+class ConversationAgentIntentDecision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["read_only_question", "next_round_requirement", "unsupported_write"]
+    requirement_text: str | None = Field(default=None)
+    target_section_hint: str | None = Field(default=None)
+    rationale: str | None = Field(default=None)
+
+
 @dataclass(frozen=True)
 class CompletedMemoryConversation:
     conversation_id: str
@@ -118,7 +129,7 @@ class ConversationAgentService:
         compaction_id_factory: Callable[[], str] | None = None,
         memory_service: MemoryServiceProtocol | None = None,
         agent_model_name: str = "gpt-4.1-mini",
-        agent_instructions: str = "You are SeekTalent Assistant. Help the user operate the local recruiting workflow.",
+        agent_instructions: str = "",
         agent_runner: AgentRunner | None = None,
         budget_policy: AgentBudgetPolicy | None = None,
         source_selection_resolver: RuntimeSourceSelectionResolver | None = None,
@@ -147,9 +158,7 @@ class ConversationAgentService:
             busy_timeout_ms=store.busy_timeout_ms,
         )
         self.outbox_store = WorkbenchOutboxStore(store.path, busy_timeout_ms=store.busy_timeout_ms)
-        self.source_selection_resolver = source_selection_resolver or RuntimeSourceSelectionResolver(
-            registered_runtime_source_ids={"cts", "liepin"}
-        )
+        self.source_selection_resolver = source_selection_resolver or RuntimeSourceSelectionResolver()
 
     def create_conversation(self, *, owner_user_id: str, workspace_id: str, title: str) -> ConversationRecord:
         return self.store.create_conversation(
@@ -170,6 +179,11 @@ class ConversationAgentService:
         idempotency_key: str | None = None,
     ) -> ConversationAgentResponse:
         self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
+        runtime_target = self._maybe_active_runtime_run_target(
+            conversation_id=conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+        )
         if idempotency_key is not None:
             existing = self.store.get_message_by_idempotency(
                 conversation_id=conversation_id,
@@ -196,6 +210,7 @@ class ConversationAgentService:
                 created_at=self.now(),
                 message_id=self.message_id_factory(),
                 token_count=user_token_estimate,
+                source_runtime_run_id=runtime_target.runtime_run_id if runtime_target is not None else None,
                 idempotency_key=idempotency_key,
             )
         except sqlite3.IntegrityError:
@@ -215,6 +230,16 @@ class ConversationAgentService:
                         idempotency_key=idempotency_key,
                     )
             raise
+        if runtime_target is not None:
+            return await self._run_routed_runtime_user_turn(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                message=message,
+                user_message=user_message,
+                idempotency_key=idempotency_key,
+                target=runtime_target,
+            )
         return await self._run_agent_model_after_user_message(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -233,14 +258,17 @@ class ConversationAgentService:
         message: TranscriptMessage,
         user_message: str,
         idempotency_key: str | None,
+        model_prompt: str | None = None,
+        source_runtime_run_id: str | None = None,
     ) -> ConversationAgentResponse:
+        prompt_text = model_prompt or user_message
         prior_messages = [
             item
             for item in self.store.get_messages(conversation_id=conversation_id)
             if item.message_seq < message.message_seq
         ]
         conversation_tokens_before_turn = _conversation_token_count(prior_messages)
-        user_token_estimate = message.token_count or _rough_token_estimate(user_message)
+        user_token_estimate = _rough_token_estimate(prompt_text)
         advisory_context = ""
         if self.memory_service is not None:
             memory_context = self.memory_service.recall_for_conversation(
@@ -295,7 +323,7 @@ class ConversationAgentService:
             runner=self.agent_runner,
         )
         try:
-            result = await runtime.run(user_message, advisory_memory_context=advisory_context)
+            result = await runtime.run(prompt_text, advisory_memory_context=advisory_context)
             result_text = _agent_result_text(result)
             usage = _extract_provider_usage(result)
             estimated_output_tokens = _rough_token_estimate(result_text)
@@ -363,6 +391,7 @@ class ConversationAgentService:
             message_id=self.message_id_factory(),
             token_count=estimated_output_tokens,
             source_tool_call_id=tool_call_id,
+            source_runtime_run_id=source_runtime_run_id,
             idempotency_key=_assistant_message_idempotency_key(idempotency_key),
             return_existing_on_idempotency=idempotency_key is not None,
         )
@@ -391,6 +420,34 @@ class ConversationAgentService:
             idempotency_key=idempotency_key,
         )
         if tool_call is None:
+            assistant_idempotency_key = _assistant_message_idempotency_key(idempotency_key)
+            if assistant_idempotency_key is None:
+                raise ConversationAgentError("agent_idempotency_key_required")
+            assistant_replay = self.store.get_message_by_idempotency(
+                conversation_id=conversation_id,
+                idempotency_key=assistant_idempotency_key,
+            )
+            if assistant_replay is not None:
+                return self._reopened_response(
+                    conversation_id=conversation_id,
+                    owner_user_id=owner_user_id,
+                    workspace_id=workspace_id,
+                )
+            target = self._maybe_active_runtime_run_target(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+            )
+            if target is not None:
+                return await self._run_routed_runtime_user_turn(
+                    conversation_id=conversation_id,
+                    owner_user_id=owner_user_id,
+                    workspace_id=workspace_id,
+                    message=user_message_record,
+                    user_message=user_message_record.text,
+                    idempotency_key=idempotency_key,
+                    target=target,
+                )
             return await self._run_agent_model_after_user_message(
                 conversation_id=conversation_id,
                 owner_user_id=owner_user_id,
@@ -453,6 +510,19 @@ class ConversationAgentService:
             call
             for call in self.store.list_tool_calls(conversation_id=conversation_id)
             if call.tool_name == "agent_model_run" and call.args.get("idempotencyKey") == idempotency_key
+        ]
+        return matching[-1] if matching else None
+
+    def _agent_intent_route_by_idempotency(
+        self,
+        *,
+        conversation_id: str,
+        idempotency_key: str,
+    ) -> AgentToolCallRecord | None:
+        matching = [
+            call
+            for call in self.store.list_tool_calls(conversation_id=conversation_id)
+            if call.tool_name == "agent_intent_route" and call.args.get("idempotencyKey") == idempotency_key
         ]
         return matching[-1] if matching else None
 
@@ -532,6 +602,31 @@ class ConversationAgentService:
             reason_code=reason_code,
             started_at=started_at,
             completed_at=self.now(),
+        )
+
+    def _mark_agent_intent_route_failed(
+        self,
+        *,
+        tool_call_id: str,
+        conversation_id: str,
+        started_at: str,
+        reason_code: str,
+        result: dict[str, object] | None,
+        args: dict[str, object] | None = None,
+        runtime_run_id: str | None = None,
+    ) -> None:
+        default_args: dict[str, object] = {"modelName": self.agent_model_name, "runtimeRunId": runtime_run_id}
+        self.store.save_tool_call(
+            tool_call_id=tool_call_id,
+            conversation_id=conversation_id,
+            tool_name="agent_intent_route",
+            status="failed",
+            args=args or default_args,
+            result=result,
+            reason_code=reason_code,
+            started_at=started_at,
+            completed_at=self.now(),
+            runtime_run_id=runtime_run_id,
         )
 
     def _monthly_cost_cents(self, *, owner_user_id: str, workspace_id: str) -> int:
@@ -1862,6 +1957,8 @@ class ConversationAgentService:
             source_runtime_run_id=target.runtime_run_id,
             created_at=self.now(),
             message_id=self.message_id_factory(),
+            idempotency_key=_assistant_message_idempotency_key(idempotency_key),
+            return_existing_on_idempotency=True,
         )
         return self.poll_runtime_events(
             conversation_id=conversation_id,
@@ -1870,6 +1967,194 @@ class ConversationAgentService:
             runtime_run_id=target.runtime_run_id,
             limit=200,
         )
+
+    async def _run_routed_runtime_user_turn(
+        self,
+        *,
+        conversation_id: str,
+        owner_user_id: str,
+        workspace_id: str,
+        message: TranscriptMessage,
+        user_message: str,
+        idempotency_key: str | None,
+        target: RuntimeRunTarget,
+    ) -> ConversationAgentResponse:
+        runtime_facts = self._runtime_fact_context(target)
+        decision = await self._run_or_replay_runtime_intent_route(
+            conversation_id=conversation_id,
+            user_message=user_message,
+            runtime_facts=runtime_facts,
+            idempotency_key=idempotency_key,
+            target=target,
+        )
+        if decision.intent == "read_only_question":
+            return await self._run_agent_model_after_user_message(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                message=message,
+                user_message=user_message,
+                idempotency_key=idempotency_key,
+                model_prompt=_read_only_runtime_prompt(user_message=user_message, runtime_facts=runtime_facts),
+                source_runtime_run_id=target.runtime_run_id,
+            )
+        if decision.intent == "next_round_requirement":
+            requirement_text = (decision.requirement_text or user_message).strip()
+            return await asyncio.to_thread(
+                self.submit_next_round_requirement,
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                runtime_run_id=target.runtime_run_id,
+                text=requirement_text,
+                target_section_hint=decision.target_section_hint,
+                idempotency_key=f"{idempotency_key or message.message_id}:next-round-requirement",
+            )
+        self.store.append_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            message_type="assistant_text",
+            text="这个请求会修改 workflow。当前对话只支持只读问题或新增下一轮需求。",
+            payload={
+                "intentDecision": decision.model_dump(mode="json"),
+                "runtimeRunId": target.runtime_run_id,
+            },
+            source_runtime_run_id=target.runtime_run_id,
+            created_at=self.now(),
+            message_id=self.message_id_factory(),
+            idempotency_key=_assistant_message_idempotency_key(idempotency_key),
+            return_existing_on_idempotency=idempotency_key is not None,
+        )
+        return self._reopened_response(
+            conversation_id=conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+        )
+
+    async def _run_or_replay_runtime_intent_route(
+        self,
+        *,
+        conversation_id: str,
+        user_message: str,
+        runtime_facts: dict[str, object],
+        idempotency_key: str | None,
+        target: RuntimeRunTarget,
+    ) -> ConversationAgentIntentDecision:
+        if idempotency_key is not None:
+            existing = self._agent_intent_route_by_idempotency(
+                conversation_id=conversation_id,
+                idempotency_key=idempotency_key,
+            )
+            if existing is not None:
+                if existing.status == "started":
+                    if self._agent_tool_call_is_stale(existing):
+                        self._mark_agent_intent_route_failed(
+                            tool_call_id=existing.tool_call_id,
+                            conversation_id=conversation_id,
+                            started_at=existing.started_at,
+                            reason_code="agent_request_stale",
+                            result={"idempotencyKey": idempotency_key},
+                            args=existing.args,
+                            runtime_run_id=target.runtime_run_id,
+                        )
+                        raise ConversationAgentError("agent_request_stale")
+                    raise ConversationAgentError("agent_request_in_progress")
+                if existing.status == "failed":
+                    raise ConversationAgentError(
+                        existing.reason_code or "agent_intent_route_failed",
+                        payload=existing.result or {},
+                    )
+                if existing.status == "completed":
+                    return self._intent_decision_from_completed_route(existing)
+
+        prompt_text = _intent_routing_prompt(user_message=user_message, runtime_facts=runtime_facts)
+        estimated_input_tokens = _rough_token_estimate(prompt_text)
+        tool_call_id = self.tool_call_id_factory()
+        started_at = self.now()
+        args: dict[str, object] = {
+            "modelName": self.agent_model_name,
+            "runtimeRunId": target.runtime_run_id,
+            "estimatedInputTokens": estimated_input_tokens,
+            "idempotencyKey": idempotency_key,
+        }
+        self.store.save_tool_call(
+            tool_call_id=tool_call_id,
+            conversation_id=conversation_id,
+            tool_name="agent_intent_route",
+            status="started",
+            args=args,
+            result=None,
+            reason_code=None,
+            started_at=started_at,
+            runtime_run_id=target.runtime_run_id,
+        )
+        runtime = AgentRuntime(
+            model_name=self.agent_model_name,
+            instructions=self.agent_instructions,
+            runner=self.agent_runner,
+        )
+        try:
+            decision_payload = await runtime.run_structured(
+                prompt_text,
+                name="SeekTalent Conversation Intent Router",
+                output_type=ConversationAgentIntentDecision,
+            )
+            decision = ConversationAgentIntentDecision.model_validate(decision_payload)
+        except ConversationAgentError as exc:
+            self._mark_agent_intent_route_failed(
+                tool_call_id=tool_call_id,
+                conversation_id=conversation_id,
+                started_at=started_at,
+                reason_code=exc.reason_code,
+                result={"estimatedInputTokens": estimated_input_tokens},
+                args=args,
+                runtime_run_id=target.runtime_run_id,
+            )
+            raise
+        except ValidationError as exc:
+            self._mark_agent_intent_route_failed(
+                tool_call_id=tool_call_id,
+                conversation_id=conversation_id,
+                started_at=started_at,
+                reason_code="agent_intent_route_invalid",
+                result={"estimatedInputTokens": estimated_input_tokens},
+                args=args,
+                runtime_run_id=target.runtime_run_id,
+            )
+            raise ConversationAgentError("agent_intent_route_invalid") from exc
+        self.store.save_tool_call(
+            tool_call_id=tool_call_id,
+            conversation_id=conversation_id,
+            tool_name="agent_intent_route",
+            status="completed",
+            args=args,
+            result={
+                "intentDecision": decision.model_dump(mode="json"),
+                "estimatedInputTokens": estimated_input_tokens,
+            },
+            reason_code=None,
+            started_at=started_at,
+            completed_at=self.now(),
+            runtime_run_id=target.runtime_run_id,
+        )
+        return decision
+
+    def _intent_decision_from_completed_route(self, tool_call: AgentToolCallRecord) -> ConversationAgentIntentDecision:
+        result = tool_call.result or {}
+        decision_payload = result.get("intentDecision")
+        try:
+            return ConversationAgentIntentDecision.model_validate(decision_payload)
+        except ValidationError as exc:
+            self._mark_agent_intent_route_failed(
+                tool_call_id=tool_call.tool_call_id,
+                conversation_id=tool_call.conversation_id,
+                started_at=tool_call.started_at,
+                reason_code="agent_intent_route_recovery_failed",
+                result=result,
+                args=tool_call.args,
+                runtime_run_id=tool_call.runtime_run_id,
+            )
+            raise ConversationAgentError("agent_intent_route_recovery_failed") from exc
 
     def get_runtime_detail(
         self,
@@ -2197,13 +2482,94 @@ class ConversationAgentService:
             completed_at=run.completed_at,
         )
 
+    def _maybe_active_runtime_run_target(
+        self,
+        *,
+        conversation_id: str,
+        owner_user_id: str,
+        workspace_id: str,
+    ) -> RuntimeRunTarget | None:
+        try:
+            target = self._resolve_runtime_run_target(
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                runtime_run_id=None,
+            )
+        except ConversationAgentError as exc:
+            if exc.reason_code == "agent_runtime_run_not_linked":
+                return None
+            raise
+        return target if target.link.is_active else None
+
+    def _runtime_fact_context(self, target: RuntimeRunTarget) -> dict[str, object]:
+        facts: dict[str, object] = {
+            "runtimeRunId": target.runtime_run_id,
+            "conversationId": target.conversation.conversation_id,
+            "link": {
+                "runKind": target.link.run_kind,
+                "linkReason": target.link.link_reason,
+                "isActive": target.link.is_active,
+                "linkedAt": target.link.linked_at,
+            },
+        }
+        runtime_store = self.tool_adapter.runtime_store
+        if runtime_store is None:
+            return facts
+        run = runtime_store.get_run(target.runtime_run_id)
+        facts.update(
+            {
+                "run": {
+                    "status": run.status,
+                    "currentStage": run.current_stage,
+                    "currentRound": run.current_round,
+                    "latestEventSeq": run.latest_event_seq,
+                    "sourceIds": run.source_ids,
+                    "approvedRequirementRevisionId": run.approved_requirement_revision_id,
+                    "stopReasonCode": run.stop_reason_code,
+                }
+            }
+        )
+        snapshot = runtime_store.get_snapshot(runtime_run_id=target.runtime_run_id)
+        latest_event_seq = run.latest_event_seq
+        if snapshot is not None:
+            latest_event_seq = max(latest_event_seq, snapshot.latest_event_seq)
+            facts["snapshot"] = {
+                "status": snapshot.status,
+                "currentStage": snapshot.current_stage,
+                "currentRound": snapshot.current_round,
+                "latestEventSeq": snapshot.latest_event_seq,
+                "summary": snapshot.snapshot.get("summary"),
+                "facts": snapshot.snapshot.get("facts"),
+            }
+        events = runtime_store.list_events(
+            runtime_run_id=target.runtime_run_id,
+            after_seq=max(0, latest_event_seq - 20),
+            limit=20,
+        ).events
+        facts["recentEvents"] = [
+            {
+                "eventSeq": event.event_seq,
+                "eventType": event.event_type,
+                "stage": event.stage,
+                "roundNo": event.round_no,
+                "status": event.status,
+                "summary": event.summary,
+            }
+            for event in events
+        ]
+        return facts
+
     def _latest_runtime_snapshot_seq(self, runtime_run_id: str) -> int:
         try:
-            return self.tool_adapter.get_workflow_snapshot(runtime_run_id=runtime_run_id).latest_event_seq
+            snapshot_seq = self.tool_adapter.get_workflow_snapshot(runtime_run_id=runtime_run_id).latest_event_seq
         except RuntimeControlError as exc:
             if exc.reason_code != "runtime_snapshot_not_found" or self.tool_adapter.runtime_store is None:
                 raise
             return self.tool_adapter.runtime_store.get_run(runtime_run_id).latest_event_seq
+        if self.tool_adapter.runtime_store is None:
+            return snapshot_seq
+        return max(snapshot_seq, self.tool_adapter.runtime_store.get_run(runtime_run_id).latest_event_seq)
 
     def _memory_source_updated_at(self, conversation_id: str) -> str | None:
         timestamps: list[str] = []
@@ -2321,6 +2687,36 @@ def _compact_summary_text(messages: list[TranscriptMessage]) -> str:
     first = messages[0].text
     last = messages[-1].text
     return sanitize_summary_text(f"本段对话从“{first}”开始，最新补充为“{last}”。")
+
+
+def _intent_routing_prompt(*, user_message: str, runtime_facts: dict[str, object]) -> str:
+    return "\n".join(
+        [
+            "Use the registered Conversation Agent instructions to classify this active runtime user message.",
+            "Return only the structured output requested by the schema.",
+            "[RUNTIME_FACTS_START]",
+            json.dumps(_json_safe_value(runtime_facts), ensure_ascii=False, sort_keys=True),
+            "[RUNTIME_FACTS_END]",
+            "[USER_MESSAGE_START]",
+            user_message,
+            "[USER_MESSAGE_END]",
+        ]
+    )
+
+
+def _read_only_runtime_prompt(*, user_message: str, runtime_facts: dict[str, object]) -> str:
+    return "\n".join(
+        [
+            "Use the registered Conversation Agent instructions to answer this read-only runtime question.",
+            "Use only the active runtime facts below. If the facts are insufficient, say what is not available.",
+            "[RUNTIME_FACTS_START]",
+            json.dumps(_json_safe_value(runtime_facts), ensure_ascii=False, sort_keys=True),
+            "[RUNTIME_FACTS_END]",
+            "[USER_MESSAGE_START]",
+            user_message,
+            "[USER_MESSAGE_END]",
+        ]
+    )
 
 
 def _object_payload(value: object) -> dict[str, object]:
