@@ -66,7 +66,7 @@ def test_submit_jd_rejects_conflicting_source_aliases(tmp_path: Path) -> None:
     assert exc_info.value.reason_code == "job_request_source_kinds_conflict"
 
 
-def test_requirement_edit_amend_review_resolution_confirm_and_workflow_start(tmp_path: Path) -> None:
+def test_requirement_edit_amend_confirm_and_workflow_start(tmp_path: Path) -> None:
     service, _conversation_store, runtime_store = build_service(tmp_path)
     conversation = service.create_conversation(
         owner_user_id="user_1",
@@ -102,33 +102,19 @@ def test_requirement_edit_amend_review_resolution_confirm_and_workflow_start(tmp
         workspace_id="workspace_1",
         draft_revision_id=edited.requirement_draft.draft_revision_id,
         base_revision_id=edited.requirement_draft.draft_revision_id,
-        text="需要确认：有平台治理经验",
+        text="另外希望有平台治理经验",
         target_section_hint="must_have_capabilities",
         idempotency_key="amend-1",
     )
-    review_item = amended.requirement_draft.sections[0].items[-1]
-    resolved = service.resolve_requirement_review(
+    added_item = amended.requirement_draft.section("must_have_capabilities").items[-1]
+    assert added_item.text == "平台治理经验"
+    assert added_item.source == "extracted_amendment"
+    confirmed = service.confirm_requirements(
         conversation_id=conversation.conversation_id,
         owner_user_id="user_1",
         workspace_id="workspace_1",
         draft_revision_id=amended.requirement_draft.draft_revision_id,
         base_revision_id=amended.requirement_draft.draft_revision_id,
-        amendment_id=review_item.amendment_id,
-        operations=[
-            {
-                "op": "edit_candidate",
-                "review_item_id": review_item.review_item_id,
-                "text": "平台治理经验",
-            }
-        ],
-        idempotency_key="resolve-1",
-    )
-    confirmed = service.confirm_requirements(
-        conversation_id=conversation.conversation_id,
-        owner_user_id="user_1",
-        workspace_id="workspace_1",
-        draft_revision_id=resolved.requirement_draft.draft_revision_id,
-        base_revision_id=resolved.requirement_draft.draft_revision_id,
         idempotency_key="confirm-1",
     )
     started = service.start_workflow(
@@ -150,7 +136,7 @@ def test_requirement_edit_amend_review_resolution_confirm_and_workflow_start(tmp
     assert linked_run.is_active is True
     assert linked_run.run_kind == "primary"
     assert linked_run.run_intent_id == (
-        f"wts:workspace_1:{conversation.conversation_id}:{resolved.requirement_draft.draft_revision_id}"
+        f"wts:workspace_1:{conversation.conversation_id}:{amended.requirement_draft.draft_revision_id}"
     )
     assert runtime_store.get_run("runtime_run_1").status == "queued"
     events = runtime_store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events

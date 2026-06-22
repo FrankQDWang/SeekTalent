@@ -97,9 +97,10 @@ class RuntimeDetailService:
             for event in self.store.list_events(runtime_run_id=runtime_run_id, after_seq=0, limit=source_snapshot_event_seq).events
             if event.event_seq <= source_snapshot_event_seq
         ]
-        facts = _candidate_revision_summary_facts(self.store, runtime_run_id=runtime_run_id)
-        if not facts:
-            facts = _summary_facts(snapshot.snapshot if snapshot is not None else {}, run_status=run.status)
+        facts = _canonical_summary_facts(self.store, runtime_run_id=runtime_run_id) or _summary_facts(
+            snapshot.snapshot if snapshot is not None else {},
+            run_status=run.status,
+        )
         summary = RuntimeFinalSummary(
             summary_id=self.summary_id_factory(),
             runtime_run_id=runtime_run_id,
@@ -244,18 +245,23 @@ def _summary_facts(snapshot: dict[str, object], *, run_status: str) -> list[dict
     return [{"label": "Run status", "value": run_status}]
 
 
-def _candidate_revision_summary_facts(store: RuntimeControlStore, *, runtime_run_id: str) -> list[dict[str, object]]:
+def _canonical_summary_facts(store: RuntimeControlStore, *, runtime_run_id: str) -> list[dict[str, object]]:
     revisions = store.list_candidate_finalization_revisions(runtime_run_id=runtime_run_id)
     if not revisions:
         return []
     latest_revision = revisions[-1]
-    identities = {identity.identity_id: identity for identity in store.list_candidate_identities(runtime_run_id=runtime_run_id)}
+    identities = {
+        identity.identity_id: identity
+        for identity in store.list_candidate_identities(runtime_run_id=runtime_run_id)
+    }
     facts: list[dict[str, object]] = []
     for identity_id in latest_revision.candidate_identity_ids:
         identity = identities.get(identity_id)
         if identity is None:
             continue
-        value = f"{identity.display_name}: {identity.summary}" if identity.summary else identity.display_name
+        name = identity.display_name or identity.canonical_resume_id or identity.identity_id
+        summary = identity.summary.strip()
+        value = f"{name}: {summary}" if summary else name
         facts.append(
             {
                 "label": "Candidate",

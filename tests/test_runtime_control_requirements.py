@@ -13,25 +13,29 @@ from seektalent_runtime_control.store import RuntimeControlStore
 
 class RequirementExecutor:
     def __init__(self) -> None:
-        self.normalized_texts: list[str] = []
+        self.extracted_texts: list[str] = []
 
     def extract_requirements(self, *, job_title: str, jd_text: str, notes: str | None) -> RequirementSheet:
-        return requirement_sheet(job_title=job_title)
-
-    def normalize_requirement_text(self, *, text: str, target_section_hint: str | None, current_draft) -> dict[str, object]:
-        self.normalized_texts.append(text)
-        return {
-            "additions": [
-                {
-                    "sectionId": target_section_hint or "must_have_capabilities",
-                    "text": "Kafka 生产环境实战",
-                    "value": "Kafka 生产环境实战",
-                    "source": "runtime_normalized",
+        del notes
+        self.extracted_texts.append(jd_text)
+        if "Kafka 实战" in jd_text or "Kafka 生产环境实战" in jd_text:
+            return requirement_sheet(job_title=job_title).model_copy(
+                update={
+                    "preferred_capabilities": ["Kafka 生产环境实战"],
+                    "initial_query_term_pool": [
+                        QueryTermCandidate(
+                            term="Kafka 生产经验",
+                            source="notes",
+                            category="tooling",
+                            priority=95,
+                            evidence="用户补充了 Kafka 实战要求。",
+                            first_added_round=0,
+                        )
+                    ],
+                    "scoring_rationale": "补充关注 Kafka 生产环境实战。",
                 }
-            ],
-            "reviewItems": [],
-            "rejectedFragments": [],
-        }
+            )
+        return requirement_sheet(job_title=job_title)
 
 
 def runtime_service(tmp_path: Path, executor: RequirementExecutor | None = None) -> RuntimeControlService:

@@ -32,6 +32,7 @@ WTS_TABLES = {
 class FakeRequirementExecutor:
     def __init__(self) -> None:
         self.received_job_titles: list[str | None] = []
+        self.received_jd_texts: list[str] = []
 
     def extract_requirements(
         self,
@@ -42,38 +43,27 @@ class FakeRequirementExecutor:
     ) -> RequirementSheet:
         del notes
         self.received_job_titles.append(job_title)
+        self.received_jd_texts.append(jd_text)
         extracted_title = job_title.strip() if isinstance(job_title, str) and job_title.strip() else _derive_title(jd_text)
-        return _requirement_sheet(job_title=extracted_title)
-
-    def normalize_requirement_text(
-        self,
-        *,
-        text: str,
-        target_section_hint: str | None,
-        current_draft: object,
-    ) -> dict[str, object]:
-        del current_draft
-        if "需要确认" in text:
-            return {
-                "reviewItems": [
-                    {
-                        "reviewItemId": "review_item_1",
-                        "rawText": text,
-                        "candidateText": "有平台治理经验",
-                        "candidateSection": target_section_hint or "must_have_capabilities",
-                        "reasonCode": "requirement_amendment_ambiguous",
-                    }
-                ]
-            }
-        return {
-            "additions": [
-                {
-                    "sectionId": target_section_hint or "must_have_capabilities",
-                    "text": text,
-                    "source": "runtime_normalized",
+        if "平台治理" in jd_text:
+            return _requirement_sheet(job_title=extracted_title).model_copy(
+                update={
+                    "must_have_capabilities": ["平台治理经验"],
+                    "preferred_capabilities": [],
+                    "initial_query_term_pool": [
+                        QueryTermCandidate(
+                            term="平台治理",
+                            source="notes",
+                            category="domain",
+                            priority=90,
+                            evidence="用户补充了平台治理经验要求。",
+                            first_added_round=0,
+                        )
+                    ],
+                    "scoring_rationale": "补充关注平台治理经验。",
                 }
-            ]
-        }
+            )
+        return _requirement_sheet(job_title=extracted_title)
 
 
 class FactoryRuntimeDerivingTitle:
@@ -674,7 +664,7 @@ def test_requirement_draft_lineage_keeps_job_request_link_through_edits(tmp_path
     amended_link = service.get_requirement_draft_job_request_link(amended.requirement_draft.draft_revision_id)
     assert amended_link.job_request_revision_id == original_job_request_id
 
-    review = service.amend_requirement_draft_from_text(
+    second_amendment = service.amend_requirement_draft_from_text(
         conversation_id=conversation.conversation_id,
         owner_user_id="user_1",
         workspace_id="workspace_1",
@@ -684,21 +674,10 @@ def test_requirement_draft_lineage_keeps_job_request_link_through_edits(tmp_path
         target_section_hint="must_have_capabilities",
         idempotency_key="lineage-review-1",
     )
-    review_link = service.get_requirement_draft_job_request_link(review.requirement_draft.draft_revision_id)
-    assert review_link.job_request_revision_id == original_job_request_id
-
-    resolved = service.resolve_requirement_review(
-        conversation_id=conversation.conversation_id,
-        owner_user_id="user_1",
-        workspace_id="workspace_1",
-        draft_revision_id=review.requirement_draft.draft_revision_id,
-        base_revision_id=review.requirement_draft.draft_revision_id,
-        amendment_id=review.requirement_draft.amendment.amendment_id,
-        operations=[{"op": "accept_candidate", "review_item_id": "review_item_1"}],
-        idempotency_key="lineage-resolve-1",
-    )
-    resolved_link = service.get_requirement_draft_job_request_link(resolved.requirement_draft.draft_revision_id)
-    assert resolved_link.job_request_revision_id == original_job_request_id
+    second_link = service.get_requirement_draft_job_request_link(second_amendment.requirement_draft.draft_revision_id)
+    assert second_link.job_request_revision_id == original_job_request_id
+    assert _extract_section_texts(second_amendment.requirement_draft, "must_have_capabilities").count("平台治理经验") == 1
+    assert _extractor.received_jd_texts[-2:] == ["需要补充平台治理经验", "需要确认：平台治理经验"]
 
 
 def test_confirm_requirements_reads_job_request_link_and_returns_typed_ids(tmp_path: Path) -> None:
@@ -1543,6 +1522,10 @@ def _confirm(
         base_revision_id=submitted.requirement_draft_revision_id,
         idempotency_key=idempotency_key,
     )
+
+
+def _extract_section_texts(draft, section_id: str) -> list[str]:
+    return [item.text for item in draft.section(section_id).items if item.status != "deleted"]
 
 
 def _workflow_start_intent_count_for_draft(service: ConversationAgentService, draft_revision_id: str) -> int:

@@ -9,6 +9,7 @@ from uuid import uuid4
 from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
 from seektalent.runtime.orchestrator import WorkflowRuntime
+from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.event_sink import RuntimeControlEventSink, RuntimeEventSink
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.models import (
@@ -40,6 +41,7 @@ class WorkflowRuntimeExecutor:
         now: Callable[[], str] | None = None,
         lease_seconds: int = 60,
         event_sink: RuntimeEventSink | None = None,
+        command_service: RuntimeCommandService | None = None,
     ) -> None:
         if runtime_factory is None and settings is None:
             raise ValueError("settings is required when runtime_factory is not provided")
@@ -52,6 +54,7 @@ class WorkflowRuntimeExecutor:
         self.now = now or _now
         self.lease_seconds = lease_seconds
         self.event_sink = event_sink or RuntimeControlEventSink(store)
+        self.command_service = command_service
 
     async def start_workflow(
         self,
@@ -281,6 +284,22 @@ class WorkflowRuntimeExecutor:
                 latest_checkpoint_id=checkpoint.checkpoint_id,
             )
 
+        def runtime_round_boundary_callback(round_no: int) -> object | None:
+            nonlocal approved
+            if self.command_service is None:
+                return None
+            self.command_service.apply_next_round_requirements_at_boundary(
+                runtime_run_id=run.runtime_run_id,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+                round_no=round_no,
+            )
+            current_run = self.store.get_run(run.runtime_run_id)
+            if current_run.approved_requirement_revision_id == approved.approved_requirement_revision_id:
+                return None
+            approved = self.store.get_approved_requirement(current_run.approved_requirement_revision_id)
+            return approved.requirement_sheet
+
         try:
             runtime_kwargs: dict[str, object] = {
                 "job_title": resolved_job_title,
@@ -292,6 +311,8 @@ class WorkflowRuntimeExecutor:
                 "runtime_checkpoint_callback": runtime_checkpoint_callback,
                 "approved_requirement_sheet": approved.requirement_sheet,
             }
+            if _runtime_accepts_round_boundary_callback(runtime):
+                runtime_kwargs["runtime_round_boundary_callback"] = runtime_round_boundary_callback
             if resume_checkpoint is not None and _runtime_accepts_resume_context(runtime):
                 runtime_kwargs["resume_checkpoint"] = resume_checkpoint.model_dump(mode="json")
                 runtime_kwargs["resume_run_state"] = dict(resume_checkpoint.run_state)
@@ -501,6 +522,16 @@ def _runtime_accepts_resume_context(runtime: object) -> bool:
         return True
     if getattr(runtime, "supports_resume_context", None) is False:
         return False
+    return any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
+
+
+def _runtime_accepts_round_boundary_callback(runtime: object) -> bool:
+    run_async = getattr(runtime, "run_async", None)
+    if not callable(run_async):
+        return False
+    parameters = signature(run_async).parameters
+    if "runtime_round_boundary_callback" in parameters:
+        return True
     return any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
 
 

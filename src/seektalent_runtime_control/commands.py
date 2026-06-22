@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
+from pydantic import ValidationError
+
+from seektalent.models import RequirementSheet
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.models import RuntimeCheckpoint, RuntimeCommand, RuntimeControlEventInput
-from seektalent_runtime_control.normalizer import DefaultRequirementNormalizer, apply_next_round_patch
+from seektalent_runtime_control.normalizer import (
+    apply_next_round_patch,
+    merge_requirement_sheet_supplement,
+)
 from seektalent_runtime_control.requirements import ApprovedRequirementRevision, RequirementAmendment, ReviewItem, ReviewResolutionOperation
 from seektalent_runtime_control.store import RuntimeControlStore
 
@@ -16,6 +23,7 @@ from seektalent_runtime_control.store import RuntimeControlStore
 _PENDING_COMMAND_STATUSES = {"accepted", "pending_safe_boundary"}
 _TERMINAL_RUN_STATUSES = {"cancelled", "completed", "failed"}
 _NEEDS_REVIEW_STATUS = "needs_review"
+_EXTRACTING_STATUS = "extracting"
 _PENDING_TARGET_ROUND_STATUS = "pending_target_round"
 _REJECT_REVIEW_OPS = {"reject_candidate", "reject_fragment"}
 _ALLOWED_REVIEW_OPS = {
@@ -40,6 +48,10 @@ class NextRoundRequirementNormalizer(Protocol):
     ) -> dict[str, object]: ...
 
 
+class NextRoundRequirementExtractor(Protocol):
+    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet: ...
+
+
 @dataclass(frozen=True)
 class NextRoundRequirementResult:
     amendment_id: str
@@ -57,18 +69,24 @@ class RuntimeCommandService:
         self,
         *,
         store: RuntimeControlStore,
+        requirement_extractor: NextRoundRequirementExtractor | None = None,
         requirement_normalizer: NextRoundRequirementNormalizer | None = None,
         command_id_factory: Callable[[], str] | None = None,
         amendment_id_factory: Callable[[], str] | None = None,
         approved_requirement_id_factory: Callable[[], str] | None = None,
         now: Callable[[], str] | None = None,
+        boundary_wait_timeout_seconds: float = 30.0,
+        boundary_wait_poll_seconds: float = 0.1,
     ) -> None:
         self.store = store
-        self.requirement_normalizer = requirement_normalizer or DefaultRequirementNormalizer()
+        self.requirement_extractor = requirement_extractor
+        self.requirement_normalizer = requirement_normalizer
         self.command_id_factory = command_id_factory or (lambda: f"rtcmd_{uuid4().hex}")
         self.amendment_id_factory = amendment_id_factory or (lambda: f"reqamend_{uuid4().hex}")
         self.approved_requirement_id_factory = approved_requirement_id_factory or (lambda: f"reqapproved_{uuid4().hex}")
         self.now = now or _now
+        self.boundary_wait_timeout_seconds = boundary_wait_timeout_seconds
+        self.boundary_wait_poll_seconds = boundary_wait_poll_seconds
 
     def request_pause(self, *, runtime_run_id: str, requested_by: str | None, idempotency_key: str) -> RuntimeCommand:
         return self._request_lifecycle_command(
@@ -245,13 +263,43 @@ class RuntimeCommandService:
         if existing is not None:
             return _amendment_result(existing, supersedes_amendment_id=None)
         current = self.store.get_approved_requirement(run.approved_requirement_revision_id)
-        normalized = self.requirement_normalizer.normalize_next_round_requirement_text(
-            text=text,
-            target_section_hint=target_section_hint,
-            current_requirement=current,
-        )
         target_round_no = self._next_unlocked_round(runtime_run_id=runtime_run_id, after_round=run.current_round or 0)
         amendment_id = self.amendment_id_factory()
+        saved_extracting = False
+        if self.requirement_extractor is not None:
+            self.store.save_requirement_amendment(
+                RequirementAmendment(
+                    amendment_id=amendment_id,
+                    agent_conversation_id=run.agent_conversation_id or runtime_run_id,
+                    runtime_run_id=runtime_run_id,
+                    base_approved_requirement_revision_id=current.approved_requirement_revision_id,
+                    target_round_no=target_round_no,
+                    effective_boundary="before_round_controller",
+                    input_text=text,
+                    target_section_hint=target_section_hint,
+                    status=_EXTRACTING_STATUS,
+                    normalized_patch={},
+                    rejected_fragments=[],
+                    review_items=[],
+                    idempotency_key=idempotency_key,
+                    created_at=self.now(),
+                )
+            )
+            saved_extracting = True
+        try:
+            normalized = self._extract_next_round_requirement_patch(
+                text=text,
+                target_section_hint=target_section_hint,
+                current_requirement=current,
+            )
+        except (RuntimeControlError, TypeError, ValueError, ValidationError):
+            if saved_extracting:
+                self.store.update_requirement_amendment_status(
+                    amendment_id=amendment_id,
+                    status="failed",
+                    resolved_at=self.now(),
+                )
+            raise
         review_items = _review_items(normalized)
         if review_items:
             amendment = RequirementAmendment(
@@ -270,7 +318,18 @@ class RuntimeCommandService:
                 idempotency_key=idempotency_key,
                 created_at=self.now(),
             )
-            self.store.save_requirement_amendment(amendment)
+            if saved_extracting:
+                amendment = self.store.complete_runtime_requirement_amendment_extraction(
+                    amendment_id=amendment_id,
+                    status=_NEEDS_REVIEW_STATUS,
+                    result_approved_requirement_revision_id=None,
+                    normalized_patch=dict(normalized),
+                    rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
+                    review_items=review_items,
+                    resolved_at=self.now(),
+                )
+            else:
+                self.store.save_requirement_amendment(amendment)
             self.store.append_event(
                 _event(
                     runtime_run_id=runtime_run_id,
@@ -329,7 +388,18 @@ class RuntimeCommandService:
             idempotency_key=idempotency_key,
             created_at=approved.created_at,
         )
-        self.store.save_requirement_amendment(amendment)
+        if saved_extracting:
+            amendment = self.store.complete_runtime_requirement_amendment_extraction(
+                amendment_id=amendment_id,
+                status=_PENDING_TARGET_ROUND_STATUS,
+                result_approved_requirement_revision_id=approved.approved_requirement_revision_id,
+                normalized_patch=dict(normalized),
+                rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
+                review_items=[],
+                resolved_at=approved.created_at,
+            )
+        else:
+            self.store.save_requirement_amendment(amendment)
         if replace_amendment_id is not None:
             self.store.update_requirement_amendment_status(
                 amendment_id=replace_amendment_id,
@@ -362,6 +432,35 @@ class RuntimeCommandService:
             )
         )
         return _amendment_result(amendment, supersedes_amendment_id=replace_amendment_id)
+
+    def _extract_next_round_requirement_patch(
+        self,
+        *,
+        text: str,
+        target_section_hint: str | None,
+        current_requirement: ApprovedRequirementRevision,
+    ) -> dict[str, object]:
+        if self.requirement_extractor is None:
+            if self.requirement_normalizer is None:
+                raise RuntimeControlError("requirement_extractor_required")
+            return self.requirement_normalizer.normalize_next_round_requirement_text(
+                text=text,
+                target_section_hint=target_section_hint,
+                current_requirement=current_requirement,
+            )
+        del target_section_hint
+        supplement = self.requirement_extractor.extract_requirements(
+            job_title=current_requirement.requirement_sheet.job_title,
+            jd_text=text,
+            notes=None,
+        )
+        merged = merge_requirement_sheet_supplement(current_requirement.requirement_sheet, supplement)
+        return {
+            "requirementSheet": merged.model_dump(mode="json"),
+            "extractedSupplement": supplement.model_dump(mode="json"),
+            "reviewItems": [],
+            "rejectedFragments": [],
+        }
 
     def resolve_next_round_requirement_review(
         self,
@@ -440,6 +539,12 @@ class RuntimeCommandService:
         attempt_no: int | None = None,
         round_no: int,
     ) -> list[RequirementAmendment]:
+        self._wait_for_blocking_next_round_requirements(
+            runtime_run_id=runtime_run_id,
+            executor_id=executor_id,
+            attempt_no=attempt_no,
+            round_no=round_no,
+        )
         pending = self.store.list_runtime_requirement_amendments(
             runtime_run_id=runtime_run_id,
             target_round_no=round_no,
@@ -495,6 +600,56 @@ class RuntimeCommandService:
                 )
             applied.append(updated)
         return applied
+
+    def _wait_for_blocking_next_round_requirements(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        attempt_no: int | None,
+        round_no: int,
+    ) -> None:
+        deadline = time.monotonic() + self.boundary_wait_timeout_seconds
+        while True:
+            blocking = self.store.list_runtime_requirement_amendments(
+                runtime_run_id=runtime_run_id,
+                target_round_no=round_no,
+                statuses={_EXTRACTING_STATUS, _NEEDS_REVIEW_STATUS},
+            )
+            if not blocking:
+                return
+            if time.monotonic() >= deadline:
+                status_counts: dict[str, int] = {}
+                for amendment in blocking:
+                    status_counts[amendment.status] = status_counts.get(amendment.status, 0) + 1
+                self.store.append_executor_event(
+                    _event(
+                        runtime_run_id=runtime_run_id,
+                        event_type="runtime_requirement_amendment_wait_timeout",
+                        stage="round",
+                        round_no=round_no,
+                        status="failed",
+                        summary="next-round requirement amendment wait timed out",
+                        payload={
+                            "targetRoundNo": round_no,
+                            "blockingAmendmentIds": [amendment.amendment_id for amendment in blocking],
+                            "blockingStatuses": status_counts,
+                        },
+                        created_at=self.now(),
+                    ),
+                    executor_id=executor_id,
+                    attempt_no=attempt_no,
+                    run_status="running",
+                )
+                raise RuntimeControlError(
+                    "runtime_requirement_amendment_extraction_timeout",
+                    payload={
+                        "targetRoundNo": round_no,
+                        "blockingAmendmentIds": [amendment.amendment_id for amendment in blocking],
+                        "blockingStatuses": status_counts,
+                    },
+                )
+            time.sleep(self.boundary_wait_poll_seconds)
 
     def _request_lifecycle_command(
         self,

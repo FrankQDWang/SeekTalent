@@ -11,44 +11,35 @@ from seektalent_conversation_agent.tools import AgentToolAdapter
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
-from seektalent_runtime_control.requirements import ApprovedRequirementRevision, RequirementDraft
+from seektalent_runtime_control.requirements import ApprovedRequirementRevision
 from seektalent_runtime_control.service import RuntimeControlService
 from seektalent_runtime_control.store import RuntimeControlStore
 
 
 class DeterministicRequirementExecutor:
     def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet:
-        del jd_text, notes
-        return sample_requirement_sheet(job_title=job_title or "Python 平台负责人")
-
-    def normalize_requirement_text(
-        self,
-        *,
-        text: str,
-        target_section_hint: str | None,
-        current_draft: RequirementDraft,
-    ) -> dict[str, object]:
-        if "需要确认" in text:
-            return {
-                "reviewItems": [
-                    {
-                        "reviewItemId": "review_item_1",
-                        "rawText": text,
-                        "candidateText": "需要确认的候选要求",
-                        "candidateSection": target_section_hint or "must_have_capabilities",
-                        "reasonCode": "requirement_amendment_ambiguous",
-                    }
-                ]
+        del notes
+        sheet = sample_requirement_sheet(job_title=job_title or "Python 平台负责人")
+        if "平台治理" not in jd_text:
+            return sheet
+        return sheet.model_copy(
+            update={
+                "must_have_capabilities": [*sheet.must_have_capabilities, "平台治理经验"],
+                "initial_query_term_pool": [
+                    *sheet.initial_query_term_pool,
+                    QueryTermCandidate(
+                        term="平台治理",
+                        source="notes",
+                        category="domain",
+                        priority=90,
+                        evidence="用户补充了平台治理经验要求。",
+                        first_added_round=0,
+                        active=True,
+                    ),
+                ],
+                "scoring_rationale": "优先 Python API、平台工程、检索排序和平台治理证据。",
             }
-        return {
-            "additions": [
-                {
-                    "sectionId": target_section_hint or "must_have_capabilities",
-                    "text": text,
-                    "source": "runtime_normalized",
-                }
-            ]
-        }
+        )
 
 
 class DeterministicWorkflowRuntime:
@@ -135,17 +126,19 @@ def build_service(tmp_path: Path) -> tuple[ConversationAgentService, Conversatio
     conversation_store.initialize()
     runtime_store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
     runtime_store.initialize()
+    requirement_executor = DeterministicRequirementExecutor()
     requirement_service = RuntimeControlService(
         store=runtime_store,
-        executor=DeterministicRequirementExecutor(),
+        executor=requirement_executor,
     )
-    command_service = RuntimeCommandService(store=runtime_store)
+    command_service = RuntimeCommandService(store=runtime_store, requirement_extractor=requirement_executor)
     executor = WorkflowRuntimeExecutor(
         store=runtime_store,
         runtime_factory=DeterministicWorkflowRuntime,
         runtime_run_id_factory=lambda: "runtime_run_1",
         executor_id_factory=lambda: "runtime_executor_1",
         checkpoint_id_factory=lambda: "runtime_checkpoint_1",
+        command_service=command_service,
     )
     detail_service = RuntimeDetailService(store=runtime_store, summary_id_factory=lambda: "runtime_final_summary_1")
     adapter = AgentToolAdapter(
@@ -174,6 +167,8 @@ def execute_queued_workflow(
     *,
     runtime_run_id: str = "runtime_run_1",
 ) -> None:
+    requirement_executor = DeterministicRequirementExecutor()
+    command_service = RuntimeCommandService(store=runtime_store, requirement_extractor=requirement_executor)
     executor = WorkflowRuntimeExecutor(
         store=runtime_store,
         runtime_factory=DeterministicWorkflowRuntime,
@@ -181,6 +176,7 @@ def execute_queued_workflow(
         executor_id_factory=lambda: "runtime_executor_worker",
         checkpoint_id_factory=lambda: "runtime_checkpoint_worker",
         now=_worker_clock(),
+        command_service=command_service,
     )
     claim = runtime_store.claim_next_runnable_run(
         executor_id="runtime_executor_worker",
