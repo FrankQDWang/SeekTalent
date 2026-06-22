@@ -26,11 +26,11 @@ test("transcript tool row exposes stable details", async ({ page }) => {
   );
 
   const transcript = page.getByLabel("Agent transcript");
-  const toolRow = transcript.getByRole("article", { name: "Read" });
+  const toolRow = transcript.getByRole("article", {
+    name: "Loaded a toolread 2 files",
+  });
   await expect(toolRow.getByText("tool_read_001")).toBeVisible();
-  await expect(
-    toolRow.getByText("读取 BFF workbench routes 以确认 replay 生命周期。"),
-  ).toBeVisible();
+  await expect(toolRow.getByText("读取 Fw Ceo Review 技能")).toBeVisible();
 });
 
 test("candidate queue story renders populated candidates", async ({ page }) => {

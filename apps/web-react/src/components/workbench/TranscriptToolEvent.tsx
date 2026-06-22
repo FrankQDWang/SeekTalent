@@ -3,7 +3,7 @@ import {
   ChevronRight,
   CircleAlert,
   LoaderCircle,
-  Wrench,
+  SquareTerminal,
 } from "lucide-react";
 import { useState } from "react";
 import type { AgentWorkbenchTranscriptEvent } from "../../lib/api/agentWorkbenchTypes";
@@ -21,6 +21,7 @@ export function TranscriptToolEvent({ event }: TranscriptToolEventProps) {
     <article
       aria-label={event.label}
       className="transcript-tool-event"
+      data-kind={event.payload.kind}
       data-status={status}
     >
       <div className="transcript-tool-event__icon">
@@ -29,7 +30,7 @@ export function TranscriptToolEvent({ event }: TranscriptToolEventProps) {
         ) : status === "failed" || status === "cancelled" ? (
           <CircleAlert aria-hidden="true" size={15} />
         ) : (
-          <Wrench aria-hidden="true" size={15} />
+          <SquareTerminal aria-hidden="true" size={15} />
         )}
       </div>
       <div className="transcript-tool-event__body">

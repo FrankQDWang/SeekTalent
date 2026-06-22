@@ -1,0 +1,224 @@
+.codex-reference-frame {
+  background: rgb(255 255 255);
+  color: rgb(30 30 30);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial,
+    sans-serif;
+  min-height: 100vh;
+}
+
+.codex-reference-frame--window {
+  display: grid;
+  grid-template-columns: 290px minmax(0, 1fr) 250px;
+  grid-template-rows: 25px minmax(0, 1fr) 78px;
+  min-height: 982px;
+}
+
+.codex-reference-menu {
+  align-items: center;
+  background: rgb(79 81 70);
+  color: rgb(236 237 232);
+  display: flex;
+  font-size: 12px;
+  gap: 14px;
+  grid-column: 1 / -1;
+  padding: 0 12px;
+}
+
+.codex-reference-sidebar {
+  background: rgb(234 234 233);
+  border-right: 1px solid rgb(226 226 223);
+  display: grid;
+  gap: 12px;
+  grid-row: 2;
+  grid-template-rows: auto minmax(0, 1fr);
+  padding: 18px 14px;
+}
+
+.codex-reference-sidebar__row {
+  border-radius: 6px;
+  color: rgb(92 94 95);
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 7px 9px;
+}
+
+.codex-reference-sidebar__row[data-active="true"] {
+  background: rgb(232 232 229);
+  color: rgb(28 29 31);
+}
+
+.codex-reference-sidebar__list {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.codex-reference-main {
+  background: rgb(232 232 232);
+  display: grid;
+  grid-row: 2;
+  grid-template-rows: 40px minmax(0, 1fr) 52px;
+  min-width: 0;
+}
+
+.codex-reference-titlebar {
+  align-items: center;
+  border-bottom: 1px solid rgb(234 234 232);
+  display: flex;
+  font-size: 14px;
+  font-weight: 600;
+  justify-content: space-between;
+  padding: 0 22px;
+}
+
+.codex-reference-scroll {
+  margin: 0 auto;
+  max-width: 690px;
+  overflow: hidden;
+  padding: 18px 0 0;
+  width: min(690px, calc(100% - 56px));
+}
+
+.codex-reference-prompt {
+  background: rgb(244 244 243);
+  border-radius: 7px;
+  color: rgb(24 24 24);
+  font-size: 14px;
+  line-height: 1.58;
+  margin: 0 0 34px auto;
+  max-width: 550px;
+  padding: 10px 14px;
+}
+
+.codex-reference-transcript .transcript {
+  padding: 0;
+}
+
+.codex-reference-transcript .transcript-run-group__toggle {
+  color: rgb(76 82 94);
+}
+
+.codex-reference-composer {
+  align-items: center;
+  border-top: 1px solid rgb(235 235 235);
+  color: rgb(82 86 94);
+  display: flex;
+  font-size: 14px;
+  padding: 0 30px;
+}
+
+.codex-reference-context {
+  background: rgb(251 251 250);
+  border-left: 1px solid rgb(232 232 229);
+  display: grid;
+  gap: 12px;
+  grid-row: 2;
+  align-content: start;
+  padding: 62px 18px 0;
+  pointer-events: none;
+}
+
+.codex-reference-context__panel {
+  border: 1px solid rgb(229 229 226);
+  border-radius: 8px;
+  color: rgb(89 91 92);
+  display: grid;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 14px;
+}
+
+.codex-reference-dock {
+  align-items: center;
+  background: rgb(40 40 34 / 72%);
+  color: transparent;
+  display: flex;
+  font-size: 11px;
+  grid-column: 1 / -1;
+  grid-row: 3;
+  justify-content: center;
+}
+
+.codex-reference-frame--slice {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 54px;
+  min-height: 673px;
+  overflow: hidden;
+}
+
+.codex-reference-frame--slice .codex-reference-scroll {
+  box-sizing: border-box;
+  margin: 0;
+  max-width: none;
+  padding: 0 20px;
+  width: 100%;
+}
+
+.codex-reference-frame--slice .codex-reference-prompt {
+  max-width: 520px;
+  margin-bottom: 70px;
+}
+
+.codex-reference-frame--slice .transcript-run-group__toggle {
+  padding-left: 0;
+}
+
+.codex-reference-frame--slice .transcript-run-group__toggle svg {
+  display: none;
+}
+
+.codex-reference-frame--slice .transcript-event h3,
+.codex-reference-frame--slice .transcript-tool-event__button span {
+  font-size: 13px;
+  font-weight: 430;
+}
+
+.codex-reference-frame--guided
+  .codex-reference-scroll
+  > .codex-reference-prompt:first-child {
+  display: none;
+}
+
+.codex-reference-frame--guided
+  .codex-reference-scroll
+  > .codex-reference-prompt:last-child {
+  margin-left: auto;
+  margin-right: -36px;
+  max-width: 360px;
+  padding: 10px 14px;
+  width: fit-content;
+}
+
+.codex-reference-frame--guided .transcript-event[data-kind="message"] p {
+  font-size: 14px;
+  font-weight: 430;
+}
+
+.codex-reference-frame--guided .transcript .transcript-run-group:last-of-type {
+  display: none;
+}
+
+.codex-reference-frame--tool-detail {
+  min-height: 110px;
+  padding: 14px 0 0 27px;
+}
+
+.codex-reference-frame--tool-detail .transcript {
+  padding: 0;
+}
+
+.codex-reference-frame--tool-detail .transcript-run-group__toggle {
+  display: none;
+}
+
+.codex-reference-frame--tool-detail .transcript-run-group__events {
+  padding: 0;
+}
+
+.codex-reference-frame--tool-detail .transcript-tool-event__button span {
+  color: rgb(26 28 31);
+  font-size: 15px;
+  font-weight: 430;
+}
