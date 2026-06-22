@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
-import { PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
+import { useEffect, useState } from "react";
+import { PanelLeft, PanelLeftOpen, SquarePen } from "lucide-react";
 import "./ConversationShell.css";
 
 type ConversationShellProps = {
@@ -17,8 +17,22 @@ export function ConversationShell({
   side,
 }: ConversationShellProps) {
   const hasSide = side != null;
-  const [railMode, setRailMode] = useState<RailMode>("expanded");
+  const [railMode, setRailMode] = useState<RailMode>(
+    hasSide ? "compact" : "expanded",
+  );
   const railVisible = railMode !== "closed";
+
+  useEffect(() => {
+    setRailMode((current) => {
+      if (hasSide && current === "expanded") {
+        return "compact";
+      }
+      if (!hasSide && current === "compact") {
+        return "expanded";
+      }
+      return current;
+    });
+  }, [hasSide]);
 
   return (
     <div
@@ -29,6 +43,9 @@ export function ConversationShell({
       {railVisible ? (
         <aside aria-label="会话列表" className="conversation-shell__rail">
           <div className="conversation-shell__rail-toolbar">
+            <div aria-label="Wide Talent Search" className="brand-mark">
+              WTS
+            </div>
             <button
               aria-label={
                 railMode === "compact" ? "展开会话列表" : "缩小会话列表"
@@ -45,22 +62,17 @@ export function ConversationShell({
               {railMode === "compact" ? (
                 <PanelLeftOpen aria-hidden="true" size={18} />
               ) : (
-                <PanelLeftClose aria-hidden="true" size={18} />
+                <PanelLeft aria-hidden="true" size={18} />
               )}
             </button>
-            <button
-              aria-label="关闭会话列表"
-              className="conversation-shell__rail-control"
-              onClick={() => {
-                setRailMode("closed");
-              }}
-              title="关闭会话列表"
-              type="button"
-            >
-              <X aria-hidden="true" size={18} />
-            </button>
           </div>
-          <div className="conversation-shell__rail-body">{rail}</div>
+          <div className="conversation-shell__rail-body">
+            <a className="conversation-shell__new-task" href="/">
+              <SquarePen aria-hidden="true" size={20} />
+              <span>新建任务</span>
+            </a>
+            {rail}
+          </div>
         </aside>
       ) : (
         <button

@@ -58,7 +58,7 @@ describe("create Agent Workbench conversation from JD hook", () => {
       expect.objectContaining({
         jobTitle: "AI Agent 平台工程师",
         messageType: "submitJd",
-        sourceKinds: ["cts"],
+        sourceKinds: ["liepin"],
         text: "寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。",
       }),
     );

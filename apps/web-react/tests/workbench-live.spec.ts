@@ -69,12 +69,17 @@ test("renders live workbench graph and opens semantic stream", async ({
 }, testInfo) => {
   await page.goto("/conversations/agent_conv_1");
 
-  await expect(
-    page.getByRole("heading", { name: "Wide Talent Search" }),
-  ).toBeVisible();
   if (testInfo.project.name.includes("mobile")) {
+    await expect(page.getByRole("tab", { name: "Chat" })).toBeVisible();
     await expect(page.getByRole("tab", { name: "Graph" })).toBeVisible();
     await page.getByRole("tab", { name: "Graph" }).click();
+  } else {
+    await expect(
+      page.getByRole("complementary", { name: "会话列表" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "资深 Python 后端" }),
+    ).toBeVisible();
   }
   await expect(page.getByRole("region", { name: "检索策略图" })).toBeVisible();
   await expect(page.locator(".react-flow")).toBeVisible();
@@ -376,23 +381,25 @@ test("starts a new workbench conversation from the home JD entry", async ({
     },
   );
 
+  const jobTitle = "AI Agent 平台工程师";
+  const jobDescription =
+    "寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。";
+
   await page.goto("/");
-  await page.getByLabel("职位名称").fill("AI Agent 平台工程师");
-  await page
-    .getByLabel("职位描述")
-    .fill("寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。");
+  await page.getByLabel("职位名称").fill(jobTitle);
+  await page.getByLabel("职位描述").fill(jobDescription);
   await page.getByRole("button", { name: "开始寻才" }).click();
 
   await expect
     .poll(() => latestCreatedConversationRequest())
-    .toMatchObject({ title: "AI Agent 平台工程师" });
+    .toMatchObject({ title: jobTitle });
   await expect
     .poll(() => latestSubmittedJdRequest())
     .toMatchObject({
-      jobTitle: "AI Agent 平台工程师",
+      jobTitle,
       messageType: "submitJd",
-      sourceKinds: ["cts"],
-      text: "寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。",
+      sourceKinds: ["liepin"],
+      text: jobDescription,
     });
   const idempotencyKey = latestSubmittedJdRequest()?.idempotencyKey;
   expect(typeof idempotencyKey === "string" ? idempotencyKey : "").toContain(

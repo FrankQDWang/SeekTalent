@@ -1,5 +1,5 @@
 .thinking-process-rail {
-  background: var(--st-panel);
+  background: var(--st-bg);
   border-left: 1px solid var(--st-border);
   display: flex;
   flex-direction: column;
@@ -9,39 +9,48 @@
 
 .thinking-process-rail__tabs {
   display: grid;
-  gap: var(--st-space-2);
+  gap: 8px;
   grid-template-columns: 1fr 1fr;
-  padding: var(--st-space-3);
+  padding: 18px 16px 12px;
 }
 
 .thinking-process-rail__tab {
   align-items: center;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: var(--st-radius-md);
+  border-radius: var(--st-radius-sm);
   color: var(--st-muted);
   cursor: pointer;
   display: inline-flex;
   font-weight: 720;
   gap: var(--st-space-2);
   justify-content: center;
-  min-height: 34px;
+  min-height: 32px;
 }
 
 .thinking-process-rail__tab[aria-selected="true"] {
-  background: var(--st-surface);
+  background: oklch(0.97 0.018 262);
   border-color: var(--st-border);
   color: var(--st-ink);
+}
+
+.thinking-process-rail__tab svg {
+  display: none;
 }
 
 .thinking-process-rail__panel {
   min-height: 0;
   overflow: auto;
-  padding: 0 var(--st-space-3) var(--st-space-3);
+  padding: 0 16px 20px;
 }
 
 .thinking-process-rail__panel .candidate-queue {
   border: 0;
+  padding: 0;
+}
+
+.thinking-process-rail__panel .candidate-queue__header {
+  display: none;
 }
 
 .thinking-timeline {
@@ -61,16 +70,16 @@
 }
 
 .thinking-round {
-  background: var(--st-surface);
-  border: 1px solid var(--st-border);
-  border-radius: var(--st-radius-md);
+  background: var(--st-bg);
+  border: 0;
+  border-radius: 0;
   display: grid;
   gap: var(--st-space-3);
-  padding: var(--st-space-3);
+  padding: 0;
 }
 
 .thinking-round[data-active="true"] {
-  border-color: var(--st-action);
+  border-color: transparent;
 }
 
 .thinking-round__header {
@@ -95,10 +104,12 @@
 }
 
 .thinking-card {
-  border-top: 1px solid var(--st-border);
+  background: oklch(0.98 0.006 262);
+  border-top: 0;
+  border-radius: var(--st-radius-md);
   display: grid;
   gap: var(--st-space-2);
-  padding-top: var(--st-space-3);
+  padding: 12px;
 }
 
 .thinking-card h3,

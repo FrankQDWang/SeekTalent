@@ -1,4 +1,5 @@
 .conversation-view {
+  background: var(--st-bg);
   display: flex;
   flex: 1;
   flex-direction: column;
@@ -9,13 +10,13 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: var(--st-space-4);
+  padding: 0;
 }
 
 .conversation-view__workspace[data-workflow-surface="visible"] {
   display: grid;
-  gap: var(--st-space-4);
-  grid-template-columns: minmax(360px, 0.58fr) minmax(320px, 0.42fr);
+  gap: 0;
+  grid-template-columns: 386px minmax(0, 1fr);
 }
 
 .conversation-view__workspace[data-workflow-surface="hidden"] {
@@ -50,8 +51,8 @@
 }
 
 .conversation-view__panel {
-  border: 1px solid var(--st-border);
-  border-radius: var(--st-radius-md);
+  border: 0;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -63,6 +64,18 @@
   display: none;
 }
 
+.conversation-view__workspace[data-workflow-surface="visible"]
+  .conversation-view__panel--chat {
+  background: rgb(246 248 252);
+  border-right: 1px solid var(--st-border);
+}
+
+.conversation-view__workspace[data-workflow-surface="visible"]
+  .conversation-view__panel--chat
+  .transcript {
+  background: rgb(246 248 252);
+}
+
 .conversation-view__panel .strategy-graph,
 .conversation-view__panel .transcript {
   border: 0;
@@ -72,7 +85,8 @@
 }
 
 .conversation-view__panel--graph .strategy-graph {
-  min-height: 420px;
+  height: 100%;
+  min-height: 100%;
 }
 
 .conversation-view__panel .transcript {

@@ -31,12 +31,10 @@ describe("CandidateDetailDrawer", () => {
     );
 
     expect(screen.getByRole("dialog", { name: "候选人详情" })).toBeVisible();
-    expect(screen.getByText("候选人 A")).toBeVisible();
+    expect(screen.getByText("吴所谓")).toBeVisible();
     expect(screen.getByText("工作经历")).toBeVisible();
-    expect(screen.getByText("技能匹配")).toBeVisible();
-    expect(
-      screen.getByText("最近一段经历覆盖 Agent 工具调用平台。"),
-    ).toBeVisible();
+    expect(screen.getByText("匹配程度")).toBeVisible();
+    expect(screen.getByText("多次通过流程重构提升任务完成率。")).toBeVisible();
     expect(
       screen.queryByText("读取完整详情前需要审批"),
     ).not.toBeInTheDocument();
@@ -137,7 +135,7 @@ describe("CandidateDetailDrawer", () => {
     expect(closeButton).toHaveFocus();
 
     await user.tab();
-    expect(closeButton).toHaveFocus();
+    expect(screen.getByLabelText("候选人详情内容")).toHaveFocus();
 
     await user.keyboard("{Escape}");
     expect(trigger).toHaveFocus();

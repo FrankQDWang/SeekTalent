@@ -1,37 +1,25 @@
 import { QueryClientProvider } from "@tanstack/react-query";
 import { render, screen } from "@testing-library/react";
-import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { App } from "../App";
 import { createWorkbenchQueryClient } from "../lib/query/client";
 import { queryKeys } from "../lib/query/keys";
 
-vi.mock("@tanstack/react-router", () => ({
-  Link: ({ children, to, ...props }: { children?: ReactNode; to: string }) => (
-    <a href={to} {...props}>
-      {children}
-    </a>
-  ),
-}));
-
 describe("React Workbench shell", () => {
-  it("renders a usable workbench scaffold", () => {
+  it("renders the workbench root shell", () => {
     expect.hasAssertions();
 
     render(
       <QueryClientProvider client={createWorkbenchQueryClient()}>
-        <App />
+        <App>
+          <section aria-label="工作台内容">Content</section>
+        </App>
       </QueryClientProvider>,
     );
 
     expect(screen.getByTestId("app-shell")).toBeInTheDocument();
-    expect(
-      screen.getByRole("heading", { name: "Wide Talent Search" }),
-    ).toBeVisible();
-    expect(
-      screen.getByRole("complementary", { name: "任务导航" }),
-    ).toBeVisible();
-    expect(screen.getByText("React foundation")).toBeVisible();
+    expect(screen.getByLabelText("工作台内容")).toBeVisible();
+    expect(screen.queryByText("React foundation")).not.toBeInTheDocument();
   });
 
   it("configures query defaults and stable BFF query keys", () => {

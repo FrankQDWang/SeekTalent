@@ -1,7 +1,7 @@
 .strategy-graph {
-  background: var(--st-canvas);
-  border: 1px solid var(--st-border);
-  border-radius: var(--st-radius-md);
+  background: rgb(232 236 248);
+  border: 0;
+  border-radius: 0;
   height: min(62vh, 680px);
   min-height: 420px;
   overflow: hidden;
@@ -14,7 +14,7 @@
 }
 
 .strategy-graph .react-flow__background {
-  opacity: 0.34;
+  opacity: 0.16;
 }
 
 .strategy-graph .react-flow__edge-path {

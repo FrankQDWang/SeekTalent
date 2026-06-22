@@ -27,9 +27,7 @@ describe("RequirementReviewPanel", () => {
       />,
     );
 
-    await user.click(
-      screen.getByRole("button", { name: /Python 后端平台经验/ }),
-    );
+    await user.click(screen.getByRole("button", { name: /交互设计功底扎实/ }));
 
     expect(screen.getByText("必须满足")).toBeVisible();
     expect(onToggleItem).toHaveBeenCalledWith(
@@ -51,11 +49,11 @@ describe("RequirementReviewPanel", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("其他"), "补充评测平台经验");
+    await user.type(screen.getByLabelText("其他补充要求"), "补充评测平台经验");
     await user.click(screen.getByRole("button", { name: "添加" }));
 
     expect(onAddOther).toHaveBeenCalledWith("补充评测平台经验");
-    expect(screen.getByLabelText("其他")).toHaveValue("");
+    expect(screen.getByLabelText("其他补充要求")).toHaveValue("");
   });
 
   it("keeps other requirement text when mutation fails", async () => {
@@ -71,10 +69,12 @@ describe("RequirementReviewPanel", () => {
       />,
     );
 
-    await user.type(screen.getByLabelText("其他"), "补充评测平台经验");
+    await user.type(screen.getByLabelText("其他补充要求"), "补充评测平台经验");
     await user.click(screen.getByRole("button", { name: "添加" }));
 
     expect(onAddOther).toHaveBeenCalledWith("补充评测平台经验");
-    expect(screen.getByLabelText("其他")).toHaveValue("补充评测平台经验");
+    expect(screen.getByLabelText("其他补充要求")).toHaveValue(
+      "补充评测平台经验",
+    );
   });
 });

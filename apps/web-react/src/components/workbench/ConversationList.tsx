@@ -1,4 +1,3 @@
-import { Link } from "@tanstack/react-router";
 import { Circle, CircleCheck, CircleDashed } from "lucide-react";
 import type { AgentWorkbenchConversationSummary } from "../../lib/api/agentWorkbenchTypes";
 import { useAgentWorkbenchConversations } from "../../lib/api/agentWorkbench";
@@ -67,33 +66,32 @@ function ConversationListView({
   return (
     <nav aria-label="Agent conversations" className="conversation-list">
       <div className="conversation-list__header">
-        <h2>任务</h2>
-        <span>{conversations.length}</span>
+        <h2>历史任务</h2>
+        <span className="conversation-list__count">{conversations.length}</span>
       </div>
       {conversations.length === 0 ? (
         <p className="conversation-list__empty" role="status">
-          暂无任务
+          还没有历史任务
         </p>
       ) : (
         <ul>
           {conversations.map((conversation) => (
             <li key={conversation.conversationId}>
-              <Link
+              <a
                 aria-current={
                   conversation.conversationId === selectedConversationId
                     ? "page"
                     : undefined
                 }
                 className="conversation-list__item"
-                params={{ conversationId: conversation.conversationId }}
-                to="/conversations/$conversationId"
+                href={`/conversations/${conversation.conversationId}`}
               >
                 <StatusIcon status={conversation.status} />
                 <span>
                   <strong>{conversation.title}</strong>
                   <em>{conversation.status}</em>
                 </span>
-              </Link>
+              </a>
             </li>
           ))}
         </ul>

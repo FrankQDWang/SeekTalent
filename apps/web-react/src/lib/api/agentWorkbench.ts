@@ -130,7 +130,7 @@ export function useCreateAgentWorkbenchConversationFromJd() {
         jobTitle: normalizedJobTitle,
         messageType: "submitJd",
         notes: null,
-        sourceKinds: ["cts"],
+        sourceKinds: ["liepin"],
         text,
       });
       return { conversationId, view };
