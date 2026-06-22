@@ -186,7 +186,9 @@ done
   SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:a11y
   SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:interactions
   SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:visual
-  pnpm test:e2e
+  SEEKTALENT_DEV_BACKEND_HOST=127.0.0.1 \
+    SEEKTALENT_DEV_BACKEND_PORT="$api_port" \
+    pnpm test:e2e
 )
 
 conversation_json="$tmp_root/conversation.json"
