@@ -22,7 +22,6 @@ def test_workflow_runtime_exposes_explicit_runtime_services_bundle(tmp_path) -> 
     assert runtime.controller is runtime.services.controller
     assert runtime.resume_scorer is runtime.services.resume_scorer
     assert runtime.reflection_critic is runtime.services.reflection_critic
-    assert runtime.finalizer is runtime.services.finalizer
     assert runtime.retrieval_runtime is runtime.services.retrieval_runtime
     assert runtime.corpus_store is runtime.services.corpus_store
 

@@ -14,7 +14,6 @@ class ControllerStageState(TypedDict):
     controller_latency_ms: int
 
 
-class FinalizerStageState(TypedDict):
-    call_id: str
+class FinalizationStageState(TypedDict):
     artifacts: list[str]
     latency_ms: int

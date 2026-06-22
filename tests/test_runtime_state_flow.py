@@ -69,6 +69,15 @@ def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
     return build_source_enabled_runtime(*args, **kwargs)
 
 
+def _cts_source_plan(runtime: WorkflowRuntime, tracer: RunTracer):
+    return build_runtime_source_plan(
+        source_kinds=["cts"],
+        settings=runtime.settings,
+        runtime_run_id=tracer.run_id,
+        source_context=None,
+    )
+
+
 def _round_artifact(run_dir: Path, round_no: int, subsystem: str, name: str, *, extension: str = "json") -> Path:
     return run_dir / "rounds" / f"{round_no:02d}" / subsystem / f"{name}.{extension}"
 
@@ -2426,7 +2435,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         top_candidates, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=progress_events.append)
+            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=progress_events.append)
         )
     finally:
         tracer.close()
@@ -2540,7 +2549,7 @@ def test_round_two_serializes_exploit_and_generic_lane_types(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2587,7 +2596,7 @@ def test_round_two_uses_prf_probe_when_gate_passes(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2644,7 +2653,7 @@ def test_default_llm_prf_backend_can_drive_prf_probe(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2680,7 +2689,7 @@ def test_prf_selection_uses_llm_prf_without_backend_setting(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2703,7 +2712,7 @@ def test_default_llm_prf_backend_skips_round_one_without_artifacts(tmp_path: Pat
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2754,7 +2763,7 @@ def test_insufficient_prf_seed_support_does_not_require_prf_provider_preflight(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2798,7 +2807,7 @@ def test_llm_prf_stage_preflight_failure_falls_back_without_model_call(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2836,7 +2845,7 @@ def test_llm_prf_backend_falls_back_to_generic_on_timeout(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2868,7 +2877,7 @@ def test_llm_prf_backend_falls_back_to_generic_on_provider_failure_without_legac
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2923,7 +2932,7 @@ def test_llm_prf_backend_falls_back_to_generic_when_all_candidates_rejected(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2952,7 +2961,7 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2988,7 +2997,7 @@ def test_duplicate_hit_does_not_overwrite_first_hit_attribution(tmp_path: Path) 
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -3082,7 +3091,7 @@ def test_run_rounds_delegates_controller_stage_to_runtime_host(
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer)
+            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3117,7 +3126,7 @@ def test_runtime_reflection_does_not_mutate_query_term_pool(tmp_path: Path) -> N
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -3179,7 +3188,7 @@ def test_run_rounds_delegates_reflection_stage_to_runtime_host(
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer)
+            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3194,7 +3203,7 @@ def test_run_rounds_delegates_reflection_stage_to_runtime_host(
     assert terminal_controller_round is None
 
 
-def test_run_async_delegates_finalizer_stage_to_runtime_host(
+def test_run_async_delegates_deterministic_finalization_stage_to_runtime_host(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
@@ -3207,22 +3216,31 @@ def test_run_async_delegates_finalizer_stage_to_runtime_host(
     )
     runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
-
-    class FailingFinalizer:
-        async def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates):
-            del run_id, run_dir, rounds_executed, stop_reason, ranked_candidates
-            raise AssertionError("finalizer.finalize should not be called directly from run_async")
-
-    cast(Any, runtime).finalizer = FailingFinalizer()
     recorded: dict[str, Any] = {}
 
-    async def fake_run_finalizer_stage(**kwargs):
+    async def fake_run_deterministic_finalization_stage(**kwargs):
         recorded["finalize_context"] = kwargs["finalize_context"]
-        recorded["finalizer"] = kwargs["finalizer"]
         recorded["progress_callback"] = kwargs["progress_callback"]
         assert "write_post_finalize_artifacts" not in kwargs
+        kwargs["tracer"].session.register_path(
+            "runtime.finalization_context",
+            "runtime/finalization_context.json",
+            content_type="application/json",
+            schema_version="v1",
+        )
+        kwargs["tracer"].session.register_path(
+            "runtime.finalization_call",
+            "runtime/finalization_call.json",
+            content_type="application/json",
+            schema_version="v1",
+        )
+        kwargs["tracer"].session.register_path(
+            "output.final_answer",
+            "output/final_answer.md",
+            content_type="text/markdown",
+        )
         kwargs["tracer"].write_json(
-            "finalizer_context.json",
+            "runtime.finalization_context",
             kwargs["slim_finalize_context"](kwargs["finalize_context"]),
         )
         final_result = FinalResult(
@@ -3250,53 +3268,37 @@ def test_run_async_delegates_finalizer_stage_to_runtime_host(
             ],
         )
         final_markdown = "# Delegated final markdown\n"
-        kwargs["tracer"].session.register_path(
-            "runtime.finalizer_call",
-            "runtime/finalizer_call.json",
-            content_type="application/json",
-            schema_version="v1",
-        )
-        kwargs["tracer"].session.register_path(
-            "output.final_answer",
-            "output/final_answer.md",
-            content_type="text/markdown",
-        )
         kwargs["tracer"].write_json(
-            "runtime.finalizer_call",
-            {"stage": "finalize", "call_id": "finalizer", "output_retries": 2},
+            "runtime.finalization_call",
+            {"stage": "finalization", "engine": "deterministic_runtime", "candidate_count": len(final_result.candidates)},
         )
         kwargs["tracer"].write_json("output.final_candidates", final_result.model_dump(mode="json"))
         kwargs["tracer"].write_text("output.final_answer", final_markdown)
-        return final_result, final_markdown, {"stage_state": "finalizer-state"}
-
-    def fake_finalize_finalizer_stage(**kwargs):
-        recorded["finalizer_stage_state"] = kwargs["finalizer_stage_state"]
-        recorded["finalizer_completed_artifacts"] = kwargs["completed_artifact_paths"]
-        recorded["completed_final_result"] = kwargs["final_result"]
+        return final_result, final_markdown, {
+            "artifacts": [
+                "runtime/finalization_context.json",
+                "runtime/finalization_call.json",
+                "output/final_candidates.json",
+                "output/final_answer.md",
+            ],
+            "latency_ms": 1,
+        }
 
     monkeypatch.setattr(
         orchestrator_module,
         "finalize_runtime",
         SimpleNamespace(
-            run_finalizer_stage=fake_run_finalizer_stage,
-            finalize_finalizer_stage=fake_finalize_finalizer_stage,
+            run_deterministic_finalization_stage=fake_run_deterministic_finalization_stage,
         ),
         raising=False,
     )
 
-    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+    artifacts = runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
-    assert recorded["finalizer"] is runtime.finalizer
     assert recorded["progress_callback"] is None
     assert recorded["finalize_context"].rounds_executed == 1
     assert recorded["finalize_context"].stop_reason == "max_rounds_reached"
     assert len(recorded["finalize_context"].top_candidates) > 0
-    assert recorded["finalizer_stage_state"] == {"stage_state": "finalizer-state"}
-    assert recorded["finalizer_completed_artifacts"] == [
-        "runtime/search_diagnostics.json",
-        "output/run_summary.md",
-    ]
-    assert recorded["completed_final_result"] == artifacts.final_result
     assert artifacts.final_result.summary == "Delegated finalizer summary."
     assert artifacts.final_markdown == "# Delegated final markdown\n"
 
@@ -3317,7 +3319,7 @@ def test_runtime_builds_plan_for_reflection_backed_inactive_term(tmp_path: Path)
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -3586,7 +3588,7 @@ def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) ->
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer)
+            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3621,7 +3623,7 @@ def test_runtime_rejects_controller_stop_when_stop_guidance_blocks_stop(tmp_path
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
         with pytest.raises(ValueError, match="controller_stop_not_allowed"):
-            asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
+            asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -3649,7 +3651,7 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer)
+            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3702,7 +3704,7 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer)
+            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3788,7 +3790,7 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -3858,7 +3860,7 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
         }
         run_state.top_pool_ids = ["fit-1", "fit-2"]
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=progress_events.append)
+            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=progress_events.append)
         )
     finally:
         tracer.close()
@@ -3931,7 +3933,7 @@ def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: P
             ),
         }
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -3959,7 +3961,7 @@ def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_wa
         run_state.retrieval_state.anchor_only_broaden_attempted = True
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
+        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -3988,7 +3990,7 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         with pytest.raises(ValueError, match="controller_stop_not_allowed"):
-            asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer))
+            asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 

@@ -40,7 +40,15 @@ def test_cts_only_rounds_emit_canonical_runtime_public_events(tmp_path) -> None:
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=progress_events.append))
+        source_plan = build_runtime_source_plan(source_kinds=["cts"], settings=settings, runtime_run_id=tracer.run_id)
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                tracer=tracer,
+                source_plan=source_plan,
+                progress_callback=progress_events.append,
+            )
+        )
     finally:
         tracer.close()
 
@@ -91,6 +99,7 @@ def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pyt
         job_title="Senior Python Engineer",
         jd="Senior Python Engineer responsible for resume matching workflows.",
         notes="Prefer retrieval experience and shipping production AI features.",
+        source_kinds=["cts"],
         progress_callback=progress_events.append,
     )
 

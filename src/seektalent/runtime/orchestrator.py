@@ -449,7 +449,6 @@ class WorkflowRuntime:
                 "controller",
                 "scoring",
                 "reflection",
-                "finalize",
                 "judge",
                 "tui_summary",
                 "prf_probe_phrase_proposal",
@@ -471,7 +470,6 @@ class WorkflowRuntime:
         self.resume_scorer = self.services.resume_scorer
         self.resume_quality_commenter = self.services.resume_quality_commenter
         self.reflection_critic = self.services.reflection_critic
-        self.finalizer = self.services.finalizer
         self.llm_prf_extractor = self.services.llm_prf_extractor
         self.retrieval_runtime = self.services.retrieval_runtime
         self.retrieval_service = self.services.retrieval_service
@@ -851,20 +849,17 @@ class WorkflowRuntime:
                 run_id=tracer.run_id,
                 run_dir=str(tracer.run_dir),
             )
-            final_result, final_markdown, finalizer_stage_state = await finalize_runtime.run_finalizer_stage(
-                settings=self.settings,
-                finalizer=self.finalizer,
-                finalize_context=finalize_context,
-                tracer=tracer,
-                progress_callback=progress_callback,
-                build_llm_call_snapshot=self._build_llm_call_snapshot,
-                emit_llm_event=self._emit_llm_event,
-                emit_progress=self._emit_progress,
-                slim_finalize_context=self._slim_finalize_context,
-                render_final_markdown=self._render_final_markdown,
-                run_stage_error=RunStageError,
+            final_result, final_markdown, finalization_stage_state = await (
+                finalize_runtime.run_deterministic_finalization_stage(
+                    finalize_context=finalize_context,
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    emit_progress=self._emit_progress,
+                    slim_finalize_context=self._slim_finalize_context,
+                    render_final_markdown=self._render_final_markdown,
+                )
             )
-            finalizer_completed_artifacts = post_finalize_runtime.write_post_finalize_artifacts(
+            finalization_completed_artifacts = post_finalize_runtime.write_post_finalize_artifacts(
                 settings=self.settings,
                 tracer=tracer,
                 run_state=run_state,
@@ -876,16 +871,15 @@ class WorkflowRuntime:
                 render_run_summary=self._render_run_summary,
                 build_search_diagnostics=self._build_search_diagnostics,
             )
-            finalize_runtime.finalize_finalizer_stage(
-                settings=self.settings,
-                finalize_context=finalize_context,
-                final_result=final_result,
-                finalizer_stage_state=finalizer_stage_state,
-                completed_artifact_paths=finalizer_completed_artifacts,
-                tracer=tracer,
-                progress_callback=progress_callback,
-                emit_llm_event=self._emit_llm_event,
-                emit_progress=self._emit_progress,
+            tracer.emit(
+                "finalization_completed",
+                status="succeeded",
+                latency_ms=finalization_stage_state["latency_ms"],
+                summary=final_result.summary,
+                artifact_paths=finalization_stage_state["artifacts"] + finalization_completed_artifacts,
+                payload={
+                    "engine": "deterministic_runtime",
+                },
             )
             post_finalize_result = await post_finalize_runtime.run_post_finalize_stage(
                 settings=self.settings,
@@ -1139,7 +1133,7 @@ class WorkflowRuntime:
                     "controller": self.settings.controller_model_id,
                     "scoring": self.settings.scoring_model_id,
                     "reflection": self.settings.reflection_model_id,
-                    "finalize": self.settings.finalize_model_id,
+                    "finalization_engine": "deterministic_runtime",
                     "tui_summary": self.settings.effective_tui_summary_model,
                 },
                 "enable_eval": self.settings.enable_eval,
@@ -3084,7 +3078,7 @@ class WorkflowRuntime:
                 "requirements_model_id": self.settings.requirements_model_id,
                 "controller_model_id": self.settings.controller_model_id,
                 "scoring_model_id": self.settings.scoring_model_id,
-                "finalize_model_id": self.settings.finalize_model_id,
+                "finalization_engine": "deterministic_runtime",
                 "reflection_model_id": self.settings.reflection_model_id,
                 "tui_summary_model_id": self.settings.effective_tui_summary_model,
                 "judge_model_id": self.settings.judge_model_id,
@@ -3594,7 +3588,7 @@ class WorkflowRuntime:
             controller_model=self.settings.controller_model_id,
             scoring_model=self.settings.scoring_model_id,
             reflection_model=self.settings.reflection_model_id,
-            finalize_model=self.settings.finalize_model_id,
+            finalization_engine="deterministic_runtime",
             prompt_hashes=self.prompts.prompt_hashes(),
         )
 
@@ -3764,7 +3758,7 @@ class WorkflowRuntime:
             raise RunStageError("llm_preflight", str(exc)) from exc
 
     def _configured_providers(self) -> list[str]:
-        stage_names = ["requirements", "controller", "scoring", "reflection", "finalize", "tui_summary"]
+        stage_names = ["requirements", "controller", "scoring", "reflection", "tui_summary"]
         if self.settings.enable_eval:
             stage_names.append("judge")
         seen: set[str] = set()

@@ -4,7 +4,6 @@ from pathlib import Path
 
 from seektalent.controller.react_controller import render_controller_prompt
 from seektalent.evaluation import render_judge_prompt
-from seektalent.finalize.finalizer import render_finalize_prompt
 from seektalent.models import (
     AgeRequirement,
     ControllerContext,
@@ -552,32 +551,6 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert "SCORING_CONTEXT" not in prompt
     assert_prompt_snapshot_safe(prompt)
 
-
-def test_finalizer_prompt_contains_ranked_list_and_exact_order() -> None:
-    prompt = render_finalize_prompt(
-        run_id="run-1",
-        run_dir="/tmp/run-1",
-        rounds_executed=2,
-        stop_reason="controller_stop",
-        ranked_candidates=[_scored_candidate("resume-1"), _scored_candidate("resume-2")],
-    )
-
-    assert "TASK" in prompt
-    assert prompt_template_version("finalize") in prompt
-    assert 'UNTRUSTED DATA "RANKED_CANDIDATES"' in prompt
-    assert "FINALIZATION STATE" in prompt
-    assert "RANKED CANDIDATES" in prompt
-    assert "EXACT DATA" in prompt
-    assert "1. resume-1" in prompt
-    assert "2. resume-2" in prompt
-    assert "matched_must_haves" in prompt
-    assert "matched_preferences" in prompt
-    assert "strengths" in prompt
-    assert "weaknesses" in prompt
-    assert "risk_flags" in prompt
-    assert "short tenure" in prompt
-    assert '"candidate_order"' in prompt
-    assert '"stop_reason": "controller_stop"' in prompt
     assert '"run_dir"' not in prompt
     assert "/tmp/run-1" not in prompt
     assert "FINALIZATION_CONTEXT" not in prompt

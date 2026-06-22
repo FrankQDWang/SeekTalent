@@ -12,7 +12,6 @@ from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.evaluation import EvaluationArtifacts, EvaluationResult, EvaluationStageResult
 from seektalent.models import (
     CTSQuery,
-    FinalCandidate,
     FinalResult,
     HardConstraintSlots,
     LocationExecutionPlan,
@@ -32,7 +31,6 @@ from seektalent.models import (
     SearchObservation,
     StopControllerDecision,
 )
-from seektalent.finalize.finalizer import render_finalize_prompt
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import LoadedPrompt
 from seektalent.runtime.context_builder import build_controller_context, build_finalize_context, build_reflection_context
@@ -51,7 +49,9 @@ from seektalent.runtime.runtime_diagnostics import (
 import seektalent.artifacts.store as artifact_store_module
 from seektalent.progress import ProgressEvent
 from seektalent.runtime import WorkflowRuntime
+from seektalent.runtime import finalize_runtime
 from seektalent.runtime.retrieval_runtime import RetrievalRuntime, _provider_request_id, build_logical_query_state
+from seektalent.runtime.source_lanes import build_runtime_source_plan
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer, json_sha256, provider_usage_from_result
@@ -61,6 +61,15 @@ from tests.test_context_builder import _run_state_for_stop_gate, _scored_candida
 
 def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
     return build_source_enabled_runtime(*args, **kwargs)
+
+
+def _cts_source_plan(runtime: WorkflowRuntime, tracer: RunTracer):
+    return build_runtime_source_plan(
+        source_kinds=["cts"],
+        settings=runtime.settings,
+        runtime_run_id=tracer.run_id,
+        source_context=None,
+    )
 
 
 def _read_json(path: Path) -> Any:
@@ -200,7 +209,7 @@ def test_run_tracer_runtime_failure_marks_run_manifest_failed(tmp_path: Path, mo
     monkeypatch.setattr(runtime, "_require_live_llm_config", lambda: (_ for _ in ()).throw(RuntimeError("boom failure")))
 
     with pytest.raises(RuntimeError, match="boom failure"):
-        runtime.run(job_title="Python Engineer", jd="JD", notes="")
+        runtime.run(source_kinds=["cts"], job_title="Python Engineer", jd="JD", notes="")
 
     run_dir = _single_run_dir(settings.artifacts_path)
     manifest = json.loads((run_dir / "manifests" / "run_manifest.json").read_text(encoding="utf-8"))
@@ -232,7 +241,7 @@ def test_corpus_finalization_failure_does_not_mask_existing_runtime_failure(
     monkeypatch.setattr("seektalent.runtime.orchestrator.write_corpus_ingest_manifest", fail_corpus_manifest)
 
     with pytest.raises(RuntimeError, match="original runtime failure"):
-        runtime.run(job_title="Python Engineer", jd="JD", notes="")
+        runtime.run(source_kinds=["cts"], job_title="Python Engineer", jd="JD", notes="")
 
     run_dir = _single_run_dir(settings.artifacts_path)
     manifest = json.loads((run_dir / "manifests" / "run_manifest.json").read_text(encoding="utf-8"))
@@ -402,15 +411,7 @@ def _build_audit_fixture(
             runtime._run_rounds(
                 run_state=run_state,
                 tracer=tracer,
-            )
-        )
-        final_result = asyncio.run(
-            runtime.finalizer.finalize(
-                run_id=tracer.run_id,
-                run_dir=str(tracer.run_dir),
-                rounds_executed=rounds_executed,
-                stop_reason=stop_reason,
-                ranked_candidates=top_scored,
+                source_plan=_cts_source_plan(runtime, tracer),
             )
         )
         finalizer_context = build_finalize_context(
@@ -420,48 +421,16 @@ def _build_audit_fixture(
             run_id=tracer.run_id,
             run_dir=str(tracer.run_dir),
         )
-        finalizer_payload = {"FINALIZER_CONTEXT": finalizer_context.model_dump(mode="json")}
-        tracer.session.register_path(
-            "runtime.finalizer_context",
-            "runtime/finalizer_context.json",
-            content_type="application/json",
-            schema_version="v1",
+        final_result, _final_markdown, _finalization_stage_state = asyncio.run(
+            finalize_runtime.run_deterministic_finalization_stage(
+                finalize_context=finalizer_context,
+                tracer=tracer,
+                progress_callback=None,
+                emit_progress=runtime._emit_progress,
+                slim_finalize_context=runtime._slim_finalize_context,
+                render_final_markdown=runtime._render_final_markdown,
+            )
         )
-        tracer.session.register_path(
-            "runtime.finalizer_call",
-            "runtime/finalizer_call.json",
-            content_type="application/json",
-            schema_version="v1",
-        )
-        tracer.write_json("runtime.finalizer_context", runtime._slim_finalize_context(finalizer_context))
-        tracer.write_json(
-            "runtime.finalizer_call",
-            runtime._build_llm_call_snapshot(
-                stage="finalize",
-                call_id="finalize-seam-test",
-                model_id=runtime.settings.finalize_model_id,
-                prompt_name="finalize",
-                user_payload=finalizer_payload,
-                user_prompt_text=render_finalize_prompt(
-                    run_id=tracer.run_id,
-                    run_dir=str(tracer.run_dir),
-                    rounds_executed=rounds_executed,
-                    stop_reason=stop_reason,
-                    ranked_candidates=top_scored,
-                ),
-                input_artifact_refs=["runtime.finalizer_context"],
-                output_artifact_refs=["output.final_candidates"],
-                started_at="2026-01-01T00:00:00+00:00",
-                latency_ms=1,
-                status="succeeded",
-                retries=0,
-                output_retries=2,
-                structured_output=final_result.model_dump(mode="json"),
-                validator_retry_count=runtime.finalizer.last_validator_retry_count,
-                validator_retry_reasons=runtime.finalizer.last_validator_retry_reasons,
-            ).model_dump(mode="json"),
-        )
-        tracer.write_json("output.final_candidates", final_result.model_dump(mode="json"))
     finally:
         tracer.close()
     return _AuditFixtureArtifacts(tracer), run_state, final_result, terminal_controller_round
@@ -854,7 +823,7 @@ def test_collect_llm_schema_pressure_tolerates_historical_company_discovery_arti
     stages = [item["stage"] for item in pressure]
 
     assert stages[0] == "requirements"
-    assert stages[-1] == "finalize"
+    assert "finalize" not in stages
     assert set(stages) == {
         "requirements",
         "controller",
@@ -862,7 +831,6 @@ def test_collect_llm_schema_pressure_tolerates_historical_company_discovery_arti
         "company_discovery_extract",
         "company_discovery_reduce",
         "reflection",
-        "finalize",
     }
 
 
@@ -899,7 +867,6 @@ def test_collect_llm_schema_pressure_ignores_legacy_company_discovery_run_config
         "requirements",
         "controller",
         "reflection",
-        "finalize",
     ]
 def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypatch) -> None:
     captured_extra_specs: list[str] | None = None
@@ -1438,38 +1405,6 @@ class FailingResumeQualityCommenter:
         raise RuntimeError("quality comment failed")
 
 
-class StubFinalizer:
-    last_validator_retry_count = 0
-    last_validator_retry_reasons: list[str] = []
-
-    async def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates) -> FinalResult:
-        candidates = [
-            FinalCandidate(
-                resume_id=item.resume_id,
-                rank=index,
-                final_score=item.overall_score,
-                fit_bucket=item.fit_bucket,
-                match_summary="Must 88/100, preferred 70/100, risk 8/100.",
-                strengths=item.strengths,
-                weaknesses=item.weaknesses,
-                matched_must_haves=item.matched_must_haves,
-                matched_preferences=item.matched_preferences,
-                risk_flags=item.risk_flags,
-                why_selected=item.reasoning_summary,
-                source_round=item.source_round,
-            )
-            for index, item in enumerate(ranked_candidates, start=1)
-        ]
-        return FinalResult(
-            run_id=run_id,
-            run_dir=run_dir,
-            rounds_executed=rounds_executed,
-            stop_reason=stop_reason,
-            candidates=candidates,
-            summary=f"Returned {len(candidates)} candidates after {rounds_executed} rounds.",
-        )
-
-
 class RepairAwareRequirementExtractor(StubRequirementExtractor):
     def __init__(self) -> None:
         self.last_provider_usage = _provider_usage_snapshot()
@@ -1528,7 +1463,6 @@ def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resu
     runtime_any.controller = controller
     runtime_any.resume_scorer = resume_scorer
     runtime_any.reflection_critic = StubReflection()
-    runtime_any.finalizer = StubFinalizer()
 
 
 def test_execute_search_tool_refills_after_batch_dedup(tmp_path: Path) -> None:
@@ -1766,7 +1700,14 @@ def test_query_resume_hits_are_enriched_after_scoring(tmp_path: Path) -> None:
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -1807,7 +1748,7 @@ def test_corpus_records_provider_returns_when_eval_disabled(
     _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
 
     job_title, jd, notes = _sample_inputs()
-    runtime.run(job_title=job_title, jd=jd, notes=notes)
+    runtime.run(source_kinds=["cts"], job_title=job_title, jd=jd, notes=notes)
 
     conn = sqlite3.connect(settings.corpus_path)
     try:
@@ -1841,7 +1782,7 @@ def test_runtime_populates_flywheel_run_query_and_hit_rows(
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     job_title, jd, notes = _sample_inputs()
 
-    artifacts = runtime.run(job_title=job_title, jd=jd, notes=notes)
+    artifacts = runtime.run(source_kinds=["cts"], job_title=job_title, jd=jd, notes=notes)
 
     conn = sqlite3.connect(settings.flywheel_path)
     conn.row_factory = sqlite3.Row
@@ -1902,7 +1843,7 @@ def test_runtime_does_not_create_flywheel_outputs_in_prod(
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     job_title, jd, notes = _sample_inputs()
 
-    artifacts = runtime.run(job_title=job_title, jd=jd, notes=notes)
+    artifacts = runtime.run(source_kinds=["cts"], job_title=job_title, jd=jd, notes=notes)
 
     assert settings.enable_flywheel is False
     assert not settings.flywheel_path.exists()
@@ -1918,7 +1859,14 @@ def test_replay_snapshot_contains_provider_snapshot_and_versions(tmp_path: Path)
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -1961,11 +1909,10 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     runtime_any.requirement_extractor.last_provider_usage = provider_usage
     runtime_any.controller.last_provider_usage = provider_usage
     runtime_any.reflection_critic.last_provider_usage = provider_usage
-    runtime_any.finalizer.last_provider_usage = provider_usage
     cast(Any, runtime).evaluation_runner = _stub_evaluation_runner
     job_title, jd, notes = _sample_inputs()
 
-    artifacts = runtime.run(job_title=job_title, jd=jd, notes=notes)
+    artifacts = runtime.run(source_kinds=["cts"], job_title=job_title, jd=jd, notes=notes)
 
     controller_decision = _read_json(_round_artifact(artifacts.run_dir, 1, "controller", "controller_decision"))
     retrieval_plan = _read_json(_round_artifact(artifacts.run_dir, 1, "retrieval", "retrieval_plan"))
@@ -1980,7 +1927,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     controller_call = _read_json(_round_artifact(artifacts.run_dir, 1, "controller", "controller_call"))
     reflection_call = _read_json(_round_artifact(artifacts.run_dir, 1, "reflection", "reflection_call"))
     scoring_calls = _read_jsonl(_round_artifact(artifacts.run_dir, 1, "scoring", "scoring_calls", extension="jsonl"))
-    finalizer_call = _read_json(_runtime_artifact(artifacts.run_dir, "finalizer_call"))
+    finalization_call = _read_json(_runtime_artifact(artifacts.run_dir, "finalization_call"))
     judge_packet = _read_json(_output_artifact(artifacts.run_dir, "judge_packet"))
     evaluation = _read_json(artifacts.run_dir / "evaluation" / "evaluation.json")
     scorecards = _read_jsonl(_round_artifact(artifacts.run_dir, 1, "scoring", "scorecards", extension="jsonl"))
@@ -1990,7 +1937,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     final_candidates = _read_json(_output_artifact(artifacts.run_dir, "final_candidates"))
     controller_context = _read_json(_round_artifact(artifacts.run_dir, 1, "controller", "controller_context"))
     reflection_context = _read_json(_round_artifact(artifacts.run_dir, 1, "reflection", "reflection_context"))
-    finalizer_context = _read_json(_runtime_artifact(artifacts.run_dir, "finalizer_context"))
+    finalization_context = _read_json(_runtime_artifact(artifacts.run_dir, "finalization_context"))
     search_diagnostics = _read_json(_runtime_artifact(artifacts.run_dir, "search_diagnostics"))
     term_surface_audit = _read_json(_runtime_artifact(artifacts.run_dir, "term_surface_audit"))
     run_summary = _output_artifact(artifacts.run_dir, "run_summary", extension="md").read_text(encoding="utf-8")
@@ -2044,8 +1991,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "full_jd" not in reflection_context
     assert "full_notes" not in reflection_context
     assert all("evidence" not in item for item in reflection_context["top_candidates"])
-    assert "top_candidates" in finalizer_context
-    assert all("evidence" not in item for item in finalizer_context["top_candidates"])
+    assert "top_candidates" in finalization_context
+    assert all("evidence" not in item for item in finalization_context["top_candidates"])
     assert final_candidates["summary"]
     assert all(candidate["match_summary"] for candidate in final_candidates["candidates"])
     assert "user_payload" not in requirements_call
@@ -2117,21 +2064,12 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert scoring_calls[0]["input_payload_sha256"]
     assert scoring_calls[0]["structured_output_sha256"]
     assert scoring_calls[0]["input_artifact_refs"] == ["round.01.scoring.scoring_input_refs", "resumes/mock-r001.json", "input.scoring_policy"]
-    assert "user_payload" not in finalizer_call
-    assert "structured_output" not in finalizer_call
-    assert finalizer_call["input_payload_sha256"]
-    assert finalizer_call["structured_output_sha256"]
-    assert finalizer_call["prompt_chars"] > 0
-    assert finalizer_call["input_payload_chars"] > 0
-    assert finalizer_call["output_chars"] > 0
-    assert "ranked_candidates" in finalizer_call["input_summary"]
-    assert "candidates=" in finalizer_call["output_summary"]
-    assert "runtime.finalizer_context" in finalizer_call["input_artifact_refs"]
-    assert "output.final_candidates" in finalizer_call["output_artifact_refs"]
-    assert finalizer_call["retries"] == 0
-    assert finalizer_call["output_retries"] == 2
-    assert finalizer_call["validator_retry_reasons"] == []
-    assert finalizer_call["provider_usage"] == provider_usage.model_dump(mode="json")
+    assert finalization_call["stage"] == "finalization"
+    assert finalization_call["engine"] == "deterministic_runtime"
+    assert finalization_call["status"] == "succeeded"
+    assert finalization_call["candidate_count"] == len(final_candidates["candidates"])
+    assert finalization_call["input_artifact_refs"] == ["runtime.finalization_context"]
+    assert finalization_call["output_artifact_refs"] == ["output.final_candidates", "output.final_answer"]
     assert judge_packet["requirements"]["requirement_sheet"]["job_title"] == "Senior Python Engineer"
     assert judge_packet["rounds"][0]["controller_decision"]["action"] == "search_cts"
     assert judge_packet["final"]["final_result"]["summary"] == final_candidates["summary"]
@@ -2163,7 +2101,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert diagnostic_round["controller_response_to_previous_reflection"] is None
     assert diagnostic_round["failure_labels"] == []
     assert diagnostic_round["audit_labels"] == []
-    assert {"requirements", "controller", "scoring", "reflection", "finalize"} <= schema_pressure_stages
+    assert {"requirements", "controller", "scoring", "reflection"} <= schema_pressure_stages
+    assert "finalize" not in schema_pressure_stages
     assert all("output_retries" in item for item in search_diagnostics["llm_schema_pressure"])
     assert all("validator_retry_count" in item for item in search_diagnostics["llm_schema_pressure"])
     assert all("prompt_chars" in item for item in search_diagnostics["llm_schema_pressure"])
@@ -2226,7 +2165,6 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert _prompt_asset(artifacts.run_dir, "controller").exists()
     assert _prompt_asset(artifacts.run_dir, "scoring").exists()
     assert _prompt_asset(artifacts.run_dir, "reflection").exists()
-    assert _prompt_asset(artifacts.run_dir, "finalize").exists()
     assert _prompt_asset(artifacts.run_dir, "judge").exists()
     event_types = {item["event_type"] for item in events}
     assert "requirements_started" in event_types
@@ -2235,18 +2173,17 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "controller_completed" in event_types
     assert "reflection_started" in event_types
     assert "reflection_completed" in event_types
-    assert "finalizer_started" in event_types
-    assert "finalizer_completed" in event_types
+    assert "finalization_completed" in event_types
     assert "evaluation_completed" in event_types
     controller_event = next(item for item in events if item["event_type"] == "controller_completed")
-    finalizer_event = next(item for item in events if item["event_type"] == "finalizer_completed")
+    finalization_event = next(item for item in events if item["event_type"] == "finalization_completed")
     run_finished_event = next(item for item in events if item["event_type"] == "run_finished")
     assert controller_event["status"] == "succeeded"
     assert "rounds/01/controller/controller_call.json" in controller_event["artifact_paths"]
-    assert finalizer_event["status"] == "succeeded"
-    assert finalizer_event["artifact_paths"] == [
-        "runtime/finalizer_context.json",
-        "runtime/finalizer_call.json",
+    assert finalization_event["status"] == "succeeded"
+    assert finalization_event["artifact_paths"] == [
+        "runtime/finalization_context.json",
+        "runtime/finalization_call.json",
         "output/final_candidates.json",
         "output/final_answer.md",
         "output/judge_packet.json",
@@ -2289,15 +2226,6 @@ def test_runtime_delegates_post_finalize_shell(tmp_path: Path, monkeypatch) -> N
         calls.append("run")
         return SimpleNamespace(evaluation_result=None)
 
-    def fake_finalize_finalizer_stage(*, completed_artifact_paths: list[str], **kwargs) -> None:  # noqa: ANN003
-        del kwargs
-        calls.append("finalize")
-        assert completed_artifact_paths == [
-            "output/judge_packet.json",
-            "runtime/search_diagnostics.json",
-            "output/run_summary.md",
-        ]
-
     monkeypatch.setattr(
         "seektalent.runtime.orchestrator.post_finalize_runtime.write_post_finalize_artifacts",
         fake_write_post_finalize_artifacts,
@@ -2306,19 +2234,15 @@ def test_runtime_delegates_post_finalize_shell(tmp_path: Path, monkeypatch) -> N
         "seektalent.runtime.orchestrator.post_finalize_runtime.run_post_finalize_stage",
         fake_run_post_finalize_stage,
     )
-    monkeypatch.setattr(
-        "seektalent.runtime.orchestrator.finalize_runtime.finalize_finalizer_stage",
-        fake_finalize_finalizer_stage,
-    )
 
-    artifacts = runtime.run(job_title=job_title, jd=jd, notes=notes)
+    artifacts = runtime.run(source_kinds=["cts"], job_title=job_title, jd=jd, notes=notes)
 
     assert completed_artifact_paths == [
         "output/judge_packet.json",
         "runtime/search_diagnostics.json",
         "output/run_summary.md",
     ]
-    assert calls == ["write", "finalize", "run"]
+    assert calls == ["write", "run"]
     assert artifacts.evaluation_result is None
     assert artifacts.final_result.summary
     assert artifacts.final_markdown
@@ -2340,7 +2264,7 @@ def test_runtime_emits_tui_progress_events(tmp_path: Path, monkeypatch) -> None:
     job_title, jd, notes = _sample_inputs()
     progress_events: list[ProgressEvent] = []
 
-    runtime.run(job_title=job_title, jd=jd, notes=notes, progress_callback=progress_events.append)
+    runtime.run(source_kinds=["cts"], job_title=job_title, jd=jd, notes=notes, progress_callback=progress_events.append)
 
     event_types = [event.type for event in progress_events]
     assert "requirements_started" in event_types
@@ -2349,7 +2273,7 @@ def test_runtime_emits_tui_progress_events(tmp_path: Path, monkeypatch) -> None:
     assert "scoring_completed" in event_types
     assert "reflection_completed" in event_types
     assert "round_completed" in event_types
-    assert "finalizer_started" in event_types
+    assert "finalization_started" in event_types
     assert "run_completed" in event_types
 
     round_event = next(event for event in progress_events if event.type == "round_completed")
@@ -2388,7 +2312,7 @@ def test_runtime_round_payload_includes_resume_quality_comment(tmp_path: Path, m
     cast(Any, runtime).resume_quality_commenter = StubResumeQualityCommenter()
     progress_events: list[ProgressEvent] = []
 
-    runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes", progress_callback=progress_events.append)
+    runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes", progress_callback=progress_events.append)
 
     round_event = next(event for event in progress_events if event.type == "round_completed")
     quality_event = next(event for event in progress_events if event.type == "resume_quality_comment_completed")
@@ -2416,7 +2340,7 @@ def test_runtime_tui_summary_artifacts_exclude_company_discovery_prompts(tmp_pat
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
     cast(Any, runtime).resume_quality_commenter = AuditResumeQualityCommenter()
 
-    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+    artifacts = runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
     run_config = _read_json(_runtime_artifact(artifacts.run_dir, "run_config"))
     tui_summary_call = _read_json(_round_artifact(artifacts.run_dir, 1, "scoring", "tui_summary_call"))
@@ -2457,7 +2381,7 @@ def test_runtime_resume_quality_comment_failure_does_not_block_reflection(tmp_pa
     cast(Any, runtime).resume_quality_commenter = FailingResumeQualityCommenter()
     progress_events: list[ProgressEvent] = []
 
-    runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes", progress_callback=progress_events.append)
+    runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes", progress_callback=progress_events.append)
 
     event_types = [event.type for event in progress_events]
     round_event = next(event for event in progress_events if event.type == "round_completed")
@@ -2488,7 +2412,7 @@ def test_runtime_writes_repair_call_artifacts(tmp_path: Path, monkeypatch) -> No
     runtime_any.requirement_extractor = RepairAwareRequirementExtractor()
     runtime_any.reflection_critic = RepairAwareReflection()
 
-    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+    artifacts = runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
     run_config = _read_json(_runtime_artifact(artifacts.run_dir, "run_config"))
     repair_requirements_call = _read_json(_runtime_artifact(artifacts.run_dir, "repair_requirements_call"))
@@ -2517,7 +2441,7 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
     _install_runtime_stubs(runtime, controller=StopOnSecondController(), resume_scorer=StubScorer())
     cast(Any, runtime).evaluation_runner = _stub_evaluation_runner
 
-    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+    artifacts = runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
     run_summary = _output_artifact(artifacts.run_dir, "run_summary", extension="md").read_text(encoding="utf-8")
     judge_packet = _read_json(_output_artifact(artifacts.run_dir, "judge_packet"))
@@ -2559,7 +2483,7 @@ def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_pa
     runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
 
-    artifacts = runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+    artifacts = runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
 
     search_diagnostics = _read_json(_runtime_artifact(artifacts.run_dir, "search_diagnostics"))
     diagnostic_round = search_diagnostics["rounds"][1]
@@ -2611,7 +2535,7 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
     _install_runtime_stubs(runtime, controller=SurfaceController(), resume_scorer=StubScorer())
     cast(Any, runtime).requirement_extractor = SurfaceRequirementExtractor()
 
-    artifacts = runtime.run(job_title="AI Agent Engineer", jd="Build MultiAgent 架构.", notes="Notes")
+    artifacts = runtime.run(source_kinds=["cts"], job_title="AI Agent Engineer", jd="Build MultiAgent 架构.", notes="Notes")
 
     events = _read_jsonl(_runtime_artifact(artifacts.run_dir, "events", extension="jsonl"))
     run_summary = _output_artifact(artifacts.run_dir, "run_summary", extension="md").read_text(encoding="utf-8")
@@ -2628,10 +2552,10 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
     assert "Judge packet" not in run_summary
     assert "evaluation_completed" not in {item["event_type"] for item in events}
     assert "evaluation_skipped" in {item["event_type"] for item in events}
-    finalizer_event = next(item for item in events if item["event_type"] == "finalizer_completed")
-    assert finalizer_event["artifact_paths"] == [
-        "runtime/finalizer_context.json",
-        "runtime/finalizer_call.json",
+    finalization_event = next(item for item in events if item["event_type"] == "finalization_completed")
+    assert finalization_event["artifact_paths"] == [
+        "runtime/finalization_context.json",
+        "runtime/finalization_call.json",
         "output/final_candidates.json",
         "output/final_answer.md",
         "runtime/search_diagnostics.json",
@@ -2693,7 +2617,7 @@ def test_requirements_failure_snapshot_records_provider_usage(tmp_path: Path, mo
     cast(Any, runtime).requirement_extractor = FailingRequirementExtractor()
 
     try:
-        runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+        runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
     except RuntimeError as exc:
         assert str(exc) == "requirements failed"
     else:  # pragma: no cover
@@ -2729,7 +2653,7 @@ def test_controller_failure_snapshot_records_provider_usage(tmp_path: Path, monk
     _install_runtime_stubs(runtime, controller=FailingController(), resume_scorer=StubScorer())
 
     try:
-        runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+        runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
     except RuntimeError as exc:
         assert str(exc) == "controller failed"
     else:  # pragma: no cover
@@ -2764,7 +2688,7 @@ def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monk
     cast(Any, runtime).reflection_critic = FailingReflection()
 
     try:
-        runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+        runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
     except RuntimeError as exc:
         assert str(exc) == "reflection failed"
     else:  # pragma: no cover
@@ -2773,43 +2697,6 @@ def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monk
     reflection_call = _read_json(_round_artifact(_single_run_dir(settings.artifacts_path), 1, "reflection", "reflection_call"))
     assert reflection_call["status"] == "failed"
     assert reflection_call["provider_usage"] == provider_usage.model_dump(mode="json")
-
-
-def test_finalizer_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    provider_usage = _provider_usage_snapshot()
-    settings = make_settings(
-        runs_dir=str(tmp_path / "runs"),
-        artifacts_dir=str(tmp_path / "artifacts"),
-        mock_cts=True,
-        min_rounds=1,
-        max_rounds=1,
-    )
-    runtime = _workflow_runtime(settings)
-    _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=StubScorer())
-
-    class FailingFinalizer:
-        last_validator_retry_count = 0
-        last_validator_retry_reasons: list[str] = []
-        last_provider_usage: ProviderUsageSnapshot | None = None
-
-        async def finalize(self, *, run_id, run_dir, rounds_executed, stop_reason, ranked_candidates):  # noqa: ANN001
-            del run_id, run_dir, rounds_executed, stop_reason, ranked_candidates
-            self.last_provider_usage = provider_usage
-            raise RuntimeError("finalizer failed")
-
-    cast(Any, runtime).finalizer = FailingFinalizer()
-
-    try:
-        runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
-    except RuntimeError as exc:
-        assert str(exc) == "finalizer failed"
-    else:  # pragma: no cover
-        raise AssertionError("Expected finalizer failure")
-
-    finalizer_call = _read_json(_runtime_artifact(_single_run_dir(settings.artifacts_path), "finalizer_call"))
-    assert finalizer_call["status"] == "failed"
-    assert finalizer_call["provider_usage"] == provider_usage.model_dump(mode="json")
 
 
 def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path, monkeypatch) -> None:
@@ -2825,7 +2712,7 @@ def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path
     runtime = _workflow_runtime(settings)
 
     try:
-        runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+        runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
     except RuntimeError as exc:
         assert "SEEKTALENT_TEXT_LLM_API_KEY" in str(exc)
     else:  # pragma: no cover
@@ -2855,7 +2742,7 @@ def test_runtime_aborts_when_scoring_has_a_final_failure(tmp_path: Path, monkeyp
     _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=FailingScorer())
 
     try:
-        runtime.run(job_title="Senior Python Engineer", jd="JD", notes="Notes")
+        runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
     except RuntimeError as exc:
         assert str(exc) == "Scoring failed for 1 resume(s): mock-r001."
     else:  # pragma: no cover

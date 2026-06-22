@@ -178,7 +178,7 @@ def _submitted_prompt_text(prompt_text: str, text: str) -> str:
 
 
 def _print_progress(console: Console, event: ProgressEvent, *, status: "_ShimmerStatus | None" = None) -> None:
-    if status is not None and event.type in {"requirements_started", "controller_started", "reflection_started", "finalizer_started"}:
+    if status is not None and event.type in {"requirements_started", "controller_started", "reflection_started", "finalization_started"}:
         status.set(_status_text(event))
         return
     for line in _render_progress_lines(event):
@@ -222,7 +222,7 @@ def _render_progress_lines(event: ProgressEvent) -> list[str]:
     payload = event.payload or {}
     if event.type == "round_completed":
         return _render_round_completed(event, payload)
-    if event.type in {"requirements_started", "controller_started", "reflection_started", "finalizer_started"}:
+    if event.type in {"requirements_started", "controller_started", "reflection_started", "finalization_started"}:
         return [_thinking_line(event)]
     if event.type == "run_completed":
         return [f"[dim]业务 trace 完成：{escape(event.message)}[/]"]
@@ -247,7 +247,7 @@ def _render_progress_lines(event: ProgressEvent) -> list[str]:
         "scoring_completed",
         "resume_quality_comment_completed",
         "reflection_completed",
-        "finalizer_completed",
+        "finalization_completed",
     }:
         return [f"[dim]· {escape(event.message)}[/]"]
     return [f"[dim]·[/] {escape(event.message)}"]
@@ -284,7 +284,7 @@ def _status_text(event: ProgressEvent) -> str:
         detail = f"第 {event.round_no} 轮复盘判断"
     elif stage == "requirements":
         detail = "岗位需求解析"
-    elif stage == "finalizer":
+    elif stage == "finalization":
         detail = "整理最终名单"
     else:
         detail = event.message

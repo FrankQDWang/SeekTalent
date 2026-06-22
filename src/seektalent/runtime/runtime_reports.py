@@ -37,9 +37,9 @@ def render_run_summary(
         ),
         (
             f"- Models: requirements=`{settings.requirements_model_id}`, controller=`{settings.controller_model_id}`, "
-            f"scoring=`{settings.scoring_model_id}`, reflection=`{settings.reflection_model_id}`, "
-            f"finalize=`{settings.finalize_model_id}`"
+            f"scoring=`{settings.scoring_model_id}`, reflection=`{settings.reflection_model_id}`"
         ),
+        "- Finalization engine: `deterministic_runtime`",
         "- Final candidates: `final_candidates.json`",
         "",
         "## Prompt Hashes",

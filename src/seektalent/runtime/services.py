@@ -8,7 +8,6 @@ from seektalent.candidate_feedback.llm_prf import LLMPRFExtractor
 from seektalent.controller import ReActController
 from seektalent.corpus.store import CorpusStore
 from seektalent.core.retrieval.service import RetrievalService
-from seektalent.finalize.finalizer import Finalizer
 from seektalent.prompting import LoadedPrompt
 from seektalent.reflection.critic import ReflectionCritic
 from seektalent.requirements import RequirementExtractor
@@ -24,7 +23,6 @@ class RuntimeServices:
     resume_scorer: ResumeScorer
     resume_quality_commenter: ResumeQualityCommenter
     reflection_critic: ReflectionCritic
-    finalizer: Finalizer
     llm_prf_extractor: LLMPRFExtractor
     retrieval_runtime: RetrievalRuntime
     retrieval_service: RetrievalService
@@ -55,7 +53,6 @@ def build_runtime_services(
             prompt_map["reflection"],
             repair_prompt=prompt_map["repair_reflection"],
         ),
-        finalizer=Finalizer(settings, prompt_map["finalize"]),
         llm_prf_extractor=LLMPRFExtractor(settings, prompt_map["prf_probe_phrase_proposal"]),
         retrieval_runtime=RetrievalRuntime(
             settings=settings,
