@@ -43,6 +43,65 @@ def test_context_compaction_persists_summary_without_deleting_canonical_transcri
         "agent_context_summary_"
     )
     assert len(reopened.messages) == 5
+    assert all(message.model_input_included is False for message in reopened.messages)
+
+
+def test_context_compaction_completion_rolls_back_summary_and_model_input_marks_on_failure(tmp_path: Path) -> None:
+    service, conversation_store, _runtime_store = build_service(tmp_path)
+    conversation = service.create_conversation(
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="资深 Python 后端",
+    )
+    for index in range(2):
+        service.store.append_message(
+            conversation_id=conversation.conversation_id,
+            role="user",
+            message_type="user_text",
+            text=f"补充信息 {index}",
+            payload={},
+            created_at=f"2026-06-09T00:00:{index + 1:02d}.000000Z",
+        )
+    with sqlite3.connect(conversation_store.path) as conn:
+        conn.execute(
+            """
+            CREATE TRIGGER fail_context_compaction_completion
+            BEFORE UPDATE OF status ON agent_context_compactions
+            WHEN NEW.status = 'completed'
+            BEGIN
+                SELECT RAISE(ABORT, 'forced compaction completion failure');
+            END
+            """
+        )
+
+    with pytest.raises(sqlite3.DatabaseError, match="forced compaction completion failure"):
+        service.compact_context(
+            conversation_id=conversation.conversation_id,
+            owner_user_id="user_1",
+            workspace_id="workspace_1",
+            trigger_reason_code="agent_compaction_trigger_budget",
+        )
+
+    with sqlite3.connect(conversation_store.path) as conn:
+        summary_count = conn.execute(
+            "SELECT COUNT(*) FROM agent_context_summaries WHERE conversation_id = ?",
+            (conversation.conversation_id,),
+        ).fetchone()[0]
+        included_flags = [
+            row[0]
+            for row in conn.execute(
+                """
+                SELECT model_input_included
+                FROM agent_transcript_messages
+                WHERE conversation_id = ?
+                ORDER BY message_seq ASC
+                """,
+                (conversation.conversation_id,),
+            ).fetchall()
+        ]
+
+    assert summary_count == 0
+    assert included_flags == [1, 1]
 
 
 def test_context_compaction_records_failed_quality_check(tmp_path: Path) -> None:

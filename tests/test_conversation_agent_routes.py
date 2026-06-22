@@ -69,11 +69,13 @@ class DeterministicRouteRuntime:
 class CapturingRouteAgentRunner:
     def __init__(self) -> None:
         self.last_agent = None
+        self.last_prompt: str | None = None
         self.calls = 0
 
     async def run(self, agent, prompt: str) -> object:
         self.calls += 1
         self.last_agent = agent
+        self.last_prompt = prompt
         return {"final": "已收到。"}
 
 
@@ -300,8 +302,10 @@ def test_agent_message_user_text_route_uses_memory_recall_before_agent_run(tmp_p
 
     assert message.status_code == 200, message.text
     assert runner.last_agent is not None
-    assert "[ADVISORY_MEMORY_CONTEXT_START]" in runner.last_agent.instructions
-    assert "先讲业务匹配" in runner.last_agent.instructions
+    assert runner.last_prompt is not None
+    assert "[ADVISORY_MEMORY_CONTEXT_START]" in runner.last_prompt
+    assert "先讲业务匹配" in runner.last_prompt
+    assert "先讲业务匹配" not in runner.last_agent.instructions
     assert message.json()["messages"][-1]["role"] == "assistant"
 
 

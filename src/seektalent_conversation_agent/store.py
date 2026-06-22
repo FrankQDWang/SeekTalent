@@ -389,6 +389,11 @@ class ConversationStore:
             rows = conn.execute(sql, params).fetchall()
         return [_context_compaction_from_row(row) for row in rows]
 
+    def get_latest_context_summary(self, *, conversation_id: str) -> ContextSummaryRecord | None:
+        with self._connect() as conn:
+            row = _latest_summary_row(conn, conversation_id)
+        return _context_summary_from_row(row) if row is not None else None
+
     def upsert_activity_item(
         self,
         *,
@@ -1059,6 +1064,133 @@ class ConversationStore:
             )
         return record
 
+    def complete_context_compaction(
+        self,
+        *,
+        summary_id: str,
+        compaction_id: str,
+        conversation_id: str,
+        trigger_reason_code: str,
+        source_message_seq_start: int,
+        source_message_seq_end: int,
+        source_activity_seq_start: int | None,
+        source_activity_seq_end: int | None,
+        latest_rendered_runtime_event_seq: int,
+        summary_text: str,
+        quality_status: str,
+        quality_evidence: dict[str, object],
+        token_count: int | None,
+        quality_reason_code: str,
+        compaction_created_at: str,
+        summary_created_at: str,
+        completed_at: str,
+    ) -> ContextCompactionRecord:
+        summary = ContextSummaryRecord(
+            summary_id=summary_id,
+            conversation_id=conversation_id,
+            source_message_seq_start=source_message_seq_start,
+            source_message_seq_end=source_message_seq_end,
+            source_activity_seq_start=source_activity_seq_start,
+            source_activity_seq_end=source_activity_seq_end,
+            latest_rendered_runtime_event_seq=latest_rendered_runtime_event_seq,
+            summary_text=summary_text,
+            quality_status=quality_status,
+            quality_evidence=quality_evidence,
+            token_count=token_count,
+            created_at=summary_created_at,
+        )
+        compaction = ContextCompactionRecord(
+            compaction_id=compaction_id,
+            conversation_id=conversation_id,
+            status="completed",
+            trigger_reason_code=trigger_reason_code,
+            summary_id=summary_id,
+            source_message_seq_start=source_message_seq_start,
+            source_message_seq_end=source_message_seq_end,
+            source_activity_seq_start=source_activity_seq_start,
+            source_activity_seq_end=source_activity_seq_end,
+            quality_reason_code=quality_reason_code,
+            created_at=compaction_created_at,
+            completed_at=completed_at,
+            failed_reason_code=None,
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO agent_context_summaries (
+                        summary_id, conversation_id, source_message_seq_start, source_message_seq_end,
+                        source_activity_seq_start, source_activity_seq_end, latest_rendered_runtime_event_seq,
+                        summary_text, quality_status, quality_evidence_json, token_count, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        summary.summary_id,
+                        summary.conversation_id,
+                        summary.source_message_seq_start,
+                        summary.source_message_seq_end,
+                        summary.source_activity_seq_start,
+                        summary.source_activity_seq_end,
+                        summary.latest_rendered_runtime_event_seq,
+                        summary.summary_text,
+                        summary.quality_status,
+                        _json(summary.quality_evidence),
+                        summary.token_count,
+                        summary.created_at,
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO agent_context_compactions (
+                        compaction_id, conversation_id, status, trigger_reason_code, summary_id,
+                        source_message_seq_start, source_message_seq_end, source_activity_seq_start,
+                        source_activity_seq_end, quality_reason_code, created_at, completed_at, failed_reason_code
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(compaction_id) DO UPDATE SET
+                        status = excluded.status,
+                        summary_id = excluded.summary_id,
+                        source_message_seq_start = excluded.source_message_seq_start,
+                        source_message_seq_end = excluded.source_message_seq_end,
+                        source_activity_seq_start = excluded.source_activity_seq_start,
+                        source_activity_seq_end = excluded.source_activity_seq_end,
+                        quality_reason_code = excluded.quality_reason_code,
+                        completed_at = excluded.completed_at,
+                        failed_reason_code = excluded.failed_reason_code
+                    """,
+                    (
+                        compaction.compaction_id,
+                        compaction.conversation_id,
+                        compaction.status,
+                        compaction.trigger_reason_code,
+                        compaction.summary_id,
+                        compaction.source_message_seq_start,
+                        compaction.source_message_seq_end,
+                        compaction.source_activity_seq_start,
+                        compaction.source_activity_seq_end,
+                        compaction.quality_reason_code,
+                        compaction.created_at,
+                        compaction.completed_at,
+                        compaction.failed_reason_code,
+                    ),
+                )
+                conn.execute(
+                    """
+                    UPDATE agent_transcript_messages
+                    SET model_input_included = 0
+                    WHERE conversation_id = ?
+                      AND message_seq BETWEEN ? AND ?
+                    """,
+                    (conversation_id, source_message_seq_start, source_message_seq_end),
+                )
+                conn.commit()
+            except (sqlite3.Error, ConversationAgentError, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return compaction
+
     def save_context_compaction(
         self,
         *,
@@ -1509,6 +1641,23 @@ def _summary_cursor(row: sqlite3.Row | None) -> CompactionSummaryCursor:
     return CompactionSummaryCursor(
         latest_summary_id=row["summary_id"],
         covered_message_seq_end=int(row["source_message_seq_end"]),
+    )
+
+
+def _context_summary_from_row(row: sqlite3.Row) -> ContextSummaryRecord:
+    return ContextSummaryRecord(
+        summary_id=row["summary_id"],
+        conversation_id=row["conversation_id"],
+        source_message_seq_start=int(row["source_message_seq_start"]),
+        source_message_seq_end=int(row["source_message_seq_end"]),
+        source_activity_seq_start=row["source_activity_seq_start"],
+        source_activity_seq_end=row["source_activity_seq_end"],
+        latest_rendered_runtime_event_seq=int(row["latest_rendered_runtime_event_seq"]),
+        summary_text=row["summary_text"],
+        quality_status=row["quality_status"],
+        quality_evidence=_loads_dict(row["quality_evidence_json"]),
+        token_count=row["token_count"],
+        created_at=row["created_at"],
     )
 
 
