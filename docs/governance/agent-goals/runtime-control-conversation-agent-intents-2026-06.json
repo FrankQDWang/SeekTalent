@@ -1,0 +1,32 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Route active runtime user messages through the registered Conversation Agent intent policy.",
+  "rationale": "This slice registers the Conversation Agent prompt and routes active runtime messages into read-only questions, next-round requirements, or unsupported writes. It crosses prompt, Conversation Agent, and BFF route files because the prompt policy, model decision audit trail, and API surface are one user-facing control boundary.",
+  "touched_layers": ["bff", "docs", "other", "prompts", "tests"],
+  "red_files": [
+    "src/seektalent/prompts/conversation_agent.md",
+    "src/seektalent_conversation_agent/factory.py",
+    "src/seektalent_conversation_agent/service.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run pytest tests/test_prompt_safety.py tests/test_llm_input_prompts.py -q"
+  ],
+  "deletion_targets": [
+    "hardcoded Conversation Agent system prompt text inside service code",
+    "implicit write routing for active runtime user messages",
+    "unsupported runtime writes that are not recorded as audited intent decisions"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_conversation_agent/service.py"
+  ],
+  "line_count_rationale": "The service module is pre-existing oversized conversation orchestration code; this slice adds a narrow runtime-intent route without broad service decomposition.",
+  "risks": [
+    "Intent routing depends on structured model output; idempotency and failure records must remain durable.",
+    "Only next-round requirements may mutate runtime state while read-only questions use persisted runtime facts."
+  ]
+}

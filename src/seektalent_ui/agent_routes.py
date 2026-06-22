@@ -4,6 +4,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from seektalent.config import AppSettings
 from seektalent_agent_memory.privacy import MemoryPrivacyError
@@ -50,7 +51,7 @@ class WorkflowStartRequest(BaseModel):
     jobTitle: str = Field(min_length=1, max_length=256)
     jdText: str = Field(min_length=1, max_length=20000)
     notes: str | None = Field(default=None, max_length=5000)
-    sourceIds: list[str] = Field(default_factory=lambda: ["cts"], min_length=1, max_length=2)
+    sourceIds: list[str] | None = Field(default=None, min_length=1, max_length=2)
 
 
 class FinalSummaryRequest(BaseModel):
@@ -207,7 +208,8 @@ async def submit_message(
     service = get_agent_service(request)
     try:
         if payload.messageType == "submitJd":
-            response = service.submit_jd(
+            response = await run_in_threadpool(
+                service.submit_jd,
                 conversation_id=conversation_id,
                 owner_user_id=user.user_id,
                 workspace_id=user.workspace_id,

@@ -174,6 +174,39 @@ def test_submit_jd_route_rejects_explicit_source_alias_conflict(tmp_path: Path) 
     assert message.json()["reasonCode"] == "job_request_source_kinds_conflict"
 
 
+def test_submit_jd_route_offloads_sync_work_to_threadpool(tmp_path: Path, monkeypatch) -> None:
+    import seektalent_ui.agent_routes as routes
+
+    calls: list[str] = []
+
+    async def fake_run_in_threadpool(fn: object, *args: object, **kwargs: object) -> object:
+        calls.append(getattr(fn, "__name__", repr(fn)))
+        return fn(*args, **kwargs)
+
+    monkeypatch.setattr(routes, "run_in_threadpool", fake_run_in_threadpool, raising=False)
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+
+    message = client.post(
+        f"/api/agent/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobTitle": "Python 平台负责人",
+            "notes": None,
+            "sourceIds": ["cts"],
+            "idempotencyKey": "submit-jd-route-threadpool-1",
+        },
+    )
+
+    assert message.status_code == 200, message.text
+    assert calls == ["submit_jd"]
+
+
 def test_workflow_start_route_uses_app_factory_runtime_wrapper(tmp_path: Path) -> None:
     DeterministicRouteRuntime.workflow_calls = []
     client = _client(tmp_path)

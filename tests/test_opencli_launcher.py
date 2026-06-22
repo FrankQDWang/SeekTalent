@@ -43,10 +43,12 @@ def test_launcher_delegates_to_managed_opencli(
 ) -> None:
     log_path = tmp_path / "node-argv.txt"
     node = _write_fake_node(tmp_path / "bin", exit_code=7, log_path=log_path)
-    _write_fake_npm(node.parent)
-    _write_managed_opencli(tmp_path / "runtime")
-    monkeypatch.setenv("PATH", str(node.parent))
-    monkeypatch.setattr(opencli_launcher, "RUNTIME_ROOT", tmp_path / "runtime")
+    opencli_main = _write_managed_opencli(tmp_path / "runtime")
+    monkeypatch.setattr(
+        opencli_launcher,
+        "ensure_opencli_runtime",
+        lambda: opencli_launcher.OpenCliRuntime(node=node, opencli_main=opencli_main),
+    )
 
     assert opencli_launcher.main(["browser", "seektalent-liepin", "state"]) == 7
 

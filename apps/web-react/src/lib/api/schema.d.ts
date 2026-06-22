@@ -4441,7 +4441,7 @@ export interface components {
       /** Notes */
       notes?: string | null;
       /** Sourceids */
-      sourceIds?: string[];
+      sourceIds?: string[] | null;
     };
   };
   responses: never;

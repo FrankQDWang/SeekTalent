@@ -6,6 +6,7 @@ from pathlib import Path
 from seektalent.models import QueryTermCandidate, RequirementSheet
 from seektalent.progress import ProgressEvent
 from seektalent_conversation_agent.service import ConversationAgentService
+from seektalent_conversation_agent.source_selection import RuntimeSourceSelectionResolver
 from seektalent_conversation_agent.store import ConversationStore
 from seektalent_conversation_agent.tools import AgentToolAdapter
 from seektalent_runtime_control.commands import RuntimeCommandService
@@ -158,6 +159,9 @@ def build_service(tmp_path: Path) -> tuple[ConversationAgentService, Conversatio
         tool_call_id_factory=_sequence("agent_tool_call"),
         summary_id_factory=_sequence("agent_context_summary"),
         compaction_id_factory=_sequence("agent_compaction"),
+        source_selection_resolver=RuntimeSourceSelectionResolver(
+            registered_runtime_source_ids={"cts", "liepin"}
+        ),
     )
     return service, conversation_store, runtime_store
 
