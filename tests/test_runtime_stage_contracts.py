@@ -21,12 +21,11 @@ def test_controller_stage_state_is_shared_contract() -> None:
     }
 
 
-def test_finalizer_stage_state_is_shared_contract() -> None:
+def test_finalization_stage_state_is_shared_contract() -> None:
     contracts = importlib.import_module("seektalent.runtime.stage_contracts")
 
-    assert finalize_runtime.FinalizerStageState is contracts.FinalizerStageState
-    assert set(contracts.FinalizerStageState.__annotations__) == {
-        "call_id",
+    assert finalize_runtime.FinalizationStageState is contracts.FinalizationStageState
+    assert set(contracts.FinalizationStageState.__annotations__) == {
         "artifacts",
         "latency_ms",
     }

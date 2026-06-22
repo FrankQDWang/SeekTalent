@@ -9,7 +9,6 @@ from pydantic_ai.models.test import TestModel
 
 from seektalent.config import AppSettings
 from seektalent.controller.react_controller import ReActController
-from seektalent.finalize.finalizer import Finalizer
 from seektalent.llm import build_model
 from seektalent.models import (
     ControllerContext,
@@ -218,23 +217,6 @@ def test_reflection_reflect_raises_live_errors(monkeypatch: pytest.MonkeyPatch, 
 
     with pytest.raises(RuntimeError, match="reflection boom"):
         asyncio.run(critic.reflect(context=_reflection_context()))
-
-
-def test_finalizer_uses_live_path_and_raises_for_empty_ranked_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    finalizer = Finalizer(_settings(monkeypatch, tmp_path), _prompt("finalize"))
-    stub_agent = type("StubAgent", (), {"run": lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("finalizer boom"))})()
-    monkeypatch.setattr(finalizer, "_get_agent", lambda: stub_agent)
-
-    with pytest.raises(RuntimeError, match="finalizer boom"):
-        asyncio.run(
-            finalizer.finalize(
-                run_id="run-1",
-                run_dir="/tmp/run-1",
-                rounds_executed=1,
-                stop_reason="controller_stop",
-                ranked_candidates=[],
-            )
-        )
 
 
 def test_requirement_extractor_fails_after_two_output_retries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -466,22 +448,6 @@ def test_requirement_repair_captures_call_artifact(monkeypatch: pytest.MonkeyPat
     assert artifact["user_payload"]["REPAIR_REASON"] == {"reason": "broken"}
     assert "job_title" not in artifact["structured_output"]
     assert artifact["provider_usage"].model_dump(mode="json") == usage.model_dump(mode="json")
-
-
-def test_finalizer_fails_after_two_output_retries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    finalizer = Finalizer(_settings(monkeypatch, tmp_path), _prompt("finalize"))
-    monkeypatch.setattr("seektalent.finalize.finalizer.build_model", lambda model_id: _test_model("{}"))
-
-    with pytest.raises(Exception, match="Exceeded maximum retries \\(2\\) for output validation"):
-        asyncio.run(
-            finalizer.finalize(
-                run_id="run-1",
-                run_dir="/tmp/run-1",
-                rounds_executed=1,
-                stop_reason="controller_stop",
-                ranked_candidates=[],
-            )
-        )
 
 
 def test_runtime_does_not_eagerly_load_candidate_feedback_prompt(monkeypatch: pytest.MonkeyPatch) -> None:

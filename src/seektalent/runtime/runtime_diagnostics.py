@@ -421,7 +421,7 @@ def build_judge_packet(
     controller_model: str,
     scoring_model: str,
     reflection_model: str,
-    finalize_model: str,
+    finalization_engine: str,
     prompt_hashes: dict[str, str],
 ) -> dict[str, object]:
     return {
@@ -436,7 +436,7 @@ def build_judge_packet(
                 "controller": controller_model,
                 "scoring": scoring_model,
                 "reflection": reflection_model,
-                "finalize": finalize_model,
+                "finalization_engine": finalization_engine,
             },
             "prompt_hashes": prompt_hashes,
         },
@@ -627,7 +627,6 @@ def collect_llm_schema_pressure(run_dir: Path) -> list[dict[str, object]]:
             if line.strip():
                 pressure.append(_llm_schema_pressure_item(json.loads(line)))
 
-    pressure.append(_llm_schema_pressure_item(json.loads(resolver.resolve("runtime.finalizer_call").read_text(encoding="utf-8"))))
     return pressure
 
 

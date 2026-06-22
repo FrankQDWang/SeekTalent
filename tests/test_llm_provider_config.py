@@ -31,7 +31,6 @@ STRICT_NATIVE_OPENAI_STAGES = (
     "controller",
     "reflection",
     "scoring",
-    "finalize",
     "judge",
     "structured_repair",
 )

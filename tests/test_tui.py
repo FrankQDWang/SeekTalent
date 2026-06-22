@@ -456,7 +456,7 @@ def test_progress_lines_match_051_bullet_style_with_quality_events() -> None:
         "resume_quality_comment_completed",
         "resume_quality_comment_failed",
         "reflection_completed",
-        "finalizer_completed",
+        "finalization_completed",
     ]
 
     for event_type in event_types:

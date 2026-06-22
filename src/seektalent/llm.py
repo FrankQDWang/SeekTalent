@@ -31,7 +31,6 @@ OPENAI_NATIVE_JSON_SCHEMA_STAGES = frozenset(
         "controller",
         "reflection",
         "scoring",
-        "finalize",
         "judge",
         "structured_repair",
     }
@@ -505,7 +504,7 @@ def preflight_models(
     extra_stage_names: list[str] | None = None,
 ) -> None:
     seen: set[tuple[str, str, str, str]] = set()
-    stage_names = ["requirements", "controller", "scoring", "reflection", "finalize", "structured_repair", "tui_summary"]
+    stage_names = ["requirements", "controller", "scoring", "reflection", "structured_repair", "tui_summary"]
     if settings.enable_eval:
         stage_names.append("judge")
     if extra_stage_names:

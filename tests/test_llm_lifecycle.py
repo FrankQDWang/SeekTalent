@@ -9,11 +9,8 @@ import pytest
 
 from seektalent.config import AppSettings
 from seektalent.controller.react_controller import ReActController
-from seektalent.finalize.finalizer import Finalizer
 from seektalent.models import (
     ControllerContext,
-    FinalCandidateDraft,
-    FinalResultDraft,
     HardConstraintSlots,
     InputTruth,
     LocationExecutionPlan,
@@ -307,7 +304,6 @@ def test_requirement_extractor_uses_run_sync(monkeypatch: pytest.MonkeyPatch, tm
         (RequirementExtractor, "requirements"),
         (ReActController, "controller"),
         (ReflectionCritic, "reflection"),
-        (Finalizer, "finalize"),
     ],
 )
 def test_sync_stages_build_fresh_agents(
@@ -354,42 +350,6 @@ def test_repeated_async_stage_calls_succeed(monkeypatch: pytest.MonkeyPatch, tmp
     assert reflection_agent.calls == 2
     assert "ROUND RESULT" in reflection_agent.prompts[0]
     assert "REFLECTION_CONTEXT" not in reflection_agent.prompts[0]
-
-    finalizer = Finalizer(_settings(monkeypatch, tmp_path), _prompt("finalize"))
-    finalizer_agent = _StubAgent(
-        FinalResultDraft(
-            summary="Shortlist ready.",
-            candidates=[
-                FinalCandidateDraft(
-                    resume_id="resume-1",
-                    match_summary="Strong fit.",
-                    why_selected="Strong fit.",
-                )
-            ],
-        )
-    )
-    monkeypatch.setattr(finalizer, "_get_agent", lambda: finalizer_agent)
-    asyncio.run(
-        finalizer.finalize(
-            run_id="run-1",
-            run_dir="/tmp/run-1",
-            rounds_executed=1,
-            stop_reason="controller_stop",
-            ranked_candidates=[_scored_candidate()],
-        )
-    )
-    asyncio.run(
-        finalizer.finalize(
-            run_id="run-1",
-            run_dir="/tmp/run-1",
-            rounds_executed=1,
-            stop_reason="controller_stop",
-            ranked_candidates=[_scored_candidate()],
-        )
-    )
-    assert finalizer_agent.calls == 2
-    assert "RANKED CANDIDATES" in finalizer_agent.prompts[0]
-    assert "FINALIZATION_CONTEXT" not in finalizer_agent.prompts[0]
 
 
 def test_scorer_builds_one_agent_per_parallel_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
