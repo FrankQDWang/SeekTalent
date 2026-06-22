@@ -1,6 +1,6 @@
 .candidate-detail-drawer__backdrop {
   align-items: stretch;
-  background: oklch(0.2 0.025 260 / 0.18);
+  background: transparent;
   display: flex;
   inset: 0;
   justify-content: flex-end;
@@ -10,24 +10,25 @@
 
 .candidate-detail-drawer {
   background: var(--st-surface);
-  box-shadow: -18px 0 44px oklch(0.24 0.04 260 / 0.18);
+  box-shadow: none;
   color: var(--st-ink);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
-  max-width: min(520px, 100%);
-  min-width: min(420px, 100%);
+  max-width: min(720px, 100%);
+  min-width: min(520px, 100%);
   overflow: hidden;
-  width: 34vw;
+  width: min(720px, calc(100vw - 64px));
 }
 
 .candidate-detail-drawer__header {
-  align-items: flex-start;
+  align-items: center;
+  background: #eef3ff;
   border-bottom: 1px solid var(--st-border);
-  display: flex;
-  gap: var(--st-space-3);
-  justify-content: space-between;
-  padding: var(--st-space-5);
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 56px minmax(0, 1fr) auto;
+  padding: 30px 26px 24px;
 }
 
 .candidate-detail-drawer__header div {
@@ -50,7 +51,7 @@
 
 .candidate-detail-drawer__header h2 {
   color: var(--st-ink);
-  font-size: 20px;
+  font-size: 24px;
   font-weight: 790;
   line-height: 1.2;
 }
@@ -65,13 +66,33 @@
   flex: 0 0 auto;
 }
 
+.candidate-detail-drawer__avatar {
+  align-items: center;
+  background: var(--st-action);
+  border-radius: 999px;
+  color: var(--st-action-ink);
+  display: inline-flex;
+  font-size: 24px;
+  font-weight: 800;
+  height: 56px;
+  justify-content: center;
+  width: 56px;
+}
+
+.candidate-detail-drawer__close.st-button {
+  background: transparent;
+  border-color: transparent;
+  min-width: 36px;
+  padding: 0;
+}
+
 .candidate-detail-drawer__body {
   align-content: start;
   display: grid;
-  gap: var(--st-space-4);
+  gap: 28px;
   min-height: 0;
   overflow: auto;
-  padding: var(--st-space-5);
+  padding: 32px;
 }
 
 .candidate-detail-drawer__summary,
@@ -138,7 +159,7 @@
 .candidate-detail-section,
 .candidate-detail-evidence {
   display: grid;
-  gap: var(--st-space-3);
+  gap: 14px;
 }
 
 .candidate-detail-section h3,
@@ -163,8 +184,9 @@
   background: var(--st-surface-raised);
   border-radius: var(--st-radius-sm);
   color: var(--st-muted);
-  line-height: 1.45;
-  padding: var(--st-space-3);
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 16px;
 }
 
 .candidate-detail-evidence li {

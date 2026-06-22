@@ -137,6 +137,9 @@ describe("CandidateDetailDrawer", () => {
     await user.tab();
     expect(screen.getByLabelText("候选人详情内容")).toHaveFocus();
 
+    await user.tab();
+    expect(closeButton).toHaveFocus();
+
     await user.keyboard("{Escape}");
     expect(trigger).toHaveFocus();
   });

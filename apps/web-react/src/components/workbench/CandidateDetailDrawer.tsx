@@ -123,6 +123,9 @@ export function CandidateDetailDrawer({
         tabIndex={-1}
       >
         <header className="candidate-detail-drawer__header">
+          <span className="candidate-detail-drawer__avatar" aria-hidden="true">
+            {title.slice(0, 1)}
+          </span>
           <div>
             <p>候选人详情</p>
             <h2>{title}</h2>
