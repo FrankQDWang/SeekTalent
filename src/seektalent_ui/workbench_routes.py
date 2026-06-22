@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from seektalent.source_adapters.registry import build_default_source_registry
 from seektalent.dev_mode import build_dev_mode_status
+from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.source_catalog import validate_runtime_source_ids
 from seektalent_ui import workbench_liepin_recovery as liepin_recovery
 from seektalent_ui.workbench_local_actor import (
     get_workbench_store,
@@ -11,6 +14,7 @@ from seektalent_ui.workbench_local_actor import (
 )
 from seektalent_ui.final_top_candidates import project_final_top_candidates
 from seektalent_ui.models import (
+    SourceKind,
     WorkbenchCandidateReviewItemResponse,
     WorkbenchCandidateReviewItemUpdateRequest,
     WorkbenchCandidateReviewQueueResponse,
@@ -145,7 +149,7 @@ async def create_session(
     if source_kinds is not None and len(set(source_kinds)) != len(source_kinds):
         raise HTTPException(status_code=400, detail="sourceKinds must not contain duplicates.")
     store = get_workbench_store(http_request)
-    requested_source_kinds = source_kinds if source_kinds is not None else ["cts", "liepin"]
+    requested_source_kinds = _resolve_workbench_source_kinds(http_request, source_kinds)
     if "liepin" in requested_source_kinds:
         await refresh_liepin_opencli_connection_if_ready(
             request=http_request,
@@ -158,7 +162,7 @@ async def create_session(
         job_title=job_title,
         jd_text=jd_text,
         notes=notes,
-        source_kinds=source_kinds,
+        source_kinds=requested_source_kinds,
     )
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
@@ -173,6 +177,25 @@ async def create_session(
         ),
         liepin_setup_reason=liepin_dev_mode_setup_reason(http_request),
     )
+
+
+def _resolve_workbench_source_kinds(request: Request, source_kinds: list[SourceKind] | None) -> list[SourceKind]:
+    settings = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise HTTPException(status_code=500, detail="Workbench settings are not available.")
+    registry = build_default_source_registry(settings)
+    try:
+        resolved: list[SourceKind] = []
+        for source in validate_runtime_source_ids(registry, source_kinds):
+            if source.source_id == "cts":
+                resolved.append("cts")
+            elif source.source_id == "liepin":
+                resolved.append("liepin")
+            else:
+                raise HTTPException(status_code=400, detail="runtime_source_selection_invalid")
+        return resolved
+    except RuntimeControlError as exc:
+        raise HTTPException(status_code=400, detail="runtime_source_selection_invalid") from exc
 
 
 @router.get("/api/workbench/sessions/{session_id}", response_model=WorkbenchSessionResponse)

@@ -2,14 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
 
 from seektalent_conversation_agent.errors import ConversationAgentError
 
 
-SourceKind = Literal["cts", "liepin"]
-
-_SOURCE_KINDS = {"cts", "liepin"}
+SourceKind = str
 
 
 @dataclass(frozen=True)
@@ -47,30 +44,19 @@ class RequirementDraftJobRequestLink:
         return self.draft_revision_id
 
 
-def normalize_source_kinds(values: Sequence[str]) -> list[SourceKind]:
+def normalize_source_kinds(values: Sequence[str], *, allow_empty: bool = False) -> list[SourceKind]:
     normalized: list[SourceKind] = []
     seen: set[str] = set()
     for raw_value in values:
         value = raw_value.strip()
-        if value not in _SOURCE_KINDS:
+        if not value:
             raise ConversationAgentError(
                 "job_request_source_kind_invalid",
                 payload={"sourceKind": raw_value},
             )
         if value not in seen:
-            normalized.append(_source_kind(value))
+            normalized.append(value)
             seen.add(value)
-    if not normalized:
+    if not normalized and not allow_empty:
         raise ConversationAgentError("job_request_source_kinds_required")
     return normalized
-
-
-def _source_kind(value: str) -> SourceKind:
-    if value == "cts":
-        return "cts"
-    if value == "liepin":
-        return "liepin"
-    raise ConversationAgentError(
-        "job_request_source_kind_invalid",
-        payload={"sourceKind": value},
-    )

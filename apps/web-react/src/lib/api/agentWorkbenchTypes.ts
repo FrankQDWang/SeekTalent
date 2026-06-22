@@ -165,8 +165,12 @@ export type AgentWorkbenchCandidateDetailResponse = Omit<
 
 export type WorkbenchUserTextMessageRequest =
   Schemas["WorkbenchUserTextMessageRequest"];
-export type WorkbenchSubmitJdMessageRequest =
-  Schemas["WorkbenchSubmitJdMessageRequest"];
+export type WorkbenchSubmitJdMessageRequest = Omit<
+  Schemas["WorkbenchSubmitJdMessageRequest"],
+  "sourceKinds"
+> & {
+  sourceKinds?: ("cts" | "liepin")[] | null;
+};
 export type WorkbenchAgentMessageRequest =
   | WorkbenchSubmitJdMessageRequest
   | WorkbenchUserTextMessageRequest;

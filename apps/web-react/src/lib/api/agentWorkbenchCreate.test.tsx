@@ -58,12 +58,12 @@ describe("create Agent Workbench conversation from JD hook", () => {
       expect.objectContaining({
         jobTitle: "AI Agent 平台工程师",
         messageType: "submitJd",
-        sourceKinds: ["liepin"],
         text: "寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。",
       }),
     );
     const payload = vi.mocked(submitAgentWorkbenchMessage).mock.calls[0]?.[1];
     expect(payload?.idempotencyKey).toContain("workbench:submit-jd:");
+    expect(payload).not.toHaveProperty("sourceKinds");
     expect(output.conversationId).toBe("agent_conv_created");
     expect(
       queryClient.getQueryData(

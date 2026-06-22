@@ -37,7 +37,7 @@ class JobRequestStore:
         idempotency_key: str,
         created_at: str,
     ) -> JobRequestRevision:
-        normalized_source_kinds = normalize_source_kinds(source_kinds)
+        normalized_source_kinds = normalize_source_kinds(source_kinds, allow_empty=True)
         request_hash = job_request_hash(
             user_job_title=user_job_title,
             jd_text=jd_text,
@@ -319,7 +319,7 @@ def _raise_if_idempotency_conflict(existing: JobRequestRevision, request_hash: s
 
 
 def _job_request_revision_from_row(row: sqlite3.Row) -> JobRequestRevision:
-    source_kinds = normalize_source_kinds(_json_list(row["source_kinds_json"]))
+    source_kinds = normalize_source_kinds(_json_list(row["source_kinds_json"]), allow_empty=True)
     return JobRequestRevision(
         job_request_revision_id=row["job_request_revision_id"],
         conversation_id=row["conversation_id"],

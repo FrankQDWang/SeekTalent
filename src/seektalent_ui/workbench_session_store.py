@@ -72,9 +72,7 @@ class WorkbenchSessionStore:
     ) -> WorkbenchSession:
         now = _now_iso()
         session_id = f"session_{uuid.uuid4().hex[:16]}"
-        requested_source_kinds: list[Literal["cts", "liepin"]] = (
-            source_kinds if source_kinds is not None else ["cts", "liepin"]
-        )
+        requested_source_kinds: list[Literal["cts", "liepin"]] = source_kinds if source_kinds is not None else []
         source_runs: list[WorkbenchSourceRun] = []
         requirement_review = WorkbenchRequirementReview(
             session_id=session_id,
