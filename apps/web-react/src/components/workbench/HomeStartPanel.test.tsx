@@ -72,7 +72,7 @@ describe("HomeStartPanel", () => {
     render(<HomeStartPanel onSubmit={vi.fn()} />);
 
     const firstPrompt = screen.getAllByRole("button", {
-      name: /这是一个标题/,
+      name: /AI Agent 平台工程师/,
     })[0];
     if (!firstPrompt) {
       throw new Error("Expected at least one WTS suggestion card.");
@@ -80,7 +80,7 @@ describe("HomeStartPanel", () => {
     await user.click(firstPrompt);
 
     expect(screen.getByLabelText("岗位名称和岗位JD")).toHaveValue(
-      "这是一个标题这是一个标题这是一个标题",
+      "上海 AI Agent 平台工程师，3 年以上 Python 后端经验，熟悉 RAG 和 workflow orchestration。",
     );
   });
 });

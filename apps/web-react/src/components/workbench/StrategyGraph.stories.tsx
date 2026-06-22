@@ -34,6 +34,15 @@ export const SearchStrategy: Story = {
   name: "SearchStrategy",
   args: {
     graph: agentWorkbenchSearchStrategyGraphFixture,
+    jobTitle: "AI Agent 平台工程师",
+  },
+};
+
+export const CanonicalRuntimeSwimlanes: Story = {
+  name: "CanonicalRuntimeSwimlanes",
+  args: {
+    graph: agentWorkbenchSearchStrategyGraphFixture,
+    jobTitle: "AI Agent 平台工程师",
   },
 };
 
@@ -41,6 +50,7 @@ export const LargeSearchStrategy: Story = {
   name: "LargeSearchStrategy",
   args: {
     graph: agentWorkbenchLargeGraphFixture,
+    jobTitle: "AI Agent 平台工程师",
   },
 };
 

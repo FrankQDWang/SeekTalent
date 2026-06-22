@@ -1,51 +1,229 @@
 .strategy-graph {
-  background: rgb(232 236 248);
-  border: 0;
-  border-radius: 0;
-  height: min(62vh, 680px);
-  min-height: 420px;
+  background: #eef3ff;
+  color: var(--st-ink);
+  display: flex;
+  flex-direction: column;
+  height: min(86vh, 900px);
+  max-width: 100vw;
+  min-height: 760px;
   overflow: hidden;
   position: relative;
   width: 100%;
 }
 
-.strategy-graph .react-flow {
-  background: transparent;
-}
-
-.strategy-graph .react-flow__background {
-  opacity: 0.16;
-}
-
-.strategy-graph .react-flow__edge-path {
-  stroke: oklch(0.66 0.14 268);
-  stroke-width: 1.6;
-}
-
-.strategy-graph__empty,
-.strategy-graph__error {
+.strategy-graph__timeline {
   align-items: center;
-  background: var(--st-surface);
-  border: 1px solid var(--st-border);
-  border-radius: var(--st-radius-md);
-  color: var(--st-muted);
-  display: inline-flex;
-  font-weight: 680;
-  left: var(--st-space-4);
-  min-height: 34px;
-  padding: 0 var(--st-space-3);
-  position: absolute;
-  top: var(--st-space-4);
-  z-index: 2;
+  background: rgb(255 255 255 / 0.82);
+  border-bottom: 1px solid #dfe5f2;
+  display: flex;
+  gap: 18px;
+  min-height: 58px;
+  padding: 10px 24px;
 }
 
-.strategy-graph__error {
-  color: var(--st-danger);
+.strategy-graph__track {
+  flex: 1;
+  height: 34px;
+  min-width: 320px;
+  position: relative;
+}
+
+.strategy-graph__track::before {
+  background: #e3e8f5;
+  border-radius: 999px;
+  content: "";
+  height: 4px;
+  left: 0;
+  position: absolute;
+  right: 0;
+  top: 14px;
+}
+
+.strategy-graph__progress {
+  background: #6d63ff;
+  border-radius: 999px;
+  height: 4px;
+  left: 0;
+  position: absolute;
+  top: 14px;
+}
+
+.strategy-graph__tick {
+  color: #78849b;
+  font-size: 11px;
+  font-weight: 760;
+  position: absolute;
+  top: 1px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.strategy-graph__tick::before {
+  background: #fff;
+  border: 2px solid #c9d2e6;
+  border-radius: 999px;
+  content: "";
+  display: block;
+  height: 9px;
+  margin: 9px auto 3px;
+  width: 9px;
+}
+
+.strategy-graph__tick[data-state="done"]::before {
+  background: #25bd75;
+  border-color: #25bd75;
+}
+
+.strategy-graph__tick[data-state="active"] {
+  color: #172036;
+}
+
+.strategy-graph__tick[data-state="active"]::before {
+  background: #3588ff;
+  border-color: #3588ff;
+  box-shadow: 0 0 0 4px rgb(53 136 255 / 0.16);
+}
+
+.strategy-graph__status {
+  align-items: center;
+  background: #fff;
+  border: 1px solid #d9dfed;
+  border-radius: 999px;
+  color: #59657c;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 760;
+  min-height: 30px;
+  padding: 0 12px;
+}
+
+.strategy-graph__viewport {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.strategy-graph__canvas-frame {
+  min-height: 100%;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+.strategy-graph__canvas {
+  left: 0;
+  position: absolute;
+  top: 0;
+  transform-origin: left top;
+}
+
+.strategy-graph__edges {
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+  position: absolute;
+}
+
+.strategy-graph__edge {
+  fill: none;
+  marker-end: url("#strategy-graph-arrow");
+  stroke: #8d82ff;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.strategy-graph__edges marker path {
+  fill: #8d82ff;
+}
+
+.strategy-graph__job-card {
+  background: #fff;
+  border: 1px solid #d7d3ff;
+  border-radius: 12px;
+  box-shadow:
+    0 12px 24px rgb(59 72 112 / 0.08),
+    0 2px 5px rgb(59 72 112 / 0.05);
+  display: grid;
+  gap: 10px;
+  padding: 13px 14px;
+  position: absolute;
+}
+
+.strategy-graph__job-heading {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.strategy-graph__job-heading span {
+  align-items: center;
+  background: #6c55ff;
+  border-radius: 7px;
+  color: #fff;
+  display: inline-flex;
+  height: 25px;
+  justify-content: center;
+  width: 25px;
+}
+
+.strategy-graph__job-heading strong {
+  color: #19233b;
+  font-size: 14px;
+  font-weight: 780;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strategy-graph__job-card p {
+  color: #5d687f;
+  font-size: 12px;
+  font-weight: 620;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.strategy-graph__empty {
+  align-items: center;
+  background: #fff;
+  border: 1px dashed #c9d2e6;
+  border-radius: 16px;
+  color: #78849b;
+  display: flex;
+  font-weight: 720;
+  justify-content: center;
+  margin: auto;
+  min-height: 220px;
+  width: min(520px, calc(100% - 48px));
+}
+
+@media (max-width: 1080px) {
+  .strategy-graph {
+    height: 660px;
+    min-height: 560px;
+  }
 }
 
 @media (max-width: 760px) {
   .strategy-graph {
-    height: 520px;
-    min-height: 360px;
+    height: 620px;
+    min-height: 520px;
+  }
+
+  .strategy-graph__timeline {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 14px;
+  }
+
+  .strategy-graph__track {
+    flex: 0 0 34px;
+    height: 34px;
+    width: 100%;
   }
 }

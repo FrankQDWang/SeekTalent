@@ -44,7 +44,7 @@ const candidates: AgentWorkbenchCandidateSummary[] = [
     location: "上海",
     education: "本科",
     experienceYears: 10,
-    sourceKinds: ["cts"],
+    sourceKinds: ["liepin"],
     matchScore: 92,
     matchSummary: "Agent 工具调用平台和 RAG 检索链路经验匹配。",
     status: "reviewing",
@@ -119,5 +119,47 @@ describe("ThinkingProcessRail", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("思考过程尚未生成");
+  });
+
+  it("renders blocked and partial round status from BFF metadata", () => {
+    expect.hasAssertions();
+
+    render(
+      <ThinkingProcessRail
+        candidates={[]}
+        defaultTab="thinking"
+        thinkingProcess={{
+          activeRoundNo: null,
+          rounds: [
+            {
+              roundNo: 1,
+              status: "blocked",
+              cards: [
+                {
+                  title: "observation",
+                  text: "来源授权阻塞，等待人工处理。",
+                  terms: ["source: liepin"],
+                },
+              ],
+            },
+            {
+              roundNo: 2,
+              status: "partial",
+              cards: [
+                {
+                  title: "反思和下一轮变更",
+                  text: "猎聘返回了部分候选人。",
+                  terms: ["source: liepin"],
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("已阻塞")).toBeInTheDocument();
+    expect(screen.getByText("部分完成")).toBeInTheDocument();
+    expect(screen.queryByText("待处理")).not.toBeInTheDocument();
   });
 });

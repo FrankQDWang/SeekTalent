@@ -15,7 +15,7 @@ type CandidateCardProps = {
 };
 
 const sourceLabels: Record<CandidateSourceKind, string> = {
-  cts: "本地",
+  cts: "CTS 实验",
   liepin: "猎聘",
 };
 

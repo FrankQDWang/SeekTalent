@@ -5,6 +5,24 @@ import { createWorkbenchQueryClient } from "../src/lib/query/client";
 import "../src/styles/tokens.css";
 import "../src/styles/base.css";
 
+const resizeObserverLoopMessages = new Set([
+  "ResizeObserver loop completed with undelivered notifications.",
+  "ResizeObserver loop limit exceeded",
+]);
+
+if (typeof window !== "undefined") {
+  window.addEventListener(
+    "error",
+    (event) => {
+      if (resizeObserverLoopMessages.has(event.message)) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+    },
+    { capture: true },
+  );
+}
+
 const storybookQueryClient = createWorkbenchQueryClient();
 
 const preview: Preview = {

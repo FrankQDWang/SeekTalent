@@ -21,10 +21,30 @@ describe("agent workbench design fixture", () => {
     expect(Array.isArray(agentWorkbenchRunningViewFixture.candidates)).toBe(
       true,
     );
-    expect(agentWorkbenchLargeGraphFixture.nodes).toHaveLength(15);
-    expect(agentWorkbenchLargeGraphFixture.edges.length).toBeGreaterThanOrEqual(
-      16,
+    const roundNos = new Set(
+      agentWorkbenchLargeGraphFixture.nodes
+        .map((node) => node.roundNo)
+        .filter((roundNo): roundNo is number => typeof roundNo === "number"),
     );
+    expect(roundNos).toEqual(new Set([1, 2, 3, 4]));
+    expect(
+      agentWorkbenchLargeGraphFixture.nodes.filter(
+        (node) =>
+          node.stage === "source_result" && node.sourceKind === "liepin",
+      ),
+    ).toHaveLength(4);
+    expect(
+      agentWorkbenchLargeGraphFixture.nodes.some(
+        (node) => node.sourceKind === "cts",
+      ),
+    ).toBe(false);
+    expect(
+      agentWorkbenchLargeGraphFixture.edges.some(
+        (edge) =>
+          edge.fromNodeId === "round:3:phase:feedback:all" &&
+          edge.toNodeId === "round:4:phase:round_query:all",
+      ),
+    ).toBe(true);
 
     const graphText = agentWorkbenchLargeGraphFixture.nodes
       .map((node) => `${node.label} ${node.summary}`)
@@ -33,8 +53,8 @@ describe("agent workbench design fixture", () => {
     for (const expectedTerm of [
       "source_result",
       "scoring",
-      "detail_approval",
-      "final_summary",
+      "feedback",
+      "猎聘",
     ]) {
       expect(graphText).toContain(expectedTerm);
     }

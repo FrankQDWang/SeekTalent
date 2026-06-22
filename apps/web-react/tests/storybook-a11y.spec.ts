@@ -1,12 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { expect, type Page, test } from "@playwright/test";
+import { failOnPageProblems } from "./pageProblems";
 
 const require = createRequire(import.meta.url);
 const axeSource = await readFile(
   require.resolve("axe-core/axe.min.js"),
   "utf8",
 );
+
+test.beforeEach(({ page }) => {
+  failOnPageProblems(page);
+});
 
 const stories = [
   ["button primary", "/iframe.html?id=primitives-button--primary"],
@@ -36,6 +41,10 @@ const stories = [
     "/iframe.html?id=workbench-strategygraphcanvas--search-strategy",
   ],
   [
+    "strategy graph canonical",
+    "/iframe.html?id=workbench-strategygraphcanvas--canonical-runtime-swimlanes",
+  ],
+  [
     "strategy graph large",
     "/iframe.html?id=workbench-strategygraphcanvas--large-search-strategy",
   ],
@@ -48,6 +57,11 @@ const stories = [
     "candidate queue populated",
     "/iframe.html?id=workbench-candidatequeue--populated",
   ],
+  [
+    "candidate queue loading",
+    "/iframe.html?id=workbench-candidatequeue--loading",
+  ],
+  ["candidate queue error", "/iframe.html?id=workbench-candidatequeue--error"],
   [
     "candidate detail",
     "/iframe.html?id=workbench-candidatedetaildrawer--summary",
@@ -241,17 +255,13 @@ async function waitForStoryReady(page: Page) {
     return;
   }
 
-  await expect(firstGraph).toHaveAttribute("aria-busy", "false", {
-    timeout: 15_000,
-  });
-
   const graphHasTerminalState =
-    (await firstGraph
-      .locator(".strategy-graph__empty, .strategy-graph__error")
-      .count()) > 0;
+    (await firstGraph.locator(".strategy-graph__empty").count()) > 0;
 
   if (!graphHasTerminalState) {
-    await expect(page.locator(".react-flow__node").first()).toBeVisible({
+    await expect(
+      firstGraph.locator(".strategy-graph-node").first(),
+    ).toBeVisible({
       timeout: 15_000,
     });
   }

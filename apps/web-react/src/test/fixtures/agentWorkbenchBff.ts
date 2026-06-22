@@ -4,6 +4,7 @@ import type {
   AgentWorkbenchConversationSummary,
   AgentWorkbenchConversationResponse,
   AgentWorkbenchStrategyGraph,
+  AgentWorkbenchThinkingProcess,
 } from "../../lib/api/agentWorkbenchTypes";
 
 const now = "2026-06-13T09:30:00.000Z";
@@ -70,7 +71,7 @@ function candidateSummary(
     location: null,
     education: null,
     experienceYears: null,
-    sourceKinds: ["cts"],
+    sourceKinds: ["liepin"],
     matchScore: null,
     matchSummary: null,
     status: "pending",
@@ -108,7 +109,7 @@ function workbenchView(
         payload: { kind: "empty" },
         role: "assistant",
         seq: 2,
-        text: "已确认需求，正在按本地库和猎聘来源检索候选人。",
+        text: "已确认需求，正在按猎聘来源检索候选人。",
       },
     ],
     activities: [
@@ -157,10 +158,10 @@ function workbenchView(
             payload: {
               kind: "source_search",
               itemId: "tool_source_search",
-              summary: "检索 CTS 和猎聘安全摘要。",
+              summary: "检索猎聘安全摘要。",
             },
             status: "running",
-            summary: "检索 CTS 和猎聘安全摘要。",
+            summary: "检索猎聘安全摘要。",
           },
           {
             createdAt: "2026-06-13T09:30:18.000Z",
@@ -398,12 +399,6 @@ function workbenchView(
     },
     sourceConnections: [
       {
-        displayName: "本地人才库",
-        lastCheckedAt: now,
-        sourceKind: "cts",
-        status: "connected",
-      },
-      {
         displayName: "猎聘",
         lastCheckedAt: now,
         sourceKind: "liepin",
@@ -420,7 +415,7 @@ function workbenchView(
         location: "上海",
         education: "本科",
         experienceYears: 10,
-        sourceKinds: ["cts", "liepin"],
+        sourceKinds: ["liepin"],
         matchScore: 92,
         matchSummary:
           "可独立主导 0-1 产品体验搭建，擅长拆解复杂 B 端业务流程。",
@@ -438,7 +433,7 @@ function workbenchView(
         location: "上海",
         education: "硕士",
         experienceYears: 8,
-        sourceKinds: ["cts"],
+        sourceKinds: ["liepin"],
         matchScore: 84,
         matchSummary: "复杂 B 端流程经验明确，跨团队推动力需要补充验证。",
         status: "pending",
@@ -509,44 +504,162 @@ const baseStrategyGraph: AgentWorkbenchStrategyGraph = {
     {
       nodeId: "requirements",
       kind: "requirements",
-      label: "需求确认",
-      summary: "上海 AI Agent 平台工程，Python 后端，检索系统经验。",
+      label: "需求拆解",
+      summary: "已确认需求：AI Agent 平台工程，Python 后端，检索系统经验。",
       status: "completed",
       sourceKind: "all",
     },
-    {
-      nodeId: "activity_001",
-      activityId: "activity_001",
-      kind: "activity",
-      label: "source search",
-      summary: "正在检索 CTS 和猎聘安全摘要。",
-      status: "running",
-      sourceKind: "all",
-    },
-    {
-      nodeId: "candidate_001",
-      kind: "candidate",
-      label: "候选人 A",
-      summary: "Agent 工具调用平台和 RAG 链路证据完整。",
-      status: "running",
-      sourceKind: "all",
-    },
+    ...roundGraphNodes(1, "completed", {
+      query: "第 1 轮查询策略已生成。",
+      source: "猎聘返回 10 份原始简历，形成 10 位候选人。",
+      scoring: "第 1 轮评分完成，10 位候选人进入 Top Pool。",
+      feedback: "第 1 轮复盘完成，准备下一轮策略。",
+    }),
+    ...roundGraphNodes(2, "completed", {
+      query: "第 2 轮查询策略已生成。",
+      source: "猎聘返回 16 份原始简历，形成 7 位候选人。",
+      scoring: "第 2 轮评分完成，10 位候选人进入 Top Pool。",
+      feedback: "第 2 轮复盘完成，准备下一轮策略。",
+    }),
+    ...roundGraphNodes(3, "running", {
+      query: "第 3 轮查询策略已生成。",
+      source: "猎聘正在返回安全摘要。",
+      scoring: "第 3 轮 Top Pool 等待评分。",
+      feedback: "等待第 3 轮结果后生成下一轮策略。",
+    }),
+    ...roundGraphNodes(4, "pending", {
+      query: "第 4 轮查询包等待后端生成。",
+      source: "猎聘检索等待第 4 轮启动。",
+      scoring: "Top Pool 等待第 4 轮评分。",
+      feedback: "等待前序轮次完成后更新策略。",
+    }),
   ],
   edges: [
     {
-      edgeId: "edge_requirement_search",
+      edgeId: "requirements->round:1:phase:round_query:all",
       fromNodeId: "requirements",
       label: "生成检索词",
-      toNodeId: "activity_001",
+      toNodeId: "round:1:phase:round_query:all",
     },
-    {
-      edgeId: "edge_search_candidate",
-      fromNodeId: "activity_001",
-      label: "安全摘要",
-      toNodeId: "candidate_001",
-    },
+    ...roundGraphEdges(1, 2),
+    ...roundGraphEdges(2, 3),
+    ...roundGraphEdges(3, 4),
+    ...roundGraphEdges(4, null),
   ],
 };
+
+function roundGraphNodes(
+  roundNo: number,
+  status: "completed" | "running" | "pending",
+  summaries: {
+    feedback: string;
+    query: string;
+    scoring: string;
+    source: string;
+  },
+): AgentWorkbenchStrategyGraph["nodes"] {
+  const roundId = String(roundNo);
+  const sourceStatus = status === "running" ? "running" : status;
+  const laterStatus = status === "running" ? "pending" : status;
+  return [
+    {
+      nodeId: `round:${roundId}`,
+      kind: "round",
+      label: `第 ${roundId} 轮`,
+      phase: "round",
+      roundNo,
+      stage: "round_summary",
+      summary: `第 ${roundId} 轮猎聘检索`,
+      status,
+      sourceKind: "all",
+    },
+    {
+      nodeId: `round:${roundId}:phase:round_query:all`,
+      kind: "phase",
+      label: "round_query",
+      phase: "query",
+      roundNo,
+      stage: "round_query",
+      summary: summaries.query,
+      status: status === "pending" ? "pending" : "completed",
+      sourceKind: "all",
+    },
+    {
+      nodeId: `round:${roundId}:phase:source_result:liepin`,
+      kind: "phase",
+      label: "liepin source_result",
+      phase: "source",
+      roundNo,
+      stage: "source_result",
+      summary: summaries.source,
+      status: sourceStatus,
+      sourceKind: "liepin",
+    },
+    {
+      nodeId: `round:${roundId}:phase:scoring:all`,
+      kind: "phase",
+      label: "scoring",
+      phase: "scoring",
+      roundNo,
+      stage: "scoring",
+      summary: summaries.scoring,
+      status: laterStatus,
+      sourceKind: "all",
+    },
+    {
+      nodeId: `round:${roundId}:phase:feedback:all`,
+      kind: "phase",
+      label: "feedback",
+      phase: "feedback",
+      roundNo,
+      stage: "feedback",
+      summary: summaries.feedback,
+      status: laterStatus,
+      sourceKind: "all",
+    },
+  ];
+}
+
+function roundGraphEdges(
+  roundNo: number,
+  nextRoundNo: number | null,
+): AgentWorkbenchStrategyGraph["edges"] {
+  const roundId = String(roundNo);
+  const query = `round:${roundId}:phase:round_query:all`;
+  const source = `round:${roundId}:phase:source_result:liepin`;
+  const scoring = `round:${roundId}:phase:scoring:all`;
+  const feedback = `round:${roundId}:phase:feedback:all`;
+  const edges: AgentWorkbenchStrategyGraph["edges"] = [
+    {
+      edgeId: `${query}->${source}`,
+      fromNodeId: query,
+      label: "猎聘检索",
+      toNodeId: source,
+    },
+    {
+      edgeId: `${source}->${scoring}`,
+      fromNodeId: source,
+      label: "安全摘要",
+      toNodeId: scoring,
+    },
+    {
+      edgeId: `${scoring}->${feedback}`,
+      fromNodeId: scoring,
+      label: "评分结果",
+      toNodeId: feedback,
+    },
+  ];
+  if (nextRoundNo !== null) {
+    const nextRoundId = String(nextRoundNo);
+    edges.push({
+      edgeId: `${feedback}->round:${nextRoundId}:phase:round_query:all`,
+      fromNodeId: feedback,
+      label: "下一轮策略",
+      toNodeId: `round:${nextRoundId}:phase:round_query:all`,
+    });
+  }
+  return edges;
+}
 
 const emptyStrategyGraph: AgentWorkbenchStrategyGraph = {
   nodes: [],
@@ -603,6 +716,98 @@ export const agentWorkbenchRequirementReviewViewFixture: AgentWorkbenchConversat
 export const agentWorkbenchRunningViewFixture: AgentWorkbenchConversationResponse =
   workbenchView();
 
+export const multiRoundThinkingProcessFixture: AgentWorkbenchThinkingProcess = {
+  activeRoundNo: 3,
+  rounds: [
+    {
+      cards: [
+        {
+          terms: ["AI Agent", "Python", "RAG"],
+          text: "锁定 AI Agent 平台、Python 后端、RAG 工程三个主关键词。",
+          title: "关键词",
+        },
+        {
+          terms: ["searched: 10", "scored: 10"],
+          text: "猎聘第一轮覆盖面较宽，强匹配集中在工具平台与检索工程。",
+          title: "observation",
+        },
+        {
+          terms: ["工具平台", "workflow"],
+          text: "下一轮收窄到工具平台和 workflow orchestration，保留 Python 约束。",
+          title: "反思和下一轮变更",
+        },
+      ],
+      roundNo: 1,
+      status: "completed",
+    },
+    {
+      cards: [
+        {
+          terms: ["workflow orchestration", "agent runtime"],
+          text: "加入 workflow orchestration 与 agent runtime，排除纯算法岗位。",
+          title: "关键词",
+        },
+        {
+          terms: ["searched: 16", "scored: 7"],
+          text: "候选人质量提升，但 RAG 评测和线上可观测性经验仍不够明确。",
+          title: "observation",
+        },
+        {
+          terms: ["eval harness", "observability"],
+          text: "第三轮补充 eval harness、observability，继续从猎聘读取安全摘要。",
+          title: "反思和下一轮变更",
+        },
+      ],
+      roundNo: 2,
+      status: "completed",
+    },
+    {
+      cards: [
+        {
+          terms: ["eval harness", "observability", "平台工程"],
+          text: "当前轮正在验证评测体系、运行时可观测性和平台工程交集。",
+          title: "关键词",
+        },
+        {
+          terms: ["searched: 24", "scored: 12"],
+          text: "猎聘返回的安全摘要显示三位候选人与运行时控制面高度相关。",
+          title: "observation",
+        },
+        {
+          terms: ["Top Pool", "强匹配"],
+          text: "先完成 Top Pool 评分，再决定是否需要第四轮补漏。",
+          title: "反思和下一轮变更",
+        },
+      ],
+      roundNo: 3,
+      status: "running",
+    },
+    {
+      cards: [
+        {
+          terms: ["补漏轮", "待生成"],
+          text: "等待第三轮评分后，由后端 runtime projection 决定是否生成补漏查询。",
+          title: "关键词",
+        },
+      ],
+      roundNo: 4,
+      status: "pending",
+    },
+  ],
+};
+
+export const agentWorkbenchMultiRoundThinkingViewFixture: AgentWorkbenchConversationResponse =
+  workbenchView({
+    runtime: {
+      currentRound: 3,
+      currentStage: "scoring",
+      latestEventSeq: 19,
+      runtimeRunId: "runtime_001",
+      status: "running",
+    },
+    thinkingProcess: multiRoundThinkingProcessFixture,
+  });
+
 export const agentWorkbenchCandidateDetailFixture: AgentWorkbenchCandidateDetailResponse =
   {
     accessState: "allowed",
@@ -644,7 +849,7 @@ export const agentWorkbenchCandidateDetailFixture: AgentWorkbenchCandidateDetail
         ],
       },
     ],
-    sourceKinds: ["cts", "liepin"],
+    sourceKinds: ["liepin"],
   };
 
 export const agentWorkbenchCandidateApprovalRequiredDetailFixture: AgentWorkbenchCandidateDetailResponse =
@@ -777,240 +982,5 @@ export const agentWorkbenchSearchStrategyGraphFixture: AgentWorkbenchStrategyGra
 export const agentWorkbenchEmptyStrategyGraphFixture: AgentWorkbenchStrategyGraph =
   agentWorkbenchInitialViewFixture.strategyGraph;
 
-export const agentWorkbenchLargeGraphFixture: AgentWorkbenchStrategyGraph = {
-  nodes: [
-    {
-      nodeId: "large_requirement",
-      kind: "requirements",
-      label: "需求确认",
-      summary: "上海 AI Agent 平台工程, Python 后端, 检索系统经验。",
-      status: "completed",
-      sourceKind: "all",
-    },
-    {
-      nodeId: "large_user_message",
-      kind: "message",
-      label: "用户补充",
-      summary: "偏好有工作流编排、评测和企业知识库落地经验。",
-      status: "completed",
-      sourceKind: "all",
-      messageId: "msg_user_large_001",
-    },
-    {
-      nodeId: "large_keyword_query",
-      kind: "activity",
-      label: "keyword query",
-      summary: "AI Agent 平台工程 上海 Python RAG workflow orchestration。",
-      status: "completed",
-      sourceKind: "all",
-      activityId: "activity_keyword_query",
-    },
-    {
-      nodeId: "large_cts_search",
-      kind: "activity",
-      label: "CTS source search",
-      summary: "本地人才库命中 18 个安全摘要。",
-      status: "completed",
-      sourceKind: "cts",
-      activityId: "activity_cts_search",
-    },
-    {
-      nodeId: "large_liepin_search",
-      kind: "activity",
-      label: "Liepin source search",
-      summary: "猎聘来源命中 24 个安全摘要, 详情读取需审批。",
-      status: "completed",
-      sourceKind: "liepin",
-      activityId: "activity_liepin_search",
-    },
-    {
-      nodeId: "large_source_result",
-      kind: "activity",
-      label: "source_result merge",
-      summary: "合并多来源结果, 保留 safe refs 和来源边界。",
-      status: "completed",
-      sourceKind: "all",
-      activityId: "activity_source_result",
-    },
-    {
-      nodeId: "large_dedupe",
-      kind: "activity",
-      label: "去重和来源归并",
-      summary: "按 person key 与履历摘要合并重复候选人。",
-      status: "completed",
-      sourceKind: "all",
-      activityId: "activity_dedupe",
-    },
-    {
-      nodeId: "large_scoring",
-      kind: "activity",
-      label: "scoring",
-      summary: "12 个候选人进入评分, 3 个强匹配。",
-      status: "completed",
-      sourceKind: "all",
-      activityId: "activity_scoring",
-    },
-    {
-      nodeId: "large_candidate_a",
-      kind: "candidate",
-      label: "候选人 A",
-      summary: "Agent 工具调用平台和 RAG 链路证据完整。",
-      status: "completed",
-      sourceKind: "all",
-    },
-    {
-      nodeId: "large_candidate_b",
-      kind: "candidate",
-      label: "候选人 B",
-      summary: "检索和后端强, Agent 平台证据需要补充。",
-      status: "completed",
-      sourceKind: "cts",
-    },
-    {
-      nodeId: "large_candidate_c",
-      kind: "candidate",
-      label: "候选人 C",
-      summary: "工作流编排经验强, 需要确认近期稳定性。",
-      status: "completed",
-      sourceKind: "liepin",
-    },
-    {
-      nodeId: "large_observation",
-      kind: "activity",
-      label: "observation",
-      summary: "结果偏 RAG, 工具编排和评测证据仍需加强。",
-      status: "completed",
-      sourceKind: "all",
-      activityId: "activity_observation",
-    },
-    {
-      nodeId: "large_reflection",
-      kind: "activity",
-      label: "reflection",
-      summary: "下一轮加入 eval harness 和 workflow orchestration。",
-      status: "running",
-      sourceKind: "all",
-      activityId: "activity_reflection",
-    },
-    {
-      nodeId: "large_detail_approval",
-      kind: "approval",
-      label: "detail_approval",
-      summary: "候选人 A 完整简历读取等待用户审批。",
-      status: "pending",
-      sourceKind: "liepin",
-    },
-    {
-      nodeId: "large_final_summary",
-      kind: "final",
-      label: "final_summary",
-      summary: "最终短名单将在审批和第二轮检索后生成。",
-      status: "pending",
-      sourceKind: "all",
-    },
-  ],
-  edges: [
-    {
-      edgeId: "large_edge_requirement_message",
-      fromNodeId: "large_requirement",
-      toNodeId: "large_user_message",
-      label: "补充约束",
-    },
-    {
-      edgeId: "large_edge_message_keyword",
-      fromNodeId: "large_user_message",
-      toNodeId: "large_keyword_query",
-      label: "生成检索词",
-    },
-    {
-      edgeId: "large_edge_keyword_cts",
-      fromNodeId: "large_keyword_query",
-      toNodeId: "large_cts_search",
-      label: "本地库",
-    },
-    {
-      edgeId: "large_edge_keyword_liepin",
-      fromNodeId: "large_keyword_query",
-      toNodeId: "large_liepin_search",
-      label: "外部来源",
-    },
-    {
-      edgeId: "large_edge_cts_result",
-      fromNodeId: "large_cts_search",
-      toNodeId: "large_source_result",
-      label: "18 summaries",
-    },
-    {
-      edgeId: "large_edge_liepin_result",
-      fromNodeId: "large_liepin_search",
-      toNodeId: "large_source_result",
-      label: "24 summaries",
-    },
-    {
-      edgeId: "large_edge_result_dedupe",
-      fromNodeId: "large_source_result",
-      toNodeId: "large_dedupe",
-      label: "safe refs",
-    },
-    {
-      edgeId: "large_edge_dedupe_scoring",
-      fromNodeId: "large_dedupe",
-      toNodeId: "large_scoring",
-      label: "12 candidates",
-    },
-    {
-      edgeId: "large_edge_scoring_a",
-      fromNodeId: "large_scoring",
-      toNodeId: "large_candidate_a",
-      label: "92",
-    },
-    {
-      edgeId: "large_edge_scoring_b",
-      fromNodeId: "large_scoring",
-      toNodeId: "large_candidate_b",
-      label: "84",
-    },
-    {
-      edgeId: "large_edge_scoring_c",
-      fromNodeId: "large_scoring",
-      toNodeId: "large_candidate_c",
-      label: "81",
-    },
-    {
-      edgeId: "large_edge_candidates_observation",
-      fromNodeId: "large_candidate_a",
-      toNodeId: "large_observation",
-      label: "强匹配证据",
-    },
-    {
-      edgeId: "large_edge_candidate_b_observation",
-      fromNodeId: "large_candidate_b",
-      toNodeId: "large_observation",
-      label: "补充风险",
-    },
-    {
-      edgeId: "large_edge_observation_reflection",
-      fromNodeId: "large_observation",
-      toNodeId: "large_reflection",
-      label: "调整策略",
-    },
-    {
-      edgeId: "large_edge_candidate_a_detail",
-      fromNodeId: "large_candidate_a",
-      toNodeId: "large_detail_approval",
-      label: "详情审批",
-    },
-    {
-      edgeId: "large_edge_reflection_final",
-      fromNodeId: "large_reflection",
-      toNodeId: "large_final_summary",
-      label: "等待完成",
-    },
-    {
-      edgeId: "large_edge_detail_final",
-      fromNodeId: "large_detail_approval",
-      toNodeId: "large_final_summary",
-      label: "审批结果",
-    },
-  ],
-};
+export const agentWorkbenchLargeGraphFixture: AgentWorkbenchStrategyGraph =
+  baseStrategyGraph;

@@ -1,14 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import {
+  agentWorkbenchMultiRoundThinkingViewFixture,
   agentWorkbenchRunningViewFixture,
-  wtsStoryConversationSummariesFixture,
 } from "../../test/fixtures/agentWorkbenchBff";
-import { ConversationList } from "./ConversationList";
-import {
-  ConversationScreen,
-  ConversationScreenSide,
-} from "./ConversationScreen";
-import { ConversationShell } from "./ConversationShell";
+import { ThinkingProcessRail } from "./ThinkingProcessRail";
 
 function ThinkingProcessRailStory({
   empty = false,
@@ -25,19 +20,25 @@ function ThinkingProcessRailStory({
           rounds: [],
         },
       }
-    : agentWorkbenchRunningViewFixture;
+    : agentWorkbenchMultiRoundThinkingViewFixture;
 
   return (
-    <ConversationShell
-      main={<ConversationScreen view={view} />}
-      rail={
-        <ConversationList
-          conversations={wtsStoryConversationSummariesFixture}
-          selectedConversationId="agent_conv_001"
+    <div
+      style={{
+        background: "#eef3ff",
+        display: "grid",
+        minHeight: "100vh",
+        placeItems: "stretch end",
+      }}
+    >
+      <div style={{ maxWidth: "100vw", minHeight: "100vh", width: 360 }}>
+        <ThinkingProcessRail
+          candidates={view.candidates}
+          defaultTab={tab}
+          thinkingProcess={view.thinkingProcess}
         />
-      }
-      side={<ConversationScreenSide defaultTab={tab} view={view} />}
-    />
+      </div>
+    </div>
   );
 }
 

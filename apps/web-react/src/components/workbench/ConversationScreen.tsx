@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   AgentWorkbenchConversationResponse,
   AgentWorkbenchRequirementDraftItem,
@@ -46,7 +46,9 @@ export function ConversationScreen({
   view,
 }: ConversationScreenProps) {
   const [activePanel, setActivePanel] = useState<WorkPanel>("chat");
+  const compactWorkspace = useCompactWorkspace();
   const workflowSurfaceVisible = hasConversationWorkflowSurface(view);
+  const shouldMountGraph = !compactWorkspace || activePanel === "graph";
   const shouldShowRequirementReview =
     view.pendingActions.allowed.includes("confirm_requirements") ||
     view.pendingActions.pendingRequirementReviewCount > 0;
@@ -122,12 +124,17 @@ export function ConversationScreen({
                 id="conversation-panel-graph"
                 role="tabpanel"
               >
-                <StrategyGraph
-                  graph={view.strategyGraph}
-                  key={
-                    activePanel === "graph" ? "graph-active" : "graph-inactive"
-                  }
-                />
+                {shouldMountGraph ? (
+                  <StrategyGraph
+                    graph={view.strategyGraph}
+                    jobTitle={view.conversation.title}
+                    key={
+                      activePanel === "graph"
+                        ? "graph-active"
+                        : "graph-inactive"
+                    }
+                  />
+                ) : null}
               </section>
               <section
                 aria-labelledby="conversation-candidates-tab"
@@ -156,6 +163,37 @@ export function ConversationScreen({
       </div>
     </>
   );
+}
+
+function useCompactWorkspace(): boolean {
+  const [compact, setCompact] = useState(() => compactWorkspaceMatches());
+
+  useEffect(() => {
+    const media = compactWorkspaceMedia();
+    if (media === null) {
+      return;
+    }
+    const update = () => setCompact(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  return compact;
+}
+
+function compactWorkspaceMatches(): boolean {
+  return compactWorkspaceMedia()?.matches ?? false;
+}
+
+function compactWorkspaceMedia(): MediaQueryList | null {
+  if (
+    typeof window === "undefined" ||
+    typeof window.matchMedia !== "function"
+  ) {
+    return null;
+  }
+  return window.matchMedia("(max-width: 1080px)");
 }
 
 export function hasConversationWorkflowSurface(

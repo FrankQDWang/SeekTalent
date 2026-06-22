@@ -1,6 +1,15 @@
 import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
+  page.on("pageerror", (error) => {
+    throw error;
+  });
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      throw new Error(message.text());
+    }
+  });
+
   await page.addInitScript(() => {
     class FakeEventSource extends EventTarget {
       static readonly CONNECTING = 0;
@@ -82,9 +91,12 @@ test("renders live workbench graph and opens semantic stream", async ({
     ).toBeVisible();
   }
   await expect(page.getByRole("region", { name: "检索策略图" })).toBeVisible();
-  await expect(page.locator(".react-flow")).toBeVisible();
+  await expect(page.locator(".react-flow")).toHaveCount(0);
   await expect(page.getByText("需求拆解")).toBeVisible();
-  await expect(page.getByText("第 1 轮检索")).toBeVisible();
+  await expect(page.getByText("第 1 轮 · 查询包")).toBeVisible();
+  await expect(page.getByText("第 2 轮 · 猎聘检索")).toBeVisible();
+  await expect(page.getByText("第 3 轮 · Top Pool")).toBeVisible();
+  await expect(page.getByText(/CTS/i)).toHaveCount(0);
   if (testInfo.project.name.includes("mobile")) {
     await page.getByRole("tab", { name: "Candidates" }).click();
     await expect(
@@ -95,7 +107,7 @@ test("renders live workbench graph and opens semantic stream", async ({
     await page.getByRole("tab", { name: "Graph" }).click();
   }
   await expect
-    .poll(() => page.locator(".react-flow__node").count())
+    .poll(() => page.locator(".strategy-graph-node").count())
     .toBeGreaterThan(0);
 
   if (testInfo.project.name.includes("mobile")) {
@@ -505,35 +517,7 @@ const conversationSnapshot = {
     currentRound: 1,
     latestEventSeq: 7,
   },
-  strategyGraph: {
-    nodes: [
-      {
-        nodeId: "requirements",
-        kind: "requirements",
-        label: "需求拆解",
-        summary: "已确认岗位要求",
-        status: "completed",
-        sourceKind: "all",
-      },
-      {
-        nodeId: "activity_1",
-        kind: "activity",
-        label: "第 1 轮检索",
-        summary: "正在检索候选人",
-        status: "running",
-        sourceKind: "liepin",
-        activityId: "activity_1",
-      },
-    ],
-    edges: [
-      {
-        edgeId: "requirements->activity_1",
-        fromNodeId: "requirements",
-        toNodeId: "activity_1",
-        label: "生成检索策略",
-      },
-    ],
-  },
+  strategyGraph: liveStrategyGraph(),
   thinkingProcess: {
     activeRoundNo: 1,
     rounds: [
@@ -571,7 +555,7 @@ const conversationSnapshot = {
       location: "上海",
       education: "本科",
       experienceYears: 10,
-      sourceKinds: ["cts", "liepin"],
+      sourceKinds: ["liepin"],
       matchScore: 92,
       matchSummary: "Agent 工具调用平台和 RAG 链路证据完整。",
       status: "running",
@@ -601,6 +585,140 @@ const conversationSnapshot = {
   reasonCode: null,
 };
 
+function liveStrategyGraph() {
+  return {
+    nodes: [
+      {
+        nodeId: "requirements",
+        kind: "requirements",
+        label: "需求拆解",
+        summary: "已确认岗位要求",
+        status: "completed",
+        sourceKind: "all",
+      },
+      ...liveRoundGraphNodes(1, "completed"),
+      ...liveRoundGraphNodes(2, "running"),
+      ...liveRoundGraphNodes(3, "pending"),
+    ],
+    edges: [
+      {
+        edgeId: "requirements->round:1:phase:round_query:all",
+        fromNodeId: "requirements",
+        toNodeId: "round:1:phase:round_query:all",
+        label: "生成检索策略",
+      },
+      ...liveRoundGraphEdges(1, 2),
+      ...liveRoundGraphEdges(2, 3),
+      ...liveRoundGraphEdges(3, null),
+    ],
+  };
+}
+
+function liveRoundGraphNodes(
+  roundNo: number,
+  status: "completed" | "running" | "pending",
+) {
+  const roundId = String(roundNo);
+  const sourceStatus = status === "running" ? "running" : status;
+  const laterStatus = status === "running" ? "pending" : status;
+  return [
+    {
+      nodeId: `round:${roundId}`,
+      kind: "round",
+      label: `第 ${roundId} 轮`,
+      summary: `第 ${roundId} 轮猎聘检索`,
+      status,
+      sourceKind: "all",
+      roundNo,
+      phase: "round",
+      stage: "round_summary",
+    },
+    {
+      nodeId: `round:${roundId}:phase:round_query:all`,
+      kind: "phase",
+      label: "round_query",
+      summary: `第 ${roundId} 轮查询策略已生成。`,
+      status: status === "pending" ? "pending" : "completed",
+      sourceKind: "all",
+      roundNo,
+      phase: "query",
+      stage: "round_query",
+    },
+    {
+      nodeId: `round:${roundId}:phase:source_result:liepin`,
+      kind: "phase",
+      label: "liepin source_result",
+      summary:
+        status === "pending" ? "猎聘检索等待本轮启动。" : "猎聘返回安全摘要。",
+      status: sourceStatus,
+      sourceKind: "liepin",
+      roundNo,
+      phase: "source",
+      stage: "source_result",
+    },
+    {
+      nodeId: `round:${roundId}:phase:scoring:all`,
+      kind: "phase",
+      label: "scoring",
+      summary: "Top Pool 等待评分。",
+      status: laterStatus,
+      sourceKind: "all",
+      roundNo,
+      phase: "scoring",
+      stage: "scoring",
+    },
+    {
+      nodeId: `round:${roundId}:phase:feedback:all`,
+      kind: "phase",
+      label: "feedback",
+      summary: "准备下一轮策略。",
+      status: laterStatus,
+      sourceKind: "all",
+      roundNo,
+      phase: "feedback",
+      stage: "feedback",
+    },
+  ];
+}
+
+function liveRoundGraphEdges(roundNo: number, nextRoundNo: number | null) {
+  const roundId = String(roundNo);
+  const query = `round:${roundId}:phase:round_query:all`;
+  const source = `round:${roundId}:phase:source_result:liepin`;
+  const scoring = `round:${roundId}:phase:scoring:all`;
+  const feedback = `round:${roundId}:phase:feedback:all`;
+  const edges = [
+    {
+      edgeId: `${query}->${source}`,
+      fromNodeId: query,
+      toNodeId: source,
+      label: "猎聘检索",
+    },
+    {
+      edgeId: `${source}->${scoring}`,
+      fromNodeId: source,
+      toNodeId: scoring,
+      label: "安全摘要",
+    },
+    {
+      edgeId: `${scoring}->${feedback}`,
+      fromNodeId: scoring,
+      toNodeId: feedback,
+      label: "评分结果",
+    },
+  ];
+  if (nextRoundNo !== null) {
+    const nextRoundId = String(nextRoundNo);
+    edges.push({
+      edgeId: `${feedback}->round:${nextRoundId}:phase:round_query:all`,
+      fromNodeId: feedback,
+      toNodeId: `round:${nextRoundId}:phase:round_query:all`,
+      label: "下一轮策略",
+    });
+  }
+  return edges;
+}
+
 const candidateDetailSnapshot = {
   accessState: "allowed",
   candidateId: "candidate_001",
@@ -623,5 +741,5 @@ const candidateDetailSnapshot = {
       ],
     },
   ],
-  sourceKinds: ["cts", "liepin"],
+  sourceKinds: ["liepin"],
 };

@@ -1,0 +1,46 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Render the Agent Workbench design contract in React and packaged static assets.",
+  "rationale": "The React Workbench must match the designer assets for the strategy graph and thinking process while staying backed by real BFF/runtime-control projections. Removing ReactFlow and ELK is part of the same UI contract because the strategy graph is now a read-only, fixed-lane timeline instead of an interactive graph canvas.",
+  "touched_layers": [
+    "dependencies",
+    "docs",
+    "frontend",
+    "tests"
+  ],
+  "red_files": [
+    "apps/web-react/package.json",
+    "apps/web-react/pnpm-lock.yaml",
+    "apps/web-react/src/components/workbench/StrategyGraph.tsx",
+    "apps/web-react/src/components/workbench/ThinkingProcessRail.tsx",
+    "apps/web-react/src/lib/strategy-graph/graphProjection.ts",
+    "apps/web-react/src/test/fixtures/agentWorkbenchBff.ts",
+    "apps/web-react/tests/workbench-live.spec.ts"
+  ],
+  "dependency_files": [
+    "apps/web-react/package.json",
+    "apps/web-react/pnpm-lock.yaml"
+  ],
+  "dependency_rationale": "ReactFlow and ELK are removed because the strategy graph is no longer an interactive node canvas. The new implementation is a static BFF-projected lane timeline using local React and CSS only.",
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run"
+  ],
+  "deletion_targets": [
+    "ReactFlow canvas controls, drag, zoom, pan, and selectable graph nodes",
+    "CTS as a default Workbench source in fixtures and visible UI",
+    "Storybook visual baselines that no longer match the designer assets",
+    "stale packaged Workbench static bundle assets"
+  ],
+  "risks": [
+    "Strategy graph layout must remain readable across mobile and desktop without canvas interactions.",
+    "Storybook visual baselines are macOS-specific and must stay aligned with the CI runner.",
+    "Packaged static assets must be rebuilt whenever React Workbench output changes."
+  ]
+}
