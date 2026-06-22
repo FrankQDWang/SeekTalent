@@ -3,13 +3,16 @@ import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useCreateAgentWorkbenchConversationFromJd } from "./agentWorkbench";
-import { createAgentConversation, submitAgentWorkbenchMessage } from "./client";
+import {
+  createAgentWorkbenchConversation,
+  submitAgentWorkbenchMessage,
+} from "./client";
 import { createWorkbenchQueryClient } from "../query/client";
 import { queryKeys } from "../query/keys";
 import { agentWorkbenchRequirementReviewViewFixture } from "../../test/fixtures/agentWorkbenchBff";
 
 vi.mock("./client", () => ({
-  createAgentConversation: vi.fn(),
+  createAgentWorkbenchConversation: vi.fn(),
   submitAgentWorkbenchMessage: vi.fn(),
 }));
 
@@ -21,8 +24,10 @@ describe("create Agent Workbench conversation from JD hook", () => {
   it("creates a conversation, submits JD through the Workbench BFF, and seeds the view cache", async () => {
     expect.hasAssertions();
     const queryClient = createWorkbenchQueryClient();
-    vi.mocked(createAgentConversation).mockResolvedValueOnce({
+    vi.mocked(createAgentWorkbenchConversation).mockResolvedValueOnce({
+      ...agentWorkbenchRequirementReviewViewFixture,
       conversation: {
+        ...agentWorkbenchRequirementReviewViewFixture.conversation,
         conversationId: "agent_conv_created",
         title: "AI Agent 平台工程师",
       },
@@ -50,7 +55,7 @@ describe("create Agent Workbench conversation from JD hook", () => {
       jobTitle: "AI Agent 平台工程师",
     });
 
-    expect(createAgentConversation).toHaveBeenCalledWith({
+    expect(createAgentWorkbenchConversation).toHaveBeenCalledWith({
       title: "AI Agent 平台工程师",
     });
     expect(submitAgentWorkbenchMessage).toHaveBeenCalledWith(
@@ -98,15 +103,17 @@ describe("create Agent Workbench conversation from JD hook", () => {
       }),
     ).rejects.toThrow("Job description is required.");
 
-    expect(createAgentConversation).not.toHaveBeenCalled();
+    expect(createAgentWorkbenchConversation).not.toHaveBeenCalled();
     expect(submitAgentWorkbenchMessage).not.toHaveBeenCalled();
   });
 
   it("reuses the created conversation and submit idempotency key when JD submit is retried", async () => {
     expect.hasAssertions();
     const queryClient = createWorkbenchQueryClient();
-    vi.mocked(createAgentConversation).mockResolvedValueOnce({
+    vi.mocked(createAgentWorkbenchConversation).mockResolvedValueOnce({
+      ...agentWorkbenchRequirementReviewViewFixture,
       conversation: {
+        ...agentWorkbenchRequirementReviewViewFixture.conversation,
         conversationId: "agent_conv_retry",
         title: "AI Agent 平台工程师",
       },
@@ -144,7 +151,7 @@ describe("create Agent Workbench conversation from JD hook", () => {
     const secondPayload = vi.mocked(submitAgentWorkbenchMessage).mock
       .calls[1]?.[1];
 
-    expect(createAgentConversation).toHaveBeenCalledOnce();
+    expect(createAgentWorkbenchConversation).toHaveBeenCalledOnce();
     expect(submitAgentWorkbenchMessage).toHaveBeenNthCalledWith(
       1,
       "agent_conv_retry",

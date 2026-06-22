@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   amendAgentWorkbenchRequirementFromText,
   confirmAgentWorkbenchRequirements,
-  createAgentConversation,
+  createAgentWorkbenchConversation,
   getAgentWorkbenchCandidateDetail,
   getAgentWorkbenchConversation,
   listAgentWorkbenchConversations,
@@ -121,7 +121,7 @@ export function useCreateAgentWorkbenchConversationFromJd() {
       let conversationId = pending.conversationId;
       if (conversationId === null) {
         const title = conversationTitleFromInput(jobTitle, text);
-        const created = await createAgentConversation({ title });
+        const created = await createAgentWorkbenchConversation({ title });
         conversationId = created.conversation.conversationId;
         pending.conversationId = conversationId;
       }

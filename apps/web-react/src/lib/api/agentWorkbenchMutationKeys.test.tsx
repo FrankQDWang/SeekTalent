@@ -16,7 +16,7 @@ import { agentWorkbenchRequirementReviewViewFixture } from "../../test/fixtures/
 vi.mock("./client", () => ({
   amendAgentWorkbenchRequirementFromText: vi.fn(),
   confirmAgentWorkbenchRequirements: vi.fn(),
-  createAgentConversation: vi.fn(),
+  createAgentWorkbenchConversation: vi.fn(),
   getAgentWorkbenchCandidateDetail: vi.fn(),
   getAgentWorkbenchConversation: vi.fn(),
   listAgentWorkbenchConversations: vi.fn(),

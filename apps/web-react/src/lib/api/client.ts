@@ -2,21 +2,22 @@ import createClient from "openapi-fetch";
 import type { paths } from "./schema";
 import {
   normalizeAgentWorkbenchCandidateDetail,
-  normalizeAgentConversationCreateResponse,
   normalizeAgentWorkbenchConversation,
   normalizeAgentWorkbenchConversationList,
-  type AgentConversationCreateRequest,
-  type AgentConversationCreateResponse,
   type AgentWorkbenchCandidateDetailResponse,
   type AgentWorkbenchConversationListResponse,
   type AgentWorkbenchConversationResponse,
   type WorkbenchAgentMessageRequest,
+  type WorkbenchConversationCreateRequest,
   type WorkbenchRequirementAmendRequest,
   type WorkbenchRequirementConfirmRequest,
   type WorkbenchRequirementOperationsRequest,
 } from "./agentWorkbenchTypes";
 
-export const api = createClient<paths>({ baseUrl: "" });
+type WorkbenchBffPath = Extract<keyof paths, `/api/agent/workbench/${string}`>;
+export type WorkbenchBffPaths = Pick<paths, WorkbenchBffPath>;
+
+export const api = createClient<WorkbenchBffPaths>({ baseUrl: "" });
 
 export class ApiRequestError extends Error {
   constructor(
@@ -112,12 +113,12 @@ export async function listAgentWorkbenchConversations(): Promise<AgentWorkbenchC
   );
 }
 
-export async function createAgentConversation(
-  payload: AgentConversationCreateRequest,
-): Promise<AgentConversationCreateResponse> {
-  return normalizeAgentConversationCreateResponse(
+export async function createAgentWorkbenchConversation(
+  payload: WorkbenchConversationCreateRequest,
+): Promise<AgentWorkbenchConversationResponse> {
+  return normalizeAgentWorkbenchConversation(
     requireData(
-      await api.POST("/api/agent/conversations", {
+      await api.POST("/api/agent/workbench/conversations", {
         body: payload,
       }),
     ),

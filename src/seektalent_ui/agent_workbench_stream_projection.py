@@ -6,7 +6,9 @@ from dataclasses import dataclass
 
 from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchConversationResponse,
+    AgentWorkbenchItemStreamPayloadResponse,
     AgentWorkbenchStreamKind,
+    AgentWorkbenchStreamPayloadResponse,
     AgentWorkbenchTranscriptPayloadResponse,
 )
 
@@ -14,7 +16,7 @@ from seektalent_ui.agent_workbench_models import (
 @dataclass(frozen=True)
 class AgentWorkbenchStreamAppend:
     kind: AgentWorkbenchStreamKind
-    payload: AgentWorkbenchTranscriptPayloadResponse
+    payload: AgentWorkbenchStreamPayloadResponse | AgentWorkbenchTranscriptPayloadResponse
     source_fact_key: str
     created_at: str
     source_kind: str | None = None
@@ -101,10 +103,13 @@ def _strategy_graph_event(response: AgentWorkbenchConversationResponse) -> Agent
     )
     return AgentWorkbenchStreamAppend(
         kind="strategyGraph.changed",
-        payload=AgentWorkbenchTranscriptPayloadResponse(
+        payload=AgentWorkbenchItemStreamPayloadResponse(
+            payloadType="strategyGraph.changed",
             kind="strategy_graph",
             itemId=signature,
             summary=f"{len(response.strategyGraph.nodes)} nodes, {len(response.strategyGraph.edges)} edges",
+            graphNodeCount=len(response.strategyGraph.nodes),
+            graphEdgeCount=len(response.strategyGraph.edges),
         ),
         source_fact_key=f"strategy_graph:{signature}",
         created_at=_created_at(response),
@@ -271,10 +276,14 @@ def _thinking_process_events(response: AgentWorkbenchConversationResponse) -> li
     return [
         AgentWorkbenchStreamAppend(
             kind="thinkingProcess.changed",
-            payload=AgentWorkbenchTranscriptPayloadResponse(
+            payload=AgentWorkbenchItemStreamPayloadResponse(
+                payloadType="thinkingProcess.changed",
                 kind="thinking_process",
                 itemId=f"round:{latest_round.roundNo}",
                 summary=latest_round.cards[-1].text if latest_round.cards else None,
+                roundNo=latest_round.roundNo,
+                activeRoundNo=response.thinkingProcess.activeRoundNo,
+                status=latest_round.status,
             ),
             source_fact_key=f"thinking_process:{signature}",
             created_at=_created_at(response),
