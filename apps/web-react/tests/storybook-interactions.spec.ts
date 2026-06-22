@@ -9,44 +9,40 @@ test("transcript collapsed run group expands and collapses", async ({
   );
 
   const groupToggle = page.locator(".transcript-run-group__toggle").first();
-  await expect(
-    page.getByRole("article", { name: "Agent response" }),
-  ).toHaveCount(0);
+  const messages = page.locator('.transcript-event[data-kind="message"]');
+  await expect(messages).toHaveCount(0);
 
   await groupToggle.click();
-  await expect(
-    page.getByRole("article", { name: "Agent response" }),
-  ).toBeVisible();
+  await expect(messages.first()).toBeVisible();
 
   await groupToggle.click();
-  await expect(
-    page.getByRole("article", { name: "Agent response" }),
-  ).toHaveCount(0);
+  await expect(messages).toHaveCount(0);
 });
 
 test("transcript tool row exposes stable details", async ({ page }) => {
   await openStory(
     page,
-    "/iframe.html?id=workbench-transcript--file-read-running",
+    "/iframe.html?id=workbench-transcript--tool-read-details",
   );
-
-  await page.locator(".transcript-tool-event__detail-toggle").click();
 
   const transcript = page.getByLabel("Agent transcript");
-  await expect(transcript.getByText("summary", { exact: true })).toBeVisible();
-  await expect(page.getByText("读取运行中")).toBeVisible();
+  const toolRow = transcript.getByRole("article", { name: "Read" });
+  await expect(toolRow.getByText("tool_read_001")).toBeVisible();
+  await expect(
+    toolRow.getByText("读取 BFF workbench routes 以确认 replay 生命周期。"),
+  ).toBeVisible();
 });
 
-test("thinking process rail switches to candidates", async ({ page }) => {
-  await openStory(
-    page,
-    "/iframe.html?id=workbench-thinkingprocessrail--round-timeline",
-  );
+test("candidate queue story renders populated candidates", async ({ page }) => {
+  await openStory(page, "/iframe.html?id=workbench-candidatequeue--populated");
 
-  await page.getByRole("tab", { name: "候选人" }).click();
-
-  await expect(page.getByRole("tabpanel", { name: "候选人" })).toBeVisible();
-  await expect(page.getByRole("article", { name: "候选人 A" })).toBeVisible();
+  const queue = page.getByRole("region", { name: "候选人队列" });
+  await expect(queue).toBeVisible();
+  await expect(queue.getByRole("article", { name: "候选人 A" })).toBeVisible();
+  await expect(queue.getByRole("article", { name: "候选人 B" })).toBeVisible();
+  await expect(
+    queue.getByRole("button", { name: "查看详情" }).first(),
+  ).toBeVisible();
 });
 
 test("composer draft story accepts and clears submitted input", async ({
@@ -57,10 +53,11 @@ test("composer draft story accepts and clears submitted input", async ({
     "/iframe.html?id=workbench-composer--requirement-draft",
   );
 
-  const composer = page.getByPlaceholder("继续补充岗位要求");
+  const composer = page.locator("textarea").first();
   await composer.fill("补充工具调用平台经验");
-  await expect(page.getByRole("button", { name: "发送" })).toBeEnabled();
-  await page.getByRole("button", { name: "发送" }).click();
+  const submitButton = page.locator('button[type="submit"]').first();
+  await expect(submitButton).toBeEnabled();
+  await submitButton.click();
 
   await expect(composer).toHaveValue("");
 });

@@ -204,7 +204,11 @@ function CandidateDetailBody({
     detail.accessState === "allowed" && detail.sections.length > 0;
 
   return (
-    <div className="candidate-detail-drawer__body">
+    <div
+      aria-label="候选人详情内容"
+      className="candidate-detail-drawer__body"
+      tabIndex={0}
+    >
       <section
         aria-label="候选人详情状态"
         className="candidate-detail-drawer__summary"

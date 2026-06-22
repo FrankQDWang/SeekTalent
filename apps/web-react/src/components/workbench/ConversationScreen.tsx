@@ -47,7 +47,10 @@ export function ConversationScreen({
 }: ConversationScreenProps) {
   const [activePanel, setActivePanel] = useState<WorkPanel>("chat");
   const workflowSurfaceVisible = hasConversationWorkflowSurface(view);
-  const requirementReviewPanel = (
+  const shouldShowRequirementReview =
+    view.pendingActions.allowed.includes("confirm_requirements") ||
+    view.pendingActions.pendingRequirementReviewCount > 0;
+  const requirementReviewPanel = shouldShowRequirementReview ? (
     <RequirementReviewPanel
       amending={amendingRequirements}
       confirming={confirmingRequirements}
@@ -58,7 +61,7 @@ export function ConversationScreen({
       requirementDraft={view.requirementDraft}
       updatingItemIds={updatingRequirementItemIds}
     />
-  );
+  ) : null;
 
   return (
     <>
@@ -104,6 +107,11 @@ export function ConversationScreen({
             <Transcript groups={view.transcriptGroups}>
               {requirementReviewPanel}
             </Transcript>
+            <MessageComposer
+              disabled={!view.pendingActions.allowed.includes("submit_message")}
+              loading={submittingMessage}
+              onSubmit={onSubmitMessage}
+            />
           </section>
           {workflowSurfaceVisible ? (
             <>
@@ -145,11 +153,6 @@ export function ConversationScreen({
             </>
           ) : null}
         </div>
-        <MessageComposer
-          disabled={!view.pendingActions.allowed.includes("submit_message")}
-          loading={submittingMessage}
-          onSubmit={onSubmitMessage}
-        />
       </div>
     </>
   );
@@ -177,14 +180,18 @@ const workPanels = [
 ] as const satisfies Array<{ id: WorkPanel; label: string }>;
 
 export function ConversationScreenSide({
+  defaultTab,
   onViewCandidateDetails,
   view,
-}: Pick<ConversationScreenProps, "onViewCandidateDetails" | "view">) {
+}: Pick<ConversationScreenProps, "onViewCandidateDetails" | "view"> & {
+  defaultTab?: "candidates" | "thinking";
+}) {
   return (
     <ThinkingProcessRail
       candidates={view.candidates}
       onViewCandidateDetails={onViewCandidateDetails}
       thinkingProcess={view.thinkingProcess}
+      {...(defaultTab === undefined ? {} : { defaultTab })}
     />
   );
 }

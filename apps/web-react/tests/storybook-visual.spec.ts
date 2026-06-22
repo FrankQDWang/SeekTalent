@@ -89,6 +89,7 @@ for (const story of visualStories) {
   }) => {
     await page.goto(story.url);
     await page.waitForSelector("#storybook-root");
+    await waitForStoryRendered(page);
     await page.evaluate(() => document.fonts.ready.then(() => undefined));
     await waitForStoryReady(page);
 
@@ -96,6 +97,66 @@ for (const story of visualStories) {
       `${story.name}.png`,
     );
   });
+}
+
+async function waitForStoryRendered(page: Page) {
+  await page.waitForFunction(
+    () => {
+      const isVisible = (element: Element) => {
+        const style = window.getComputedStyle(element);
+        return (
+          element.getClientRects().length > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          Number(style.opacity) !== 0
+        );
+      };
+      const root = document.getElementById("storybook-root");
+      if (root === null) {
+        return false;
+      }
+      const visibleStorybookState = Array.from(
+        document.querySelectorAll(
+          ".sb-loader, .sb-preparing-story, .sb-errordisplay, .sb-nopreview",
+        ),
+      ).some(isVisible);
+      const visibleStoryRoot = Array.from(root.children).some(isVisible);
+      const storyContentSelector = [
+        "article",
+        "button",
+        "canvas",
+        "input",
+        "main",
+        "nav",
+        "section",
+        "svg",
+        "textarea",
+        "[role='dialog']",
+        ".react-flow",
+      ].join(",");
+      const hasStoryContent =
+        root.textContent.trim().length > 0 ||
+        root.querySelector(storyContentSelector) != null;
+      const centerElement = document.elementFromPoint(
+        window.innerWidth / 2,
+        window.innerHeight / 2,
+      );
+      const centerIsStorybookState =
+        centerElement?.closest(
+          ".sb-loader, .sb-preparing-story, .sb-errordisplay, .sb-nopreview",
+        ) != null;
+
+      return (
+        document.body.classList.contains("sb-show-main") &&
+        !visibleStorybookState &&
+        visibleStoryRoot &&
+        hasStoryContent &&
+        !centerIsStorybookState
+      );
+    },
+    undefined,
+    { timeout: 15_000 },
+  );
 }
 
 async function waitForStoryReady(page: Page) {

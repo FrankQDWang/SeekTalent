@@ -2,10 +2,10 @@
   color-scheme: light;
   --st-bg: oklch(1 0 0);
   --st-surface: oklch(0.995 0 0);
-  --st-surface-raised: oklch(0.985 0.004 260);
-  --st-panel: oklch(0.955 0.018 262);
-  --st-canvas: oklch(0.925 0.024 263);
-  --st-border: oklch(0.86 0.018 262);
+  --st-surface-raised: rgb(246 248 252);
+  --st-panel: rgb(232 240 248);
+  --st-canvas: rgb(232 240 248);
+  --st-border: rgb(221 229 242);
   --st-border-strong: oklch(0.74 0.04 262);
   --st-ink: oklch(0.22 0.04 260);
   --st-muted: oklch(0.46 0.035 260);

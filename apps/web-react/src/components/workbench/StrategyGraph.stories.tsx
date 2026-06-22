@@ -16,9 +16,8 @@ const meta = {
     (Story) => (
       <div
         style={{
-          background: "var(--st-canvas)",
-          minHeight: "720px",
-          padding: "24px",
+          background: "#eef3ff",
+          minHeight: "1082px",
         }}
       >
         <Story />

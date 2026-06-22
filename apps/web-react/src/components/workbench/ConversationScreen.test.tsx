@@ -60,7 +60,7 @@ describe("ConversationScreen", () => {
     await user.click(screen.getByRole("button", { name: "确认需求" }));
 
     expect(onConfirmRequirements).toHaveBeenCalledOnce();
-    expect(screen.getByText("AI Agent 平台工程师")).toBeVisible();
+    expect(screen.getByRole("region", { name: "需求确认" })).toBeVisible();
     expect(screen.queryByLabelText("检索策略图")).not.toBeInTheDocument();
   });
 
