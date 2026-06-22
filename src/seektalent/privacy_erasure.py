@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from hashlib import sha256
 import json
 from pathlib import Path
 import sqlite3
+from uuid import uuid4
+
+
+_RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND = "runtime_stage_output"
+_RUNTIME_STAGE_OUTPUT_ARTIFACT_DIR = "runtime_control_artifacts/stage_outputs"
 
 
 @dataclass(frozen=True)
@@ -60,79 +68,66 @@ def erase_candidate_subject(
 def _erase_runtime_control_subject(path: Path, *, resume_id: str, erased_at: str) -> tuple[int, int]:
     if not path.exists():
         return (0, 0)
-    with sqlite3.connect(path) as conn:
-        conn.row_factory = sqlite3.Row
-        has_identity_table = _table_exists(conn, "runtime_control_candidate_identities")
-        has_evidence_table = _table_exists(conn, "runtime_control_candidate_evidence")
-        if not has_identity_table and not has_evidence_table:
-            return (0, 0)
-        evidence_rows = (
-            conn.execute(
-                """
-                SELECT runtime_run_id, evidence_id, identity_id, resume_id, provider_candidate_key_hash, payload_json
-                FROM runtime_control_candidate_evidence
-                WHERE resume_id = ?
-                """,
-                (resume_id,),
-            ).fetchall()
-            if has_evidence_table
-            else []
-        )
-        evidence_identity_keys = {(row["runtime_run_id"], row["identity_id"]) for row in evidence_rows}
-        identity_rows = []
-        if has_identity_table:
-            identity_rows = conn.execute(
-                """
-                SELECT
-                    runtime_run_id, identity_id, canonical_resume_id, merged_resume_ids_json,
-                    source_evidence_ids_json, display_name, title, company, location, summary
-                FROM runtime_control_candidate_identities
-                WHERE canonical_resume_id = ?
-                   OR merged_resume_ids_json LIKE ? ESCAPE '\\'
-                """,
-                (resume_id, _merged_resume_id_like_pattern(resume_id)),
-            ).fetchall()
-            identity_keys = {(row["runtime_run_id"], row["identity_id"]) for row in identity_rows}
-            missing_evidence_identity_keys = sorted(evidence_identity_keys - identity_keys)
-            identity_rows.extend(
+    quarantined_artifacts: list[tuple[Path, Path]] = []
+    try:
+        with sqlite3.connect(path) as conn:
+            conn.row_factory = sqlite3.Row
+            has_identity_table = _table_exists(conn, "runtime_control_candidate_identities")
+            has_evidence_table = _table_exists(conn, "runtime_control_candidate_evidence")
+            if not has_identity_table and not has_evidence_table:
+                return (0, 0)
+            evidence_rows = (
                 conn.execute(
+                    """
+                    SELECT
+                        runtime_run_id, evidence_id, identity_id, resume_id,
+                        provider_candidate_key_hash, payload_json
+                    FROM runtime_control_candidate_evidence
+                    WHERE resume_id = ?
+                    """,
+                    (resume_id,),
+                ).fetchall()
+                if has_evidence_table
+                else []
+            )
+            evidence_identity_keys = {(row["runtime_run_id"], row["identity_id"]) for row in evidence_rows}
+            identity_rows = []
+            if has_identity_table:
+                identity_rows = conn.execute(
                     """
                     SELECT
                         runtime_run_id, identity_id, canonical_resume_id, merged_resume_ids_json,
                         source_evidence_ids_json, display_name, title, company, location, summary
                     FROM runtime_control_candidate_identities
-                    WHERE runtime_run_id = ? AND identity_id = ?
+                    WHERE canonical_resume_id = ?
+                       OR merged_resume_ids_json LIKE ? ESCAPE '\\'
                     """,
-                    key,
-                ).fetchone()
-                for key in missing_evidence_identity_keys
-            )
-            identity_rows = [row for row in identity_rows if row is not None]
+                    (resume_id, _merged_resume_id_like_pattern(resume_id)),
+                ).fetchall()
+                identity_keys = {(row["runtime_run_id"], row["identity_id"]) for row in identity_rows}
+                missing_evidence_identity_keys = sorted(evidence_identity_keys - identity_keys)
+                identity_rows.extend(
+                    conn.execute(
+                        """
+                        SELECT
+                            runtime_run_id, identity_id, canonical_resume_id, merged_resume_ids_json,
+                            source_evidence_ids_json, display_name, title, company, location, summary
+                        FROM runtime_control_candidate_identities
+                        WHERE runtime_run_id = ? AND identity_id = ?
+                        """,
+                        key,
+                    ).fetchone()
+                    for key in missing_evidence_identity_keys
+                )
+                identity_rows = [row for row in identity_rows if row is not None]
+            else:
+                missing_evidence_identity_keys = []
             subject_tokens = _runtime_subject_tokens(
                 resume_id=resume_id,
                 identity_rows=identity_rows,
                 evidence_rows=evidence_rows,
             )
-            conn.execute(
-                """
-                UPDATE runtime_control_candidate_identities
-                SET canonical_resume_id = '',
-                    merged_resume_ids_json = '[]',
-                    display_name = 'Candidate erased',
-                    title = '',
-                    company = '',
-                    location = '',
-                    summary = '',
-                    score = NULL,
-                    fit_bucket = NULL,
-                    payload_hash = ?,
-                    updated_at = ?
-                WHERE canonical_resume_id = ?
-                   OR merged_resume_ids_json LIKE ? ESCAPE '\\'
-                """,
-                (f"erased:{erased_at}", erased_at, resume_id, _merged_resume_id_like_pattern(resume_id)),
-            )
-            for runtime_run_id, identity_id in missing_evidence_identity_keys:
+            if has_identity_table:
                 conn.execute(
                     """
                     UPDATE runtime_control_candidate_identities
@@ -147,38 +142,241 @@ def _erase_runtime_control_subject(path: Path, *, resume_id: str, erased_at: str
                         fit_bucket = NULL,
                         payload_hash = ?,
                         updated_at = ?
-                    WHERE runtime_run_id = ? AND identity_id = ?
+                    WHERE canonical_resume_id = ?
+                       OR merged_resume_ids_json LIKE ? ESCAPE '\\'
                     """,
-                    (f"erased:{erased_at}", erased_at, runtime_run_id, identity_id),
+                    (f"erased:{erased_at}", erased_at, resume_id, _merged_resume_id_like_pattern(resume_id)),
                 )
-            _erase_runtime_checkpoints(
+                for runtime_run_id, identity_id in missing_evidence_identity_keys:
+                    conn.execute(
+                        """
+                        UPDATE runtime_control_candidate_identities
+                        SET canonical_resume_id = '',
+                            merged_resume_ids_json = '[]',
+                            display_name = 'Candidate erased',
+                            title = '',
+                            company = '',
+                            location = '',
+                            summary = '',
+                            score = NULL,
+                            fit_bucket = NULL,
+                            payload_hash = ?,
+                            updated_at = ?
+                        WHERE runtime_run_id = ? AND identity_id = ?
+                        """,
+                        (f"erased:{erased_at}", erased_at, runtime_run_id, identity_id),
+                    )
+                _erase_runtime_checkpoints(
+                    conn,
+                    resume_id=resume_id,
+                    subject_tokens=subject_tokens,
+                    identity_rows=identity_rows,
+                )
+                _erase_runtime_snapshots_and_summaries(
+                    conn,
+                    resume_id=resume_id,
+                    subject_tokens=subject_tokens,
+                    identity_rows=identity_rows,
+                )
+            quarantined_artifacts = _delete_runtime_stage_output_artifacts(
                 conn,
-                resume_id=resume_id,
+                path,
                 subject_tokens=subject_tokens,
                 identity_rows=identity_rows,
+                evidence_rows=evidence_rows,
             )
-            _erase_runtime_snapshots_and_summaries(
-                conn,
-                resume_id=resume_id,
-                subject_tokens=subject_tokens,
-                identity_rows=identity_rows,
-            )
-        if has_evidence_table:
-            conn.execute(
-                """
-                UPDATE runtime_control_candidate_evidence
-                SET resume_id = '',
-                    provider_candidate_key_hash = '',
-                    score = NULL,
-                    fit_bucket = NULL,
-                    payload_json = '{}',
-                    payload_hash = ?,
-                    updated_at = ?
-                WHERE resume_id = ?
-                """,
-                (f"erased:{erased_at}", erased_at, resume_id),
-            )
+            if has_evidence_table:
+                conn.execute(
+                    """
+                    UPDATE runtime_control_candidate_evidence
+                    SET resume_id = '',
+                        provider_candidate_key_hash = '',
+                        score = NULL,
+                        fit_bucket = NULL,
+                        payload_json = '{}',
+                        payload_hash = ?,
+                        updated_at = ?
+                    WHERE resume_id = ?
+                    """,
+                    (f"erased:{erased_at}", erased_at, resume_id),
+                )
+            conn.commit()
+    except (OSError, sqlite3.Error):
+        _restore_quarantined_artifact_paths(quarantined_artifacts)
+        raise
+    _delete_quarantined_artifact_paths(
+        path,
+        quarantined_artifacts,
+        reason_code="privacy_erasure",
+    )
     return (len(identity_rows), len(evidence_rows))
+
+
+def _delete_runtime_stage_output_artifacts(
+    conn: sqlite3.Connection,
+    database_path: Path,
+    *,
+    subject_tokens: set[str],
+    identity_rows: list[sqlite3.Row],
+    evidence_rows: list[sqlite3.Row],
+) -> list[tuple[Path, Path]]:
+    if not subject_tokens or not _table_exists(conn, "runtime_control_stage_outputs"):
+        return []
+    runtime_run_ids = sorted(
+        {
+            row["runtime_run_id"]
+            for row in [*identity_rows, *evidence_rows]
+            if row["runtime_run_id"]
+        }
+    )
+    if not runtime_run_ids:
+        return []
+    placeholders = ",".join("?" for _ in runtime_run_ids)
+    rows = conn.execute(
+        f"""
+        SELECT output_id, artifact_ref_id, output_json
+        FROM runtime_control_stage_outputs
+        WHERE runtime_run_id IN ({placeholders})
+          AND artifact_ref_id IS NOT NULL
+        """,
+        runtime_run_ids,
+    ).fetchall()
+    quarantined_artifacts: list[tuple[Path, Path]] = []
+    for row in rows:
+        artifact_ref_id = row["artifact_ref_id"]
+        if not isinstance(artifact_ref_id, str):
+            continue
+        marker = _loads_json(row["output_json"])
+        if not _is_stage_output_artifact_marker(marker, artifact_ref_id):
+            continue
+        if not _safe_stage_output_artifact_ref_id(artifact_ref_id):
+            continue
+        artifact_path = _stage_output_artifact_path(database_path, artifact_ref_id)
+        try:
+            artifact_text = artifact_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            artifact_text = ""
+        if not any(token in artifact_text for token in subject_tokens):
+            continue
+        quarantine_path = _quarantine_artifact_path(artifact_path)
+        quarantined_artifacts.append((quarantine_path, artifact_path))
+        conn.execute(
+            "DELETE FROM runtime_control_stage_outputs WHERE output_id = ?",
+            (row["output_id"],),
+        )
+        if _table_exists(conn, "runtime_control_artifact_refs"):
+            conn.execute(
+                "DELETE FROM runtime_control_artifact_refs WHERE artifact_ref_id = ?",
+                (artifact_ref_id,),
+            )
+    return quarantined_artifacts
+
+
+def _quarantine_artifact_path(path: Path) -> Path:
+    quarantine_path = path.with_name(f"{path.name}.delete-{uuid4().hex}")
+    path.replace(quarantine_path)
+    return quarantine_path
+
+
+def _delete_quarantined_artifact_paths(
+    database_path: Path,
+    paths: list[tuple[Path, Path]],
+    *,
+    reason_code: str,
+) -> None:
+    failures: list[OSError] = []
+    for quarantine_path, artifact_path in paths:
+        try:
+            quarantine_path.unlink(missing_ok=True)
+        except OSError as exc:
+            _record_pending_artifact_deletion(
+                database_path,
+                artifact_ref_id=artifact_path.stem,
+                original_path=artifact_path,
+                quarantine_path=quarantine_path,
+                reason_code=reason_code,
+                error=exc,
+            )
+            failures.append(exc)
+    if failures:
+        raise failures[0]
+
+
+def _restore_quarantined_artifact_paths(paths: list[tuple[Path, Path]]) -> None:
+    for quarantine_path, path in reversed(paths):
+        if quarantine_path.exists():
+            quarantine_path.replace(path)
+
+
+def _record_pending_artifact_deletion(
+    database_path: Path,
+    *,
+    artifact_ref_id: str,
+    original_path: Path,
+    quarantine_path: Path,
+    reason_code: str,
+    error: OSError,
+) -> None:
+    now = _now_iso()
+    deletion_id = "rtartifact_delete_" + sha256(str(quarantine_path).encode("utf-8")).hexdigest()[:32]
+    with sqlite3.connect(database_path) as conn:
+        _ensure_artifact_deletions_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO runtime_control_artifact_deletions (
+                deletion_id, artifact_ref_id, artifact_kind, original_path, quarantine_path,
+                reason_code, status, attempt_count, last_error_code,
+                requested_at, last_attempt_at, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?, ?, ?)
+            ON CONFLICT(deletion_id) DO UPDATE SET
+                status = 'pending',
+                attempt_count = runtime_control_artifact_deletions.attempt_count + 1,
+                last_error_code = excluded.last_error_code,
+                last_attempt_at = excluded.last_attempt_at,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                deletion_id,
+                artifact_ref_id,
+                _RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND,
+                str(original_path),
+                str(quarantine_path),
+                reason_code,
+                type(error).__name__,
+                now,
+                now,
+                json.dumps({"message": str(error)}, ensure_ascii=False, sort_keys=True),
+            ),
+        )
+
+
+def _ensure_artifact_deletions_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_control_artifact_deletions (
+          deletion_id TEXT PRIMARY KEY,
+          artifact_ref_id TEXT NOT NULL,
+          artifact_kind TEXT NOT NULL,
+          original_path TEXT NOT NULL,
+          quarantine_path TEXT NOT NULL,
+          reason_code TEXT NOT NULL,
+          status TEXT NOT NULL,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_error_code TEXT,
+          requested_at TEXT NOT NULL,
+          last_attempt_at TEXT,
+          metadata_json TEXT NOT NULL,
+          CHECK (status IN ('pending', 'completed'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_runtime_artifact_deletions_status
+          ON runtime_control_artifact_deletions(status, requested_at);
+        """
+    )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def _erase_workbench_subject(path: Path, *, resume_id: str, erased_at: str) -> tuple[int, int]:
@@ -595,6 +793,36 @@ def _loads_json(value: str) -> object:
         return json.loads(value)
     except (TypeError, json.JSONDecodeError):
         return None
+
+
+def _stage_output_artifact_path(database_path: Path, artifact_ref_id: str) -> Path:
+    return database_path.parent / _RUNTIME_STAGE_OUTPUT_ARTIFACT_DIR / f"{artifact_ref_id}.json"
+
+
+def _safe_stage_output_artifact_ref_id(artifact_ref_id: str) -> bool:
+    return bool(artifact_ref_id) and all(
+        character.isalnum() or character in {"_", "-", "."} for character in artifact_ref_id
+    )
+
+
+def _is_stage_output_artifact_marker(value: object, artifact_ref_id: str) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    storage = None
+    artifact_kind = None
+    marker_artifact_ref_id = None
+    for key, item in value.items():
+        if key == "storage":
+            storage = item
+        elif key == "artifactKind":
+            artifact_kind = item
+        elif key == "artifactRefId":
+            marker_artifact_ref_id = item
+    return (
+        storage == "file"
+        and artifact_kind == _RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND
+        and marker_artifact_ref_id == artifact_ref_id
+    )
 
 
 def _contains_like_pattern(value: str) -> str:

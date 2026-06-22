@@ -32,7 +32,7 @@ def test_v1_database_migrates_to_run_intent_ownership_without_dropping_rows(tmp_
             "SELECT runtime_run_id, run_intent_id, start_idempotency_key, run_kind FROM runtime_control_runs"
         ).fetchone()
 
-    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 3
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 4
     assert migrated["runtime_run_id"] == "runtime_run_v1"
     assert migrated["run_intent_id"] == "runtime_run_v1"
     assert migrated["start_idempotency_key"] == "runtime_run_v1"
@@ -883,7 +883,7 @@ def test_stage_output_identity_rejects_empty_node_id_and_negative_round_at_model
         )
 
 
-def test_payload_guards_reject_oversized_event_and_stage_output_with_reason_codes(tmp_path: Path) -> None:
+def test_payload_guards_reject_oversized_event_and_artifact_large_stage_output(tmp_path: Path) -> None:
     from seektalent_runtime_control.errors import RuntimeControlError
     from seektalent_runtime_control.models import RuntimeStageOutputInput
 
@@ -902,24 +902,24 @@ def test_payload_guards_reject_oversized_event_and_stage_output_with_reason_code
         )
     assert event_exc.value.reason_code == "runtime_event_payload_too_large"
 
-    with pytest.raises(RuntimeControlError) as output_exc:
-        store.save_stage_output(
-            RuntimeStageOutputInput(
-                output_id="rtout_oversized",
-                runtime_run_id="runtime_run_payload_guards",
-                stage="sourcing",
-                node_id=None,
-                round_no=None,
-                output_kind="candidate_batch",
-                schema_version="stage-output/v1",
-                output=oversized,
-                source_event_id=None,
-                source_checkpoint_id=None,
-                artifact_ref_id=None,
-                created_at="2026-06-17T00:00:06.000000Z",
-            )
+    saved = store.save_stage_output(
+        RuntimeStageOutputInput(
+            output_id="rtout_oversized",
+            runtime_run_id="runtime_run_payload_guards",
+            stage="sourcing",
+            node_id=None,
+            round_no=None,
+            output_kind="candidate_batch",
+            schema_version="stage-output/v1",
+            output=oversized,
+            source_event_id=None,
+            source_checkpoint_id=None,
+            artifact_ref_id=None,
+            created_at="2026-06-17T00:00:06.000000Z",
         )
-    assert output_exc.value.reason_code == "runtime_stage_output_payload_too_large"
+    )
+    assert saved.artifact_ref_id is not None
+    assert saved.output == oversized
 
 
 def test_claim_next_runnable_run_updates_run_lease_snapshot_and_claim_event(tmp_path: Path) -> None:

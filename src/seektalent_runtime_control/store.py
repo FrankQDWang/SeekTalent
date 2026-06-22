@@ -50,10 +50,12 @@ from seektalent_runtime_control.requirements import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 3
+RUNTIME_CONTROL_SCHEMA_VERSION = 4
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
+_RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND = "runtime_stage_output"
+_RUNTIME_STAGE_OUTPUT_ARTIFACT_DIR = "runtime_control_artifacts/stage_outputs"
 _TERMINAL_RUN_STATUSES = ("cancelled", "completed", "failed")
 _REQUIRED_STAGE_OUTPUT_KINDS = {
     "audit",
@@ -108,7 +110,7 @@ class RuntimeControlStore:
                     now=_migration_now(),
                 )
             with conn:
-                if version in {1, 2}:
+                if version in {1, 2, 3}:
                     run_ordered_migrations(
                         conn,
                         from_version=version,
@@ -116,6 +118,7 @@ class RuntimeControlStore:
                         migrations={
                             1: SQLiteMigrationStep(1, 2, _migrate_v1_to_v2),
                             2: SQLiteMigrationStep(2, 3, _migrate_v2_to_v3),
+                            3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
                         },
                         store_name="runtime-control",
                     )
@@ -1540,73 +1543,31 @@ class RuntimeControlStore:
     ) -> RuntimeStageOutput:
         node_key = _node_key(output.node_id)
         round_key = _round_key(output.round_no)
-        with self._connect() as conn, conn:
-            if _run_row(conn, output.runtime_run_id) is None:
-                raise RuntimeControlLookupError("runtime_run_not_found")
-            if executor_id is not None:
-                _require_active_executor(
-                    conn,
-                    output.runtime_run_id,
-                    executor_id,
-                    attempt_no=attempt_no,
-                    observed_at=output.created_at,
-                )
-            safe_output = sanitize_stage_output_payload(
-                output_kind=output.output_kind,
-                schema_version=output.schema_version,
-                output=output.output,
-                stage=output.stage,
-                round_no=output.round_no,
-                node_id=output.node_id,
-            )
-            output_json, payload_size_bytes = _json_with_size(
-                safe_output,
-                reason_code="runtime_stage_output_payload_too_large",
-            )
-            payload_hash = sha256(output_json.encode("utf-8")).hexdigest()
-            existing = _stage_output_row(
-                conn,
-                runtime_run_id=output.runtime_run_id,
-                stage=output.stage,
-                node_key=node_key,
-                round_key=round_key,
-                output_kind=output.output_kind,
-                schema_version=output.schema_version,
-            )
-            if existing is not None:
-                if existing["payload_hash"] != payload_hash:
-                    raise RuntimeControlError("runtime_stage_output_conflict")
-                return _stage_output_from_row(existing)
+        wrote_new_artifact_ref_id: str | None = None
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             try:
-                conn.execute(
-                    """
-                    INSERT INTO runtime_control_stage_outputs (
-                        output_id, runtime_run_id, stage, node_id, node_key, round_no, round_key,
-                        output_kind, schema_version, output_json, payload_hash, payload_size_bytes,
-                        source_event_id, source_checkpoint_id, artifact_ref_id, created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        output.output_id,
+                if _run_row(conn, output.runtime_run_id) is None:
+                    raise RuntimeControlLookupError("runtime_run_not_found")
+                if executor_id is not None:
+                    _require_active_executor(
+                        conn,
                         output.runtime_run_id,
-                        output.stage,
-                        output.node_id,
-                        node_key,
-                        output.round_no,
-                        round_key,
-                        output.output_kind,
-                        output.schema_version,
-                        output_json,
-                        payload_hash,
-                        payload_size_bytes,
-                        output.source_event_id,
-                        output.source_checkpoint_id,
-                        output.artifact_ref_id,
-                        output.created_at,
-                    ),
+                        executor_id,
+                        attempt_no=attempt_no,
+                        observed_at=output.created_at,
+                    )
+                safe_output = sanitize_stage_output_payload(
+                    output_kind=output.output_kind,
+                    schema_version=output.schema_version,
+                    output=output.output,
+                    stage=output.stage,
+                    round_no=output.round_no,
+                    node_id=output.node_id,
                 )
-            except sqlite3.IntegrityError:
+                payload_json = _json(safe_output)
+                payload_size_bytes = len(payload_json.encode("utf-8"))
+                payload_hash = sha256(payload_json.encode("utf-8")).hexdigest()
                 existing = _stage_output_row(
                     conn,
                     runtime_run_id=output.runtime_run_id,
@@ -1619,13 +1580,104 @@ class RuntimeControlStore:
                 if existing is not None:
                     if existing["payload_hash"] != payload_hash:
                         raise RuntimeControlError("runtime_stage_output_conflict")
-                    return _stage_output_from_row(existing)
+                    conn.commit()
+                    return _stage_output_from_row(existing, database_path=self.path)
+                output_json = payload_json
+                artifact_ref_id = output.artifact_ref_id
+                if payload_size_bytes > MAX_RUNTIME_CONTROL_JSON_BYTES:
+                    if output.artifact_ref_id is not None:
+                        raise RuntimeControlError("runtime_stage_output_artifact_ref_external")
+                    artifact_ref_id = output.artifact_ref_id or _stage_output_artifact_ref_id(
+                        output_id=output.output_id,
+                        payload_hash=payload_hash,
+                    )
+                    artifact_ref_existed = (
+                        conn.execute(
+                            "SELECT 1 FROM runtime_control_artifact_refs WHERE artifact_ref_id = ?",
+                            (artifact_ref_id,),
+                        ).fetchone()
+                        is not None
+                    )
+                    _write_stage_output_artifact(self.path, artifact_ref_id=artifact_ref_id, payload_json=payload_json)
+                    if not artifact_ref_existed:
+                        wrote_new_artifact_ref_id = artifact_ref_id
+                    output_json = _json(
+                        {
+                            "artifactKind": _RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND,
+                            "artifactRefId": artifact_ref_id,
+                            "payloadHash": payload_hash,
+                            "payloadSizeBytes": payload_size_bytes,
+                            "storage": "file",
+                        }
+                    )
+                    _record_stage_output_artifact_ref(
+                        conn,
+                        artifact_ref_id=artifact_ref_id,
+                        runtime_run_id=output.runtime_run_id,
+                        output_id=output.output_id,
+                        stage=output.stage,
+                        output_kind=output.output_kind,
+                        schema_version=output.schema_version,
+                        payload_hash=payload_hash,
+                        payload_size_bytes=payload_size_bytes,
+                        created_at=output.created_at,
+                    )
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO runtime_control_stage_outputs (
+                            output_id, runtime_run_id, stage, node_id, node_key, round_no, round_key,
+                            output_kind, schema_version, output_json, payload_hash, payload_size_bytes,
+                            source_event_id, source_checkpoint_id, artifact_ref_id, created_at
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            output.output_id,
+                            output.runtime_run_id,
+                            output.stage,
+                            output.node_id,
+                            node_key,
+                            output.round_no,
+                            round_key,
+                            output.output_kind,
+                            output.schema_version,
+                            output_json,
+                            payload_hash,
+                            payload_size_bytes,
+                            output.source_event_id,
+                            output.source_checkpoint_id,
+                            artifact_ref_id,
+                            output.created_at,
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    existing = _stage_output_row(
+                        conn,
+                        runtime_run_id=output.runtime_run_id,
+                        stage=output.stage,
+                        node_key=node_key,
+                        round_key=round_key,
+                        output_kind=output.output_kind,
+                        schema_version=output.schema_version,
+                    )
+                    if existing is not None:
+                        if existing["payload_hash"] != payload_hash:
+                            raise RuntimeControlError("runtime_stage_output_conflict")
+                        conn.commit()
+                        return _stage_output_from_row(existing, database_path=self.path)
+                    raise
+                row = conn.execute(
+                    "SELECT * FROM runtime_control_stage_outputs WHERE output_id = ?",
+                    (output.output_id,),
+                ).fetchone()
+                conn.commit()
+            except (OSError, sqlite3.Error):
+                conn.rollback()
+                if wrote_new_artifact_ref_id is not None:
+                    _delete_stage_output_artifact_files(self.path, [wrote_new_artifact_ref_id])
                 raise
-            row = conn.execute(
-                "SELECT * FROM runtime_control_stage_outputs WHERE output_id = ?",
-                (output.output_id,),
-            ).fetchone()
-        return _stage_output_from_row(row)
+        return _stage_output_from_row(row, database_path=self.path)
 
     def list_candidate_identities(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateIdentity]:
         with self._connect() as conn:
@@ -1806,7 +1858,7 @@ class RuntimeControlStore:
                 output_kind=output_kind,
                 schema_version=schema_version,
             )
-        return _stage_output_from_row(row) if row is not None else None
+        return _stage_output_from_row(row, database_path=self.path) if row is not None else None
 
     def list_stage_outputs(
         self,
@@ -1837,17 +1889,19 @@ class RuntimeControlStore:
                 """,
                 params,
             ).fetchall()
-        return [_stage_output_from_row(row) for row in rows]
+        return [_stage_output_from_row(row, database_path=self.path) for row in rows]
 
     def delete_terminal_stage_outputs(self, *, older_than: str, batch_size: int) -> int:
         safe_limit = max(1, min(batch_size, 1000))
         placeholders = ",".join("?" for _ in _REQUIRED_STAGE_OUTPUT_KINDS)
+        artifact_ref_ids: list[str] = []
+        quarantined_artifacts: list[tuple[Path, Path]] = []
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
                 rows = conn.execute(
                     f"""
-                    SELECT output.output_id
+                    SELECT output.output_id, output.artifact_ref_id, output.output_json
                     FROM runtime_control_stage_outputs AS output
                     JOIN runtime_control_runs AS run
                       ON run.runtime_run_id = output.runtime_run_id
@@ -1865,15 +1919,24 @@ class RuntimeControlStore:
                     """,
                     (older_than, *sorted(_REQUIRED_STAGE_OUTPUT_KINDS), safe_limit),
                 ).fetchall()
+                artifact_ref_ids = _stage_output_file_artifact_ref_ids(rows)
+                quarantined_artifacts = _quarantine_stage_output_artifact_files(self.path, artifact_ref_ids)
                 for row in rows:
                     conn.execute(
                         "DELETE FROM runtime_control_stage_outputs WHERE output_id = ?",
                         (row["output_id"],),
                     )
+                _delete_rows_by_ids(conn, "runtime_control_artifact_refs", "artifact_ref_id", artifact_ref_ids)
                 conn.commit()
-            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+            except (OSError, RuntimeControlError, sqlite3.Error, TypeError, ValueError):
                 conn.rollback()
+                _restore_quarantined_stage_output_artifacts(quarantined_artifacts)
                 raise
+        _delete_quarantined_stage_output_artifacts(
+            self.path,
+            quarantined_artifacts,
+            reason_code="runtime_stage_output_retention",
+        )
         return len(rows)
 
     def collect_runtime_control_retention_stats(
@@ -1917,6 +1980,7 @@ class RuntimeControlStore:
         dry_run: bool = False,
     ) -> dict[str, int]:
         safe_limit = max(1, min(batch_size, 1000))
+        stage_output_artifact_ref_ids: list[str] = []
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -1933,7 +1997,16 @@ class RuntimeControlStore:
                     limit=safe_limit,
                 )
                 deleted = {key: len(value) for key, value in ids.items()}
+                quarantined_artifacts: list[tuple[Path, Path]] = []
                 if not dry_run:
+                    stage_output_artifact_ref_ids = _stage_output_file_artifact_ref_ids_for_output_ids(
+                        conn,
+                        ids["stage_output"],
+                    )
+                    quarantined_artifacts = _quarantine_stage_output_artifact_files(
+                        self.path,
+                        stage_output_artifact_ref_ids,
+                    )
                     _delete_rows_by_ids(conn, "runtime_control_events", "event_id", ids["nonpublic_event"])
                     _clear_latest_checkpoint_refs(conn, ids["checkpoint"])
                     _delete_rows_by_ids(
@@ -1957,14 +2030,28 @@ class RuntimeControlStore:
                     )
                     _delete_rows_by_ids(
                         conn,
+                        "runtime_control_artifact_refs",
+                        "artifact_ref_id",
+                        stage_output_artifact_ref_ids,
+                    )
+                    _delete_rows_by_ids(
+                        conn,
                         "runtime_control_final_summaries",
                         "summary_id",
                         ids["final_summary"],
                     )
                 conn.commit()
-            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+            except (OSError, RuntimeControlError, sqlite3.Error, TypeError, ValueError):
                 conn.rollback()
+                if not dry_run:
+                    _restore_quarantined_stage_output_artifacts(quarantined_artifacts)
                 raise
+        if not dry_run:
+            _delete_quarantined_stage_output_artifacts(
+                self.path,
+                quarantined_artifacts,
+                reason_code="runtime_control_retention",
+            )
         return deleted
 
     def claim_next_runnable_run(
@@ -2361,6 +2448,22 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS runtime_control_artifact_deletions (
+          deletion_id TEXT PRIMARY KEY,
+          artifact_ref_id TEXT NOT NULL,
+          artifact_kind TEXT NOT NULL,
+          original_path TEXT NOT NULL,
+          quarantine_path TEXT NOT NULL,
+          reason_code TEXT NOT NULL,
+          status TEXT NOT NULL,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          last_error_code TEXT,
+          requested_at TEXT NOT NULL,
+          last_attempt_at TEXT,
+          metadata_json TEXT NOT NULL,
+          CHECK (status IN ('pending', 'completed'))
+        );
+
         CREATE TABLE IF NOT EXISTS runtime_control_final_summaries (
           summary_id TEXT PRIMARY KEY,
           runtime_run_id TEXT NOT NULL,
@@ -2413,6 +2516,8 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           ON runtime_control_candidate_finalization_revisions(runtime_run_id, revision DESC);
         CREATE INDEX IF NOT EXISTS idx_runtime_projection_marks_target
           ON runtime_control_projection_marks(runtime_run_id, target_kind, projector, status);
+        CREATE INDEX IF NOT EXISTS idx_runtime_artifact_deletions_status
+          ON runtime_control_artifact_deletions(status, requested_at);
         """
     )
 
@@ -2498,6 +2603,10 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    _create_schema(conn)
+
+
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
     _create_schema(conn)
 
 
@@ -3372,6 +3481,181 @@ def _delete_rows_by_ids(
     conn.execute(f"DELETE FROM {table_name} WHERE {id_column} IN ({placeholders})", ids)
 
 
+def _record_pending_artifact_deletion(
+    database_path: Path,
+    *,
+    artifact_ref_id: str,
+    artifact_kind: str,
+    original_path: Path,
+    quarantine_path: Path,
+    reason_code: str,
+    error: OSError,
+) -> None:
+    now = _migration_now()
+    deletion_id = "rtartifact_delete_" + sha256(str(quarantine_path).encode("utf-8")).hexdigest()[:32]
+    with sqlite3.connect(database_path) as conn:
+        _create_schema(conn)
+        conn.execute(
+            """
+            INSERT INTO runtime_control_artifact_deletions (
+                deletion_id, artifact_ref_id, artifact_kind, original_path, quarantine_path,
+                reason_code, status, attempt_count, last_error_code,
+                requested_at, last_attempt_at, metadata_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', 1, ?, ?, ?, ?)
+            ON CONFLICT(deletion_id) DO UPDATE SET
+                status = 'pending',
+                attempt_count = runtime_control_artifact_deletions.attempt_count + 1,
+                last_error_code = excluded.last_error_code,
+                last_attempt_at = excluded.last_attempt_at,
+                metadata_json = excluded.metadata_json
+            """,
+            (
+                deletion_id,
+                artifact_ref_id,
+                artifact_kind,
+                str(original_path),
+                str(quarantine_path),
+                reason_code,
+                type(error).__name__,
+                now,
+                now,
+                _json({"message": str(error)}),
+            ),
+        )
+
+
+def _record_stage_output_artifact_ref(
+    conn: sqlite3.Connection,
+    *,
+    artifact_ref_id: str,
+    runtime_run_id: str,
+    output_id: str,
+    stage: str,
+    output_kind: str,
+    schema_version: str,
+    payload_hash: str,
+    payload_size_bytes: int,
+    created_at: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO runtime_control_artifact_refs (
+            artifact_ref_id, runtime_run_id, artifact_kind, safe_uri, visibility, metadata_json, created_at
+        )
+        VALUES (?, ?, ?, ?, 'internal', ?, ?)
+        ON CONFLICT(artifact_ref_id) DO UPDATE SET
+            runtime_run_id = excluded.runtime_run_id,
+            artifact_kind = excluded.artifact_kind,
+            safe_uri = excluded.safe_uri,
+            visibility = excluded.visibility,
+            metadata_json = excluded.metadata_json,
+            created_at = excluded.created_at
+        """,
+        (
+            artifact_ref_id,
+            runtime_run_id,
+            _RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND,
+            f"artifact://runtime-control/stage-output/{artifact_ref_id}.json",
+            _json(
+                {
+                    "outputId": output_id,
+                    "stage": stage,
+                    "outputKind": output_kind,
+                    "schemaVersion": schema_version,
+                    "payloadHash": payload_hash,
+                    "payloadSizeBytes": payload_size_bytes,
+                }
+            ),
+            created_at,
+        ),
+    )
+
+
+def _stage_output_file_artifact_ref_ids_for_output_ids(
+    conn: sqlite3.Connection,
+    output_ids: list[str],
+) -> list[str]:
+    if not output_ids:
+        return []
+    placeholders = ",".join("?" for _ in output_ids)
+    rows = conn.execute(
+        f"""
+        SELECT artifact_ref_id, output_json
+        FROM runtime_control_stage_outputs
+        WHERE output_id IN ({placeholders})
+        """,
+        output_ids,
+    ).fetchall()
+    return _stage_output_file_artifact_ref_ids(rows)
+
+
+def _stage_output_file_artifact_ref_ids(rows: list[sqlite3.Row]) -> list[str]:
+    ref_ids: list[str] = []
+    for row in rows:
+        ref_id = row["artifact_ref_id"]
+        if not isinstance(ref_id, str):
+            continue
+        if _is_stage_output_artifact_marker(_json_object(row["output_json"]), ref_id):
+            ref_ids.append(ref_id)
+    return list(dict.fromkeys(ref_ids))
+
+
+def _delete_stage_output_artifact_files(database_path: Path, artifact_ref_ids: list[str]) -> None:
+    for artifact_ref_id in artifact_ref_ids:
+        _stage_output_artifact_path(database_path, artifact_ref_id).unlink(missing_ok=True)
+
+
+def _quarantine_stage_output_artifact_files(
+    database_path: Path,
+    artifact_ref_ids: list[str],
+) -> list[tuple[Path, Path]]:
+    quarantined: list[tuple[Path, Path]] = []
+    try:
+        for artifact_ref_id in artifact_ref_ids:
+            artifact_path = _stage_output_artifact_path(database_path, artifact_ref_id)
+            if not artifact_path.exists():
+                continue
+            quarantine_path = artifact_path.with_name(f"{artifact_path.name}.delete-{uuid4().hex}")
+            artifact_path.replace(quarantine_path)
+            quarantined.append((quarantine_path, artifact_path))
+    except OSError:
+        _restore_quarantined_stage_output_artifacts(quarantined)
+        raise
+    return quarantined
+
+
+def _delete_quarantined_stage_output_artifacts(
+    database_path: Path,
+    quarantined: list[tuple[Path, Path]],
+    *,
+    reason_code: str,
+) -> None:
+    failures: list[OSError] = []
+    for quarantine_path, artifact_path in quarantined:
+        try:
+            quarantine_path.unlink(missing_ok=True)
+        except OSError as exc:
+            _record_pending_artifact_deletion(
+                database_path,
+                artifact_ref_id=artifact_path.stem,
+                artifact_kind=_RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND,
+                original_path=artifact_path,
+                quarantine_path=quarantine_path,
+                reason_code=reason_code,
+                error=exc,
+            )
+            failures.append(exc)
+    if failures:
+        raise failures[0]
+
+
+def _restore_quarantined_stage_output_artifacts(quarantined: list[tuple[Path, Path]]) -> None:
+    for quarantine_path, artifact_path in reversed(quarantined):
+        if quarantine_path.exists():
+            quarantine_path.replace(artifact_path)
+
+
 def _sync_candidate_truth_from_checkpoint(conn: sqlite3.Connection, checkpoint: RuntimeCheckpoint) -> None:
     truth = candidate_truth_from_run_state(
         runtime_run_id=checkpoint.runtime_run_id,
@@ -3623,7 +3907,15 @@ def _event_from_row(row: sqlite3.Row) -> RuntimeControlEvent:
     )
 
 
-def _stage_output_from_row(row: sqlite3.Row) -> RuntimeStageOutput:
+def _stage_output_from_row(row: sqlite3.Row, *, database_path: Path) -> RuntimeStageOutput:
+    output = _json_object(row["output_json"])
+    artifact_ref_id = row["artifact_ref_id"]
+    if isinstance(artifact_ref_id, str) and _is_stage_output_artifact_marker(output, artifact_ref_id):
+        output = _read_stage_output_artifact(
+            database_path,
+            artifact_ref_id,
+            expected_payload_hash=row["payload_hash"],
+        )
     return RuntimeStageOutput(
         output_id=row["output_id"],
         runtime_run_id=row["runtime_run_id"],
@@ -3634,7 +3926,7 @@ def _stage_output_from_row(row: sqlite3.Row) -> RuntimeStageOutput:
         round_key=int(row["round_key"]),
         output_kind=row["output_kind"],
         schema_version=row["schema_version"],
-        output=_json_object(row["output_json"]),
+        output=output,
         payload_hash=row["payload_hash"],
         payload_size_bytes=int(row["payload_size_bytes"]),
         source_event_id=row["source_event_id"],
@@ -3780,6 +4072,60 @@ def _json_with_size(value: object, *, reason_code: str) -> tuple[str, int]:
     if payload_size_bytes > MAX_RUNTIME_CONTROL_JSON_BYTES:
         raise RuntimeControlError(reason_code, payload={"payloadSizeBytes": payload_size_bytes})
     return payload_json, payload_size_bytes
+
+
+def _stage_output_artifact_ref_id(*, output_id: str, payload_hash: str) -> str:
+    digest = sha256(f"{output_id}:{payload_hash}".encode("utf-8")).hexdigest()[:32]
+    return f"rtartifact_stage_{digest}"
+
+
+def _write_stage_output_artifact(database_path: Path, *, artifact_ref_id: str, payload_json: str) -> None:
+    path = _stage_output_artifact_path(database_path, artifact_ref_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+    try:
+        tmp_path.write_text(payload_json, encoding="utf-8")
+        tmp_path.replace(path)
+    except OSError:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _read_stage_output_artifact(
+    database_path: Path,
+    artifact_ref_id: str,
+    *,
+    expected_payload_hash: str,
+) -> dict[str, object]:
+    path = _stage_output_artifact_path(database_path, artifact_ref_id)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise RuntimeControlError("runtime_stage_output_artifact_missing") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeControlError("runtime_stage_output_artifact_invalid") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeControlError("runtime_stage_output_artifact_invalid")
+    payload_hash = sha256(_json(payload).encode("utf-8")).hexdigest()
+    if payload_hash != expected_payload_hash:
+        raise RuntimeControlError("runtime_stage_output_artifact_hash_mismatch")
+    return payload
+
+
+def _stage_output_artifact_path(database_path: Path, artifact_ref_id: str) -> Path:
+    if not artifact_ref_id or any(
+        not (character.isalnum() or character in {"_", "-", "."}) for character in artifact_ref_id
+    ):
+        raise RuntimeControlError("runtime_stage_output_artifact_ref_invalid")
+    return database_path.parent / _RUNTIME_STAGE_OUTPUT_ARTIFACT_DIR / f"{artifact_ref_id}.json"
+
+
+def _is_stage_output_artifact_marker(output: dict[str, object], artifact_ref_id: str) -> bool:
+    return (
+        output.get("storage") == "file"
+        and output.get("artifactKind") == _RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND
+        and output.get("artifactRefId") == artifact_ref_id
+    )
 
 
 def _node_key(node_id: str | None) -> str:
