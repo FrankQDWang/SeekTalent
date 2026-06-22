@@ -7,7 +7,10 @@ import httpx
 from seektalent.core.retrieval.provider_contract import ProviderSearchError
 from seektalent.models import QueryOutcomeThresholds
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext, WorkflowRuntime
-from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
+from seektalent.runtime.source_query_intent import (
+    RuntimeSourceQueryIntent,
+    query_package_from_provider_query,
+)
 from seektalent.runtime.source_round_dispatch import (
     SourceRoundAdapter,
     SourceRoundAdapterResult,
@@ -120,6 +123,10 @@ async def _run_cts_source_round(
         diagnostics=tuple(result.search_observation.adapter_notes),
         retrieval_result=result,
         lane_result=lane_result,
+        executed_query_packages=tuple(
+            query_package_from_provider_query(source_kind=source_id, query=query)
+            for query in result.executed_queries
+        ),
     )
 
 
@@ -174,6 +181,7 @@ async def _run_liepin_source_round(
         raw_candidate_count=int(result.raw_candidate_count or 0),
         safe_reason_code=result.stop_reason_code or result.blocked_reason_code or filter_warning_reason,
         lane_result=result,
+        executed_query_packages=result.executed_query_packages,
     )
 
 

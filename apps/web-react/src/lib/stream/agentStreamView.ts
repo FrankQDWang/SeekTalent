@@ -15,6 +15,7 @@ const SNAPSHOT_DEPENDENT_KINDS = new Set<AgentWorkbenchStreamEnvelope["kind"]>([
   "candidate.upserted",
   "detailApproval.changed",
   "finalSummary.updated",
+  "runtimeFinalization.changed",
   "pendingAction.changed",
   "sourceConnection.changed",
   "thinkingProcess.changed",
@@ -252,6 +253,8 @@ function streamLabel(kind: AgentWorkbenchStreamEnvelope["kind"]): string {
       return "Detail approval";
     case "finalSummary.updated":
       return "Final shortlist";
+    case "runtimeFinalization.changed":
+      return "Runtime finalization";
     case "pendingAction.changed":
       return "Pending action";
     case "sourceConnection.changed":

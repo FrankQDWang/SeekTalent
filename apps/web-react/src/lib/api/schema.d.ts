@@ -1430,14 +1430,22 @@ export interface components {
       queryTerms?: string[];
       /** Keywordquery */
       keywordQuery?: string | null;
+      /** Plannedqueries */
+      plannedQueries?: components["schemas"]["AgentWorkbenchQueryPackageResponse"][];
+      /** Executedqueries */
+      executedQueries?: components["schemas"]["AgentWorkbenchQueryPackageResponse"][];
       /** Executedqueryterms */
       executedQueryTerms?: string[][];
       /** Rawcandidatecount */
       rawCandidateCount?: number | null;
       /** Uniquenewcount */
       uniqueNewCount?: number | null;
+      /** Totalmergedidentitycount */
+      totalMergedIdentityCount?: number | null;
       /** Newlyscoredcount */
       newlyScoredCount?: number | null;
+      /** Toppoolcount */
+      topPoolCount?: number | null;
       /** Resumequalitycomment */
       resumeQualityComment?: string | null;
       /** Reflectionsummary */
@@ -1452,6 +1460,12 @@ export interface components {
       suggestedDeprioritizeTerms?: string[];
       /** Suggesteddropterms */
       suggestedDropTerms?: string[];
+      /** Suggestedaddfilterfields */
+      suggestedAddFilterFields?: string[];
+      /** Suggestedkeepfilterfields */
+      suggestedKeepFilterFields?: string[];
+      /** Suggesteddropfilterfields */
+      suggestedDropFilterFields?: string[];
     };
     /** AgentWorkbenchActivityResponse */
     AgentWorkbenchActivityResponse: {
@@ -1622,6 +1636,9 @@ export interface components {
       detailApprovals?: components["schemas"]["AgentWorkbenchDetailApprovalResponse"][];
       /** Reviewartifacts */
       reviewArtifacts?: components["schemas"]["AgentWorkbenchReviewArtifactResponse"][];
+      runtimeFinalization?:
+        | components["schemas"]["AgentWorkbenchRunFinalizationResponse"]
+        | null;
       finalSummary?:
         | components["schemas"]["AgentWorkbenchFinalSummaryResponse"]
         | null;
@@ -1769,6 +1786,7 @@ export interface components {
         | "requirement.updated"
         | "runtime.eventProjected"
         | "runtime.stageChanged"
+        | "runtimeFinalization.changed"
         | "sourceConnection.changed"
         | "sourceSearch.completed"
         | "sourceSearch.failed"
@@ -1795,6 +1813,7 @@ export interface components {
         | "approval"
         | "artifact"
         | "final_summary"
+        | "runtime_finalization"
         | "strategy_graph"
         | "pending_action"
         | "source_connection"
@@ -1924,6 +1943,19 @@ export interface components {
        */
       pendingMemoryReviewCount: number;
     };
+    /** AgentWorkbenchQueryPackageResponse */
+    AgentWorkbenchQueryPackageResponse: {
+      /** Sourcekind */
+      sourceKind?: string | null;
+      /** Queryrole */
+      queryRole?: string | null;
+      /** Lanetype */
+      laneType?: string | null;
+      /** Queryterms */
+      queryTerms?: string[];
+      /** Keywordquery */
+      keywordQuery?: string | null;
+    };
     /** AgentWorkbenchRequirementDraftItemResponse */
     AgentWorkbenchRequirementDraftItemResponse: {
       /** Itemid */
@@ -2009,6 +2041,21 @@ export interface components {
         | "stream_recovery";
       /** Safesummary */
       safeSummary: string;
+    };
+    /** AgentWorkbenchRunFinalizationResponse */
+    AgentWorkbenchRunFinalizationResponse: {
+      /** Selectedidentitycount */
+      selectedIdentityCount?: number | null;
+      /** Revision */
+      revision?: number | null;
+      /** Reasoncode */
+      reasonCode?: string | null;
+      /**
+       * Status
+       * @default completed
+       * @enum {string}
+       */
+      status: "pending" | "running" | "completed" | "failed" | "cancelled";
     };
     /** AgentWorkbenchRuntimeResponse */
     AgentWorkbenchRuntimeResponse: {
@@ -2123,6 +2170,7 @@ export interface components {
         | "candidate.upserted"
         | "detailApproval.changed"
         | "finalSummary.updated"
+        | "runtimeFinalization.changed"
         | "pendingAction.changed"
         | "sourceConnection.changed"
         | "context.compacted"
@@ -2228,6 +2276,7 @@ export interface components {
         | "candidate.upserted"
         | "detailApproval.changed"
         | "finalSummary.updated"
+        | "runtimeFinalization.changed"
         | "pendingAction.changed"
         | "sourceConnection.changed"
         | "context.compacted"
@@ -2282,6 +2331,7 @@ export interface components {
         | "approval"
         | "artifact"
         | "final_summary"
+        | "runtime_finalization"
         | "strategy_graph"
         | "pending_action"
         | "source_connection"

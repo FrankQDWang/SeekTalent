@@ -35,6 +35,7 @@ def project_agent_workbench_stream_events(
     events.extend(_detail_approval_events(response))
     events.extend(_artifact_events(response))
     events.extend(_final_summary_events(response))
+    events.extend(_runtime_finalization_events(response))
     events.append(_pending_action_event(response))
     events.extend(_thinking_process_events(response))
     return events
@@ -203,6 +204,35 @@ def _final_summary_events(response: AgentWorkbenchConversationResponse) -> list[
             created_at=_created_at(response),
             source_kind="final_summary",
             source_id=summary.summaryId,
+        )
+    ]
+
+
+def _runtime_finalization_events(response: AgentWorkbenchConversationResponse) -> list[AgentWorkbenchStreamAppend]:
+    finalization = response.runtimeFinalization
+    if finalization is None:
+        return []
+    signature = _signature(
+        {
+            "selectedIdentityCount": finalization.selectedIdentityCount,
+            "revision": finalization.revision,
+            "reasonCode": finalization.reasonCode,
+            "status": finalization.status,
+        }
+    )
+    return [
+        AgentWorkbenchStreamAppend(
+            kind="runtimeFinalization.changed",
+            payload=AgentWorkbenchTranscriptPayloadResponse(
+                kind="runtime_finalization",
+                itemId="runtimeFinalization",
+                summary=finalization.reasonCode or finalization.status,
+            ),
+            source_fact_key=f"runtime_finalization:{signature}",
+            created_at=_created_at(response),
+            source_kind="runtime_finalization",
+            source_id=response.conversation.conversationId,
+            source_seq=finalization.revision or 0,
         )
     ]
 

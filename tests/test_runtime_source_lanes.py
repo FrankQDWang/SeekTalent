@@ -43,6 +43,7 @@ from seektalent.runtime.orchestrator import RunArtifacts, WorkflowRuntime
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
 from seektalent.source_adapters import build_source_lane_request_runner
 from seektalent.source_contracts import (
+    LogicalQueryDispatch,
     RegisteredSource,
     SourceBudget,
     SourceCapabilities,
@@ -51,6 +52,7 @@ from seektalent.source_contracts import (
     SourceRegistry,
 )
 from seektalent.sources.provider_card_lane import run_provider_card_lane
+from seektalent.sources.liepin.runtime_lane import run_liepin_logical_query_bundle
 from seektalent.tracing import RunTracer
 from seektalent.storage.json import sha256_json
 from tests.settings_factory import make_settings
@@ -1296,6 +1298,50 @@ def test_runtime_liepin_card_source_lane_returns_delta_without_detail_open(tmp_p
     assert worker.ensure_ready_calls == 1
     assert worker.search_calls[0]["provider_account_hash"] == "acct_hash_123"
     assert worker.open_details_calls == 0
+
+
+def test_liepin_logical_query_bundle_records_executed_query_packages(tmp_path) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"))
+    worker = _FakeLiepinWorker()
+    logical_query = LogicalQueryDispatch(
+        round_no=1,
+        query_role="exploit",
+        lane_type="exploit",
+        query_instance_id="query-exploit",
+        query_fingerprint="fingerprint-exploit",
+        query_terms=("FastAPI", "retrieval"),
+        keyword_query="FastAPI retrieval",
+        requested_count=3,
+        source_plan_version="2",
+    )
+
+    result = asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=settings,
+            runtime_run_id="run-liepin",
+            source_plan_id="plan-liepin",
+            job_title="Backend Engineer",
+            jd="FastAPI retrieval",
+            notes="ranking",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=(logical_query,),
+            source_budget_policy=RuntimeSourceBudgetPolicy(),
+            liepin_context={"provider_account_hash": "acct_hash_123"},
+            worker_client=worker,
+        )
+    )
+
+    assert result.status == "completed"
+    assert len(worker.search_calls) == 1
+    executed_packages = [
+        (package.source_kind, package.query_role, package.lane_type)
+        for package in result.executed_query_packages
+    ]
+    assert executed_packages == [
+        ("liepin", "exploit", "exploit")
+    ]
+    assert result.executed_query_packages[0].query_terms == ("FastAPI", "retrieval")
+    assert result.executed_query_packages[0].keyword_query == "FastAPI retrieval"
 
 
 def test_runtime_liepin_detail_lane_requires_approved_lease(tmp_path) -> None:

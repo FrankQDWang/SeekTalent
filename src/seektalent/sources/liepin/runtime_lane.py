@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 from collections.abc import Collection, Mapping
+from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -24,7 +25,7 @@ from seektalent.providers.liepin.client import (
     is_live_liepin_worker_mode,
 )
 from seektalent.providers.liepin.filter_compiler import LiepinSourceQueryIntent
-from seektalent.providers.liepin.source_compiler import compile_liepin_source_query_intents
+from seektalent.providers.liepin.source_compiler import LiepinCompiledQuery, compile_liepin_source_query_intents
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
 from seektalent.sources.liepin.reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
@@ -34,6 +35,7 @@ from seektalent.source_contracts import (
     LogicalQueryDispatch,
     RuntimeDetailRecommendation,
     RuntimeEvidenceLevel,
+    RuntimeQueryPackage,
     RuntimeSourceBudgetPolicy,
     RuntimeSourceLaneEventType,
     RuntimeSourceLaneEvent,
@@ -258,6 +260,11 @@ async def run_liepin_logical_query_bundle(
                 worker_client=worker_client,
                 compiled_search_request=compiled_request,
             )
+            result = _with_liepin_executed_query_package(
+                result,
+                logical_query=logical_query,
+                compiled_query=compiled_query,
+            )
             logical_result = (
                 result if logical_result is None else merge_liepin_card_lane_results(logical_result, result)
             )
@@ -319,11 +326,50 @@ def merge_liepin_card_lane_results(
         safe_summary_refs=first.safe_summary_refs + second.safe_summary_refs,
         detail_recommendations=first.detail_recommendations + second.detail_recommendations,
         events=first.events + second.events,
+        executed_query_packages=first.executed_query_packages + second.executed_query_packages,
         blocked_reason_code=blocked_reason_code,
         stop_reason_code=stop_reason_code,
         retryable=first.retryable or second.retryable,
         safe_error_summary=first.safe_error_summary or second.safe_error_summary,
         error_ref=first.error_ref or second.error_ref,
+    )
+
+
+def _with_liepin_executed_query_package(
+    result: RuntimeSourceLaneResult,
+    *,
+    logical_query: LogicalQueryDispatch,
+    compiled_query: LiepinCompiledQuery | None,
+) -> RuntimeSourceLaneResult:
+    if result.status not in {"completed", "partial"}:
+        return result
+    return replace(
+        result,
+        executed_query_packages=result.executed_query_packages
+        + (_liepin_executed_query_package(logical_query=logical_query, compiled_query=compiled_query),),
+    )
+
+
+def _liepin_executed_query_package(
+    *,
+    logical_query: LogicalQueryDispatch,
+    compiled_query: LiepinCompiledQuery | None,
+) -> RuntimeQueryPackage:
+    if compiled_query is not None:
+        intent = compiled_query.intent
+        return RuntimeQueryPackage(
+            source_kind="liepin",
+            query_role=intent.query_role,
+            lane_type=intent.lane_type,
+            query_terms=tuple(intent.query_terms),
+            keyword_query=intent.keyword_query,
+        )
+    return RuntimeQueryPackage(
+        source_kind="liepin",
+        query_role=logical_query.query_role,
+        lane_type=logical_query.lane_type,
+        query_terms=tuple(logical_query.query_terms),
+        keyword_query=logical_query.keyword_query,
     )
 
 

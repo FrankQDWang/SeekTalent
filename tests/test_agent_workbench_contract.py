@@ -26,14 +26,29 @@ from seektalent_conversation_agent.models import (
     TranscriptActivityItem,
     TranscriptMessage,
 )
-from seektalent_runtime_control.models import RuntimeControlEvent, RuntimeControlEventPage, RuntimeRunRecord
+from seektalent_runtime_control.models import (
+    RuntimeControlEvent,
+    RuntimeControlEventPage,
+    RuntimeRunRecord,
+    RuntimeStageOutput,
+)
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_ui.agent_routes import LocalAgentRateLimiter
 from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchCandidateSummaryResponse,
+    AgentWorkbenchConversationResponse,
+    AgentWorkbenchConversationSummaryResponse,
     AgentWorkbenchDetailApprovalResponse,
+    AgentWorkbenchFinalSummaryResponse,
     AgentWorkbenchMessageStreamPayloadResponse,
     AgentWorkbenchItemStreamPayloadResponse,
+    AgentWorkbenchPendingActionsResponse,
+    AgentWorkbenchRunFinalizationResponse,
+    AgentWorkbenchStrategyGraphResponse,
+    AgentWorkbenchStreamCursorResponse,
+    AgentWorkbenchThinkingProcessCardResponse,
+    AgentWorkbenchThinkingProcessResponse,
+    AgentWorkbenchThinkingProcessRoundResponse,
     AgentWorkbenchTranscriptPayloadResponse,
 )
 from seektalent_ui.agent_workbench_projection import (
@@ -91,6 +106,8 @@ class StreamingRequest:
 
 
 def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
+    from seektalent_ui.agent_workbench_rounds import AgentWorkbenchRoundSummaryProjection
+
     thread = _thread_view()
     projection_input = AgentWorkbenchProjectionInput(
         conversation_reopen_state=thread.conversation_reopen_state,
@@ -131,6 +148,19 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
         candidates=[],
         detail_approvals=[],
         review_artifacts=[],
+        round_summaries=[
+            AgentWorkbenchRoundSummaryProjection(
+                round_no=1,
+                status="completed",
+                query_terms=("canonical", "LLM"),
+                keyword_query="canonical LLM query",
+                raw_candidate_count=5,
+                unique_new_count=3,
+                newly_scored_count=2,
+                resume_quality_comment="canonical coverage summary",
+                reflection_summary="canonical LangChain reflection",
+            )
+        ],
     )
 
     response = project_agent_workbench_view(projection_input)
@@ -175,11 +205,258 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
         "observation",
         "反思和下一轮变更",
     ]
-    assert response.thinkingProcess.rounds[0].cards[0].terms == ["AI agent", "LLM"]
-    assert "覆盖面较好" in response.thinkingProcess.rounds[0].cards[1].text
-    assert "LangChain" in response.thinkingProcess.rounds[0].cards[2].text
+    assert response.thinkingProcess.rounds[0].cards[0].terms == ["canonical", "LLM"]
+    assert "canonical coverage summary" in response.thinkingProcess.rounds[0].cards[1].text
+    assert "canonical LangChain reflection" in response.thinkingProcess.rounds[0].cards[2].text
     assert "rawPayload" not in serialized
     assert "providerResponse" not in serialized
+
+
+def test_thinking_process_is_empty_without_canonical_round_summaries() -> None:
+    thread = _thread_view()
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=thread.conversation_reopen_state,
+            messages=thread.messages,
+            runtime_events=[
+                RuntimeControlEvent(
+                    event_id="runtime_event_raw_1",
+                    runtime_run_id="runtime_1",
+                    event_seq=1,
+                    event_type="runtime_round",
+                    stage="round",
+                    round_no=1,
+                    source_id="liepin",
+                    status="running",
+                    summary="Raw round must not drive thinkingProcess",
+                    payload={"keyword_query": "raw query", "query_terms": ["raw"]},
+                    payload_size_bytes=0,
+                    created_at=_now(),
+                )
+            ],
+            activity_items=thread.activity_items,
+        )
+    )
+
+    assert response.thinkingProcess.activeRoundNo is None
+    assert response.thinkingProcess.rounds == []
+
+
+def test_thinking_process_uses_only_canonical_round_summaries() -> None:
+    from seektalent_ui.agent_workbench_rounds import AgentWorkbenchRoundSummaryProjection
+
+    thread = _thread_view()
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=thread.conversation_reopen_state,
+            messages=thread.messages,
+            round_summaries=[
+                AgentWorkbenchRoundSummaryProjection(
+                    round_no=2,
+                    status="completed",
+                    query_terms=("canonical",),
+                    keyword_query="canonical query",
+                    raw_candidate_count=1,
+                    unique_new_count=1,
+                    newly_scored_count=1,
+                    reflection_summary="canonical reflection",
+                )
+            ],
+            runtime_events=[
+                RuntimeControlEvent(
+                    event_id="runtime_event_raw_1",
+                    runtime_run_id="runtime_1",
+                    event_seq=1,
+                    event_type="runtime_round",
+                    stage="round",
+                    round_no=1,
+                    source_id="liepin",
+                    status="running",
+                    summary="Raw round must not drive thinkingProcess",
+                    payload={"keyword_query": "raw query", "query_terms": ["raw"]},
+                    payload_size_bytes=0,
+                    created_at=_now(),
+                )
+            ],
+            activity_items=thread.activity_items,
+        )
+    )
+
+    assert [item.roundNo for item in response.thinkingProcess.rounds] == [2]
+    assert response.thinkingProcess.activeRoundNo == 2
+    assert response.thinkingProcess.rounds[0].cards[0].text == "canonical query"
+
+
+def test_projection_loads_round_summaries_before_runtime_event_window_bound() -> None:
+    store = _LargeRuntimeStore()
+    store.stage_outputs = [
+        _public_stage_output(
+            output_id="rtout_round_1_query",
+            runtime_run_id="runtime_1",
+            stage="round_query",
+            round_no=1,
+            output={"details": {"queryTerms": ["AI agent"], "keywordQuery": "AI agent"}},
+        )
+    ]
+
+    projection_input = build_agent_workbench_projection_input(
+        service=_conversation_agent_service_for_thread(_thread_view()),
+        conversation_store=_conversation_store_for_thread(_thread_view()),
+        runtime_store=store,
+        workbench_store=_empty_workbench_store(),
+        conversation_id="agent_conv_1",
+        user=_workbench_user(),
+    )
+
+    assert [summary.round_no for summary in projection_input.round_summaries] == [1]
+    assert len(projection_input.runtime_events) <= 300
+
+
+def test_round_reducer_combines_public_stage_outputs_without_raw_fallback() -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    summaries = round_summaries_from_stage_outputs(
+        [
+            _public_stage_output(
+                output_id="rtout_r1_query",
+                stage="round_query",
+                round_no=1,
+                output={
+                    "details": {
+                        "queryTerms": ["AI agent"],
+                        "keywordQuery": "AI agent platform engineer",
+                        "plannedQueries": [
+                            {
+                                "queryRole": "exploit",
+                                "laneType": "primary",
+                                "queryTerms": ["AI agent"],
+                                "keywordQuery": "AI agent platform engineer",
+                            }
+                        ],
+                    }
+                },
+            ),
+            _public_stage_output(
+                output_id="rtout_r1_source_cts",
+                stage="source_result",
+                round_no=1,
+                source_kind="cts",
+                output={"counts": {"roundReturned": 0, "roundIdentities": 0}},
+            ),
+            _public_stage_output(
+                output_id="rtout_r1_merge",
+                stage="merge",
+                round_no=1,
+                output={"counts": {"roundUniqueIdentities": 0, "mergedIdentities": 7}},
+            ),
+            _public_stage_output(
+                output_id="rtout_r1_scoring",
+                stage="scoring",
+                round_no=1,
+                output={"counts": {"roundIdentities": 0, "topPoolCount": 4}},
+            ),
+            _public_stage_output(
+                output_id="rtout_r1_feedback",
+                stage="feedback",
+                round_no=1,
+                output={
+                    "details": {
+                        "executedQueries": [
+                            {
+                                "queryRole": "exploit",
+                                "laneType": "primary",
+                                "queryTerms": ["AI agent"],
+                                "keywordQuery": "AI agent platform engineer",
+                            }
+                        ],
+                        "resumeQualityComment": "本轮候选人偏平台工程。",
+                        "reflectionSummary": "继续保留 agent 平台关键词。",
+                        "reflectionRationale": "候选人匹配度稳定。",
+                        "suggestedAddFilterFields": ["location"],
+                    }
+                },
+            ),
+            _public_stage_output(
+                output_id="rtout_final",
+                stage="finalization",
+                round_no=None,
+                output={"counts": {"selectedIdentityCount": 3}},
+            ),
+        ],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+
+    assert [summary.round_no for summary in summaries] == [1]
+    summary = summaries[0]
+    assert summary.status == "completed"
+    assert summary.raw_candidate_count == 0
+    assert summary.unique_new_count == 0
+    assert summary.total_merged_identity_count == 7
+    assert summary.newly_scored_count == 0
+    assert summary.top_pool_count == 4
+    assert summary.planned_queries[0].keyword_query == "AI agent platform engineer"
+    assert summary.executed_queries[0].query_terms == ("AI agent",)
+    assert summary.suggested_add_filter_fields == ("location",)
+
+
+def test_round_reducer_rejects_public_stage_output_metadata_mismatch() -> None:
+    from seektalent_ui.agent_workbench_rounds import AgentWorkbenchProjectionError, round_summaries_from_stage_outputs
+
+    output = _public_stage_output(
+        output_id="rtout_bad",
+        stage="round_query",
+        round_no=1,
+        output={"stage": "feedback"},
+    )
+
+    with pytest.raises(AgentWorkbenchProjectionError) as exc_info:
+        round_summaries_from_stage_outputs([output], expected_runtime_run_id="runtime_run_reducer")
+
+    assert exc_info.value.reason_code == "workbench_round_output_metadata_mismatch"
+
+
+def test_round_reducer_rejects_row_schema_version_mismatch() -> None:
+    from seektalent_ui.agent_workbench_rounds import AgentWorkbenchProjectionError, round_summaries_from_stage_outputs
+
+    output = _public_stage_output(
+        output_id="rtout_bad_schema",
+        stage="round_query",
+        round_no=1,
+        schema_version="debug-output/v1",
+        output={},
+    )
+
+    with pytest.raises(AgentWorkbenchProjectionError) as exc_info:
+        round_summaries_from_stage_outputs([output], expected_runtime_run_id="runtime_run_reducer")
+
+    assert exc_info.value.reason_code == "workbench_round_output_metadata_mismatch"
+
+
+def test_deterministic_finalization_projection_is_run_level_only() -> None:
+    from seektalent_ui.agent_workbench_rounds import deterministic_finalization_from_stage_outputs
+
+    finalization = deterministic_finalization_from_stage_outputs(
+        [
+            _public_stage_output(
+                output_id="rtout_final",
+                stage="finalization",
+                round_no=None,
+                output={
+                    "counts": {"selectedIdentityCount": 3},
+                    "details": {
+                        "finalizationRevision": 2,
+                        "finalizationReasonCode": "target_satisfied",
+                    },
+                },
+            )
+        ],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+
+    assert finalization is not None
+    assert finalization.selected_identity_count == 3
+    assert finalization.revision == 2
+    assert finalization.reason_code == "target_satisfied"
 
 
 @pytest.mark.parametrize(
@@ -656,6 +933,51 @@ def test_stream_envelope_rejects_payload_type_that_does_not_match_kind() -> None
         )
 
 
+def test_thinking_process_stream_event_uses_projected_canonical_round() -> None:
+    response = _conversation_response_with_thinking_round(
+        round_no=2,
+        keyword_text="canonical query",
+        observation_text="1 candidate",
+        reflection_text="canonical reflection",
+    )
+
+    events = project_agent_workbench_stream_events(response)
+    thinking_events = [event for event in events if event.kind == "thinkingProcess.changed"]
+
+    assert len(thinking_events) == 1
+    assert thinking_events[0].source_seq == 2
+    assert thinking_events[0].payload.itemId == "round:2"
+    assert thinking_events[0].payload.summary == "canonical reflection"
+
+
+def test_runtime_finalization_stream_event_is_separate_from_final_summary() -> None:
+    response = _conversation_response_with_thinking_round(
+        round_no=2,
+        keyword_text="canonical query",
+        observation_text="1 candidate",
+        reflection_text="canonical reflection",
+        runtime_finalization=AgentWorkbenchRunFinalizationResponse(
+            selectedIdentityCount=3,
+            revision=4,
+            reasonCode="target_satisfied",
+            status="completed",
+        ),
+        final_summary=AgentWorkbenchFinalSummaryResponse(
+            summaryId="summary_1",
+            text="Conversation Agent natural-language summary",
+        ),
+    )
+
+    events = project_agent_workbench_stream_events(response)
+
+    assert [event.kind for event in events].count("finalSummary.updated") == 1
+    runtime_events = [event for event in events if event.kind == "runtimeFinalization.changed"]
+    assert len(runtime_events) == 1
+    assert runtime_events[0].source_seq == 4
+    assert runtime_events[0].payload.itemId == "runtimeFinalization"
+    assert runtime_events[0].payload.summary == "target_satisfied"
+
+
 def test_agent_workbench_stream_store_replays_durable_bff_seq_and_gaps(tmp_path: Path) -> None:
     store = AgentWorkbenchStreamStore(tmp_path / "stream.sqlite3")
     first = store.append_event(
@@ -835,7 +1157,24 @@ def test_projected_stream_events_cover_non_transcript_workbench_surfaces() -> No
     projection_input = build_agent_workbench_projection_input(
         service=_FakeAgentService(thread),
         conversation_store=_FakeConversationStore(),
-        runtime_store=_FakeRuntimeStore(),
+        runtime_store=_FakeRuntimeStore(
+            stage_outputs=[
+                _public_stage_output(
+                    output_id="rtout_stream_round_query",
+                    runtime_run_id="runtime_1",
+                    stage="round_query",
+                    round_no=1,
+                    output={"details": {"queryTerms": ["AI agent"], "keywordQuery": "AI agent"}},
+                ),
+                _public_stage_output(
+                    output_id="rtout_stream_feedback",
+                    runtime_run_id="runtime_1",
+                    stage="feedback",
+                    round_no=1,
+                    output={"details": {"reflectionSummary": "canonical reflection"}},
+                ),
+            ]
+        ),
         workbench_store=_FakeWorkbenchStore(),
         conversation_id="agent_conv_1",
         user=WorkbenchUser(
@@ -2174,6 +2513,89 @@ def test_agent_workbench_sse_generator_emits_terminal_error_on_projection_failur
     assert not hasattr(record, "conversation_id")
 
 
+def _public_stage_output(
+    *,
+    output_id: str,
+    stage: str,
+    round_no: int | None,
+    output: dict[str, object],
+    runtime_run_id: str = "runtime_run_reducer",
+    source_kind: str | None = None,
+    schema_version: str = "runtime-public-stage-output/v1",
+) -> RuntimeStageOutput:
+    payload = {
+        "schemaVersion": "runtime-public-stage-output/v1",
+        "publicEventSchemaVersion": "runtime_public_event_v1",
+        "stage": stage,
+        "roundNo": round_no,
+        "sourceKind": source_kind,
+        "status": "completed",
+        "counts": {},
+        "details": {},
+        "safeReasonCode": None,
+    }
+    payload.update(output)
+    node_key = source_kind or ""
+    round_key = round_no if round_no is not None else -1
+    return RuntimeStageOutput(
+        output_id=output_id,
+        runtime_run_id=runtime_run_id,
+        stage=stage,
+        node_id=source_kind,
+        node_key=node_key,
+        round_no=round_no,
+        round_key=round_key,
+        output_kind=f"runtime_public_{stage}",
+        schema_version=schema_version,
+        output=payload,
+        payload_hash="hash",
+        payload_size_bytes=1,
+        source_event_id=None,
+        source_checkpoint_id=None,
+        artifact_ref_id=None,
+        created_at=f"2026-06-22T00:00:{len(output_id):02d}.000000Z",
+    )
+
+
+def _conversation_response_with_thinking_round(
+    *,
+    round_no: int,
+    keyword_text: str,
+    observation_text: str,
+    reflection_text: str,
+    runtime_finalization: AgentWorkbenchRunFinalizationResponse | None = None,
+    final_summary: AgentWorkbenchFinalSummaryResponse | None = None,
+) -> AgentWorkbenchConversationResponse:
+    return AgentWorkbenchConversationResponse(
+        conversation=AgentWorkbenchConversationSummaryResponse(
+            conversationId="agent_conv_1",
+            title="Find backend engineers",
+            status="running",
+            isArchived=False,
+            updatedAt=_now(),
+        ),
+        strategyGraph=AgentWorkbenchStrategyGraphResponse(nodes=[], edges=[]),
+        thinkingProcess=AgentWorkbenchThinkingProcessResponse(
+            activeRoundNo=round_no,
+            rounds=[
+                AgentWorkbenchThinkingProcessRoundResponse(
+                    roundNo=round_no,
+                    status="completed",
+                    cards=[
+                        AgentWorkbenchThinkingProcessCardResponse(title="关键词", text=keyword_text),
+                        AgentWorkbenchThinkingProcessCardResponse(title="observation", text=observation_text),
+                        AgentWorkbenchThinkingProcessCardResponse(title="反思和下一轮变更", text=reflection_text),
+                    ],
+                )
+            ],
+        ),
+        pendingActions=AgentWorkbenchPendingActionsResponse(),
+        streamCursor=AgentWorkbenchStreamCursorResponse(),
+        runtimeFinalization=runtime_finalization,
+        finalSummary=final_summary,
+    )
+
+
 class _FakeAgentService:
     def __init__(self, thread: ConversationThreadView) -> None:
         self.thread = thread
@@ -2232,8 +2654,13 @@ class _FakeConversationStore:
 
 
 class _FakeRuntimeStore:
-    def __init__(self, requirement_drafts: dict[str, object] | None = None) -> None:
+    def __init__(
+        self,
+        requirement_drafts: dict[str, object] | None = None,
+        stage_outputs: list[RuntimeStageOutput] | None = None,
+    ) -> None:
         self.requirement_drafts = requirement_drafts or {}
+        self.stage_outputs = stage_outputs or []
         self.requested_requirement_draft_ids: list[str] = []
 
     def get_run(self, runtime_run_id: str) -> RuntimeRunRecord:
@@ -2279,6 +2706,24 @@ class _FakeRuntimeStore:
     def get_requirement_draft(self, draft_revision_id: str) -> object | None:
         self.requested_requirement_draft_ids.append(draft_revision_id)
         return self.requirement_drafts.get(draft_revision_id)
+
+    def list_stage_outputs(
+        self,
+        *,
+        runtime_run_id: str,
+        stage: str | None = None,
+        round_no: int | None = None,
+        output_kind: str | None = None,
+    ) -> list[RuntimeStageOutput]:
+        assert runtime_run_id == "runtime_1"
+        outputs = self.stage_outputs
+        if stage is not None:
+            outputs = [output for output in outputs if output.stage == stage]
+        if round_no is not None:
+            outputs = [output for output in outputs if output.round_no == round_no]
+        if output_kind is not None:
+            outputs = [output for output in outputs if output.output_kind == output_kind]
+        return outputs
 
     def list_artifact_refs(self, *, runtime_run_id: str):
         assert runtime_run_id == "runtime_1"

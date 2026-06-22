@@ -6,7 +6,7 @@ from collections.abc import Awaitable
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import TYPE_CHECKING, Literal, TypedDict
 
 from seektalent.config import AppSettings
 from seektalent.corpus.runtime import ProviderReturnedCandidate, build_deterministic_provider_request_id
@@ -40,6 +40,9 @@ from seektalent.retrieval.query_identity import build_query_fingerprint, build_q
 from seektalent.runtime.runtime_diagnostics import classify_query_outcome
 from seektalent.storage.json import sha256_json
 from seektalent.tracing import RunTracer
+
+if TYPE_CHECKING:
+    from seektalent.runtime.source_query_intent import RuntimeQueryPackage
 
 
 def _provider_query_role(query_role: QueryRole) -> Literal["primary", "expansion"]:
@@ -293,6 +296,7 @@ class RetrievalExecutionResult:
     search_attempts: list[SearchAttempt]
     query_resume_hits: list[QueryResumeHit] = field(default_factory=list)
     provider_returned_candidates: list[ProviderReturnedCandidate] = field(default_factory=list)
+    executed_query_packages: tuple[RuntimeQueryPackage, ...] = ()
 
 
 class _CityDispatchResult(TypedDict):

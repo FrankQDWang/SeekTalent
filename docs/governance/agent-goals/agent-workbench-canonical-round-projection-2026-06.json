@@ -1,0 +1,55 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Project Agent Workbench rounds from canonical runtime public stage outputs.",
+  "rationale": "This rollout intentionally crosses runtime public event emission, runtime-control stage output persistence, Workbench BFF projection, and the React stream client so the Workbench thinking process uses durable runtime_public_* summaries instead of raw runtime-event window reconstruction. The schema, projection, and stream invalidation changes must land together to keep the BFF and frontend contract coherent.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "frontend",
+    "other",
+    "runtime",
+    "sources",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent/runtime/public_events.py",
+    "src/seektalent/runtime/retrieval_runtime.py",
+    "src/seektalent/runtime/source_query_intent.py",
+    "src/seektalent/runtime/source_round_dispatch.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "Both files were already above the production line-count redline. This PR adds small adapter hooks only: runtime public stage emission in the orchestrator and public stage output allowlisting in RuntimeControlStore. New projection logic lives in src/seektalent_ui/agent_workbench_rounds.py instead of expanding those oversized files further.",
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run python -m pytest tests/test_runtime_control_event_contract.py tests/test_runtime_public_event_contract.py tests/test_runtime_multi_source_round_dispatch.py tests/test_runtime_source_lanes.py tests/test_agent_workbench_contract.py -q",
+    "uv run python -m pytest tests/test_workflow_runtime_control_integration.py tests/test_runtime_control_retention.py -q",
+    "uv run ruff check",
+    "uv run ty check src tests tools",
+    "uv run python tools/check_arch_imports.py",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "git diff --check",
+    "pnpm --dir apps/web-react check",
+    "pnpm --dir apps/web-react lint",
+    "pnpm --dir apps/web-react test",
+    "pnpm --dir apps/web-react build"
+  ],
+  "deletion_targets": [
+    "Workbench thinking process reconstruction from bounded raw runtime-event windows",
+    "planned source query intents displayed as executed when a source lane is blocked",
+    "runtime finalization changes hidden inside natural-language final summary updates"
+  ],
+  "risks": [
+    "Public stage outputs must reject provider payloads, raw resumes, prompts, cookies, and tokens while preserving recruiter-visible query and round facts.",
+    "The BFF projection must keep final runtime state separate from Conversation Agent finalSummary text.",
+    "Frontend stream handling must treat runtimeFinalization.changed as a durable snapshot invalidation event."
+  ]
+}

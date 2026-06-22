@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import fields
 from types import SimpleNamespace
 
 import pytest
 
+from seektalent.models import ResumeCandidate
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.source_lanes import build_runtime_source_plan
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
@@ -52,6 +54,24 @@ def test_cts_only_rounds_emit_canonical_runtime_public_events(tmp_path) -> None:
         ("scoring", 1, None),
         ("feedback", 1, None),
     ]
+
+
+def test_runtime_round_query_public_event_uses_source_aware_planned_queries(tmp_path) -> None:
+    payloads = _multi_source_runtime_public_event_payloads(tmp_path, source_kinds=("cts", "liepin"))
+    round_query = next(payload for payload in payloads if payload["stage"] == "round_query")
+
+    planned_queries = round_query["details"]["plannedQueries"]
+    assert {item["sourceKind"] for item in planned_queries} >= {"cts", "liepin"}
+    assert all(item["queryTerms"] for item in planned_queries)
+    assert all("keywordQuery" in item for item in planned_queries)
+
+
+def test_runtime_feedback_public_event_includes_liepin_executed_queries(tmp_path) -> None:
+    payloads = _multi_source_runtime_public_event_payloads(tmp_path, source_kinds=("cts", "liepin"))
+    feedback = next(payload for payload in payloads if payload["stage"] == "feedback")
+
+    executed_queries = feedback["details"]["executedQueries"]
+    assert {item["sourceKind"] for item in executed_queries} >= {"cts", "liepin"}
 
 
 def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,3 +162,87 @@ def _runtime_public_event_payloads(progress_events: list[object]) -> list[dict[s
         if event.type == "runtime_public_event"
         and event.payload.get("schemaVersion") == "runtime_public_event_v1"
     ]
+
+
+def _multi_source_runtime_public_event_payloads(
+    tmp_path,
+    *,
+    source_kinds: tuple[str, ...],
+) -> list[dict[str, object]]:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts="cts" in source_kinds,
+        liepin_worker_mode="fake_fixture" if "liepin" in source_kinds else "disabled",
+        liepin_allow_fake_fixture_worker="liepin" in source_kinds,
+        min_rounds=1,
+        max_rounds=1,
+        enable_eval=False,
+    )
+    runtime = WorkflowRuntime(settings, source_round_adapter_provider=_completed_source_round_adapters)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+    progress_events = []
+    source_context = (
+        {"backend_mode": "fake_fixture", "status": "ready"}
+        if "liepin" in source_kinds
+        else None
+    )
+    source_plan = build_runtime_source_plan(
+        source_kinds=source_kinds,
+        settings=settings,
+        runtime_run_id=tracer.run_id,
+        source_context=source_context,
+    )
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                tracer=tracer,
+                source_plan=source_plan,
+                source_context=source_context,
+                progress_callback=progress_events.append,
+            )
+        )
+    finally:
+        tracer.close()
+
+    return _runtime_public_event_payloads(progress_events)
+
+
+def _completed_source_round_adapters(runtime: WorkflowRuntime, context):
+    del runtime, context
+
+    async def adapter(request, source_id: str):
+        result_kwargs = {
+            "source": source_id,
+            "status": "completed",
+            "candidates": (_public_event_candidate(source_id),),
+            "raw_candidate_count": 1,
+        }
+        if "executed_query_packages" in {field.name for field in fields(SourceRoundAdapterResult)}:
+            result_kwargs["executed_query_packages"] = tuple(
+                SimpleNamespace(
+                    source_kind=source_id,
+                    query_role=intent.query_role,
+                    lane_type=intent.lane_type,
+                    query_terms=intent.query_terms,
+                    keyword_query=intent.keyword_query,
+                )
+                for intent in request.source_query_intents_by_source.get(source_id, ())
+            )
+        return SourceRoundAdapterResult(**result_kwargs)
+
+    return {source_id: (lambda request, source_id=source_id: adapter(request, source_id)) for source_id in ("cts", "liepin")}
+
+
+def _public_event_candidate(source: str) -> ResumeCandidate:
+    return ResumeCandidate(
+        resume_id=f"{source}-candidate-1",
+        source_resume_id=f"{source}-candidate-1",
+        dedup_key=f"dedup-{source}-candidate-1",
+        search_text=f"{source} public event candidate",
+        raw={"source": source},
+    )

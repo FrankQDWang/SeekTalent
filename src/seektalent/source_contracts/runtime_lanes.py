@@ -51,6 +51,16 @@ RuntimeSourceLaneEventType = Literal[
     "detail_blocked",
 ]
 
+
+@dataclass(frozen=True)
+class RuntimeQueryPackage:
+    source_kind: SourceKind | str | None = None
+    query_role: str | None = None
+    lane_type: str | None = None
+    query_terms: tuple[str, ...] = ()
+    keyword_query: str | None = None
+
+
 @dataclass(frozen=True, kw_only=True)
 class RuntimeSourceBudgetPolicy:
     card_target: int = 10
@@ -300,6 +310,7 @@ class RuntimeSourceLaneResult:
     safe_summary_refs: tuple[str, ...] = ()
     detail_recommendations: tuple[RuntimeDetailRecommendation, ...] = ()
     events: tuple[RuntimeSourceLaneEvent, ...] = ()
+    executed_query_packages: tuple[RuntimeQueryPackage, ...] = ()
     blocked_reason_code: str | None = None
     stop_reason_code: str | None = None
     retryable: bool = False

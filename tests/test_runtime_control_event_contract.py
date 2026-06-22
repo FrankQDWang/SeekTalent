@@ -596,6 +596,8 @@ def test_stage_output_allowlists_public_output(tmp_path: Path) -> None:
             output_id="rtout_public",
             runtime_run_id="runtime_run_stage_output_privacy",
             stage="source_result",
+            node_id="cts",
+            round_no=1,
             output_kind="runtime_public_source_result",
             schema_version="runtime-public-stage-output/v1",
             output={
@@ -617,6 +619,175 @@ def test_stage_output_allowlists_public_output(tmp_path: Path) -> None:
     assert saved.output["counts"] == {"roundReturned": 5}
     assert saved.output["details"] == {"reflectionSummary": "safe"}
     assert "extraDebug" not in saved.output
+
+
+def test_public_stage_output_rejects_sensitive_query_package_keys(tmp_path: Path) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+    from seektalent_runtime_control.models import RuntimeStageOutputInput
+
+    store = _initialized_store(tmp_path)
+    store.create_run(_run(runtime_run_id="runtime_run_public_sensitive", status="running"))
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        store.save_stage_output(
+            RuntimeStageOutputInput(
+                output_id="rtout_public_sensitive_feedback",
+                runtime_run_id="runtime_run_public_sensitive",
+                stage="feedback",
+                round_no=1,
+                output_kind="runtime_public_feedback",
+                schema_version="runtime-public-stage-output/v1",
+                output={
+                    "schemaVersion": "runtime-public-stage-output/v1",
+                    "publicEventSchemaVersion": "runtime_public_event_v1",
+                    "stage": "feedback",
+                    "roundNo": 1,
+                    "sourceKind": None,
+                    "status": "completed",
+                    "counts": {},
+                    "details": {
+                        "executedQueries": [
+                            {
+                                "sourceKind": "liepin",
+                                "queryRole": "exploit",
+                                "laneType": "primary",
+                                "queryTerms": ["AI agent"],
+                                "keywordQuery": "AI agent platform engineer",
+                                "providerPayload": {"secret": "reject the whole output"},
+                            }
+                        ]
+                    },
+                    "safeReasonCode": None,
+                },
+                source_event_id=None,
+                source_checkpoint_id=None,
+                artifact_ref_id=None,
+                created_at="2026-06-22T00:00:00.000000Z",
+            )
+        )
+
+    assert exc_info.value.reason_code == "runtime_stage_output_sensitive_payload"
+
+
+def test_public_stage_output_keeps_query_packages_and_drops_unknown_public_details(tmp_path: Path) -> None:
+    from seektalent_runtime_control.models import RuntimeStageOutputInput
+
+    store = _initialized_store(tmp_path)
+    store.create_run(_run(runtime_run_id="runtime_run_public_query_packages", status="running"))
+
+    saved = store.save_stage_output(
+        RuntimeStageOutputInput(
+            output_id="rtout_public_feedback",
+            runtime_run_id="runtime_run_public_query_packages",
+            stage="feedback",
+            round_no=1,
+            output_kind="runtime_public_feedback",
+            schema_version="runtime-public-stage-output/v1",
+            output={
+                "schemaVersion": "runtime-public-stage-output/v1",
+                "publicEventSchemaVersion": "runtime_public_event_v1",
+                "stage": "feedback",
+                "roundNo": 1,
+                "sourceKind": None,
+                "status": "completed",
+                "counts": {"feedbackCandidateCount": 2},
+                "details": {
+                    "executedQueries": [
+                        {
+                            "source_kind": "liepin",
+                            "query_role": "exploit",
+                            "lane_type": "primary",
+                            "query_terms": ["AI agent"],
+                            "keyword_query": "AI agent platform engineer",
+                            "debugNote": "drop this non-sensitive unknown key",
+                        }
+                    ],
+                    "suggestedActivateTerms": ["platform"],
+                    "suggestedKeepFilterFields": ["location"],
+                    "suggestedDropTerms": [{"bad": "dict must be dropped"}],
+                    "nonPublicDetail": "drop this field",
+                },
+                "safeReasonCode": None,
+            },
+            source_event_id=None,
+            source_checkpoint_id=None,
+            artifact_ref_id=None,
+            created_at="2026-06-22T00:00:01.000000Z",
+        )
+    )
+
+    assert saved.output["details"]["executedQueries"] == [
+        {
+            "sourceKind": "liepin",
+            "queryRole": "exploit",
+            "laneType": "primary",
+            "queryTerms": ["AI agent"],
+            "keywordQuery": "AI agent platform engineer",
+        }
+    ]
+    assert saved.output["details"]["suggestedKeepFilterFields"] == ["location"]
+    assert saved.output["details"]["suggestedDropTerms"] == []
+    assert "nonPublicDetail" not in saved.output["details"]
+
+
+@pytest.mark.parametrize(
+    ("stage", "round_no", "output_kind", "payload_stage", "payload_round_no", "expected_reason"),
+    [
+        ("feedback", None, "runtime_public_feedback", "feedback", None, "runtime_public_round_required"),
+        (
+            "finalization",
+            1,
+            "runtime_public_finalization",
+            "finalization",
+            1,
+            "runtime_public_finalization_run_level_required",
+        ),
+        ("round_query", 1, "runtime_public_round_query", "feedback", 1, "runtime_stage_output_metadata_mismatch"),
+    ],
+)
+def test_public_stage_output_rejects_metadata_and_round_hierarchy_mismatch(
+    tmp_path: Path,
+    stage: str,
+    round_no: int | None,
+    output_kind: str,
+    payload_stage: str,
+    payload_round_no: int | None,
+    expected_reason: str,
+) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+    from seektalent_runtime_control.models import RuntimeStageOutputInput
+
+    store = _initialized_store(tmp_path)
+    store.create_run(_run(runtime_run_id="runtime_run_public_metadata", status="running"))
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        store.save_stage_output(
+            RuntimeStageOutputInput(
+                output_id=f"rtout_public_{stage}",
+                runtime_run_id="runtime_run_public_metadata",
+                stage=stage,
+                round_no=round_no,
+                output_kind=output_kind,
+                schema_version="runtime-public-stage-output/v1",
+                output={
+                    "schemaVersion": "runtime-public-stage-output/v1",
+                    "publicEventSchemaVersion": "runtime_public_event_v1",
+                    "stage": payload_stage,
+                    "roundNo": payload_round_no,
+                    "sourceKind": None,
+                    "status": "completed",
+                    "counts": {},
+                    "details": {},
+                    "safeReasonCode": None,
+                },
+                source_event_id=None,
+                source_checkpoint_id=None,
+                artifact_ref_id=None,
+                created_at="2026-06-22T00:00:02.000000Z",
+            )
+        )
+
+    assert exc_info.value.reason_code == expected_reason
 
 
 def test_stage_output_duplicate_key_conflicts_when_payload_hash_changes(tmp_path: Path) -> None:

@@ -39,6 +39,7 @@ from seektalent_ui.agent_workbench_projection import (
     build_agent_workbench_projection_input,
     candidate_detail_response_from_review_item,
 )
+from seektalent_ui.agent_workbench_rounds import AgentWorkbenchProjectionError
 from seektalent_ui.agent_workbench_response import (
     project_agent_workbench_conversation_summary,
     project_agent_workbench_view,
@@ -435,6 +436,13 @@ def _build_agent_workbench_view(
         )
     except ConversationAgentError as exc:
         raise _agent_workbench_error(exc, request) from exc
+    except AgentWorkbenchProjectionError as exc:
+        raise problem_http_error_from_reason(
+            reason_code=exc.reason_code,
+            status=409,
+            request=request,
+            correlation_id=correlation_id_from_request(request),
+        ) from exc
     return project_agent_workbench_view(projection_input)
 
 

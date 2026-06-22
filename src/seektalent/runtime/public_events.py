@@ -61,20 +61,26 @@ _PUBLIC_COUNT_KEYS = {
     "roundIdentities",
     "sourceCumulativeReturned",
     "sourceCumulativeIdentities",
+    "roundUniqueIdentities",
     "mergedIdentities",
     "topPoolCount",
     "selectedIdentityCount",
     "feedbackCandidateCount",
 }
 _PUBLIC_DETAIL_TEXT_KEYS = {
+    "keywordQuery",
+    "resumeQualityComment",
     "reflectionSummary",
     "reflectionRationale",
     "suggestedStopReason",
+    "finalizationReasonCode",
 }
+_PUBLIC_DETAIL_INT_KEYS = {"finalizationRevision"}
 _PUBLIC_DETAIL_BOOL_KEYS = {
     "suggestStop",
 }
 _PUBLIC_DETAIL_LIST_KEYS = {
+    "queryTerms",
     "suggestedActivateTerms",
     "suggestedAddFilterFields",
     "suggestedDeprioritizeTerms",
@@ -83,6 +89,7 @@ _PUBLIC_DETAIL_LIST_KEYS = {
     "suggestedKeepFilterFields",
     "suggestedKeepTerms",
 }
+_PUBLIC_DETAIL_QUERY_PACKAGE_KEYS = {"plannedQueries", "executedQueries"}
 
 
 class RuntimePublicEvent(TypedDict):
@@ -248,11 +255,56 @@ def _safe_public_details(value: object) -> dict[str, object]:
         elif key in _PUBLIC_DETAIL_BOOL_KEYS:
             if isinstance(raw_value, bool):
                 details[key] = raw_value
+        elif key in _PUBLIC_DETAIL_INT_KEYS:
+            value = _optional_non_negative_int(raw_value)
+            if value is not None:
+                details[key] = value
         elif key in _PUBLIC_DETAIL_LIST_KEYS:
             values = _public_detail_list(raw_value)
             if values:
                 details[key] = values
+        elif key in _PUBLIC_DETAIL_QUERY_PACKAGE_KEYS:
+            values = _public_query_packages(raw_value)
+            if values:
+                details[key] = values
     return details
+
+
+def _public_query_packages(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    packages: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        package: dict[str, object] = {}
+        item_mapping = _string_key_mapping(item)
+        source_kind = _public_detail_text(item_mapping.get("sourceKind"), max_length=80)
+        query_role = _public_detail_text(item_mapping.get("queryRole"), max_length=80)
+        lane_type = _public_detail_text(item_mapping.get("laneType"), max_length=80)
+        query_terms = _public_detail_list(item_mapping.get("queryTerms"))
+        keyword_query = _public_detail_text(item_mapping.get("keywordQuery"), max_length=2000)
+        if source_kind is not None:
+            package["sourceKind"] = source_kind
+        if query_role is not None:
+            package["queryRole"] = query_role
+        if lane_type is not None:
+            package["laneType"] = lane_type
+        if query_terms:
+            package["queryTerms"] = query_terms
+        if keyword_query is not None:
+            package["keywordQuery"] = keyword_query
+        if package:
+            packages.append(package)
+        if len(packages) >= 50:
+            break
+    return packages
+
+
+def _string_key_mapping(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
 def _public_detail_list(value: object) -> list[str]:
