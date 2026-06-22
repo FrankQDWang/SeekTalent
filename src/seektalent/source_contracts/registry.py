@@ -29,8 +29,21 @@ class SourceRegistry:
         except KeyError as exc:
             raise ValueError(f"unknown_source:{source_id}") from exc
 
+    @property
+    def source_ids(self) -> tuple[str, ...]:
+        return tuple(self._sources)
+
+    @property
+    def default_source_ids(self) -> tuple[str, ...]:
+        return self._default_source_ids
+
     def enabled_sources(self, source_ids: Sequence[str] | None) -> tuple[RegisteredSource, ...]:
-        requested_source_ids = tuple(source_ids) if source_ids else self._default_source_ids
+        if source_ids is None:
+            requested_source_ids = self._default_source_ids
+        else:
+            requested_source_ids = tuple(source_ids)
+            if not requested_source_ids:
+                raise ValueError("empty_source_selection")
         seen: set[str] = set()
         enabled: list[RegisteredSource] = []
         for source_id in requested_source_ids:

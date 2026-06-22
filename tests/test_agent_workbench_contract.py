@@ -1915,7 +1915,7 @@ def test_workbench_message_action_rejects_source_ids_only_submit_jd_contract(tmp
     assert response.status_code == 400, response.text
     problem = response.json()
     assert problem["reasonCode"] == "agent_request_invalid"
-    assert {region["field"] for region in problem["regions"]} >= {"submitJd.sourceIds", "submitJd.sourceKinds"}
+    assert {region["field"] for region in problem["regions"]} >= {"submitJd.sourceIds"}
 
 
 def test_agent_message_route_rejects_explicit_source_alias_conflict(tmp_path: Path) -> None:

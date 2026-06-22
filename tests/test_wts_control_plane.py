@@ -1096,11 +1096,19 @@ def test_source_selection_rejects_missing_duplicate_and_disallowed_source_state(
 
     with pytest.raises(SourceSelectionError) as missing:
         resolve_runtime_source_selection(
-            source_kinds=[],
+            source_kinds=None,
             workspace_source_policy_id=None,
             registered_runtime_source_ids={"cts", "liepin"},
         )
     assert missing.value.reason_code == "source_policy_missing"
+
+    with pytest.raises(SourceSelectionError) as empty:
+        resolve_runtime_source_selection(
+            source_kinds=[],
+            workspace_source_policy_id=None,
+            registered_runtime_source_ids={"cts", "liepin"},
+        )
+    assert empty.value.reason_code == "source_selection_empty"
 
     with pytest.raises(SourceSelectionError) as duplicate:
         resolve_runtime_source_selection(
@@ -1117,6 +1125,66 @@ def test_source_selection_rejects_missing_duplicate_and_disallowed_source_state(
             registered_runtime_source_ids={"cts"},
         )
     assert disallowed.value.reason_code == "source_policy_disallowed"
+
+
+def test_source_selection_uses_source_registry_default_policy_and_custom_registered_sources() -> None:
+    from seektalent.source_contracts import RegisteredSource, SourceBudget, SourceCapabilities, SourcePlan, SourceRegistry
+    from seektalent_runtime_control.source_catalog import RuntimeSourcePolicyResolver
+    from seektalent_conversation_agent.source_selection import RuntimeSourceSelectionResolver, SourceSelectionError
+
+    budget = SourceBudget(card_target=3, detail_target=0, scan_limit=3)
+
+    async def run_card_lane(request):  # type: ignore[no-untyped-def]
+        raise AssertionError("selection should not execute source lanes")
+
+    def source(source_id: str) -> RegisteredSource:
+        return RegisteredSource(
+            source_id=source_id,
+            label=source_id,
+            capabilities=SourceCapabilities(
+                supports_card_search=True,
+                supports_detail_fetch=False,
+                supports_native_filters=False,
+                supports_incremental_detail=False,
+                requires_human_login=False,
+                max_safe_concurrency=1,
+                stable_external_id=True,
+                stable_dedup_key=True,
+            ),
+            default_budget=budget,
+            plan=lambda runtime_run_id, source_index, budget_overrides: SourcePlan(
+                source_id=source_id,
+                source_plan_id=f"{runtime_run_id}:source:{source_index}",
+                runtime_run_id=runtime_run_id,
+                label=source_id,
+                budget=budget,
+            ),
+            run_card_lane=run_card_lane,
+        )
+
+    resolver = RuntimeSourceSelectionResolver(
+        source_policy_resolver=RuntimeSourcePolicyResolver(
+            SourceRegistry(
+                [source("internal_referrals"), source("external_board")],
+                default_source_ids=("internal_referrals",),
+            )
+        )
+    )
+
+    default_selection = resolver.resolve_runtime_source_selection(
+        source_kinds=None,
+        workspace_source_policy_id=None,
+    )
+    explicit_selection = resolver.resolve_runtime_source_selection(
+        source_kinds=["external_board"],
+        workspace_source_policy_id=None,
+    )
+
+    assert default_selection.runtime_source_ids == ("internal_referrals",)
+    assert explicit_selection.runtime_source_ids == ("external_board",)
+    with pytest.raises(SourceSelectionError) as exc_info:
+        resolver.resolve_runtime_source_selection(source_kinds=["liepin"], workspace_source_policy_id=None)
+    assert exc_info.value.reason_code == "source_policy_disallowed"
 
 
 def test_workflow_start_resolves_source_kinds_to_runtime_source_ids(tmp_path: Path) -> None:
@@ -1184,6 +1252,45 @@ def test_workflow_start_marks_intent_failed_when_source_disallowed(tmp_path: Pat
     assert intent.reason_code == "source_policy_disallowed"
     assert workflow_executor.calls == []
     assert service.outbox_store.get(outbox_id).status == "done"
+
+
+def test_workflow_start_uses_default_source_policy_when_sources_are_not_explicit(tmp_path: Path) -> None:
+    from seektalent.source_adapters.registry import build_default_source_registry
+    from seektalent_conversation_agent.source_selection import RuntimeSourceSelectionResolver
+    from seektalent_runtime_control.source_catalog import RuntimeSourcePolicyResolver
+
+    workflow_executor = CapturingWorkflowExecutor()
+    service, _extractor = _service_with_workflow_executor(
+        tmp_path,
+        workflow_executor=workflow_executor,
+        source_selection_resolver=RuntimeSourceSelectionResolver(
+            source_policy_resolver=RuntimeSourcePolicyResolver(
+                build_default_source_registry(make_settings(workspace_root=str(tmp_path)))
+            )
+        ),
+    )
+    conversation = _conversation(service)
+    submitted = service.submit_jd(
+        conversation_id=conversation.conversation_id,
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        job_title=None,
+        jd_text="需要 Python 平台负责人，负责 API 与平台工程。",
+        notes="优先华东，接受远程协作",
+        idempotency_key="submit-default-source-1",
+    )
+    confirmed = _confirm(
+        service,
+        conversation_id=conversation.conversation_id,
+        submitted=submitted,
+        idempotency_key="confirm-default-source-1",
+    )
+    outbox_id = _outbox_id_for_aggregate(service, confirmed.workflow_start_intent_id)
+
+    intent = service.process_workflow_start_outbox_item(outbox_id)
+
+    assert intent.status == "started"
+    assert tuple(workflow_executor.calls[0]["source_ids"]) == ("liepin",)
 
 
 def test_workflow_start_outbox_retry_after_started_intent_does_not_enqueue_twice(tmp_path: Path) -> None:
@@ -1363,7 +1470,8 @@ def _service_with_workflow_executor(
     tmp_path: Path,
     *,
     workflow_executor: CapturingWorkflowExecutor,
-    registered_runtime_source_ids: set[str],
+    registered_runtime_source_ids: set[str] | None = None,
+    source_selection_resolver=None,
 ) -> tuple[ConversationAgentService, FakeRequirementExecutor]:
     from seektalent_conversation_agent.source_selection import RuntimeSourceSelectionResolver
 
@@ -1387,9 +1495,8 @@ def _service_with_workflow_executor(
         conversation_id_factory=lambda: "agent_conv_1",
         message_id_factory=_sequence("agent_msg"),
         tool_call_id_factory=_sequence("agent_tool_call"),
-        source_selection_resolver=RuntimeSourceSelectionResolver(
-            registered_runtime_source_ids=registered_runtime_source_ids
-        ),
+        source_selection_resolver=source_selection_resolver
+        or RuntimeSourceSelectionResolver(registered_runtime_source_ids=registered_runtime_source_ids or set()),
     )
     return service, executor
 

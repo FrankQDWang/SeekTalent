@@ -185,7 +185,12 @@ def test_agent_workbench_openapi_documents_problem_details_and_source_kind_enum(
     schemas = openapi["components"]["schemas"]
     submit_schema = schemas["WorkbenchSubmitJdMessageRequest"]
     source_kinds = submit_schema["properties"]["sourceKinds"]
-    assert source_kinds["items"]["enum"] == ["cts", "liepin"]
+    source_kinds_array = next(
+        option
+        for option in source_kinds.get("anyOf", [source_kinds])
+        if option.get("type") == "array"
+    )
+    assert source_kinds_array["items"]["enum"] == ["cts", "liepin"]
 
     submit_message = openapi["paths"]["/api/agent/workbench/conversations/{conversation_id}/messages"]["post"]
     responses = submit_message["responses"]

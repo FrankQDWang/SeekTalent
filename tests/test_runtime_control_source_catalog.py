@@ -1,6 +1,48 @@
 from __future__ import annotations
 
+import pytest
+
+from seektalent.source_adapters.registry import build_default_source_registry
 from seektalent.source_contracts import RegisteredSource, SourceBudget, SourceCapabilities, SourcePlan, SourceRegistry
+from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.source_catalog import RuntimeSourcePolicyResolver, validate_runtime_source_ids
+from tests.settings_factory import make_settings
+
+
+def test_default_runtime_source_policy_uses_liepin_with_explicit_cts_override(tmp_path) -> None:
+    resolver = RuntimeSourcePolicyResolver(build_default_source_registry(make_settings(workspace_root=str(tmp_path))))
+
+    assert resolver.resolve_source_ids(None) == ("liepin",)
+    assert resolver.resolve_source_ids(["cts"]) == ("cts",)
+    assert resolver.resolve_source_ids(["liepin", "cts"]) == ("liepin", "cts")
+
+
+def test_runtime_source_policy_rejects_explicit_empty_source_ids(tmp_path) -> None:
+    resolver = RuntimeSourcePolicyResolver(build_default_source_registry(make_settings(workspace_root=str(tmp_path))))
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        resolver.resolve_source_ids([])
+
+    assert exc_info.value.reason_code == "source_selection_empty"
+
+    with pytest.raises(RuntimeControlError) as tuple_exc_info:
+        resolver.resolve_source_ids(())
+
+    assert tuple_exc_info.value.reason_code == "source_selection_empty"
+
+    with pytest.raises(RuntimeControlError) as validator_exc_info:
+        validate_runtime_source_ids(resolver.registry, ())
+
+    assert validator_exc_info.value.reason_code == "source_selection_empty"
+
+
+def test_runtime_source_policy_rejects_unregistered_source_ids(tmp_path) -> None:
+    resolver = RuntimeSourcePolicyResolver(build_default_source_registry(make_settings(workspace_root=str(tmp_path))))
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        resolver.resolve_source_ids(["unknown"])
+
+    assert exc_info.value.reason_code == "source_id_unavailable"
 
 
 def test_runtime_control_validates_non_fixture_source_ids_through_registry() -> None:

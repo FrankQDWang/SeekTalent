@@ -1457,7 +1457,7 @@ class ConversationAgentService:
 
         try:
             source_selection = self.source_selection_resolver.resolve_runtime_source_selection(
-                source_kinds=job_request.source_kinds,
+                source_kinds=job_request.source_kinds or None,
                 workspace_source_policy_id=job_request.workspace_source_policy_id,
             )
         except SourceSelectionError as exc:
@@ -1476,7 +1476,7 @@ class ConversationAgentService:
             job_title=job_request.effective_job_title,
             jd_text=job_request.jd_text,
             notes=job_request.notes,
-            source_ids=source_selection.runtime_source_ids,
+            source_ids=list(source_selection.runtime_source_ids),
             run_intent_id=intent.deterministic_run_key,
             start_idempotency_key=intent.deterministic_run_key,
         )
@@ -1538,7 +1538,7 @@ class ConversationAgentService:
         job_title: str,
         jd_text: str,
         notes: str | None,
-        source_ids: list[str],
+        source_ids: list[str] | None = None,
     ) -> ConversationAgentResponse:
         conversation = self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
         if conversation.approved_requirement_revision_id is None:
@@ -1571,6 +1571,13 @@ class ConversationAgentService:
         approved = self.tool_adapter._require_requirement_service().store.get_approved_requirement(
             conversation.approved_requirement_revision_id
         )
+        try:
+            source_selection = self.source_selection_resolver.resolve_runtime_source_selection(
+                source_kinds=source_ids,
+                workspace_source_policy_id=None,
+            )
+        except SourceSelectionError as exc:
+            raise ConversationAgentError(exc.reason_code) from exc
         run = self.tool_adapter.start_workflow(
             conversation_id=conversation_id,
             workbench_session_id=conversation.workbench_session_id,
@@ -1578,7 +1585,7 @@ class ConversationAgentService:
             job_title=job_title,
             jd_text=jd_text,
             notes=notes,
-            source_ids=source_ids,
+            source_ids=list(source_selection.runtime_source_ids),
         )
         self.store.link_runtime_run(
             conversation_id=conversation_id,
@@ -2292,13 +2299,13 @@ def _resolve_submit_jd_source_kinds(
     source_ids: Sequence[str] | None,
 ) -> list[str]:
     if source_kinds is None and source_ids is None:
-        raise ConversationAgentError("job_request_source_kinds_required")
+        return []
     if source_kinds is None:
-        return list(normalize_source_kinds(list(source_ids or [])))
-    normalized_source_kinds = normalize_source_kinds(list(source_kinds))
+        return list(normalize_source_kinds(list(source_ids or []), allow_empty=True))
+    normalized_source_kinds = normalize_source_kinds(list(source_kinds), allow_empty=True)
     if source_ids is None:
         return list(normalized_source_kinds)
-    normalized_source_ids = normalize_source_kinds(list(source_ids))
+    normalized_source_ids = normalize_source_kinds(list(source_ids), allow_empty=True)
     if normalized_source_kinds != normalized_source_ids:
         raise ConversationAgentError(
             "job_request_source_kinds_conflict",

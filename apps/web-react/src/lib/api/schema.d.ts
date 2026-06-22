@@ -1402,7 +1402,7 @@ export interface components {
       /** Notes */
       notes?: string | null;
       /** Sourceids */
-      sourceIds?: string[];
+      sourceIds?: string[] | null;
       /** Sourcekinds */
       sourceKinds?: ("cts" | "liepin")[] | null;
       /** Idempotencykey */
@@ -4400,7 +4400,7 @@ export interface components {
       /** Notes */
       notes?: string | null;
       /** Sourcekinds */
-      sourceKinds: ("cts" | "liepin")[];
+      sourceKinds?: ("cts" | "liepin")[] | null;
       /** Idempotencykey */
       idempotencyKey: string;
     };

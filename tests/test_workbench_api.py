@@ -896,10 +896,8 @@ def test_authenticated_session_creation_returns_default_source_cards(tmp_path: P
     assert payload["notes"] == "Prefer retrieval experience."
     assert payload["workspaceId"] == "default"
     assert payload["ownerUserId"]
-    assert {card["sourceKind"] for card in payload["sourceCards"]} == {"cts", "liepin"}
+    assert {card["sourceKind"] for card in payload["sourceCards"]} == {"liepin"}
     cards = {card["sourceKind"]: card for card in payload["sourceCards"]}
-    assert cards["cts"]["status"] == "queued"
-    assert cards["cts"]["authState"] == "not_required"
     assert cards["liepin"]["status"] == "blocked"
     assert cards["liepin"]["authState"] == "login_required"
     assert cards["liepin"]["warningCode"] == "source_login_required"
@@ -907,7 +905,7 @@ def test_authenticated_session_creation_returns_default_source_cards(tmp_path: P
         cards["liepin"]["warningMessage"]
         == "请在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。"
     )
-    assert {run["sourceKind"] for run in payload["sourceRuns"]} == {"cts", "liepin"}
+    assert {run["sourceKind"] for run in payload["sourceRuns"]} == {"liepin"}
     assert payload["requirement_review"]["status"] == "draft"
     assert payload["requirement_review"]["requirement_sheet"] is None
     assert FakeWorkbenchRuntime.extraction_calls == []
@@ -968,7 +966,7 @@ def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path:
     client = _client(tmp_path)
     _ensure_local_actor(client)
 
-    payload = _create_session(client)
+    payload = _create_session(client, source_kinds=["cts", "liepin"])
     session_id = payload["sessionId"]
     runs = {run["sourceKind"]: run for run in payload["sourceRuns"]}
     now = "2026-05-15T00:00:00+00:00"
@@ -2552,7 +2550,7 @@ def test_session_start_requires_approved_requirement_review_and_blocks_unconnect
     _reset_fake_runtime()
     client = _client(tmp_path)
     _ensure_local_actor(client)
-    session = _create_session(client)
+    session = _create_session(client, source_kinds=["cts", "liepin"])
     runs = {run["sourceKind"]: run for run in session["sourceRuns"]}
 
     blocked = _start_session(client, session["sessionId"])

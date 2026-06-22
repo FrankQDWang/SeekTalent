@@ -394,9 +394,9 @@ test("starts a new workbench conversation from the home JD entry", async ({
     .toMatchObject({
       jobTitle: null,
       messageType: "submitJd",
-      sourceKinds: ["liepin"],
       text: jobDescription,
     });
+  expect(latestSubmittedJdRequest()).not.toHaveProperty("sourceKinds");
   const idempotencyKey = latestSubmittedJdRequest()?.idempotencyKey;
   expect(typeof idempotencyKey === "string" ? idempotencyKey : "").toContain(
     "workbench:submit-jd:",

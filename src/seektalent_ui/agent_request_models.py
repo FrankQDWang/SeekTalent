@@ -51,7 +51,7 @@ class AgentMessageRequest(RequestModel):
     text: str = Field(min_length=1, max_length=MAX_AGENT_MESSAGE_CHARS)
     jobTitle: str | None = Field(default=None, min_length=1, max_length=MAX_JOB_TITLE_CHARS)
     notes: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
-    sourceIds: list[str] = Field(default_factory=lambda: ["cts"], min_length=1, max_length=2)
+    sourceIds: list[str] | None = Field(default=None, min_length=1, max_length=2)
     sourceKinds: list[SourceKind] | None = Field(default=None, min_length=1, max_length=2)
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
@@ -63,7 +63,7 @@ class WorkbenchSubmitJdMessageRequest(RequestModel):
     text: str = Field(min_length=1, max_length=MAX_AGENT_MESSAGE_CHARS)
     jobTitle: str | None = Field(default=None, min_length=1, max_length=MAX_JOB_TITLE_CHARS)
     notes: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
-    sourceKinds: list[SourceKind] = Field(min_length=1, max_length=2)
+    sourceKinds: list[SourceKind] | None = Field(default=None, min_length=1, max_length=2)
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 

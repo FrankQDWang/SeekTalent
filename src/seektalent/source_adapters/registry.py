@@ -22,7 +22,7 @@ def build_default_source_registry(settings: AppSettings) -> SourceRegistry:
             _registered_cts_source(settings),
             _registered_liepin_source(),
         ],
-        default_source_ids=("cts",),
+        default_source_ids=("liepin",),
     )
 
 

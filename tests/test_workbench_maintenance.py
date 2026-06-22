@@ -224,6 +224,7 @@ def _create_workbench_fixture(workspace_root: Path, *, job_title: str) -> tuple[
         job_title=job_title,
         jd_text="Own senior AI recruiting platform work.",
         notes="internal fixture",
+        source_kinds=["liepin"],
     )
     connection, _ = store.get_or_create_liepin_source_connection(user=user)
     connected = store.mark_liepin_connection_connected(
@@ -676,12 +677,12 @@ def test_restore_checks_backup_and_replaces_workbench_database(tmp_path: Path) -
         assert wal_path.read_bytes() != b"stale wal"
     if shm_path.exists():
         assert shm_path.read_bytes() != b"stale shm"
-    assert _snapshot(workspace_root) == {
-        "job_title": "Restored AI Search Lead",
-        "source_kinds": ["cts", "liepin"],
-        "candidate_count": 1,
-        "candidate_badges": ["Liepin card"],
-        "detail_request_count": 1,
+        assert _snapshot(workspace_root) == {
+            "job_title": "Restored AI Search Lead",
+            "source_kinds": ["liepin"],
+            "candidate_count": 1,
+            "candidate_badges": ["Liepin card"],
+            "detail_request_count": 1,
         "detail_ledger_status": "leased",
     }
     assert _mode(target_db.parent) == 0o700

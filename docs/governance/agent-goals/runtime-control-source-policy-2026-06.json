@@ -1,0 +1,29 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Centralize runtime source policy behind the Conversation Agent and BFF contract.",
+  "rationale": "This slice removes frontend hardcoded source defaults by letting the backend source registry decide the runtime default. It crosses Conversation Agent, BFF, and React API contract files because source selection is submitted through the workbench contract but resolved by runtime-control policy.",
+  "touched_layers": ["bff", "docs", "frontend", "other", "tests"],
+  "red_files": [
+    "src/seektalent_conversation_agent/factory.py",
+    "src/seektalent_conversation_agent/job_request_store.py",
+    "src/seektalent_conversation_agent/job_requests.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/source_selection.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "deletion_targets": [
+    "frontend hardcoded runtime source defaults",
+    "Conversation Agent source selection that requires sourceKinds for default starts",
+    "source policy tests tied to a single hardcoded provider instead of the registry"
+  ],
+  "risks": [
+    "The first product release defaults to Liepin while CTS remains registered for explicit/internal use.",
+    "Frontend source selection stays optional and must not become the source of truth for runtime source policy."
+  ]
+}

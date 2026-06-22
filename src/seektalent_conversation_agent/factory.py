@@ -8,6 +8,7 @@ from seektalent.models import RequirementSheet
 from seektalent_conversation_agent.budget import AgentBudgetPolicy
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.service import ConversationAgentService
+from seektalent_conversation_agent.source_selection import RuntimeSourceSelectionResolver
 from seektalent_conversation_agent.store import ConversationStore
 from seektalent_conversation_agent.tools import AgentToolAdapter
 from seektalent_runtime_control.commands import RuntimeCommandService
@@ -97,6 +98,10 @@ def build_agent_service(
             conversation_token_budget=settings.agent_conversation_token_budget,
             compaction_trigger_token_budget=settings.agent_compaction_trigger_token_budget,
             monthly_cost_budget_cents=settings.agent_monthly_cost_budget_cents,
+        ),
+        source_selection_resolver=RuntimeSourceSelectionResolver(
+            registered_runtime_source_ids={"cts", "liepin"},
+            default_runtime_source_ids=("liepin",),
         ),
     )
 

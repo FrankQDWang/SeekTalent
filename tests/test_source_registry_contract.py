@@ -185,6 +185,8 @@ def test_fixture_source_executes_through_workflow_runtime_without_runtime_source
 def test_source_registry_rejects_unknown_and_duplicate_sources() -> None:
     registry = SourceRegistry([_fixture_source()], default_source_ids=("fixture_source",))
 
+    with pytest.raises(ValueError, match="empty_source_selection"):
+        registry.enabled_sources(())
     with pytest.raises(ValueError, match="unknown_source:missing"):
         registry.enabled_sources(["missing"])
     with pytest.raises(ValueError, match="duplicate_source:fixture_source"):
