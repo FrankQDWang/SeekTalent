@@ -1,0 +1,28 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "governance-bootstrap-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Wire Workbench verification e2e to the dynamically started BFF port.",
+  "rationale": "scripts/verify-dev-workbench.sh starts seektalent-ui-api on an available local port, but the final React Playwright e2e step started Vite with its default backend proxy target of 127.0.0.1:8012. Passing the dynamic port into the e2e Vite process keeps the required Workbench gate self-contained in local and CI runs.",
+  "touched_layers": [
+    "docs",
+    "governance"
+  ],
+  "red_files": [
+    "scripts/verify-dev-workbench.sh"
+  ],
+  "verification": [
+    "uv run pytest tests/test_pr_governance.py -q",
+    "uv run ruff check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check tools/check_pr_governance.py tests/test_pr_governance.py",
+    "scripts/verify-dev-workbench.sh",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "implicit e2e dependency on a separately running BFF at 127.0.0.1:8012"
+  ],
+  "risks": [
+    "The e2e Vite dev server must continue to proxy API calls to the same backend instance used for OpenAPI generation.",
+    "Local callers that intentionally set SEEKTALENT_DEV_BACKEND_PORT must still be able to run app e2e outside the verification script."
+  ]
+}
