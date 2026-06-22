@@ -6,6 +6,8 @@ export type AgentWorkbenchStatus =
   | "pending"
   | "running"
   | "completed"
+  | "partial"
+  | "blocked"
   | "failed"
   | "cancelled";
 
@@ -174,14 +176,8 @@ export type WorkbenchSubmitJdMessageRequest = Omit<
 export type WorkbenchAgentMessageRequest =
   | WorkbenchSubmitJdMessageRequest
   | WorkbenchUserTextMessageRequest;
-export type AgentConversationCreateRequest =
-  Schemas["ConversationCreateRequest"];
-export type AgentConversationCreateResponse = {
-  conversation: {
-    conversationId: string;
-    title: string;
-  };
-};
+export type WorkbenchConversationCreateRequest =
+  Schemas["WorkbenchConversationCreateRequest"];
 export type WorkbenchRequirementConfirmRequest =
   Schemas["WorkbenchRequirementConfirmRequest"];
 export type WorkbenchRequirementOperationsRequest =
@@ -251,32 +247,6 @@ export function normalizeAgentWorkbenchCandidateDetail(
       items: section.items ?? [],
     })),
     evidence: response.evidence ?? [],
-  };
-}
-
-export function normalizeAgentConversationCreateResponse(
-  response: unknown,
-): AgentConversationCreateResponse {
-  if (typeof response !== "object" || response === null) {
-    throw new Error("Invalid conversation create response.");
-  }
-  const candidate = response as Record<string, unknown>;
-  const conversation = candidate.conversation;
-  if (typeof conversation !== "object" || conversation === null) {
-    throw new Error("Invalid conversation create response.");
-  }
-  const record = conversation as Record<string, unknown>;
-  if (
-    typeof record.conversationId !== "string" ||
-    typeof record.title !== "string"
-  ) {
-    throw new Error("Invalid conversation create response.");
-  }
-  return {
-    conversation: {
-      conversationId: record.conversationId,
-      title: record.title,
-    },
   };
 }
 

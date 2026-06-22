@@ -1,0 +1,39 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Expose the complete Agent Workbench BFF projection contract to the React API client.",
+  "rationale": "The Workbench React app must depend only on BFF routes, and every visible field must be backed by BFF response or stream metadata. This PR changes the BFF route/model/projection contract together with the generated OpenAPI schema and typed React client boundary so intermediate stack branches remain buildable.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "frontend",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_ui/agent_request_models.py",
+    "src/seektalent_ui/agent_workbench_models.py",
+    "src/seektalent_ui/agent_workbench_response.py",
+    "src/seektalent_ui/agent_workbench_routes.py",
+    "src/seektalent_ui/agent_workbench_stream_projection.py",
+    "apps/web-react/src/lib/api/client.ts"
+  ],
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run"
+  ],
+  "deletion_targets": [
+    "React calls to non-BFF conversation creation routes",
+    "frontend-visible Workbench fields without BFF response or stream support",
+    "manual typed client normalization for retired non-Workbench conversation create responses"
+  ],
+  "risks": [
+    "BFF response models and generated OpenAPI schema must remain in sync.",
+    "Stream projection metadata must preserve round, lane, phase, and status fields used by React.",
+    "The React API client must not regain access to non-Workbench API paths."
+  ]
+}

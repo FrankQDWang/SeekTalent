@@ -13,7 +13,7 @@ from typing import Any, get_args, get_origin
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
@@ -31,6 +31,7 @@ from seektalent_runtime_control.models import (
     RuntimeControlEventPage,
     RuntimeRunRecord,
     RuntimeStageOutput,
+    RuntimeStageOutputInput,
 )
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_ui.agent_routes import LocalAgentRateLimiter
@@ -40,6 +41,7 @@ from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchConversationSummaryResponse,
     AgentWorkbenchDetailApprovalResponse,
     AgentWorkbenchFinalSummaryResponse,
+    AgentWorkbenchGraphNodeResponse,
     AgentWorkbenchMessageStreamPayloadResponse,
     AgentWorkbenchItemStreamPayloadResponse,
     AgentWorkbenchPendingActionsResponse,
@@ -310,6 +312,228 @@ def test_projection_loads_round_summaries_before_runtime_event_window_bound() ->
 
     assert [summary.round_no for summary in projection_input.round_summaries] == [1]
     assert len(projection_input.runtime_events) <= 300
+
+
+def test_strategy_graph_projects_public_round_outputs_with_swimlane_metadata() -> None:
+    thread = _thread_view()
+    projection_input = build_agent_workbench_projection_input(
+        service=_FakeAgentService(thread),
+        conversation_store=_FakeConversationStore(),
+        runtime_store=_FakeRuntimeStore(
+            stage_outputs=[
+                _public_stage_output(
+                    output_id="rtout_graph_round_query",
+                    runtime_run_id="runtime_1",
+                    stage="round_query",
+                    round_no=1,
+                    output={
+                        "details": {
+                            "queryTerms": ["AI agent"],
+                            "keywordQuery": "AI agent platform engineer",
+                            "plannedQueries": [
+                                {
+                                    "sourceKind": "liepin",
+                                    "queryRole": "exploit",
+                                    "laneType": "primary",
+                                    "queryTerms": ["AI agent"],
+                                    "keywordQuery": "AI agent platform engineer",
+                                }
+                            ],
+                        }
+                    },
+                ),
+                _public_stage_output(
+                    output_id="rtout_graph_source_liepin",
+                    runtime_run_id="runtime_1",
+                    stage="source_result",
+                    round_no=1,
+                    source_kind="liepin",
+                    output={"counts": {"roundReturned": 5, "roundIdentities": 4}},
+                ),
+                _public_stage_output(
+                    output_id="rtout_graph_feedback",
+                    runtime_run_id="runtime_1",
+                    stage="feedback",
+                    round_no=1,
+                    output={
+                        "details": {
+                            "executedQueries": [
+                                {
+                                    "sourceKind": "liepin",
+                                    "queryRole": "exploit",
+                                    "laneType": "primary",
+                                    "queryTerms": ["AI agent"],
+                                    "keywordQuery": "AI agent platform engineer",
+                                }
+                            ],
+                            "resumeQualityComment": "Public BFF observation.",
+                            "reflectionSummary": "Public BFF reflection.",
+                        }
+                    },
+                ),
+            ]
+        ),
+        workbench_store=_FakeWorkbenchStore(),
+        conversation_id="agent_conv_1",
+        user=_workbench_user(),
+    )
+
+    response = project_agent_workbench_view(projection_input)
+
+    nodes = {node.nodeId: node for node in response.strategyGraph.nodes}
+    assert nodes["round:1"].kind == "round"
+    assert nodes["round:1"].roundNo == 1
+    assert nodes["round:1"].phase == "round"
+    assert nodes["round:1"].stage == "round_summary"
+    assert nodes["round:1"].status == "completed"
+    lane_nodes = [node for node in nodes.values() if node.kind == "lane"]
+    assert [(node.roundNo, node.laneType, node.sourceKind) for node in lane_nodes] == [(1, "primary", "liepin")]
+    phase_nodes = [node for node in nodes.values() if node.kind == "phase"]
+    assert {
+        (node.roundNo, node.phase, node.stage, node.sourceKind, node.status)
+        for node in phase_nodes
+    } >= {
+        (1, "query", "round_query", "all", "completed"),
+        (1, "source", "source_result", "liepin", "completed"),
+        (1, "feedback", "feedback", "all", "completed"),
+    }
+
+    projected_events = project_agent_workbench_stream_events(response)
+    strategy_event = next(event for event in projected_events if event.kind == "strategyGraph.changed")
+    thinking_event = next(event for event in projected_events if event.kind == "thinkingProcess.changed")
+    strategy_envelope = build_stream_envelope(
+        conversation_id="agent_conv_1",
+        seq=1,
+        kind=strategy_event.kind,
+        payload=strategy_event.payload,
+        created_at=strategy_event.created_at,
+    )
+    thinking_envelope = build_stream_envelope(
+        conversation_id="agent_conv_1",
+        seq=2,
+        kind=thinking_event.kind,
+        payload=thinking_event.payload,
+        created_at=thinking_event.created_at,
+    )
+
+    assert strategy_envelope.payload.graphNodeCount == len(response.strategyGraph.nodes)
+    assert strategy_envelope.payload.graphEdgeCount == len(response.strategyGraph.edges)
+    assert thinking_envelope.payload.roundNo == 1
+    assert thinking_envelope.payload.activeRoundNo == 1
+    assert thinking_envelope.payload.status == "completed"
+
+
+def test_strategy_graph_edges_only_reference_returned_nodes_under_budget() -> None:
+    from seektalent_ui.agent_workbench_rounds import (
+        AgentWorkbenchQueryPackageProjection,
+        AgentWorkbenchRoundStageProjection,
+        AgentWorkbenchRoundSummaryProjection,
+    )
+
+    thread = _thread_view()
+    projection_input = AgentWorkbenchProjectionInput(
+        conversation_reopen_state=thread.conversation_reopen_state,
+        round_summaries=[
+            AgentWorkbenchRoundSummaryProjection(
+                round_no=index,
+                status="completed",
+                planned_queries=(
+                    AgentWorkbenchQueryPackageProjection(source_kind="cts", lane_type=f"lane_{index}"),
+                ),
+                stage_outputs=(
+                    AgentWorkbenchRoundStageProjection(stage="round_query", source_kind="cts"),
+                    AgentWorkbenchRoundStageProjection(stage="source_result", source_kind="cts"),
+                ),
+            )
+            for index in range(1, 50)
+        ],
+    )
+
+    response = project_agent_workbench_view(projection_input)
+    node_ids = {node.nodeId for node in response.strategyGraph.nodes}
+
+    assert len(response.strategyGraph.nodes) <= 80
+    assert len(response.strategyGraph.edges) <= 120
+    assert all(edge.fromNodeId in node_ids and edge.toNodeId in node_ids for edge in response.strategyGraph.edges)
+
+
+def test_strategy_graph_preserves_blocked_and_partial_phase_statuses() -> None:
+    thread = _thread_view()
+    projection_input = build_agent_workbench_projection_input(
+        service=_FakeAgentService(thread),
+        conversation_store=_FakeConversationStore(),
+        runtime_store=_FakeRuntimeStore(
+            stage_outputs=[
+                _public_stage_output(
+                    output_id="rtout_graph_status_query",
+                    runtime_run_id="runtime_1",
+                    stage="round_query",
+                    round_no=1,
+                    output={
+                        "details": {
+                            "plannedQueries": [
+                                {
+                                    "sourceKind": "liepin",
+                                    "queryRole": "exploit",
+                                    "laneType": "primary",
+                                    "queryTerms": ["AI agent"],
+                                    "keywordQuery": "AI agent platform engineer",
+                                },
+                                {
+                                    "sourceKind": "cts",
+                                    "queryRole": "expand",
+                                    "laneType": "expansion",
+                                    "queryTerms": ["platform"],
+                                    "keywordQuery": "platform backend engineer",
+                                },
+                            ]
+                        }
+                    },
+                ),
+                _public_stage_output(
+                    output_id="rtout_graph_source_blocked",
+                    runtime_run_id="runtime_1",
+                    stage="source_result",
+                    round_no=1,
+                    source_kind="liepin",
+                    status="blocked",
+                    output={"safeReasonCode": "blocked_backend_unavailable"},
+                ),
+                _public_stage_output(
+                    output_id="rtout_graph_source_partial",
+                    runtime_run_id="runtime_1",
+                    stage="source_result",
+                    round_no=1,
+                    source_kind="cts",
+                    status="partial",
+                    output={"safeReasonCode": "partial_timeout"},
+                ),
+            ]
+        ),
+        workbench_store=_FakeWorkbenchStore(),
+        conversation_id="agent_conv_1",
+        user=_workbench_user(),
+    )
+
+    response = project_agent_workbench_view(projection_input)
+    nodes = {node.nodeId: node for node in response.strategyGraph.nodes}
+
+    assert nodes["round:1"].status == "blocked"
+    assert nodes["round:1:lane:liepin:primary"].status == "blocked"
+    assert nodes["round:1:lane:cts:expansion"].status == "partial"
+    assert nodes["round:1:phase:source_result:liepin"].status == "blocked"
+    assert nodes["round:1:phase:source_result:cts"].status == "partial"
+
+
+def test_strategy_graph_node_status_rejects_unknown_values() -> None:
+    with pytest.raises(ValidationError):
+        AgentWorkbenchGraphNodeResponse(
+            nodeId="round:1",
+            kind="round",
+            label="Round 1",
+            summary="summary",
+            status="unknown-runtime-status",
+        )
 
 
 def test_round_reducer_combines_public_stage_outputs_without_raw_fallback() -> None:
@@ -808,6 +1032,8 @@ def test_workbench_view_enforces_product_payload_budgets() -> None:
     assert sum(len(group.events) for group in response.transcriptGroups) <= 200
     assert len(response.strategyGraph.nodes) <= 80
     assert len(response.strategyGraph.edges) <= 120
+    graph_node_ids = {node.nodeId for node in response.strategyGraph.nodes}
+    assert all(edge.fromNodeId in graph_node_ids and edge.toNodeId in graph_node_ids for edge in response.strategyGraph.edges)
     assert len(response.thinkingProcess.rounds) <= 50
     assert len(response.candidates) <= 10
     assert len(response.model_dump_json()) <= 750_000
@@ -1715,6 +1941,191 @@ def test_agent_workbench_view_route_returns_typed_snapshot(tmp_path: Path) -> No
     assert stream_store.latest_seq(conversation_id=conversation_id) == 0
 
 
+def test_agent_workbench_create_route_returns_bff_snapshot(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+
+    response = client.post(
+        "/api/agent/workbench/conversations",
+        json={"title": "资深 Python 后端"},
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["schemaVersion"] == "agent.workbench.view.v2"
+    assert payload["conversation"]["conversationId"].startswith("agent_conv_")
+    assert payload["conversation"]["title"] == "资深 Python 后端"
+    assert payload["strategyGraph"]["nodes"][0]["nodeId"] == "requirements"
+    assert payload["streamCursor"]["latestStreamSeq"] == 0
+
+
+def test_agent_workbench_route_does_not_fallback_to_raw_activity_runtime_state(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    created = client.post(
+        "/api/agent/workbench/conversations",
+        json={"title": "资深 Python 后端"},
+    )
+    assert created.status_code == 201, created.text
+    conversation_id = created.json()["conversation"]["conversationId"]
+    service = client.app.state.agent_conversation_service
+    service.store.link_runtime_run(
+        conversation_id=conversation_id,
+        runtime_run_id="runtime_run_missing_projection",
+        workbench_session_id="workbench_session_missing_projection",
+        approved_requirement_revision_id="reqapproved_missing_projection",
+        linked_at="2026-06-22T00:00:00.000000Z",
+    )
+    service.store.upsert_activity_item(
+        activity_id="activity_missing_projection",
+        conversation_id=conversation_id,
+        activity_key="runtime_run_missing_projection:round:7",
+        activity_type="runtime_event",
+        status="running",
+        title="第 7 轮检索",
+        summary="raw activity should not synthesize runtime state",
+        payload={"stage": "raw_activity_stage", "round_no": 7},
+        source_runtime_run_id="runtime_run_missing_projection",
+        source_event_id_latest="rtevt_missing_projection",
+        source_event_seq_start=1,
+        source_event_seq_latest=7,
+        created_at="2026-06-22T00:00:01.000000Z",
+        updated_at="2026-06-22T00:00:01.000000Z",
+    )
+
+    response = client.get(f"/api/agent/workbench/conversations/{conversation_id}")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["conversation"]["runtimeRunId"] == "runtime_run_missing_projection"
+    assert payload["runtime"] is None
+    assert payload["reasonCode"] == "runtime_projection_unavailable"
+    serialized_runtime = json.dumps(payload.get("runtime"), ensure_ascii=False)
+    assert "raw_activity_stage" not in serialized_runtime
+    assert "currentRound" not in serialized_runtime
+
+
+def test_agent_workbench_routes_project_real_runtime_outputs_into_snapshot_and_events(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    created = client.post(
+        "/api/agent/workbench/conversations",
+        json={"title": "资深 Python 后端"},
+    )
+    assert created.status_code == 201, created.text
+    conversation_id = created.json()["conversation"]["conversationId"]
+    service = client.app.state.agent_conversation_service
+    runtime_store = service.tool_adapter.runtime_store
+    approved = save_approved_requirement(
+        runtime_store,
+        conversation_id=conversation_id,
+        approved_requirement_revision_id="reqapproved_workbench_projection_1",
+    )
+    runtime_store.create_run(
+        RuntimeRunRecord(
+            runtime_run_id="runtime_run_workbench_projection_1",
+            agent_conversation_id=conversation_id,
+            workbench_session_id="workbench_session_projection_1",
+            approved_requirement_revision_id=approved.approved_requirement_revision_id,
+            status="running",
+            current_stage="round",
+            current_round=1,
+            latest_checkpoint_id=None,
+            latest_event_seq=0,
+            source_ids=["liepin", "cts"],
+            stop_reason_code=None,
+            created_at="2026-06-22T00:00:00.000000Z",
+            updated_at="2026-06-22T00:00:00.000000Z",
+            completed_at=None,
+        )
+    )
+    service.store.link_runtime_run(
+        conversation_id=conversation_id,
+        runtime_run_id="runtime_run_workbench_projection_1",
+        workbench_session_id="workbench_session_projection_1",
+        approved_requirement_revision_id=approved.approved_requirement_revision_id,
+        linked_at="2026-06-22T00:00:00.000000Z",
+    )
+    _save_public_stage_output(
+        runtime_store,
+        output_id="rtout_route_graph_query",
+        runtime_run_id="runtime_run_workbench_projection_1",
+        stage="round_query",
+        round_no=1,
+        output={
+            "details": {
+                "queryTerms": ["AI agent"],
+                "keywordQuery": "AI agent platform engineer",
+                "plannedQueries": [
+                    {
+                        "sourceKind": "liepin",
+                        "queryRole": "exploit",
+                        "laneType": "primary",
+                        "queryTerms": ["AI agent"],
+                        "keywordQuery": "AI agent platform engineer",
+                    },
+                    {
+                        "sourceKind": "cts",
+                        "queryRole": "expand",
+                        "laneType": "expansion",
+                        "queryTerms": ["platform"],
+                        "keywordQuery": "platform backend engineer",
+                    },
+                ],
+            }
+        },
+    )
+    _save_public_stage_output(
+        runtime_store,
+        output_id="rtout_route_graph_liepin",
+        runtime_run_id="runtime_run_workbench_projection_1",
+        stage="source_result",
+        round_no=1,
+        source_kind="liepin",
+        status="blocked",
+        output={
+            "counts": {"roundReturned": 0, "roundIdentities": 0},
+            "safeReasonCode": "blocked_backend_unavailable",
+        },
+    )
+    _save_public_stage_output(
+        runtime_store,
+        output_id="rtout_route_graph_cts",
+        runtime_run_id="runtime_run_workbench_projection_1",
+        stage="source_result",
+        round_no=1,
+        source_kind="cts",
+        status="partial",
+        output={
+            "counts": {"roundReturned": 3, "roundIdentities": 2},
+            "safeReasonCode": "partial_timeout",
+        },
+    )
+
+    snapshot = client.get(f"/api/agent/workbench/conversations/{conversation_id}")
+    assert snapshot.status_code == 200, snapshot.text
+    payload = snapshot.json()
+    nodes = {node["nodeId"]: node for node in payload["strategyGraph"]["nodes"]}
+    assert nodes["round:1"]["status"] == "blocked"
+    assert nodes["round:1"]["roundNo"] == 1
+    assert nodes["round:1:lane:liepin:primary"]["status"] == "blocked"
+    assert nodes["round:1:lane:cts:expansion"]["status"] == "partial"
+    assert nodes["round:1:phase:source_result:liepin"]["status"] == "blocked"
+    assert nodes["round:1:phase:source_result:cts"]["status"] == "partial"
+    thinking_round = payload["thinkingProcess"]["rounds"][0]
+    assert thinking_round["roundNo"] == 1
+    assert thinking_round["status"] == "blocked"
+    assert "AI agent platform engineer" in json.dumps(thinking_round, ensure_ascii=False)
+
+    events = client.get(f"/api/agent/workbench/conversations/{conversation_id}/events?after_seq=0")
+    assert events.status_code == 200, events.text
+    event_payload = events.json()
+    event_by_kind = {event["kind"]: event for event in event_payload["events"]}
+    assert event_by_kind["strategyGraph.changed"]["payload"]["graphNodeCount"] >= 6
+    assert event_by_kind["thinkingProcess.changed"]["payload"]["activeRoundNo"] == 1
+    assert event_by_kind["thinkingProcess.changed"]["payload"]["status"] == "blocked"
+
+
 def test_workbench_message_action_returns_refreshed_workbench_view(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
@@ -2521,6 +2932,7 @@ def _public_stage_output(
     output: dict[str, object],
     runtime_run_id: str = "runtime_run_reducer",
     source_kind: str | None = None,
+    status: str = "completed",
     schema_version: str = "runtime-public-stage-output/v1",
 ) -> RuntimeStageOutput:
     payload = {
@@ -2529,7 +2941,7 @@ def _public_stage_output(
         "stage": stage,
         "roundNo": round_no,
         "sourceKind": source_kind,
-        "status": "completed",
+        "status": status,
         "counts": {},
         "details": {},
         "safeReasonCode": None,
@@ -2554,6 +2966,47 @@ def _public_stage_output(
         source_checkpoint_id=None,
         artifact_ref_id=None,
         created_at=f"2026-06-22T00:00:{len(output_id):02d}.000000Z",
+    )
+
+
+def _save_public_stage_output(
+    runtime_store: RuntimeControlStore,
+    *,
+    output_id: str,
+    runtime_run_id: str,
+    stage: str,
+    round_no: int | None,
+    output: dict[str, object],
+    source_kind: str | None = None,
+    status: str = "completed",
+) -> None:
+    payload = {
+        "schemaVersion": "runtime-public-stage-output/v1",
+        "publicEventSchemaVersion": "runtime_public_event_v1",
+        "stage": stage,
+        "roundNo": round_no,
+        "sourceKind": source_kind,
+        "status": status,
+        "counts": {},
+        "details": {},
+        "safeReasonCode": None,
+    }
+    payload.update(output)
+    runtime_store.save_stage_output(
+        RuntimeStageOutputInput(
+            output_id=output_id,
+            runtime_run_id=runtime_run_id,
+            stage=stage,
+            node_id=source_kind,
+            round_no=round_no,
+            output_kind=f"runtime_public_{stage}",
+            schema_version="runtime-public-stage-output/v1",
+            output=payload,
+            source_event_id=None,
+            source_checkpoint_id=None,
+            artifact_ref_id=None,
+            created_at=f"2026-06-22T00:01:{len(output_id):02d}.000000Z",
+        )
     )
 
 

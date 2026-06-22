@@ -35,9 +35,17 @@ class AgentWorkbenchQueryPackageProjection:
 
 
 @dataclass(frozen=True)
+class AgentWorkbenchRoundStageProjection:
+    stage: str
+    source_kind: str | None = None
+    status: str = "completed"
+
+
+@dataclass(frozen=True)
 class AgentWorkbenchRoundSummaryProjection:
     round_no: int
     status: str
+    stage_outputs: tuple[AgentWorkbenchRoundStageProjection, ...] = ()
     query_terms: tuple[str, ...] = ()
     keyword_query: str | None = None
     planned_queries: tuple[AgentWorkbenchQueryPackageProjection, ...] = ()
@@ -72,6 +80,8 @@ class AgentWorkbenchRunFinalizationProjection:
 class _RoundFacts:
     round_no: int
     stages: set[str] = field(default_factory=set)
+    statuses: set[str] = field(default_factory=set)
+    stage_outputs: list[AgentWorkbenchRoundStageProjection] = field(default_factory=list)
     failed: bool = False
     query_terms: tuple[str, ...] = ()
     keyword_query: str | None = None
@@ -97,7 +107,8 @@ class _RoundFacts:
     def freeze(self) -> AgentWorkbenchRoundSummaryProjection:
         return AgentWorkbenchRoundSummaryProjection(
             round_no=self.round_no,
-            status=_derive_status(self.stages, failed=self.failed),
+            status=_derive_status(self.stages, statuses=self.statuses, failed=self.failed),
+            stage_outputs=tuple(self.stage_outputs),
             query_terms=self.query_terms,
             keyword_query=self.keyword_query,
             planned_queries=self.planned_queries,
@@ -171,7 +182,16 @@ def _apply_round_output(summary: _RoundFacts, *, output: RuntimeStageOutput, pay
     status = _text(payload.get("status"))
     if status in {"failed", "cancelled"}:
         summary.failed = True
+    if status is not None:
+        summary.statuses.add(status)
     summary.stages.add(stage)
+    summary.stage_outputs.append(
+        AgentWorkbenchRoundStageProjection(
+            stage=stage,
+            source_kind=output.node_id,
+            status=status or "completed",
+        )
+    )
     counts = _mapping(payload.get("counts"))
     details = _mapping(payload.get("details"))
     if stage == "round_query":
@@ -251,9 +271,15 @@ def _validate_expected_runtime_run_id(
         raise AgentWorkbenchProjectionError("workbench_round_output_runtime_run_mismatch", output_id=output.output_id)
 
 
-def _derive_status(stages: set[str], *, failed: bool) -> str:
-    if failed:
+def _derive_status(stages: set[str], *, statuses: set[str], failed: bool) -> str:
+    if failed or "failed" in statuses:
         return "failed"
+    if "cancelled" in statuses:
+        return "cancelled"
+    if "blocked" in statuses:
+        return "blocked"
+    if "partial" in statuses:
+        return "partial"
     if "feedback" in stages:
         return "completed"
     return "running"

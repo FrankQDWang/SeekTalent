@@ -24,7 +24,6 @@ from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchRequirementDraftSectionResponse,
     AgentWorkbenchRequirementDraftStatus,
     AgentWorkbenchRequirementItemStatus,
-    AgentWorkbenchRuntimeResponse,
     AgentWorkbenchRunFinalizationResponse,
     AgentWorkbenchStatus,
     AgentWorkbenchStrategyGraphResponse,
@@ -66,7 +65,7 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
     activities = [_activity_response(activity) for activity in bounded_input.activity_items]
     reason_code = state.reason_code
     runtime_run_id = _workflow_runtime_run_id(state.runtime_run_id, input.workflow_start_intent)
-    if input.requirement_draft_missing and reason_code is None:
+    if (input.requirement_draft_missing or (runtime_run_id is not None and input.runtime is None)) and reason_code is None:
         reason_code = "runtime_projection_unavailable"
     response = AgentWorkbenchConversationResponse(
         conversation=AgentWorkbenchConversationSummaryResponse(
@@ -86,7 +85,7 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
             linkedRuntimeRuns=[
                 AgentWorkbenchLinkedRuntimeRunResponse(
                     runtimeRunId=link.runtime_run_id,
-                    status=link.status,
+                    status=_status(link.status),
                     runKind=link.run_kind,
                     workbenchSessionId=link.workbench_session_id,
                     approvedRequirementRevisionId=link.approved_requirement_revision_id,
@@ -108,8 +107,8 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
         activities=activities,
         transcriptGroups=build_transcript_groups(bounded_input),
         requirementDraft=_requirement_draft(input),
-        runtime=input.runtime or _runtime_from_state(input),
-        strategyGraph=_strategy_graph(bounded_input.activity_items),
+        runtime=input.runtime,
+        strategyGraph=_strategy_graph(bounded_input),
         thinkingProcess=_thinking_process(bounded_input),
         sourceConnections=list(_latest(input.source_connections, MAX_WORKBENCH_SOURCE_CONNECTIONS)),
         candidates=list(input.candidates[:MAX_WORKBENCH_CANDIDATES]),
@@ -392,24 +391,8 @@ def _requirement_snapshot_payload(value: object) -> AgentWorkbenchRequirementDra
         return None
 
 
-def _runtime_from_state(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchRuntimeResponse | None:
-    state = input.conversation_reopen_state
-    if state.runtime_run_id is None:
-        return None
-    latest_activity = next((activity for activity in reversed(input.activity_items) if activity.source_runtime_run_id), None)
-    current_stage = _str_or_none(latest_activity.payload.get("stage")) if latest_activity is not None else None
-    current_round = _int_or_none(latest_activity.payload.get("round_no")) if latest_activity is not None else None
-    return AgentWorkbenchRuntimeResponse(
-        runtimeRunId=state.runtime_run_id,
-        status=state.status,
-        currentStage=current_stage or "unknown",
-        currentRound=current_round,
-        latestEventSeq=state.latest_rendered_runtime_event_seq,
-    )
-
-
-def _strategy_graph(activity_items: Sequence[TranscriptActivityItem]) -> AgentWorkbenchStrategyGraphResponse:
-    activity_items = _latest(activity_items, MAX_WORKBENCH_GRAPH_NODES - 1)
+def _strategy_graph(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchStrategyGraphResponse:
+    activity_items = _latest(input.activity_items, MAX_WORKBENCH_GRAPH_NODES - 1)
     nodes = [
         AgentWorkbenchGraphNodeResponse(
             nodeId="requirements",
@@ -421,6 +404,85 @@ def _strategy_graph(activity_items: Sequence[TranscriptActivityItem]) -> AgentWo
     ]
     edges: list[AgentWorkbenchGraphEdgeResponse] = []
     previous_node_id = "requirements"
+    for summary in input.round_summaries:
+        round_no = _int_or_none(_attr(summary, "round_no"))
+        if round_no is None:
+            continue
+        round_node_id = f"round:{round_no}"
+        nodes.append(
+            AgentWorkbenchGraphNodeResponse(
+                nodeId=round_node_id,
+                kind="round",
+                label=f"Round {round_no}",
+                summary=_round_graph_summary(summary),
+                roundNo=round_no,
+                phase="round",
+                stage="round_summary",
+                status=_status(_str_or_none(_attr(summary, "status"))),
+            )
+        )
+        edges.append(
+            AgentWorkbenchGraphEdgeResponse(
+                edgeId=f"{previous_node_id}->{round_node_id}",
+                fromNodeId=previous_node_id,
+                toNodeId=round_node_id,
+            )
+        )
+        previous_node_id = round_node_id
+        for lane_type, source_kind in _round_graph_lanes(summary):
+            lane_node_id = f"round:{round_no}:lane:{source_kind}:{lane_type}"
+            nodes.append(
+                AgentWorkbenchGraphNodeResponse(
+                    nodeId=lane_node_id,
+                    kind="lane",
+                    label=_lane_graph_label(lane_type=lane_type, source_kind=source_kind),
+                    summary="Planned or executed query lane.",
+                    roundNo=round_no,
+                    laneType=lane_type,
+                    phase="lane",
+                    stage="round_lane",
+                    sourceKind=source_kind,
+                    status=_round_lane_status(summary, source_kind=source_kind),
+                )
+            )
+            edges.append(
+                AgentWorkbenchGraphEdgeResponse(
+                    edgeId=f"{round_node_id}->{lane_node_id}",
+                    fromNodeId=round_node_id,
+                    toNodeId=lane_node_id,
+                )
+            )
+        seen_phase_nodes: set[str] = set()
+        for stage_output in _sequence_or_empty(_attr(summary, "stage_outputs")):
+            stage = _str_or_none(_attr(stage_output, "stage"))
+            if stage is None:
+                continue
+            source_kind = _graph_source_kind(_attr(stage_output, "source_kind"))
+            phase = _graph_phase(stage)
+            phase_node_id = f"round:{round_no}:phase:{stage}:{source_kind}"
+            if phase_node_id in seen_phase_nodes:
+                continue
+            seen_phase_nodes.add(phase_node_id)
+            nodes.append(
+                AgentWorkbenchGraphNodeResponse(
+                    nodeId=phase_node_id,
+                    kind="phase",
+                    label=_stage_graph_label(stage=stage, source_kind=source_kind),
+                    summary=f"Public runtime stage output for {stage}.",
+                    roundNo=round_no,
+                    phase=phase,
+                    stage=stage,
+                    sourceKind=source_kind,
+                    status=_status(_str_or_none(_attr(stage_output, "status"))),
+                )
+            )
+            edges.append(
+                AgentWorkbenchGraphEdgeResponse(
+                    edgeId=f"{round_node_id}->{phase_node_id}",
+                    fromNodeId=round_node_id,
+                    toNodeId=phase_node_id,
+                )
+            )
     for activity in activity_items:
         node_id = activity.activity_id
         nodes.append(
@@ -429,7 +491,7 @@ def _strategy_graph(activity_items: Sequence[TranscriptActivityItem]) -> AgentWo
                 kind="activity",
                 label=activity.title,
                 summary=activity.summary,
-                status=activity.status,
+                status=_status(activity.status),
                 activityId=activity.activity_id,
             )
         )
@@ -441,10 +503,87 @@ def _strategy_graph(activity_items: Sequence[TranscriptActivityItem]) -> AgentWo
             )
         )
         previous_node_id = node_id
-    return AgentWorkbenchStrategyGraphResponse(
-        nodes=nodes[:MAX_WORKBENCH_GRAPH_NODES],
-        edges=edges[:MAX_WORKBENCH_GRAPH_EDGES],
-    )
+    bounded_nodes = nodes[:MAX_WORKBENCH_GRAPH_NODES]
+    bounded_node_ids = {node.nodeId for node in bounded_nodes}
+    bounded_edges = [
+        edge
+        for edge in edges
+        if edge.fromNodeId in bounded_node_ids and edge.toNodeId in bounded_node_ids
+    ][:MAX_WORKBENCH_GRAPH_EDGES]
+    return AgentWorkbenchStrategyGraphResponse(nodes=bounded_nodes, edges=bounded_edges)
+
+
+def _round_graph_summary(summary: object) -> str:
+    query = _str_or_none(_attr(summary, "keyword_query"))
+    if query is not None:
+        return query
+    round_no = _int_or_none(_attr(summary, "round_no"))
+    return f"Canonical public projection for round {round_no}."
+
+
+def _round_graph_lanes(summary: object) -> list[tuple[str, Literal["cts", "liepin", "all"]]]:
+    lanes: list[tuple[str, Literal["cts", "liepin", "all"]]] = []
+    seen: set[tuple[str, Literal["cts", "liepin", "all"]]] = set()
+    packages = [
+        *_sequence_or_empty(_attr(summary, "planned_queries")),
+        *_sequence_or_empty(_attr(summary, "executed_queries")),
+    ]
+    for package in packages:
+        lane_type = _str_or_none(_attr(package, "lane_type")) or "default"
+        source_kind = _graph_source_kind(_attr(package, "source_kind"))
+        key = (lane_type, source_kind)
+        if key in seen:
+            continue
+        seen.add(key)
+        lanes.append(key)
+    return lanes
+
+
+def _round_lane_status(summary: object, *, source_kind: Literal["cts", "liepin", "all"]) -> AgentWorkbenchStatus:
+    statuses = [
+        _str_or_none(_attr(stage_output, "status"))
+        for stage_output in _sequence_or_empty(_attr(summary, "stage_outputs"))
+        if _graph_source_kind(_attr(stage_output, "source_kind")) == source_kind
+    ]
+    return _status(_aggregate_graph_status(statuses, fallback=_str_or_none(_attr(summary, "status"))))
+
+
+def _aggregate_graph_status(statuses: Sequence[str | None], *, fallback: str | None) -> str:
+    status_set = {status for status in statuses if status}
+    for candidate in ("failed", "cancelled", "blocked", "partial", "running", "pending"):
+        if candidate in status_set:
+            return _status(candidate)
+    if "completed" in status_set:
+        return "completed"
+    return _status(fallback)
+
+
+def _lane_graph_label(*, lane_type: str, source_kind: Literal["cts", "liepin", "all"]) -> str:
+    if source_kind == "all":
+        return lane_type
+    return f"{source_kind} {lane_type}"
+
+
+def _stage_graph_label(*, stage: str, source_kind: Literal["cts", "liepin", "all"]) -> str:
+    if source_kind == "all":
+        return stage
+    return f"{source_kind} {stage}"
+
+
+def _graph_phase(stage: str) -> str:
+    if stage == "round_query":
+        return "query"
+    if stage == "source_result":
+        return "source"
+    return stage
+
+
+def _graph_source_kind(value: object) -> Literal["cts", "liepin", "all"]:
+    if value == "cts":
+        return "cts"
+    if value == "liepin":
+        return "liepin"
+    return "all"
 
 
 def _thinking_process(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchThinkingProcessResponse:
@@ -682,6 +821,10 @@ def _status(value: str | None) -> AgentWorkbenchStatus:
         return "completed"
     if normalized in {"running", "started", "in_progress", "queued"}:
         return "running"
+    if normalized == "partial":
+        return "partial"
+    if normalized in {"blocked", "forbidden"}:
+        return "blocked"
     if normalized in {"failed", "error", "rejected", "denied"}:
         return "failed"
     if normalized in {"cancelled", "canceled", "superseded"}:

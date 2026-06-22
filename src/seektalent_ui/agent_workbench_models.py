@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-AgentWorkbenchStatus = Literal["pending", "running", "completed", "failed", "cancelled"]
+AgentWorkbenchStatus = Literal["pending", "running", "completed", "partial", "blocked", "failed", "cancelled"]
 AgentWorkbenchDetailApprovalStatus = Literal["pending", "accepted", "rejected", "applied"]
 AgentWorkbenchStreamKind = Literal[
     "item.started",
@@ -90,7 +90,7 @@ class AgentWorkbenchLinkedRuntimeRunResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     runtimeRunId: str
-    status: str
+    status: AgentWorkbenchStatus
     runKind: str
     workbenchSessionId: str | None = None
     approvedRequirementRevisionId: str
@@ -274,6 +274,11 @@ class AgentWorkbenchItemStreamPayloadResponse(BaseModel):
     delta: str | None = None
     sourceRuntimeRunId: str | None = None
     summary: str | None = None
+    graphNodeCount: int | None = None
+    graphEdgeCount: int | None = None
+    roundNo: int | None = None
+    activeRoundNo: int | None = None
+    status: AgentWorkbenchStatus | None = None
 
 
 class AgentWorkbenchGapStreamPayloadResponse(BaseModel):
@@ -510,10 +515,14 @@ class AgentWorkbenchGraphNodeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nodeId: str
-    kind: Literal["requirements", "message", "activity", "candidate", "approval", "final"]
+    kind: Literal["requirements", "message", "activity", "candidate", "approval", "final", "round", "lane", "phase"]
     label: str
     summary: str
-    status: str
+    roundNo: int | None = None
+    laneType: str | None = None
+    phase: str | None = None
+    stage: str | None = None
+    status: AgentWorkbenchStatus
     sourceKind: Literal["cts", "liepin", "all"] = "all"
     activityId: str | None = None
     messageId: str | None = None

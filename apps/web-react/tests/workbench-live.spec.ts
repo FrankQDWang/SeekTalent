@@ -336,7 +336,7 @@ test("starts a new workbench conversation from the home JD entry", async ({
     thinkingProcess: { activeRoundNo: null, rounds: [] },
   };
 
-  await page.route("**/api/agent/conversations", async (route) => {
+  await page.route("**/api/agent/workbench/conversations", async (route) => {
     if (route.request().method() !== "POST") {
       await route.fallback();
       return;
@@ -347,12 +347,7 @@ test("starts a new workbench conversation from the home JD entry", async ({
     >;
     await route.fulfill({
       contentType: "application/json",
-      json: {
-        conversation: {
-          conversationId: "agent_conv_created",
-          title: "AI Agent 平台工程师",
-        },
-      },
+      json: createdConversationSnapshot,
       status: 201,
     });
   });

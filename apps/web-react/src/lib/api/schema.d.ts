@@ -989,7 +989,8 @@ export interface paths {
     /** List Agent Workbench Conversations */
     get: operations["list_agent_workbench_conversations_api_agent_workbench_conversations_get"];
     put?: never;
-    post?: never;
+    /** Create Agent Workbench Conversation */
+    post: operations["create_agent_workbench_conversation_api_agent_workbench_conversations_post"];
     delete?: never;
     options?: never;
     head?: never;
@@ -1422,7 +1423,15 @@ export interface components {
       sourceId?: string | null;
       /** Status */
       status?:
-        | ("pending" | "running" | "completed" | "failed" | "cancelled")
+        | (
+            | "pending"
+            | "running"
+            | "completed"
+            | "partial"
+            | "blocked"
+            | "failed"
+            | "cancelled"
+          )
         | null;
       /** Roundno */
       roundNo?: number | null;
@@ -1747,13 +1756,34 @@ export interface components {
         | "activity"
         | "candidate"
         | "approval"
-        | "final";
+        | "final"
+        | "round"
+        | "lane"
+        | "phase";
       /** Label */
       label: string;
       /** Summary */
       summary: string;
-      /** Status */
-      status: string;
+      /** Roundno */
+      roundNo?: number | null;
+      /** Lanetype */
+      laneType?: string | null;
+      /** Phase */
+      phase?: string | null;
+      /** Stage */
+      stage?: string | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        | "pending"
+        | "running"
+        | "completed"
+        | "partial"
+        | "blocked"
+        | "failed"
+        | "cancelled";
       /**
        * Sourcekind
        * @default all
@@ -1827,13 +1857,43 @@ export interface components {
       sourceRuntimeRunId?: string | null;
       /** Summary */
       summary?: string | null;
+      /** Graphnodecount */
+      graphNodeCount?: number | null;
+      /** Graphedgecount */
+      graphEdgeCount?: number | null;
+      /** Roundno */
+      roundNo?: number | null;
+      /** Activeroundno */
+      activeRoundNo?: number | null;
+      /** Status */
+      status?:
+        | (
+            | "pending"
+            | "running"
+            | "completed"
+            | "partial"
+            | "blocked"
+            | "failed"
+            | "cancelled"
+          )
+        | null;
     };
     /** AgentWorkbenchLinkedRuntimeRunResponse */
     AgentWorkbenchLinkedRuntimeRunResponse: {
       /** Runtimerunid */
       runtimeRunId: string;
-      /** Status */
-      status: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        | "pending"
+        | "running"
+        | "completed"
+        | "partial"
+        | "blocked"
+        | "failed"
+        | "cancelled";
       /** Runkind */
       runKind: string;
       /** Workbenchsessionid */
@@ -2055,7 +2115,14 @@ export interface components {
        * @default completed
        * @enum {string}
        */
-      status: "pending" | "running" | "completed" | "failed" | "cancelled";
+      status:
+        | "pending"
+        | "running"
+        | "completed"
+        | "partial"
+        | "blocked"
+        | "failed"
+        | "cancelled";
     };
     /** AgentWorkbenchRuntimeResponse */
     AgentWorkbenchRuntimeResponse: {
@@ -2235,7 +2302,14 @@ export interface components {
        * Status
        * @enum {string}
        */
-      status: "pending" | "running" | "completed" | "failed" | "cancelled";
+      status:
+        | "pending"
+        | "running"
+        | "completed"
+        | "partial"
+        | "blocked"
+        | "failed"
+        | "cancelled";
       /** Cards */
       cards?: components["schemas"]["AgentWorkbenchThinkingProcessCardResponse"][];
     };
@@ -2285,7 +2359,15 @@ export interface components {
         | "stream.gap";
       /** Status */
       status?:
-        | ("pending" | "running" | "completed" | "failed" | "cancelled")
+        | (
+            | "pending"
+            | "running"
+            | "completed"
+            | "partial"
+            | "blocked"
+            | "failed"
+            | "cancelled"
+          )
         | null;
       /** Label */
       label: string;
@@ -2305,7 +2387,14 @@ export interface components {
        * Status
        * @enum {string}
        */
-      status: "pending" | "running" | "completed" | "failed" | "cancelled";
+      status:
+        | "pending"
+        | "running"
+        | "completed"
+        | "partial"
+        | "blocked"
+        | "failed"
+        | "cancelled";
       /** Startedat */
       startedAt?: string | null;
       /** Completedat */
@@ -2943,6 +3032,11 @@ export interface components {
     WorkbenchCandidateReviewQueueResponse: {
       /** Items */
       items: components["schemas"]["WorkbenchCandidateReviewItemResponse"][];
+    };
+    /** WorkbenchConversationCreateRequest */
+    WorkbenchConversationCreateRequest: {
+      /** Title */
+      title: string;
     };
     /** WorkbenchDetailOpenCandidateSnapshotResponse */
     WorkbenchDetailOpenCandidateSnapshotResponse: {
@@ -6428,6 +6522,93 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["AgentWorkbenchConversationListResponse"];
+        };
+      };
+    };
+  };
+  create_agent_workbench_conversation_api_agent_workbench_conversations_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkbenchConversationCreateRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Gone */
+      410: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
         };
       };
     };

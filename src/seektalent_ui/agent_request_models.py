@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 SourceKind = Literal["cts", "liepin"]
 
 MAX_AGENT_MESSAGE_CHARS = 20000
+MAX_CONVERSATION_TITLE_CHARS = 120
 MAX_IDEMPOTENCY_KEY_CHARS = 160
 MAX_JOB_TITLE_CHARS = 256
 MAX_NOTES_CHARS = 5000
@@ -36,6 +37,7 @@ class RequestModel(BaseModel):
         "targetSection",
         "targetSectionHint",
         "text",
+        "title",
         mode="before",
         check_fields=False,
     )
@@ -79,6 +81,12 @@ WorkbenchAgentMessageRequest = Annotated[
     WorkbenchSubmitJdMessageRequest | WorkbenchUserTextMessageRequest,
     Field(discriminator="messageType"),
 ]
+
+
+class WorkbenchConversationCreateRequest(RequestModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=MAX_CONVERSATION_TITLE_CHARS)
 
 
 class RequirementDraftOperationRequest(RequestModel):

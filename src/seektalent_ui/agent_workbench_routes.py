@@ -15,6 +15,7 @@ from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_ui.agent_rate_limit import check_agent_write_rate
 from seektalent_ui.agent_request_models import (
     WorkbenchAgentMessageRequest,
+    WorkbenchConversationCreateRequest,
     WorkbenchRequirementAmendRequest,
     WorkbenchRequirementConfirmRequest,
     WorkbenchRequirementOperationsRequest,
@@ -99,6 +100,33 @@ def list_agent_workbench_conversations(
             )
             for conversation in conversations
         ]
+    )
+
+
+@router.post(
+    "/conversations",
+    response_model=AgentWorkbenchConversationResponse,
+    status_code=201,
+    responses=WORKBENCH_PROBLEM_RESPONSES,
+)
+def create_agent_workbench_conversation(
+    payload: WorkbenchConversationCreateRequest,
+    request: Request,
+    user: WorkbenchUser = Depends(local_workbench_write_user),
+) -> AgentWorkbenchConversationResponse:
+    try:
+        check_agent_write_rate(request, user=user, conversation_id="new")
+        conversation = get_agent_service(request).create_conversation(
+            owner_user_id=user.user_id,
+            workspace_id=user.workspace_id,
+            title=payload.title,
+        )
+    except ConversationAgentError as exc:
+        raise _agent_workbench_error(exc, request) from exc
+    return _build_agent_workbench_snapshot(
+        request=request,
+        conversation_id=conversation.conversation_id,
+        user=user,
     )
 
 
