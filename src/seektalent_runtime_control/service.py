@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Protocol
@@ -7,6 +8,7 @@ from uuid import uuid4
 
 from seektalent.models import RequirementSheet
 from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.normalizer import merge_requirement_sheet_supplement
 from seektalent_runtime_control.requirements import (
     ApprovedRequirementRevision,
     DraftOperation,
@@ -25,14 +27,6 @@ from seektalent_runtime_control.store import RuntimeControlStore
 
 class RequirementExecutor(Protocol):
     def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet: ...
-
-    def normalize_requirement_text(
-        self,
-        *,
-        text: str,
-        target_section_hint: str | None,
-        current_draft: RequirementDraft,
-    ) -> dict[str, object]: ...
 
 
 class RuntimeControlService:
@@ -128,14 +122,25 @@ class RuntimeControlService:
             return self._require_draft(existing_amendment.result_draft_revision_id)
         self._reject_stale(base, base_revision_id)
 
-        normalized = self.executor.normalize_requirement_text(
-            text=text,
-            target_section_hint=target_section_hint,
-            current_draft=base,
+        extracted = RequirementSheet.model_validate(
+            self.store.get_extracted_requirement_sheet_json(base.draft_revision_id)
         )
+        base_sheet = requirement_sheet_from_draft(base, extracted)
+        supplement = self.executor.extract_requirements(
+            job_title=base_sheet.job_title,
+            jd_text=text,
+            notes=None,
+        )
+        merged_sheet = merge_requirement_sheet_supplement(base_sheet, supplement)
+        normalized = {
+            "requirementSheet": merged_sheet.model_dump(mode="json"),
+            "extractedSupplement": supplement.model_dump(mode="json"),
+            "reviewItems": [],
+            "rejectedFragments": [],
+        }
         amendment_id = _new_id("reqamend")
         updated = _copy_draft(base, base_revision_id=base.draft_revision_id, status="draft_ready")
-        added_item_ids = _apply_normalized_patch(updated, normalized, amendment_id=amendment_id)
+        added_item_ids = _append_extracted_supplement(updated, supplement, amendment_id=amendment_id)
         review_items = _review_items(normalized)
         if review_items:
             _apply_review_items(updated, review_items, amendment_id=amendment_id)
@@ -164,6 +169,7 @@ class RuntimeControlService:
             updated,
             base=base,
             idempotency_key=idempotency_key,
+            extracted_requirement_sheet_json=merged_sheet.model_dump(mode="json"),
         )
 
     def resolve_requirement_review(
@@ -242,9 +248,12 @@ class RuntimeControlService:
         *,
         base: RequirementDraft,
         idempotency_key: str,
+        extracted_requirement_sheet_json: dict[str, object] | None = None,
     ) -> RequirementDraft:
         _refresh_draft_state(draft)
-        extracted = self.store.get_extracted_requirement_sheet_json(base.draft_revision_id)
+        extracted = extracted_requirement_sheet_json or self.store.get_extracted_requirement_sheet_json(
+            base.draft_revision_id
+        )
         return self.store.save_requirement_draft(
             draft,
             extracted_requirement_sheet_json=extracted,
@@ -277,6 +286,51 @@ def _copy_draft(base: RequirementDraft, *, base_revision_id: str, status: str) -
         status=status,
         sections=deepcopy(base.sections),
         created_at=_now(),
+    )
+
+
+def _append_extracted_supplement(
+    draft: RequirementDraft,
+    supplement: RequirementSheet,
+    *,
+    amendment_id: str,
+) -> list[str]:
+    supplement_draft = draft_from_requirement_sheet(
+        conversation_id=draft.conversation_id,
+        draft_revision_id=_new_id("reqdraft"),
+        base_revision_id=None,
+        requirement_sheet=supplement,
+        source="extracted_amendment",
+        created_at=draft.created_at,
+    )
+    added_item_ids: list[str] = []
+    for supplement_section in supplement_draft.sections:
+        target_section = draft.section(supplement_section.section_id)
+        seen = {_draft_item_key(item) for item in target_section.items if item.status != "deleted"}
+        for item in supplement_section.items:
+            key = _draft_item_key(item)
+            if key in seen:
+                continue
+            appended = item.model_copy(
+                deep=True,
+                update={
+                    "item_id": _new_id("reqitem"),
+                    "source": "extracted_amendment",
+                    "amendment_id": amendment_id,
+                    "sort_order": (len(target_section.items) + 1) * 10,
+                },
+            )
+            target_section.items.append(appended)
+            seen.add(key)
+            added_item_ids.append(appended.item_id)
+    return added_item_ids
+
+
+def _draft_item_key(item: RequirementDraftItem) -> tuple[str, str, str]:
+    return (
+        item.text.strip().casefold(),
+        type(item.value).__name__,
+        json.dumps(item.value, ensure_ascii=False, sort_keys=True) if isinstance(item.value, dict) else repr(item.value),
     )
 
 
@@ -323,33 +377,6 @@ def _apply_operation(draft: RequirementDraft, operation: DraftOperation) -> None
     else:
         raise RuntimeControlError("requirement_draft_invalid")
     section.items.sort(key=lambda item: item.sort_order)
-
-
-def _apply_normalized_patch(draft: RequirementDraft, normalized: dict[str, object], *, amendment_id: str) -> list[str]:
-    added_item_ids: list[str] = []
-    additions = _list_payload(normalized.get("additions"))
-    for raw_addition in additions:
-        addition = _string_key_dict(raw_addition)
-        if not addition:
-            continue
-        section_id = str(addition.get("sectionId") or "")
-        section = draft.section(section_id)
-        text = _required_text(addition.get("text"))
-        item = RequirementDraftItem(
-            item_id=_new_id("reqitem"),
-            selected=True,
-            enabled=True,
-            text=text,
-            value=addition.get("value", text),
-            source=str(addition.get("source") or "runtime_normalized"),
-            status="resolved",
-            amendment_id=amendment_id,
-            sort_order=(len(section.items) + 1) * 10,
-            allowed_actions=["select", "edit", "delete"],
-        )
-        section.items.append(item)
-        added_item_ids.append(item.item_id)
-    return added_item_ids
 
 
 def _apply_review_items(draft: RequirementDraft, review_items: list[ReviewItem], *, amendment_id: str) -> None:

@@ -323,6 +323,7 @@ RuntimeSourceQueryPolicyProvider = Callable[
 
 RuntimeStartCallback = Callable[[str], None]
 RuntimeCheckpointCallback = Callable[[object], None]
+RuntimeRoundBoundaryCallback = Callable[[int], RequirementSheet | None]
 RuntimeSourceLaneRunner = Callable[[RuntimeSourceLanePlan], Awaitable[RuntimeSourceLaneResult]]
 RuntimeSourceLaneRequestRunner = Callable[[RuntimeSourceLaneRequest, object | None], Awaitable[RuntimeSourceLaneResult]]
 
@@ -507,6 +508,7 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
+        runtime_round_boundary_callback: RuntimeRoundBoundaryCallback | None = None,
         requirement_cache_scope: str | None = None,
         approved_requirement_sheet: RequirementSheet | None = None,
     ) -> RunArtifacts:
@@ -520,6 +522,7 @@ class WorkflowRuntime:
                 progress_callback=progress_callback,
                 runtime_start_callback=runtime_start_callback,
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
+                runtime_round_boundary_callback=runtime_round_boundary_callback,
                 requirement_cache_scope=requirement_cache_scope,
                 approved_requirement_sheet=approved_requirement_sheet,
             )
@@ -792,6 +795,7 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
+        runtime_round_boundary_callback: RuntimeRoundBoundaryCallback | None = None,
         requirement_cache_scope: str | None = None,
         approved_requirement_sheet: RequirementSheet | None = None,
     ) -> RunArtifacts:
@@ -841,6 +845,7 @@ class WorkflowRuntime:
                 source_context=source_context,
                 progress_callback=progress_callback,
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
+                runtime_round_boundary_callback=runtime_round_boundary_callback,
             )
             finalize_context = build_finalize_context(
                 run_state=run_state,
@@ -1876,6 +1881,7 @@ class WorkflowRuntime:
         source_context: Mapping[str, str | int | bool | None] | None = None,
         progress_callback: ProgressCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
+        runtime_round_boundary_callback: RuntimeRoundBoundaryCallback | None = None,
     ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
         if source_plan is None:
             source_plan = build_runtime_source_plan(
@@ -1890,6 +1896,10 @@ class WorkflowRuntime:
         terminal_controller_round: TerminalControllerRound | None = None
 
         for round_no in range(1, self.settings.max_rounds + 1):
+            if runtime_round_boundary_callback is not None:
+                updated_requirement_sheet = runtime_round_boundary_callback(round_no)
+                if updated_requirement_sheet is not None:
+                    run_state.requirement_sheet = updated_requirement_sheet
             target_new = TOP_K
             controller_context = build_controller_context(
                 run_state=run_state,

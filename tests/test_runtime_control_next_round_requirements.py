@@ -6,7 +6,7 @@ import pytest
 
 from seektalent.models import QueryTermCandidate, RequirementSheet
 from seektalent_runtime_control.errors import RuntimeControlError
-from seektalent_runtime_control.requirements import ReviewResolutionOperation
+from seektalent_runtime_control.requirements import RequirementAmendment, ReviewResolutionOperation
 
 
 def test_next_round_requirement_amendments_accumulate_unless_explicitly_replaced(tmp_path: Path) -> None:
@@ -54,6 +54,23 @@ def test_next_round_requirement_amendments_accumulate_unless_explicitly_replaced
         statuses={"pending_target_round"},
     )
     assert [amendment.amendment_id for amendment in pending] == [second.amendment_id, replacement.amendment_id]
+
+
+def test_next_round_requirement_requires_extractor_or_explicit_test_normalizer(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    service = RuntimeCommandService(store=store)
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        service.submit_next_round_requirement(
+            runtime_run_id="runtime_run_1",
+            text="Add Kafka.",
+            target_section_hint="must_have_capabilities",
+            idempotency_key="amend-requires-extractor",
+        )
+
+    assert exc_info.value.reason_code == "requirement_extractor_required"
 
 
 def test_next_round_requirement_retargets_locked_round_and_activates_at_boundary(tmp_path: Path) -> None:
@@ -116,6 +133,97 @@ def test_next_round_requirement_retargets_locked_round_and_activates_at_boundary
         "runtime_next_round_requirement_applied",
         "runtime_requirement_revision_activated",
     ]
+
+
+def test_next_round_boundary_waits_for_requirement_extraction_before_controller(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    store.acquire_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        acquired_at="2026-06-08T00:00:01.500000Z",
+        lease_expires_at="2026-06-08T00:01:00.000000Z",
+    )
+    store.save_requirement_amendment(
+        RequirementAmendment(
+            amendment_id="reqamend_extracting",
+            agent_conversation_id="agent_conv_1",
+            runtime_run_id="runtime_run_1",
+            base_approved_requirement_revision_id="reqapproved_1",
+            target_round_no=3,
+            effective_boundary="before_round_controller",
+            input_text="补充 Kafka 生产经验",
+            target_section_hint=None,
+            status="extracting",
+            normalized_patch={},
+            rejected_fragments=[],
+            review_items=[],
+            idempotency_key="amend-extracting",
+            created_at="2026-06-08T00:00:01.000000Z",
+        )
+    )
+    service = RuntimeCommandService(
+        store=store,
+        boundary_wait_timeout_seconds=0,
+        boundary_wait_poll_seconds=0,
+        now=_clock("2026-06-08T00:00:02.000000Z"),
+    )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        service.apply_next_round_requirements_at_boundary(
+            runtime_run_id="runtime_run_1",
+            executor_id="executor_1",
+            round_no=3,
+        )
+
+    assert exc_info.value.reason_code == "runtime_requirement_amendment_extraction_timeout"
+    events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
+    assert events[-1].event_type == "runtime_requirement_amendment_wait_timeout"
+    assert events[-1].payload["targetRoundNo"] == 3
+    assert events[-1].payload["blockingAmendmentIds"] == ["reqamend_extracting"]
+
+
+def test_next_round_boundary_waits_for_requirement_review_before_controller(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    store.acquire_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        acquired_at="2026-06-08T00:00:00.500000Z",
+        lease_expires_at="2026-06-08T00:01:00.000000Z",
+    )
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=ReviewRequiredRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_review",
+        approved_requirement_id_factory=lambda: "reqapproved_should_not_exist",
+        boundary_wait_timeout_seconds=0,
+        boundary_wait_poll_seconds=0,
+        now=_clock("2026-06-08T00:00:01.000000Z", "2026-06-08T00:00:02.000000Z"),
+    )
+    pending = service.submit_next_round_requirement(
+        runtime_run_id="runtime_run_1",
+        text="Kafka 要求怎么归类",
+        target_section_hint=None,
+        idempotency_key="amend-review-boundary",
+    )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        service.apply_next_round_requirements_at_boundary(
+            runtime_run_id="runtime_run_1",
+            executor_id="executor_1",
+            round_no=pending.target_round_no,
+        )
+
+    assert exc_info.value.reason_code == "runtime_requirement_amendment_extraction_timeout"
+    assert store.get_requirement_amendment(pending.amendment_id).status == "needs_review"
+    events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=20).events
+    assert events[-1].event_type == "runtime_requirement_amendment_wait_timeout"
+    assert events[-1].payload["targetRoundNo"] == pending.target_round_no
+    assert events[-1].payload["blockingAmendmentIds"] == [pending.amendment_id]
+    assert events[-1].payload["blockingStatuses"] == {"needs_review": 1}
 
 
 def test_next_round_requirement_can_replace_full_requirement_sheet_with_query_terms_and_scoring(tmp_path: Path) -> None:
@@ -503,30 +611,38 @@ def test_submit_next_round_requirement_rejects_malformed_review_items(tmp_path: 
     assert exc_info.value.reason_code == "requirement_amendment_invalid_review_item"
 
 
-def test_default_next_round_normalizer_treats_user_text_as_requirement_signal(tmp_path: Path) -> None:
+def test_next_round_requirement_uses_extraction_backed_requirement_sheet_merge(tmp_path: Path) -> None:
     from seektalent_runtime_control.commands import RuntimeCommandService
 
     store = _store_with_approved_run(tmp_path)
+    extractor = FakeRequirementExtractor()
     service = RuntimeCommandService(
         store=store,
-        amendment_id_factory=lambda: "reqamend_default",
-        approved_requirement_id_factory=lambda: "reqapproved_default",
+        requirement_extractor=extractor,
+        amendment_id_factory=lambda: "reqamend_extracted",
+        approved_requirement_id_factory=lambda: "reqapproved_extracted",
         now=_clock("2026-06-08T00:00:01.000000Z"),
     )
 
     result = service.submit_next_round_requirement(
         runtime_run_id="runtime_run_1",
-        text="ClickHouse production experience",
+        text="下一轮必须补充 Kafka 生产经验",
         target_section_hint="preferred_capabilities",
-        idempotency_key="amend-default",
+        idempotency_key="amend-extracted",
     )
 
     approved = store.get_approved_requirement(result.approved_requirement_revision_id)
-    assert approved.requirement_sheet.preferred_capabilities == ["ClickHouse production experience"]
-    assert [term.term for term in approved.requirement_sheet.initial_query_term_pool] == [
-        "ClickHouse production experience"
+    amendment = store.get_requirement_amendment(result.amendment_id)
+    assert extractor.calls == [
+        {
+            "job_title": "Senior Python Engineer",
+            "jd_text": "下一轮必须补充 Kafka 生产经验",
+            "notes": None,
+        }
     ]
-    assert "ClickHouse production experience" in approved.requirement_sheet.scoring_rationale
+    assert approved.requirement_sheet.must_have_capabilities == ["Python", "Kafka 生产经验"]
+    assert [term.term for term in approved.requirement_sheet.initial_query_term_pool] == ["Kafka"]
+    assert amendment.normalized_patch["extractedSupplement"]["must_have_capabilities"] == ["Kafka 生产经验"]
 
 
 class FakeRequirementNormalizer:
@@ -541,6 +657,34 @@ class FakeRequirementNormalizer:
             "reviewItems": [],
             "rejectedFragments": [],
         }
+
+
+class FakeRequirementExtractor:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet:
+        self.calls.append({"job_title": job_title, "jd_text": jd_text, "notes": notes})
+        return RequirementSheet(
+            job_title=job_title or "Senior Python Engineer",
+            title_anchor_terms=[job_title or "Senior Python Engineer"],
+            title_anchor_rationale="Use the current runtime job title.",
+            role_summary="Supplemental runtime requirement.",
+            must_have_capabilities=["Kafka 生产经验"],
+            preferred_capabilities=[],
+            exclusion_signals=[],
+            initial_query_term_pool=[
+                QueryTermCandidate(
+                    term="Kafka",
+                    source="notes",
+                    category="tooling",
+                    priority=95,
+                    evidence="User added Kafka production experience.",
+                    first_added_round=0,
+                )
+            ],
+            scoring_rationale="Supplement with Kafka production experience.",
+        )
 
 
 class FullSheetRequirementNormalizer:

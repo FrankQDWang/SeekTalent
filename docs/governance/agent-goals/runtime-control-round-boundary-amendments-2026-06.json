@@ -1,0 +1,30 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Apply extracted requirement amendments at runtime round boundaries.",
+  "rationale": "This slice connects runtime-control amendment commands to the workflow runtime boundary so a user-added requirement is extracted, persisted, and applied before the next controller round. The change crosses runtime and runtime-control modules because the executor must pass a boundary callback into the stable workflow runtime.",
+  "touched_layers": ["docs", "other", "runtime", "tests"],
+  "red_files": [
+    "src/seektalent/runtime/orchestrator.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "deletion_targets": [
+    "normalizer-backed amendment patches that bypass requirement extraction",
+    "best-effort next-round changes that do not block at a runtime round boundary",
+    "runtime-control tests that prove only fake normalization paths"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "Both files are pre-existing oversized coordination modules; this slice touches narrow boundary and persistence points without broad refactoring.",
+  "risks": [
+    "The workflow runtime must block only at round boundaries, not mid-round.",
+    "The Conversation Agent remains the only write entrypoint; other runtime messages stay read-only."
+  ]
+}

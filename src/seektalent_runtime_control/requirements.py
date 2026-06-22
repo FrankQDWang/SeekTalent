@@ -203,7 +203,10 @@ def draft_from_requirement_sheet(
 
 
 def requirement_sheet_from_draft(draft: RequirementDraft, extracted_sheet: RequirementSheet) -> RequirementSheet:
-    hard_constraints = HardConstraintSlots()
+    hard_constraints = extracted_sheet.hard_constraints.model_copy(deep=True)
+    hard_constraints.locations = []
+    hard_constraints.school_names = []
+    hard_constraints.company_names = []
     for item in _active_items(draft.section("hard_constraints")):
         value_payload = _string_key_dict(item.value)
         field = value_payload.get("field")

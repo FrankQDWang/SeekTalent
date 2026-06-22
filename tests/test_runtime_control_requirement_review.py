@@ -3,34 +3,20 @@ from __future__ import annotations
 import pytest
 
 from seektalent_runtime_control.errors import RuntimeControlError
-from seektalent_runtime_control.requirements import DraftOperation, ReviewResolutionOperation
-from seektalent_runtime_control.service import _apply_review_resolution
-from tests.test_runtime_control_requirements import RequirementExecutor, runtime_service
+from seektalent_runtime_control.requirements import (
+    DraftOperation,
+    RequirementAmendment,
+    RequirementAmendmentSummary,
+    RequirementDraftItem,
+    ReviewItem,
+    ReviewResolutionOperation,
+)
+from seektalent_runtime_control.service import _apply_review_resolution, _now
+from tests.test_runtime_control_requirements import runtime_service
 
 
-class AmbiguousRequirementExecutor(RequirementExecutor):
-    def __init__(self, *, candidate_section: str = "must_have_capabilities") -> None:
-        super().__init__()
-        self.candidate_section = candidate_section
-
-    def normalize_requirement_text(self, *, text: str, target_section_hint: str | None, current_draft) -> dict[str, object]:
-        return {
-            "additions": [],
-            "reviewItems": [
-                {
-                    "reviewItemId": "review_kafka",
-                    "rawText": text,
-                    "candidateText": "Kafka 生产环境实战",
-                    "candidateSection": self.candidate_section,
-                    "reasonCode": "requirement_amendment_ambiguous",
-                }
-            ],
-            "rejectedFragments": [],
-        }
-
-
-def _draft_with_review_item(tmp_path, *, executor: RequirementExecutor | None = None):  # type: ignore[no-untyped-def]
-    service = runtime_service(tmp_path, executor=executor or AmbiguousRequirementExecutor())
+def _draft_with_review_item(tmp_path, *, candidate_section: str = "must_have_capabilities"):  # type: ignore[no-untyped-def]
+    service = runtime_service(tmp_path)
     draft = service.extract_requirements(
         conversation_id="agent_conv_1",
         job_title="Python 后端工程师",
@@ -39,11 +25,62 @@ def _draft_with_review_item(tmp_path, *, executor: RequirementExecutor | None = 
         source_ids=[],
         idempotency_key="extract",
     )
-    amended = service.amend_requirement_draft_from_text(
-        draft_revision_id=draft.draft_revision_id,
-        base_revision_id=draft.draft_revision_id,
-        text="Kafka 要求怎么归类",
-        target_section_hint=None,
+    amendment_id = "reqamend_review"
+    review_item = ReviewItem(
+        review_item_id="review_kafka",
+        raw_text="Kafka 要求怎么归类",
+        candidate_text="Kafka 生产环境实战",
+        candidate_section=candidate_section,
+        reason_code="requirement_amendment_ambiguous",
+    )
+    amended = draft.model_copy(
+        deep=True,
+        update={
+            "draft_revision_id": "reqdraft_review",
+            "base_revision_id": draft.draft_revision_id,
+            "status": "needs_review",
+            "created_at": _now(),
+            "amendment": RequirementAmendmentSummary(amendment_id=amendment_id, status="needs_review"),
+            "unresolved_review_item_count": 1,
+            "can_confirm": False,
+        },
+    )
+    target = amended.section(candidate_section)
+    target.items.append(
+        RequirementDraftItem(
+            item_id="reqitem_review_kafka",
+            selected=True,
+            enabled=True,
+            editable=True,
+            text="Kafka 生产环境实战",
+            value="Kafka 生产环境实战",
+            source="extracted_amendment",
+            status="needs_review",
+            review_item_id=review_item.review_item_id,
+            amendment_id=amendment_id,
+            sort_order=(len(target.items) + 1) * 10,
+            allowed_actions=["select", "edit", "delete"],
+        )
+    )
+    service.store.save_requirement_amendment(
+        RequirementAmendment(
+            amendment_id=amendment_id,
+            agent_conversation_id=draft.conversation_id,
+            base_draft_revision_id=draft.draft_revision_id,
+            result_draft_revision_id=amended.draft_revision_id,
+            input_text=review_item.raw_text,
+            target_section_hint=None,
+            status="needs_review",
+            normalized_patch={"reviewItems": [review_item.model_dump(mode="json")]},
+            rejected_fragments=[],
+            review_items=[review_item],
+            idempotency_key="amend-ambiguous",
+            created_at=amended.created_at,
+        )
+    )
+    service.store.save_requirement_draft(
+        amended,
+        extracted_requirement_sheet_json=service.store.get_extracted_requirement_sheet_json(draft.draft_revision_id),
         idempotency_key="amend-ambiguous",
     )
     return service, amended
@@ -86,7 +123,7 @@ def test_review_required_amendment_blocks_confirm_until_resolved(tmp_path) -> No
 def test_review_items_use_target_section_order(tmp_path) -> None:  # type: ignore[no-untyped-def]
     _, amended = _draft_with_review_item(
         tmp_path,
-        executor=AmbiguousRequirementExecutor(candidate_section="preferred_capabilities"),
+        candidate_section="preferred_capabilities",
     )
 
     preferred = amended.section("preferred_capabilities")
