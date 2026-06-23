@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
@@ -837,10 +837,11 @@ def _sanitize_requirement_provenance(provenance: dict[str, object] | None) -> di
         if isinstance(value, str):
             safe[key] = _truncate_provenance_text(value)
     intent_decision = provenance.get("intentDecision")
-    if isinstance(intent_decision, Mapping):
-        intent = intent_decision.get("intent")
-        if isinstance(intent, str):
-            safe["intentDecision"] = {"intent": _truncate_provenance_text(intent)}
+    if isinstance(intent_decision, dict):
+        for key, value in intent_decision.items():
+            if str(key) == "intent" and isinstance(value, str):
+                safe["intentDecision"] = {"intent": _truncate_provenance_text(value)}
+                break
     return safe
 
 
