@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol, cast
+from typing import Protocol
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -838,8 +838,7 @@ def _sanitize_requirement_provenance(provenance: dict[str, object] | None) -> di
             safe[key] = _truncate_provenance_text(value)
     intent_decision = provenance.get("intentDecision")
     if isinstance(intent_decision, Mapping):
-        decision = cast("Mapping[object, object]", intent_decision)
-        intent = decision.get("intent")
+        intent = intent_decision.get("intent")
         if isinstance(intent, str):
             safe["intentDecision"] = {"intent": _truncate_provenance_text(intent)}
     return safe

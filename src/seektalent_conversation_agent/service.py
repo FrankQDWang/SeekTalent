@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Protocol, TypeVar, cast
+from typing import Literal, Protocol, TypeVar
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -3216,8 +3216,7 @@ def _summary_mapping_list(value: object) -> list[dict[str, object]]:
     for item in value:
         if not isinstance(item, Mapping):
             continue
-        mapping = cast("Mapping[object, object]", item)
-        result.append({str(key): mapped_value for key, mapped_value in mapping.items()})
+        result.append({str(key): mapped_value for key, mapped_value in item.items()})
     return result
 
 
