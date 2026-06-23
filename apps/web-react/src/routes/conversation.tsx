@@ -1,4 +1,4 @@
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ConversationList } from "../components/workbench/ConversationList";
@@ -10,10 +10,16 @@ import {
 import { ConversationShell } from "../components/workbench/ConversationShell";
 import { CandidateDetailDrawer } from "../components/workbench/CandidateDetailDrawer";
 import {
+  HomeStartPanel,
+  type HomeStartPanelSubmitInput,
+} from "../components/workbench/HomeStartPanel";
+import {
   useAmendAgentWorkbenchRequirementFromText,
   useConfirmAgentWorkbenchRequirements,
   useAgentWorkbenchCandidateDetail,
+  useAgentWorkbenchConversations,
   useAgentWorkbenchLiveConversation,
+  useCreateAgentWorkbenchConversationFromJd,
   useSubmitAgentWorkbenchMessage,
   useUpdateAgentWorkbenchRequirementDraft,
 } from "../lib/api/agentWorkbench";
@@ -28,11 +34,139 @@ import { rootRoute } from "./root";
 export const conversationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/conversations/$conversationId",
-  component: ConversationRoute,
+  component: WorkbenchRoute,
 });
 
-function ConversationRoute() {
+function WorkbenchRoute() {
   const { conversationId } = conversationRoute.useParams();
+
+  if (conversationId === "new") {
+    return <NewConversationFlow />;
+  }
+
+  return (
+    <ExistingConversationFlow
+      key={conversationId}
+      conversationId={conversationId}
+    />
+  );
+}
+
+function NewConversationFlow() {
+  const [collapsing, setCollapsing] = useState(false);
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const collapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navigate = useNavigate({ from: "/conversations/$conversationId" });
+  const conversationsQuery = useAgentWorkbenchConversations();
+  const createConversationMutation =
+    useCreateAgentWorkbenchConversationFromJd();
+  const [homeErrorMessage, setHomeErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (collapseTimeoutRef.current !== null) {
+        clearTimeout(collapseTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const onHomeSubmit = async (input: HomeStartPanelSubmitInput) => {
+    setHomeErrorMessage(null);
+    try {
+      const result = await createConversationMutation.mutateAsync({
+        jobDescription: input.jobDescription,
+        jobTitle: input.jobTitle,
+      });
+      const navigateToConversation = () => {
+        void navigate({
+          params: { conversationId: result.conversationId },
+          to: "/conversations/$conversationId",
+          replace: true,
+        });
+      };
+
+      if (prefersReducedMotion) {
+        navigateToConversation();
+        return;
+      }
+
+      setCollapsing(true);
+      if (collapseTimeoutRef.current !== null) {
+        clearTimeout(collapseTimeoutRef.current);
+      }
+      collapseTimeoutRef.current = setTimeout(() => {
+        collapseTimeoutRef.current = null;
+        navigateToConversation();
+      }, HOME_START_PANEL_COLLAPSE_MS);
+    } catch (error) {
+      setHomeErrorMessage(safeErrorMessage(error));
+      throw error;
+    }
+  };
+
+  return (
+    <ConversationShell
+      main={
+        <HomeStartPanel
+          collapsing={collapsing}
+          errorMessage={homeErrorMessage}
+          loading={createConversationMutation.isPending}
+          onSubmit={onHomeSubmit}
+        />
+      }
+      rail={
+        conversationsQuery.isSuccess ? (
+          <ConversationList
+            conversations={conversationsQuery.data.conversations}
+          />
+        ) : (
+          <ConversationList />
+        )
+      }
+    />
+  );
+}
+
+const HOME_START_PANEL_COLLAPSE_MS = 500;
+
+function usePrefersReducedMotion(): boolean {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
+    reducedMotionMatches(),
+  );
+
+  useEffect(() => {
+    const media = reducedMotionMedia();
+    if (media === null) {
+      return;
+    }
+    const update = () => setPrefersReducedMotion(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
+function reducedMotionMatches(): boolean {
+  return reducedMotionMedia()?.matches ?? false;
+}
+
+function reducedMotionMedia(): MediaQueryList | null {
+  if (
+    typeof window === "undefined" ||
+    typeof window.matchMedia !== "function"
+  ) {
+    return null;
+  }
+  return window.matchMedia("(prefers-reduced-motion: reduce)");
+}
+
+function ExistingConversationFlow({
+  conversationId,
+}: {
+  conversationId: string;
+}) {
   const queryClient = useQueryClient();
   const query = useAgentWorkbenchLiveConversation(conversationId);
   const queryKey = useMemo(
@@ -113,6 +247,7 @@ function ConversationRoute() {
     queryClient.getQueryData<AgentWorkbenchConversationResponse>(queryKey)
       ?.requirementDraft?.draftRevisionId ??
     view.requirementDraft?.draftRevisionId;
+
   const enqueueRequirementMutation = (run: () => Promise<void>) => {
     const next = requirementMutationChainRef.current
       .catch(() => undefined)
@@ -120,6 +255,7 @@ function ConversationRoute() {
     requirementMutationChainRef.current = next.catch(() => undefined);
     return next;
   };
+
   const onSubmitMessage = async (message: string) => {
     setActionErrorMessage(null);
     try {
@@ -129,6 +265,7 @@ function ConversationRoute() {
       throw error;
     }
   };
+
   const onConfirmRequirements = async () => {
     setActionErrorMessage(null);
     await requirementMutationChainRef.current.catch(() => undefined);
@@ -143,6 +280,7 @@ function ConversationRoute() {
       setActionErrorMessage(safeErrorMessage(error));
     }
   };
+
   const onToggleRequirementItem = async (
     item: AgentWorkbenchRequirementDraftItem,
     selected: boolean,
@@ -159,13 +297,7 @@ function ConversationRoute() {
         }
         await updateRequirementMutation.mutateAsync({
           draftRevisionId,
-          operations: [
-            {
-              itemId: item.itemId,
-              op: "set_selected",
-              selected,
-            },
-          ],
+          operations: [{ itemId: item.itemId, op: "set_selected", selected }],
         });
       });
     } catch (error) {
@@ -176,6 +308,7 @@ function ConversationRoute() {
       );
     }
   };
+
   const onAddOtherRequirement = async (text: string) => {
     setActionErrorMessage(null);
     try {
@@ -184,16 +317,14 @@ function ConversationRoute() {
         if (!draftRevisionId) {
           throw new Error("Requirement draft is unavailable.");
         }
-        await amendRequirementMutation.mutateAsync({
-          draftRevisionId,
-          text,
-        });
+        await amendRequirementMutation.mutateAsync({ draftRevisionId, text });
       });
     } catch (error) {
       setActionErrorMessage(safeErrorMessage(error));
       throw error;
     }
   };
+
   return (
     <>
       <ConversationShell
@@ -208,7 +339,6 @@ function ConversationRoute() {
             onToggleRequirementItem={(item, selected) => {
               void onToggleRequirementItem(item, selected);
             }}
-            onViewCandidateDetails={viewCandidateDetails}
             submittingMessage={submitMessageMutation.isPending}
             updatingRequirementItemIds={updatingRequirementItemIds}
             view={view}

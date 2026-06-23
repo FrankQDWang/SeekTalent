@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 test("renders the workbench shell", async ({ page }, testInfo) => {
   await page.goto("/");
+  await expect(page).toHaveURL(/\/conversations\/new$/);
 
   if (!testInfo.project.name.includes("mobile")) {
     await expect(

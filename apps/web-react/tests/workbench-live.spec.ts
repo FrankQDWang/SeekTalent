@@ -78,10 +78,12 @@ test("renders live workbench graph and opens semantic stream", async ({
 }, testInfo) => {
   await page.goto("/conversations/agent_conv_1");
 
+  await expect(page.getByRole("tablist", { name: "工作区" })).toHaveCount(0);
+
   if (testInfo.project.name.includes("mobile")) {
-    await expect(page.getByRole("tab", { name: "Chat" })).toBeVisible();
-    await expect(page.getByRole("tab", { name: "Graph" })).toBeVisible();
-    await page.getByRole("tab", { name: "Graph" }).click();
+    await expect(
+      page.getByRole("complementary", { name: "会话列表" }),
+    ).toHaveCount(0);
   } else {
     await expect(
       page.getByRole("complementary", { name: "会话列表" }),
@@ -97,29 +99,21 @@ test("renders live workbench graph and opens semantic stream", async ({
   await expect(page.getByText("第 2 轮 · 猎聘检索")).toBeVisible();
   await expect(page.getByText("第 3 轮 · Top Pool")).toBeVisible();
   await expect(page.getByText(/CTS/i)).toHaveCount(0);
-  if (testInfo.project.name.includes("mobile")) {
-    await page.getByRole("tab", { name: "Candidates" }).click();
-    await expect(
-      page
-        .getByRole("tabpanel", { name: "Candidates" })
-        .getByText("第一轮正在运行"),
-    ).toBeVisible();
-    await page.getByRole("tab", { name: "Graph" }).click();
-  }
   await expect
     .poll(() => page.locator(".strategy-graph-node").count())
     .toBeGreaterThan(0);
 
-  if (testInfo.project.name.includes("mobile")) {
-    await page.getByRole("tab", { name: "Candidates" }).click();
+  if (!testInfo.project.name.includes("mobile")) {
+    await page.getByRole("tab", { name: "候选人" }).click();
+    await page.getByRole("button", { name: "查看详情" }).first().click();
+    await expect(
+      page.getByRole("dialog", { name: "候选人详情" }),
+    ).toBeVisible();
+    await expect(page.getByText("工作经历")).toBeVisible();
+    await expect(
+      page.getByText("最近一段经历覆盖 Agent 工具调用平台。"),
+    ).toBeVisible();
   }
-  await page.getByRole("tab", { name: "候选人" }).click();
-  await page.getByRole("button", { name: "查看详情" }).first().click();
-  await expect(page.getByRole("dialog", { name: "候选人详情" })).toBeVisible();
-  await expect(page.getByText("工作经历")).toBeVisible();
-  await expect(
-    page.getByText("最近一段经历覆盖 Agent 工具调用平台。"),
-  ).toBeVisible();
 
   await expect
     .poll(async () =>
@@ -622,17 +616,6 @@ function liveRoundGraphNodes(
   const sourceStatus = status === "running" ? "running" : status;
   const laterStatus = status === "running" ? "pending" : status;
   return [
-    {
-      nodeId: `round:${roundId}`,
-      kind: "round",
-      label: `第 ${roundId} 轮`,
-      summary: `第 ${roundId} 轮猎聘检索`,
-      status,
-      sourceKind: "all",
-      roundNo,
-      phase: "round",
-      stage: "round_summary",
-    },
     {
       nodeId: `round:${roundId}:phase:round_query:all`,
       kind: "phase",

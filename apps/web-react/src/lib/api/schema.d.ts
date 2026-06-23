@@ -1757,7 +1757,6 @@ export interface components {
         | "candidate"
         | "approval"
         | "final"
-        | "round"
         | "lane"
         | "phase";
       /** Label */

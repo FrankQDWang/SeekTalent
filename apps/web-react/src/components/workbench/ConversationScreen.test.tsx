@@ -23,27 +23,53 @@ afterEach(() => {
 });
 
 describe("ConversationScreen", () => {
-  it("renders the live workbench view and submits composer messages", async () => {
+  it("renders the live workbench view with chat and graph panels", () => {
     expect.hasAssertions();
-    const user = userEvent.setup();
-    const onSubmitMessage = vi.fn();
 
-    render(
-      <ConversationScreen
-        onSubmitMessage={onSubmitMessage}
-        view={agentWorkbenchRunningViewFixture}
-      />,
-    );
-
-    await user.type(
-      screen.getByPlaceholderText("输入下一步要求"),
-      "继续收紧关键词",
-    );
-    await user.click(screen.getByRole("button", { name: "发送" }));
+    render(<ConversationScreen view={agentWorkbenchRunningViewFixture} />);
 
     expect(screen.getByLabelText("检索策略图")).toBeVisible();
     expect(screen.getByLabelText("Agent transcript")).toBeVisible();
-    expect(onSubmitMessage).toHaveBeenCalledWith("继续收紧关键词");
+  });
+
+  it("renders a resize separator between chat and graph when not compact", () => {
+    expect.hasAssertions();
+
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      addEventListener,
+      addListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      matches: false,
+      media: query,
+      onchange: null,
+      removeEventListener,
+      removeListener: vi.fn(),
+    }));
+
+    render(<ConversationScreen view={agentWorkbenchRunningViewFixture} />);
+
+    expect(
+      screen.getByRole("separator", { name: "调整对话和策略图宽度" }),
+    ).toBeVisible();
+    expect(screen.getByRole("region", { name: "对话" })).toBeVisible();
+    expect(screen.getByLabelText("检索策略图")).toBeVisible();
+  });
+
+  it("ignores malformed saved resize layouts", () => {
+    expect.hasAssertions();
+
+    localStorage.setItem(
+      "chat-graph-layout",
+      JSON.stringify({ chat: "wide", graph: 400 }),
+    );
+
+    render(<ConversationScreen view={agentWorkbenchRunningViewFixture} />);
+
+    expect(localStorage.getItem("chat-graph-layout")).toBeNull();
+    expect(screen.getByLabelText("检索策略图")).toBeVisible();
   });
 
   it("exposes requirement confirmation as a callback", async () => {
@@ -78,6 +104,30 @@ describe("ConversationScreen", () => {
     ).toBeVisible();
   });
 
+  it("keeps requirement review visible in compact workflow startup", () => {
+    expect.hasAssertions();
+
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      addEventListener: vi.fn(),
+      addListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      matches: true,
+      media: query,
+      onchange: null,
+      removeEventListener: vi.fn(),
+      removeListener: vi.fn(),
+    }));
+
+    render(
+      <ConversationScreen view={agentWorkbenchRequirementReviewViewFixture} />,
+    );
+
+    expect(screen.getByRole("button", { name: "确认需求" })).toBeVisible();
+    expect(
+      screen.queryByRole("tablist", { name: "工作区" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("shows permission failure as a stable screen state", () => {
     expect.hasAssertions();
 
@@ -100,9 +150,8 @@ describe("ConversationScreen", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("mounts the strategy graph only when the compact graph panel is active", async () => {
+  it("does not add synthetic workspace tabs in compact layouts", () => {
     expect.hasAssertions();
-    const user = userEvent.setup();
     const addEventListener = vi.fn();
     const removeEventListener = vi.fn();
 
@@ -119,11 +168,10 @@ describe("ConversationScreen", () => {
 
     render(<ConversationScreen view={agentWorkbenchRunningViewFixture} />);
 
-    expect(screen.queryByLabelText("检索策略图")).not.toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: "Graph" }));
-
     expect(screen.getByLabelText("检索策略图")).toBeVisible();
+    expect(
+      screen.queryByRole("tablist", { name: "工作区" }),
+    ).not.toBeInTheDocument();
     expect(addEventListener).toHaveBeenCalledWith(
       "change",
       expect.any(Function),

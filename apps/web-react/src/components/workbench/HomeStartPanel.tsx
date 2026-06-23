@@ -9,6 +9,7 @@ export type HomeStartPanelSubmitInput = {
 };
 
 type HomeStartPanelProps = {
+  collapsing?: boolean;
   errorMessage?: string | null;
   initialJobDescription?: string;
   loading?: boolean;
@@ -16,6 +17,7 @@ type HomeStartPanelProps = {
 };
 
 export function HomeStartPanel({
+  collapsing = false,
   errorMessage = null,
   initialJobDescription = "",
   loading = false,
@@ -30,7 +32,12 @@ export function HomeStartPanel({
   const submitDisabled = loading || trimmedJobDescription.length === 0;
 
   return (
-    <section aria-label="新建招聘任务" className="home-start-panel">
+    <section
+      aria-label="新建招聘任务"
+      className={
+        "home-start-panel" + (collapsing ? " home-start-panel--collapsing" : "")
+      }
+    >
       <div className="home-start-panel__body">
         <div className="home-start-panel__copy">
           <h2>Wide Talent Search</h2>

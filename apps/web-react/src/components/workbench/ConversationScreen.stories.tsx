@@ -23,7 +23,7 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div style={{ minHeight: "720px" }}>
+      <div style={{ minHeight: "100vh" }}>
         <Story />
       </div>
     ),
@@ -79,6 +79,12 @@ export const Completed: Story = {
 export const Archived: Story = {
   args: {
     view: agentWorkbenchArchivedViewFixture,
+  },
+};
+
+export const ResizableLayout: Story = {
+  args: {
+    view: agentWorkbenchRunningViewFixture,
   },
 };
 

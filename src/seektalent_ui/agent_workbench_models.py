@@ -511,7 +511,7 @@ class AgentWorkbenchGraphNodeResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nodeId: str
-    kind: Literal["requirements", "message", "activity", "candidate", "approval", "final", "round", "lane", "phase"]
+    kind: Literal["requirements", "message", "activity", "candidate", "approval", "final", "lane", "phase"]
     label: str
     summary: str
     roundNo: int | None = None

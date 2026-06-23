@@ -292,7 +292,7 @@ Source-checkout development uses the repo-local React/OpenCLI launcher:
 scripts/start-dev-workbench.sh
 ```
 
-See [docs/development.md](docs/development.md) for lower-level backend/frontend commands and Workbench verification. The React UI design contract lives in [apps/web-react/DESIGN.md](apps/web-react/DESIGN.md).
+See [docs/development.md](docs/development.md) for lower-level backend/frontend commands and Workbench verification. React Workbench visual acceptance is pinned to the assets under `docs/superpowers/artifacts/react-agent-workbench-design/`.
 
 ## Local State And Outputs
 

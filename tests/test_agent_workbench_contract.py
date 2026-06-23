@@ -385,11 +385,9 @@ def test_strategy_graph_projects_public_round_outputs_with_swimlane_metadata() -
     response = project_agent_workbench_view(projection_input)
 
     nodes = {node.nodeId: node for node in response.strategyGraph.nodes}
-    assert nodes["round:1"].kind == "round"
-    assert nodes["round:1"].roundNo == 1
-    assert nodes["round:1"].phase == "round"
-    assert nodes["round:1"].stage == "round_summary"
-    assert nodes["round:1"].status == "completed"
+    assert "round:1" not in nodes
+    assert {node.kind for node in nodes.values()}.isdisjoint({"round"})
+    assert {node.stage for node in nodes.values()}.isdisjoint({"round_summary"})
     lane_nodes = [node for node in nodes.values() if node.kind == "lane"]
     assert [(node.roundNo, node.laneType, node.sourceKind) for node in lane_nodes] == [(1, "primary", "liepin")]
     phase_nodes = [node for node in nodes.values() if node.kind == "phase"]
@@ -522,7 +520,6 @@ def test_strategy_graph_preserves_blocked_and_partial_phase_statuses() -> None:
     response = project_agent_workbench_view(projection_input)
     nodes = {node.nodeId: node for node in response.strategyGraph.nodes}
 
-    assert nodes["round:1"].status == "blocked"
     assert nodes["round:1:lane:liepin:primary"].status == "blocked"
     assert nodes["round:1:lane:cts:expansion"].status == "partial"
     assert nodes["round:1:phase:source_result:liepin"].status == "blocked"
@@ -532,11 +529,25 @@ def test_strategy_graph_preserves_blocked_and_partial_phase_statuses() -> None:
 def test_strategy_graph_node_status_rejects_unknown_values() -> None:
     with pytest.raises(ValidationError):
         AgentWorkbenchGraphNodeResponse(
+            nodeId="round:1:phase:round_query:all",
+            kind="phase",
+            label="Round query",
+            summary="summary",
+            status="unknown-runtime-status",
+        )
+
+
+def test_strategy_graph_node_kind_rejects_round_summary_nodes() -> None:
+    with pytest.raises(ValidationError):
+        AgentWorkbenchGraphNodeResponse(
             nodeId="round:1",
             kind="round",
             label="Round 1",
             summary="summary",
-            status="unknown-runtime-status",
+            roundNo=1,
+            phase="round",
+            stage="round_summary",
+            status="completed",
         )
 
 
@@ -2153,8 +2164,8 @@ def test_agent_workbench_routes_project_real_runtime_outputs_into_snapshot_and_e
     assert snapshot.status_code == 200, snapshot.text
     payload = snapshot.json()
     nodes = {node["nodeId"]: node for node in payload["strategyGraph"]["nodes"]}
-    assert nodes["round:1"]["status"] == "blocked"
-    assert nodes["round:1"]["roundNo"] == 1
+    assert "round:1" not in nodes
+    assert all(node["kind"] != "round" for node in nodes.values())
     assert nodes["round:1:lane:liepin:primary"]["status"] == "blocked"
     assert nodes["round:1:lane:cts:expansion"]["status"] == "partial"
     assert nodes["round:1:phase:source_result:liepin"]["status"] == "blocked"
@@ -2168,7 +2179,7 @@ def test_agent_workbench_routes_project_real_runtime_outputs_into_snapshot_and_e
     assert events.status_code == 200, events.text
     event_payload = events.json()
     event_by_kind = {event["kind"]: event for event in event_payload["events"]}
-    assert event_by_kind["strategyGraph.changed"]["payload"]["graphNodeCount"] >= 6
+    assert event_by_kind["strategyGraph.changed"]["payload"]["graphNodeCount"] == len(nodes)
     assert event_by_kind["thinkingProcess.changed"]["payload"]["activeRoundNo"] == 1
     assert event_by_kind["thinkingProcess.changed"]["payload"]["status"] == "blocked"
 

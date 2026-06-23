@@ -3,7 +3,9 @@
   display: grid;
   flex: 1;
   grid-template-columns: 257px minmax(0, 1fr) minmax(320px, 360px);
-  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
+  height: 100vh;
+  min-height: 100vh;
   position: relative;
 }
 
@@ -140,10 +142,16 @@
   overflow: hidden;
 }
 
+.conversation-shell__main .conversation-view {
+  height: 100%;
+  min-height: 0;
+}
+
 @media (max-width: 1080px) {
   .conversation-shell {
     display: flex;
     flex-direction: column;
+    height: auto;
     overflow: auto;
   }
 

@@ -1,0 +1,71 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add resizable Workbench panels and transcript text measurement to the React Agent Workbench.",
+  "rationale": "The React Workbench needs user-controlled desktop panel sizing and accurate transcript text measurement while keeping the desktop designer assets as the only Workbench visual baseline. This intentionally changes frontend code, the Workbench BFF graph contract, and web dependency control files together because react-resizable-panels provides the accessible split-pane behavior, @chenglou/pretext provides focused text measurement for longer transcript events, and the Strategy Graph API must stop emitting removed round summary nodes.",
+  "touched_layers": [
+    "bff",
+    "dependencies",
+    "docs",
+    "frontend",
+    "governance",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "apps/web-react/package.json",
+    "apps/web-react/playwright.storybook-visual.config.ts",
+    "apps/web-react/playwright.storybook.config.ts",
+    "apps/web-react/pnpm-lock.yaml",
+    "apps/web-react/src/components/workbench/ConversationScreen.css",
+    "apps/web-react/src/components/workbench/ConversationScreen.stories.tsx",
+    "apps/web-react/src/components/workbench/ConversationScreen.test.tsx",
+    "apps/web-react/src/components/workbench/ConversationScreen.tsx",
+    "apps/web-react/src/components/workbench/HomeStartPanel.css",
+    "apps/web-react/src/components/workbench/HomeStartPanel.test.tsx",
+    "apps/web-react/src/components/workbench/HomeStartPanel.tsx",
+    "apps/web-react/src/components/workbench/StrategyGraph.test.tsx",
+    "apps/web-react/src/components/workbench/TranscriptRunGroup.tsx",
+    "apps/web-react/src/lib/strategy-graph/graphProjection.test.ts",
+    "apps/web-react/src/lib/strategy-graph/graphProjection.ts",
+    "apps/web-react/src/routes/conversation.tsx",
+    "apps/web-react/src/routes/root.tsx",
+    "apps/web-react/src/test/fixtures/agentWorkbenchBff.ts",
+    "apps/web-react/src/test/setup.ts",
+    "apps/web-react/tests/app-shell.spec.ts",
+    "apps/web-react/tests/storybook-interactions.spec.ts",
+    "apps/web-react/tests/storybook-visual.spec.ts",
+    "apps/web-react/tests/workbench-live.spec.ts",
+    "src/seektalent_ui/agent_workbench_models.py",
+    "src/seektalent_ui/agent_workbench_response.py",
+    "tools/check_react_workbench_design_acceptance.py"
+  ],
+  "dependency_files": [
+    "apps/web-react/package.json",
+    "apps/web-react/pnpm-lock.yaml"
+  ],
+  "dependency_rationale": "react-resizable-panels is the focused dependency for accessible persisted chat and graph resizing. @chenglou/pretext is the focused dependency for transcript text measurement when deciding whether long run events should collapse.",
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run"
+  ],
+  "deletion_targets": [
+    "fixed 386px CSS Grid chat column",
+    "desktop-only inability to resize transcript and graph panels",
+    "home route coupling between new conversation startup and existing conversation runtime view",
+    "character-count-only transcript collapse decisions for long event text",
+    "Strategy Graph round summary nodes in the public BFF graph contract"
+  ],
+  "risks": [
+    "Desktop layout persistence must not reintroduce the removed top-level Chat/Graph/Candidates/Final workspace tabs.",
+    "The resize separator must stay keyboard accessible through the underlying library.",
+    "Pretext text measurement must only run for long transcript text to avoid unnecessary render cost.",
+    "The / to /conversations/new redirect must not break existing deep links to conversations.",
+    "Removing round summary nodes from Strategy Graph data must not remove round summaries from the transcript/activity payload."
+  ]
+}

@@ -408,28 +408,9 @@ def _strategy_graph(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchStrat
         round_no = _int_or_none(_attr(summary, "round_no"))
         if round_no is None:
             continue
-        round_node_id = f"round:{round_no}"
-        nodes.append(
-            AgentWorkbenchGraphNodeResponse(
-                nodeId=round_node_id,
-                kind="round",
-                label=f"Round {round_no}",
-                summary=_round_graph_summary(summary),
-                roundNo=round_no,
-                phase="round",
-                stage="round_summary",
-                status=_status(_str_or_none(_attr(summary, "status"))),
-            )
-        )
-        edges.append(
-            AgentWorkbenchGraphEdgeResponse(
-                edgeId=f"{previous_node_id}->{round_node_id}",
-                fromNodeId=previous_node_id,
-                toNodeId=round_node_id,
-            )
-        )
-        previous_node_id = round_node_id
-        for lane_type, source_kind in _round_graph_lanes(summary):
+        round_entry_node_id: str | None = None
+        last_round_node_id: str | None = None
+        for lane_type, source_kind in _strategy_lane_sources(summary):
             lane_node_id = f"round:{round_no}:lane:{source_kind}:{lane_type}"
             nodes.append(
                 AgentWorkbenchGraphNodeResponse(
@@ -447,12 +428,15 @@ def _strategy_graph(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchStrat
             )
             edges.append(
                 AgentWorkbenchGraphEdgeResponse(
-                    edgeId=f"{round_node_id}->{lane_node_id}",
-                    fromNodeId=round_node_id,
+                    edgeId=f"{previous_node_id}->{lane_node_id}",
+                    fromNodeId=previous_node_id,
                     toNodeId=lane_node_id,
                 )
             )
+            round_entry_node_id = round_entry_node_id or lane_node_id
+            last_round_node_id = lane_node_id
         seen_phase_nodes: set[str] = set()
+        previous_phase_node_id = previous_node_id
         for stage_output in _sequence_or_empty(_attr(summary, "stage_outputs")):
             stage = _str_or_none(_attr(stage_output, "stage"))
             if stage is None:
@@ -478,11 +462,16 @@ def _strategy_graph(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchStrat
             )
             edges.append(
                 AgentWorkbenchGraphEdgeResponse(
-                    edgeId=f"{round_node_id}->{phase_node_id}",
-                    fromNodeId=round_node_id,
+                    edgeId=f"{previous_phase_node_id}->{phase_node_id}",
+                    fromNodeId=previous_phase_node_id,
                     toNodeId=phase_node_id,
                 )
             )
+            round_entry_node_id = round_entry_node_id or phase_node_id
+            previous_phase_node_id = phase_node_id
+            last_round_node_id = phase_node_id
+        if round_entry_node_id is not None and last_round_node_id is not None:
+            previous_node_id = last_round_node_id
     for activity in activity_items:
         node_id = activity.activity_id
         nodes.append(
@@ -513,15 +502,7 @@ def _strategy_graph(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchStrat
     return AgentWorkbenchStrategyGraphResponse(nodes=bounded_nodes, edges=bounded_edges)
 
 
-def _round_graph_summary(summary: object) -> str:
-    query = _str_or_none(_attr(summary, "keyword_query"))
-    if query is not None:
-        return query
-    round_no = _int_or_none(_attr(summary, "round_no"))
-    return f"Canonical public projection for round {round_no}."
-
-
-def _round_graph_lanes(summary: object) -> list[tuple[str, Literal["cts", "liepin", "all"]]]:
+def _strategy_lane_sources(summary: object) -> list[tuple[str, Literal["cts", "liepin", "all"]]]:
     lanes: list[tuple[str, Literal["cts", "liepin", "all"]]] = []
     seen: set[tuple[str, Literal["cts", "liepin", "all"]]] = set()
     packages = [
@@ -629,15 +610,15 @@ def _thinking_round_payloads(
     input: AgentWorkbenchProjectionInput,
 ) -> list[tuple[AgentWorkbenchActivityPayloadResponse, str | None]]:
     return [
-        (_round_summary_payload(summary), _str_or_none(_attr(summary, "status")))
+        (_runtime_round_payload(summary), _str_or_none(_attr(summary, "status")))
         for summary in input.round_summaries
     ]
 
 
-def _round_summary_payload(summary: object) -> AgentWorkbenchActivityPayloadResponse:
+def _runtime_round_payload(summary: object) -> AgentWorkbenchActivityPayloadResponse:
     return AgentWorkbenchActivityPayloadResponse(
         kind="runtime_round",
-        stage="round_summary",
+        stage="runtime_summary",
         status=_status(_str_or_none(_attr(summary, "status"))),
         roundNo=_int_or_none(_attr(summary, "round_no")),
         queryTerms=[item for item in _sequence_or_empty(_attr(summary, "query_terms")) if isinstance(item, str)],
