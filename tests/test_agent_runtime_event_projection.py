@@ -90,6 +90,19 @@ def test_runtime_event_projection_is_idempotent_and_advances_cursor(tmp_path: Pa
     assert [message.message_type for message in first.messages if message.message_type == "runtime_progress"] == [
         "runtime_progress"
     ]
+    with sqlite3.connect(service.store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT idempotency_key, model_input_included
+            FROM agent_transcript_messages
+            WHERE conversation_id = ? AND message_type = 'runtime_progress'
+            """,
+            (conversation.conversation_id,),
+        ).fetchone()
+    assert row == (
+        f"runtime-progress-message:{conversation.conversation_id}:runtime_run_projection_1:{event.event_seq}",
+        0,
+    )
     assert second.messages == first.messages
     assert second.activity_items == first.activity_items
 

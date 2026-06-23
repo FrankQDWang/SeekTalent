@@ -350,6 +350,22 @@ def test_agent_model_runner_receives_cache_ready_model_input_from_conversation_c
         payload={},
         created_at="2026-06-09T00:00:21.000000Z",
     )
+    progress_message = service.store.append_message(
+        conversation_id=conversation.conversation_id,
+        role="assistant",
+        message_type="runtime_progress",
+        text="runtime progress should stay out of model input",
+        payload={},
+        created_at="2026-06-09T00:00:22.000000Z",
+    )
+    command_message = service.store.append_message(
+        conversation_id=conversation.conversation_id,
+        role="assistant",
+        message_type="command_state",
+        text="command state should stay out of model input",
+        payload={},
+        created_at="2026-06-09T00:00:23.000000Z",
+    )
 
     asyncio.run(
         service.run_agent_turn(
@@ -375,6 +391,10 @@ def test_agent_model_runner_receives_cache_ready_model_input_from_conversation_c
     assert "recent included assistant answer" in recent_transcript
     assert "compacted old first" not in recent_transcript
     assert "compacted old last" not in recent_transcript
+    assert "runtime progress should stay out of model input" not in recent_transcript
+    assert "command state should stay out of model input" not in recent_transcript
+    assert progress_message.model_input_included is False
+    assert command_message.model_input_included is False
     assert "[ADVISORY_MEMORY_CONTEXT_START]" in prompt
     assert "ADVISORY_MEMORY: 用户偏好先讲业务匹配。" in prompt
     assert "ADVISORY_MEMORY" not in runner.last_agent.instructions
