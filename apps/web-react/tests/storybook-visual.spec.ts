@@ -90,6 +90,10 @@ const visualStories = [
     name: "workbench-transcript-guided-followup",
     url: "/iframe.html?id=workbench-transcript--guided-followup",
   },
+  {
+    name: "workbench-resizable-layout",
+    url: "/iframe.html?id=workbench-conversationscreen--resizable-layout",
+  },
 ] as const;
 
 for (const story of visualStories) {
