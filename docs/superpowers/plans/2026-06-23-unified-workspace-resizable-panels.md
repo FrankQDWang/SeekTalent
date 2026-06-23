@@ -1,14 +1,14 @@
-# Phase 1: Resizable Chat↔Graph Panels — Implementation Plan
+# Phase 2: Route Merging + Collapse Animation + Pretext — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans.
 
-**Goal:** Replace the fixed CSS Grid chat↔graph split with `react-resizable-panels` v4 (Group/Panel/Separator), making panel widths user-draggable and persistent.
+**Goal:** Merge `/` and `/conversations/$id` into a single route, add HomeStartPanel collapse animation, fully integrate Pretext text measurement.
 
-**Architecture:** Minimal surgical change to `ConversationScreen.tsx` — swap the `data-workflow-surface="visible"` grid for a `Group` with two `Panel`s and one `Separator`. No route changes, no animations, no Pretext.
+**Architecture:** Single route `/conversations/$conversationId` with `NewConversationFlow` (id="new") and `ExistingConversationFlow` (real id). Collapse animation plays in NewConversationFlow before navigate. Pretext prepare/layout in TranscriptRunGroup message cells.
 
-**Tech Stack:** React 19, `react-resizable-panels@^4.11.2`
+**Tech Stack:** React 19, `@chenglou/pretext`, `@tanstack/react-router`
 
-**Base branch:** `codex/conversation-agent-controlled-orchestration` (476288f2)
+**Base:** `codex/unified-workspace-resizable-panels` (Phase 1 HEAD)
 
 ---
 
@@ -16,351 +16,535 @@
 
 | File | Action | Responsibility |
 |------|--------|---------------|
-| `apps/web-react/package.json` | Modify | Add `react-resizable-panels` dependency |
-| `apps/web-react/src/components/workbench/ConversationScreen.tsx` | Modify | Import Group/Panel/Separator, replace CSS grid in `!compactWorkspace && workflowSurfaceVisible` path |
-| `apps/web-react/src/components/workbench/ConversationScreen.css` | Modify | Remove `grid-template-columns` rules, add workspace-group/panel/separator styles |
-| `apps/web-react/src/components/workbench/ConversationScreen.test.tsx` | Modify | Add "renders resize separator" test |
-| `apps/web-react/src/components/workbench/ConversationScreen.stories.tsx` | Modify | Add `ResizableLayout` story |
-| `apps/web-react/tests/storybook-visual.spec.ts` | Modify | Add `workbench-resizable-layout` entry |
+| `apps/web-react/package.json` | Modify | Add `@chenglou/pretext` |
+| `apps/web-react/src/routes/root.tsx` | Modify | `/` → redirect to `/conversations/new` |
+| `apps/web-react/src/routes/conversation.tsx` | Modify | Split into `NewConversationFlow` + `ExistingConversationFlow` |
+| `apps/web-react/src/components/workbench/HomeStartPanel.tsx` | Modify | Add `collapsing` prop |
+| `apps/web-react/src/components/workbench/HomeStartPanel.css` | Modify | Add collapse keyframes |
+| `apps/web-react/src/components/workbench/TranscriptRunGroup.tsx` | Modify | Integrate Pretext `prepare`/`layout` |
+| `apps/web-react/src/components/workbench/HomeStartPanel.test.tsx` | Modify | Add collapsing class test |
+| `apps/web-react/src/components/workbench/TranscriptRunGroup.test.tsx` | Create | Pretext prepare/layout integration test |
 
 ---
 
-### Task 1: Install react-resizable-panels
+### Task 1: Install @chenglou/pretext
 
 **Files:**
 - Modify: `apps/web-react/package.json`
 
-- [ ] **Step 1: Install the package**
+- [ ] **Step 1: Install**
 
 ```bash
-cd apps/web-react && pnpm add react-resizable-panels
+cd apps/web-react && pnpm add @chenglou/pretext
 ```
-
-Expected output: package added to `package.json` dependencies.
 
 - [ ] **Step 2: Commit**
 
 ```bash
 git add apps/web-react/package.json apps/web-react/pnpm-lock.yaml
-git commit -m "chore: add react-resizable-panels"
+git commit -m "chore: add @chenglou/pretext"
 ```
 
 ---
 
-### Task 2: Replace CSS Grid with Group/Panel/Separator in ConversationScreen
+### Task 2: Update root.tsx — Redirect / to /conversations/new
 
 **Files:**
-- Modify: `apps/web-react/src/components/workbench/ConversationScreen.tsx`
+- Modify: `apps/web-react/src/routes/root.tsx`
 
-- [ ] **Step 1: Add imports**
+- [ ] **Step 1: Replace WorkbenchIndexRoute with a redirect**
 
-Add to the import block in `ConversationScreen.tsx`:
+Replace the entire content of `apps/web-react/src/routes/root.tsx`:
 
 ```tsx
-import { Group, Panel, Separator } from "react-resizable-panels";
+import {
+  createRootRoute,
+  createRoute,
+  Outlet,
+  useNavigate,
+} from "@tanstack/react-router";
+import { useEffect } from "react";
+import { App } from "../App";
+
+export const rootRoute = createRootRoute({
+  component: () => (
+    <App>
+      <Outlet />
+    </App>
+  ),
+});
+
+export const indexRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/",
+  component: IndexRedirect,
+});
+
+function IndexRedirect() {
+  const navigate = useNavigate({ from: "/" });
+
+  useEffect(() => {
+    navigate({ to: "/conversations/new", replace: true });
+  }, [navigate]);
+
+  return null;
+}
 ```
 
-- [ ] **Step 2: Replace the workspace rendering for non-compact + visible workflow surface**
+This removes the `WorkbenchIndexRoute` function entirely, along with the `ConversationList`, `HomeStartPanel`, `useAgentWorkbenchConversations`, `useCreateAgentWorkbenchConversationFromJd`, and `safeErrorMessage` imports that were only used here.
 
-In the `ConversationScreen` component's return block, find the `<div className="conversation-view__workspace">` section. The current code conditionally renders a grid when `workflowSurfaceVisible` is true and compact mode is off.
+- [ ] **Step 2: Run type check and tests**
 
-Replace the current workspace content block (lines 97-162) with:
+```bash
+cd apps/web-react && npx tsc -b --pretty false && npx vitest run
+```
+
+Expected: No type errors. All 102 tests pass.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add apps/web-react/src/routes/root.tsx
+git commit -m "refactor: redirect / to /conversations/new"
+```
+
+---
+
+### Task 3: Update conversation.tsx — NewConversationFlow + ExistingConversationFlow
+
+**Files:**
+- Modify: `apps/web-react/src/routes/conversation.tsx`
+
+- [ ] **Step 1: Replace the file with split flows**
+
+Replace the entire content of `apps/web-react/src/routes/conversation.tsx`:
 
 ```tsx
-        {compactWorkspace && workflowSurfaceVisible ? (
-          <div
-            className="conversation-view__workspace"
-            data-active-panel={activePanel}
-            data-workflow-surface="visible"
-          >
-            <section
-              aria-labelledby="conversation-chat-tab"
-              className="conversation-view__panel conversation-view__panel--chat"
-              data-panel="chat"
-              id="conversation-panel-chat"
-              role="tabpanel"
-            >
-              <Transcript groups={view.transcriptGroups}>
-                {requirementReviewPanel}
-              </Transcript>
-              <MessageComposer
-                disabled={!view.pendingActions.allowed.includes("submit_message")}
-                loading={submittingMessage}
-                onSubmit={onSubmitMessage}
-              />
-            </section>
-            <section
-              aria-labelledby="conversation-graph-tab"
-              className="conversation-view__panel conversation-view__panel--graph"
-              data-panel="graph"
-              id="conversation-panel-graph"
-              role="tabpanel"
-            >
-              {shouldMountGraph ? (
-                <StrategyGraph
-                  graph={view.strategyGraph}
-                  jobTitle={view.conversation.title}
-                  key={activePanel === "graph" ? "graph-active" : "graph-inactive"}
-                />
-              ) : null}
-            </section>
-            <section
-              aria-labelledby="conversation-candidates-tab"
-              className="conversation-view__panel conversation-view__panel--candidates"
-              data-panel="candidates"
-              id="conversation-panel-candidates"
-              role="tabpanel"
-            >
-              <ConversationScreenSide
-                onViewCandidateDetails={onViewCandidateDetails}
-                view={view}
-              />
-            </section>
-            <section
-              aria-labelledby="conversation-final-tab"
-              className="conversation-view__panel conversation-view__panel--final"
-              data-panel="final"
-              id="conversation-panel-final"
-              role="tabpanel"
-            >
-              <FinalReviewPanel view={view} />
-            </section>
-          </div>
-        ) : workflowSurfaceVisible ? (
-          <Group autoSaveId="chat-graph-layout" className="workspace-group" direction="horizontal">
-            <Panel className="workspace-panel workspace-panel--chat" defaultSize={386} minSize={280} maxSize="50%">
-              <section
-                aria-labelledby="conversation-chat-tab"
-                className="conversation-view__panel conversation-view__panel--chat"
-                data-panel="chat"
-                id="conversation-panel-chat"
-                role="tabpanel"
-              >
-                <Transcript groups={view.transcriptGroups}>
-                  {requirementReviewPanel}
-                </Transcript>
-                <MessageComposer
-                  disabled={!view.pendingActions.allowed.includes("submit_message")}
-                  loading={submittingMessage}
-                  onSubmit={onSubmitMessage}
-                />
-              </section>
-            </Panel>
-            <Separator className="workspace-separator" />
-            <Panel className="workspace-panel workspace-panel--graph" minSize={400}>
-              <section
-                aria-labelledby="conversation-graph-tab"
-                className="conversation-view__panel conversation-view__panel--graph"
-                data-panel="graph"
-                id="conversation-panel-graph"
-                role="tabpanel"
-              >
-                {shouldMountGraph ? (
-                  <StrategyGraph
-                    graph={view.strategyGraph}
-                    jobTitle={view.conversation.title}
-                    key="graph-active"
-                  />
-                ) : null}
-              </section>
-            </Panel>
-          </Group>
+import { createRoute, useNavigate } from "@tanstack/react-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ConversationList } from "../components/workbench/ConversationList";
+import {
+  ConversationScreen,
+  ConversationScreenSide,
+  hasConversationWorkflowSurface,
+} from "../components/workbench/ConversationScreen";
+import { ConversationShell } from "../components/workbench/ConversationShell";
+import { CandidateDetailDrawer } from "../components/workbench/CandidateDetailDrawer";
+import { HomeStartPanel } from "../components/workbench/HomeStartPanel";
+import type { HomeStartPanelSubmitInput } from "../components/workbench/HomeStartPanel";
+import {
+  useAmendAgentWorkbenchRequirementFromText,
+  useConfirmAgentWorkbenchRequirements,
+  useAgentWorkbenchCandidateDetail,
+  useAgentWorkbenchConversations,
+  useAgentWorkbenchLiveConversation,
+  useCreateAgentWorkbenchConversationFromJd,
+  useSubmitAgentWorkbenchMessage,
+  useUpdateAgentWorkbenchRequirementDraft,
+} from "../lib/api/agentWorkbench";
+import type {
+  AgentWorkbenchConversationResponse,
+  AgentWorkbenchRequirementDraftItem,
+} from "../lib/api/agentWorkbenchTypes";
+import { safeErrorMessage } from "../lib/api/client";
+import { queryKeys } from "../lib/query/keys";
+import { rootRoute } from "./root";
+
+export const conversationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/conversations/$conversationId",
+  component: WorkbenchRoute,
+});
+
+function WorkbenchRoute() {
+  const { conversationId } = conversationRoute.useParams();
+
+  if (conversationId === "new") {
+    return <NewConversationFlow />;
+  }
+
+  return <ExistingConversationFlow key={conversationId} conversationId={conversationId} />;
+}
+
+/** Lightweight flow for /conversations/new — only loads conversation list. */
+function NewConversationFlow() {
+  const [collapsing, setCollapsing] = useState(false);
+  const navigate = useNavigate({ from: "/conversations/$conversationId" });
+  const conversationsQuery = useAgentWorkbenchConversations();
+  const createConversationMutation = useCreateAgentWorkbenchConversationFromJd();
+  const [homeErrorMessage, setHomeErrorMessage] = useState<string | null>(null);
+
+  const onHomeSubmit = async (input: HomeStartPanelSubmitInput) => {
+    setHomeErrorMessage(null);
+    try {
+      const result = await createConversationMutation.mutateAsync({
+        jobDescription: input.jobDescription,
+        jobTitle: input.jobTitle,
+      });
+      setCollapsing(true);
+      setTimeout(() => {
+        navigate({
+          params: { conversationId: result.conversationId },
+          to: "/conversations/$conversationId",
+          replace: true,
+        });
+      }, 500);
+    } catch (error) {
+      setHomeErrorMessage(safeErrorMessage(error));
+      throw error;
+    }
+  };
+
+  return (
+    <ConversationShell
+      main={
+        <HomeStartPanel
+          collapsing={collapsing}
+          errorMessage={homeErrorMessage}
+          loading={createConversationMutation.isPending}
+          onSubmit={onHomeSubmit}
+        />
+      }
+      rail={
+        conversationsQuery.isSuccess ? (
+          <ConversationList
+            conversations={conversationsQuery.data?.conversations ?? []}
+          />
         ) : (
-          <div
-            className="conversation-view__workspace"
-            data-workflow-surface="hidden"
-          >
-            <section
-              aria-labelledby="conversation-chat-tab"
-              className="conversation-view__panel conversation-view__panel--chat"
-              data-panel="chat"
-              id="conversation-panel-chat"
-              role="tabpanel"
-            >
-              <Transcript groups={view.transcriptGroups}>
-                {requirementReviewPanel}
-              </Transcript>
-              <MessageComposer
-                disabled={!view.pendingActions.allowed.includes("submit_message")}
-                loading={submittingMessage}
-                onSubmit={onSubmitMessage}
-              />
-            </section>
-          </div>
-        )}
+          <ConversationList />
+        )
+      }
+    />
+  );
+}
+
+/** Full-featured flow for real conversation IDs. */
+function ExistingConversationFlow({
+  conversationId,
+}: {
+  conversationId: string;
+}) {
+  const queryClient = useQueryClient();
+  const query = useAgentWorkbenchLiveConversation(conversationId);
+  const queryKey = useMemo(
+    () => queryKeys.agentConversation(conversationId),
+    [conversationId],
+  );
+  const requirementMutationChainRef = useRef<Promise<void>>(Promise.resolve());
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(null);
+  const [updatingRequirementItemIds, setUpdatingRequirementItemIds] = useState<string[]>([]);
+  const detailQuery = useAgentWorkbenchCandidateDetail(
+    conversationId,
+    selectedCandidateId,
+  );
+  const submitMessageMutation = useSubmitAgentWorkbenchMessage(conversationId);
+  const confirmRequirementsMutation = useConfirmAgentWorkbenchRequirements(conversationId);
+  const updateRequirementMutation = useUpdateAgentWorkbenchRequirementDraft(conversationId);
+  const amendRequirementMutation = useAmendAgentWorkbenchRequirementFromText(conversationId);
+  const selectedCandidate = useMemo(
+    () =>
+      query.data?.candidates.find(
+        (candidate) => candidate.candidateId === selectedCandidateId,
+      ) ?? null,
+    [selectedCandidateId, query.data?.candidates],
+  );
+  const closeCandidateDrawer = useCallback(() => {
+    setSelectedCandidateId(null);
+  }, []);
+  const retryCandidateDetail = useCallback(() => {
+    void detailQuery.refetch();
+  }, [detailQuery]);
+  const viewCandidateDetails = useCallback((candidateId: string) => {
+    setActionErrorMessage(null);
+    setSelectedCandidateId(candidateId);
+  }, []);
+
+  useEffect(() => {
+    requirementMutationChainRef.current = Promise.resolve();
+    setActionErrorMessage(null);
+    setSelectedCandidateId(null);
+    setUpdatingRequirementItemIds([]);
+  }, [conversationId]);
+
+  if (query.isPending) {
+    return (
+      <ConversationShell
+        main={<section aria-busy="true" className="conversation-view__state" />}
+        rail={<ConversationList selectedConversationId={conversationId} />}
+      />
+    );
+  }
+
+  if (query.isError) {
+    return (
+      <ConversationShell
+        main={
+          <section className="conversation-view__state" role="alert">
+            {safeErrorMessage(query.error)}
+          </section>
+        }
+        rail={<ConversationList selectedConversationId={conversationId} />}
+      />
+    );
+  }
+
+  const view = query.data;
+  const workflowSurfaceVisible = hasConversationWorkflowSurface(view);
+  const latestRequirementDraftRevisionId = () =>
+    queryClient.getQueryData<AgentWorkbenchConversationResponse>(queryKey)
+      ?.requirementDraft?.draftRevisionId ??
+    view.requirementDraft?.draftRevisionId;
+
+  const enqueueRequirementMutation = (run: () => Promise<void>) => {
+    const next = requirementMutationChainRef.current
+      .catch(() => undefined)
+      .then(run);
+    requirementMutationChainRef.current = next.catch(() => undefined);
+    return next;
+  };
+
+  const onSubmitMessage = async (message: string) => {
+    setActionErrorMessage(null);
+    try {
+      await submitMessageMutation.mutateAsync(message);
+    } catch (error) {
+      setActionErrorMessage(safeErrorMessage(error));
+      throw error;
+    }
+  };
+
+  const onConfirmRequirements = async () => {
+    setActionErrorMessage(null);
+    await requirementMutationChainRef.current.catch(() => undefined);
+    const draftRevisionId = latestRequirementDraftRevisionId();
+    if (!draftRevisionId) {
+      setActionErrorMessage("当前没有可确认的需求草稿。");
+      return;
+    }
+    try {
+      await confirmRequirementsMutation.mutateAsync(draftRevisionId);
+    } catch (error) {
+      setActionErrorMessage(safeErrorMessage(error));
+    }
+  };
+
+  const onToggleRequirementItem = async (
+    item: AgentWorkbenchRequirementDraftItem,
+    selected: boolean,
+  ) => {
+    setActionErrorMessage(null);
+    setUpdatingRequirementItemIds((current) =>
+      current.includes(item.itemId) ? current : [...current, item.itemId],
+    );
+    try {
+      await enqueueRequirementMutation(async () => {
+        const draftRevisionId = latestRequirementDraftRevisionId();
+        if (!draftRevisionId) {
+          throw new Error("Requirement draft is unavailable.");
+        }
+        await updateRequirementMutation.mutateAsync({
+          draftRevisionId,
+          operations: [{ itemId: item.itemId, op: "set_selected", selected }],
+        });
+      });
+    } catch (error) {
+      setActionErrorMessage(safeErrorMessage(error));
+    } finally {
+      setUpdatingRequirementItemIds((current) =>
+        current.filter((itemId) => itemId !== item.itemId),
+      );
+    }
+  };
+
+  const onAddOtherRequirement = async (text: string) => {
+    setActionErrorMessage(null);
+    try {
+      await enqueueRequirementMutation(async () => {
+        const draftRevisionId = latestRequirementDraftRevisionId();
+        if (!draftRevisionId) {
+          throw new Error("Requirement draft is unavailable.");
+        }
+        await amendRequirementMutation.mutateAsync({ draftRevisionId, text });
+      });
+    } catch (error) {
+      setActionErrorMessage(safeErrorMessage(error));
+      throw error;
+    }
+  };
+
+  return (
+    <>
+      <ConversationShell
+        main={
+          <ConversationScreen
+            actionErrorMessage={actionErrorMessage}
+            amendingRequirements={amendRequirementMutation.isPending}
+            confirmingRequirements={confirmRequirementsMutation.isPending}
+            onAddOtherRequirement={onAddOtherRequirement}
+            onConfirmRequirements={() => void onConfirmRequirements()}
+            onSubmitMessage={onSubmitMessage}
+            onToggleRequirementItem={(item, selected) => {
+              void onToggleRequirementItem(item, selected);
+            }}
+            onViewCandidateDetails={viewCandidateDetails}
+            submittingMessage={submitMessageMutation.isPending}
+            updatingRequirementItemIds={updatingRequirementItemIds}
+            view={view}
+          />
+        }
+        rail={<ConversationList selectedConversationId={conversationId} />}
+        side={
+          workflowSurfaceVisible ? (
+            <ConversationScreenSide
+              onViewCandidateDetails={viewCandidateDetails}
+              view={view}
+            />
+          ) : null
+        }
+      />
+      <CandidateDetailDrawer
+        candidate={selectedCandidate}
+        detail={detailQuery.data ?? null}
+        errorMessage={
+          detailQuery.isError ? safeErrorMessage(detailQuery.error) : undefined
+        }
+        onClose={closeCandidateDrawer}
+        onRetry={retryCandidateDetail}
+        open={selectedCandidateId !== null}
+        status={
+          selectedCandidateId === null
+            ? "idle"
+            : detailQuery.isPending
+              ? "loading"
+              : detailQuery.isError
+                ? "error"
+                : "ready"
+        }
+      />
+    </>
+  );
+}
 ```
 
-- [ ] **Step 3: Verify imports are correct**
-
-The component needs `useCompactWorkspace` (already used), `hasConversationWorkflowSurface` (already used). No new hooks needed.
-
-- [ ] **Step 4: Run type check**
+- [ ] **Step 2: Run type check and tests**
 
 ```bash
-cd apps/web-react && npx tsc -b --pretty false
+cd apps/web-react && npx tsc -b --pretty false && npx vitest run
 ```
 
-Expected: No type errors.
+Expected: No type errors. All 102 tests pass.
 
-- [ ] **Step 5: Run tests**
-
-```bash
-cd apps/web-react && npx vitest run
-```
-
-Expected: All existing tests pass (101 tests, 0 failures). Note: the existing compact mode test at line 103 mocks `matchMedia` to return `matches: true`, so it exercises the compact path — the non-compact resizable path runs for other tests.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add apps/web-react/src/components/workbench/ConversationScreen.tsx
-git commit -m "feat: replace CSS grid with resizable Group/Panel/Separator"
+git add apps/web-react/src/routes/conversation.tsx
+git commit -m "feat: split conversation route into new/existing flows with collapse support"
 ```
 
 ---
 
-### Task 3: Update ConversationScreen.css
+### Task 4: Add Collapsing Prop to HomeStartPanel
 
 **Files:**
-- Modify: `apps/web-react/src/components/workbench/ConversationScreen.css`
+- Modify: `apps/web-react/src/components/workbench/HomeStartPanel.tsx`
+- Modify: `apps/web-react/src/components/workbench/HomeStartPanel.css`
 
-- [ ] **Step 1: Replace grid rules with workspace-group styles**
+- [ ] **Step 1: Add `collapsing` prop to TSX**
 
-Remove lines 16-24:
+In `HomeStartPanel.tsx`, add `collapsing` to the props type and the section className:
+
+```tsx
+type HomeStartPanelProps = {
+  collapsing?: boolean;
+  errorMessage?: string | null;
+  initialJobDescription?: string;
+  loading?: boolean;
+  onSubmit: (input: HomeStartPanelSubmitInput) => Promise<void> | void;
+};
+
+export function HomeStartPanel({
+  collapsing = false,
+  errorMessage = null,
+  initialJobDescription = "",
+  loading = false,
+  onSubmit,
+}: HomeStartPanelProps) {
+```
+
+And update the section:
+
+```tsx
+<section
+  aria-label="新建招聘任务"
+  className={
+    "home-start-panel" + (collapsing ? " home-start-panel--collapsing" : "")
+  }
+>
+```
+
+- [ ] **Step 2: Add collapse keyframes to CSS**
+
+At the end of `HomeStartPanel.css`:
 
 ```css
-/* Remove these */
-.conversation-view__workspace[data-workflow-surface="visible"] {
-  display: grid;
-  gap: 0;
-  grid-template-columns: 386px minmax(0, 1fr);
+.home-start-panel--collapsing {
+  animation: home-panel-collapse 500ms ease forwards;
 }
 
-.conversation-view__workspace[data-workflow-surface="hidden"] {
-  display: block;
+@keyframes home-panel-collapse {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-start-panel--collapsing {
+    animation: none;
+    opacity: 0;
+  }
 }
 ```
 
-Replace with:
-
-```css
-.conversation-view__workspace[data-workflow-surface="visible"] {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-
-.conversation-view__workspace[data-workflow-surface="hidden"] {
-  display: block;
-}
-```
-
-- [ ] **Step 2: Add workspace-group, workspace-panel, and workspace-separator rules**
-
-At the end of `ConversationScreen.css`, add:
-
-```css
-/* --- Resizable panel layout (react-resizable-panels) --- */
-
-.workspace-group {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.workspace-panel {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.workspace-panel--chat {
-  background: rgb(246 248 252);
-}
-
-.workspace-panel--chat .transcript {
-  background: rgb(246 248 252);
-}
-
-.workspace-separator {
-  background: transparent;
-  flex-shrink: 0;
-  outline: none;
-  transition: background 150ms;
-  width: 4px;
-}
-
-.workspace-separator:hover {
-  background: var(--st-action);
-  cursor: col-resize;
-}
-
-.workspace-separator[data-separator] {
-  background: var(--st-action);
-  cursor: col-resize;
-}
-
-.workspace-separator:focus-visible {
-  background: var(--st-action);
-  outline: 2px solid var(--st-action);
-  outline-offset: 2px;
-}
-```
-
-- [ ] **Step 3: Run style check**
+- [ ] **Step 3: Run tests**
 
 ```bash
 cd apps/web-react && npx vitest run
 ```
 
-Expected: All tests still pass (style-only change to existing CSS selectors should not affect tests).
+Expected: All 102 tests pass.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add apps/web-react/src/components/workbench/ConversationScreen.css
-git commit -m "style: add resizable panel layout CSS rules"
+git add apps/web-react/src/components/workbench/HomeStartPanel.tsx \
+        apps/web-react/src/components/workbench/HomeStartPanel.css
+git commit -m "feat: add collapse animation to HomeStartPanel"
 ```
 
 ---
 
-### Task 4: Update Tests
+### Task 5: Add Collapsing Test for HomeStartPanel
 
 **Files:**
-- Modify: `apps/web-react/src/components/workbench/ConversationScreen.test.tsx`
+- Modify: `apps/web-react/src/components/workbench/HomeStartPanel.test.tsx`
 
-- [ ] **Step 1: Add "renders resize separator" test**
-
-Add at the end of the `ConversationScreen` describe block (before the `ConversationScreenSide` describe block):
+- [ ] **Step 1: Add test**
 
 ```tsx
-  it("renders a resize separator between chat and graph when not compact", () => {
+it("renders with collapsing class when collapsing prop is true", () => {
     expect.hasAssertions();
 
-    vi.stubGlobal("matchMedia", (query: string) => ({
-      addEventListener: vi.fn(),
-      addListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-      matches: false,
-      media: query,
-      onchange: null,
-      removeEventListener: vi.fn(),
-      removeListener: vi.fn(),
-    }));
+    render(<HomeStartPanel collapsing onSubmit={vi.fn()} />);
 
-    render(
-      <ConversationScreen
-        onSubmitMessage={vi.fn()}
-        view={agentWorkbenchRunningViewFixture}
-      />,
-    );
-
-    // The Separator renders as a div with class workspace-separator
-    const separator = document.querySelector(".workspace-separator");
-    expect(separator).not.toBeNull();
-    expect(screen.getByLabelText("检索策略图")).toBeVisible();
+    const section = screen.getByRole("region", { name: "新建招聘任务" });
+    expect(section.className).toContain("home-start-panel--collapsing");
   });
 ```
 
@@ -370,86 +554,111 @@ Add at the end of the `ConversationScreen` describe block (before the `Conversat
 cd apps/web-react && npx vitest run
 ```
 
-Expected: All tests pass (101+1 = 102 tests).
+Expected: 103 tests pass.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add apps/web-react/src/components/workbench/ConversationScreen.test.tsx
-git commit -m "test: add resize separator rendering test"
+git add apps/web-react/src/components/workbench/HomeStartPanel.test.tsx
+git commit -m "test: add collapsing class test for HomeStartPanel"
 ```
 
 ---
 
-### Task 5: Add Storybook Story
+### Task 6: Integrate Pretext into Transcript Event Rendering
 
 **Files:**
-- Modify: `apps/web-react/src/components/workbench/ConversationScreen.stories.tsx`
+- Modify: `apps/web-react/src/components/workbench/TranscriptRunGroup.tsx`
 
-- [ ] **Step 1: Find the ConversationScreen stories file**
+- [ ] **Step 1: Add Pretext imports and pre-measurement hook**
 
-Read it to understand the existing pattern:
-
-```bash
-cat apps/web-react/src/components/workbench/ConversationScreen.stories.tsx
-```
-
-- [ ] **Step 2: Add a `ResizableLayout` story**
-
-Following the existing pattern (simple `view` prop, no render override), add:
+In `TranscriptRunGroup.tsx`, add:
 
 ```tsx
-export const ResizableLayout: Story = {
-  args: {
-    view: agentWorkbenchRunningViewFixture,
-  },
-};
+import { prepare, layout } from "@chenglou/pretext";
+
+const FONT_STRING = "14px system-ui, -apple-system, sans-serif";
+const MIN_PRETEXT_CHARS = 200;
 ```
 
-This story renders the two-panel resizable layout with the running workbench view fixture. The `RunningWithStream` story already renders the same fixture, but in Chromatic/Playwright the resize separator will be visible between the chat and graph panels when the viewport is ≥1081px.
+- [ ] **Step 2: Update TranscriptEvent to use Pretext for long text**
 
-- [ ] **Step 3: Run Storybook build to verify**
-
-```bash
-cd apps/web-react && npx storybook build
-```
-
-Expected: Build succeeds.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add apps/web-react/src/components/workbench/ConversationScreen.stories.tsx
-git commit -m "story: add ResizableLayout story for ConversationScreen"
-```
-
----
-
-### Task 6: Add Playwright Screenshot Entry
-
-**Files:**
-- Modify: `apps/web-react/tests/storybook-visual.spec.ts`
-
-- [ ] **Step 1: Add the resizable layout entry**
-
-After the existing `workbench-strategy-graph-large` entry (around line 37), add:
+In the `TranscriptEvent` function, before the `<p>` tag that renders `event.summary`, add pre-measurement:
 
 ```tsx
-  {
-    name: "workbench-resizable-layout",
-    url: "/iframe.html?id=workbench-conversationscreen--resizable-layout",
-  },
+function TranscriptEvent({ event }: { event: AgentWorkbenchTranscriptEvent }) {
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  const summaryText = event.summary ?? event.payload.summary ?? null;
+  const shouldMeasure = summaryText !== null && summaryText.length > MIN_PRETEXT_CHARS;
+
+  const prepared = useMemo(
+    () => (shouldMeasure ? prepare(summaryText, FONT_STRING) : null),
+    [summaryText, shouldMeasure],
+  );
+
+  const measuredHeight = useMemo(() => {
+    if (prepared === null || containerWidth === null) return undefined;
+    const { height } = layout(prepared, containerWidth, 20);
+    return height;
+  }, [prepared, containerWidth]);
+
+  // ... rest of existing rendering
 ```
 
-- [ ] **Step 2: Update the test count assertion**
+And add a `ResizeObserver` effect to track container width:
 
-Find the existing `test.describe` assertion for the count and update it. Each entry generates 3 viewport screenshots (desktop, tablet, mobile). If the previous count was 17 entries × 3 = 51, the new count is 18 entries × 3 = 54.
+```tsx
+  const ref = useRef<HTMLDivElement>(null);
 
-- [ ] **Step 3: Commit**
+  useEffect(() => {
+    if (!shouldMeasure) return;
+    const element = ref.current;
+    if (!element) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setContainerWidth(entry.contentRect.width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [shouldMeasure]);
+```
+
+Then update the `<p>` tag rendering:
+
+```tsx
+        {(event.summary ?? event.payload.summary) ? (
+          <p style={measuredHeight !== undefined ? { minHeight: measuredHeight } : undefined}>
+            {event.summary ?? event.payload.summary}
+          </p>
+        ) : null}
+```
+
+And add `ref={ref}` to the transcript-event body div:
+
+```tsx
+      <div className="transcript-event__body" ref={ref}>
+```
+
+- [ ] **Step 3: Add the necessary imports**
+
+```tsx
+import { useMemo, useRef, useEffect, useState } from "react";
+// ... existing imports
+```
+
+- [ ] **Step 4: Run type check and tests**
 
 ```bash
-git add apps/web-react/tests/storybook-visual.spec.ts
-git commit -m "test: add resizable layout Playwright screenshot entry"
+cd apps/web-react && npx tsc -b --pretty false && npx vitest run
+```
+
+Expected: No type errors. All 103 tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add apps/web-react/src/components/workbench/TranscriptRunGroup.tsx
+git commit -m "feat: integrate Pretext text measurement in Transcript events"
 ```
 
 ---
@@ -462,7 +671,7 @@ git commit -m "test: add resizable layout Playwright screenshot entry"
 cd apps/web-react && npx vitest run
 ```
 
-Expected: All tests pass, 0 failures.
+Expected: 103+ tests, all passing.
 
 - [ ] **Step 2: TypeScript check**
 
@@ -480,7 +689,7 @@ cd apps/web-react && npx vite build
 
 Expected: Build succeeds.
 
-- [ ] **Step 4: Verify git status**
+- [ ] **Step 4: Verify git status clean**
 
 ```bash
 git status
@@ -491,7 +700,7 @@ Expected: Working tree clean.
 - [ ] **Step 5: Final commit**
 
 ```bash
-git add -A && git commit -m "chore: final Phase 1 verification pass" || echo "Nothing to commit"
+git add -A && git commit -m "chore: final Phase 2 verification pass" || echo "Nothing to commit"
 ```
 
 ---
@@ -501,16 +710,10 @@ git add -A && git commit -m "chore: final Phase 1 verification pass" || echo "No
 1. `pnpm test` — all tests pass
 2. `tsc -b` — no type errors
 3. `vite build` — builds successfully
-4. Navigate to `/conversations/agent_conv_1` — chat and graph panels have a 4px draggable separator
-5. Hover over separator — blue highlight + `col-resize` cursor
-6. Drag separator — panels resize proportionally
-7. Chat panel cannot go below 280px or above 50%
-8. Graph panel cannot go below 400px
-9. Refresh page — panel positions restored from localStorage
-10. ≤1080px viewport — no separator, tab layout works unchanged
-
-## Phase 2 (future)
-
-- Route merging (`/` + `/conversations/$id` → single route with stage state)
-- HomeStartPanel collapse animation
-- Pretext text measurement integration
+4. `/` redirects to `/conversations/new`
+5. Home form visible at `/conversations/new`
+6. Submit form → 500ms collapse animation → workspace loads
+7. `prefers-reduced-motion` skips animation
+8. Panel resize → transcript text height follows (no DOM reflow for long messages)
+9. Short messages (<200 chars) use normal CSS text flow
+10. Existing conversation list, side panel, candidate drawer unaffected

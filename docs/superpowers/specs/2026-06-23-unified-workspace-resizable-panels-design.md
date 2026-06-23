@@ -1,192 +1,91 @@
-# Phase 1: Resizable Chat↔Graph Panels — Design Spec
+# Unified Workspace — Design Spec
 
 > **Date:** 2026-06-23  
 > **Branch:** `codex/unified-workspace-resizable-panels`  
-> **Base:** `codex/conversation-agent-controlled-orchestration` (476288f2)  
-> **Status:** phased — Phase 1 only
+> **Status:** Phase 2 — Route Merging + Collapse Animation + Pretext
 
 ---
 
-## 1. Problem
+## Phase 1 (Done)
 
-The ConversationScreen workspace chat and graph panels are laid out with a fixed CSS Grid (`grid-template-columns: 386px minmax(0, 1fr)`). Users cannot resize the panels. When the chat panel has long messages or the graph needs more width, there is no way to adjust the split.
+Resizable chat↔graph panels with `react-resizable-panels` v4. See git log.
 
-## 2. Goal
+## Phase 2
 
-Replace the fixed CSS Grid with `react-resizable-panels` (v4) `Group`/`Panel`/`Separator` components, making the chat↔graph split draggable. Panel sizes persist via `autoSaveId` in localStorage.
+### 1. Problem
 
-## 3. Non-goals (Phase 1)
+After Phase 1, the workspace has resizable panels but the user still experiences a hard route jump from `/` to `/conversations/$id` with no transition. The form disappears and the workspace appears with no animation. Additionally, transcript text does not use pre-measurement, causing layout reflow during panel resize.
 
-- No route merging (`/` and `/conversations/$id` stay separate)
-- No HomeStartPanel collapse animation
-- No Pretext text measurement
-- No changes to the rail, side panel, or responsive tab layout
-- No changes to BFF or backend
+### 2. Goals
 
-## 4. Design
+1. **Route merging:** `/` redirects to `/conversations/new`. Single route with `NewConversationFlow` / `ExistingConversationFlow` split.
+2. **Form collapse animation:** Submitting the form triggers a 500ms CSS collapse animation on HomeStartPanel, then navigates to the real conversation.
+3. **Pretext text measurement:** Full integration of `@chenglou/pretext` in Transcript message rendering for DOM-reflow-free text height during panel resize.
 
-### 4.1 Component Change
+### 3. Route Architecture
 
-**Before** (`ConversationScreen.tsx`):
+```
+/                        → redirect to /conversations/new
+/conversations/new       → NewConversationFlow (HomeStartPanel + collapse animation)
+/conversations/$id       → ExistingConversationFlow (ConversationScreen + BFF hooks)
+```
+
+The split at the route level avoids hook-ordering issues (BFF hooks never render for `"new"`). The collapse animation plays in `NewConversationFlow`, then after 500ms `navigate` to the real ID unmounts it and mounts `ExistingConversationFlow`.
+
+### 4. Collapse Animation
+
+HomeStartPanel accepts a `collapsing` prop. When true, CSS applies:
+
+```css
+.home-start-panel--collapsing {
+  animation: home-panel-collapse 500ms ease forwards;
+}
+
+@keyframes home-panel-collapse {
+  0% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.95); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-start-panel--collapsing { animation: none; opacity: 0; }
+}
+```
+
+### 5. Pretext Integration
+
+`@chenglou/pretext` is used for pre-measuring message text heights in TranscriptRunGroup:
+
 ```tsx
-<div className="conversation-view__workspace"
-     data-workflow-surface="visible">
-  <section className="conversation-view__panel--chat">...</section>
-  {workflowSurfaceVisible ? (
-    <section className="conversation-view__panel--graph">...</section>
-  ) : null}
-</div>
+import { prepare, layout } from "@chenglou/pretext";
+
+// On message mount:
+const prepared = useMemo(() => prepare(text, fontString), [text]);
+// On panel resize:
+const { height } = layout(prepared, containerWidth, lineHeight);
 ```
 
-CSS:
-```css
-.conversation-view__workspace[data-workflow-surface="visible"] {
-  display: grid;
-  grid-template-columns: 386px minmax(0, 1fr);
-}
-```
+The measured height is applied as `min-height` to the message container, preventing DOM layout reflow during resize.
 
-**After**:
-```tsx
-import { Group, Panel, Separator } from "react-resizable-panels";
+Only messages > 200 characters get Pretext pre-measurement. Shorter messages use CSS naturally.
 
-// Inside ConversationScreen, when !compactWorkspace && workflowSurfaceVisible:
-<Group autoSaveId="chat-graph-layout" className="workspace-group" direction="horizontal">
-  <Panel className="workspace-panel workspace-panel--chat"
-         defaultSize={386} minSize={280} maxSize="50%">
-    {chatPanelContent}
-  </Panel>
-  <Separator className="workspace-separator" />
-  <Panel className="workspace-panel workspace-panel--graph"
-         defaultSize={null} minSize={400}>
-    {graphPanelContent}
-  </Panel>
-</Group>
-```
-
-**Key API notes (react-resizable-panels v4.11.2):**
-- Container: `Group` (not `PanelGroup`)
-- Handle: `Separator` (not `PanelResizeHandle`)
-- Size props: numeric values = pixels, strings ending with `%` = percentage
-- Default `minSize`/`maxSize` = 0%/100%
-- Hover/active styling uses `[data-separator]` attribute selector
-
-### 4.2 CSS Changes
-
-Remove `grid-template-columns` rules. Add resize handle styles:
-
-```css
-/* Remove */
-.conversation-view__workspace[data-workflow-surface="visible"] {
-  display: grid;
-  gap: 0;
-  grid-template-columns: 386px minmax(0, 1fr);
-}
-
-/* Replace with */
-.conversation-view__workspace[data-workflow-surface="visible"] {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-}
-```
-
-```css
-/* Add */
-.workspace-group {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.workspace-panel {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.workspace-panel--chat {
-  background: rgb(246 248 252);
-}
-
-.workspace-separator {
-  background: transparent;
-  flex-shrink: 0;
-  outline: none;
-  transition: background 150ms;
-  width: 4px;
-}
-
-.workspace-separator:hover,
-.workspace-separator[data-separator] {
-  background: var(--st-action);
-  cursor: col-resize;
-}
-
-.workspace-separator:focus-visible {
-  background: var(--st-action);
-  outline: 2px solid var(--st-action);
-  outline-offset: 2px;
-}
-
-.workspace-panel--graph .strategy-graph {
-  height: 100%;
-  min-height: 100%;
-}
-```
-
-### 4.3 Responsive (≤1080px)
-
-No change. `useCompactWorkspace()` still returns true on narrow viewports, and the existing tab-driven layout works as before. `Group`/`Panel`/`Separator` are only rendered when `!compactWorkspace`.
-
-### 4.4 Compact Workspace Path
-
-When `compactWorkspace` is true, the existing block layout with tab switching is preserved unchanged. The `Group` is never mounted.
-
-### 4.5 localStorage Persistence
-
-`autoSaveId="chat-graph-layout"` on `Group` persists the layout automatically. Refreshing the page restores the user's panel widths.
-
-## 5. Files Changed
+### 6. Files Changed
 
 | File | Change |
 |------|--------|
-| `package.json` | Add `react-resizable-panels` dependency |
-| `ConversationScreen.tsx` | Import `Group`/`Panel`/`Separator`, replace CSS Grid in `!compactWorkspace && workflowSurfaceVisible` path |
-| `ConversationScreen.css` | Remove `grid-template-columns: 386px ...`, add `.workspace-group`/`.workspace-panel`/`.workspace-separator` styles |
-| `ConversationScreen.test.tsx` | Add test that resize handle renders (no structural change to existing tests) |
-| `ConversationScreen.stories.tsx` | Add story `ResizableLayout` showing the draggable split |
-| `tests/storybook-visual.spec.ts` | Add screenshot entry for `workbench-resizable-layout` |
+| `routes/root.tsx` | `/` → redirect to `/conversations/new` |
+| `routes/conversation.tsx` | Split into `NewConversationFlow` + `ExistingConversationFlow`. New flow has collapse animation + create mutation. |
+| `components/workbench/HomeStartPanel.tsx` | Add `collapsing` prop |
+| `components/workbench/HomeStartPanel.css` | Add collapse keyframes + `--collapsing` class |
+| `components/workbench/TranscriptRunGroup.tsx` | Integrate Pretext `prepare`/`layout` |
+| `components/workbench/HomeStartPanel.test.tsx` | Add collapsing class test |
+| `package.json` | Add `@chenglou/pretext` |
 
-## 6. Acceptance Criteria
+### 7. Acceptance Criteria
 
-1. Chat and graph panels have a 4px vertical separator between them
-2. Hovering over the separator shows `cursor: col-resize` and a blue highlight
-3. Dragging the separator resizes both panels proportionally
-4. Chat panel cannot be smaller than 280px or larger than 50%
-5. Graph panel cannot be smaller than 400px
-6. Panel positions persist in localStorage across page reloads
-7. ≤1080px viewport: no separator, existing tab layout works unchanged
-8. Keyboard accessible: tab to separator, arrow keys to resize
-
-## 7. Test Plan
-
-### Unit Tests
-
-- `ResizableChatGraphLayout.test.tsx`: verify Group, Panel, Separator render
-- Extend `ConversationScreen.test.tsx`: verify resize handle rendered when `!compactWorkspace`
-
-### Playwright Visual
-
-- `workbench-live.spec.ts`: existing test already navigates to workspace and screenshots; verify result includes separator
-- `storybook-visual.spec.ts`: add `workbench-resizable-layout` entry
-
-### Storybook
-
-- `ConversationScreen/ResizableLayout`: story showing the draggable chat↔graph split with fixture data
-
-## 8. Dependencies
-
-- `react-resizable-panels@^4.11.2`
+1. `/` redirects to `/conversations/new`
+2. At `/conversations/new`, home form is shown full-screen
+3. Submitting the form: 500ms collapse animation plays, then workspace loads
+4. Panel resize during workspace: transcript text height follows without visible DOM reflow
+5. Pretext only activates for messages > 200 chars
+6. `prefers-reduced-motion` skips collapse animation
+7. Existing 102 tests pass, new Pretext tests pass
