@@ -4,9 +4,19 @@
   "change_type": "major_refactor",
   "summary": "Add resizable Workbench panels and transcript text measurement to the React Agent Workbench.",
   "rationale": "The React Workbench needs user-controlled desktop panel sizing and accurate transcript text measurement while keeping the desktop designer assets as the only Workbench visual baseline. This intentionally changes frontend code, the Workbench BFF graph contract, and web dependency control files together because react-resizable-panels provides the accessible split-pane behavior, @chenglou/pretext provides focused text measurement for longer transcript events, and the Strategy Graph API must stop emitting removed round summary nodes.",
-  "touched_layers": ["bff", "dependencies", "docs", "frontend", "tests"],
+  "touched_layers": [
+    "bff",
+    "dependencies",
+    "docs",
+    "frontend",
+    "governance",
+    "other",
+    "tests"
+  ],
   "red_files": [
     "apps/web-react/package.json",
+    "apps/web-react/playwright.storybook-visual.config.ts",
+    "apps/web-react/playwright.storybook.config.ts",
     "apps/web-react/pnpm-lock.yaml",
     "apps/web-react/src/components/workbench/ConversationScreen.css",
     "apps/web-react/src/components/workbench/ConversationScreen.stories.tsx",
@@ -24,10 +34,12 @@
     "apps/web-react/src/test/fixtures/agentWorkbenchBff.ts",
     "apps/web-react/src/test/setup.ts",
     "apps/web-react/tests/app-shell.spec.ts",
+    "apps/web-react/tests/storybook-interactions.spec.ts",
     "apps/web-react/tests/storybook-visual.spec.ts",
     "apps/web-react/tests/workbench-live.spec.ts",
     "src/seektalent_ui/agent_workbench_models.py",
-    "src/seektalent_ui/agent_workbench_response.py"
+    "src/seektalent_ui/agent_workbench_response.py",
+    "tools/check_react_workbench_design_acceptance.py"
   ],
   "dependency_files": [
     "apps/web-react/package.json",
