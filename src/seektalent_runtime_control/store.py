@@ -50,7 +50,7 @@ from seektalent_runtime_control.requirements import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 4
+RUNTIME_CONTROL_SCHEMA_VERSION = 5
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -110,7 +110,7 @@ class RuntimeControlStore:
                     now=_migration_now(),
                 )
             with conn:
-                if version in {1, 2, 3}:
+                if version in {1, 2, 3, 4}:
                     run_ordered_migrations(
                         conn,
                         from_version=version,
@@ -119,6 +119,7 @@ class RuntimeControlStore:
                             1: SQLiteMigrationStep(1, 2, _migrate_v1_to_v2),
                             2: SQLiteMigrationStep(2, 3, _migrate_v2_to_v3),
                             3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
+                            4: SQLiteMigrationStep(4, 5, _migrate_v4_to_v5),
                         },
                         store_name="runtime-control",
                     )
@@ -559,10 +560,10 @@ class RuntimeControlStore:
                     result_draft_revision_id, base_approved_requirement_revision_id,
                     result_approved_requirement_revision_id, target_round_no, effective_boundary,
                     applied_event_id, input_text, target_section_hint, status, normalized_patch_json,
-                    rejected_fragments_json, review_items_json, resolved_patch_json,
+                    rejected_fragments_json, review_items_json, provenance_json, resolved_patch_json,
                     superseded_by_amendment_id, resolved_at, idempotency_key, created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     amendment.amendment_id,
@@ -581,6 +582,7 @@ class RuntimeControlStore:
                     _json(amendment.normalized_patch),
                     _json(amendment.rejected_fragments),
                     _json([item.model_dump(mode="json") for item in amendment.review_items]),
+                    _json(amendment.provenance),
                     _json(amendment.resolved_patch) if amendment.resolved_patch is not None else None,
                     amendment.superseded_by_amendment_id,
                     amendment.resolved_at,
@@ -1443,24 +1445,37 @@ class RuntimeControlStore:
 
     def save_final_summary(self, summary: RuntimeFinalSummary, *, idempotency_key: str) -> RuntimeFinalSummary:
         with self._connect() as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO runtime_control_final_summaries (
-                    summary_id, runtime_run_id, idempotency_key, user_instruction,
-                    summary_json, source_snapshot_event_seq, created_at
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_final_summaries (
+                        summary_id, runtime_run_id, idempotency_key, user_instruction,
+                        summary_json, source_snapshot_event_seq, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        summary.summary_id,
+                        summary.runtime_run_id,
+                        idempotency_key,
+                        summary.user_instruction,
+                        _json(summary.model_dump(mode="json")),
+                        summary.source_snapshot_event_seq,
+                        summary.created_at,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    summary.summary_id,
-                    summary.runtime_run_id,
-                    idempotency_key,
-                    summary.user_instruction,
-                    _json(summary.model_dump(mode="json")),
-                    summary.source_snapshot_event_seq,
-                    summary.created_at,
-                ),
-            )
+            except sqlite3.IntegrityError:
+                row = conn.execute(
+                    """
+                    SELECT summary_json
+                    FROM runtime_control_final_summaries
+                    WHERE runtime_run_id = ? AND idempotency_key = ?
+                    """,
+                    (summary.runtime_run_id, idempotency_key),
+                ).fetchone()
+                if row is not None:
+                    return RuntimeFinalSummary.model_validate_json(row["summary_json"])
+                raise
         return summary
 
     def get_final_summary_by_idempotency(
@@ -1477,6 +1492,18 @@ class RuntimeControlStore:
                 WHERE runtime_run_id = ? AND idempotency_key = ?
                 """,
                 (runtime_run_id, idempotency_key),
+            ).fetchone()
+        return RuntimeFinalSummary.model_validate_json(row["summary_json"]) if row is not None else None
+
+    def get_final_summary(self, *, summary_id: str) -> RuntimeFinalSummary | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT summary_json
+                FROM runtime_control_final_summaries
+                WHERE summary_id = ?
+                """,
+                (summary_id,),
             ).fetchone()
         return RuntimeFinalSummary.model_validate_json(row["summary_json"]) if row is not None else None
 
@@ -2251,6 +2278,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           normalized_patch_json TEXT NOT NULL,
           rejected_fragments_json TEXT NOT NULL,
           review_items_json TEXT NOT NULL,
+          provenance_json TEXT NOT NULL DEFAULT '{}',
           resolved_patch_json TEXT,
           superseded_by_amendment_id TEXT,
           resolved_at TEXT,
@@ -2608,6 +2636,18 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
 
 def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
     _create_schema(conn)
+
+
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    _create_schema(conn)
+    _ensure_requirement_amendment_provenance_column(conn)
+
+
+def _ensure_requirement_amendment_provenance_column(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "runtime_requirement_amendments"):
+        return
+    if "provenance_json" not in _column_names(conn, "runtime_requirement_amendments"):
+        conn.execute("ALTER TABLE runtime_requirement_amendments ADD COLUMN provenance_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -4001,6 +4041,7 @@ def _draft_from_row(row: sqlite3.Row) -> RequirementDraft:
 
 
 def _amendment_from_row(row: sqlite3.Row) -> RequirementAmendment:
+    provenance_json = row["provenance_json"] if "provenance_json" in row.keys() else "{}"
     return RequirementAmendment(
         amendment_id=row["amendment_id"],
         agent_conversation_id=row["agent_conversation_id"],
@@ -4018,6 +4059,7 @@ def _amendment_from_row(row: sqlite3.Row) -> RequirementAmendment:
         normalized_patch=_json_object(row["normalized_patch_json"]),
         rejected_fragments=_json_list(row["rejected_fragments_json"]),
         review_items=[ReviewItem.model_validate(item) for item in _json_list(row["review_items_json"]) if _string_key_dict(item)],
+        provenance=_json_object(provenance_json),
         resolved_patch=_json_object(row["resolved_patch_json"]) if row["resolved_patch_json"] is not None else None,
         superseded_by_amendment_id=row["superseded_by_amendment_id"],
         resolved_at=row["resolved_at"],

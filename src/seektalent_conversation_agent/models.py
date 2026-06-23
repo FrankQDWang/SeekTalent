@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from seektalent_runtime_control.models import RuntimeFinalSummary
+from seektalent_runtime_control.requirements import RequirementDraft
+
 
 class CompactionSummaryCursor(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -50,7 +53,7 @@ class TranscriptMessage(BaseModel):
     payload: dict[str, object] = Field(default_factory=dict)
     token_count: int | None = None
     model_input_included: bool = True
-    source_tool_call_id: str | None = None
+    source_operation_id: str | None = None
     source_runtime_run_id: str | None = None
     source_runtime_event_seq: int | None = None
     created_at: str
@@ -133,14 +136,15 @@ class ConversationThreadView(BaseModel):
     activity_items: list[TranscriptActivityItem] = Field(default_factory=list)
 
 
-class AgentToolCallRecord(BaseModel):
+class OperationAuditRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    tool_call_id: str
+    operation_id: str
     conversation_id: str
     activity_id: str | None = None
     runtime_run_id: str | None = None
-    tool_name: str
+    operation_name: str
+    execution_origin: str
     status: str
     args: dict[str, object] = Field(default_factory=dict)
     result: dict[str, object] | None = None
@@ -190,10 +194,10 @@ class ConversationAgentResponse(BaseModel):
     conversation_reopen_state: ConversationReopenState
     messages: list[TranscriptMessage] = Field(default_factory=list)
     activity_items: list[TranscriptActivityItem] = Field(default_factory=list)
-    requirement_draft: object | None = None
+    requirement_draft: RequirementDraft | None = None
     job_request_revision_id: str | None = None
     requirement_draft_revision_id: str | None = None
     workflow_start_intent_id: str | None = None
-    final_summary: object | None = None
+    final_summary: RuntimeFinalSummary | None = None
     compaction: ContextCompactionRecord | None = None
     reason_code: str | None = None

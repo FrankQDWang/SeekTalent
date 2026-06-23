@@ -28,7 +28,7 @@ class JobRequestRevision:
 
     @property
     def effective_job_title(self) -> str | None:
-        return self.extracted_job_title or self.user_job_title
+        return self.user_job_title or self.extracted_job_title
 
 
 @dataclass(frozen=True)

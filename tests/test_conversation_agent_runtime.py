@@ -28,6 +28,15 @@ def test_agent_runtime_imports_agents_sdk_behind_runtime_boundary() -> None:
     assert runtime.instructions == "你是招聘助手。"
 
 
+def test_agent_runtime_build_agent_has_no_tools_by_default() -> None:
+    from seektalent_conversation_agent.runtime import AgentRuntime
+
+    runtime = AgentRuntime(model_name="gpt-5.1", instructions="你是招聘助手。")
+    agent = runtime.build_agent()
+
+    assert agent.tools == []
+
+
 def test_agent_budget_settings_have_fail_closed_defaults() -> None:
     settings = make_settings()
 

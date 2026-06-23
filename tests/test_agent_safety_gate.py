@@ -189,7 +189,7 @@ def test_ignores_tests_and_docs() -> None:
     findings = check_added_lines(
         [
             _line(
-                "tests/test_conversation_agent_tools.py",
+                "tests/test_conversation_agent_service_actions.py",
                 "def run_action(action: str, payload: dict[str, object]):",
             ),
             _line(

@@ -54,7 +54,6 @@ class ModelInputTranscriptMessage:
 
 def build_cache_ready_model_input(
     *,
-    registered_prompt: str,
     latest_context_summary: str | None,
     recent_transcript: Sequence[ModelInputTranscriptMessage],
     advisory_memory_context: str | None,
@@ -65,9 +64,6 @@ def build_cache_ready_model_input(
     return "\n".join(
         [
             "[CONVERSATION_AGENT_MODEL_INPUT_START]",
-            "[REGISTERED_PROMPT_START]",
-            registered_prompt.strip(),
-            "[REGISTERED_PROMPT_END]",
             "[LATEST_CONTEXT_SUMMARY_START]",
             _model_input_json((latest_context_summary or "").strip()),
             "[LATEST_CONTEXT_SUMMARY_END]",
@@ -191,6 +187,7 @@ class AgentRuntime:
             name=name,
             model=self.model_name,
             instructions=self.instructions,
+            tools=[],
             output_type=output_type,
         )
         runner = self.runner or _DefaultRunner()

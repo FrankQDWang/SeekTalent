@@ -71,7 +71,7 @@ def create_app(
         runtime_factory=runtime_factory,
     )
     app.state.agent_conversation_store = app.state.agent_conversation_service.store
-    app.state.runtime_control_store = app.state.agent_conversation_service.tool_adapter.runtime_store
+    app.state.runtime_control_store = app.state.agent_conversation_service.service_action_adapter.runtime_store
     app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
     app.state.workflow_start_outbox_runner = WorkflowStartOutboxRunner(
         service=app.state.agent_conversation_service,

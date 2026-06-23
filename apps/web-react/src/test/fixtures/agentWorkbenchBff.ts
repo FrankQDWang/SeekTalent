@@ -151,7 +151,7 @@ function workbenchView(
           },
           {
             createdAt: "2026-06-13T09:30:12.000Z",
-            eventId: "tool:source_search:started",
+            eventId: "operation:source_search:started",
             itemId: "tool_source_search",
             kind: "sourceSearch.started",
             label: "source search",
@@ -913,7 +913,7 @@ export const agentWorkbenchFailedViewFixture: AgentWorkbenchConversationResponse
         events: [
           {
             createdAt: now,
-            eventId: "tool:source_search:failed",
+            eventId: "operation:source_search:failed",
             itemId: "tool_source_search",
             kind: "sourceSearch.failed",
             label: "source search",

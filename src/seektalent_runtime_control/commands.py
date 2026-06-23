@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Protocol, cast
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -36,6 +36,7 @@ _REQUIREMENT_AMENDMENT_UNCLASSIFIABLE_REASON_CODE = "requirement_amendment_uncla
 _NOT_A_REQUIREMENT_REASON_CODE = "not_a_requirement"
 _INVALID_REVIEW_OPERATION_REASON_CODE = "requirement_amendment_invalid_review_operation"
 _INVALID_REVIEW_ITEM_PAYLOAD_REASON_CODE = "requirement_amendment_invalid_review_item"
+_PROVENANCE_STRING_MAX_CHARS = 4000
 
 
 class NextRoundRequirementNormalizer(Protocol):
@@ -253,6 +254,7 @@ class RuntimeCommandService:
         target_section_hint: str | None,
         idempotency_key: str,
         replace_amendment_id: str | None = None,
+        provenance: dict[str, object] | None = None,
     ) -> NextRoundRequirementResult:
         run = self.store.get_run(runtime_run_id)
         self._reject_if_terminal_cancel_pending(runtime_run_id=runtime_run_id, command_type="apply_next_round_requirement")
@@ -265,6 +267,7 @@ class RuntimeCommandService:
         current = self.store.get_approved_requirement(run.approved_requirement_revision_id)
         target_round_no = self._next_unlocked_round(runtime_run_id=runtime_run_id, after_round=run.current_round or 0)
         amendment_id = self.amendment_id_factory()
+        safe_provenance = _sanitize_requirement_provenance(provenance)
         saved_extracting = False
         if self.requirement_extractor is not None:
             self.store.save_requirement_amendment(
@@ -281,6 +284,7 @@ class RuntimeCommandService:
                     normalized_patch={},
                     rejected_fragments=[],
                     review_items=[],
+                    provenance=safe_provenance,
                     idempotency_key=idempotency_key,
                     created_at=self.now(),
                 )
@@ -315,6 +319,7 @@ class RuntimeCommandService:
                 normalized_patch=dict(normalized),
                 rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
                 review_items=review_items,
+                provenance=safe_provenance,
                 idempotency_key=idempotency_key,
                 created_at=self.now(),
             )
@@ -385,6 +390,7 @@ class RuntimeCommandService:
             normalized_patch=dict(normalized),
             rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
             review_items=[],
+            provenance=safe_provenance,
             idempotency_key=idempotency_key,
             created_at=approved.created_at,
         )
@@ -820,6 +826,29 @@ def _command_conflict(command: RuntimeCommand) -> RuntimeControlError:
             "conflictingCommandStatus": command.status,
         },
     )
+
+
+def _sanitize_requirement_provenance(provenance: dict[str, object] | None) -> dict[str, object]:
+    if not provenance:
+        return {}
+    safe: dict[str, object] = {}
+    for key in ("originalUserText", "normalizedRequirementText", "sourceMessageId", "runtimeRunId"):
+        value = provenance.get(key)
+        if isinstance(value, str):
+            safe[key] = _truncate_provenance_text(value)
+    intent_decision = provenance.get("intentDecision")
+    if isinstance(intent_decision, Mapping):
+        decision = cast("Mapping[object, object]", intent_decision)
+        intent = decision.get("intent")
+        if isinstance(intent, str):
+            safe["intentDecision"] = {"intent": _truncate_provenance_text(intent)}
+    return safe
+
+
+def _truncate_provenance_text(value: str) -> str:
+    if len(value) <= _PROVENANCE_STRING_MAX_CHARS:
+        return value
+    return value[:_PROVENANCE_STRING_MAX_CHARS]
 
 
 def _amendment_result(

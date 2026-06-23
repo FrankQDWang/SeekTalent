@@ -32,7 +32,7 @@ def test_v1_database_migrates_to_run_intent_ownership_without_dropping_rows(tmp_
             "SELECT runtime_run_id, run_intent_id, start_idempotency_key, run_kind FROM runtime_control_runs"
         ).fetchone()
 
-    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 4
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 5
     assert migrated["runtime_run_id"] == "runtime_run_v1"
     assert migrated["run_intent_id"] == "runtime_run_v1"
     assert migrated["start_idempotency_key"] == "runtime_run_v1"
@@ -52,6 +52,70 @@ def test_v1_database_migrates_to_run_intent_ownership_without_dropping_rows(tmp_
     )
     assert store.get_run_by_run_intent_id("runtime_run_v1").runtime_run_id == "runtime_run_v1"
     assert store.get_run_by_run_intent_id("intent_v2").runtime_run_id == "runtime_run_v2"
+
+
+def test_v4_database_migrates_requirement_amendment_provenance_to_v5(tmp_path: Path) -> None:
+    from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION, RuntimeControlStore
+
+    db_path = tmp_path / "runtime_control_v4.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE runtime_requirement_amendments (
+              amendment_id TEXT PRIMARY KEY,
+              agent_conversation_id TEXT NOT NULL,
+              runtime_run_id TEXT,
+              base_draft_revision_id TEXT,
+              result_draft_revision_id TEXT,
+              base_approved_requirement_revision_id TEXT,
+              result_approved_requirement_revision_id TEXT,
+              target_round_no INTEGER,
+              effective_boundary TEXT,
+              applied_event_id TEXT,
+              input_text TEXT NOT NULL,
+              target_section_hint TEXT,
+              status TEXT NOT NULL,
+              normalized_patch_json TEXT NOT NULL,
+              rejected_fragments_json TEXT NOT NULL,
+              review_items_json TEXT NOT NULL,
+              resolved_patch_json TEXT,
+              superseded_by_amendment_id TEXT,
+              resolved_at TEXT,
+              idempotency_key TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              UNIQUE(agent_conversation_id, idempotency_key),
+              UNIQUE(runtime_run_id, idempotency_key)
+            );
+            INSERT INTO runtime_requirement_amendments (
+              amendment_id, agent_conversation_id, runtime_run_id, input_text,
+              status, normalized_patch_json, rejected_fragments_json, review_items_json,
+              idempotency_key, created_at
+            ) VALUES (
+              'reqamend_v4', 'agent_conv_v4', 'runtime_run_v4', 'Add Kafka',
+              'pending_target_round', '{}', '[]', '[]',
+              'idem_v4', '2026-06-17T00:00:00.000000Z'
+            );
+            PRAGMA user_version = 4;
+            """
+        )
+
+    RuntimeControlStore(db_path).initialize()
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(runtime_requirement_amendments)")}
+        provenance = conn.execute(
+            """
+            SELECT provenance_json
+            FROM runtime_requirement_amendments
+            WHERE amendment_id = 'reqamend_v4'
+            """
+        ).fetchone()["provenance_json"]
+
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 5
+    assert "provenance_json" in columns
+    assert provenance == "{}"
 
 
 def test_runs_are_owned_by_run_intent_not_requirement_revision(tmp_path: Path) -> None:

@@ -19,7 +19,6 @@ from seektalent.sqlite_migrations import (
 from seektalent_conversation_agent.control_plane_schema import migrate_wts_control_plane
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.models import (
-    AgentToolCallRecord,
     CompactionSummaryCursor,
     ContextCompactionRecord,
     ContextSummaryRecord,
@@ -27,12 +26,13 @@ from seektalent_conversation_agent.models import (
     ConversationReopenState,
     ConversationRuntimeRunLink,
     ConversationThreadView,
+    OperationAuditRecord,
     TranscriptActivityItem,
     TranscriptMessage,
 )
 
 
-CONVERSATION_AGENT_SCHEMA_VERSION = 7
+CONVERSATION_AGENT_SCHEMA_VERSION = 8
 
 _ACTIVE_ARCHIVE_BLOCKING_STATUSES = {"starting", "running"}
 _RUNTIME_RUN_KINDS = {"primary", "rerun", "fork"}
@@ -72,7 +72,7 @@ class ConversationStore:
                     conn.execute(f"PRAGMA user_version = {CONVERSATION_AGENT_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="conversation-agent", foreign_keys=True)
                 return
-            if version in {2, 3, 4, 5, 6}:
+            if version in {2, 3, 4, 5, 6, 7}:
                 with conn:
                     run_ordered_migrations(
                         conn,
@@ -84,6 +84,7 @@ class ConversationStore:
                             4: SQLiteMigrationStep(4, 5, _migrate_v4_to_v5),
                             5: SQLiteMigrationStep(5, 6, _migrate_v5_to_v6),
                             6: SQLiteMigrationStep(6, 7, _migrate_v6_to_v7),
+                            7: SQLiteMigrationStep(7, 8, _migrate_v7_to_v8),
                         },
                         store_name="conversation-agent",
                     )
@@ -173,7 +174,7 @@ class ConversationStore:
         message_id: str | None = None,
         token_count: int | None = None,
         model_input_included: bool = True,
-        source_tool_call_id: str | None = None,
+        source_operation_id: str | None = None,
         source_runtime_run_id: str | None = None,
         source_runtime_event_seq: int | None = None,
         idempotency_key: str | None = None,
@@ -205,7 +206,7 @@ class ConversationStore:
                     payload=payload,
                     token_count=token_count,
                     model_input_included=model_input_included,
-                    source_tool_call_id=source_tool_call_id,
+                    source_operation_id=source_operation_id,
                     source_runtime_run_id=source_runtime_run_id,
                     source_runtime_event_seq=source_runtime_event_seq,
                     created_at=created_at,
@@ -214,7 +215,7 @@ class ConversationStore:
                     """
                     INSERT INTO agent_transcript_messages (
                         message_id, conversation_id, message_seq, role, message_type, text,
-                        payload_json, token_count, model_input_included, source_tool_call_id,
+                        payload_json, token_count, model_input_included, source_operation_id,
                         source_runtime_run_id, source_runtime_event_seq, idempotency_key, created_at
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -229,7 +230,7 @@ class ConversationStore:
                         _json(message.payload),
                         message.token_count,
                         int(message.model_input_included),
-                        message.source_tool_call_id,
+                        message.source_operation_id,
                         message.source_runtime_run_id,
                         message.source_runtime_event_seq,
                         idempotency_key,
@@ -309,12 +310,13 @@ class ConversationStore:
                 conn.rollback()
                 raise
 
-    def save_tool_call(
+    def save_operation_audit(
         self,
         *,
-        tool_call_id: str,
+        operation_id: str,
         conversation_id: str,
-        tool_name: str,
+        operation_name: str,
+        execution_origin: str,
         status: str,
         args: dict[str, object],
         result: dict[str, object] | None,
@@ -323,13 +325,14 @@ class ConversationStore:
         completed_at: str | None = None,
         activity_id: str | None = None,
         runtime_run_id: str | None = None,
-    ) -> AgentToolCallRecord:
-        record = AgentToolCallRecord(
-            tool_call_id=tool_call_id,
+    ) -> OperationAuditRecord:
+        record = OperationAuditRecord(
+            operation_id=operation_id,
             conversation_id=conversation_id,
             activity_id=activity_id,
             runtime_run_id=runtime_run_id,
-            tool_name=tool_name,
+            operation_name=operation_name,
+            execution_origin=execution_origin,
             status=status,
             args=args,
             result=result,
@@ -340,23 +343,24 @@ class ConversationStore:
         with self._connect() as conn, conn:
             conn.execute(
                 """
-                INSERT INTO agent_tool_calls (
-                    tool_call_id, conversation_id, activity_id, runtime_run_id, tool_name, status,
+                INSERT INTO agent_operation_audits (
+                    operation_id, conversation_id, activity_id, runtime_run_id, operation_name, execution_origin, status,
                     args_json, result_json, reason_code, started_at, completed_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(tool_call_id) DO UPDATE SET
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(operation_id) DO UPDATE SET
                     status = excluded.status,
                     result_json = excluded.result_json,
                     reason_code = excluded.reason_code,
                     completed_at = excluded.completed_at
                 """,
                 (
-                    tool_call_id,
+                    operation_id,
                     conversation_id,
                     activity_id,
                     runtime_run_id,
-                    tool_name,
+                    operation_name,
+                    execution_origin,
                     status,
                     _json(args),
                     _json(result) if result is not None else None,
@@ -367,16 +371,16 @@ class ConversationStore:
             )
         return record
 
-    def list_tool_calls(self, *, conversation_id: str | None = None) -> list[AgentToolCallRecord]:
-        sql = "SELECT * FROM agent_tool_calls"
+    def list_operation_audits(self, *, conversation_id: str | None = None) -> list[OperationAuditRecord]:
+        sql = "SELECT * FROM agent_operation_audits"
         params: list[object] = []
         if conversation_id is not None:
             sql += " WHERE conversation_id = ?"
             params.append(conversation_id)
-        sql += " ORDER BY started_at ASC, tool_call_id ASC"
+        sql += " ORDER BY started_at ASC, operation_id ASC"
         with self._connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [_tool_call_from_row(row) for row in rows]
+        return [_operation_audit_from_row(row) for row in rows]
 
     def list_context_compactions(self, *, conversation_id: str | None = None) -> list[ContextCompactionRecord]:
         sql = "SELECT * FROM agent_context_compactions"
@@ -1141,41 +1145,7 @@ class ConversationStore:
                         summary.created_at,
                     ),
                 )
-                conn.execute(
-                    """
-                    INSERT INTO agent_context_compactions (
-                        compaction_id, conversation_id, status, trigger_reason_code, summary_id,
-                        source_message_seq_start, source_message_seq_end, source_activity_seq_start,
-                        source_activity_seq_end, quality_reason_code, created_at, completed_at, failed_reason_code
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(compaction_id) DO UPDATE SET
-                        status = excluded.status,
-                        summary_id = excluded.summary_id,
-                        source_message_seq_start = excluded.source_message_seq_start,
-                        source_message_seq_end = excluded.source_message_seq_end,
-                        source_activity_seq_start = excluded.source_activity_seq_start,
-                        source_activity_seq_end = excluded.source_activity_seq_end,
-                        quality_reason_code = excluded.quality_reason_code,
-                        completed_at = excluded.completed_at,
-                        failed_reason_code = excluded.failed_reason_code
-                    """,
-                    (
-                        compaction.compaction_id,
-                        compaction.conversation_id,
-                        compaction.status,
-                        compaction.trigger_reason_code,
-                        compaction.summary_id,
-                        compaction.source_message_seq_start,
-                        compaction.source_message_seq_end,
-                        compaction.source_activity_seq_start,
-                        compaction.source_activity_seq_end,
-                        compaction.quality_reason_code,
-                        compaction.created_at,
-                        compaction.completed_at,
-                        compaction.failed_reason_code,
-                    ),
-                )
+                _upsert_context_compaction(conn, compaction)
                 conn.execute(
                     """
                     UPDATE agent_transcript_messages
@@ -1224,41 +1194,7 @@ class ConversationStore:
             failed_reason_code=failed_reason_code,
         )
         with self._connect() as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO agent_context_compactions (
-                    compaction_id, conversation_id, status, trigger_reason_code, summary_id,
-                    source_message_seq_start, source_message_seq_end, source_activity_seq_start,
-                    source_activity_seq_end, quality_reason_code, created_at, completed_at, failed_reason_code
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(compaction_id) DO UPDATE SET
-                    status = excluded.status,
-                    summary_id = excluded.summary_id,
-                    source_message_seq_start = excluded.source_message_seq_start,
-                    source_message_seq_end = excluded.source_message_seq_end,
-                    source_activity_seq_start = excluded.source_activity_seq_start,
-                    source_activity_seq_end = excluded.source_activity_seq_end,
-                    quality_reason_code = excluded.quality_reason_code,
-                    completed_at = excluded.completed_at,
-                    failed_reason_code = excluded.failed_reason_code
-                """,
-                (
-                    record.compaction_id,
-                    record.conversation_id,
-                    record.status,
-                    record.trigger_reason_code,
-                    record.summary_id,
-                    record.source_message_seq_start,
-                    record.source_message_seq_end,
-                    record.source_activity_seq_start,
-                    record.source_activity_seq_end,
-                    record.quality_reason_code,
-                    record.created_at,
-                    record.completed_at,
-                    record.failed_reason_code,
-                ),
-            )
+            _upsert_context_compaction(conn, record)
         return record
 
     @contextmanager
@@ -1279,6 +1215,44 @@ class ConversationStore:
 
 def _migration_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _upsert_context_compaction(conn: sqlite3.Connection, record: ContextCompactionRecord) -> None:
+    conn.execute(
+        """
+        INSERT INTO agent_context_compactions (
+            compaction_id, conversation_id, status, trigger_reason_code, summary_id,
+            source_message_seq_start, source_message_seq_end, source_activity_seq_start,
+            source_activity_seq_end, quality_reason_code, created_at, completed_at, failed_reason_code
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(compaction_id) DO UPDATE SET
+            status = excluded.status,
+            summary_id = excluded.summary_id,
+            source_message_seq_start = excluded.source_message_seq_start,
+            source_message_seq_end = excluded.source_message_seq_end,
+            source_activity_seq_start = excluded.source_activity_seq_start,
+            source_activity_seq_end = excluded.source_activity_seq_end,
+            quality_reason_code = excluded.quality_reason_code,
+            completed_at = excluded.completed_at,
+            failed_reason_code = excluded.failed_reason_code
+        """,
+        (
+            record.compaction_id,
+            record.conversation_id,
+            record.status,
+            record.trigger_reason_code,
+            record.summary_id,
+            record.source_message_seq_start,
+            record.source_message_seq_end,
+            record.source_activity_seq_start,
+            record.source_activity_seq_end,
+            record.quality_reason_code,
+            record.created_at,
+            record.completed_at,
+            record.failed_reason_code,
+        ),
+    )
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -1325,7 +1299,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             payload_json TEXT NOT NULL,
             token_count INTEGER,
             model_input_included INTEGER NOT NULL DEFAULT 1,
-            source_tool_call_id TEXT,
+            source_operation_id TEXT,
             source_runtime_run_id TEXT,
             source_runtime_event_seq INTEGER,
             idempotency_key TEXT,
@@ -1360,12 +1334,13 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             UNIQUE(conversation_id, activity_key)
         );
 
-        CREATE TABLE IF NOT EXISTS agent_tool_calls (
-            tool_call_id TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS agent_operation_audits (
+            operation_id TEXT PRIMARY KEY,
             conversation_id TEXT NOT NULL REFERENCES agent_conversations(conversation_id) ON DELETE CASCADE,
             activity_id TEXT REFERENCES agent_transcript_activity_items(activity_id) ON DELETE SET NULL,
             runtime_run_id TEXT,
-            tool_name TEXT NOT NULL,
+            operation_name TEXT NOT NULL,
+            execution_origin TEXT NOT NULL,
             status TEXT NOT NULL,
             args_json TEXT NOT NULL,
             result_json TEXT,
@@ -1505,6 +1480,74 @@ def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
 
 def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     migrate_wts_control_plane(conn)
+
+
+def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    _ensure_operation_audits_table(conn)
+    if _table_exists(conn, "agent_tool_calls"):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO agent_operation_audits (
+                operation_id, conversation_id, activity_id, runtime_run_id, operation_name,
+                execution_origin, status, args_json, result_json, reason_code, started_at, completed_at
+            )
+            SELECT
+                tool_call_id,
+                conversation_id,
+                activity_id,
+                runtime_run_id,
+                tool_name,
+                CASE WHEN tool_name = 'agent_model_run' THEN 'model' ELSE 'service' END,
+                status,
+                args_json,
+                result_json,
+                reason_code,
+                started_at,
+                completed_at
+            FROM agent_tool_calls
+            """
+        )
+        conn.execute("DROP TABLE agent_tool_calls")
+
+    if _table_exists(conn, "agent_transcript_messages"):
+        message_columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(agent_transcript_messages)").fetchall()
+        }
+        if "source_tool_call_id" in message_columns and "source_operation_id" not in message_columns:
+            conn.execute("ALTER TABLE agent_transcript_messages RENAME COLUMN source_tool_call_id TO source_operation_id")
+        elif "source_operation_id" not in message_columns:
+            _ensure_columns(conn, "agent_transcript_messages", {"source_operation_id": "TEXT"})
+
+
+def _ensure_operation_audits_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_operation_audits (
+            operation_id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL REFERENCES agent_conversations(conversation_id) ON DELETE CASCADE,
+            activity_id TEXT REFERENCES agent_transcript_activity_items(activity_id) ON DELETE SET NULL,
+            runtime_run_id TEXT,
+            operation_name TEXT NOT NULL,
+            execution_origin TEXT NOT NULL,
+            status TEXT NOT NULL,
+            args_json TEXT NOT NULL,
+            result_json TEXT,
+            reason_code TEXT,
+            started_at TEXT NOT NULL,
+            completed_at TEXT
+        )
+        """
+    )
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    return (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        is not None
+    )
 
 
 def _ensure_columns(conn: sqlite3.Connection, table_name: str, columns: dict[str, str]) -> None:
@@ -1672,20 +1715,21 @@ def _message_from_row(row: sqlite3.Row) -> TranscriptMessage:
         payload=_loads_dict(row["payload_json"]),
         token_count=row["token_count"],
         model_input_included=bool(row["model_input_included"]),
-        source_tool_call_id=row["source_tool_call_id"],
+        source_operation_id=row["source_operation_id"],
         source_runtime_run_id=row["source_runtime_run_id"],
         source_runtime_event_seq=row["source_runtime_event_seq"],
         created_at=row["created_at"],
     )
 
 
-def _tool_call_from_row(row: sqlite3.Row) -> AgentToolCallRecord:
-    return AgentToolCallRecord(
-        tool_call_id=row["tool_call_id"],
+def _operation_audit_from_row(row: sqlite3.Row) -> OperationAuditRecord:
+    return OperationAuditRecord(
+        operation_id=row["operation_id"],
         conversation_id=row["conversation_id"],
         activity_id=row["activity_id"],
         runtime_run_id=row["runtime_run_id"],
-        tool_name=row["tool_name"],
+        operation_name=row["operation_name"],
+        execution_origin=row["execution_origin"],
         status=row["status"],
         args=_loads_dict(row["args_json"]),
         result=_loads_dict(row["result_json"]) if row["result_json"] is not None else None,

@@ -199,7 +199,7 @@ function messagePayload(
 function isTranscriptEvent(kind: AgentStreamKind): boolean {
   return (
     kind.startsWith("item.") ||
-    kind.startsWith("tool.") ||
+    kind.startsWith("operation.") ||
     kind.startsWith("sourceSearch.") ||
     kind.startsWith("webSearch.") ||
     kind.startsWith("command.") ||

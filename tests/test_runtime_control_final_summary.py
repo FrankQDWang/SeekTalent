@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -78,7 +80,66 @@ def test_prepare_final_summary_falls_back_to_terminal_snapshot_when_no_finalizat
         {"label": "Candidate", "value": "Alice: Python search experience"},
         {"label": "Candidate", "value": "Bob: Distributed systems"},
     ]
-    assert "Focus on top candidates." in summary.summary
+    assert "Focus on top candidates." not in summary.summary
+    assert "Different wording should not create a new record." not in replay.summary
+    assert summary.user_instruction is None
+
+    with sqlite3.connect(store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT user_instruction, summary_json
+            FROM runtime_control_final_summaries
+            WHERE runtime_run_id = ? AND idempotency_key = ?
+            """,
+            ("runtime_run_1", "summary-1"),
+        ).fetchone()
+    assert row is not None
+    assert row[0] is None
+    stored_summary = json.loads(row[1])
+    assert stored_summary["user_instruction"] is None
+    assert "Focus on top candidates." not in json.dumps(stored_summary, ensure_ascii=False)
+
+
+def test_save_final_summary_returns_existing_on_duplicate_runtime_idempotency_key(tmp_path: Path) -> None:
+    from seektalent_runtime_control.models import RuntimeFinalSummary
+
+    store = _store_with_run(tmp_path, status="completed")
+    idempotency_key = "runtime-final-summary:runtime_run_1"
+    first = RuntimeFinalSummary(
+        summary_id="rtfinalsummary_first",
+        runtime_run_id="runtime_run_1",
+        status="completed",
+        summary="Run status: completed.",
+        facts=[{"label": "Run status", "value": "completed"}],
+        source_snapshot_event_seq=0,
+        latest_snapshot_event_seq=0,
+        user_instruction=None,
+        created_at="2026-06-08T00:00:02.000000Z",
+    )
+    duplicate = first.model_copy(
+        update={
+            "summary_id": "rtfinalsummary_duplicate",
+            "summary": "This duplicate should not replace the original.",
+            "created_at": "2026-06-08T00:00:03.000000Z",
+        }
+    )
+
+    saved = store.save_final_summary(first, idempotency_key=idempotency_key)
+    replay = store.save_final_summary(duplicate, idempotency_key=idempotency_key)
+
+    assert saved.summary_id == "rtfinalsummary_first"
+    assert replay.summary_id == "rtfinalsummary_first"
+    assert replay.summary == "Run status: completed."
+    with sqlite3.connect(store.path) as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM runtime_control_final_summaries
+            WHERE runtime_run_id = ? AND idempotency_key = ?
+            """,
+            ("runtime_run_1", idempotency_key),
+        ).fetchone()
+    assert row == (1,)
 
 
 def test_prepare_final_summary_prefers_canonical_finalization_revision_over_snapshot(tmp_path: Path) -> None:
@@ -201,6 +262,62 @@ def test_prepare_final_summary_falls_back_to_run_status_without_final_candidates
     assert "candidate" not in summary.summary.lower()
 
 
+@pytest.mark.parametrize(
+    ("status", "event_type"),
+    [
+        ("failed", "runtime_run_failed"),
+        ("cancelled", "runtime_run_cancelled"),
+    ],
+)
+def test_prepare_final_summary_uses_distinct_terminal_status_without_candidates(
+    tmp_path: Path,
+    status: str,
+    event_type: str,
+) -> None:
+    from seektalent_runtime_control.detail import RuntimeDetailService
+    from seektalent_runtime_control.models import RuntimeControlEventInput, RuntimeRunSnapshot
+
+    store = _store_with_run(tmp_path, status=status)
+    event = store.append_event(
+        RuntimeControlEventInput(
+            event_id=f"rtevt_{status}_without_candidates",
+            runtime_run_id="runtime_run_1",
+            event_type=event_type,
+            stage="terminal",
+            round_no=None,
+            source_id=None,
+            status=status,
+            summary=f"Run {status} without final candidates.",
+            payload={},
+            workbench_event_global_seq=None,
+            created_at="2026-06-08T00:00:01.000000Z",
+        ),
+        snapshot=RuntimeRunSnapshot(
+            runtime_run_id="runtime_run_1",
+            status=status,
+            current_stage="terminal",
+            current_round=None,
+            latest_event_seq=1,
+            snapshot={},
+            updated_at="2026-06-08T00:00:01.000000Z",
+        ),
+    )
+
+    summary = RuntimeDetailService(store=store).prepare_final_summary(
+        runtime_run_id="runtime_run_1",
+        user_instruction="Pretend this is completed.",
+        source_snapshot_event_seq=event.event_seq,
+        idempotency_key=f"summary-{status}",
+    )
+
+    assert summary.status == status
+    assert summary.facts == [{"label": "Run status", "value": status}]
+    assert status in summary.summary.lower()
+    assert "completed" not in summary.summary.lower()
+    assert "Pretend this is completed." not in summary.summary
+    assert "candidate" not in summary.summary.lower()
+
+
 def test_prepare_final_summary_rejects_stale_snapshot_cursor_with_latest_cursor(tmp_path: Path) -> None:
     from seektalent_runtime_control.detail import RuntimeDetailService
     from seektalent_runtime_control.models import RuntimeControlEventInput, RuntimeRunSnapshot
@@ -233,13 +350,15 @@ def test_prepare_final_summary_rejects_stale_snapshot_cursor_with_latest_cursor(
 
     summary = RuntimeDetailService(store=store).prepare_final_summary(
         runtime_run_id="runtime_run_1",
-        user_instruction=None,
+        user_instruction="Do not leak this stale cursor instruction.",
         source_snapshot_event_seq=0,
         idempotency_key="summary-1",
     )
 
     assert summary.reason_code == "runtime_snapshot_stale"
     assert summary.latest_snapshot_event_seq == 1
+    assert "Do not leak this stale cursor instruction." not in summary.summary
+    assert summary.user_instruction is None
 
 
 def _store_with_run(tmp_path: Path, *, status: str):

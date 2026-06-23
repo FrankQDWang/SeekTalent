@@ -17,10 +17,9 @@ AgentWorkbenchStreamKind = Literal[
     "requirement.updated",
     "runtime.eventProjected",
     "strategyGraph.changed",
-    "tool.started",
-    "tool.outputDelta",
-    "tool.completed",
-    "tool.failed",
+    "operation.started",
+    "operation.completed",
+    "operation.failed",
     "sourceSearch.started",
     "sourceSearch.completed",
     "sourceSearch.failed",
@@ -49,10 +48,9 @@ AgentWorkbenchItemStreamPayloadType = Literal[
     "requirement.updated",
     "runtime.eventProjected",
     "strategyGraph.changed",
-    "tool.started",
-    "tool.outputDelta",
-    "tool.completed",
-    "tool.failed",
+    "operation.started",
+    "operation.completed",
+    "operation.failed",
     "sourceSearch.started",
     "sourceSearch.completed",
     "sourceSearch.failed",
@@ -152,7 +150,7 @@ class AgentWorkbenchQueryPackageResponse(BaseModel):
 class AgentWorkbenchActivityPayloadResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["runtime_round", "runtime_event", "tool_event", "empty"] = "empty"
+    kind: Literal["runtime_round", "runtime_event", "operation_event", "empty"] = "empty"
     stage: str | None = None
     sourceId: str | None = None
     status: AgentWorkbenchStatus | None = None
@@ -199,7 +197,7 @@ class AgentWorkbenchTranscriptPayloadResponse(BaseModel):
     kind: Literal[
         "message",
         "activity",
-        "tool",
+        "operation",
         "command",
         "source_search",
         "runtime_stage",
@@ -255,7 +253,7 @@ class AgentWorkbenchItemStreamPayloadResponse(BaseModel):
 
     payloadType: AgentWorkbenchItemStreamPayloadType
     kind: Literal[
-        "tool",
+        "operation",
         "command",
         "source_search",
         "runtime_stage",
@@ -369,14 +367,12 @@ def _item_stream_payload_type(stream_kind: AgentWorkbenchStreamKind) -> AgentWor
             return "runtime.eventProjected"
         case "strategyGraph.changed":
             return "strategyGraph.changed"
-        case "tool.started":
-            return "tool.started"
-        case "tool.outputDelta":
-            return "tool.outputDelta"
-        case "tool.completed":
-            return "tool.completed"
-        case "tool.failed":
-            return "tool.failed"
+        case "operation.started":
+            return "operation.started"
+        case "operation.completed":
+            return "operation.completed"
+        case "operation.failed":
+            return "operation.failed"
         case "sourceSearch.started":
             return "sourceSearch.started"
         case "sourceSearch.completed":
@@ -443,7 +439,7 @@ def _empty_stream_payload_for_kind(stream_kind: AgentWorkbenchStreamKind) -> Age
 
 
 def _item_payload_kind_for_stream_kind(stream_kind: AgentWorkbenchStreamKind) -> Literal[
-    "tool",
+    "operation",
     "command",
     "source_search",
     "runtime_stage",
@@ -458,8 +454,8 @@ def _item_payload_kind_for_stream_kind(stream_kind: AgentWorkbenchStreamKind) ->
     "thinking_process",
     "context",
 ]:
-    if stream_kind.startswith("tool."):
-        return "tool"
+    if stream_kind.startswith("operation."):
+        return "operation"
     if stream_kind.startswith("command."):
         return "command"
     if stream_kind.startswith("sourceSearch.") or stream_kind.startswith("webSearch."):

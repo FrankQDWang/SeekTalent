@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol, cast
 
 from seektalent_conversation_agent.models import (
-    AgentToolCallRecord,
     ContextCompactionRecord,
     ConversationReopenState,
     ConversationThreadView,
+    OperationAuditRecord,
     TranscriptActivityItem,
     TranscriptMessage,
 )
@@ -76,7 +76,7 @@ class AgentWorkbenchProjectionInput:
     conversation_reopen_state: ConversationReopenState
     messages: Sequence[TranscriptMessage] = field(default_factory=tuple)
     activity_items: Sequence[TranscriptActivityItem] = field(default_factory=tuple)
-    tool_call_records: Sequence[AgentToolCallRecord] = field(default_factory=tuple)
+    operation_audit_records: Sequence[OperationAuditRecord] = field(default_factory=tuple)
     context_compactions: Sequence[ContextCompactionRecord] = field(default_factory=tuple)
     runtime_events: Sequence[object] = field(default_factory=tuple)
     round_summaries: Sequence[AgentWorkbenchRoundSummaryProjection] = field(default_factory=tuple)
@@ -175,7 +175,7 @@ def build_agent_workbench_projection_input(
         conversation_reopen_state=state,
         messages=tuple(thread.messages),
         activity_items=tuple(thread.activity_items),
-        tool_call_records=tuple(conversation_store.list_tool_calls(conversation_id=conversation_id)),
+        operation_audit_records=tuple(conversation_store.list_operation_audits(conversation_id=conversation_id)),
         context_compactions=tuple(conversation_store.list_context_compactions(conversation_id=conversation_id)),
         runtime_events=runtime_events,
         round_summaries=round_summaries,

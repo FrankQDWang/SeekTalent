@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from seektalent_conversation_agent.models import AgentToolCallRecord, ConversationRecord
-from seektalent_conversation_agent.tools import AgentToolAdapter
+from seektalent_conversation_agent.models import OperationAuditRecord, ConversationRecord
+from seektalent_conversation_agent.service_actions import AgentServiceActionAdapter
 
 
 def should_repair_submit_replay_status(conversation: ConversationRecord) -> bool:
@@ -16,11 +16,11 @@ def normalize_optional_job_title(job_title: str | None) -> str | None:
 
 
 def extracted_job_title_from_runtime_control(
-    tool_adapter: AgentToolAdapter,
+    service_action_adapter: AgentServiceActionAdapter,
     *,
     draft_revision_id: str,
 ) -> str | None:
-    runtime_store = tool_adapter.runtime_store
+    runtime_store = service_action_adapter.runtime_store
     if runtime_store is None:
         return None
     payload = runtime_store.get_extracted_requirement_sheet_json(draft_revision_id)
@@ -31,10 +31,10 @@ def extracted_job_title_from_runtime_control(
     return normalized or None
 
 
-def tool_call_draft_revision_id(tool_call: AgentToolCallRecord) -> str | None:
-    if tool_call.result is None:
+def operation_audit_draft_revision_id(operation_audit: OperationAuditRecord) -> str | None:
+    if operation_audit.result is None:
         return None
-    draft_revision_id = tool_call.result.get("draftRevisionId")
+    draft_revision_id = operation_audit.result.get("draftRevisionId")
     return draft_revision_id if isinstance(draft_revision_id, str) and draft_revision_id else None
 
 

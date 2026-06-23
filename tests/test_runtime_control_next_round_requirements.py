@@ -56,6 +56,53 @@ def test_next_round_requirement_amendments_accumulate_unless_explicitly_replaced
     assert [amendment.amendment_id for amendment in pending] == [second.amendment_id, replacement.amendment_id]
 
 
+def test_next_round_requirement_persists_bounded_provenance(tmp_path: Path) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = _store_with_approved_run(tmp_path)
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=FakeRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_provenance",
+        approved_requirement_id_factory=lambda: "reqapproved_provenance",
+        now=_clock("2026-06-08T00:00:01.000000Z"),
+    )
+    long_text = "x" * 5001
+    provenance = {
+        "originalUserText": long_text,
+        "normalizedRequirementText": long_text,
+        "intentDecision": {"intent": long_text, "rationale": "drop me"},
+        "sourceMessageId": long_text,
+        "runtimeRunId": long_text,
+        "ignoredList": ["drop me"],
+        "ignoredBool": True,
+    }
+
+    result = service.submit_next_round_requirement(
+        runtime_run_id="runtime_run_1",
+        text="新增平台治理经验，最好做过权限体系。",
+        target_section_hint="must_have_capabilities",
+        idempotency_key="amend-provenance",
+        provenance=provenance,
+    )
+
+    amendment = store.get_requirement_amendment(result.amendment_id)
+    expected_truncated = "x" * 4000
+    assert amendment.provenance == {
+        "originalUserText": expected_truncated,
+        "normalizedRequirementText": expected_truncated,
+        "intentDecision": {"intent": expected_truncated},
+        "sourceMessageId": expected_truncated,
+        "runtimeRunId": expected_truncated,
+    }
+    fresh_store = RuntimeControlStore(store.path)
+    fresh_store.initialize()
+    reloaded = fresh_store.get_requirement_amendment(result.amendment_id)
+    assert reloaded is not None
+    assert reloaded.provenance == amendment.provenance
+
+
 def test_next_round_requirement_requires_extractor_or_explicit_test_normalizer(tmp_path: Path) -> None:
     from seektalent_runtime_control.commands import RuntimeCommandService
 

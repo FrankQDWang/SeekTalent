@@ -27,18 +27,39 @@ _SUMMARY_INSTRUCTION_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _SUMMARY_FILTER_MARKER = "[filtered_summary_fragment]"
+MAX_REQUIREMENT_TEXT_CHARS = 2000
+MAX_SECTION_HINT_CHARS = 120
 
 
 def screen_requirement_text(text: str) -> str:
     clean = text.strip()
     if not clean:
         raise ConversationAgentError("agent_free_text_empty")
+    if len(clean) > MAX_REQUIREMENT_TEXT_CHARS:
+        raise ConversationAgentError(
+            "agent_free_text_too_long",
+            payload={"maxChars": MAX_REQUIREMENT_TEXT_CHARS, "actualChars": len(clean)},
+        )
     if _EMAIL_RE.search(clean) or _PHONE_RE.search(clean):
         _raise_rejected("agent_free_text_candidate_pii", clean)
     if _AUTH_RE.search(clean) or _SECRET_RE.search(clean):
         _raise_rejected("agent_free_text_auth_material", clean)
     if _RESUME_RE.search(clean):
         _raise_rejected("agent_free_text_raw_resume", clean)
+    return clean
+
+
+def screen_target_section_hint(hint: str | None) -> str | None:
+    if hint is None:
+        return None
+    clean = hint.strip()
+    if not clean:
+        return None
+    if len(clean) > MAX_SECTION_HINT_CHARS:
+        raise ConversationAgentError(
+            "agent_target_section_hint_too_long",
+            payload={"maxChars": MAX_SECTION_HINT_CHARS, "actualChars": len(clean)},
+        )
     return clean
 
 

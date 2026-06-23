@@ -136,9 +136,16 @@ def test_conversation_agent_service_enforces_budget_before_model_run(tmp_path: P
     assert exc_info.value.reason_code == "agent_token_budget_exceeded"
     assert runner.calls == 0
     with store._connect() as conn:
-        row = conn.execute("SELECT status, reason_code FROM agent_tool_calls WHERE tool_name = 'agent_model_run'").fetchone()
+        row = conn.execute(
+            """
+            SELECT status, reason_code, execution_origin
+            FROM agent_operation_audits
+            WHERE operation_name = 'agent_model_run'
+            """
+        ).fetchone()
     assert row["status"] == "failed"
     assert row["reason_code"] == "agent_token_budget_exceeded"
+    assert row["execution_origin"] == "model"
 
 
 def test_conversation_agent_service_detects_provider_usage_anomaly(tmp_path: Path) -> None:
@@ -172,9 +179,16 @@ def test_conversation_agent_service_detects_provider_usage_anomaly(tmp_path: Pat
 
     assert exc_info.value.reason_code == "agent_usage_anomaly_detected"
     with store._connect() as conn:
-        row = conn.execute("SELECT status, reason_code FROM agent_tool_calls WHERE tool_name = 'agent_model_run'").fetchone()
+        row = conn.execute(
+            """
+            SELECT status, reason_code, execution_origin
+            FROM agent_operation_audits
+            WHERE operation_name = 'agent_model_run'
+            """
+        ).fetchone()
     assert row["status"] == "failed"
     assert row["reason_code"] == "agent_usage_anomaly_detected"
+    assert row["execution_origin"] == "model"
 
 
 def test_conversation_agent_service_fails_when_reported_turn_cost_exceeds_monthly_budget(tmp_path: Path) -> None:
@@ -194,10 +208,11 @@ def test_conversation_agent_service_fails_when_reported_turn_cost_exceeds_monthl
         workspace_id="workspace_1",
         title="Data Platform Engineer",
     )
-    store.save_tool_call(
-        tool_call_id="prior_agent_model_run",
+    store.save_operation_audit(
+        operation_id="prior_agent_model_run",
         conversation_id=conversation.conversation_id,
-        tool_name="agent_model_run",
+        operation_name="agent_model_run",
+        execution_origin="model",
         status="completed",
         args={"modelName": "previous"},
         result={"reportedCostCents": 45},
@@ -223,8 +238,8 @@ def test_conversation_agent_service_fails_when_reported_turn_cost_exceeds_monthl
         row = conn.execute(
             """
             SELECT status, reason_code
-            FROM agent_tool_calls
-            WHERE tool_name = 'agent_model_run' AND tool_call_id != 'prior_agent_model_run'
+            FROM agent_operation_audits
+            WHERE operation_name = 'agent_model_run' AND operation_id != 'prior_agent_model_run'
             """
         ).fetchone()
         assistant_count = conn.execute(
@@ -253,10 +268,11 @@ def test_conversation_agent_service_replays_failed_idempotent_turn_as_same_error
         workspace_id="workspace_1",
         title="Data Platform Engineer",
     )
-    store.save_tool_call(
-        tool_call_id="prior_agent_model_run",
+    store.save_operation_audit(
+        operation_id="prior_agent_model_run",
         conversation_id=conversation.conversation_id,
-        tool_name="agent_model_run",
+        operation_name="agent_model_run",
+        execution_origin="model",
         status="completed",
         args={"modelName": "previous"},
         result={"reportedCostCents": 45},
@@ -325,11 +341,11 @@ def test_conversation_agent_service_resumes_idempotent_turn_after_user_message_o
         user_count = conn.execute(
             "SELECT COUNT(*) FROM agent_transcript_messages WHERE role = 'user'"
         ).fetchone()[0]
-        tool_count = conn.execute(
-            "SELECT COUNT(*) FROM agent_tool_calls WHERE tool_name = 'agent_model_run'"
+        operation_count = conn.execute(
+            "SELECT COUNT(*) FROM agent_operation_audits WHERE operation_name = 'agent_model_run'"
         ).fetchone()[0]
     assert user_count == 1
-    assert tool_count == 1
+    assert operation_count == 1
 
 
 def test_conversation_agent_service_restores_missing_assistant_after_completed_idempotent_turn(
@@ -375,8 +391,8 @@ def test_conversation_agent_service_restores_missing_assistant_after_completed_i
         completed_count = conn.execute(
             """
             SELECT COUNT(*)
-            FROM agent_tool_calls
-            WHERE tool_name = 'agent_model_run' AND status = 'completed'
+            FROM agent_operation_audits
+            WHERE operation_name = 'agent_model_run' AND status = 'completed'
             """
         ).fetchone()[0]
     assert assistant_count == 1
@@ -403,10 +419,11 @@ def test_conversation_agent_service_marks_stale_started_idempotent_turn_failed(t
         token_count=8,
         idempotency_key="user-text-stale",
     )
-    store.save_tool_call(
-        tool_call_id="agent_tool_call_stale",
+    store.save_operation_audit(
+        operation_id="operation_audit_stale",
         conversation_id=conversation.conversation_id,
-        tool_name="agent_model_run",
+        operation_name="agent_model_run",
+        execution_origin="model",
         status="started",
         args={"modelName": "test-model", "idempotencyKey": "user-text-stale"},
         result=None,
@@ -429,7 +446,7 @@ def test_conversation_agent_service_marks_stale_started_idempotent_turn_failed(t
     assert runner.calls == 0
     with store._connect() as conn:
         row = conn.execute(
-            "SELECT status, reason_code FROM agent_tool_calls WHERE tool_call_id = 'agent_tool_call_stale'"
+            "SELECT status, reason_code FROM agent_operation_audits WHERE operation_id = 'operation_audit_stale'"
         ).fetchone()
     assert row["status"] == "failed"
     assert row["reason_code"] == "agent_request_stale"

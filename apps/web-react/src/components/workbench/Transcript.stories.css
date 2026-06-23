@@ -170,7 +170,7 @@
 }
 
 .codex-reference-frame--slice .transcript-event h3,
-.codex-reference-frame--slice .transcript-tool-event__button span {
+.codex-reference-frame--slice .transcript-operation-event__button span {
   font-size: 13px;
   font-weight: 430;
 }
@@ -200,24 +200,26 @@
   display: none;
 }
 
-.codex-reference-frame--tool-detail {
+.codex-reference-frame--operation-detail {
   min-height: 110px;
   padding: 14px 0 0 27px;
 }
 
-.codex-reference-frame--tool-detail .transcript {
+.codex-reference-frame--operation-detail .transcript {
   padding: 0;
 }
 
-.codex-reference-frame--tool-detail .transcript-run-group__toggle {
+.codex-reference-frame--operation-detail .transcript-run-group__toggle {
   display: none;
 }
 
-.codex-reference-frame--tool-detail .transcript-run-group__events {
+.codex-reference-frame--operation-detail .transcript-run-group__events {
   padding: 0;
 }
 
-.codex-reference-frame--tool-detail .transcript-tool-event__button span {
+.codex-reference-frame--operation-detail
+  .transcript-operation-event__button
+  span {
   color: rgb(26 28 31);
   font-size: 15px;
   font-weight: 430;

@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from typing import Literal
 
 from seektalent_conversation_agent.models import (
-    AgentToolCallRecord,
     ContextCompactionRecord,
+    OperationAuditRecord,
     TranscriptActivityItem,
     TranscriptMessage,
 )
@@ -78,8 +78,8 @@ def _transcript_facts(input: AgentWorkbenchProjectionInput) -> Iterable[_Transcr
             starts_segment=message.role == "user",
             event=event,
         )
-    for tool in input.tool_call_records:
-        event = _tool_event(tool)
+    for operation in input.operation_audit_records:
+        event = _operation_event(operation)
         yield _TranscriptFact(
             sort_key=(event.createdAt, _event_kind_rank(event.kind), event.eventId),
             starts_segment=False,
@@ -123,21 +123,21 @@ def _message_event(message: TranscriptMessage) -> AgentWorkbenchTranscriptEventR
     )
 
 
-def _tool_event(tool: AgentToolCallRecord) -> AgentWorkbenchTranscriptEventResponse:
-    status = _status(tool.status)
+def _operation_event(operation: OperationAuditRecord) -> AgentWorkbenchTranscriptEventResponse:
+    status = _status(operation.status)
     return AgentWorkbenchTranscriptEventResponse(
-        eventId=f"tool:{tool.tool_call_id}:{_tool_kind(status)}",
-        itemId=tool.tool_call_id,
-        kind=_tool_kind(status),
+        eventId=f"operation:{operation.operation_id}:{_operation_kind(status)}",
+        itemId=operation.operation_id,
+        kind=_operation_kind(status),
         status=status,
-        label=tool.tool_name,
-        summary=_tool_summary(tool),
+        label=operation.operation_name,
+        summary=_operation_summary(operation),
         payload=AgentWorkbenchTranscriptPayloadResponse(
-            kind="tool",
-            itemId=tool.tool_call_id,
-            summary=_tool_summary(tool),
+            kind="operation",
+            itemId=operation.operation_id,
+            summary=_operation_summary(operation),
         ),
-        createdAt=tool.started_at,
+        createdAt=operation.started_at,
     )
 
 
@@ -272,12 +272,12 @@ def _message_label(message: TranscriptMessage) -> str:
     return "User message" if message.role == "user" else "Agent message"
 
 
-def _tool_kind(status: AgentWorkbenchStatus) -> AgentWorkbenchStreamKind:
+def _operation_kind(status: AgentWorkbenchStatus) -> AgentWorkbenchStreamKind:
     if status == "failed":
-        return "tool.failed"
+        return "operation.failed"
     if status == "running":
-        return "tool.started"
-    return "tool.completed"
+        return "operation.started"
+    return "operation.completed"
 
 
 def _runtime_event_kind(event_type: str) -> AgentWorkbenchStreamKind:
@@ -311,13 +311,13 @@ def _event_kind_rank(kind: AgentWorkbenchStreamKind, role: str | None = None) ->
         return 10
     if kind == "message.completed":
         return 20
-    if kind in {"tool.started", "sourceSearch.started", "webSearch.started", "command.started"}:
+    if kind in {"operation.started", "sourceSearch.started", "webSearch.started", "command.started"}:
         return 30
-    if kind in {"tool.outputDelta", "command.outputDelta"}:
+    if kind == "command.outputDelta":
         return 40
-    if kind in {"tool.completed", "sourceSearch.completed", "webSearch.completed", "command.completed"}:
+    if kind in {"operation.completed", "sourceSearch.completed", "webSearch.completed", "command.completed"}:
         return 50
-    if kind in {"tool.failed", "sourceSearch.failed", "webSearch.failed", "command.failed"}:
+    if kind in {"operation.failed", "sourceSearch.failed", "webSearch.failed", "command.failed"}:
         return 60
     if kind in {"activity.upserted", "runtime.stageChanged"}:
         return 70
@@ -326,12 +326,12 @@ def _event_kind_rank(kind: AgentWorkbenchStreamKind, role: str | None = None) ->
     return 90
 
 
-def _tool_summary(tool: AgentToolCallRecord) -> str | None:
-    if tool.result is not None:
-        summary = tool.result.get("summary")
+def _operation_summary(operation: OperationAuditRecord) -> str | None:
+    if operation.result is not None:
+        summary = operation.result.get("summary")
         if isinstance(summary, str) and summary:
             return summary
-    return tool.reason_code
+    return operation.reason_code
 
 
 def _attr(value: object, name: str) -> object:

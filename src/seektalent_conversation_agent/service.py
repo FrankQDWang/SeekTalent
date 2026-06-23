@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Literal, Protocol
+from typing import Literal, Protocol, TypeVar, cast
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
@@ -20,11 +20,12 @@ from seektalent_conversation_agent.job_requests import (
     normalize_source_kinds,
 )
 from seektalent_conversation_agent.models import (
-    AgentToolCallRecord,
+    OperationAuditRecord,
     ConversationAgentResponse,
     ConversationRecord,
     ConversationRuntimeRunLink,
     ConversationThreadView,
+    TranscriptActivityItem,
     TranscriptMessage,
 )
 from seektalent_conversation_agent.projection import project_runtime_event
@@ -35,7 +36,13 @@ from seektalent_conversation_agent.runtime import (
     _model_input_json,
     build_cache_ready_model_input,
 )
-from seektalent_conversation_agent.safety import sanitize_summary_text, screen_requirement_text
+from seektalent_conversation_agent.safety import (
+    MAX_REQUIREMENT_TEXT_CHARS,
+    MAX_SECTION_HINT_CHARS,
+    sanitize_summary_text,
+    screen_requirement_text,
+    screen_target_section_hint,
+)
 from seektalent_conversation_agent.source_selection import (
     RuntimeSourceSelectionResolver,
     SourceSelectionError,
@@ -48,9 +55,9 @@ from seektalent_conversation_agent.submit_jd_recovery import (
     requirement_review_message_idempotency_key as _requirement_review_message_idempotency_key,
     requirement_review_payload as _requirement_review_payload,
     should_repair_submit_replay_status as _should_repair_submit_replay_status,
-    tool_call_draft_revision_id as _tool_call_draft_revision_id,
+    operation_audit_draft_revision_id as _operation_audit_draft_revision_id,
 )
-from seektalent_conversation_agent.tools import AgentToolAdapter
+from seektalent_conversation_agent.service_actions import AgentServiceActionAdapter
 from seektalent_conversation_agent.workflow_start_intents import (
     WorkbenchOutboxStore,
     WorkflowConfirmRequestStore,
@@ -60,8 +67,13 @@ from seektalent_conversation_agent.workflow_start_intents import (
     workflow_start_request_hash,
 )
 from seektalent_runtime_control.errors import RuntimeControlError
-from seektalent_runtime_control.models import RuntimeRunSnapshot
-from seektalent_runtime_control.requirements import ApprovedRequirementRevision, DraftOperation, ReviewResolutionOperation
+from seektalent_runtime_control.models import RuntimeFinalSummary, RuntimeRunSnapshot
+from seektalent_runtime_control.requirements import (
+    ApprovedRequirementRevision,
+    DraftOperation,
+    RequirementDraft,
+    ReviewResolutionOperation,
+)
 
 
 _TERMINAL_RUN_STATUS_TO_CONVERSATION = {
@@ -69,8 +81,12 @@ _TERMINAL_RUN_STATUS_TO_CONVERSATION = {
     "failed": "failed",
     "cancelled": "cancelled",
 }
+_RUNTIME_FINAL_SUMMARY_IDEMPOTENCY_PREFIX = "runtime-final-summary:"
+_FINAL_SUMMARY_MESSAGE_IDEMPOTENCY_PREFIX = "final-summary-message:"
+_WORKFLOW_COMMAND_MESSAGE_IDEMPOTENCY_PREFIX = "workflow-command-message:"
 _AGENT_TURN_STARTED_STALE_SECONDS = 15 * 60
 _WORKFLOW_START_OUTBOX_CLAIM_TIMEOUT_SECONDS = 60
+_SummaryItemT = TypeVar("_SummaryItemT")
 
 
 class DraftProtocol(Protocol):
@@ -99,8 +115,8 @@ class ConversationAgentIntentDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent: Literal["read_only_question", "next_round_requirement", "unsupported_write"]
-    requirement_text: str | None = Field(default=None)
-    target_section_hint: str | None = Field(default=None)
+    requirement_text: str | None = Field(default=None, max_length=MAX_REQUIREMENT_TEXT_CHARS)
+    target_section_hint: str | None = Field(default=None, max_length=MAX_SECTION_HINT_CHARS)
     rationale: str | None = Field(default=None)
 
 
@@ -125,12 +141,12 @@ class ConversationAgentService:
         self,
         *,
         store: ConversationStore,
-        tool_adapter: AgentToolAdapter,
+        service_action_adapter: AgentServiceActionAdapter,
         now: Callable[[], str],
         conversation_id_factory: Callable[[], str] | None = None,
         message_id_factory: Callable[[], str] | None = None,
         activity_id_factory: Callable[[], str] | None = None,
-        tool_call_id_factory: Callable[[], str] | None = None,
+        operation_id_factory: Callable[[], str] | None = None,
         summary_id_factory: Callable[[], str] | None = None,
         compaction_id_factory: Callable[[], str] | None = None,
         memory_service: MemoryServiceProtocol | None = None,
@@ -141,12 +157,12 @@ class ConversationAgentService:
         source_selection_resolver: RuntimeSourceSelectionResolver | None = None,
     ) -> None:
         self.store = store
-        self.tool_adapter = tool_adapter
+        self.service_action_adapter = service_action_adapter
         self.now = now
         self.conversation_id_factory = conversation_id_factory or (lambda: f"agent_conv_{uuid4().hex}")
         self.message_id_factory = message_id_factory or (lambda: f"agent_msg_{uuid4().hex}")
         self.activity_id_factory = activity_id_factory or (lambda: f"agent_activity_{uuid4().hex}")
-        self.tool_call_id_factory = tool_call_id_factory or (lambda: f"agent_tool_call_{uuid4().hex}")
+        self.operation_id_factory = operation_id_factory or (lambda: f"agent_operation_audit_{uuid4().hex}")
         self.summary_id_factory = summary_id_factory or (lambda: f"agent_context_summary_{uuid4().hex}")
         self.compaction_id_factory = compaction_id_factory or (lambda: f"agent_compaction_{uuid4().hex}")
         self.memory_service = memory_service
@@ -286,7 +302,6 @@ class ConversationAgentService:
         latest_summary = self.store.get_latest_context_summary(conversation_id=conversation_id)
         included_recent_messages = [item for item in prior_messages if item.model_input_included]
         model_input = build_cache_ready_model_input(
-            registered_prompt=self.agent_instructions,
             latest_context_summary=latest_summary.summary_text if latest_summary is not None else None,
             recent_transcript=[
                 ModelInputTranscriptMessage(
@@ -303,7 +318,7 @@ class ConversationAgentService:
             runtime_facts=runtime_facts,
         )
         estimated_input_tokens = _model_input_content_token_estimate(
-            registered_prompt=self.agent_instructions,
+            instructions_text=self.agent_instructions,
             latest_context_summary=latest_summary.summary_text if latest_summary is not None else None,
             recent_messages=included_recent_messages,
             advisory_context=advisory_context,
@@ -311,12 +326,13 @@ class ConversationAgentService:
             runtime_task=runtime_task,
             runtime_facts=runtime_facts,
         )
-        tool_call_id = self.tool_call_id_factory()
+        operation_id = self.operation_id_factory()
         started_at = self.now()
-        self.store.save_tool_call(
-            tool_call_id=tool_call_id,
+        self.store.save_operation_audit(
+            operation_id=operation_id,
             conversation_id=conversation_id,
-            tool_name="agent_model_run",
+            operation_name="agent_model_run",
+            execution_origin="model",
             status="started",
             args={
                 "modelName": self.agent_model_name,
@@ -342,7 +358,7 @@ class ConversationAgentService:
                 )
             except ConversationAgentError as exc:
                 self._mark_agent_model_run_failed(
-                    tool_call_id=tool_call_id,
+                    operation_id=operation_id,
                     conversation_id=conversation_id,
                     started_at=started_at,
                     reason_code=exc.reason_code,
@@ -390,17 +406,18 @@ class ConversationAgentService:
                 )
         except ConversationAgentError as exc:
             self._mark_agent_model_run_failed(
-                tool_call_id=tool_call_id,
+                operation_id=operation_id,
                 conversation_id=conversation_id,
                 started_at=started_at,
                 reason_code=exc.reason_code,
                 result=locals().get("usage_result", {"estimatedInputTokens": estimated_input_tokens}),
             )
             raise
-        self.store.save_tool_call(
-            tool_call_id=tool_call_id,
+        self.store.save_operation_audit(
+            operation_id=operation_id,
             conversation_id=conversation_id,
-            tool_name="agent_model_run",
+            operation_name="agent_model_run",
+            execution_origin="model",
             status="completed",
             args={
                 "modelName": self.agent_model_name,
@@ -422,7 +439,7 @@ class ConversationAgentService:
             created_at=self.now(),
             message_id=self.message_id_factory(),
             token_count=estimated_output_tokens,
-            source_tool_call_id=tool_call_id,
+            source_operation_id=operation_id,
             source_runtime_run_id=source_runtime_run_id,
             idempotency_key=_assistant_message_idempotency_key(idempotency_key),
             return_existing_on_idempotency=idempotency_key is not None,
@@ -447,11 +464,11 @@ class ConversationAgentService:
         user_message_record: TranscriptMessage,
         idempotency_key: str,
     ) -> ConversationAgentResponse:
-        tool_call = self._agent_model_run_by_idempotency(
+        operation_audit = self._agent_model_run_by_idempotency(
             conversation_id=conversation_id,
             idempotency_key=idempotency_key,
         )
-        if tool_call is None:
+        if operation_audit is None:
             assistant_idempotency_key = _assistant_message_idempotency_key(idempotency_key)
             if assistant_idempotency_key is None:
                 raise ConversationAgentError("agent_idempotency_key_required")
@@ -488,34 +505,34 @@ class ConversationAgentService:
                 user_message=user_message_record.text,
                 idempotency_key=idempotency_key,
             )
-        if tool_call.status == "started":
-            if self._agent_tool_call_is_stale(tool_call):
+        if operation_audit.status == "started":
+            if self._agent_operation_audit_is_stale(operation_audit):
                 self._mark_agent_model_run_failed(
-                    tool_call_id=tool_call.tool_call_id,
+                    operation_id=operation_audit.operation_id,
                     conversation_id=conversation_id,
-                    started_at=tool_call.started_at,
+                    started_at=operation_audit.started_at,
                     reason_code="agent_request_stale",
                     result={"idempotencyKey": idempotency_key},
                 )
                 raise ConversationAgentError("agent_request_stale")
             raise ConversationAgentError("agent_request_in_progress")
-        if tool_call.status == "failed":
+        if operation_audit.status == "failed":
             raise ConversationAgentError(
-                tool_call.reason_code or "agent_request_failed",
-                payload=tool_call.result or {},
+                operation_audit.reason_code or "agent_request_failed",
+                payload=operation_audit.result or {},
             )
-        if tool_call.status == "completed" and self._assistant_message_exists(
+        if operation_audit.status == "completed" and self._assistant_message_exists(
             conversation_id=conversation_id,
-            tool_call_id=tool_call.tool_call_id,
+            operation_id=operation_audit.operation_id,
         ):
             return self._reopened_response(
                 conversation_id=conversation_id,
                 owner_user_id=owner_user_id,
                 workspace_id=workspace_id,
             )
-        if tool_call.status == "completed" and self._restore_assistant_message_from_tool_call(
+        if operation_audit.status == "completed" and self._restore_assistant_message_from_operation_audit(
             conversation_id=conversation_id,
-            tool_call=tool_call,
+            operation_audit=operation_audit,
             idempotency_key=idempotency_key,
         ):
             return self._reopened_response(
@@ -524,9 +541,9 @@ class ConversationAgentService:
                 workspace_id=workspace_id,
             )
         self._mark_agent_model_run_failed(
-            tool_call_id=tool_call.tool_call_id,
+            operation_id=operation_audit.operation_id,
             conversation_id=conversation_id,
-            started_at=tool_call.started_at,
+            started_at=operation_audit.started_at,
             reason_code="agent_request_recovery_failed",
             result={"idempotencyKey": idempotency_key},
         )
@@ -540,8 +557,8 @@ class ConversationAgentService:
     ):
         matching = [
             call
-            for call in self.store.list_tool_calls(conversation_id=conversation_id)
-            if call.tool_name == "agent_model_run" and call.args.get("idempotencyKey") == idempotency_key
+            for call in self.store.list_operation_audits(conversation_id=conversation_id)
+            if call.operation_name == "agent_model_run" and call.args.get("idempotencyKey") == idempotency_key
         ]
         return matching[-1] if matching else None
 
@@ -550,28 +567,28 @@ class ConversationAgentService:
         *,
         conversation_id: str,
         idempotency_key: str,
-    ) -> AgentToolCallRecord | None:
+    ) -> OperationAuditRecord | None:
         matching = [
             call
-            for call in self.store.list_tool_calls(conversation_id=conversation_id)
-            if call.tool_name == "agent_intent_route" and call.args.get("idempotencyKey") == idempotency_key
+            for call in self.store.list_operation_audits(conversation_id=conversation_id)
+            if call.operation_name == "agent_intent_route" and call.args.get("idempotencyKey") == idempotency_key
         ]
         return matching[-1] if matching else None
 
-    def _assistant_message_exists(self, *, conversation_id: str, tool_call_id: str) -> bool:
+    def _assistant_message_exists(self, *, conversation_id: str, operation_id: str) -> bool:
         return any(
-            message.role == "assistant" and message.source_tool_call_id == tool_call_id
+            message.role == "assistant" and message.source_operation_id == operation_id
             for message in self.store.get_messages(conversation_id=conversation_id)
         )
 
-    def _restore_assistant_message_from_tool_call(
+    def _restore_assistant_message_from_operation_audit(
         self,
         *,
         conversation_id: str,
-        tool_call: AgentToolCallRecord,
+        operation_audit: OperationAuditRecord,
         idempotency_key: str,
     ) -> bool:
-        result = tool_call.result or {}
+        result = operation_audit.result or {}
         assistant_text = result.get("assistantText")
         if not isinstance(assistant_text, str):
             return False
@@ -586,14 +603,14 @@ class ConversationAgentService:
             created_at=self.now(),
             message_id=self.message_id_factory(),
             token_count=token_count if isinstance(token_count, int) else _rough_token_estimate(assistant_text),
-            source_tool_call_id=tool_call.tool_call_id,
+            source_operation_id=operation_audit.operation_id,
             idempotency_key=_assistant_message_idempotency_key(idempotency_key),
             return_existing_on_idempotency=True,
         )
         return True
 
-    def _agent_tool_call_is_stale(self, tool_call: AgentToolCallRecord) -> bool:
-        return _parse_time(self.now()) - _parse_time(tool_call.started_at) > timedelta(
+    def _agent_operation_audit_is_stale(self, operation_audit: OperationAuditRecord) -> bool:
+        return _parse_time(self.now()) - _parse_time(operation_audit.started_at) > timedelta(
             seconds=_AGENT_TURN_STARTED_STALE_SECONDS
         )
 
@@ -604,6 +621,20 @@ class ConversationAgentService:
         owner_user_id: str,
         workspace_id: str,
     ) -> ConversationAgentResponse:
+        final_summary = None
+        target = self._maybe_active_runtime_run_target(
+            conversation_id=conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+        )
+        if target is not None:
+            final_summary = self._ensure_final_summary_for_runtime(
+                target=target,
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                display_instruction=None,
+            )
         reopened = self.reopen_conversation(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -613,21 +644,23 @@ class ConversationAgentService:
             conversation_reopen_state=reopened.conversation_reopen_state,
             messages=reopened.messages,
             activity_items=reopened.activity_items,
+            final_summary=final_summary,
         )
 
     def _mark_agent_model_run_failed(
         self,
         *,
-        tool_call_id: str,
+        operation_id: str,
         conversation_id: str,
         started_at: str,
         reason_code: str,
         result: dict[str, object] | None,
     ) -> None:
-        self.store.save_tool_call(
-            tool_call_id=tool_call_id,
+        self.store.save_operation_audit(
+            operation_id=operation_id,
             conversation_id=conversation_id,
-            tool_name="agent_model_run",
+            operation_name="agent_model_run",
+            execution_origin="model",
             status="failed",
             args={"modelName": self.agent_model_name},
             result=result,
@@ -639,7 +672,7 @@ class ConversationAgentService:
     def _mark_agent_intent_route_failed(
         self,
         *,
-        tool_call_id: str,
+        operation_id: str,
         conversation_id: str,
         started_at: str,
         reason_code: str,
@@ -648,10 +681,11 @@ class ConversationAgentService:
         runtime_run_id: str | None = None,
     ) -> None:
         default_args: dict[str, object] = {"modelName": self.agent_model_name, "runtimeRunId": runtime_run_id}
-        self.store.save_tool_call(
-            tool_call_id=tool_call_id,
+        self.store.save_operation_audit(
+            operation_id=operation_id,
             conversation_id=conversation_id,
-            tool_name="agent_intent_route",
+            operation_name="agent_intent_route",
+            execution_origin="service",
             status="failed",
             args=args or default_args,
             result=result,
@@ -668,8 +702,8 @@ class ConversationAgentService:
             workspace_id=workspace_id,
             include_archived=True,
         ):
-            for call in self.store.list_tool_calls(conversation_id=conversation.conversation_id):
-                if call.tool_name != "agent_model_run" or call.status != "completed" or call.result is None:
+            for call in self.store.list_operation_audits(conversation_id=conversation.conversation_id):
+                if call.operation_name != "agent_model_run" or call.status != "completed" or call.result is None:
                     continue
                 value = call.result.get("reportedCostCents")
                 if isinstance(value, int):
@@ -744,7 +778,7 @@ class ConversationAgentService:
                 {
                 "item_id": activity.activity_id,
                 "item_kind": "activity",
-                "role": "tool",
+                "role": "activity",
                 "text": activity.summary,
                 "payload": activity.payload,
                 "created_at": activity.updated_at,
@@ -869,11 +903,11 @@ class ConversationAgentService:
             job_request.job_request_revision_id
         )
         if existing_link is not None:
-            draft = self.tool_adapter.get_requirement_draft(
+            draft = self.service_action_adapter.get_requirement_draft(
                 conversation_id=conversation_id,
                 draft_revision_id=existing_link.draft_revision_id,
             )
-            tool_call = self._ensure_submit_jd_extract_tool_call_completed(
+            operation_audit = self._ensure_submit_jd_extract_operation_audit_completed(
                 conversation_id=conversation_id,
                 job_request=job_request,
                 draft_revision_id=existing_link.draft_revision_id,
@@ -893,7 +927,7 @@ class ConversationAgentService:
             self._ensure_requirement_review_message(
                 conversation_id=conversation_id,
                 draft=draft,
-                source_tool_call_id=tool_call.tool_call_id,
+                source_operation_id=operation_audit.operation_id,
                 idempotency_key=idempotency_key,
             )
             reopened = self.reopen_conversation(
@@ -914,19 +948,19 @@ class ConversationAgentService:
             job_request=job_request,
             idempotency_key=idempotency_key,
         )
-        tool_call = self._extract_requirements_tool_call_for_job_request(
+        operation_audit = self._extract_requirements_operation_audit_for_job_request(
             conversation_id=conversation_id,
             job_request=job_request,
         )
         draft = self._extract_or_recover_requirement_draft(
             conversation_id=conversation_id,
             job_request=job_request,
-            tool_call=tool_call,
+            operation_audit=operation_audit,
             idempotency_key=idempotency_key,
         )
-        tool_call_id = tool_call.tool_call_id
+        operation_id = operation_audit.operation_id
         extracted_job_title = _extracted_job_title_from_runtime_control(
-            self.tool_adapter,
+            self.service_action_adapter,
             draft_revision_id=draft.draft_revision_id,
         )
         job_request = self.job_request_store.update_extracted_job_title(
@@ -936,10 +970,11 @@ class ConversationAgentService:
         )
         effective_job_title = job_request.effective_job_title
         if effective_job_title is None:
-            self.store.save_tool_call(
-                tool_call_id=tool_call_id,
+            self.store.save_operation_audit(
+                operation_id=operation_id,
                 conversation_id=conversation_id,
-                tool_name="extract_requirements",
+                operation_name="extract_requirements",
+                execution_origin="service",
                 status="failed",
                 args={
                     "jobTitle": user_job_title,
@@ -952,10 +987,10 @@ class ConversationAgentService:
                 completed_at=self.now(),
             )
             raise ConversationAgentError("job_request_title_required")
-        self._mark_submit_jd_extract_tool_call_completed(
+        self._mark_submit_jd_extract_operation_audit_completed(
             conversation_id=conversation_id,
             job_request=job_request,
-            tool_call_id=tool_call_id,
+            operation_id=operation_id,
             extracted_job_title=extracted_job_title,
             effective_job_title=effective_job_title,
             draft_revision_id=draft.draft_revision_id,
@@ -980,7 +1015,7 @@ class ConversationAgentService:
         )
         assistant_message = self._ensure_requirement_review_message(
             conversation_id=conversation_id,
-            source_tool_call_id=tool_call_id,
+            source_operation_id=operation_id,
             draft=draft,
             idempotency_key=idempotency_key,
         )
@@ -993,7 +1028,7 @@ class ConversationAgentService:
             conversation_reopen_state=reopened.conversation_reopen_state,
             messages=[user_message, assistant_message],
             activity_items=reopened.activity_items,
-            requirement_draft=draft,
+            requirement_draft=_requirement_draft_response(draft),
             job_request_revision_id=job_request.job_request_revision_id,
             requirement_draft_revision_id=draft.draft_revision_id,
         )
@@ -1041,22 +1076,23 @@ class ConversationAgentService:
                 return message
         return None
 
-    def _extract_requirements_tool_call_for_job_request(
+    def _extract_requirements_operation_audit_for_job_request(
         self,
         *,
         conversation_id: str,
         job_request: JobRequestRevision,
-    ) -> AgentToolCallRecord:
-        existing = self._find_extract_requirements_tool_call(
+    ) -> OperationAuditRecord:
+        existing = self._find_extract_requirements_operation_audit(
             conversation_id=conversation_id,
             job_request_revision_id=job_request.job_request_revision_id,
         )
         if existing is not None:
             return existing
-        return self.store.save_tool_call(
-            tool_call_id=self.tool_call_id_factory(),
+        return self.store.save_operation_audit(
+            operation_id=self.operation_id_factory(),
             conversation_id=conversation_id,
-            tool_name="extract_requirements",
+            operation_name="extract_requirements",
+            execution_origin="service",
             status="started",
             args={
                 "jobTitle": job_request.user_job_title,
@@ -1068,16 +1104,16 @@ class ConversationAgentService:
             started_at=self.now(),
         )
 
-    def _find_extract_requirements_tool_call(
+    def _find_extract_requirements_operation_audit(
         self,
         *,
         conversation_id: str,
         job_request_revision_id: str,
-    ) -> AgentToolCallRecord | None:
+    ) -> OperationAuditRecord | None:
         matching = [
             call
-            for call in self.store.list_tool_calls(conversation_id=conversation_id)
-            if call.tool_name == "extract_requirements"
+            for call in self.store.list_operation_audits(conversation_id=conversation_id)
+            if call.operation_name == "extract_requirements"
             and call.args.get("jobRequestRevisionId") == job_request_revision_id
         ]
         if not matching:
@@ -1090,17 +1126,17 @@ class ConversationAgentService:
         *,
         conversation_id: str,
         job_request: JobRequestRevision,
-        tool_call: AgentToolCallRecord,
+        operation_audit: OperationAuditRecord,
         idempotency_key: str,
     ) -> DraftProtocol:
-        if tool_call.status == "completed":
-            draft_revision_id = _tool_call_draft_revision_id(tool_call)
+        if operation_audit.status == "completed":
+            draft_revision_id = _operation_audit_draft_revision_id(operation_audit)
             if draft_revision_id is not None:
-                return self.tool_adapter.get_requirement_draft(
+                return self.service_action_adapter.get_requirement_draft(
                     conversation_id=conversation_id,
                     draft_revision_id=draft_revision_id,
                 )
-        return self.tool_adapter.extract_requirements(
+        return self.service_action_adapter.extract_requirements(
             conversation_id=conversation_id,
             job_title=job_request.user_job_title,
             jd_text=job_request.jd_text,
@@ -1109,52 +1145,53 @@ class ConversationAgentService:
             idempotency_key=idempotency_key,
         )
 
-    def _ensure_submit_jd_extract_tool_call_completed(
+    def _ensure_submit_jd_extract_operation_audit_completed(
         self,
         *,
         conversation_id: str,
         job_request: JobRequestRevision,
         draft_revision_id: str,
-    ) -> AgentToolCallRecord:
-        tool_call = self._extract_requirements_tool_call_for_job_request(
+    ) -> OperationAuditRecord:
+        operation_audit = self._extract_requirements_operation_audit_for_job_request(
             conversation_id=conversation_id,
             job_request=job_request,
         )
-        if tool_call.status == "completed" and _tool_call_draft_revision_id(tool_call) == draft_revision_id:
-            return tool_call
+        if operation_audit.status == "completed" and _operation_audit_draft_revision_id(operation_audit) == draft_revision_id:
+            return operation_audit
         effective_job_title = job_request.effective_job_title
         if effective_job_title is None:
             effective_job_title = _extracted_job_title_from_runtime_control(
-                self.tool_adapter,
+                self.service_action_adapter,
                 draft_revision_id=draft_revision_id,
             )
         if effective_job_title is None:
             effective_job_title = job_request.user_job_title
         if effective_job_title is None:
-            return tool_call
-        return self._mark_submit_jd_extract_tool_call_completed(
+            return operation_audit
+        return self._mark_submit_jd_extract_operation_audit_completed(
             conversation_id=conversation_id,
             job_request=job_request,
-            tool_call_id=tool_call.tool_call_id,
+            operation_id=operation_audit.operation_id,
             extracted_job_title=job_request.extracted_job_title,
             effective_job_title=effective_job_title,
             draft_revision_id=draft_revision_id,
         )
 
-    def _mark_submit_jd_extract_tool_call_completed(
+    def _mark_submit_jd_extract_operation_audit_completed(
         self,
         *,
         conversation_id: str,
         job_request: JobRequestRevision,
-        tool_call_id: str,
+        operation_id: str,
         extracted_job_title: str | None,
         effective_job_title: str,
         draft_revision_id: str,
-    ) -> AgentToolCallRecord:
-        return self.store.save_tool_call(
-            tool_call_id=tool_call_id,
+    ) -> OperationAuditRecord:
+        return self.store.save_operation_audit(
+            operation_id=operation_id,
             conversation_id=conversation_id,
-            tool_name="extract_requirements",
+            operation_name="extract_requirements",
+            execution_origin="service",
             status="completed",
             args={
                 "jobTitle": job_request.user_job_title,
@@ -1174,7 +1211,7 @@ class ConversationAgentService:
         *,
         conversation_id: str,
         draft: DraftProtocol,
-        source_tool_call_id: str,
+        source_operation_id: str,
         idempotency_key: str,
     ) -> TranscriptMessage:
         existing = self._requirement_review_message_for_draft(
@@ -1190,7 +1227,7 @@ class ConversationAgentService:
             message_type="requirement_review",
             text="已拆解岗位需求，请确认后再启动检索。",
             payload=_requirement_review_payload(draft),
-            source_tool_call_id=source_tool_call_id,
+            source_operation_id=source_operation_id,
             created_at=self.now(),
             message_id=self.message_id_factory(),
             idempotency_key=f"{idempotency_key}:requirement-review",
@@ -1232,7 +1269,7 @@ class ConversationAgentService:
         except ValidationError as exc:
             raise ConversationAgentError("agent_request_invalid", payload={"errors": exc.errors()}) from exc
         try:
-            draft = self.tool_adapter.update_requirement_draft(
+            draft = self.service_action_adapter.update_requirement_draft(
                 draft_revision_id=draft_revision_id,
                 base_revision_id=base_revision_id,
                 operations=parsed,
@@ -1264,7 +1301,7 @@ class ConversationAgentService:
         self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
         safe_text = screen_requirement_text(text)
         try:
-            draft = self.tool_adapter.amend_requirement_draft_from_text(
+            draft = self.service_action_adapter.amend_requirement_draft_from_text(
                 draft_revision_id=draft_revision_id,
                 base_revision_id=base_revision_id,
                 text=safe_text,
@@ -1300,7 +1337,7 @@ class ConversationAgentService:
         except ValidationError as exc:
             raise ConversationAgentError("agent_request_invalid", payload={"errors": exc.errors()}) from exc
         try:
-            draft = self.tool_adapter.resolve_requirement_review(
+            draft = self.service_action_adapter.resolve_requirement_review(
                 draft_revision_id=draft_revision_id,
                 base_revision_id=base_revision_id,
                 amendment_id=amendment_id,
@@ -1524,8 +1561,8 @@ class ConversationAgentService:
         base_revision_id: str,
         idempotency_key: str,
     ) -> ApprovedRequirementRevision:
-        if self.tool_adapter.runtime_store is not None:
-            approved = self.tool_adapter.runtime_store.get_approved_requirement_by_idempotency(
+        if self.service_action_adapter.runtime_store is not None:
+            approved = self.service_action_adapter.runtime_store.get_approved_requirement_by_idempotency(
                 conversation_id=conversation_id,
                 idempotency_key=idempotency_key,
             )
@@ -1534,7 +1571,7 @@ class ConversationAgentService:
                     raise ConversationAgentError("idempotency_key_conflict")
                 return approved
         try:
-            return self.tool_adapter.confirm_requirements(
+            return self.service_action_adapter.confirm_requirements(
                 draft_revision_id=draft_revision_id,
                 base_revision_id=base_revision_id,
                 idempotency_key=idempotency_key,
@@ -1569,9 +1606,9 @@ class ConversationAgentService:
             self.outbox_store.mark_done(outbox_id, updated_at=self.now())
             return intent
 
-        if self.tool_adapter.runtime_store is None:
+        if self.service_action_adapter.runtime_store is None:
             raise ConversationAgentError("runtime_control_store_required")
-        approved = self.tool_adapter.runtime_store.get_approved_requirement(intent.approved_requirement_revision_id)
+        approved = self.service_action_adapter.runtime_store.get_approved_requirement(intent.approved_requirement_revision_id)
         job_request = self.job_request_store.get_job_request_revision(intent.job_request_revision_id)
         if job_request is None or job_request.effective_job_title is None:
             failed = self.workflow_start_intent_store.mark_failed(
@@ -1596,7 +1633,7 @@ class ConversationAgentService:
             self.outbox_store.mark_done(outbox_id, updated_at=self.now())
             return failed
 
-        runtime_run = self.tool_adapter.start_workflow(
+        runtime_run = self.service_action_adapter.start_workflow(
             conversation_id=intent.conversation_id,
             workbench_session_id=None,
             approved_requirement=approved,
@@ -1635,7 +1672,7 @@ class ConversationAgentService:
             conversation_reopen_state=reopened.conversation_reopen_state,
             messages=reopened.messages,
             activity_items=reopened.activity_items,
-            requirement_draft=self.tool_adapter.get_requirement_draft(
+            requirement_draft=self.service_action_adapter.get_requirement_draft(
                 conversation_id=conversation_id,
                 draft_revision_id=draft_revision_id,
             ),
@@ -1662,10 +1699,6 @@ class ConversationAgentService:
         conversation_id: str,
         owner_user_id: str,
         workspace_id: str,
-        job_title: str,
-        jd_text: str,
-        notes: str | None,
-        source_ids: list[str] | None = None,
     ) -> ConversationAgentResponse:
         conversation = self._require_conversation(conversation_id, owner_user_id=owner_user_id, workspace_id=workspace_id)
         if conversation.approved_requirement_revision_id is None:
@@ -1674,67 +1707,29 @@ class ConversationAgentService:
             workspace_id=workspace_id,
             conversation_id=conversation_id,
         )
-        if (
-            intent is not None
-            and intent.approved_requirement_revision_id == conversation.approved_requirement_revision_id
-            and intent.status in {"pending", "started"}
-        ):
-            if intent.status == "pending":
-                outbox_item = self.outbox_store.get_for_aggregate(intent.workflow_start_intent_id)
-                if outbox_item is None:
-                    raise ConversationAgentError("workflow_start_outbox_not_found")
-                intent = self.process_workflow_start_outbox_item(outbox_item.outbox_id)
-            elif intent.runtime_run_id is not None:
-                self._link_started_workflow_run(intent, runtime_run_id=intent.runtime_run_id)
-            if intent.runtime_run_id is None:
-                raise ConversationAgentError(intent.reason_code or "workflow_start_not_started")
-            return self.poll_runtime_events(
-                conversation_id=conversation_id,
-                owner_user_id=owner_user_id,
-                workspace_id=workspace_id,
-                runtime_run_id=intent.runtime_run_id,
-                limit=200,
-            )
-        approved = self.tool_adapter._require_requirement_service().store.get_approved_requirement(
-            conversation.approved_requirement_revision_id
-        )
-        try:
-            source_selection = self.source_selection_resolver.resolve_runtime_source_selection(
-                source_kinds=source_ids,
-                workspace_source_policy_id=None,
-            )
-        except SourceSelectionError as exc:
-            raise ConversationAgentError(exc.reason_code) from exc
-        run = self.tool_adapter.start_workflow(
-            conversation_id=conversation_id,
-            workbench_session_id=conversation.workbench_session_id,
-            approved_requirement=approved,
-            job_title=job_title,
-            jd_text=jd_text,
-            notes=notes,
-            source_ids=list(source_selection.runtime_source_ids),
-        )
-        self.store.link_runtime_run(
-            conversation_id=conversation_id,
-            runtime_run_id=run.runtime_run_id,
-            workbench_session_id=run.workbench_session_id,
-            approved_requirement_revision_id=run.approved_requirement_revision_id,
-            run_intent_id=run.run_intent_id,
-            run_kind=run.run_kind,
-            link_reason="start",
-            linked_at=self.now(),
-        )
-        self.store.update_conversation_status(
-            conversation_id=conversation_id,
-            status=_conversation_status_from_run(run.status),
-            updated_at=self.now(),
-            completed_at=run.completed_at,
-        )
+        if intent is None or intent.approved_requirement_revision_id != conversation.approved_requirement_revision_id:
+            raise ConversationAgentError("workflow_start_intent_not_found")
+
+        if intent.status == "pending":
+            outbox_item = self.outbox_store.get_for_aggregate(intent.workflow_start_intent_id)
+            if outbox_item is None:
+                raise ConversationAgentError("workflow_start_outbox_not_found")
+            intent = self.process_workflow_start_outbox_item(outbox_item.outbox_id)
+        elif intent.status == "started" and intent.runtime_run_id is not None:
+            self._link_started_workflow_run(intent, runtime_run_id=intent.runtime_run_id)
+
+        if intent.status == "failed":
+            raise ConversationAgentError(intent.reason_code or "workflow_start_failed")
+        if intent.status == "cancelled":
+            raise ConversationAgentError(intent.reason_code or "workflow_start_cancelled")
+        if intent.status != "started" or intent.runtime_run_id is None:
+            raise ConversationAgentError(intent.reason_code or "workflow_start_not_started")
+
         return self.poll_runtime_events(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
-            runtime_run_id=run.runtime_run_id,
+            runtime_run_id=intent.runtime_run_id,
             limit=200,
         )
 
@@ -1753,12 +1748,21 @@ class ConversationAgentService:
             workspace_id=workspace_id,
             runtime_run_id=runtime_run_id,
         )
-        page = self.tool_adapter.list_workflow_events(
+        page = self.service_action_adapter.list_workflow_events(
             runtime_run_id=target.runtime_run_id,
             after_seq=target.link.latest_event_seq,
             limit=limit,
         )
         if page.reason_code == "runtime_event_gap_detected":
+            if target.link.is_active:
+                self._sync_status_from_runtime(conversation_id=conversation_id, runtime_run_id=target.runtime_run_id)
+            final_summary = self._ensure_final_summary_for_runtime(
+                target=target,
+                conversation_id=conversation_id,
+                owner_user_id=owner_user_id,
+                workspace_id=workspace_id,
+                display_instruction=None,
+            )
             reopened = self.reopen_conversation(
                 conversation_id=conversation_id,
                 owner_user_id=owner_user_id,
@@ -1768,6 +1772,7 @@ class ConversationAgentService:
                 conversation_reopen_state=reopened.conversation_reopen_state,
                 messages=reopened.messages,
                 activity_items=reopened.activity_items,
+                final_summary=final_summary,
                 reason_code=page.reason_code,
             )
         for event in page.events:
@@ -1810,6 +1815,13 @@ class ConversationAgentService:
             )
         if target.link.is_active:
             self._sync_status_from_runtime(conversation_id=conversation_id, runtime_run_id=target.runtime_run_id)
+        final_summary = self._ensure_final_summary_for_runtime(
+            target=target,
+            conversation_id=conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+            display_instruction=None,
+        )
         reopened = self.reopen_conversation(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -1819,6 +1831,7 @@ class ConversationAgentService:
             conversation_reopen_state=reopened.conversation_reopen_state,
             messages=reopened.messages,
             activity_items=reopened.activity_items,
+            final_summary=final_summary,
         )
 
     def prepare_final_summary(
@@ -1831,34 +1844,90 @@ class ConversationAgentService:
         user_instruction: str | None,
         idempotency_key: str,
     ) -> ConversationAgentResponse:
+        del idempotency_key
         target = self._resolve_runtime_run_target(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
             workspace_id=workspace_id,
             runtime_run_id=runtime_run_id,
         )
+        summary = self._ensure_final_summary_for_runtime(
+            target=target,
+            conversation_id=conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+            display_instruction=user_instruction,
+        )
+        if summary is None:
+            raise ConversationAgentError("runtime_run_not_completed")
+        reopened = self.reopen_conversation(
+            conversation_id=conversation_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+        )
+        return ConversationAgentResponse(
+            conversation_reopen_state=reopened.conversation_reopen_state,
+            messages=reopened.messages,
+            activity_items=reopened.activity_items,
+            final_summary=summary,
+        )
+
+    def _ensure_final_summary_for_runtime(
+        self,
+        *,
+        target: RuntimeRunTarget,
+        conversation_id: str,
+        owner_user_id: str,
+        workspace_id: str,
+        display_instruction: str | None,
+    ) -> RuntimeFinalSummary | None:
+        del display_instruction, owner_user_id, workspace_id
+        runtime_store = self.service_action_adapter.runtime_store
+        if runtime_store is None:
+            return None
+        run = runtime_store.get_run(target.runtime_run_id)
+        if run.status not in _TERMINAL_RUN_STATUS_TO_CONVERSATION:
+            return None
+        if target.conversation.final_summary_id is not None:
+            existing_summary = runtime_store.get_final_summary(summary_id=target.conversation.final_summary_id)
+            if existing_summary is not None and existing_summary.runtime_run_id == target.runtime_run_id:
+                return self._record_final_summary_for_runtime(
+                    target=target,
+                    conversation_id=conversation_id,
+                    summary=existing_summary,
+                )
         source_snapshot_event_seq = self._latest_runtime_snapshot_seq(target.runtime_run_id)
-        summary = self.tool_adapter.prepare_final_summary(
+        summary = self.service_action_adapter.prepare_final_summary(
             runtime_run_id=target.runtime_run_id,
-            user_instruction=user_instruction,
+            user_instruction=None,
             source_snapshot_event_seq=source_snapshot_event_seq,
-            idempotency_key=idempotency_key,
+            idempotency_key=_runtime_final_summary_idempotency_key(target.runtime_run_id),
         )
         if summary.summary_id is None:
-            raise ConversationAgentError(summary.reason_code or "runtime_final_summary_unavailable")
-        summary_id = summary.summary_id
+            return None
+        return self._record_final_summary_for_runtime(
+            target=target,
+            conversation_id=conversation_id,
+            summary=summary,
+        )
+
+    def _record_final_summary_for_runtime(
+        self,
+        *,
+        target: RuntimeRunTarget,
+        conversation_id: str,
+        summary: RuntimeFinalSummary,
+    ) -> RuntimeFinalSummary:
         safe_summary = summary.model_copy(
             update={
                 "summary": sanitize_summary_text(summary.summary),
-                "user_instruction": (
-                    sanitize_summary_text(summary.user_instruction) if summary.user_instruction is not None else None
-                ),
+                "user_instruction": None,
             }
         )
-        if target.link.is_active:
+        if target.link.is_active and safe_summary.summary_id is not None:
             self.store.set_final_summary(
                 conversation_id=conversation_id,
-                final_summary_id=summary_id,
+                final_summary_id=safe_summary.summary_id,
                 updated_at=self.now(),
             )
         self.store.append_message(
@@ -1870,18 +1939,10 @@ class ConversationAgentService:
             source_runtime_run_id=target.runtime_run_id,
             created_at=self.now(),
             message_id=self.message_id_factory(),
+            idempotency_key=_final_summary_message_idempotency_key(conversation_id, target.runtime_run_id),
+            return_existing_on_idempotency=True,
         )
-        reopened = self.reopen_conversation(
-            conversation_id=conversation_id,
-            owner_user_id=owner_user_id,
-            workspace_id=workspace_id,
-        )
-        return ConversationAgentResponse(
-            conversation_reopen_state=reopened.conversation_reopen_state,
-            messages=reopened.messages,
-            activity_items=reopened.activity_items,
-            final_summary=safe_summary,
-        )
+        return safe_summary
 
     def request_workflow_command(
         self,
@@ -1901,19 +1962,19 @@ class ConversationAgentService:
         )
         try:
             if command_type == "pause":
-                command = self.tool_adapter.request_pause(
+                command = self.service_action_adapter.request_pause(
                     runtime_run_id=target.runtime_run_id,
                     requested_by=owner_user_id,
                     idempotency_key=idempotency_key,
                 )
             elif command_type == "cancel":
-                command = self.tool_adapter.request_cancel(
+                command = self.service_action_adapter.request_cancel(
                     runtime_run_id=target.runtime_run_id,
                     requested_by=owner_user_id,
                     idempotency_key=idempotency_key,
                 )
             elif command_type == "resume":
-                command = self.tool_adapter.resume_workflow(
+                command = self.service_action_adapter.resume_workflow(
                     runtime_run_id=target.runtime_run_id,
                     requested_by=owner_user_id,
                     idempotency_key=idempotency_key,
@@ -1931,6 +1992,12 @@ class ConversationAgentService:
             source_runtime_run_id=target.runtime_run_id,
             created_at=self.now(),
             message_id=self.message_id_factory(),
+            idempotency_key=_workflow_command_message_idempotency_key(
+                conversation_id=conversation_id,
+                runtime_run_id=target.runtime_run_id,
+                idempotency_key=idempotency_key,
+            ),
+            return_existing_on_idempotency=True,
         )
         if target.link.is_active:
             self._sync_status_from_runtime(conversation_id=conversation_id, runtime_run_id=target.runtime_run_id)
@@ -1955,6 +2022,7 @@ class ConversationAgentService:
         text: str,
         target_section_hint: str | None,
         idempotency_key: str,
+        provenance: dict[str, object] | None = None,
     ) -> ConversationAgentResponse:
         target = self._resolve_runtime_run_target(
             conversation_id=conversation_id,
@@ -1963,12 +2031,14 @@ class ConversationAgentService:
             runtime_run_id=runtime_run_id,
         )
         safe_text = screen_requirement_text(text)
+        safe_target_section_hint = screen_target_section_hint(target_section_hint)
         try:
-            result = self.tool_adapter.submit_next_round_requirement(
+            result = self.service_action_adapter.submit_next_round_requirement(
                 runtime_run_id=target.runtime_run_id,
                 text=safe_text,
-                target_section_hint=target_section_hint,
+                target_section_hint=safe_target_section_hint,
                 idempotency_key=idempotency_key,
+                provenance=provenance,
             )
         except RuntimeControlError as exc:
             raise _conversation_error_from_runtime_control(exc) from exc
@@ -2035,7 +2105,36 @@ class ConversationAgentService:
                 runtime_facts=runtime_facts,
             )
         if decision.intent == "next_round_requirement":
-            requirement_text = (decision.requirement_text or user_message).strip()
+            requirement_text = user_message.strip()
+            normalized_requirement_text = (decision.requirement_text or "").strip()
+            if not normalized_requirement_text:
+                self.store.append_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    message_type="assistant_text",
+                    text="我没有把这条消息记录为下一轮需求。请明确写出要新增的需求内容。",
+                    payload={
+                        "intentDecision": decision.model_dump(mode="json"),
+                        "runtimeRunId": target.runtime_run_id,
+                    },
+                    source_runtime_run_id=target.runtime_run_id,
+                    created_at=self.now(),
+                    message_id=self.message_id_factory(),
+                    idempotency_key=_assistant_message_idempotency_key(idempotency_key),
+                    return_existing_on_idempotency=idempotency_key is not None,
+                )
+                return self._reopened_response(
+                    conversation_id=conversation_id,
+                    owner_user_id=owner_user_id,
+                    workspace_id=workspace_id,
+                )
+            provenance: dict[str, object] = {
+                "originalUserText": user_message,
+                "intentDecision": {"intent": decision.intent},
+                "sourceMessageId": message.message_id,
+                "runtimeRunId": target.runtime_run_id,
+            }
+            provenance["normalizedRequirementText"] = normalized_requirement_text
             return await asyncio.to_thread(
                 self.submit_next_round_requirement,
                 conversation_id=conversation_id,
@@ -2045,6 +2144,7 @@ class ConversationAgentService:
                 text=requirement_text,
                 target_section_hint=decision.target_section_hint,
                 idempotency_key=f"{idempotency_key or message.message_id}:next-round-requirement",
+                provenance=provenance,
             )
         self.store.append_message(
             conversation_id=conversation_id,
@@ -2083,9 +2183,9 @@ class ConversationAgentService:
             )
             if existing is not None:
                 if existing.status == "started":
-                    if self._agent_tool_call_is_stale(existing):
+                    if self._agent_operation_audit_is_stale(existing):
                         self._mark_agent_intent_route_failed(
-                            tool_call_id=existing.tool_call_id,
+                            operation_id=existing.operation_id,
                             conversation_id=conversation_id,
                             started_at=existing.started_at,
                             reason_code="agent_request_stale",
@@ -2105,7 +2205,7 @@ class ConversationAgentService:
 
         prompt_text = _intent_routing_prompt(user_message=user_message, runtime_facts=runtime_facts)
         estimated_input_tokens = _rough_token_estimate(prompt_text)
-        tool_call_id = self.tool_call_id_factory()
+        operation_id = self.operation_id_factory()
         started_at = self.now()
         args: dict[str, object] = {
             "modelName": self.agent_model_name,
@@ -2113,10 +2213,11 @@ class ConversationAgentService:
             "estimatedInputTokens": estimated_input_tokens,
             "idempotencyKey": idempotency_key,
         }
-        self.store.save_tool_call(
-            tool_call_id=tool_call_id,
+        self.store.save_operation_audit(
+            operation_id=operation_id,
             conversation_id=conversation_id,
-            tool_name="agent_intent_route",
+            operation_name="agent_intent_route",
+            execution_origin="service",
             status="started",
             args=args,
             result=None,
@@ -2138,7 +2239,7 @@ class ConversationAgentService:
             decision = ConversationAgentIntentDecision.model_validate(decision_payload)
         except ConversationAgentError as exc:
             self._mark_agent_intent_route_failed(
-                tool_call_id=tool_call_id,
+                operation_id=operation_id,
                 conversation_id=conversation_id,
                 started_at=started_at,
                 reason_code=exc.reason_code,
@@ -2149,7 +2250,7 @@ class ConversationAgentService:
             raise
         except ValidationError as exc:
             self._mark_agent_intent_route_failed(
-                tool_call_id=tool_call_id,
+                operation_id=operation_id,
                 conversation_id=conversation_id,
                 started_at=started_at,
                 reason_code="agent_intent_route_invalid",
@@ -2158,10 +2259,11 @@ class ConversationAgentService:
                 runtime_run_id=target.runtime_run_id,
             )
             raise ConversationAgentError("agent_intent_route_invalid") from exc
-        self.store.save_tool_call(
-            tool_call_id=tool_call_id,
+        self.store.save_operation_audit(
+            operation_id=operation_id,
             conversation_id=conversation_id,
-            tool_name="agent_intent_route",
+            operation_name="agent_intent_route",
+            execution_origin="service",
             status="completed",
             args=args,
             result={
@@ -2175,20 +2277,20 @@ class ConversationAgentService:
         )
         return decision
 
-    def _intent_decision_from_completed_route(self, tool_call: AgentToolCallRecord) -> ConversationAgentIntentDecision:
-        result = tool_call.result or {}
+    def _intent_decision_from_completed_route(self, operation_audit: OperationAuditRecord) -> ConversationAgentIntentDecision:
+        result = operation_audit.result or {}
         decision_payload = result.get("intentDecision")
         try:
             return ConversationAgentIntentDecision.model_validate(decision_payload)
         except ValidationError as exc:
             self._mark_agent_intent_route_failed(
-                tool_call_id=tool_call.tool_call_id,
-                conversation_id=tool_call.conversation_id,
-                started_at=tool_call.started_at,
+                operation_id=operation_audit.operation_id,
+                conversation_id=operation_audit.conversation_id,
+                started_at=operation_audit.started_at,
                 reason_code="agent_intent_route_recovery_failed",
                 result=result,
-                args=tool_call.args,
-                runtime_run_id=tool_call.runtime_run_id,
+                args=operation_audit.args,
+                runtime_run_id=operation_audit.runtime_run_id,
             )
             raise ConversationAgentError("agent_intent_route_recovery_failed") from exc
 
@@ -2211,7 +2313,7 @@ class ConversationAgentService:
             workspace_id=workspace_id,
             runtime_run_id=runtime_run_id,
         )
-        detail = self.tool_adapter.get_runtime_detail(
+        detail = self.service_action_adapter.get_runtime_detail(
             runtime_run_id=target.runtime_run_id,
             kind=kind,
             round_no=round_no,
@@ -2254,7 +2356,51 @@ class ConversationAgentService:
             workspace_id=workspace_id,
             runtime_run_id=runtime_run_id,
         )
-        return self.tool_adapter.get_workflow_snapshot(runtime_run_id=target.runtime_run_id)
+        return self.service_action_adapter.get_workflow_snapshot(runtime_run_id=target.runtime_run_id)
+
+    def _mark_context_compaction_failed(
+        self,
+        *,
+        conversation: ConversationRecord,
+        compaction_id: str,
+        activity_key: str,
+        trigger_reason_code: str,
+        created_at: str,
+        reason_code: str,
+        summary: str,
+    ) -> None:
+        failed_at = self.now()
+        self.store.save_context_compaction(
+            compaction_id=compaction_id,
+            conversation_id=conversation.conversation_id,
+            status="failed",
+            trigger_reason_code=trigger_reason_code,
+            created_at=created_at,
+            completed_at=failed_at,
+            failed_reason_code=reason_code,
+        )
+        self.store.upsert_activity_item(
+            activity_id=self.activity_id_factory(),
+            conversation_id=conversation.conversation_id,
+            activity_key=activity_key,
+            activity_type="context_compaction",
+            status="failed",
+            title="上下文压缩",
+            summary=summary,
+            payload={
+                "compactionId": compaction_id,
+                "triggerReasonCode": trigger_reason_code,
+                "reasonCode": reason_code,
+            },
+            source_runtime_run_id=conversation.runtime_run_id,
+            source_event_id_latest=None,
+            source_event_seq_start=None,
+            source_event_seq_latest=None,
+            started_at=created_at,
+            updated_at=failed_at,
+            completed_at=failed_at,
+            created_at=created_at,
+        )
 
     def compact_context(
         self,
@@ -2292,97 +2438,88 @@ class ConversationAgentService:
             updated_at=created_at,
             created_at=created_at,
         )
-        messages = self.store.get_messages(conversation_id=conversation_id)
-        if not messages:
-            failed_at = self.now()
-            self.store.save_context_compaction(
+        try:
+            messages = self.store.get_messages(conversation_id=conversation_id)
+            if not messages:
+                raise ConversationAgentError("agent_compaction_quality_failed")
+            summary_id = self.summary_id_factory()
+            first_seq = messages[0].message_seq
+            last_seq = messages[-1].message_seq
+            activity_items = self.store.get_activity_items(conversation_id=conversation_id)
+            evidence: dict[str, object] = {
+                "coveredMessageSeqStart": first_seq,
+                "coveredMessageSeqEnd": last_seq,
+                "latestRenderedRuntimeEventSeq": conversation.latest_rendered_runtime_event_seq,
+                "activeActivityItemIds": [
+                    item.activity_id
+                    for item in activity_items
+                    if item.status not in {"completed", "failed", "cancelled", "superseded"}
+                ],
+            }
+            summary_text = _compact_summary_text(
+                conversation=conversation,
+                messages=messages,
+                activity_items=activity_items,
+            )
+            compaction = self.store.complete_context_compaction(
+                summary_id=summary_id,
                 compaction_id=compaction_id,
                 conversation_id=conversation_id,
-                status="failed",
                 trigger_reason_code=trigger_reason_code,
-                created_at=created_at,
-                completed_at=failed_at,
-                failed_reason_code="agent_compaction_quality_failed",
+                source_message_seq_start=first_seq,
+                source_message_seq_end=last_seq,
+                source_activity_seq_start=activity_items[0].activity_seq if activity_items else None,
+                source_activity_seq_end=activity_items[-1].activity_seq if activity_items else None,
+                latest_rendered_runtime_event_seq=conversation.latest_rendered_runtime_event_seq,
+                summary_text=summary_text,
+                quality_status="passed",
+                quality_evidence=evidence,
+                token_count=_rough_token_estimate(summary_text),
+                quality_reason_code="agent_compaction_quality_passed",
+                compaction_created_at=created_at,
+                summary_created_at=self.now(),
+                completed_at=self.now(),
             )
             self.store.upsert_activity_item(
                 activity_id=self.activity_id_factory(),
                 conversation_id=conversation_id,
                 activity_key=activity_key,
                 activity_type="context_compaction",
-                status="failed",
+                status="completed",
                 title="上下文压缩",
-                summary="上下文压缩失败：没有可压缩的 transcript。",
+                summary="已生成模型输入摘要，原始 transcript 保持不变。",
                 payload={
                     "compactionId": compaction_id,
+                    "summaryId": summary_id,
+                    "coveredMessageSeqEnd": last_seq,
                     "triggerReasonCode": trigger_reason_code,
-                    "reasonCode": "agent_compaction_quality_failed",
                 },
                 source_runtime_run_id=conversation.runtime_run_id,
                 source_event_id_latest=None,
                 source_event_seq_start=None,
                 source_event_seq_latest=None,
                 started_at=created_at,
-                updated_at=failed_at,
-                completed_at=failed_at,
+                updated_at=self.now(),
+                completed_at=self.now(),
                 created_at=created_at,
             )
-            raise ConversationAgentError("agent_compaction_quality_failed")
-        summary_id = self.summary_id_factory()
-        first_seq = messages[0].message_seq
-        last_seq = messages[-1].message_seq
-        activity_items = self.store.get_activity_items(conversation_id=conversation_id)
-        evidence: dict[str, object] = {
-            "coveredMessageSeqStart": first_seq,
-            "coveredMessageSeqEnd": last_seq,
-            "latestRenderedRuntimeEventSeq": conversation.latest_rendered_runtime_event_seq,
-            "activeActivityItemIds": [
-                item.activity_id
-                for item in activity_items
-                if item.status not in {"completed", "failed", "cancelled", "superseded"}
-            ],
-        }
-        compaction = self.store.complete_context_compaction(
-            summary_id=summary_id,
-            compaction_id=compaction_id,
-            conversation_id=conversation_id,
-            trigger_reason_code=trigger_reason_code,
-            source_message_seq_start=first_seq,
-            source_message_seq_end=last_seq,
-            source_activity_seq_start=activity_items[0].activity_seq if activity_items else None,
-            source_activity_seq_end=activity_items[-1].activity_seq if activity_items else None,
-            latest_rendered_runtime_event_seq=conversation.latest_rendered_runtime_event_seq,
-            summary_text=_compact_summary_text(messages),
-            quality_status="passed",
-            quality_evidence=evidence,
-            token_count=sum(len(message.text) for message in messages),
-            quality_reason_code="agent_compaction_quality_passed",
-            compaction_created_at=created_at,
-            summary_created_at=self.now(),
-            completed_at=self.now(),
-        )
-        self.store.upsert_activity_item(
-            activity_id=self.activity_id_factory(),
-            conversation_id=conversation_id,
-            activity_key=activity_key,
-            activity_type="context_compaction",
-            status="completed",
-            title="上下文压缩",
-            summary="已生成模型输入摘要，原始 transcript 保持不变。",
-            payload={
-                "compactionId": compaction_id,
-                "summaryId": summary_id,
-                "coveredMessageSeqEnd": last_seq,
-                "triggerReasonCode": trigger_reason_code,
-            },
-            source_runtime_run_id=conversation.runtime_run_id,
-            source_event_id_latest=None,
-            source_event_seq_start=None,
-            source_event_seq_latest=None,
-            started_at=created_at,
-            updated_at=self.now(),
-            completed_at=self.now(),
-            created_at=created_at,
-        )
+        except (ConversationAgentError, sqlite3.Error, TypeError, ValueError) as exc:
+            reason_code = exc.reason_code if isinstance(exc, ConversationAgentError) else "agent_compaction_failed"
+            summary = (
+                "上下文压缩失败：没有可压缩的 transcript。"
+                if reason_code == "agent_compaction_quality_failed"
+                else "上下文压缩失败：未能生成模型输入摘要。"
+            )
+            self._mark_context_compaction_failed(
+                conversation=conversation,
+                compaction_id=compaction_id,
+                activity_key=activity_key,
+                trigger_reason_code=trigger_reason_code,
+                created_at=created_at,
+                reason_code=reason_code,
+                summary=summary,
+            )
+            raise
         reopened = self.reopen_conversation(
             conversation_id=conversation_id,
             owner_user_id=owner_user_id,
@@ -2446,7 +2583,7 @@ class ConversationAgentService:
             conversation_reopen_state=reopened.conversation_reopen_state,
             messages=reopened.messages,
             activity_items=reopened.activity_items,
-            requirement_draft=draft,
+            requirement_draft=_requirement_draft_response(draft),
             job_request_revision_id=job_request_link.job_request_revision_id if job_request_link is not None else None,
             requirement_draft_revision_id=draft_revision_id if job_request_link is not None else None,
         )
@@ -2499,9 +2636,9 @@ class ConversationAgentService:
                 raise
 
     def _sync_status_from_runtime(self, *, conversation_id: str, runtime_run_id: str) -> None:
-        if self.tool_adapter.runtime_store is None:
+        if self.service_action_adapter.runtime_store is None:
             return
-        run = self.tool_adapter.runtime_store.get_run(runtime_run_id)
+        run = self.service_action_adapter.runtime_store.get_run(runtime_run_id)
         self.store.update_conversation_status(
             conversation_id=conversation_id,
             status=_conversation_status_from_run(run.status),
@@ -2540,7 +2677,7 @@ class ConversationAgentService:
                 "linkedAt": target.link.linked_at,
             },
         }
-        runtime_store = self.tool_adapter.runtime_store
+        runtime_store = self.service_action_adapter.runtime_store
         if runtime_store is None:
             return facts
         run = runtime_store.get_run(target.runtime_run_id)
@@ -2589,14 +2726,14 @@ class ConversationAgentService:
 
     def _latest_runtime_snapshot_seq(self, runtime_run_id: str) -> int:
         try:
-            snapshot_seq = self.tool_adapter.get_workflow_snapshot(runtime_run_id=runtime_run_id).latest_event_seq
+            snapshot_seq = self.service_action_adapter.get_workflow_snapshot(runtime_run_id=runtime_run_id).latest_event_seq
         except RuntimeControlError as exc:
-            if exc.reason_code != "runtime_snapshot_not_found" or self.tool_adapter.runtime_store is None:
+            if exc.reason_code != "runtime_snapshot_not_found" or self.service_action_adapter.runtime_store is None:
                 raise
-            return self.tool_adapter.runtime_store.get_run(runtime_run_id).latest_event_seq
-        if self.tool_adapter.runtime_store is None:
+            return self.service_action_adapter.runtime_store.get_run(runtime_run_id).latest_event_seq
+        if self.service_action_adapter.runtime_store is None:
             return snapshot_seq
-        return max(snapshot_seq, self.tool_adapter.runtime_store.get_run(runtime_run_id).latest_event_seq)
+        return max(snapshot_seq, self.service_action_adapter.runtime_store.get_run(runtime_run_id).latest_event_seq)
 
     def _memory_source_updated_at(self, conversation_id: str) -> str | None:
         timestamps: list[str] = []
@@ -2642,7 +2779,7 @@ class ConversationAgentService:
                 "agent_runtime_run_not_linked",
                 payload={"runtimeRunId": target_runtime_run_id},
             )
-        runtime_store = self.tool_adapter.runtime_store
+        runtime_store = self.service_action_adapter.runtime_store
         if runtime_store is not None:
             try:
                 run = runtime_store.get_run(target_runtime_run_id)
@@ -2682,6 +2819,29 @@ def _conversation_status_from_run(run_status: str) -> str:
     return "running"
 
 
+def _runtime_final_summary_idempotency_key(runtime_run_id: str) -> str:
+    return f"{_RUNTIME_FINAL_SUMMARY_IDEMPOTENCY_PREFIX}{runtime_run_id}"
+
+
+def _final_summary_message_idempotency_key(conversation_id: str, runtime_run_id: str) -> str:
+    return f"{_FINAL_SUMMARY_MESSAGE_IDEMPOTENCY_PREFIX}{conversation_id}:{runtime_run_id}"
+
+
+def _workflow_command_message_idempotency_key(
+    *,
+    conversation_id: str,
+    runtime_run_id: str,
+    idempotency_key: str,
+) -> str:
+    return f"{_WORKFLOW_COMMAND_MESSAGE_IDEMPOTENCY_PREFIX}{conversation_id}:{runtime_run_id}:{idempotency_key}"
+
+
+def _requirement_draft_response(draft: DraftProtocol) -> RequirementDraft:
+    if isinstance(draft, RequirementDraft):
+        return draft
+    return RequirementDraft.model_validate(draft.model_dump(mode="python"))
+
+
 def _conversation_error_from_runtime_control(exc: RuntimeControlError) -> ConversationAgentError:
     return ConversationAgentError(exc.reason_code, payload=exc.payload)
 
@@ -2710,10 +2870,366 @@ def _resolve_submit_jd_source_kinds(
     return list(normalized_source_kinds)
 
 
-def _compact_summary_text(messages: list[TranscriptMessage]) -> str:
-    first = messages[0].text
-    last = messages[-1].text
-    return sanitize_summary_text(f"本段对话从“{first}”开始，最新补充为“{last}”。")
+_CONTEXT_SUMMARY_SCHEMA_VERSION = "conversation-context-summary/v1"
+_CONTEXT_SUMMARY_ACTIVE_ACTIVITY_CAP = 6
+_CONTEXT_SUMMARY_REQUIREMENT_REVIEW_CAP = 4
+_CONTEXT_SUMMARY_COMMAND_STATE_CAP = 6
+_CONTEXT_SUMMARY_FINAL_SUMMARY_CAP = 3
+_CONTEXT_SUMMARY_RECENT_MESSAGE_CAP = 6
+_CONTEXT_SUMMARY_TEXT_FIELD_CHAR_CAP = 180
+_CONTEXT_SUMMARY_PAYLOAD_FIELD_CAP = 4
+_CONTEXT_SUMMARY_PAYLOAD_LIST_CAP = 6
+_CONTEXT_SUMMARY_TRUNCATION_RECORD_CAP = 48
+_CONTEXT_SUMMARY_MAX_SERIALIZED_BYTES = 12_000
+_TERMINAL_ACTIVITY_STATUSES = {"completed", "failed", "cancelled", "superseded"}
+_PROMPT_SECTION_MARKERS = tuple(
+    f"[{section}_{boundary}]"
+    for section in (
+        "ADVISORY_MEMORY_CONTEXT",
+        "CONVERSATION_AGENT_MODEL_INPUT",
+        "CURRENT_USER_MESSAGE",
+        "LATEST_CONTEXT_SUMMARY",
+        "RECENT_TRANSCRIPT",
+        "REGISTERED_PROMPT",
+        "RUNTIME_FACTS",
+        "RUNTIME_TASK",
+        "USER_MESSAGE",
+    )
+    for boundary in ("START", "END")
+)
+
+
+def _compact_summary_text(
+    *,
+    conversation: ConversationRecord,
+    messages: list[TranscriptMessage],
+    activity_items: list[TranscriptActivityItem],
+) -> str:
+    ordered_messages = sorted(messages, key=lambda message: message.message_seq)
+    ordered_activities = sorted(activity_items, key=lambda item: item.activity_seq)
+    truncation: list[dict[str, object]] = []
+    requirement_reviews = _last_n(
+        [message for message in ordered_messages if message.message_type == "requirement_review"],
+        _CONTEXT_SUMMARY_REQUIREMENT_REVIEW_CAP,
+        "$.requirementReviews",
+        truncation,
+    )
+    command_states = _last_n(
+        [message for message in ordered_messages if message.message_type == "command_state"],
+        _CONTEXT_SUMMARY_COMMAND_STATE_CAP,
+        "$.commandStates",
+        truncation,
+    )
+    final_summaries = _last_n(
+        [message for message in ordered_messages if message.message_type == "final_summary"],
+        _CONTEXT_SUMMARY_FINAL_SUMMARY_CAP,
+        "$.finalSummaries",
+        truncation,
+    )
+    recent_messages = _last_n(
+        ordered_messages,
+        _CONTEXT_SUMMARY_RECENT_MESSAGE_CAP,
+        "$.recentMessages",
+        truncation,
+    )
+    active_activities = _last_n(
+        [item for item in ordered_activities if item.status not in _TERMINAL_ACTIVITY_STATUSES],
+        _CONTEXT_SUMMARY_ACTIVE_ACTIVITY_CAP,
+        "$.activeActivities",
+        truncation,
+    )
+    summary: dict[str, object] = {
+        "schemaVersion": _CONTEXT_SUMMARY_SCHEMA_VERSION,
+        "coveredMessageSeqStart": ordered_messages[0].message_seq,
+        "coveredMessageSeqEnd": ordered_messages[-1].message_seq,
+        "coveredActivitySeqStart": ordered_activities[0].activity_seq if ordered_activities else None,
+        "coveredActivitySeqEnd": ordered_activities[-1].activity_seq if ordered_activities else None,
+        "conversationStatus": _bounded_summary_string(
+            conversation.status,
+            "$.conversationStatus",
+            truncation,
+        ),
+        "activeRuntimeRunId": _bounded_optional_summary_string(
+            conversation.runtime_run_id,
+            "$.activeRuntimeRunId",
+            truncation,
+        ),
+        "latestRenderedRuntimeEventSeq": conversation.latest_rendered_runtime_event_seq,
+        "activeActivities": [
+            _activity_summary_entry(item, f"$.activeActivities[{index}]", truncation)
+            for index, item in enumerate(active_activities)
+        ],
+        "requirementReviews": [
+            _message_summary_entry(message, f"$.requirementReviews[{index}]", truncation, include_payload=True)
+            for index, message in enumerate(requirement_reviews)
+        ],
+        "commandStates": [
+            _message_summary_entry(message, f"$.commandStates[{index}]", truncation, include_payload=True)
+            for index, message in enumerate(command_states)
+        ],
+        "finalSummaries": [
+            _message_summary_entry(message, f"$.finalSummaries[{index}]", truncation, include_payload=True)
+            for index, message in enumerate(final_summaries)
+        ],
+        "recentMessages": [
+            _message_summary_entry(message, f"$.recentMessages[{index}]", truncation, include_payload=False)
+            for index, message in enumerate(recent_messages)
+        ],
+        "truncation": truncation,
+    }
+    return _serialize_context_summary(summary)
+
+
+def _last_n(
+    items: list[_SummaryItemT],
+    cap: int,
+    path: str,
+    truncation: list[dict[str, object]],
+) -> list[_SummaryItemT]:
+    if len(items) <= cap:
+        return items
+    _append_truncation_record(truncation, path, original_length=len(items), truncated_length=cap, unit="items")
+    return items[-cap:]
+
+
+def _message_summary_entry(
+    message: TranscriptMessage,
+    path: str,
+    truncation: list[dict[str, object]],
+    *,
+    include_payload: bool,
+) -> dict[str, object]:
+    entry: dict[str, object] = {
+        "messageSeq": message.message_seq,
+        "messageId": _bounded_summary_string(message.message_id, f"{path}.messageId", truncation),
+        "role": _bounded_summary_string(message.role, f"{path}.role", truncation),
+        "messageType": _bounded_summary_string(message.message_type, f"{path}.messageType", truncation),
+        "text": _bounded_summary_string(message.text, f"{path}.text", truncation),
+        "sourceRuntimeRunId": _bounded_optional_summary_string(
+            message.source_runtime_run_id,
+            f"{path}.sourceRuntimeRunId",
+            truncation,
+        ),
+        "sourceRuntimeEventSeq": message.source_runtime_event_seq,
+    }
+    if include_payload:
+        entry["payload"] = _bounded_summary_value(message.payload, f"{path}.payload", truncation)
+    return entry
+
+
+def _activity_summary_entry(
+    item: TranscriptActivityItem,
+    path: str,
+    truncation: list[dict[str, object]],
+) -> dict[str, object]:
+    return {
+        "activitySeq": item.activity_seq,
+        "activityId": _bounded_summary_string(item.activity_id, f"{path}.activityId", truncation),
+        "activityType": _bounded_summary_string(item.activity_type, f"{path}.activityType", truncation),
+        "status": _bounded_summary_string(item.status, f"{path}.status", truncation),
+        "title": _bounded_summary_string(item.title, f"{path}.title", truncation),
+        "summary": _bounded_summary_string(item.summary, f"{path}.summary", truncation),
+        "sourceRuntimeRunId": _bounded_optional_summary_string(
+            item.source_runtime_run_id,
+            f"{path}.sourceRuntimeRunId",
+            truncation,
+        ),
+        "sourceEventSeqStart": item.source_event_seq_start,
+        "sourceEventSeqLatest": item.source_event_seq_latest,
+        "payload": _bounded_summary_value(item.payload, f"{path}.payload", truncation),
+    }
+
+
+def _bounded_summary_value(value: object, path: str, truncation: list[dict[str, object]]) -> object | None:
+    safe = _json_safe_value(value)
+    if safe is None:
+        return None
+    if isinstance(safe, str):
+        return _bounded_summary_string(safe, path, truncation)
+    if isinstance(safe, bool | int | float):
+        return safe
+    if isinstance(safe, Mapping):
+        items = sorted(safe.items(), key=lambda item: str(item[0]))
+        selected_items = items[:_CONTEXT_SUMMARY_PAYLOAD_FIELD_CAP]
+        if len(items) > len(selected_items):
+            _append_truncation_record(
+                truncation,
+                path,
+                original_length=len(items),
+                truncated_length=len(selected_items),
+                unit="fields",
+            )
+        bounded: dict[str, object] = {}
+        for key, item in selected_items:
+            bounded_key = _bounded_summary_string(str(key), f"{path}.*.key", truncation)
+            key_path = f"{path}.{bounded_key}"
+            bounded_item = _bounded_summary_value(item, key_path, truncation)
+            if bounded_item is not None:
+                bounded[bounded_key] = bounded_item
+        return bounded
+    if isinstance(safe, list | tuple):
+        selected_items = list(safe[:_CONTEXT_SUMMARY_PAYLOAD_LIST_CAP])
+        if len(safe) > len(selected_items):
+            _append_truncation_record(
+                truncation,
+                path,
+                original_length=len(safe),
+                truncated_length=len(selected_items),
+                unit="items",
+            )
+        return [
+            bounded_item
+            for index, item in enumerate(selected_items)
+            if (bounded_item := _bounded_summary_value(item, f"{path}[{index}]", truncation)) is not None
+        ]
+    return _bounded_summary_string(str(safe), path, truncation)
+
+
+def _bounded_optional_summary_string(
+    value: str | None,
+    path: str,
+    truncation: list[dict[str, object]],
+) -> str | None:
+    if value is None:
+        return None
+    return _bounded_summary_string(value, path, truncation)
+
+
+def _bounded_summary_string(value: str, path: str, truncation: list[dict[str, object]]) -> str:
+    safe_text = sanitize_summary_text(value)
+    if len(safe_text) <= _CONTEXT_SUMMARY_TEXT_FIELD_CHAR_CAP:
+        return safe_text
+    suffix = "..."
+    truncated = safe_text[: _CONTEXT_SUMMARY_TEXT_FIELD_CHAR_CAP - len(suffix)].rstrip() + suffix
+    _append_truncation_record(
+        truncation,
+        path,
+        original_length=len(safe_text),
+        truncated_length=len(truncated),
+        unit="chars",
+    )
+    return truncated
+
+
+def _append_truncation_record(
+    truncation: list[dict[str, object]],
+    path: str,
+    *,
+    original_length: int,
+    truncated_length: int,
+    unit: str,
+) -> None:
+    if original_length <= truncated_length or len(truncation) >= _CONTEXT_SUMMARY_TRUNCATION_RECORD_CAP:
+        return
+    truncation.append(
+        {
+            "path": path,
+            "originalLength": original_length,
+            "truncatedLength": truncated_length,
+            "unit": unit,
+        }
+    )
+
+
+def _serialize_context_summary(summary: dict[str, object]) -> str:
+    serialized = _context_summary_json(summary)
+    if len(serialized.encode("utf-8")) <= _CONTEXT_SUMMARY_MAX_SERIALIZED_BYTES:
+        return serialized
+
+    compacted = dict(summary)
+    truncation = _summary_mapping_list(compacted.get("truncation"))
+    for category in ("activeActivities", "requirementReviews", "commandStates", "finalSummaries", "recentMessages"):
+        compacted[category] = [_without_payload(entry) for entry in _summary_mapping_list(compacted.get(category))]
+    _append_truncation_record(
+        truncation,
+        "$",
+        original_length=len(serialized.encode("utf-8")),
+        truncated_length=_CONTEXT_SUMMARY_MAX_SERIALIZED_BYTES,
+        unit="bytes",
+    )
+    compacted["truncation"] = truncation[:_CONTEXT_SUMMARY_TRUNCATION_RECORD_CAP]
+    serialized = _context_summary_json(compacted)
+    if len(serialized.encode("utf-8")) <= _CONTEXT_SUMMARY_MAX_SERIALIZED_BYTES:
+        return serialized
+
+    for category in ("recentMessages", "activeActivities", "commandStates", "requirementReviews", "finalSummaries"):
+        items = _summary_mapping_list(compacted.get(category))
+        if len(items) > 1:
+            compacted[category] = items[-1:]
+            _append_truncation_record(
+                truncation,
+                f"$.{category}",
+                original_length=len(items),
+                truncated_length=1,
+                unit="items",
+            )
+    compacted["truncation"] = truncation[:_CONTEXT_SUMMARY_TRUNCATION_RECORD_CAP]
+    serialized = _context_summary_json(compacted)
+    if len(serialized.encode("utf-8")) <= _CONTEXT_SUMMARY_MAX_SERIALIZED_BYTES:
+        return serialized
+
+    minimal = {
+        key: compacted[key]
+        for key in (
+            "schemaVersion",
+            "coveredMessageSeqStart",
+            "coveredMessageSeqEnd",
+            "coveredActivitySeqStart",
+            "coveredActivitySeqEnd",
+            "conversationStatus",
+            "activeRuntimeRunId",
+            "latestRenderedRuntimeEventSeq",
+        )
+    }
+    minimal.update(
+        {
+            "activeActivities": [],
+            "requirementReviews": [],
+            "commandStates": [],
+            "finalSummaries": [],
+            "recentMessages": [],
+            "truncation": [
+                {
+                    "path": "$",
+                    "originalLength": len(serialized.encode("utf-8")),
+                    "truncatedLength": 0,
+                    "unit": "bytes",
+                }
+            ],
+        }
+    )
+    return _context_summary_json(minimal)
+
+
+def _without_payload(entry: object) -> object:
+    if not isinstance(entry, dict):
+        return entry
+    stripped = dict(entry)
+    stripped.pop("payload", None)
+    return stripped
+
+
+def _summary_mapping_list(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        mapping = cast("Mapping[object, object]", item)
+        result.append({str(key): mapped_value for key, mapped_value in mapping.items()})
+    return result
+
+
+def _context_summary_json(summary: Mapping[str, object]) -> str:
+    return _escape_prompt_section_markers(json.dumps(summary, ensure_ascii=False, separators=(",", ":")))
+
+
+def _escape_prompt_section_markers(json_text: str) -> str:
+    escaped = json_text
+    for marker in _PROMPT_SECTION_MARKERS:
+        escaped = escaped.replace(marker, marker.replace("[", "\\u005b").replace("]", "\\u005d"))
+    return escaped
 
 
 def _intent_routing_prompt(*, user_message: str, runtime_facts: dict[str, object]) -> str:
@@ -2722,7 +3238,7 @@ def _intent_routing_prompt(*, user_message: str, runtime_facts: dict[str, object
             "Use the registered Conversation Agent instructions to classify this active runtime user message.",
             "Return only the structured output requested by the schema.",
             "[RUNTIME_FACTS_START]",
-            json.dumps(_json_safe_value(runtime_facts), ensure_ascii=False, sort_keys=True),
+            _model_input_json(_json_safe_value(runtime_facts)),
             "[RUNTIME_FACTS_END]",
             "[USER_MESSAGE_START]",
             _model_input_json(user_message),
@@ -2780,7 +3296,7 @@ def _conversation_token_count(messages: list[TranscriptMessage]) -> int:
 
 def _model_input_content_token_estimate(
     *,
-    registered_prompt: str,
+    instructions_text: str,
     latest_context_summary: str | None,
     recent_messages: list[TranscriptMessage],
     advisory_context: str,
@@ -2789,7 +3305,7 @@ def _model_input_content_token_estimate(
     runtime_facts: dict[str, object] | None = None,
 ) -> int:
     return (
-        _rough_token_estimate(registered_prompt)
+        _rough_token_estimate(instructions_text)
         + _rough_token_estimate(latest_context_summary or "")
         + sum(message.token_count or _rough_token_estimate(message.text) for message in recent_messages)
         + _rough_token_estimate(advisory_context)

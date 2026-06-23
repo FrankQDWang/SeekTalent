@@ -34,7 +34,7 @@ const expandedGroups: AgentWorkbenchTranscriptGroup[] = [
         kind: "sourceSearch.completed",
         status: "completed",
         label:
-          "Loaded a tool{count, plural, one {已搜索网页 # 次} other {已搜索网页 # 次}}",
+          "Loaded a operation{count, plural, one {已搜索网页 # 次} other {已搜索网页 # 次}}",
         summary: "",
         payload: {
           kind: "source_search",
@@ -64,12 +64,12 @@ const expandedGroups: AgentWorkbenchTranscriptGroup[] = [
       {
         eventId: "evt_file_read_running",
         itemId: "file_read_running",
-        kind: "tool.started",
+        kind: "operation.started",
         status: "running",
         label: "正在读取 service.py",
         summary: "",
         payload: {
-          kind: "tool",
+          kind: "operation",
           itemId: "file_read_running",
           summary: "",
         },
@@ -110,7 +110,7 @@ const failedSourceSearchEvent = {
   label: "来源检索失败",
   summary: "source_connection_expired",
   payload: {
-    kind: "tool",
+    kind: "operation",
     itemId: "tool_source_search_001",
     summary: "No raw provider data was exposed.",
   },
@@ -139,12 +139,12 @@ const toolReadGroups: AgentWorkbenchTranscriptGroup[] = [
       {
         eventId: "evt_tool_read",
         itemId: "tool_read_001",
-        kind: "tool.completed",
+        kind: "operation.completed",
         status: "completed",
         label: "Loaded a toolread 2 files",
         summary: "读取 Fw Ceo Review 技能",
         payload: {
-          kind: "tool",
+          kind: "operation",
           itemId: "tool_read_001",
           summary: "Read common-safety.md\nRead SKILL.md",
         },
@@ -168,7 +168,7 @@ const webSearchRunningGroups: AgentWorkbenchTranscriptGroup[] = [
         kind: "webSearch.started",
         status: "running",
         label:
-          "Loaded a tool{count, plural, one {已搜索网页 # 次} other {已搜索网页 # 次}}",
+          "Loaded a operation{count, plural, one {已搜索网页 # 次} other {已搜索网页 # 次}}",
         summary: "",
         payload: {
           kind: "source_search",
@@ -218,12 +218,12 @@ const fileReadRunningGroups: AgentWorkbenchTranscriptGroup[] = [
       {
         eventId: "evt_file_read",
         itemId: "file_read_001",
-        kind: "tool.started",
+        kind: "operation.started",
         status: "running",
         label: "Read 5 files, searched code和已列出文件",
         summary: "",
         payload: {
-          kind: "tool",
+          kind: "operation",
           itemId: "file_read_001",
           summary: "",
         },
@@ -278,9 +278,9 @@ const meta = {
         );
       }
 
-      if (variant === "tool-detail") {
+      if (variant === "operation-detail") {
         return (
-          <div className="codex-reference-frame codex-reference-frame--tool-detail">
+          <div className="codex-reference-frame codex-reference-frame--operation-detail">
             <Story />
           </div>
         );
@@ -304,10 +304,14 @@ const meta = {
 export default meta;
 
 type Story = StoryObj<typeof meta>;
-type CodexReferenceVariant = "guided" | "slice" | "tool-detail" | "window";
+type CodexReferenceVariant = "guided" | "slice" | "operation-detail" | "window";
 
 function codexReferenceVariant(value: unknown): CodexReferenceVariant {
-  if (value === "guided" || value === "tool-detail" || value === "window") {
+  if (
+    value === "guided" ||
+    value === "operation-detail" ||
+    value === "window"
+  ) {
     return value;
   }
   return "slice";
@@ -345,11 +349,11 @@ export const ToolReadDetails: Story = {
     groups: toolReadGroups,
   },
   parameters: {
-    codexReferenceVariant: "tool-detail",
+    codexReferenceVariant: "operation-detail",
   },
   play: ({ canvasElement }) => {
     const button = canvasElement.querySelector<HTMLButtonElement>(
-      ".transcript-tool-event__detail-toggle",
+      ".transcript-operation-event__detail-toggle",
     );
     button?.click();
   },

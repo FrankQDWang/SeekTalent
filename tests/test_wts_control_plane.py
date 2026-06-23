@@ -11,7 +11,7 @@ from seektalent_conversation_agent.factory import build_agent_service
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_conversation_agent.store import CONVERSATION_AGENT_SCHEMA_VERSION, ConversationStore
-from seektalent_conversation_agent.tools import AgentToolAdapter
+from seektalent_conversation_agent.service_actions import AgentServiceActionAdapter
 from seektalent_runtime_control.models import RuntimeRunRecord
 from seektalent_runtime_control.service import RuntimeControlService
 from seektalent_runtime_control.store import RuntimeControlStore
@@ -441,7 +441,12 @@ def test_submit_jd_replay_repairs_missing_link_and_review_message_without_duplic
     }
     first = service.submit_jd(**request)
     user_message_count = _message_count(service, conversation.conversation_id, message_type="user_text")
-    tool_call_count = _tool_call_count(service, conversation.conversation_id, tool_name="extract_requirements")
+    operation_audit_count = _operation_audit_count(
+        service,
+        conversation.conversation_id,
+        operation_name="extract_requirements",
+        execution_origin="service",
+    )
     with sqlite3.connect(service.store.path) as conn, conn:
         conn.execute(
             "DELETE FROM wts_requirement_draft_job_requests WHERE draft_revision_id = ?",
@@ -468,7 +473,15 @@ def test_submit_jd_replay_repairs_missing_link_and_review_message_without_duplic
     assert replay.requirement_draft_revision_id == first.requirement_draft_revision_id
     assert _message_count(service, conversation.conversation_id, message_type="user_text") == user_message_count
     assert _message_count(service, conversation.conversation_id, message_type="requirement_review") == 1
-    assert _tool_call_count(service, conversation.conversation_id, tool_name="extract_requirements") == tool_call_count
+    assert (
+        _operation_audit_count(
+            service,
+            conversation.conversation_id,
+            operation_name="extract_requirements",
+            execution_origin="service",
+        )
+        == operation_audit_count
+    )
     assert _requirement_snapshot_count(service, first.requirement_draft_revision_id) == 1
     assert extractor.received_job_titles == [None]
 
@@ -544,10 +557,6 @@ def test_submit_jd_replay_preserves_running_workflow_state(tmp_path: Path) -> No
         conversation_id=conversation.conversation_id,
         owner_user_id="user_1",
         workspace_id="workspace_1",
-        job_title="Python 平台负责人",
-        jd_text="需要 Python 平台负责人，负责 API 与平台工程。",
-        notes="优先华东，接受远程协作",
-        source_ids=["cts"],
     )
     runtime_run_id = started.conversation_reopen_state.runtime_run_id
     linked_run_before = started.conversation_reopen_state.linked_runtime_runs[0]
@@ -734,7 +743,7 @@ def test_confirm_creates_one_workflow_start_intent_for_same_draft(tmp_path: Path
     assert _outbox_count_for_aggregate(service, first.workflow_start_intent_id) == 1
     intent = _workflow_start_intent_row(service, first.workflow_start_intent_id)
     assert intent["approved_requirement_revision_id"]
-    approved = service.tool_adapter.runtime_store.get_approved_requirement(intent["approved_requirement_revision_id"])
+    approved = service.service_action_adapter.runtime_store.get_approved_requirement(intent["approved_requirement_revision_id"])
     assert approved.draft_revision_id == submitted.requirement_draft_revision_id
     assert intent["job_request_revision_id"] == submitted.job_request_revision_id
     assert intent["status"] == "pending"
@@ -837,7 +846,7 @@ def test_confirm_recovers_intent_and_outbox_after_approved_requirement_crash(
     assert _outbox_count(service) == 0
 
     def fail_if_reconfirming(
-        self: AgentToolAdapter,
+        self: AgentServiceActionAdapter,
         *,
         draft_revision_id: str,
         base_revision_id: str,
@@ -846,7 +855,7 @@ def test_confirm_recovers_intent_and_outbox_after_approved_requirement_crash(
         del self, draft_revision_id, base_revision_id, idempotency_key
         raise AssertionError("retry should recover the approved requirement without re-confirming")
 
-    monkeypatch.setattr(AgentToolAdapter, "confirm_requirements", fail_if_reconfirming)
+    monkeypatch.setattr(AgentServiceActionAdapter, "confirm_requirements", fail_if_reconfirming)
 
     recovered = _confirm(
         service,
@@ -864,7 +873,7 @@ def test_confirm_recovers_intent_and_outbox_after_approved_requirement_crash(
     assert _workflow_start_intent_count_for_draft(service, submitted.requirement_draft_revision_id) == 1
     assert _outbox_count_for_aggregate(service, recovered.workflow_start_intent_id) == 1
     intent = service.workflow_start_intent_store.get(recovered.workflow_start_intent_id)
-    approved = service.tool_adapter.runtime_store.get_approved_requirement_by_idempotency(
+    approved = service.service_action_adapter.runtime_store.get_approved_requirement_by_idempotency(
         conversation_id=conversation.conversation_id,
         idempotency_key="confirm-crash-1",
     )
@@ -927,7 +936,7 @@ def test_confirm_recovery_same_key_after_newer_draft_creates_missing_intent_outb
     assert _workflow_start_intent_count_for_draft(service, original_draft_id) == 1
     assert _outbox_count_for_aggregate(service, recovered.workflow_start_intent_id) == 1
     intent = service.workflow_start_intent_store.get(recovered.workflow_start_intent_id)
-    approved = service.tool_adapter.runtime_store.get_approved_requirement_by_idempotency(
+    approved = service.service_action_adapter.runtime_store.get_approved_requirement_by_idempotency(
         conversation_id=conversation.conversation_id,
         idempotency_key="confirm-crash-newer-1",
     )
@@ -1063,7 +1072,7 @@ def test_confirm_missing_effective_title_does_not_create_intent_or_outbox(tmp_pa
     assert exc_info.value.reason_code == "job_title_missing"
     assert _workflow_start_intent_count_for_draft(service, submitted.requirement_draft_revision_id) == 0
     assert _outbox_count(service) == 0
-    approved = service.tool_adapter.runtime_store.get_approved_requirement_by_idempotency(
+    approved = service.service_action_adapter.runtime_store.get_approved_requirement_by_idempotency(
         conversation_id=conversation.conversation_id,
         idempotency_key="confirm-title-1",
     )
@@ -1433,14 +1442,14 @@ def _service(tmp_path: Path) -> tuple[ConversationAgentService, FakeRequirementE
     )
     service = ConversationAgentService(
         store=conversation_store,
-        tool_adapter=AgentToolAdapter(
+        service_action_adapter=AgentServiceActionAdapter(
             runtime_store=runtime_store,
             requirement_service=requirement_service,
         ),
         now=_clock(),
         conversation_id_factory=lambda: "agent_conv_1",
         message_id_factory=_sequence("agent_msg"),
-        tool_call_id_factory=_sequence("agent_tool_call"),
+        operation_id_factory=_sequence("operation_audit"),
     )
     return service, executor
 
@@ -1465,7 +1474,7 @@ def _service_with_workflow_executor(
     )
     service = ConversationAgentService(
         store=conversation_store,
-        tool_adapter=AgentToolAdapter(
+        service_action_adapter=AgentServiceActionAdapter(
             runtime_store=runtime_store,
             requirement_service=requirement_service,
             workflow_executor=workflow_executor,
@@ -1473,7 +1482,7 @@ def _service_with_workflow_executor(
         now=_clock(),
         conversation_id_factory=lambda: "agent_conv_1",
         message_id_factory=_sequence("agent_msg"),
-        tool_call_id_factory=_sequence("agent_tool_call"),
+        operation_id_factory=_sequence("operation_audit"),
         source_selection_resolver=source_selection_resolver
         or RuntimeSourceSelectionResolver(registered_runtime_source_ids=registered_runtime_source_ids or set()),
     )
@@ -1587,7 +1596,7 @@ def _approved_requirement_count_for_idempotency(
     conversation_id: str,
     idempotency_key: str,
 ) -> int:
-    runtime_store = service.tool_adapter.runtime_store
+    runtime_store = service.service_action_adapter.runtime_store
     assert runtime_store is not None
     with sqlite3.connect(runtime_store.path) as conn:
         row = conn.execute(
@@ -1614,15 +1623,21 @@ def _message_count(service: ConversationAgentService, conversation_id: str, *, m
     return int(row[0])
 
 
-def _tool_call_count(service: ConversationAgentService, conversation_id: str, *, tool_name: str) -> int:
+def _operation_audit_count(
+    service: ConversationAgentService,
+    conversation_id: str,
+    *,
+    operation_name: str,
+    execution_origin: str,
+) -> int:
     with sqlite3.connect(service.store.path) as conn:
         row = conn.execute(
             """
             SELECT COUNT(*)
-            FROM agent_tool_calls
-            WHERE conversation_id = ? AND tool_name = ?
+            FROM agent_operation_audits
+            WHERE conversation_id = ? AND operation_name = ? AND execution_origin = ?
             """,
-            (conversation_id, tool_name),
+            (conversation_id, operation_name, execution_origin),
         ).fetchone()
     return int(row[0])
 

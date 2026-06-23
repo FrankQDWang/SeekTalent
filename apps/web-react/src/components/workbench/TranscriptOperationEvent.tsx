@@ -9,22 +9,24 @@ import { useState } from "react";
 import type { AgentWorkbenchTranscriptEvent } from "../../lib/api/agentWorkbenchTypes";
 import { TranscriptEventDetails } from "./TranscriptEventDetails";
 
-type TranscriptToolEventProps = {
+type TranscriptOperationEventProps = {
   event: AgentWorkbenchTranscriptEvent;
 };
 
-export function TranscriptToolEvent({ event }: TranscriptToolEventProps) {
+export function TranscriptOperationEvent({
+  event,
+}: TranscriptOperationEventProps) {
   const [expanded, setExpanded] = useState(false);
   const status = event.status ?? "pending";
 
   return (
     <article
       aria-label={event.label}
-      className="transcript-tool-event"
+      className="transcript-operation-event"
       data-kind={event.payload.kind}
       data-status={status}
     >
-      <div className="transcript-tool-event__icon">
+      <div className="transcript-operation-event__icon">
         {status === "running" || status === "pending" ? (
           <LoaderCircle aria-hidden="true" size={15} />
         ) : status === "failed" || status === "cancelled" ? (
@@ -33,10 +35,10 @@ export function TranscriptToolEvent({ event }: TranscriptToolEventProps) {
           <SquareTerminal aria-hidden="true" size={15} />
         )}
       </div>
-      <div className="transcript-tool-event__body">
+      <div className="transcript-operation-event__body">
         <button
           aria-expanded={expanded}
-          className="transcript-tool-event__button"
+          className="transcript-operation-event__button"
           onClick={() => setExpanded((value) => !value)}
           type="button"
         >
@@ -51,7 +53,7 @@ export function TranscriptToolEvent({ event }: TranscriptToolEventProps) {
           <p>{event.summary ?? event.payload.summary}</p>
         ) : null}
         <button
-          className="transcript-tool-event__detail-toggle"
+          className="transcript-operation-event__detail-toggle"
           onClick={() => setExpanded((value) => !value)}
           type="button"
         >

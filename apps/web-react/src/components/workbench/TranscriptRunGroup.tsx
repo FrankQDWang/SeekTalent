@@ -9,7 +9,7 @@ import type {
   AgentWorkbenchTranscriptEvent,
   AgentWorkbenchTranscriptGroup,
 } from "../../lib/api/agentWorkbenchTypes";
-import { TranscriptToolEvent } from "./TranscriptToolEvent";
+import { TranscriptOperationEvent } from "./TranscriptOperationEvent";
 
 type TranscriptRunGroupProps = {
   collapsed: boolean;
@@ -51,8 +51,8 @@ export function TranscriptRunGroup({
 }
 
 function TranscriptEvent({ event }: { event: AgentWorkbenchTranscriptEvent }) {
-  if (isToolLikeEvent(event)) {
-    return <TranscriptToolEvent event={event} />;
+  if (isOperationLikeEvent(event)) {
+    return <TranscriptOperationEvent event={event} />;
   }
 
   return (
@@ -78,12 +78,12 @@ function TranscriptEvent({ event }: { event: AgentWorkbenchTranscriptEvent }) {
   );
 }
 
-function isToolLikeEvent(event: AgentWorkbenchTranscriptEvent): boolean {
+function isOperationLikeEvent(event: AgentWorkbenchTranscriptEvent): boolean {
   return (
-    event.payload.kind === "tool" ||
+    event.payload.kind === "operation" ||
     event.payload.kind === "command" ||
     event.payload.kind === "source_search" ||
-    event.kind.startsWith("tool.") ||
+    event.kind.startsWith("operation.") ||
     event.kind.startsWith("sourceSearch.") ||
     event.kind.startsWith("webSearch.") ||
     event.kind.startsWith("command.")

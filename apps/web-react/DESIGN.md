@@ -104,10 +104,10 @@ Mobile shell:
 | `wts/简历详情完整内容.png`                                | `ResumeEvidencePanel`                                | `ResumeEvidencePanel/FullContent`          | `workbench-resume-full`                |
 | `transcript/codex-transcript-01-full-collapsed.png`       | `Transcript`, collapsed run group                    | `Transcript/CollapsedRunGroup`             | `workbench-transcript-collapsed`       |
 | `transcript/codex-transcript-02-full-expanded.png`        | `Transcript`, expanded run group                     | `Transcript/ExpandedRunGroup`              | `workbench-transcript-expanded`        |
-| `transcript/codex-transcript-03-toolread-detail.png`      | `TranscriptToolEvent`, expanded details              | `Transcript/ToolReadDetails`               | `workbench-transcript-tool-detail`     |
-| `transcript/codex-transcript-04-web-search-running.png`   | `TranscriptToolEvent`, running web/source row        | `Transcript/WebSearchRunning`              | `workbench-transcript-web-running`     |
-| `transcript/codex-transcript-05-file-search-complete.png` | `TranscriptToolEvent`, completed source/file search  | `Transcript/FileSearchComplete`            | `workbench-transcript-file-complete`   |
-| `transcript/codex-transcript-06-file-read-running.png`    | `TranscriptToolEvent`, running file/source read      | `Transcript/FileReadRunning`               | `workbench-transcript-file-running`    |
+| `transcript/codex-transcript-03-toolread-detail.png`      | `TranscriptOperationEvent`, expanded details         | `Transcript/ToolReadDetails`               | `workbench-transcript-tool-detail`     |
+| `transcript/codex-transcript-04-web-search-running.png`   | `TranscriptOperationEvent`, running operation row    | `Transcript/WebSearchRunning`              | `workbench-transcript-web-running`     |
+| `transcript/codex-transcript-05-file-search-complete.png` | `TranscriptOperationEvent`, completed operation row  | `Transcript/FileSearchComplete`            | `workbench-transcript-file-complete`   |
+| `transcript/codex-transcript-06-file-read-running.png`    | `TranscriptOperationEvent`, running operation row    | `Transcript/FileReadRunning`               | `workbench-transcript-file-running`    |
 | `transcript/codex-transcript-07-guided-followup.png`      | `Transcript`, guided follow-up and composer boundary | `Transcript/GuidedFollowup`                | `workbench-transcript-guided-followup` |
 
 Every manifest row must map to one owner above. Unowned design assets fail the design gate.
@@ -118,7 +118,7 @@ Every manifest row must map to one owner above. Unowned design assets fail the d
 - `ConversationNav`: conversation/run list and archived run access.
 - `Transcript`: semantic transcript groups, active stream tail, composer boundary, context dividers.
 - `TranscriptRunGroup`: collapsed/expanded run grouping and processed-time row.
-- `TranscriptToolEvent`: tool/source/command lifecycle row with status and optional details.
+- `TranscriptOperationEvent`: operation lifecycle row with status and optional details.
 - `TranscriptEventDetails`: structured detail lines, safe refs, source ids, command output snippets, error reasons.
 - `Composer`: user input, attachments, submit state, stop/regenerate controls when supported by BFF.
 - `RequirementReviewPanel`: requirement draft, confirmation, missing fields, approval controls.
@@ -214,26 +214,26 @@ If transcript lifecycle, active-cell behavior, grouping, details, or stream repl
 
 ## BFF Event Profile Summary
 
-| Source fact          | BFF event kind                                                                  | Frontend cell/surface          | Durable       |
-| -------------------- | ------------------------------------------------------------------------------- | ------------------------------ | ------------- |
-| user message         | `message.created`, `message.completed`                                          | transcript message cell        | yes           |
-| assistant token      | `message.delta`                                                                 | active transcript message      | live optional |
-| assistant completion | `message.completed`                                                             | committed transcript message   | yes           |
-| activity lifecycle   | `activity.upserted`                                                             | tool/activity row              | yes           |
-| tool lifecycle       | `tool.started`, `tool.outputDelta`, `tool.completed`, `tool.failed`             | tool row and details           | yes           |
-| source search        | `sourceSearch.started`, `sourceSearch.completed`, `sourceSearch.failed`         | source/tool row                | yes           |
-| web search reference | `webSearch.started`, `webSearch.completed`                                      | web/source row                 | yes           |
-| command lifecycle    | `command.started`, `command.outputDelta`, `command.completed`, `command.failed` | command row and bounded output | yes           |
-| runtime stage        | `runtime.stageChanged`                                                          | graph and activity state       | yes           |
-| strategy graph       | `strategyGraph.changed`                                                         | read-only strategy timeline    | yes           |
-| thinking process     | `thinkingProcess.changed`                                                       | right rail timeline            | yes           |
-| candidate            | `candidate.upserted`                                                            | candidate queue/detail         | yes           |
-| detail approval      | `detailApproval.changed`                                                        | approval panel                 | yes           |
-| pending action       | `pendingAction.changed`                                                         | banner/control slot            | yes           |
-| source connection    | `sourceConnection.changed`                                                      | source status                  | yes           |
-| final summary        | `finalSummary.updated`                                                          | final shortlist panel          | yes           |
-| context compaction   | `context.compacted`                                                             | transcript divider             | yes           |
-| replay gap           | `stream.gap`                                                                    | recoverable stream state       | yes           |
+| Source fact          | BFF event kind                                                                          | Frontend cell/surface          | Durable       |
+| -------------------- | --------------------------------------------------------------------------------------- | ------------------------------ | ------------- |
+| user message         | `message.created`, `message.completed`                                                  | transcript message cell        | yes           |
+| assistant token      | `message.delta`                                                                         | active transcript message      | live optional |
+| assistant completion | `message.completed`                                                                     | committed transcript message   | yes           |
+| activity lifecycle   | `activity.upserted`                                                                     | operation/activity row         | yes           |
+| operation lifecycle  | `operation.started`, `operation.outputDelta`, `operation.completed`, `operation.failed` | operation row and details      | yes           |
+| source search        | `sourceSearch.started`, `sourceSearch.completed`, `sourceSearch.failed`                 | source/tool row                | yes           |
+| web search reference | `webSearch.started`, `webSearch.completed`                                              | web/source row                 | yes           |
+| command lifecycle    | `command.started`, `command.outputDelta`, `command.completed`, `command.failed`         | command row and bounded output | yes           |
+| runtime stage        | `runtime.stageChanged`                                                                  | graph and activity state       | yes           |
+| strategy graph       | `strategyGraph.changed`                                                                 | read-only strategy timeline    | yes           |
+| thinking process     | `thinkingProcess.changed`                                                               | right rail timeline            | yes           |
+| candidate            | `candidate.upserted`                                                                    | candidate queue/detail         | yes           |
+| detail approval      | `detailApproval.changed`                                                                | approval panel                 | yes           |
+| pending action       | `pendingAction.changed`                                                                 | banner/control slot            | yes           |
+| source connection    | `sourceConnection.changed`                                                              | source status                  | yes           |
+| final summary        | `finalSummary.updated`                                                                  | final shortlist panel          | yes           |
+| context compaction   | `context.compacted`                                                                     | transcript divider             | yes           |
+| replay gap           | `stream.gap`                                                                            | recoverable stream state       | yes           |
 
 ## Layout And Interaction Details
 
