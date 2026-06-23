@@ -194,3 +194,25 @@
     grid-template-columns: 1fr;
   }
 }
+
+.home-start-panel--collapsing {
+  animation: home-panel-collapse 500ms ease forwards;
+}
+
+@keyframes home-panel-collapse {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-start-panel--collapsing {
+    animation: none;
+    opacity: 0;
+  }
+}

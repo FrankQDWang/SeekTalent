@@ -1,4 +1,4 @@
-import { createRoute } from "@tanstack/react-router";
+import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ConversationList } from "../components/workbench/ConversationList";
@@ -9,11 +9,14 @@ import {
 } from "../components/workbench/ConversationScreen";
 import { ConversationShell } from "../components/workbench/ConversationShell";
 import { CandidateDetailDrawer } from "../components/workbench/CandidateDetailDrawer";
+import { HomeStartPanel, type HomeStartPanelSubmitInput } from "../components/workbench/HomeStartPanel";
 import {
   useAmendAgentWorkbenchRequirementFromText,
   useConfirmAgentWorkbenchRequirements,
   useAgentWorkbenchCandidateDetail,
+  useAgentWorkbenchConversations,
   useAgentWorkbenchLiveConversation,
+  useCreateAgentWorkbenchConversationFromJd,
   useSubmitAgentWorkbenchMessage,
   useUpdateAgentWorkbenchRequirementDraft,
 } from "../lib/api/agentWorkbench";
@@ -28,11 +31,75 @@ import { rootRoute } from "./root";
 export const conversationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/conversations/$conversationId",
-  component: ConversationRoute,
+  component: WorkbenchRoute,
 });
 
-function ConversationRoute() {
+function WorkbenchRoute() {
   const { conversationId } = conversationRoute.useParams();
+
+  if (conversationId === "new") {
+    return <NewConversationFlow />;
+  }
+
+  return <ExistingConversationFlow key={conversationId} conversationId={conversationId} />;
+}
+
+function NewConversationFlow() {
+  const [collapsing, setCollapsing] = useState(false);
+  const navigate = useNavigate({ from: "/conversations/$conversationId" });
+  const conversationsQuery = useAgentWorkbenchConversations();
+  const createConversationMutation = useCreateAgentWorkbenchConversationFromJd();
+  const [homeErrorMessage, setHomeErrorMessage] = useState<string | null>(null);
+
+  const onHomeSubmit = async (input: HomeStartPanelSubmitInput) => {
+    setHomeErrorMessage(null);
+    try {
+      const result = await createConversationMutation.mutateAsync({
+        jobDescription: input.jobDescription,
+        jobTitle: input.jobTitle,
+      });
+      setCollapsing(true);
+      setTimeout(() => {
+        navigate({
+          params: { conversationId: result.conversationId },
+          to: "/conversations/$conversationId",
+          replace: true,
+        });
+      }, 500);
+    } catch (error) {
+      setHomeErrorMessage(safeErrorMessage(error));
+      throw error;
+    }
+  };
+
+  return (
+    <ConversationShell
+      main={
+        <HomeStartPanel
+          collapsing={collapsing}
+          errorMessage={homeErrorMessage}
+          loading={createConversationMutation.isPending}
+          onSubmit={onHomeSubmit}
+        />
+      }
+      rail={
+        conversationsQuery.isSuccess ? (
+          <ConversationList
+            conversations={conversationsQuery.data?.conversations ?? []}
+          />
+        ) : (
+          <ConversationList />
+        )
+      }
+    />
+  );
+}
+
+function ExistingConversationFlow({
+  conversationId,
+}: {
+  conversationId: string;
+}) {
   const queryClient = useQueryClient();
   const query = useAgentWorkbenchLiveConversation(conversationId);
   const queryKey = useMemo(
@@ -40,26 +107,17 @@ function ConversationRoute() {
     [conversationId],
   );
   const requirementMutationChainRef = useRef<Promise<void>>(Promise.resolve());
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
-    null,
-  );
-  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
-    null,
-  );
-  const [updatingRequirementItemIds, setUpdatingRequirementItemIds] = useState<
-    string[]
-  >([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(null);
+  const [updatingRequirementItemIds, setUpdatingRequirementItemIds] = useState<string[]>([]);
   const detailQuery = useAgentWorkbenchCandidateDetail(
     conversationId,
     selectedCandidateId,
   );
   const submitMessageMutation = useSubmitAgentWorkbenchMessage(conversationId);
-  const confirmRequirementsMutation =
-    useConfirmAgentWorkbenchRequirements(conversationId);
-  const updateRequirementMutation =
-    useUpdateAgentWorkbenchRequirementDraft(conversationId);
-  const amendRequirementMutation =
-    useAmendAgentWorkbenchRequirementFromText(conversationId);
+  const confirmRequirementsMutation = useConfirmAgentWorkbenchRequirements(conversationId);
+  const updateRequirementMutation = useUpdateAgentWorkbenchRequirementDraft(conversationId);
+  const amendRequirementMutation = useAmendAgentWorkbenchRequirementFromText(conversationId);
   const selectedCandidate = useMemo(
     () =>
       query.data?.candidates.find(
@@ -113,6 +171,7 @@ function ConversationRoute() {
     queryClient.getQueryData<AgentWorkbenchConversationResponse>(queryKey)
       ?.requirementDraft?.draftRevisionId ??
     view.requirementDraft?.draftRevisionId;
+
   const enqueueRequirementMutation = (run: () => Promise<void>) => {
     const next = requirementMutationChainRef.current
       .catch(() => undefined)
@@ -120,6 +179,7 @@ function ConversationRoute() {
     requirementMutationChainRef.current = next.catch(() => undefined);
     return next;
   };
+
   const onSubmitMessage = async (message: string) => {
     setActionErrorMessage(null);
     try {
@@ -129,6 +189,7 @@ function ConversationRoute() {
       throw error;
     }
   };
+
   const onConfirmRequirements = async () => {
     setActionErrorMessage(null);
     await requirementMutationChainRef.current.catch(() => undefined);
@@ -143,6 +204,7 @@ function ConversationRoute() {
       setActionErrorMessage(safeErrorMessage(error));
     }
   };
+
   const onToggleRequirementItem = async (
     item: AgentWorkbenchRequirementDraftItem,
     selected: boolean,
@@ -159,13 +221,7 @@ function ConversationRoute() {
         }
         await updateRequirementMutation.mutateAsync({
           draftRevisionId,
-          operations: [
-            {
-              itemId: item.itemId,
-              op: "set_selected",
-              selected,
-            },
-          ],
+          operations: [{ itemId: item.itemId, op: "set_selected", selected }],
         });
       });
     } catch (error) {
@@ -176,6 +232,7 @@ function ConversationRoute() {
       );
     }
   };
+
   const onAddOtherRequirement = async (text: string) => {
     setActionErrorMessage(null);
     try {
@@ -184,16 +241,14 @@ function ConversationRoute() {
         if (!draftRevisionId) {
           throw new Error("Requirement draft is unavailable.");
         }
-        await amendRequirementMutation.mutateAsync({
-          draftRevisionId,
-          text,
-        });
+        await amendRequirementMutation.mutateAsync({ draftRevisionId, text });
       });
     } catch (error) {
       setActionErrorMessage(safeErrorMessage(error));
       throw error;
     }
   };
+
   return (
     <>
       <ConversationShell
