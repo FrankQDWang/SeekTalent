@@ -84,6 +84,7 @@ _TERMINAL_RUN_STATUS_TO_CONVERSATION = {
 _RUNTIME_FINAL_SUMMARY_IDEMPOTENCY_PREFIX = "runtime-final-summary:"
 _FINAL_SUMMARY_MESSAGE_IDEMPOTENCY_PREFIX = "final-summary-message:"
 _WORKFLOW_COMMAND_MESSAGE_IDEMPOTENCY_PREFIX = "workflow-command-message:"
+_RUNTIME_PROGRESS_MESSAGE_IDEMPOTENCY_PREFIX = "runtime-progress-message:"
 _AGENT_TURN_STARTED_STALE_SECONDS = 15 * 60
 _WORKFLOW_START_OUTBOX_CLAIM_TIMEOUT_SECONDS = 60
 _SummaryItemT = TypeVar("_SummaryItemT")
@@ -2619,21 +2620,23 @@ class ConversationAgentService:
         payload: dict[str, object],
         created_at: str,
     ) -> None:
-        try:
-            self.store.append_message(
+        self.store.append_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            message_type="runtime_progress",
+            text=text,
+            payload=payload,
+            source_runtime_run_id=runtime_run_id,
+            source_runtime_event_seq=event_seq,
+            created_at=created_at,
+            message_id=self.message_id_factory(),
+            idempotency_key=_runtime_progress_message_idempotency_key(
                 conversation_id=conversation_id,
-                role="assistant",
-                message_type="runtime_progress",
-                text=text,
-                payload=payload,
-                source_runtime_run_id=runtime_run_id,
-                source_runtime_event_seq=event_seq,
-                created_at=created_at,
-                message_id=self.message_id_factory(),
-            )
-        except sqlite3.IntegrityError as exc:
-            if "UNIQUE" not in str(exc):
-                raise
+                runtime_run_id=runtime_run_id,
+                event_seq=event_seq,
+            ),
+            return_existing_on_idempotency=True,
+        )
 
     def _sync_status_from_runtime(self, *, conversation_id: str, runtime_run_id: str) -> None:
         if self.service_action_adapter.runtime_store is None:
@@ -2834,6 +2837,15 @@ def _workflow_command_message_idempotency_key(
     idempotency_key: str,
 ) -> str:
     return f"{_WORKFLOW_COMMAND_MESSAGE_IDEMPOTENCY_PREFIX}{conversation_id}:{runtime_run_id}:{idempotency_key}"
+
+
+def _runtime_progress_message_idempotency_key(
+    *,
+    conversation_id: str,
+    runtime_run_id: str,
+    event_seq: int,
+) -> str:
+    return f"{_RUNTIME_PROGRESS_MESSAGE_IDEMPOTENCY_PREFIX}{conversation_id}:{runtime_run_id}:{event_seq}"
 
 
 def _requirement_draft_response(draft: DraftProtocol) -> RequirementDraft:

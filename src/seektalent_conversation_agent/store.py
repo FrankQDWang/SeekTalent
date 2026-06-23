@@ -36,6 +36,7 @@ CONVERSATION_AGENT_SCHEMA_VERSION = 8
 
 _ACTIVE_ARCHIVE_BLOCKING_STATUSES = {"starting", "running"}
 _RUNTIME_RUN_KINDS = {"primary", "rerun", "fork"}
+_MODEL_INPUT_EXCLUDED_MESSAGE_TYPES = {"command_state", "runtime_progress"}
 
 
 class ConversationStore:
@@ -173,7 +174,7 @@ class ConversationStore:
         created_at: str,
         message_id: str | None = None,
         token_count: int | None = None,
-        model_input_included: bool = True,
+        model_input_included: bool | None = None,
         source_operation_id: str | None = None,
         source_runtime_run_id: str | None = None,
         source_runtime_event_seq: int | None = None,
@@ -195,6 +196,11 @@ class ConversationStore:
                     if existing is not None:
                         conn.rollback()
                         return _message_from_row(existing)
+                included_in_model_input = (
+                    _default_model_input_included(message_type)
+                    if model_input_included is None
+                    else model_input_included
+                )
                 message_seq = int(row["latest_message_seq"]) + 1
                 message = TranscriptMessage(
                     message_id=message_id or f"agent_msg_{uuid4().hex}",
@@ -205,7 +211,7 @@ class ConversationStore:
                     text=text,
                     payload=payload,
                     token_count=token_count,
-                    model_input_included=model_input_included,
+                    model_input_included=included_in_model_input,
                     source_operation_id=source_operation_id,
                     source_runtime_run_id=source_runtime_run_id,
                     source_runtime_event_seq=source_runtime_event_seq,
@@ -1215,6 +1221,10 @@ class ConversationStore:
 
 def _migration_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _default_model_input_included(message_type: str) -> bool:
+    return message_type not in _MODEL_INPUT_EXCLUDED_MESSAGE_TYPES
 
 
 def _upsert_context_compaction(conn: sqlite3.Connection, record: ContextCompactionRecord) -> None:

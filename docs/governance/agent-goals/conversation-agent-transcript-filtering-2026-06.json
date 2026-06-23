@@ -1,0 +1,36 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Filter Conversation Agent transcript noise out of model input.",
+  "rationale": "This follow-up keeps runtime progress and command-state transcript items visible to the Workbench UI while preventing those operational records from becoming future LLM context. The change belongs in the Conversation Agent store/service contract because the business transcript is the canonical source of truth, not an OpenAI Agents SDK session transcript.",
+  "touched_layers": [
+    "other"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/store.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_conversation_agent/service.py"
+  ],
+  "line_count_rationale": "The service file is already above the production line-count redline. This PR changes the existing runtime-progress append path and adds focused regression coverage instead of introducing a parallel transcript adapter during release hardening.",
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run pytest tests/test_conversation_agent_service.py tests/test_agent_runtime_event_projection.py tests/test_conversation_agent_control_plane.py tests/test_conversation_agent_routes.py",
+    "uv run ruff check src/seektalent_conversation_agent/service.py src/seektalent_conversation_agent/store.py tests/test_conversation_agent_service.py tests/test_agent_runtime_event_projection.py",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "runtime progress messages reused as LLM recent transcript context",
+    "command-state messages reused as LLM recent transcript context",
+    "runtime progress duplicate handling by broad sqlite UNIQUE exception swallowing"
+  ],
+  "risks": [
+    "Runtime progress must remain visible in UI transcript responses even when excluded from model input.",
+    "Idempotency must deduplicate repeated runtime event polling without hiding unrelated database integrity failures.",
+    "Future message types need explicit model-input inclusion semantics instead of accidental defaults."
+  ]
+}
