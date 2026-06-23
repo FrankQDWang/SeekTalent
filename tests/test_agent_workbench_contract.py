@@ -18,11 +18,11 @@ from pydantic import BaseModel, ValidationError
 from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
 from seektalent_conversation_agent.models import (
-    AgentToolCallRecord,
     ContextCompactionRecord,
     ConversationReopenState,
     ConversationRuntimeRunLink,
     ConversationThreadView,
+    OperationAuditRecord,
     TranscriptActivityItem,
     TranscriptMessage,
 )
@@ -115,13 +115,14 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
         conversation_reopen_state=thread.conversation_reopen_state,
         messages=thread.messages,
         activity_items=thread.activity_items,
-        tool_call_records=[
-            AgentToolCallRecord(
-                tool_call_id="tool_1",
+        operation_audit_records=[
+            OperationAuditRecord(
+                operation_id="operation_1",
                 conversation_id="agent_conv_1",
                 activity_id="activity_1",
                 runtime_run_id="runtime_1",
-                tool_name="runtime_search",
+                operation_name="runtime_search",
+                execution_origin="service",
                 status="completed",
                 args={"source": "liepin", "rawPayload": "must not leak"},
                 result={"summary": "Read 5 safe profile summaries.", "providerResponse": "must not leak"},
@@ -192,9 +193,12 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
     assert [event.kind for event in response.transcriptGroups[0].events] == [
         "message.completed",
         "message.completed",
-        "tool.completed",
+        "operation.completed",
         "activity.upserted",
     ]
+    operation_event = response.transcriptGroups[0].events[2]
+    assert operation_event.payload.kind == "operation"
+    assert not operation_event.kind.startswith("tool.")
     assert response.transcriptGroups[1].events[0].kind == "context.compacted"
     last_payload = response.transcriptGroups[0].events[-1].payload
     assert last_payload.activityId == "activity_1"
@@ -997,7 +1001,7 @@ def test_workbench_view_enforces_product_payload_budgets() -> None:
         ),
         messages=thread.messages,
         activity_items=thread.activity_items,
-        tool_call_records=[],
+        operation_audit_records=[],
         context_compactions=[],
         runtime_events=[],
         source_connections=[],
@@ -1429,6 +1433,49 @@ def test_projected_stream_events_cover_non_transcript_workbench_surfaces() -> No
     assert "raw_body" not in json.dumps([event.payload.model_dump(mode="json") for event in events])
 
 
+def test_completed_workbench_response_contains_final_transcript_item_and_summary_metadata() -> None:
+    thread = _thread_view(final_summary_id="summary_1")
+    final_message = TranscriptMessage(
+        message_id="msg_final_1",
+        conversation_id="agent_conv_1",
+        message_seq=3,
+        role="assistant",
+        message_type="final_summary",
+        text="Final shortlist ready.",
+        payload={"summaryId": "summary_1"},
+        source_runtime_run_id="runtime_1",
+        created_at="2026-06-12T12:05:00+00:00",
+    )
+    thread = thread.model_copy(
+        update={
+            "conversation_reopen_state": thread.conversation_reopen_state.model_copy(
+                update={"status": "completed", "latest_message_seq": 3}
+            ),
+            "messages": [*thread.messages, final_message],
+        }
+    )
+    projection_input = build_agent_workbench_projection_input(
+        service=_FakeAgentService(thread),
+        conversation_store=_FakeConversationStore(),
+        runtime_store=_FakeRuntimeStore(),
+        workbench_store=_FakeWorkbenchStore(),
+        conversation_id="agent_conv_1",
+        user=_workbench_user(),
+    )
+
+    response = project_agent_workbench_view(projection_input)
+    payload = response.model_dump(mode="json")
+    transcript_events = [event for group in response.transcriptGroups for event in group.events]
+
+    assert payload["finalSummary"] == {"summaryId": "summary_1", "text": "Final shortlist ready."}
+    assert payload["messages"][-1]["messageId"] == "msg_final_1"
+    assert payload["messages"][-1]["messageType"] == "final_summary"
+    assert any(
+        event.itemId == "msg_final_1" and event.kind == "message.completed"
+        for event in transcript_events
+    )
+
+
 def test_candidate_stream_idempotency_tracks_same_status_content_changes() -> None:
     thread = _thread_view(final_summary_id="summary_1")
     projection_input = build_agent_workbench_projection_input(
@@ -1699,7 +1746,7 @@ def test_projection_input_aggregator_loads_named_store_boundaries() -> None:
         user=user,
     )
 
-    assert projection_input.tool_call_records[0].tool_call_id == "tool_1"
+    assert projection_input.operation_audit_records[0].operation_id == "operation_1"
     assert projection_input.context_compactions[0].compaction_id == "compact_1"
     assert projection_input.runtime is not None
     assert projection_input.runtime.runtimeRunId == "runtime_1"
@@ -2015,7 +2062,7 @@ def test_agent_workbench_routes_project_real_runtime_outputs_into_snapshot_and_e
     assert created.status_code == 201, created.text
     conversation_id = created.json()["conversation"]["conversationId"]
     service = client.app.state.agent_conversation_service
-    runtime_store = service.tool_adapter.runtime_store
+    runtime_store = service.service_action_adapter.runtime_store
     approved = save_approved_requirement(
         runtime_store,
         conversation_id=conversation_id,
@@ -2502,7 +2549,7 @@ def test_agent_workbench_confirm_route_wakes_outbox_runner_and_starts_runtime_on
         assert payload["conversation"]["workflowStartIntentId"]
         assert payload["conversation"]["workflowStartReasonCode"] is None
         service = client.app.state.agent_conversation_service
-        runtime_store = service.tool_adapter.runtime_store
+        runtime_store = service.service_action_adapter.runtime_store
         assert runtime_store is not None
         run_intent_id = f"wts:default:{conversation_id}:{draft_id}"
         runtime_run = _wait_for_runtime_run(runtime_store, run_intent_id=run_intent_id)
@@ -2679,7 +2726,7 @@ def test_agent_workbench_workflow_command_route_handles_commands_and_problem_det
         json={"title": "资深 Python 后端"},
     ).json()["conversation"]["conversationId"]
     service = client.app.state.agent_conversation_service
-    runtime_store = service.tool_adapter.runtime_store
+    runtime_store = service.service_action_adapter.runtime_store
     approved = save_approved_requirement(
         runtime_store,
         conversation_id=conversation_id,
@@ -3069,15 +3116,16 @@ class _FakeWorkflowStartIntentStore:
 
 
 class _FakeConversationStore:
-    def list_tool_calls(self, *, conversation_id: str):
+    def list_operation_audits(self, *, conversation_id: str):
         assert conversation_id == "agent_conv_1"
         return [
-            AgentToolCallRecord(
-                tool_call_id="tool_1",
+            OperationAuditRecord(
+                operation_id="operation_1",
                 conversation_id="agent_conv_1",
                 activity_id="activity_1",
                 runtime_run_id="runtime_1",
-                tool_name="runtime_search",
+                operation_name="runtime_search",
+                execution_origin="service",
                 status="completed",
                 args={"rawPayload": "must not leak"},
                 result={"summary": "Read safe profile summaries.", "providerResponse": "must not leak"},

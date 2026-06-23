@@ -34,7 +34,7 @@ const transcriptGroups: AgentWorkbenchTranscriptGroup[] = [
         label: "检索候选人来源",
         summary: "42 safe profile summaries matched source filters.",
         payload: {
-          kind: "tool",
+          kind: "operation",
           activityId: "activity_source_search",
           itemId: "tool_source_search_001",
           sourceRuntimeRunId: "agent_run_001",
@@ -116,7 +116,7 @@ describe("Transcript", () => {
     expect(within(transcript).getByText("Agent response")).toBeInTheDocument();
   });
 
-  it("expands and collapses structured tool event details", async () => {
+  it("expands and collapses structured operation event details", async () => {
     expect.hasAssertions();
 
     const user = userEvent.setup();

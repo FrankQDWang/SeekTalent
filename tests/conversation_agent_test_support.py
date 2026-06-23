@@ -8,7 +8,7 @@ from seektalent.progress import ProgressEvent
 from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_conversation_agent.source_selection import RuntimeSourceSelectionResolver
 from seektalent_conversation_agent.store import ConversationStore
-from seektalent_conversation_agent.tools import AgentToolAdapter
+from seektalent_conversation_agent.service_actions import AgentServiceActionAdapter
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
@@ -142,7 +142,7 @@ def build_service(tmp_path: Path) -> tuple[ConversationAgentService, Conversatio
         command_service=command_service,
     )
     detail_service = RuntimeDetailService(store=runtime_store, summary_id_factory=lambda: "runtime_final_summary_1")
-    adapter = AgentToolAdapter(
+    adapter = AgentServiceActionAdapter(
         runtime_store=runtime_store,
         requirement_service=requirement_service,
         command_service=command_service,
@@ -151,12 +151,12 @@ def build_service(tmp_path: Path) -> tuple[ConversationAgentService, Conversatio
     )
     service = ConversationAgentService(
         store=conversation_store,
-        tool_adapter=adapter,
+        service_action_adapter=adapter,
         now=_clock(),
         conversation_id_factory=lambda: "agent_conv_1",
         message_id_factory=_sequence("agent_msg"),
         activity_id_factory=_sequence("agent_activity"),
-        tool_call_id_factory=_sequence("agent_tool_call"),
+        operation_id_factory=_sequence("operation_audit"),
         summary_id_factory=_sequence("agent_context_summary"),
         compaction_id_factory=_sequence("agent_compaction"),
         source_selection_resolver=RuntimeSourceSelectionResolver(

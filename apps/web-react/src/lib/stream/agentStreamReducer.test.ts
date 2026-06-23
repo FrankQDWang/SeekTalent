@@ -126,11 +126,11 @@ describe("agent stream reducer", () => {
       initialAgentStreamState("agent_conv_1"),
       envelope({
         seq: 1,
-        kind: "tool.outputDelta",
+        kind: "operation.started",
         payload: {
-          payloadType: "tool.outputDelta",
-          kind: "tool",
-          itemId: "tool_1",
+          payloadType: "operation.started",
+          kind: "operation",
+          itemId: "operation_1",
           delta: "Read service.py",
         },
       }),
@@ -139,11 +139,11 @@ describe("agent stream reducer", () => {
     expect(state.transcriptEvents).toEqual([
       envelope({
         seq: 1,
-        kind: "tool.outputDelta",
+        kind: "operation.started",
         payload: {
-          payloadType: "tool.outputDelta",
-          kind: "tool",
-          itemId: "tool_1",
+          payloadType: "operation.started",
+          kind: "operation",
+          itemId: "operation_1",
           delta: "Read service.py",
         },
       }),

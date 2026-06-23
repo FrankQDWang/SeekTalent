@@ -37,11 +37,71 @@ def test_conversation_store_initializes_empty_db_and_reopens_idempotently(tmp_pa
         "agent_conversations",
         "agent_transcript_messages",
         "agent_transcript_activity_items",
-        "agent_tool_calls",
+        "agent_operation_audits",
         "agent_runtime_links",
         "agent_context_summaries",
         "agent_context_compactions",
     } <= tables
+    assert "agent_" + "tool_calls" not in tables
+
+    with sqlite3.connect(db_path) as conn:
+        operation_audit_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(agent_operation_audits)").fetchall()
+        }
+        message_columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_transcript_messages)").fetchall()}
+
+    assert {
+        "operation_id",
+        "conversation_id",
+        "activity_id",
+        "runtime_run_id",
+        "operation_name",
+        "execution_origin",
+        "status",
+        "args_json",
+        "result_json",
+        "reason_code",
+        "started_at",
+        "completed_at",
+    } <= operation_audit_columns
+    assert "source_operation_id" in message_columns
+    assert "source_" + "tool" + "_call_id" not in message_columns
+
+
+def test_conversation_store_persists_operation_audit_records(tmp_path: Path) -> None:
+    from seektalent_conversation_agent.models import OperationAuditRecord
+    from seektalent_conversation_agent.store import ConversationStore
+
+    store = ConversationStore(tmp_path / "conversation_agent.sqlite3")
+    store.initialize()
+    conversation = store.create_conversation(
+        conversation_id="agent_conv_1",
+        owner_user_id="user_1",
+        workspace_id="workspace_1",
+        title="Python 平台负责人",
+        created_at="2026-06-09T00:00:00.000000Z",
+    )
+
+    saved = store.save_operation_audit(
+        operation_id="operation_1",
+        conversation_id=conversation.conversation_id,
+        operation_name="agent_model_run",
+        execution_origin="model",
+        status="completed",
+        args={"idempotencyKey": "idem_1"},
+        result={"assistantMessageId": "msg_1"},
+        reason_code=None,
+        started_at="2026-06-09T00:00:01.000000Z",
+        completed_at="2026-06-09T00:00:02.000000Z",
+    )
+
+    assert isinstance(saved, OperationAuditRecord)
+    assert saved.operation_id == "operation_1"
+    assert saved.operation_name == "agent_model_run"
+    assert saved.execution_origin == "model"
+    assert not hasattr(saved, "tool" + "_call_id")
+    assert not hasattr(saved, "tool" + "_name")
+    assert store.list_operation_audits(conversation_id=conversation.conversation_id) == [saved]
 
 
 def test_conversation_store_does_not_own_runtime_control_tables_or_progression_state(tmp_path: Path) -> None:
@@ -382,6 +442,192 @@ def test_conversation_store_migrates_v3_runtime_links_to_metadata_history(tmp_pa
     assert reopened.linked_runtime_runs[0].approved_requirement_revision_id == "reqapproved_1"
     assert reopened.linked_runtime_runs[0].latest_event_seq == 9
     assert reopened.linked_runtime_runs[0].is_active is True
+
+
+def test_conversation_store_migrates_v7_tool_calls_to_operation_audits(tmp_path: Path) -> None:
+    from seektalent_conversation_agent.store import CONVERSATION_AGENT_SCHEMA_VERSION, ConversationStore
+
+    db_path = tmp_path / "conversation_agent_v7.sqlite3"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE agent_conversations (
+                conversation_id TEXT PRIMARY KEY,
+                owner_user_id TEXT NOT NULL,
+                workspace_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                title TEXT NOT NULL,
+                title_updated_at TEXT,
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                archived_at TEXT,
+                archive_reason_code TEXT,
+                last_opened_at TEXT,
+                latest_message_seq INTEGER NOT NULL DEFAULT 0,
+                latest_activity_seq INTEGER NOT NULL DEFAULT 0,
+                latest_rendered_runtime_event_seq INTEGER NOT NULL DEFAULT 0,
+                runtime_run_id TEXT,
+                workbench_session_id TEXT,
+                latest_draft_revision_id TEXT,
+                approved_requirement_revision_id TEXT,
+                final_summary_id TEXT,
+                pending_user_action TEXT,
+                pending_command_count INTEGER NOT NULL DEFAULT 0,
+                pending_requirement_review_count INTEGER NOT NULL DEFAULT 0,
+                pending_memory_review_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            CREATE TABLE agent_transcript_messages (
+                message_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                message_seq INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                message_type TEXT NOT NULL,
+                text TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                token_count INTEGER,
+                model_input_included INTEGER NOT NULL DEFAULT 1,
+                source_tool_call_id TEXT,
+                source_runtime_run_id TEXT,
+                source_runtime_event_seq INTEGER,
+                idempotency_key TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE agent_transcript_activity_items (
+                activity_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                activity_seq INTEGER NOT NULL,
+                activity_key TEXT NOT NULL,
+                activity_type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                source_runtime_run_id TEXT,
+                source_event_id_latest TEXT,
+                source_event_seq_start INTEGER,
+                source_event_seq_latest INTEGER,
+                payload_json TEXT NOT NULL,
+                started_at TEXT,
+                updated_at TEXT NOT NULL,
+                completed_at TEXT,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE agent_tool_calls (
+                tool_call_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                activity_id TEXT,
+                runtime_run_id TEXT,
+                tool_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                args_json TEXT NOT NULL,
+                result_json TEXT,
+                reason_code TEXT,
+                started_at TEXT NOT NULL,
+                completed_at TEXT
+            );
+            CREATE TABLE agent_runtime_links (
+                conversation_id TEXT NOT NULL,
+                runtime_run_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                run_kind TEXT NOT NULL DEFAULT 'primary',
+                workbench_session_id TEXT,
+                approved_requirement_revision_id TEXT NOT NULL DEFAULT '',
+                run_intent_id TEXT,
+                link_reason TEXT NOT NULL DEFAULT 'start',
+                latest_event_seq INTEGER NOT NULL DEFAULT 0,
+                linked_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                active_at TEXT,
+                superseded_at TEXT,
+                completed_at TEXT,
+                PRIMARY KEY(conversation_id, runtime_run_id)
+            );
+            CREATE TABLE agent_context_summaries (
+                summary_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                source_message_seq_start INTEGER NOT NULL,
+                source_message_seq_end INTEGER NOT NULL,
+                source_activity_seq_start INTEGER,
+                source_activity_seq_end INTEGER,
+                latest_rendered_runtime_event_seq INTEGER NOT NULL,
+                summary_text TEXT NOT NULL,
+                quality_status TEXT NOT NULL,
+                quality_evidence_json TEXT NOT NULL,
+                token_count INTEGER,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE agent_context_compactions (
+                compaction_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                trigger_reason_code TEXT NOT NULL,
+                summary_id TEXT,
+                source_message_seq_start INTEGER,
+                source_message_seq_end INTEGER,
+                source_activity_seq_start INTEGER,
+                source_activity_seq_end INTEGER,
+                quality_reason_code TEXT,
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                failed_reason_code TEXT
+            );
+            INSERT INTO agent_conversations (
+                conversation_id, owner_user_id, workspace_id, status, title,
+                latest_message_seq, created_at, updated_at
+            ) VALUES (
+                'agent_conv_1', 'user_1', 'workspace_1', 'draft', 'Python 平台负责人',
+                1, '2026-06-09T00:00:00.000000Z', '2026-06-09T00:00:00.000000Z'
+            );
+            INSERT INTO agent_tool_calls (
+                tool_call_id, conversation_id, activity_id, runtime_run_id, tool_name, status,
+                args_json, result_json, reason_code, started_at, completed_at
+            ) VALUES (
+                'legacy_tool_call_1', 'agent_conv_1', NULL, NULL, 'agent_model_run', 'completed',
+                '{"idempotencyKey":"idem_1"}', '{"assistantMessageId":"msg_1"}', NULL,
+                '2026-06-09T00:00:01.000000Z', '2026-06-09T00:00:02.000000Z'
+            ), (
+                'legacy_tool_call_2', 'agent_conv_1', NULL, 'runtime_run_1', 'extract_requirements', 'completed',
+                '{"idempotencyKey":"idem_2"}', '{"draftRevisionId":"draft_1"}', NULL,
+                '2026-06-09T00:00:03.000000Z', '2026-06-09T00:00:04.000000Z'
+            );
+            INSERT INTO agent_transcript_messages (
+                message_id, conversation_id, message_seq, role, message_type, text,
+                payload_json, source_tool_call_id, created_at
+            ) VALUES (
+                'msg_1', 'agent_conv_1', 1, 'assistant', 'assistant_text', '已完成',
+                '{}', 'legacy_tool_call_1', '2026-06-09T00:00:02.000000Z'
+            );
+            PRAGMA user_version = 7;
+            """
+        )
+
+    store = ConversationStore(db_path)
+    store.initialize()
+
+    audits = store.list_operation_audits(conversation_id="agent_conv_1")
+    messages = store.get_messages(conversation_id="agent_conv_1")
+    with sqlite3.connect(db_path) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        message_columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_transcript_messages)")}
+
+    assert version == CONVERSATION_AGENT_SCHEMA_VERSION
+    assert [audit.operation_id for audit in audits] == ["legacy_tool_call_1", "legacy_tool_call_2"]
+    assert audits[0].operation_name == "agent_model_run"
+    assert audits[0].execution_origin == "model"
+    assert audits[0].args == {"idempotencyKey": "idem_1"}
+    assert audits[0].result == {"assistantMessageId": "msg_1"}
+    assert audits[1].operation_name == "extract_requirements"
+    assert audits[1].execution_origin == "service"
+    assert audits[1].runtime_run_id == "runtime_run_1"
+    assert audits[1].args == {"idempotencyKey": "idem_2"}
+    assert audits[1].result == {"draftRevisionId": "draft_1"}
+    assert messages[0].source_operation_id == "legacy_tool_call_1"
+    assert "agent_operation_audits" in tables
+    assert "agent_tool_calls" not in tables
+    assert "source_operation_id" in message_columns
+    assert "source_tool_call_id" not in message_columns
 
 
 def test_conversation_store_rejects_runtime_run_linked_to_multiple_conversations(tmp_path: Path) -> None:

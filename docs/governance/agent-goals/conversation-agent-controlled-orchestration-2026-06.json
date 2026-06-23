@@ -1,0 +1,51 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Harden Conversation Agent orchestration around canonical runtime-control contracts.",
+  "rationale": "This stack intentionally crosses the Conversation Agent service boundary, runtime-control persistence, Workbench BFF projection, React transcript rendering, and the registered Conversation Agent prompt. These changes must land together so user text is converted into canonical job/request and requirement revisions, workflow starts cannot bypass approved intents, finalization remains deterministic, and the UI contract stays aligned with the backend schema.",
+  "touched_layers": [
+    "bff",
+    "frontend",
+    "other",
+    "prompts"
+  ],
+  "red_files": [
+    "src/seektalent/prompts/conversation_agent.md",
+    "src/seektalent_conversation_agent/factory.py",
+    "src/seektalent_conversation_agent/job_requests.py",
+    "src/seektalent_conversation_agent/models.py",
+    "src/seektalent_conversation_agent/runtime.py",
+    "src/seektalent_conversation_agent/safety.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/service_actions.py",
+    "src/seektalent_conversation_agent/store.py",
+    "src/seektalent_conversation_agent/submit_jd_recovery.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "Both files were already above the production line-count redline. This PR keeps the product contract in the existing service/store boundary and adds regression coverage instead of introducing a parallel orchestration layer during the release hardening slice.",
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run pytest tests/test_prompt_safety.py tests/test_llm_input_prompts.py -q",
+    "uv run pytest tests/test_conversation_agent_schema_contract.py tests/test_conversation_agent_workflow_start.py tests/test_conversation_agent_finalization.py tests/test_conversation_agent_control_plane.py tests/test_conversation_agent_compaction.py",
+    "uv run ruff check src/seektalent_conversation_agent tests/test_conversation_agent_schema_contract.py tests/test_conversation_agent_workflow_start.py tests/test_conversation_agent_finalization.py tests/test_conversation_agent_control_plane.py tests/test_conversation_agent_compaction.py",
+    "scripts/verify-dev-workbench.sh",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "legacy direct workflow starts that can replace approved job inputs",
+    "canonical final summaries polluted by user display instructions",
+    "model-tool terminology for deterministic service actions",
+    "unbounded Conversation Agent context assembly"
+  ],
+  "risks": [
+    "Conversation Agent prompt changes must preserve the no-model-tools boundary.",
+    "Workflow starts must continue to resolve only from persisted approved intents and outbox records.",
+    "Workbench transcript and OpenAPI types must stay aligned with backend message and activity contracts."
+  ]
+}

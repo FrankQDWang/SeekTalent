@@ -45,7 +45,7 @@ from seektalent_ui.workbench_observability import (
 
 MAX_WORKBENCH_MESSAGES = 100
 MAX_WORKBENCH_ACTIVITIES = 100
-MAX_WORKBENCH_TOOL_CALLS = 100
+MAX_WORKBENCH_OPERATION_AUDITS = 100
 MAX_WORKBENCH_CONTEXT_COMPACTIONS = 20
 MAX_WORKBENCH_RUNTIME_EVENTS = 300
 MAX_WORKBENCH_GRAPH_NODES = 80
@@ -225,7 +225,7 @@ def _bounded_projection_input(input: AgentWorkbenchProjectionInput) -> AgentWork
         input,
         messages=tuple(_latest(input.messages, MAX_WORKBENCH_MESSAGES)),
         activity_items=tuple(_latest(input.activity_items, MAX_WORKBENCH_ACTIVITIES)),
-        tool_call_records=tuple(_latest(input.tool_call_records, MAX_WORKBENCH_TOOL_CALLS)),
+        operation_audit_records=tuple(_latest(input.operation_audit_records, MAX_WORKBENCH_OPERATION_AUDITS)),
         context_compactions=tuple(_latest(input.context_compactions, MAX_WORKBENCH_CONTEXT_COMPACTIONS)),
         runtime_events=tuple(_latest(input.runtime_events, MAX_WORKBENCH_RUNTIME_EVENTS)),
         round_summaries=tuple(_latest(tuple(input.round_summaries), MAX_WORKBENCH_THINKING_ROUNDS)),

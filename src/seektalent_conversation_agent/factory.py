@@ -11,7 +11,7 @@ from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_conversation_agent.source_selection import RuntimeSourceSelectionResolver
 from seektalent_conversation_agent.store import ConversationStore
-from seektalent_conversation_agent.tools import AgentToolAdapter
+from seektalent_conversation_agent.service_actions import AgentServiceActionAdapter
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
@@ -76,7 +76,7 @@ def build_agent_service(
     agent_prompt = PromptRegistry(settings.prompt_dir).load("conversation_agent")
     return ConversationAgentService(
         store=conversation_store,
-        tool_adapter=AgentToolAdapter(
+        service_action_adapter=AgentServiceActionAdapter(
             runtime_store=runtime_store,
             requirement_service=requirement_service,
             command_service=command_service,

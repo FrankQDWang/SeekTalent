@@ -25,7 +25,7 @@ from seektalent_runtime_control.service import RuntimeControlService
 from seektalent_runtime_control.store import RuntimeControlStore
 
 
-AGENT_RUNTIME_TOOL_NAMES = (
+AGENT_SERVICE_ACTION_NAMES = (
     "extract_requirements",
     "get_requirement_draft",
     "update_requirement_draft",
@@ -45,7 +45,7 @@ AGENT_RUNTIME_TOOL_NAMES = (
 
 
 @dataclass(frozen=True)
-class AgentToolAdapter:
+class AgentServiceActionAdapter:
     runtime_store: RuntimeControlStore | None = None
     requirement_service: RuntimeControlService | None = None
     command_service: RuntimeCommandService | None = None
@@ -214,6 +214,7 @@ class AgentToolAdapter:
         target_section_hint: str | None,
         idempotency_key: str,
         replace_amendment_id: str | None = None,
+        provenance: dict[str, object] | None = None,
     ) -> object:
         return self._require_command_service().submit_next_round_requirement(
             runtime_run_id=runtime_run_id,
@@ -221,6 +222,7 @@ class AgentToolAdapter:
             target_section_hint=target_section_hint,
             idempotency_key=idempotency_key,
             replace_amendment_id=replace_amendment_id,
+            provenance=provenance,
         )
 
     def get_runtime_detail(

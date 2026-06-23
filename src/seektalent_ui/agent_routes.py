@@ -48,11 +48,6 @@ class ConversationTitleRequest(BaseModel):
 class WorkflowStartRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    jobTitle: str = Field(min_length=1, max_length=256)
-    jdText: str = Field(min_length=1, max_length=20000)
-    notes: str | None = Field(default=None, max_length=5000)
-    sourceIds: list[str] | None = Field(default=None, min_length=1, max_length=2)
-
 
 class FinalSummaryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -346,10 +341,6 @@ def start_workflow(
             conversation_id=conversation_id,
             owner_user_id=user.user_id,
             workspace_id=user.workspace_id,
-            job_title=payload.jobTitle,
-            jd_text=payload.jdText,
-            notes=payload.notes,
-            source_ids=payload.sourceIds,
         )
     except ConversationAgentError as exc:
         raise agent_http_error(exc) from exc

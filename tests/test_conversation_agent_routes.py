@@ -235,19 +235,14 @@ def test_workflow_start_route_uses_app_factory_runtime_wrapper(tmp_path: Path) -
     )
     started = client.post(
         f"/api/agent/conversations/{conversation_id}/workflow/start",
-        json={
-            "jobTitle": "Python 平台负责人",
-            "jdText": "需要 Python API、平台工程和检索排序。",
-            "notes": "优先 toB SaaS",
-            "sourceIds": ["cts"],
-        },
+        json={},
     )
 
     assert confirmed.status_code == 200, confirmed.text
     assert started.status_code == 200, started.text
     runtime_run_id = started.json()["conversationReopenState"]["runtimeRunId"]
-    runtime_store = client.app.state.agent_conversation_service.tool_adapter.runtime_store
-    executor = client.app.state.agent_conversation_service.tool_adapter.workflow_executor
+    runtime_store = client.app.state.agent_conversation_service.service_action_adapter.runtime_store
+    executor = client.app.state.agent_conversation_service.service_action_adapter.workflow_executor
     claim = runtime_store.claim_next_runnable_run(
         executor_id="route-wrapper-worker",
         claimed_at="2026-06-09T00:01:00.000000Z",
@@ -372,7 +367,7 @@ def test_workflow_events_route_returns_ui_ready_activity_lifecycle(tmp_path: Pat
         json={"title": "资深 Python 后端"},
     ).json()["conversation"]["conversationId"]
     service = client.app.state.agent_conversation_service
-    runtime_store = service.tool_adapter.runtime_store
+    runtime_store = service.service_action_adapter.runtime_store
     approved = save_approved_requirement(
         runtime_store,
         conversation_id=conversation_id,

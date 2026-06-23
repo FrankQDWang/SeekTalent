@@ -1416,7 +1416,7 @@ export interface components {
        * @default empty
        * @enum {string}
        */
-      kind: "runtime_round" | "runtime_event" | "tool_event" | "empty";
+      kind: "runtime_round" | "runtime_event" | "operation_event" | "empty";
       /** Stage */
       stage?: string | null;
       /** Sourceid */
@@ -1812,6 +1812,9 @@ export interface components {
         | "finalSummary.updated"
         | "item.completed"
         | "item.started"
+        | "operation.completed"
+        | "operation.failed"
+        | "operation.started"
         | "pendingAction.changed"
         | "requirement.updated"
         | "runtime.eventProjected"
@@ -1823,10 +1826,6 @@ export interface components {
         | "sourceSearch.started"
         | "strategyGraph.changed"
         | "thinkingProcess.changed"
-        | "tool.completed"
-        | "tool.failed"
-        | "tool.outputDelta"
-        | "tool.started"
         | "transcript.groupCollapsed"
         | "webSearch.completed"
         | "webSearch.started";
@@ -1835,7 +1834,7 @@ export interface components {
        * @enum {string}
        */
       kind:
-        | "tool"
+        | "operation"
         | "command"
         | "source_search"
         | "runtime_stage"
@@ -2220,10 +2219,9 @@ export interface components {
         | "requirement.updated"
         | "runtime.eventProjected"
         | "strategyGraph.changed"
-        | "tool.started"
-        | "tool.outputDelta"
-        | "tool.completed"
-        | "tool.failed"
+        | "operation.started"
+        | "operation.completed"
+        | "operation.failed"
         | "sourceSearch.started"
         | "sourceSearch.completed"
         | "sourceSearch.failed"
@@ -2333,10 +2331,9 @@ export interface components {
         | "requirement.updated"
         | "runtime.eventProjected"
         | "strategyGraph.changed"
-        | "tool.started"
-        | "tool.outputDelta"
-        | "tool.completed"
-        | "tool.failed"
+        | "operation.started"
+        | "operation.completed"
+        | "operation.failed"
         | "sourceSearch.started"
         | "sourceSearch.completed"
         | "sourceSearch.failed"
@@ -2412,7 +2409,7 @@ export interface components {
       kind:
         | "message"
         | "activity"
-        | "tool"
+        | "operation"
         | "command"
         | "source_search"
         | "runtime_stage"
@@ -4527,16 +4524,7 @@ export interface components {
       targetSectionHint?: string | null;
     };
     /** WorkflowStartRequest */
-    WorkflowStartRequest: {
-      /** Jobtitle */
-      jobTitle: string;
-      /** Jdtext */
-      jdText: string;
-      /** Notes */
-      notes?: string | null;
-      /** Sourceids */
-      sourceIds?: string[] | null;
-    };
+    WorkflowStartRequest: Record<string, never>;
   };
   responses: never;
   parameters: never;

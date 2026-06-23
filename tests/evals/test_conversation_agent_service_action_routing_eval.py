@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from seektalent_conversation_agent.tools import AGENT_RUNTIME_TOOL_NAMES, AgentToolAdapter
+from seektalent_conversation_agent.service_actions import AGENT_SERVICE_ACTION_NAMES, AgentServiceActionAdapter
 
 
-def test_tool_routing_eval_all_declared_tools_have_adapter_methods() -> None:
+def test_service_action_routing_eval_all_declared_actions_have_adapter_methods() -> None:
     adapter_methods = {
         "extract_requirements",
         "get_requirement_draft",
@@ -22,5 +22,5 @@ def test_tool_routing_eval_all_declared_tools_have_adapter_methods() -> None:
         "prepare_final_summary",
     }
 
-    assert set(AGENT_RUNTIME_TOOL_NAMES) == adapter_methods
-    assert all(hasattr(AgentToolAdapter, name) for name in adapter_methods)
+    assert set(AGENT_SERVICE_ACTION_NAMES) == adapter_methods
+    assert all(hasattr(AgentServiceActionAdapter, name) for name in adapter_methods)

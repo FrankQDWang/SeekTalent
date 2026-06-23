@@ -155,6 +155,7 @@ class RequirementAmendment(BaseModel):
     normalized_patch: dict[str, object] = Field(default_factory=dict)
     rejected_fragments: list[object] = Field(default_factory=list)
     review_items: list[ReviewItem] = Field(default_factory=list)
+    provenance: dict[str, object] = Field(default_factory=dict)
     resolved_patch: dict[str, object] | None = None
     superseded_by_amendment_id: str | None = None
     resolved_at: str | None = None

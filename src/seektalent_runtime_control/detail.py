@@ -71,6 +71,7 @@ class RuntimeDetailService:
         source_snapshot_event_seq: int,
         idempotency_key: str,
     ) -> RuntimeFinalSummary:
+        del user_instruction
         run = self.store.get_run(runtime_run_id)
         if run.status not in _TERMINAL_RUN_STATUSES:
             raise RuntimeControlError("runtime_run_not_completed")
@@ -83,7 +84,7 @@ class RuntimeDetailService:
                 summary="Snapshot cursor is stale.",
                 source_snapshot_event_seq=source_snapshot_event_seq,
                 latest_snapshot_event_seq=latest_snapshot_event_seq,
-                user_instruction=user_instruction,
+                user_instruction=None,
                 reason_code="runtime_snapshot_stale",
             )
         existing = self.store.get_final_summary_by_idempotency(
@@ -105,12 +106,12 @@ class RuntimeDetailService:
             summary_id=self.summary_id_factory(),
             runtime_run_id=runtime_run_id,
             status=run.status,
-            summary=_summary_text(run_status=run.status, facts=facts, user_instruction=user_instruction),
+            summary=_summary_text(run_status=run.status, facts=facts),
             facts=facts,
             source_event_ids=[event.event_id for event in events],
             source_snapshot_event_seq=source_snapshot_event_seq,
             latest_snapshot_event_seq=latest_snapshot_event_seq,
-            user_instruction=user_instruction,
+            user_instruction=None,
             created_at=self.now(),
         )
         return self.store.save_final_summary(summary, idempotency_key=idempotency_key)
@@ -273,12 +274,9 @@ def _canonical_summary_facts(store: RuntimeControlStore, *, runtime_run_id: str)
     return facts
 
 
-def _summary_text(*, run_status: str, facts: list[dict[str, object]], user_instruction: str | None) -> str:
+def _summary_text(*, run_status: str, facts: list[dict[str, object]]) -> str:
     fact_text = "; ".join(str(fact["value"]) for fact in facts)
-    parts = [f"Run status: {run_status}.", fact_text]
-    if user_instruction:
-        parts.append(user_instruction)
-    return " ".join(part for part in parts if part)
+    return " ".join(part for part in [f"Run status: {run_status}.", fact_text] if part)
 
 
 def _detail_title(kind: str, event: RuntimeControlEvent) -> str:

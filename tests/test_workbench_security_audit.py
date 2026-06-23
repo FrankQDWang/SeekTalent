@@ -201,6 +201,20 @@ def test_agent_workbench_openapi_documents_problem_details_and_source_kind_enum(
         responses["400"]["content"]["application/json"]["schema"]["$ref"]
         == "#/components/schemas/ProblemDetails"
     )
+    for schema_name in [
+        "AgentWorkbenchRequirementDraftItemResponse",
+        "AgentWorkbenchRequirementDraftSectionResponse",
+        "AgentWorkbenchRequirementDraftResponse",
+        "AgentWorkbenchFinalSummaryResponse",
+    ]:
+        assert schemas[schema_name]["additionalProperties"] is False
+    for runtime_private_schema_name in [
+        "RequirementDraft",
+        "RequirementDraftItem",
+        "RequirementDraftSection",
+        "RuntimeFinalSummary",
+    ]:
+        assert runtime_private_schema_name not in schemas
     assert schemas["WorkbenchSecurityAuditMetadataResponse"]["additionalProperties"] is False
     serialized_event_payload = json.dumps(schemas["WorkbenchEventResponse"]["properties"]["payload"], sort_keys=True)
     serialized_audit_metadata = json.dumps(
@@ -209,6 +223,16 @@ def test_agent_workbench_openapi_documents_problem_details_and_source_kind_enum(
     )
     assert "additionalProperties" not in serialized_event_payload
     assert "additionalProperties" not in serialized_audit_metadata
+
+
+def test_agent_workflow_start_openapi_does_not_accept_fresh_job_payload(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()["components"]["schemas"]["WorkflowStartRequest"]
+    assert set(schema.get("properties", {})).isdisjoint({"jobTitle", "jdText", "notes", "sourceIds"})
 
 
 def test_workbench_feature_gate_disables_workbench_routes_and_auth_routes_stay_removed(tmp_path: Path) -> None:

@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_agent_tool_adapter_exposes_shared_contract_tool_names() -> None:
-    from seektalent_conversation_agent.tools import AGENT_RUNTIME_TOOL_NAMES
+def test_agent_adapter_exposes_shared_service_action_names() -> None:
+    from seektalent_conversation_agent.service_actions import AGENT_SERVICE_ACTION_NAMES
 
-    assert AGENT_RUNTIME_TOOL_NAMES == (
+    assert AGENT_SERVICE_ACTION_NAMES == (
         "extract_requirements",
         "get_requirement_draft",
         "update_requirement_draft",
@@ -25,8 +25,8 @@ def test_agent_tool_adapter_exposes_shared_contract_tool_names() -> None:
     )
 
 
-def test_agent_tool_adapter_reads_snapshot_and_events_through_runtime_control_store(tmp_path: Path) -> None:
-    from seektalent_conversation_agent.tools import AgentToolAdapter
+def test_agent_service_action_adapter_reads_snapshot_and_events_through_runtime_control_store(tmp_path: Path) -> None:
+    from seektalent_conversation_agent.service_actions import AgentServiceActionAdapter
     from seektalent_runtime_control.models import RuntimeControlEventInput, RuntimeRunRecord, RuntimeRunSnapshot
     from seektalent_runtime_control.store import RuntimeControlStore
 
@@ -74,7 +74,7 @@ def test_agent_tool_adapter_reads_snapshot_and_events_through_runtime_control_st
             updated_at="2026-06-09T00:00:01.000000Z",
         ),
     )
-    adapter = AgentToolAdapter(runtime_store=store)
+    adapter = AgentServiceActionAdapter(runtime_store=store)
 
     snapshot = adapter.get_workflow_snapshot(runtime_run_id="runtime_run_1")
     events = adapter.list_workflow_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10)
