@@ -13,6 +13,7 @@
   overflow: hidden;
   padding: 13px 14px;
   position: absolute;
+  z-index: 0;
 }
 
 .strategy-graph-node[data-status="completed"] {

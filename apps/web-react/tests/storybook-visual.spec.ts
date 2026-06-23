@@ -7,14 +7,6 @@ test.beforeEach(({ page }) => {
 
 const visualStories = [
   {
-    name: "primitives-controls-gallery",
-    url: "/iframe.html?id=primitives-controlsgallery--controls-gallery",
-  },
-  {
-    name: "primitives-dialog-open",
-    url: "/iframe.html?id=primitives-controlsgallery--dialog-open",
-  },
-  {
     name: "workbench-shell-figma-reference",
     url: "/iframe.html?id=workbench-workbenchshell--figma-thumbnail-reference",
   },

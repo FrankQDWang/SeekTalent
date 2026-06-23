@@ -1,12 +1,15 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { useState } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Dialog } from "./Dialog";
 import { FieldInput } from "./FieldInput";
 import { FieldSelect } from "./FieldSelect";
 import { Skeleton } from "./Skeleton";
 import { Tabs } from "./Tabs";
 import { Toast } from "./Toast";
+
+afterEach(cleanup);
 
 describe("Workbench primitives", () => {
   it("renders typed field controls with stable labels and states", async () => {
@@ -68,6 +71,44 @@ describe("Workbench primitives", () => {
     await user.click(screen.getByRole("tab", { name: "候选人" }));
 
     expect(onValueChange).toHaveBeenCalledWith("candidates");
+  });
+
+  it("moves tab selection with keyboard navigation", async () => {
+    expect.hasAssertions();
+    const user = userEvent.setup();
+
+    function ControlledTabs() {
+      const [value, setValue] = useState("candidates");
+      return (
+        <Tabs
+          ariaLabel="右栏视图"
+          onValueChange={setValue}
+          tabs={[
+            { label: "候选人", value: "candidates" },
+            { label: "思考过程", value: "thinking" },
+            { label: "最终名单", value: "final" },
+          ]}
+          value={value}
+        />
+      );
+    }
+
+    render(<ControlledTabs />);
+
+    const candidatesTab = screen.getByRole("tab", { name: "候选人" });
+    candidatesTab.focus();
+    await user.keyboard("{ArrowRight}");
+
+    expect(screen.getByRole("tab", { name: "思考过程" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+
+    await user.keyboard("{End}");
+    expect(screen.getByRole("tab", { name: "最终名单" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
   });
 
   it("renders dialog, toast, and skeleton primitives with accessible states", () => {

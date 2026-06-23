@@ -11,93 +11,6 @@
   width: 100%;
 }
 
-.strategy-graph__timeline {
-  align-items: center;
-  background: rgb(255 255 255 / 0.82);
-  border-bottom: 1px solid #dfe5f2;
-  display: flex;
-  gap: 18px;
-  min-height: 58px;
-  padding: 10px 24px;
-}
-
-.strategy-graph__track {
-  flex: 1;
-  height: 34px;
-  min-width: 320px;
-  position: relative;
-}
-
-.strategy-graph__track::before {
-  background: #e3e8f5;
-  border-radius: 999px;
-  content: "";
-  height: 4px;
-  left: 0;
-  position: absolute;
-  right: 0;
-  top: 14px;
-}
-
-.strategy-graph__progress {
-  background: #6d63ff;
-  border-radius: 999px;
-  height: 4px;
-  left: 0;
-  position: absolute;
-  top: 14px;
-}
-
-.strategy-graph__tick {
-  color: #78849b;
-  font-size: 11px;
-  font-weight: 760;
-  position: absolute;
-  top: 1px;
-  transform: translateX(-50%);
-  white-space: nowrap;
-}
-
-.strategy-graph__tick::before {
-  background: #fff;
-  border: 2px solid #c9d2e6;
-  border-radius: 999px;
-  content: "";
-  display: block;
-  height: 9px;
-  margin: 9px auto 3px;
-  width: 9px;
-}
-
-.strategy-graph__tick[data-state="done"]::before {
-  background: #25bd75;
-  border-color: #25bd75;
-}
-
-.strategy-graph__tick[data-state="active"] {
-  color: #172036;
-}
-
-.strategy-graph__tick[data-state="active"]::before {
-  background: #3588ff;
-  border-color: #3588ff;
-  box-shadow: 0 0 0 4px rgb(53 136 255 / 0.16);
-}
-
-.strategy-graph__status {
-  align-items: center;
-  background: #fff;
-  border: 1px solid #d9dfed;
-  border-radius: 999px;
-  color: #59657c;
-  display: inline-flex;
-  flex: 0 0 auto;
-  font-size: 12px;
-  font-weight: 760;
-  min-height: 30px;
-  padding: 0 12px;
-}
-
 .strategy-graph__viewport {
   flex: 1;
   min-height: 0;
@@ -124,19 +37,24 @@
   overflow: visible;
   pointer-events: none;
   position: absolute;
+  z-index: 1;
 }
 
 .strategy-graph__edge {
   fill: none;
   marker-end: url("#strategy-graph-arrow");
-  stroke: #8d82ff;
+  stroke: #7f73ff;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2;
+  stroke-width: 2.4;
+}
+
+.strategy-graph__edge--root {
+  marker-end: none;
 }
 
 .strategy-graph__edges marker path {
-  fill: #8d82ff;
+  fill: #7f73ff;
 }
 
 .strategy-graph__job-card {
@@ -212,18 +130,5 @@
   .strategy-graph {
     height: 620px;
     min-height: 520px;
-  }
-
-  .strategy-graph__timeline {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 14px;
-  }
-
-  .strategy-graph__track {
-    flex: 0 0 34px;
-    height: 34px;
-    width: 100%;
   }
 }

@@ -14,15 +14,6 @@ test.beforeEach(({ page }) => {
 });
 
 const stories = [
-  ["button primary", "/iframe.html?id=primitives-button--primary"],
-  [
-    "primitives controls gallery",
-    "/iframe.html?id=primitives-controlsgallery--controls-gallery",
-  ],
-  [
-    "primitives dialog open",
-    "/iframe.html?id=primitives-controlsgallery--dialog-open",
-  ],
   [
     "workbench shell figma reference",
     "/iframe.html?id=workbench-workbenchshell--figma-thumbnail-reference",

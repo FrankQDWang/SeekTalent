@@ -105,9 +105,24 @@ describe("StrategyGraph", () => {
     expect(screen.getByText("第 1 轮 · Top Pool")).toBeVisible();
     expect(screen.getByText("第 1 轮 · 下一轮策略")).toBeVisible();
     expect(screen.getByText("猎聘")).toBeVisible();
+    expect(container.querySelector(".strategy-graph__timeline")).toBeNull();
+    expect(screen.queryByText("第 1 轮")).not.toBeInTheDocument();
+    expect(screen.queryByText("第 1 轮检索中")).not.toBeInTheDocument();
+    expect(screen.queryByText(/单轮检索|\d+ 轮检索/)).not.toBeInTheDocument();
     expect(screen.queryByText(/CTS/i)).not.toBeInTheDocument();
     expect(container.querySelector(".react-flow")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("检索策略图控制")).not.toBeInTheDocument();
+    expect(
+      container.querySelector('[data-edge-id="job-root->strategy-root"]'),
+    ).toHaveClass("strategy-graph__edge--root");
+    expect(
+      container.querySelector('[data-edge-id="job-root->strategy-root"]'),
+    ).toHaveAttribute("d", "M 238 213 H 316 V 109 H 340");
+    expect(
+      container.querySelector(
+        '[data-edge-id="requirements->round:1:phase:round_query:all"]',
+      ),
+    ).toHaveAttribute("d", "M 550 109 H 638");
   });
 
   it("does not select nodes or open detail UI when clicked", () => {
