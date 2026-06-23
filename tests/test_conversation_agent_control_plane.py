@@ -382,6 +382,11 @@ def test_agent_turn_routes_next_round_requirement_to_runtime_command(tmp_path: P
     )
 
     assert len(runner.calls) == 1
+    decision_prompt = str(runner.calls[0]["prompt"])
+    assert "Host handoff contract" in decision_prompt
+    assert "original user message as canonical extraction input" in decision_prompt
+    assert "normalized text as provenance" in decision_prompt
+    assert "Never claim that you executed a service action" in decision_prompt
     amendments = runtime_store.list_runtime_requirement_amendments(
         runtime_run_id="runtime_run_active",
         target_round_no=2,
