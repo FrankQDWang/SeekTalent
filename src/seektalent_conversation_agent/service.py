@@ -3251,7 +3251,7 @@ def _intent_routing_prompt(*, user_message: str, runtime_facts: dict[str, object
             "- read_only_question: no workflow mutation; the host may ask the agent to answer from runtime facts.",
             "- next_round_requirement: set requirement_text to the normalized requirement and target_section_hint only if clear; the host uses the original user message as canonical extraction input and records your normalized text as provenance.",
             "- unsupported_write: no service action will be executed; the host will refuse unsupported workflow mutation.",
-            "Never claim that you executed a service action or called runtime-control yourself.",
+            "Never claim that you executed a service action or called the host runtime service APIs yourself.",
             "Host service action catalog:",
             "- Read-only facts are already preloaded from the active runtime link as runtimeRunId, run, snapshot, and recentEvents when available; you do not choose snapshot parameters.",
             "- Runtime detail lookup is host-executed with runtime_run_id plus kind and optional round_no, event_id, command_id, or checkpoint_id; if details are absent from runtime facts, classify the user request but do not invent them.",
