@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Group, Panel, Separator } from "react-resizable-panels";
+import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import type {
   AgentWorkbenchConversationResponse,
   AgentWorkbenchRequirementDraftItem,
@@ -27,6 +27,11 @@ export type ConversationScreenCallbacks = {
 
 type ConversationScreenProps = ConversationScreenCallbacks & {
   view: AgentWorkbenchConversationResponse;
+};
+
+type ChatGraphLayout = Layout & {
+  chat: number;
+  graph: number;
 };
 
 export function ConversationScreen({
@@ -58,13 +63,15 @@ export function ConversationScreen({
       updatingItemIds={updatingRequirementItemIds}
     />
   ) : null;
-  const [savedLayout, setSavedLayout] = useState<
-    Record<string, number> | undefined
-  >(() => loadSavedChatGraphLayout());
+  const [savedLayout, setSavedLayout] = useState<ChatGraphLayout | undefined>(
+    () => loadSavedChatGraphLayout(),
+  );
   const handleLayoutChanged = useMemo(
-    () => (layout: Record<string, number>) => {
-      setSavedLayout(layout);
-      persistChatGraphLayout(layout);
+    () => (layout: Layout) => {
+      const chatGraphLayout = normalizeChatGraphLayout(layout);
+      if (chatGraphLayout === undefined) return;
+      setSavedLayout(chatGraphLayout);
+      persistChatGraphLayout(chatGraphLayout);
     },
     [],
   );
@@ -222,13 +229,14 @@ export function hasConversationWorkflowSurface(
 
 const CHAT_GRAPH_LAYOUT_STORAGE_KEY = "chat-graph-layout";
 
-function loadSavedChatGraphLayout(): Record<string, number> | undefined {
+function loadSavedChatGraphLayout(): ChatGraphLayout | undefined {
   try {
     if (typeof localStorage === "undefined") return undefined;
     const stored = localStorage.getItem(CHAT_GRAPH_LAYOUT_STORAGE_KEY);
     if (stored === null) return undefined;
     const parsed = JSON.parse(stored) as unknown;
-    if (isValidChatGraphLayout(parsed)) return parsed;
+    const layout = normalizeChatGraphLayout(parsed);
+    if (layout !== undefined) return layout;
     localStorage.removeItem(CHAT_GRAPH_LAYOUT_STORAGE_KEY);
     return undefined;
   } catch {
@@ -236,22 +244,27 @@ function loadSavedChatGraphLayout(): Record<string, number> | undefined {
   }
 }
 
-function isValidChatGraphLayout(
+function normalizeChatGraphLayout(
   layout: unknown,
-): layout is Record<string, number> {
+): ChatGraphLayout | undefined {
   if (layout === null || typeof layout !== "object") {
-    return false;
+    return undefined;
   }
   const values = layout as Record<string, unknown>;
-  return (
-    Number.isFinite(values.chat) &&
-    Number.isFinite(values.graph) &&
-    (values.chat as number) > 0 &&
-    (values.graph as number) > 0
-  );
+  if (
+    !isPositiveFiniteNumber(values.chat) ||
+    !isPositiveFiniteNumber(values.graph)
+  ) {
+    return undefined;
+  }
+  return { chat: values.chat, graph: values.graph };
 }
 
-function persistChatGraphLayout(layout: Record<string, number>) {
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function persistChatGraphLayout(layout: ChatGraphLayout) {
   try {
     if (typeof localStorage === "undefined") return;
     localStorage.setItem(CHAT_GRAPH_LAYOUT_STORAGE_KEY, JSON.stringify(layout));

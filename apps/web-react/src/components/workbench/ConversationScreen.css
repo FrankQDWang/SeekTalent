@@ -21,11 +21,14 @@
 }
 
 .conversation-view__workspace[data-workflow-surface="hidden"] {
-  display: block;
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .conversation-view__workspace[data-workflow-surface="hidden"]
   .conversation-view__panel--chat {
+  flex: 1;
   min-height: 100%;
 }
 
