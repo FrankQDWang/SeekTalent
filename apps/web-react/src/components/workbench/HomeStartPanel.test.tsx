@@ -83,4 +83,13 @@ describe("HomeStartPanel", () => {
       "上海 AI Agent 平台工程师，3 年以上 Python 后端经验，熟悉 RAG 和 workflow orchestration。",
     );
   });
+
+  it("renders with collapsing class when collapsing prop is true", () => {
+    expect.hasAssertions();
+
+    render(<HomeStartPanel collapsing onSubmit={vi.fn()} />);
+
+    const section = screen.getByRole("region", { name: "新建招聘任务" });
+    expect(section.className).toContain("home-start-panel--collapsing");
+  });
 });
