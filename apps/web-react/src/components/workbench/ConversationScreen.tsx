@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { Group, Panel, Separator } from "react-resizable-panels";
 import type {
   AgentWorkbenchConversationResponse,
   AgentWorkbenchRequirementDraftItem,
@@ -64,6 +65,16 @@ export function ConversationScreen({
       updatingItemIds={updatingRequirementItemIds}
     />
   ) : null;
+  const [savedLayout, setSavedLayout] = useState<Record<string, number> | undefined>(
+    () => loadSavedChatGraphLayout(),
+  );
+  const handleLayoutChanged = useMemo(
+    () => (layout: Record<string, number>) => {
+      setSavedLayout(layout);
+      persistChatGraphLayout(layout);
+    },
+    [],
+  );
 
   return (
     <>
@@ -79,7 +90,7 @@ export function ConversationScreen({
             <span>{actionErrorMessage}</span>
           </section>
         ) : null}
-        {workflowSurfaceVisible ? (
+        {compactWorkspace && workflowSurfaceVisible ? (
           <Tabs
             ariaLabel="工作区"
             className="conversation-view__tabs"
@@ -94,29 +105,107 @@ export function ConversationScreen({
             value={activePanel}
           />
         ) : null}
-        <div
-          className="conversation-view__workspace"
-          data-active-panel={activePanel}
-          data-workflow-surface={workflowSurfaceVisible ? "visible" : "hidden"}
-        >
-          <section
-            aria-labelledby="conversation-chat-tab"
-            className="conversation-view__panel conversation-view__panel--chat"
-            data-panel="chat"
-            id="conversation-panel-chat"
-            role="tabpanel"
+        {compactWorkspace && workflowSurfaceVisible ? (
+          <div
+            className="conversation-view__workspace"
+            data-active-panel={activePanel}
+            data-workflow-surface="visible"
           >
-            <Transcript groups={view.transcriptGroups}>
-              {requirementReviewPanel}
-            </Transcript>
-            <MessageComposer
-              disabled={!view.pendingActions.allowed.includes("submit_message")}
-              loading={submittingMessage}
-              onSubmit={onSubmitMessage}
-            />
-          </section>
-          {workflowSurfaceVisible ? (
-            <>
+            <section
+              aria-labelledby="conversation-chat-tab"
+              className="conversation-view__panel conversation-view__panel--chat"
+              data-panel="chat"
+              id="conversation-panel-chat"
+              role="tabpanel"
+            >
+              <Transcript groups={view.transcriptGroups}>
+                {requirementReviewPanel}
+              </Transcript>
+              <MessageComposer
+                disabled={!view.pendingActions.allowed.includes("submit_message")}
+                loading={submittingMessage}
+                onSubmit={onSubmitMessage}
+              />
+            </section>
+            <section
+              aria-labelledby="conversation-graph-tab"
+              className="conversation-view__panel conversation-view__panel--graph"
+              data-panel="graph"
+              id="conversation-panel-graph"
+              role="tabpanel"
+            >
+              {shouldMountGraph ? (
+                <StrategyGraph
+                  graph={view.strategyGraph}
+                  jobTitle={view.conversation.title}
+                  key={
+                    activePanel === "graph"
+                      ? "graph-active"
+                      : "graph-inactive"
+                  }
+                />
+              ) : null}
+            </section>
+            <section
+              aria-labelledby="conversation-candidates-tab"
+              className="conversation-view__panel conversation-view__panel--candidates"
+              data-panel="candidates"
+              id="conversation-panel-candidates"
+              role="tabpanel"
+            >
+              <ConversationScreenSide
+                onViewCandidateDetails={onViewCandidateDetails}
+                view={view}
+              />
+            </section>
+            <section
+              aria-labelledby="conversation-final-tab"
+              className="conversation-view__panel conversation-view__panel--final"
+              data-panel="final"
+              id="conversation-panel-final"
+              role="tabpanel"
+            >
+              <FinalReviewPanel view={view} />
+            </section>
+          </div>
+        ) : workflowSurfaceVisible ? (
+          <Group
+            className="workspace-group"
+            defaultLayout={savedLayout ?? undefined}
+            orientation="horizontal"
+            id="chat-graph-layout"
+            onLayoutChanged={handleLayoutChanged}
+          >
+            <Panel
+              className="workspace-panel workspace-panel--chat"
+              defaultSize={386}
+              id="chat"
+              maxSize="50%"
+              minSize={280}
+            >
+              <section
+                aria-labelledby="conversation-chat-tab"
+                className="conversation-view__panel conversation-view__panel--chat"
+                data-panel="chat"
+                id="conversation-panel-chat"
+                role="tabpanel"
+              >
+                <Transcript groups={view.transcriptGroups}>
+                  {requirementReviewPanel}
+                </Transcript>
+                <MessageComposer
+                  disabled={!view.pendingActions.allowed.includes("submit_message")}
+                  loading={submittingMessage}
+                  onSubmit={onSubmitMessage}
+                />
+              </section>
+            </Panel>
+            <Separator className="workspace-separator" />
+            <Panel
+              className="workspace-panel workspace-panel--graph"
+              id="graph"
+              minSize={400}
+            >
               <section
                 aria-labelledby="conversation-graph-tab"
                 className="conversation-view__panel conversation-view__panel--graph"
@@ -128,38 +217,35 @@ export function ConversationScreen({
                   <StrategyGraph
                     graph={view.strategyGraph}
                     jobTitle={view.conversation.title}
-                    key={
-                      activePanel === "graph"
-                        ? "graph-active"
-                        : "graph-inactive"
-                    }
+                    key="graph-active"
                   />
                 ) : null}
               </section>
-              <section
-                aria-labelledby="conversation-candidates-tab"
-                className="conversation-view__panel conversation-view__panel--candidates"
-                data-panel="candidates"
-                id="conversation-panel-candidates"
-                role="tabpanel"
-              >
-                <ConversationScreenSide
-                  onViewCandidateDetails={onViewCandidateDetails}
-                  view={view}
-                />
-              </section>
-              <section
-                aria-labelledby="conversation-final-tab"
-                className="conversation-view__panel conversation-view__panel--final"
-                data-panel="final"
-                id="conversation-panel-final"
-                role="tabpanel"
-              >
-                <FinalReviewPanel view={view} />
-              </section>
-            </>
-          ) : null}
-        </div>
+            </Panel>
+          </Group>
+        ) : (
+          <div
+            className="conversation-view__workspace"
+            data-workflow-surface="hidden"
+          >
+            <section
+              aria-labelledby="conversation-chat-tab"
+              className="conversation-view__panel conversation-view__panel--chat"
+              data-panel="chat"
+              id="conversation-panel-chat"
+              role="tabpanel"
+            >
+              <Transcript groups={view.transcriptGroups}>
+                {requirementReviewPanel}
+              </Transcript>
+              <MessageComposer
+                disabled={!view.pendingActions.allowed.includes("submit_message")}
+                loading={submittingMessage}
+                onSubmit={onSubmitMessage}
+              />
+            </section>
+          </div>
+        )}
       </div>
     </>
   );
@@ -216,6 +302,30 @@ const workPanels = [
   { id: "candidates", label: "Candidates" },
   { id: "final", label: "Final" },
 ] as const satisfies Array<{ id: WorkPanel; label: string }>;
+
+const CHAT_GRAPH_LAYOUT_STORAGE_KEY = "chat-graph-layout";
+
+function loadSavedChatGraphLayout(): Record<string, number> | undefined {
+  try {
+    if (typeof localStorage === "undefined") return undefined;
+    const stored = localStorage.getItem(CHAT_GRAPH_LAYOUT_STORAGE_KEY);
+    if (stored === null) return undefined;
+    const parsed = JSON.parse(stored) as unknown;
+    if (parsed !== null && typeof parsed === "object") return parsed as Record<string, number>;
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function persistChatGraphLayout(layout: Record<string, number>) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(CHAT_GRAPH_LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+  } catch {
+    // storage unavailable
+  }
+}
 
 export function ConversationScreenSide({
   defaultTab,

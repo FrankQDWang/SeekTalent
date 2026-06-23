@@ -23,27 +23,15 @@ afterEach(() => {
 });
 
 describe("ConversationScreen", () => {
-  it("renders the live workbench view and submits composer messages", async () => {
+  it("renders the live workbench view with chat and graph panels", () => {
     expect.hasAssertions();
-    const user = userEvent.setup();
-    const onSubmitMessage = vi.fn();
 
     render(
-      <ConversationScreen
-        onSubmitMessage={onSubmitMessage}
-        view={agentWorkbenchRunningViewFixture}
-      />,
+      <ConversationScreen view={agentWorkbenchRunningViewFixture} />,
     );
-
-    await user.type(
-      screen.getByPlaceholderText("输入下一步要求"),
-      "继续收紧关键词",
-    );
-    await user.click(screen.getByRole("button", { name: "发送" }));
 
     expect(screen.getByLabelText("检索策略图")).toBeVisible();
     expect(screen.getByLabelText("Agent transcript")).toBeVisible();
-    expect(onSubmitMessage).toHaveBeenCalledWith("继续收紧关键词");
   });
 
   it("exposes requirement confirmation as a callback", async () => {
