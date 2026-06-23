@@ -1,3 +1,4 @@
+import { useMemo, useRef, useState, useEffect } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -5,11 +6,15 @@ import {
   CircleCheck,
   LoaderCircle,
 } from "lucide-react";
+import { prepare, layout } from "@chenglou/pretext";
 import type {
   AgentWorkbenchTranscriptEvent,
   AgentWorkbenchTranscriptGroup,
 } from "../../lib/api/agentWorkbenchTypes";
 import { TranscriptOperationEvent } from "./TranscriptOperationEvent";
+
+const FONT_STRING = "14px system-ui, -apple-system, sans-serif";
+const MIN_PRETEXT_CHARS = 200;
 
 type TranscriptRunGroupProps = {
   collapsed: boolean;
@@ -51,9 +56,39 @@ export function TranscriptRunGroup({
 }
 
 function TranscriptEvent({ event }: { event: AgentWorkbenchTranscriptEvent }) {
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
   if (isOperationLikeEvent(event)) {
     return <TranscriptOperationEvent event={event} />;
   }
+
+  const summaryText = event.summary ?? event.payload.summary ?? null;
+  const shouldMeasure =
+    summaryText !== null && summaryText.length > MIN_PRETEXT_CHARS;
+
+  const prepared = useMemo(
+    () => (shouldMeasure ? prepare(summaryText, FONT_STRING) : null),
+    [summaryText, shouldMeasure],
+  );
+
+  const measuredHeight = useMemo(() => {
+    if (prepared === null || containerWidth === null) return undefined;
+    const { height } = layout(prepared, containerWidth, 20);
+    return height;
+  }, [prepared, containerWidth]);
+
+  useEffect(() => {
+    if (!shouldMeasure) return;
+    const element = bodyRef.current;
+    if (!element) return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) setContainerWidth(entry.contentRect.width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [shouldMeasure]);
 
   return (
     <article
@@ -65,13 +100,21 @@ function TranscriptEvent({ event }: { event: AgentWorkbenchTranscriptEvent }) {
       <div className="transcript-event__marker">
         <StatusGlyph status={event.status ?? "pending"} />
       </div>
-      <div className="transcript-event__body">
+      <div className="transcript-event__body" ref={bodyRef}>
         <div className="transcript-event__header">
           <h3>{event.label}</h3>
           <time dateTime={event.createdAt}>{formatTime(event.createdAt)}</time>
         </div>
-        {(event.summary ?? event.payload.summary) ? (
-          <p>{event.summary ?? event.payload.summary}</p>
+        {summaryText !== null ? (
+          <p
+            style={
+              measuredHeight !== undefined
+                ? { minHeight: measuredHeight }
+                : undefined
+            }
+          >
+            {summaryText}
+          </p>
         ) : null}
       </div>
     </article>
