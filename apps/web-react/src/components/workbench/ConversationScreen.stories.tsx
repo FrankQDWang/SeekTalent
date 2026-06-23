@@ -82,6 +82,12 @@ export const Archived: Story = {
   },
 };
 
+export const ResizableLayout: Story = {
+  args: {
+    view: agentWorkbenchRunningViewFixture,
+  },
+};
+
 export const WorkbenchShellComposed: Story = {
   render: ({ view }) => (
     <ConversationShell
