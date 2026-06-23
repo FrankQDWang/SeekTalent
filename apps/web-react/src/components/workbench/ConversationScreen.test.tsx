@@ -34,6 +34,32 @@ describe("ConversationScreen", () => {
     expect(screen.getByLabelText("Agent transcript")).toBeVisible();
   });
 
+  it("renders a resize separator between chat and graph when not compact", () => {
+    expect.hasAssertions();
+
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      addEventListener,
+      addListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      matches: false,
+      media: query,
+      onchange: null,
+      removeEventListener,
+      removeListener: vi.fn(),
+    }));
+
+    render(
+      <ConversationScreen view={agentWorkbenchRunningViewFixture} />,
+    );
+
+    const separator = document.querySelector(".workspace-separator");
+    expect(separator).not.toBeNull();
+    expect(screen.getByLabelText("检索策略图")).toBeVisible();
+  });
+
   it("exposes requirement confirmation as a callback", async () => {
     expect.hasAssertions();
     const user = userEvent.setup();
