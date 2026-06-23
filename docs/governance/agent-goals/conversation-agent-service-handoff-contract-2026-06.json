@@ -1,0 +1,37 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Clarify the Conversation Agent service handoff contract.",
+  "rationale": "This change intentionally updates both the registered Conversation Agent prompt and the active runtime intent prompt so the model sees one consistent contract: it classifies user intent and the host executes deterministic service actions for read-only detail lookup, requirement extraction, next-round requirement submission, and finalization.",
+  "touched_layers": [
+    "other",
+    "prompts"
+  ],
+  "red_files": [
+    "src/seektalent/prompts/conversation_agent.md",
+    "src/seektalent_conversation_agent/service.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_conversation_agent/service.py"
+  ],
+  "line_count_rationale": "The service file is already above the production line-count redline. This PR keeps the active runtime intent prompt in the existing Conversation Agent service path instead of adding a parallel classifier or weakening the service-action boundary.",
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run pytest tests/test_prompt_safety.py tests/test_llm_input_prompts.py -q",
+    "uv run pytest tests/test_conversation_agent_prompt_contract.py tests/test_conversation_agent_control_plane.py -q",
+    "uv run ruff check src/seektalent_conversation_agent/service.py tests/test_conversation_agent_prompt_contract.py tests/test_conversation_agent_control_plane.py",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "ambiguous prompt text that describes service actions without naming host-owned inputs",
+    "active runtime intent prompts that omit the host service handoff contract"
+  ],
+  "risks": [
+    "The model must not believe it directly executes workflow tools.",
+    "Next-round requirement extraction must continue to use the original user message as canonical input.",
+    "Read-only runtime questions must answer only from host-supplied runtime facts and detail lookups."
+  ]
+}
