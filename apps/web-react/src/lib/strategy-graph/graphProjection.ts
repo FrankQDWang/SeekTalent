@@ -28,21 +28,15 @@ export type StrategyTimelineEdge = {
   path: string;
 };
 
-export type StrategyTimelineRound = {
-  roundNo: number;
-  label: string;
-  state: "done" | "active" | "pending";
-  x: number;
-};
-
 export type StrategyTimelineProjection = {
   nodes: StrategyTimelineNode[];
   edges: StrategyTimelineEdge[];
-  rounds: StrategyTimelineRound[];
   width: number;
   height: number;
-  progressPercent: number;
-  activeLabel: string;
+};
+
+export type StrategyTimelineProjectionOptions = {
+  reserveRootColumn?: boolean;
 };
 
 const NODE_WIDTH = 210;
@@ -50,10 +44,12 @@ const NODE_HEIGHT = 90;
 const ROUND_Y_START = 64;
 const ROUND_Y_GAP = 168;
 const START_X = 28;
-const REQUIREMENTS_X_WITH_ROOT = 258;
-const ROUND_STAGE_START_X = 500;
-const STAGE_X_GAP = 218;
+const REQUIREMENTS_X_WITH_ROOT = 340;
+const ROUND_STAGE_START_X = 638;
+const STAGE_X_GAP = 286;
 const CANVAS_PADDING = 36;
+const NEXT_ROUND_LOOP_LEFT_GAP = 52;
+const NEXT_ROUND_LOOP_TOP_GAP = 24;
 
 const stageOrder = new Map<string, number>([
   ["round_query", 0],
@@ -72,10 +68,12 @@ const stageOrder = new Map<string, number>([
 
 export function projectStrategyTimelineGraph(
   graph: AgentStrategyGraph,
+  options: StrategyTimelineProjectionOptions = {},
 ): StrategyTimelineProjection {
   const rootNodes = graph.nodes.filter((node) => node.roundNo == null);
   const requirements = rootNodes.find((node) => node.kind === "requirements");
   const messageRoot = rootNodes.find((node) => node.kind === "message");
+  const reserveRootColumn = options.reserveRootColumn === true || !!messageRoot;
   const rounds = sortedRoundNos(graph.nodes);
   const visibleNodes: StrategyTimelineNode[] = [];
 
@@ -87,7 +85,7 @@ export function projectStrategyTimelineGraph(
     visibleNodes.push(
       timelineNode(
         requirements,
-        messageRoot ? REQUIREMENTS_X_WITH_ROOT : START_X,
+        reserveRootColumn ? REQUIREMENTS_X_WITH_ROOT : START_X,
         firstRoundY,
       ),
     );
@@ -123,21 +121,11 @@ export function projectStrategyTimelineGraph(
     }),
     { width: 960, height: 420 },
   );
-  const timelineRounds = rounds.map((roundNo, index) => ({
-    roundNo,
-    label: `第 ${String(roundNo)} 轮`,
-    state: roundState(graph.nodes, roundNo),
-    x: rounds.length === 1 ? 0 : (index / (rounds.length - 1)) * 100,
-  }));
-
   return {
     nodes: visibleNodes,
     edges: visibleEdges,
-    rounds: timelineRounds,
     width: extents.width,
     height: extents.height,
-    progressPercent: progressPercent(timelineRounds),
-    activeLabel: activeLabel(timelineRounds),
   };
 }
 
@@ -252,51 +240,14 @@ function sourceTitle(sourceKind: AgentGraphNode["sourceKind"]): string {
   return "";
 }
 
-function roundState(
-  nodes: AgentGraphNode[],
-  roundNo: number,
-): StrategyTimelineRound["state"] {
-  const statuses = nodes
-    .filter((node) => node.roundNo === roundNo)
-    .map((node) => node.status);
-  if (statuses.some((status) => status === "running")) {
-    return "active";
-  }
-  if (statuses.some((status) => status === "pending")) {
-    return "pending";
-  }
-  return "done";
-}
-
-function progressPercent(rounds: StrategyTimelineRound[]): number {
-  if (rounds.length === 0) {
-    return 0;
-  }
-  const activeIndex = rounds.findIndex((round) => round.state === "active");
-  if (activeIndex >= 0) {
-    return (activeIndex / Math.max(1, rounds.length - 1)) * 100;
-  }
-  const completedCount = rounds.filter(
-    (round) => round.state === "done",
-  ).length;
-  return Math.min(100, (completedCount / rounds.length) * 100);
-}
-
-function activeLabel(rounds: StrategyTimelineRound[]): string {
-  const active = rounds.find((round) => round.state === "active");
-  if (active) {
-    return `${active.label}检索中`;
-  }
-  if (rounds.length > 0 && rounds.every((round) => round.state === "done")) {
-    return "检索完成";
-  }
-  return "等待检索进度";
-}
-
 function edgePath(
   from: StrategyTimelineNode,
   to: StrategyTimelineNode,
 ): string {
+  if (isNextRoundLoopEdge(from.node, to.node)) {
+    return nextRoundLoopPath(from, to);
+  }
+
   const startX = from.x + from.width;
   const startY = from.y + from.height / 2;
   const endX = to.x;
@@ -306,6 +257,49 @@ function edgePath(
   }
   const elbowX = Math.max(startX + 36, Math.min(startX + 132, endX - 48));
   return ["M", startX, startY, "H", elbowX, "V", endY, "H", endX]
+    .map(String)
+    .join(" ");
+}
+
+function isNextRoundLoopEdge(
+  from: AgentGraphNode,
+  to: AgentGraphNode,
+): boolean {
+  return (
+    typeof from.roundNo === "number" &&
+    typeof to.roundNo === "number" &&
+    to.roundNo === from.roundNo + 1 &&
+    isFeedbackStage(from) &&
+    isQueryStage(to)
+  );
+}
+
+function isFeedbackStage(node: AgentGraphNode): boolean {
+  const stage = node.stage ?? node.phase ?? "";
+  return stage === "feedback" || stage === "reflection";
+}
+
+function isQueryStage(node: AgentGraphNode): boolean {
+  const stage = node.stage ?? node.phase ?? "";
+  return stage === "round_query" || stage === "query";
+}
+
+function nextRoundLoopPath(
+  from: StrategyTimelineNode,
+  to: StrategyTimelineNode,
+): string {
+  const startX = from.x + from.width / 2;
+  const endX = to.x;
+  const endY = to.y + to.height / 2;
+  const leftX = Math.max(CANVAS_PADDING, endX - NEXT_ROUND_LOOP_LEFT_GAP);
+  const gapTop = from.y + from.height;
+  const gapBottom = to.y;
+  const routeY =
+    gapBottom > gapTop
+      ? Math.max(gapTop + 12, gapBottom - NEXT_ROUND_LOOP_TOP_GAP)
+      : gapTop;
+
+  return ["M", startX, routeY, "H", leftX, "V", endY, "H", endX]
     .map(String)
     .join(" ");
 }

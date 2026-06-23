@@ -13,8 +13,10 @@ type StrategyGraphProps = {
 };
 
 export function StrategyGraph({ graph, jobTitle = null }: StrategyGraphProps) {
-  const projection = projectStrategyTimelineGraph(graph);
   const rootCard = jobTitle ? jobRootCard(jobTitle, graph) : null;
+  const projection = projectStrategyTimelineGraph(graph, {
+    reserveRootColumn: rootCard !== null,
+  });
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [viewportWidth, setViewportWidth] = useState(0);
   const canvasWidth = Math.max(
@@ -53,95 +55,74 @@ export function StrategyGraph({ graph, jobTitle = null }: StrategyGraphProps) {
       {projection.nodes.length === 0 && rootCard === null ? (
         <div className="strategy-graph__empty">等待检索策略生成</div>
       ) : (
-        <>
-          <div className="strategy-graph__timeline" aria-hidden="true">
-            <div className="strategy-graph__track">
-              <span
-                className="strategy-graph__progress"
-                style={{ width: `${String(projection.progressPercent)}%` }}
-              />
-              {projection.rounds.map((round) => (
-                <span
-                  className="strategy-graph__tick"
-                  data-state={round.state}
-                  key={round.roundNo}
-                  style={{ left: `${String(round.x)}%` }}
-                >
-                  {round.label}
-                </span>
-              ))}
-            </div>
-            <span className="strategy-graph__status">
-              {projection.activeLabel}
-            </span>
-          </div>
+        <div
+          aria-label="检索策略图画布"
+          className="strategy-graph__viewport"
+          ref={viewportRef}
+          tabIndex={0}
+        >
           <div
-            aria-label="检索策略图画布"
-            className="strategy-graph__viewport"
-            ref={viewportRef}
-            tabIndex={0}
+            className="strategy-graph__canvas-frame"
+            style={{
+              height: scaledCanvasHeight,
+            }}
           >
             <div
-              className="strategy-graph__canvas-frame"
+              className="strategy-graph__canvas"
               style={{
-                height: scaledCanvasHeight,
+                height: canvasHeight,
+                transform: `scale(${String(canvasScale)})`,
+                width: canvasWidth,
               }}
             >
-              <div
-                className="strategy-graph__canvas"
-                style={{
-                  height: canvasHeight,
-                  transform: `scale(${String(canvasScale)})`,
-                  width: canvasWidth,
-                }}
+              <svg
+                aria-hidden="true"
+                className="strategy-graph__edges"
+                height={canvasHeight}
+                viewBox={[
+                  "0",
+                  "0",
+                  String(canvasWidth),
+                  String(canvasHeight),
+                ].join(" ")}
+                width={canvasWidth}
               >
-                <svg
-                  aria-hidden="true"
-                  className="strategy-graph__edges"
-                  height={canvasHeight}
-                  viewBox={[
-                    "0",
-                    "0",
-                    String(canvasWidth),
-                    String(canvasHeight),
-                  ].join(" ")}
-                  width={canvasWidth}
-                >
-                  <defs>
-                    <marker
-                      id="strategy-graph-arrow"
-                      markerHeight="8"
-                      markerWidth="8"
-                      orient="auto"
-                      refX="7"
-                      refY="4"
-                      viewBox="0 0 8 8"
-                    >
-                      <path d="M 0 0 L 8 4 L 0 8 z" />
-                    </marker>
-                  </defs>
-                  {rootCard && projection.nodes[0] ? (
-                    <path
-                      className="strategy-graph__edge"
-                      d={rootToFirstPath(rootCard, projection.nodes[0])}
-                    />
-                  ) : null}
-                  {projection.edges.map((edge) => (
-                    <path
-                      className="strategy-graph__edge"
-                      d={edge.path}
-                      key={edge.edge.edgeId}
-                    />
-                  ))}
-                </svg>
-                {rootCard ? <JobRootCard item={rootCard} /> : null}
-                {projection.nodes.map((node) => (
-                  <StrategyGraphNode item={node} key={node.node.nodeId} />
+                <defs>
+                  <marker
+                    id="strategy-graph-arrow"
+                    markerHeight="8"
+                    markerWidth="8"
+                    orient="auto"
+                    refX="7"
+                    refY="4"
+                    viewBox="0 0 8 8"
+                  >
+                    <path d="M 0 0 L 8 4 L 0 8 z" />
+                  </marker>
+                </defs>
+                {rootCard && projection.nodes[0] ? (
+                  <path
+                    className="strategy-graph__edge strategy-graph__edge--root"
+                    data-edge-id="job-root->strategy-root"
+                    d={rootToFirstPath(rootCard, projection.nodes[0])}
+                  />
+                ) : null}
+                {projection.edges.map((edge) => (
+                  <path
+                    className="strategy-graph__edge"
+                    data-edge-id={edge.edge.edgeId}
+                    d={edge.path}
+                    key={edge.edge.edgeId}
+                  />
                 ))}
-              </div>
+              </svg>
+              {rootCard ? <JobRootCard item={rootCard} /> : null}
+              {projection.nodes.map((node) => (
+                <StrategyGraphNode item={node} key={node.node.nodeId} />
+              ))}
             </div>
           </div>
-        </>
+        </div>
       )}
     </section>
   );
@@ -203,23 +184,13 @@ function graphBackedRootSummary(graph: AgentStrategyGraph): string | null {
         ),
     ),
   );
-  const roundCount = new Set(
-    graph.nodes
-      .map((node) => node.roundNo)
-      .filter((roundNo): roundNo is number => typeof roundNo === "number"),
-  ).size;
-  const parts: string[] = [];
   if (sourceKinds.length === 1) {
-    parts.push(sourceKinds[0] === "liepin" ? "猎聘来源" : "CTS 实验来源");
-  } else if (sourceKinds.length > 1) {
-    parts.push("多来源");
+    return sourceKinds[0] === "liepin" ? "猎聘来源" : "CTS 实验来源";
   }
-  if (roundCount > 1) {
-    parts.push(`${String(roundCount)} 轮检索`);
-  } else if (roundCount === 1) {
-    parts.push("单轮检索");
+  if (sourceKinds.length > 1) {
+    return "多来源";
   }
-  return parts.length > 0 ? parts.join(" · ") : null;
+  return null;
 }
 
 function rootToFirstPath(
@@ -233,7 +204,7 @@ function rootToFirstPath(
   const startY = root.y + root.height / 2;
   const endX = firstNode.x;
   const endY = firstNode.y + firstNode.height / 2;
-  const elbowX = startX + 84;
+  const elbowX = Math.min(startX + 84, endX - 24);
   return ["M", startX, startY, "H", elbowX, "V", endY, "H", endX]
     .map(String)
     .join(" ");

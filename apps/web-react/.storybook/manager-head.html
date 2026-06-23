@@ -1,0 +1,14 @@
+<script>
+  (() => {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("statuses")) {
+      return;
+    }
+
+    url.searchParams.delete("statuses");
+    if (url.searchParams.get("tags") === "") {
+      url.searchParams.delete("tags");
+    }
+    window.location.replace(url.toString());
+  })();
+</script>

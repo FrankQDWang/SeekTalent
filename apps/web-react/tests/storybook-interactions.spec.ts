@@ -5,6 +5,43 @@ test.beforeEach(({ page }) => {
   failOnPageProblems(page);
 });
 
+test("storybook index only exposes product UI stories", async ({ request }) => {
+  const response = await request.get("/index.json");
+
+  expect(response.ok()).toBe(true);
+  const storyIndex = (await response.json()) as {
+    entries?: Record<string, { id?: string; title?: string }>;
+    stories?: Record<string, { id?: string; title?: string }>;
+  };
+  const entries = Object.values(storyIndex.entries ?? storyIndex.stories ?? {});
+  const primitiveEntries = entries.filter(
+    (entry) =>
+      entry.id?.startsWith("primitives-") ||
+      entry.title?.startsWith("Primitives/"),
+  );
+
+  expect(primitiveEntries).toEqual([]);
+});
+
+test("manager clears stale status filters from shared story URLs", async ({
+  page,
+}) => {
+  await page.goto(
+    "/?path=/story/workbench-strategygraphcanvas--search-strategy&statuses=modified;new&tags=",
+  );
+
+  await expect
+    .poll(() => new URL(page.url()).searchParams.has("statuses"))
+    .toBe(false);
+  await expect(page.getByText("No stories found")).toBeHidden();
+  await expect(page.locator("#storybook-preview-iframe")).toBeVisible();
+  await expect(
+    page
+      .frameLocator("#storybook-preview-iframe")
+      .getByRole("region", { name: "检索策略图" }),
+  ).toBeVisible();
+});
+
 test("strategy graph story covers canonical runtime swimlanes", async ({
   page,
 }) => {
@@ -20,9 +57,18 @@ test("strategy graph story covers canonical runtime swimlanes", async ({
   await expect(graph.getByText("第 3 轮 · 猎聘检索")).toBeVisible();
   await expect(graph.getByText("第 4 轮 · Top Pool")).toBeVisible();
   await expect(graph.getByText("第 4 轮 · 下一轮策略")).toBeVisible();
+  await expect(graph.locator(".strategy-graph__timeline")).toHaveCount(0);
+  await expect(graph.getByText("第 1 轮", { exact: true })).toHaveCount(0);
+  await expect(graph.getByText(/第 \d+ 轮检索中/)).toHaveCount(0);
+  await expect(graph.getByText(/单轮检索|\d+ 轮检索/)).toHaveCount(0);
   await expect(
     graph.locator('.strategy-graph-node[data-source="liepin"]'),
   ).toHaveCount(4);
+  await expect(
+    graph.locator(
+      '[data-edge-id="round:1:phase:feedback:all->round:2:phase:round_query:all"]',
+    ),
+  ).toHaveAttribute("d", "M 1601 208 H 586 V 277 H 638");
   await expect
     .poll(async () =>
       graph
@@ -149,28 +195,6 @@ test("composer draft story accepts and clears submitted input", async ({
   await submitButton.click();
 
   await expect(composer).toHaveValue("");
-});
-
-test("primitive tabs support keyboard navigation", async ({ page }) => {
-  await openStory(
-    page,
-    "/iframe.html?id=primitives-controlsgallery--controls-gallery",
-  );
-
-  const candidatesTab = page.getByRole("tab", { name: "候选人" });
-  await candidatesTab.focus();
-  await candidatesTab.press("ArrowRight");
-
-  await expect(page.getByRole("tab", { name: "思考过程" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
-
-  await page.keyboard.press("End");
-  await expect(page.getByRole("tab", { name: "最终名单" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
 });
 
 async function openStory(page: Page, url: string) {
