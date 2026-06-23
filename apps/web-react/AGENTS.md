@@ -3,7 +3,7 @@
 ## React Agent Workbench Rules
 
 - Load and apply the `impeccable` skill before implementing, reviewing, or polishing React UI components in this app.
-- Treat `apps/web-react/DESIGN.md`, the WTS assets, the local Figma export metadata, and the Codex transcript reference screenshots as the active design baseline.
+- Treat `docs/superpowers/artifacts/react-agent-workbench-design/` as the active visual baseline: WTS and Figma assets are the Workbench standard, while the seven Codex transcript screenshots are the Transcript standard.
 - Do not use retired legacy UI documents or deleted legacy frontend behavior as design source material.
 - This app is a breaking pre-1.0 replacement. Do not preserve old frontend compatibility paths.
 - React must consume typed BFF DTOs and semantic stream events only. Do not parse raw runtime/provider payloads, raw shell output, source payloads, or localized display strings.

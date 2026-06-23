@@ -154,7 +154,7 @@ function visibleRoundNodes(nodes: AgentGraphNode[]): AgentGraphNode[] {
     return laneNodes;
   }
 
-  return nodes.filter((node) => node.kind === "round");
+  return [];
 }
 
 function compareRoundStageNodes(left: AgentGraphNode, right: AgentGraphNode) {

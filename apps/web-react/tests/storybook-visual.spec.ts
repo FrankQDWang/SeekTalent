@@ -105,6 +105,9 @@ for (const story of visualStories) {
     await waitForStoryRendered(page);
     await page.evaluate(() => document.fonts.ready.then(() => undefined));
     await waitForStoryReady(page);
+    if (story.name === "workbench-resizable-layout") {
+      await expectResizableLayoutFillsVisibleWorkspace(page);
+    }
 
     await expect(page.locator("#storybook-root")).toHaveScreenshot(
       `${story.name}.png`,
@@ -170,6 +173,26 @@ async function waitForStoryRendered(page: Page) {
     undefined,
     { timeout: 15_000 },
   );
+}
+
+async function expectResizableLayoutFillsVisibleWorkspace(page: Page) {
+  const viewport = page.viewportSize();
+  const rootBox = await page.locator("#storybook-root").boundingBox();
+  if (!viewport || !rootBox) {
+    throw new Error("Storybook viewport was not available");
+  }
+
+  const graphBox = await page
+    .locator(".conversation-view__panel--graph .strategy-graph")
+    .boundingBox();
+  if (!graphBox) {
+    throw new Error("Desktop graph panel was not available");
+  }
+
+  expect(Math.abs(graphBox.y - rootBox.y)).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(graphBox.y + graphBox.height - (rootBox.y + rootBox.height)),
+  ).toBeLessThanOrEqual(1);
 }
 
 async function waitForStoryReady(page: Page) {

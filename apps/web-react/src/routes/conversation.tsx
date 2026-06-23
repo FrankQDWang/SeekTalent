@@ -9,7 +9,10 @@ import {
 } from "../components/workbench/ConversationScreen";
 import { ConversationShell } from "../components/workbench/ConversationShell";
 import { CandidateDetailDrawer } from "../components/workbench/CandidateDetailDrawer";
-import { HomeStartPanel, type HomeStartPanelSubmitInput } from "../components/workbench/HomeStartPanel";
+import {
+  HomeStartPanel,
+  type HomeStartPanelSubmitInput,
+} from "../components/workbench/HomeStartPanel";
 import {
   useAmendAgentWorkbenchRequirementFromText,
   useConfirmAgentWorkbenchRequirements,
@@ -41,15 +44,31 @@ function WorkbenchRoute() {
     return <NewConversationFlow />;
   }
 
-  return <ExistingConversationFlow key={conversationId} conversationId={conversationId} />;
+  return (
+    <ExistingConversationFlow
+      key={conversationId}
+      conversationId={conversationId}
+    />
+  );
 }
 
 function NewConversationFlow() {
   const [collapsing, setCollapsing] = useState(false);
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const collapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate({ from: "/conversations/$conversationId" });
   const conversationsQuery = useAgentWorkbenchConversations();
-  const createConversationMutation = useCreateAgentWorkbenchConversationFromJd();
+  const createConversationMutation =
+    useCreateAgentWorkbenchConversationFromJd();
   const [homeErrorMessage, setHomeErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (collapseTimeoutRef.current !== null) {
+        clearTimeout(collapseTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const onHomeSubmit = async (input: HomeStartPanelSubmitInput) => {
     setHomeErrorMessage(null);
@@ -58,14 +77,27 @@ function NewConversationFlow() {
         jobDescription: input.jobDescription,
         jobTitle: input.jobTitle,
       });
-      setCollapsing(true);
-      setTimeout(() => {
-        navigate({
+      const navigateToConversation = () => {
+        void navigate({
           params: { conversationId: result.conversationId },
           to: "/conversations/$conversationId",
           replace: true,
         });
-      }, 500);
+      };
+
+      if (prefersReducedMotion) {
+        navigateToConversation();
+        return;
+      }
+
+      setCollapsing(true);
+      if (collapseTimeoutRef.current !== null) {
+        clearTimeout(collapseTimeoutRef.current);
+      }
+      collapseTimeoutRef.current = setTimeout(() => {
+        collapseTimeoutRef.current = null;
+        navigateToConversation();
+      }, HOME_START_PANEL_COLLAPSE_MS);
     } catch (error) {
       setHomeErrorMessage(safeErrorMessage(error));
       throw error;
@@ -85,7 +117,7 @@ function NewConversationFlow() {
       rail={
         conversationsQuery.isSuccess ? (
           <ConversationList
-            conversations={conversationsQuery.data?.conversations ?? []}
+            conversations={conversationsQuery.data.conversations}
           />
         ) : (
           <ConversationList />
@@ -93,6 +125,41 @@ function NewConversationFlow() {
       }
     />
   );
+}
+
+const HOME_START_PANEL_COLLAPSE_MS = 500;
+
+function usePrefersReducedMotion(): boolean {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
+    reducedMotionMatches(),
+  );
+
+  useEffect(() => {
+    const media = reducedMotionMedia();
+    if (media === null) {
+      return;
+    }
+    const update = () => setPrefersReducedMotion(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+
+  return prefersReducedMotion;
+}
+
+function reducedMotionMatches(): boolean {
+  return reducedMotionMedia()?.matches ?? false;
+}
+
+function reducedMotionMedia(): MediaQueryList | null {
+  if (
+    typeof window === "undefined" ||
+    typeof window.matchMedia !== "function"
+  ) {
+    return null;
+  }
+  return window.matchMedia("(prefers-reduced-motion: reduce)");
 }
 
 function ExistingConversationFlow({
@@ -107,17 +174,26 @@ function ExistingConversationFlow({
     [conversationId],
   );
   const requirementMutationChainRef = useRef<Promise<void>>(Promise.resolve());
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
-  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(null);
-  const [updatingRequirementItemIds, setUpdatingRequirementItemIds] = useState<string[]>([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    null,
+  );
+  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
+    null,
+  );
+  const [updatingRequirementItemIds, setUpdatingRequirementItemIds] = useState<
+    string[]
+  >([]);
   const detailQuery = useAgentWorkbenchCandidateDetail(
     conversationId,
     selectedCandidateId,
   );
   const submitMessageMutation = useSubmitAgentWorkbenchMessage(conversationId);
-  const confirmRequirementsMutation = useConfirmAgentWorkbenchRequirements(conversationId);
-  const updateRequirementMutation = useUpdateAgentWorkbenchRequirementDraft(conversationId);
-  const amendRequirementMutation = useAmendAgentWorkbenchRequirementFromText(conversationId);
+  const confirmRequirementsMutation =
+    useConfirmAgentWorkbenchRequirements(conversationId);
+  const updateRequirementMutation =
+    useUpdateAgentWorkbenchRequirementDraft(conversationId);
+  const amendRequirementMutation =
+    useAmendAgentWorkbenchRequirementFromText(conversationId);
   const selectedCandidate = useMemo(
     () =>
       query.data?.candidates.find(
@@ -263,7 +339,6 @@ function ExistingConversationFlow({
             onToggleRequirementItem={(item, selected) => {
               void onToggleRequirementItem(item, selected);
             }}
-            onViewCandidateDetails={viewCandidateDetails}
             submittingMessage={submitMessageMutation.isPending}
             updatingRequirementItemIds={updatingRequirementItemIds}
             view={view}

@@ -15,17 +15,6 @@ const strategyGraph: AgentStrategyGraph = {
       sourceKind: "all",
     },
     {
-      nodeId: "round:1",
-      kind: "round",
-      label: "Round 1",
-      summary: "AI agent platform engineer",
-      status: "running",
-      roundNo: 1,
-      phase: "round",
-      stage: "round_summary",
-      sourceKind: "all",
-    },
-    {
       nodeId: "round:1:phase:round_query:all",
       kind: "phase",
       label: "round_query",

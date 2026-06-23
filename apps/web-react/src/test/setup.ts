@@ -1,9 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 
 if (typeof globalThis.ResizeObserver === "undefined") {
-  globalThis.ResizeObserver = class ResizeObserver {
+  class TestResizeObserver {
     observe() {}
     unobserve() {}
     disconnect() {}
-  } as unknown as typeof ResizeObserver;
+  }
+
+  globalThis.ResizeObserver = TestResizeObserver;
 }

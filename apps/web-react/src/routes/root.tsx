@@ -25,7 +25,7 @@ function IndexRedirect() {
   const navigate = useNavigate({ from: "/" });
 
   useEffect(() => {
-    navigate({ to: "/conversations/new" as never, replace: true });
+    void navigate({ to: "/conversations/new" as never, replace: true });
   }, [navigate]);
 
   return null;

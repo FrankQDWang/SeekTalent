@@ -197,6 +197,7 @@
 
 .home-start-panel--collapsing {
   animation: home-panel-collapse 500ms ease forwards;
+  pointer-events: none;
 }
 
 @keyframes home-panel-collapse {

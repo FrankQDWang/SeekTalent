@@ -250,7 +250,7 @@ The public entry points for users are:
 - `README.md`
 - `docs/configuration.md`
 - `docs/cli.md`
-- `apps/web-react/DESIGN.md`
+- `docs/superpowers/artifacts/react-agent-workbench-design/`
 - `docs/architecture.md`
 - `docs/outputs.md`
 

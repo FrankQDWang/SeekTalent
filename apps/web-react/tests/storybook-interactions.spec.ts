@@ -155,14 +155,7 @@ test("transcript tool row exposes stable details", async ({ page }) => {
 test("candidate queue story renders populated candidates", async ({ page }) => {
   await openStory(page, "/iframe.html?id=workbench-candidatequeue--populated");
 
-  let candidateScope = page.locator("body");
-  if ((page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 1080) {
-    const candidatesTab = page.locator("#conversation-candidates-tab");
-    await candidatesTab.click();
-    await expect(candidatesTab).toHaveAttribute("aria-selected", "true");
-    candidateScope = page.locator("#conversation-panel-candidates");
-    await expect(candidateScope).toBeVisible();
-  }
+  const candidateScope = page.locator("body");
   const innerCandidatesTab = candidateScope
     .getByRole("tab", { name: "候选人" })
     .first();

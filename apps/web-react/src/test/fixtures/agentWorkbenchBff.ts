@@ -509,25 +509,25 @@ const baseStrategyGraph: AgentWorkbenchStrategyGraph = {
       status: "completed",
       sourceKind: "all",
     },
-    ...roundGraphNodes(1, "completed", {
+    ...strategyPhaseNodes(1, "completed", {
       query: "第 1 轮查询策略已生成。",
       source: "猎聘返回 10 份原始简历，形成 10 位候选人。",
       scoring: "第 1 轮评分完成，10 位候选人进入 Top Pool。",
       feedback: "第 1 轮复盘完成，准备下一轮策略。",
     }),
-    ...roundGraphNodes(2, "completed", {
+    ...strategyPhaseNodes(2, "completed", {
       query: "第 2 轮查询策略已生成。",
       source: "猎聘返回 16 份原始简历，形成 7 位候选人。",
       scoring: "第 2 轮评分完成，10 位候选人进入 Top Pool。",
       feedback: "第 2 轮复盘完成，准备下一轮策略。",
     }),
-    ...roundGraphNodes(3, "running", {
+    ...strategyPhaseNodes(3, "running", {
       query: "第 3 轮查询策略已生成。",
       source: "猎聘正在返回安全摘要。",
       scoring: "第 3 轮 Top Pool 等待评分。",
       feedback: "等待第 3 轮结果后生成下一轮策略。",
     }),
-    ...roundGraphNodes(4, "pending", {
+    ...strategyPhaseNodes(4, "pending", {
       query: "第 4 轮查询包等待后端生成。",
       source: "猎聘检索等待第 4 轮启动。",
       scoring: "Top Pool 等待第 4 轮评分。",
@@ -541,14 +541,14 @@ const baseStrategyGraph: AgentWorkbenchStrategyGraph = {
       label: "生成检索词",
       toNodeId: "round:1:phase:round_query:all",
     },
-    ...roundGraphEdges(1, 2),
-    ...roundGraphEdges(2, 3),
-    ...roundGraphEdges(3, 4),
-    ...roundGraphEdges(4, null),
+    ...strategyPhaseEdges(1, 2),
+    ...strategyPhaseEdges(2, 3),
+    ...strategyPhaseEdges(3, 4),
+    ...strategyPhaseEdges(4, null),
   ],
 };
 
-function roundGraphNodes(
+function strategyPhaseNodes(
   roundNo: number,
   status: "completed" | "running" | "pending",
   summaries: {
@@ -562,17 +562,6 @@ function roundGraphNodes(
   const sourceStatus = status === "running" ? "running" : status;
   const laterStatus = status === "running" ? "pending" : status;
   return [
-    {
-      nodeId: `round:${roundId}`,
-      kind: "round",
-      label: `第 ${roundId} 轮`,
-      phase: "round",
-      roundNo,
-      stage: "round_summary",
-      summary: `第 ${roundId} 轮猎聘检索`,
-      status,
-      sourceKind: "all",
-    },
     {
       nodeId: `round:${roundId}:phase:round_query:all`,
       kind: "phase",
@@ -620,7 +609,7 @@ function roundGraphNodes(
   ];
 }
 
-function roundGraphEdges(
+function strategyPhaseEdges(
   roundNo: number,
   nextRoundNo: number | null,
 ): AgentWorkbenchStrategyGraph["edges"] {
