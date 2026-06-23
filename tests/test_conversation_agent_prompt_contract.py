@@ -18,6 +18,7 @@ def test_conversation_agent_prompt_uses_locked_sections() -> None:
         "Tool And Action Boundary",
         "Intent Classes",
         "Intent Routing And Service Handoff",
+        "Host Service Action Catalog",
         "Requirement Flow",
         "Runtime Answers",
         "Final Output",
@@ -43,6 +44,12 @@ def test_conversation_agent_prompt_contains_required_contract_phrases() -> None:
         "canonical extraction input",
         "normalized text as provenance",
         "Never claim that you executed a service action",
+        "runtime_run_id",
+        "recentEvents",
+        "Runtime detail lookup",
+        "Requirement extraction",
+        "Next-round requirement submission",
+        "source_snapshot_event_seq",
         "deterministic runtime finalization",
     ]:
         assert phrase in prompt

@@ -384,6 +384,11 @@ def test_agent_turn_routes_next_round_requirement_to_runtime_command(tmp_path: P
     assert len(runner.calls) == 1
     decision_prompt = str(runner.calls[0]["prompt"])
     assert "Host handoff contract" in decision_prompt
+    assert "Host service action catalog" in decision_prompt
+    assert "Read-only facts are already preloaded" in decision_prompt
+    assert "runtimeRunId, run, snapshot, and recentEvents" in decision_prompt
+    assert "runtime_run_id plus kind and optional round_no, event_id, command_id, or checkpoint_id" in decision_prompt
+    assert "runtime_run_id, original user text, optional target_section_hint, idempotency_key" in decision_prompt
     assert "original user message as canonical extraction input" in decision_prompt
     assert "normalized text as provenance" in decision_prompt
     assert "Never claim that you executed a service action" in decision_prompt
