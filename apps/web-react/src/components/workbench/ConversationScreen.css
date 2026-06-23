@@ -14,9 +14,9 @@
 }
 
 .conversation-view__workspace[data-workflow-surface="visible"] {
-  display: grid;
-  gap: 0;
-  grid-template-columns: 386px minmax(0, 1fr);
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .conversation-view__workspace[data-workflow-surface="hidden"] {
@@ -221,4 +221,47 @@
   .conversation-view__panel--graph {
     height: 500px;
   }
+}
+
+/* --- Resizable panel layout (react-resizable-panels) --- */
+
+.workspace-group {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-panel--chat {
+  background: rgb(246 248 252);
+}
+
+.workspace-panel--chat .transcript {
+  background: rgb(246 248 252);
+}
+
+.workspace-separator {
+  background: transparent;
+  flex-shrink: 0;
+  outline: none;
+  transition: background 150ms;
+  width: 4px;
+}
+
+.workspace-separator:hover {
+  background: var(--st-action);
+  cursor: col-resize;
+}
+
+.workspace-separator:focus-visible {
+  background: var(--st-action);
+  outline: 2px solid var(--st-action);
+  outline-offset: 2px;
 }
