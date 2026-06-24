@@ -14,10 +14,19 @@ from seektalent_runtime_control.store import RuntimeControlStore
 class RequirementExecutor:
     def __init__(self) -> None:
         self.extracted_texts: list[str] = []
+        self.cache_scopes: list[str | None] = []
 
-    def extract_requirements(self, *, job_title: str, jd_text: str, notes: str | None) -> RequirementSheet:
+    def extract_requirements(
+        self,
+        *,
+        job_title: str,
+        jd_text: str,
+        notes: str | None,
+        requirement_cache_scope: str | None = None,
+    ) -> RequirementSheet:
         del notes
         self.extracted_texts.append(jd_text)
+        self.cache_scopes.append(requirement_cache_scope)
         if "Kafka 实战" in jd_text or "Kafka 生产环境实战" in jd_text:
             return requirement_sheet(job_title=job_title).model_copy(
                 update={
@@ -100,6 +109,22 @@ def test_extract_requirements_persists_editable_default_selected_draft(tmp_path:
         idempotency_key="agent_conv_1:extract:1",
     )
     assert replay.draft_revision_id == draft.draft_revision_id
+
+
+def test_extract_requirements_scopes_exact_cache_by_conversation(tmp_path: Path) -> None:
+    executor = RequirementExecutor()
+    service = runtime_service(tmp_path, executor=executor)
+
+    service.extract_requirements(
+        conversation_id="agent_conv_1",
+        job_title="Python 后端工程师",
+        jd_text="需要 Python API 和 Kafka",
+        notes=None,
+        source_ids=["internal_referrals"],
+        idempotency_key="agent_conv_1:extract:1",
+    )
+
+    assert executor.cache_scopes == ["agent_conv_1"]
 
 
 def test_update_requirement_draft_creates_revision_and_rejects_stale_base(tmp_path: Path) -> None:

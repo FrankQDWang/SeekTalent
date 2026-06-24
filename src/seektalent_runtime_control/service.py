@@ -57,17 +57,13 @@ class RuntimeControlService:
         )
         if existing is not None:
             return existing
-        try:
-            sheet = self.executor.extract_requirements(
-                job_title=job_title,
-                jd_text=jd_text,
-                notes=notes,
-                requirement_cache_scope=conversation_id,
-            )
-        except TypeError as exc:
-            if "requirement_cache_scope" not in str(exc):
-                raise
-            sheet = self.executor.extract_requirements(job_title=job_title, jd_text=jd_text, notes=notes)
+        sheet = _extract_requirements(
+            self.executor,
+            job_title=job_title,
+            jd_text=jd_text,
+            notes=notes,
+            requirement_cache_scope=conversation_id,
+        )
         draft = draft_from_requirement_sheet(
             conversation_id=conversation_id,
             draft_revision_id=_new_id("reqdraft"),
@@ -143,10 +139,12 @@ class RuntimeControlService:
             self.store.get_extracted_requirement_sheet_json(base.draft_revision_id)
         )
         base_sheet = requirement_sheet_from_draft(base, extracted)
-        supplement = self.executor.extract_requirements(
+        supplement = _extract_requirements(
+            self.executor,
             job_title=base_sheet.job_title,
             jd_text=text,
             notes=None,
+            requirement_cache_scope=base.conversation_id,
         )
         merged_sheet = merge_requirement_sheet_supplement(base_sheet, supplement)
         normalized = {
@@ -499,6 +497,22 @@ def _required_text(value: object) -> str:
     if not text:
         raise RuntimeControlError("requirement_draft_invalid")
     return text
+
+
+def _extract_requirements(
+    executor: RequirementExecutor,
+    *,
+    job_title: str | None,
+    jd_text: str,
+    notes: str | None,
+    requirement_cache_scope: str,
+) -> RequirementSheet:
+    return executor.extract_requirements(
+        job_title=job_title,
+        jd_text=jd_text,
+        notes=notes,
+        requirement_cache_scope=requirement_cache_scope,
+    )
 
 
 def _new_id(prefix: str) -> str:

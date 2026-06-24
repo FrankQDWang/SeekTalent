@@ -260,8 +260,15 @@ class BoundaryCallbackRuntime:
 
 
 class BoundaryRequirementExtractor:
-    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet:
-        del jd_text, notes
+    def extract_requirements(
+        self,
+        *,
+        job_title: str | None,
+        jd_text: str,
+        notes: str | None,
+        requirement_cache_scope: str | None = None,
+    ) -> RequirementSheet:
+        del jd_text, notes, requirement_cache_scope
         return RequirementSheet(
             job_title=job_title or "Senior Python Engineer",
             title_anchor_terms=["Python Engineer"],

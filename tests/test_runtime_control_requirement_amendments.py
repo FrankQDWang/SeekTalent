@@ -6,8 +6,20 @@ from tests.test_runtime_control_requirements import RequirementExecutor, runtime
 
 
 class ScalarHardConstraintRequirementExecutor(RequirementExecutor):
-    def extract_requirements(self, *, job_title: str, jd_text: str, notes: str | None):  # type: ignore[no-untyped-def]
-        sheet = super().extract_requirements(job_title=job_title, jd_text=jd_text, notes=notes)
+    def extract_requirements(
+        self,
+        *,
+        job_title: str,
+        jd_text: str,
+        notes: str | None,
+        requirement_cache_scope: str | None = None,
+    ):  # type: ignore[no-untyped-def]
+        sheet = super().extract_requirements(
+            job_title=job_title,
+            jd_text=jd_text,
+            notes=notes,
+            requirement_cache_scope=requirement_cache_scope,
+        )
         if "5 年以上" not in jd_text:
             return sheet
         return sheet.model_copy(

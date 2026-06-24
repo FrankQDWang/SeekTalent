@@ -685,6 +685,7 @@ def test_next_round_requirement_uses_extraction_backed_requirement_sheet_merge(t
             "job_title": "Senior Python Engineer",
             "jd_text": "下一轮必须补充 Kafka 生产经验",
             "notes": None,
+            "requirement_cache_scope": None,
         }
     ]
     assert approved.requirement_sheet.must_have_capabilities == ["Python", "Kafka 生产经验"]
@@ -710,8 +711,20 @@ class FakeRequirementExtractor:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
 
-    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet:
-        self.calls.append({"job_title": job_title, "jd_text": jd_text, "notes": notes})
+    def extract_requirements(
+        self,
+        *,
+        job_title: str | None,
+        jd_text: str,
+        notes: str | None,
+        requirement_cache_scope: str | None = None,
+    ) -> RequirementSheet:
+        self.calls.append({
+            "job_title": job_title,
+            "jd_text": jd_text,
+            "notes": notes,
+            "requirement_cache_scope": requirement_cache_scope,
+        })
         return RequirementSheet(
             job_title=job_title or "Senior Python Engineer",
             title_anchor_terms=[job_title or "Senior Python Engineer"],

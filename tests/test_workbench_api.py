@@ -248,8 +248,8 @@ class ParallelProbeRuntime:
 
 
 class ExplodingRequirementRuntime(FakeWorkbenchRuntime):
-    def extract_requirements(self, *, job_title: str, jd: str, notes: str, progress_callback=None) -> object:
-        del job_title, jd, notes, progress_callback
+    def extract_requirements(self, *, job_title: str, jd: str, notes: str, progress_callback=None, requirement_cache_scope: str | None = None) -> object:
+        del job_title, jd, notes, progress_callback, requirement_cache_scope
         raise RuntimeError(
             "Cookie=abc Authorization: Bearer token storageState=/tmp/private-runtime-dir "
             "webSocketDebuggerUrl=ws://127.0.0.1/devtools/browser/secret"
