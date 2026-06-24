@@ -91,6 +91,22 @@ const visualStories = [
     url: "/iframe.html?id=workbench-transcript--guided-followup",
   },
   {
+    name: "workbench-first-turn-thinking",
+    url: "/iframe.html?id=workbench-conversationscreen--first-turn-thinking",
+  },
+  {
+    name: "workbench-requirement-review-long-content",
+    url: "/iframe.html?id=workbench-conversationscreen--requirement-review-long-content",
+  },
+  {
+    name: "workbench-post-confirm-graph",
+    url: "/iframe.html?id=workbench-conversationscreen--post-confirm-graph",
+  },
+  {
+    name: "workbench-long-transcript-and-graph",
+    url: "/iframe.html?id=workbench-conversationscreen--long-transcript-and-graph",
+  },
+  {
     name: "workbench-resizable-layout",
     url: "/iframe.html?id=workbench-conversationscreen--resizable-layout",
   },

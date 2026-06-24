@@ -997,6 +997,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/agent/workbench/conversations/from-jd": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create Agent Workbench Conversation From Jd */
+    post: operations["create_agent_workbench_conversation_from_jd_api_agent_workbench_conversations_from_jd_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/agent/workbench/conversations/{conversation_id}": {
     parameters: {
       query?: never;
@@ -3034,6 +3051,19 @@ export interface components {
       /** Title */
       title: string;
     };
+    /** WorkbenchConversationFromJdRequest */
+    WorkbenchConversationFromJdRequest: {
+      /** Jobdescription */
+      jobDescription: string;
+      /** Jobtitle */
+      jobTitle?: string | null;
+      /** Notes */
+      notes?: string | null;
+      /** Sourcekinds */
+      sourceKinds?: ("cts" | "liepin")[] | null;
+      /** Idempotencykey */
+      idempotencyKey: string;
+    };
     /** WorkbenchDetailOpenCandidateSnapshotResponse */
     WorkbenchDetailOpenCandidateSnapshotResponse: {
       /** Reviewitemid */
@@ -4476,29 +4506,11 @@ export interface components {
        */
       detailOpenBlockedCount: number;
     };
-    /** WorkbenchSubmitJdMessageRequest */
-    WorkbenchSubmitJdMessageRequest: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
-      messageType: "submitJd";
-      /** Text */
-      text: string;
-      /** Jobtitle */
-      jobTitle?: string | null;
-      /** Notes */
-      notes?: string | null;
-      /** Sourcekinds */
-      sourceKinds?: ("cts" | "liepin")[] | null;
-      /** Idempotencykey */
-      idempotencyKey: string;
-    };
     /** WorkbenchUserTextMessageRequest */
     WorkbenchUserTextMessageRequest: {
       /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
+       * Messagetype
+       * @constant
        */
       messageType: "userText";
       /** Text */
@@ -6600,6 +6612,93 @@ export interface operations {
       };
     };
   };
+  create_agent_workbench_conversation_from_jd_api_agent_workbench_conversations_from_jd_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkbenchConversationFromJdRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["AgentWorkbenchConversationResponse"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Forbidden */
+      403: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Not Found */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Gone */
+      410: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Too Many Requests */
+      429: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+    };
+  };
   get_agent_workbench_view_api_agent_workbench_conversations__conversation_id__get: {
     parameters: {
       query?: never;
@@ -6719,9 +6818,7 @@ export interface operations {
     };
     requestBody: {
       content: {
-        "application/json":
-          | components["schemas"]["WorkbenchSubmitJdMessageRequest"]
-          | components["schemas"]["WorkbenchUserTextMessageRequest"];
+        "application/json": components["schemas"]["WorkbenchUserTextMessageRequest"];
       };
     };
     responses: {

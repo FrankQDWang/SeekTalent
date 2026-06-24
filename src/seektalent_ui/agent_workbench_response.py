@@ -36,7 +36,10 @@ from seektalent_ui.agent_workbench_projection import (
     AgentWorkbenchProjectionInput,
     AgentWorkbenchWorkflowStartIntentProjection,
 )
-from seektalent_ui.agent_workbench_transcript import build_transcript_groups
+from seektalent_ui.agent_workbench_transcript import (
+    build_transcript_groups,
+    filter_completed_requirement_progress_messages,
+)
 from seektalent_ui.workbench_observability import (
     record_requirement_snapshot_invalid,
     record_workbench_payload_bytes,
@@ -61,7 +64,10 @@ MAX_WORKBENCH_LINKED_RUNTIME_RUNS = 20
 def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchConversationResponse:
     state = input.conversation_reopen_state
     bounded_input = _bounded_projection_input(input)
-    messages = _latest(input.messages, MAX_WORKBENCH_MESSAGES)
+    messages = _latest(
+        filter_completed_requirement_progress_messages(input.messages, input.operation_audit_records),
+        MAX_WORKBENCH_MESSAGES,
+    )
     activities = [_activity_response(activity) for activity in bounded_input.activity_items]
     reason_code = state.reason_code
     runtime_run_id = _workflow_runtime_run_id(state.runtime_run_id, input.workflow_start_intent)
@@ -392,6 +398,8 @@ def _requirement_snapshot_payload(value: object) -> AgentWorkbenchRequirementDra
 
 
 def _strategy_graph(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchStrategyGraphResponse:
+    if input.requirement_draft is None and not input.round_summaries and not input.activity_items:
+        return AgentWorkbenchStrategyGraphResponse(nodes=[], edges=[])
     activity_items = _latest(input.activity_items, MAX_WORKBENCH_GRAPH_NODES - 1)
     nodes = [
         AgentWorkbenchGraphNodeResponse(

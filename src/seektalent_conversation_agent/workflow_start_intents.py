@@ -16,7 +16,7 @@ from seektalent_conversation_agent.job_requests import SourceKind
 
 WorkflowConfirmRequestStatus = Literal["pending", "approved", "intent_created", "failed"]
 WorkflowStartIntentStatus = Literal["pending", "started", "failed", "cancelled"]
-WorkbenchOutboxStatus = Literal["pending", "in_progress", "done"]
+WorkbenchOutboxStatus = Literal["held", "pending", "in_progress", "done"]
 
 
 @dataclass(frozen=True)
@@ -594,7 +594,7 @@ class WorkbenchOutboxStore:
         params: list[object] = [claimed_at, outbox_id]
         if reclaim_before is not None:
             status_predicate = "(status = 'pending' OR (status = 'in_progress' AND updated_at < ?))"
-            params.append(reclaim_before)
+            params = [claimed_at, reclaim_before, outbox_id]
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -602,7 +602,7 @@ class WorkbenchOutboxStore:
                     f"""
                     UPDATE wts_outbox
                     SET status = 'in_progress', attempt_count = attempt_count + 1, updated_at = ?
-                    WHERE outbox_id = ? AND {status_predicate}
+                    WHERE {status_predicate} AND outbox_id = ?
                     """,
                     tuple(params),
                 )
@@ -625,23 +625,64 @@ class WorkbenchOutboxStore:
             raise ConversationAgentError("workbench_outbox_item_not_found")
         return _outbox_from_row(row)
 
-    def get_for_aggregate(self, aggregate_id: str) -> WorkbenchOutboxItem | None:
+    def insert_once(
+        self,
+        *,
+        workspace_id: str,
+        event_type: str,
+        aggregate_id: str,
+        payload: dict[str, object],
+        initial_status: Literal["held", "pending"],
+        now: str,
+    ) -> WorkbenchOutboxItem:
+        existing = self.get_for_aggregate(event_type=event_type, aggregate_id=aggregate_id)
+        if existing is not None:
+            return existing
+        outbox_id = f"wts_outbox_{uuid4().hex}"
+        with self._connect() as conn, conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO wts_outbox (
+                        outbox_id, workspace_id, event_type, aggregate_id, payload_json,
+                        status, attempt_count, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    """,
+                    (outbox_id, workspace_id, event_type, aggregate_id, _json(payload), initial_status, now, now),
+                )
+            except sqlite3.IntegrityError:
+                existing = self.get_for_aggregate(event_type=event_type, aggregate_id=aggregate_id)
+                if existing is not None:
+                    return existing
+                raise
+        return self.get(outbox_id)
+
+    def get_for_aggregate(
+        self,
+        aggregate_id: str | None = None,
+        *,
+        event_type: str = "workflow_start_requested",
+    ) -> WorkbenchOutboxItem | None:
+        if aggregate_id is None:
+            raise TypeError("aggregate_id is required")
         with self._connect() as conn:
             row = conn.execute(
                 """
                 SELECT *
                 FROM wts_outbox
-                WHERE event_type = 'workflow_start_requested' AND aggregate_id = ?
+                WHERE event_type = ? AND aggregate_id = ?
                 ORDER BY created_at ASC
                 LIMIT 1
                 """,
-                (aggregate_id,),
+                (event_type, aggregate_id),
             ).fetchone()
         return _outbox_from_row(row) if row is not None else None
 
-    def list_claimable_workflow_start_items(
+    def list_claimable_items(
         self,
         *,
+        event_type: str,
         reclaim_before: str,
         limit: int,
     ) -> list[WorkbenchOutboxItem]:
@@ -650,7 +691,7 @@ class WorkbenchOutboxStore:
                 """
                 SELECT *
                 FROM wts_outbox
-                WHERE event_type = 'workflow_start_requested'
+                WHERE event_type = ?
                   AND (
                     status = 'pending'
                     OR (status = 'in_progress' AND updated_at < ?)
@@ -658,9 +699,42 @@ class WorkbenchOutboxStore:
                 ORDER BY created_at ASC, outbox_id ASC
                 LIMIT ?
                 """,
-                (reclaim_before, limit),
+                (event_type, reclaim_before, limit),
             ).fetchall()
         return [_outbox_from_row(row) for row in rows]
+
+    def list_claimable_workflow_start_items(
+        self,
+        *,
+        reclaim_before: str,
+        limit: int,
+    ) -> list[WorkbenchOutboxItem]:
+        return self.list_claimable_items(
+            event_type="workflow_start_requested",
+            reclaim_before=reclaim_before,
+            limit=limit,
+        )
+
+    def release_held_item(
+        self,
+        *,
+        event_type: str,
+        aggregate_id: str,
+        now: str,
+    ) -> WorkbenchOutboxItem:
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE wts_outbox
+                SET status = 'pending', updated_at = ?
+                WHERE event_type = ? AND aggregate_id = ? AND status = 'held'
+                """,
+                (now, event_type, aggregate_id),
+            )
+        item = self.get_for_aggregate(event_type=event_type, aggregate_id=aggregate_id)
+        if item is None:
+            raise ConversationAgentError("workbench_outbox_item_not_found")
+        return item
 
     def mark_done(self, outbox_id: str, *, updated_at: str) -> WorkbenchOutboxItem:
         with self._connect() as conn, conn:

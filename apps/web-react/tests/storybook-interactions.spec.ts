@@ -190,6 +190,30 @@ test("composer draft story accepts and clears submitted input", async ({
   await expect(composer).toHaveValue("");
 });
 
+test("conversation screen first-turn contract stories render expected surfaces", async ({
+  page,
+}) => {
+  await openStory(
+    page,
+    "/iframe.html?id=workbench-conversationscreen--first-turn-thinking",
+  );
+  await expect(page.getByLabel("Agent transcript")).toContainText("正在思考");
+  await expect(page.getByLabel("检索策略图")).toHaveCount(0);
+
+  await openStory(
+    page,
+    "/iframe.html?id=workbench-conversationscreen--post-confirm-graph",
+  );
+  await expect(page.getByRole("region", { name: "检索策略图" })).toBeVisible();
+
+  await openStory(
+    page,
+    "/iframe.html?id=workbench-conversationscreen--long-transcript-and-graph",
+  );
+  await expect(page.getByLabel("Agent transcript")).toBeVisible();
+  await expect(page.getByRole("region", { name: "检索策略图" })).toBeVisible();
+});
+
 async function openStory(page: Page, url: string) {
   await page.goto(url);
   await page.waitForSelector("#storybook-root");

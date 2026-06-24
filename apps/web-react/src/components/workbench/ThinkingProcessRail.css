@@ -178,17 +178,3 @@
   font-weight: 720;
   padding: 4px 8px;
 }
-
-@media (max-width: 760px) {
-  .thinking-process-rail__tabs {
-    margin: 14px 14px 12px;
-  }
-
-  .thinking-process-rail__panel {
-    padding: 0 14px 18px;
-  }
-
-  .thinking-timeline {
-    padding-left: 26px;
-  }
-}

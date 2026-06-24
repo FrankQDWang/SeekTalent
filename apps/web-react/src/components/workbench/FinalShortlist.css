@@ -183,14 +183,3 @@
 .final-shortlist__skeleton span:last-child {
   width: 65%;
 }
-
-@media (max-width: 520px) {
-  .final-shortlist {
-    padding: var(--st-space-3);
-  }
-
-  .final-shortlist__footer {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-}

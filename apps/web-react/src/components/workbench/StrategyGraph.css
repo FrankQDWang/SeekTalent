@@ -118,17 +118,3 @@
   min-height: 220px;
   width: min(520px, calc(100% - 48px));
 }
-
-@media (max-width: 1080px) {
-  .strategy-graph {
-    height: 660px;
-    min-height: 560px;
-  }
-}
-
-@media (max-width: 760px) {
-  .strategy-graph {
-    height: 620px;
-    min-height: 520px;
-  }
-}

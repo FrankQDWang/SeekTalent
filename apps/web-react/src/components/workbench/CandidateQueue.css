@@ -241,19 +241,3 @@
 .candidate-card--skeleton span:last-child {
   width: 58%;
 }
-
-@media (max-width: 520px) {
-  .candidate-queue,
-  .candidate-card {
-    padding: var(--st-space-3);
-  }
-
-  .candidate-card__header {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .candidate-card__status {
-    align-self: flex-start;
-  }
-}

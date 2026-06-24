@@ -1,0 +1,44 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Reset the desktop Workbench first-turn creation and review contract.",
+  "rationale": "The approved React Workbench rebuild needs the first recruiter turn to persist the JD, create the Workbench conversation through the BFF, show a desktop-only extraction and review surface, and avoid starting workflow execution until the recruiter confirms requirements. This slice changes the BFF, conversation agent contract, React route, packaged static app, and focused verification together so the branch remains reviewable and buildable.",
+  "touched_layers": [
+    "bff",
+    "docs",
+    "frontend",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent_conversation_agent/control_plane_schema.py",
+    "src/seektalent_conversation_agent/factory.py",
+    "src/seektalent_conversation_agent/first_turn_store.py",
+    "src/seektalent_conversation_agent/service.py",
+    "src/seektalent_conversation_agent/workflow_start_intents.py"
+  ],
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run"
+  ],
+  "deletion_targets": [
+    "first-turn Workbench creation paths that drop the initial recruiter JD before extraction",
+    "workflow-start UI paths that appear before confirmed requirements exist",
+    "compact or mobile Workbench CSS contracts in the desktop-first reset"
+  ],
+  "risks": [
+    "Conversation creation must not trigger duplicate workflow execution before the recruiter confirms requirements.",
+    "The packaged static Workbench must be rebuilt after route or schema changes so FastAPI serves the current contract.",
+    "Desktop-only CSS removal must not regress the committed Storybook, visual, a11y, and live Workbench gates.",
+    "The existing conversation-agent service module remains oversized and is only exempted here for this focused Workbench contract slice."
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_conversation_agent/service.py"
+  ],
+  "line_count_rationale": "The PR adds first-turn held-message extraction hooks to the existing conversation-agent service without broad service decomposition; the oversized module is explicitly tracked as a risk and covered by Workbench contract verification."
+}

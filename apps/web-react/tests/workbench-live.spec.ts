@@ -80,18 +80,12 @@ test("renders live workbench graph and opens semantic stream", async ({
 
   await expect(page.getByRole("tablist", { name: "工作区" })).toHaveCount(0);
 
-  if (testInfo.project.name.includes("mobile")) {
-    await expect(
-      page.getByRole("complementary", { name: "会话列表" }),
-    ).toHaveCount(0);
-  } else {
-    await expect(
-      page.getByRole("complementary", { name: "会话列表" }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: "资深 Python 后端" }),
-    ).toBeVisible();
-  }
+  await expect(
+    page.getByRole("complementary", { name: "会话列表" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "资深 Python 后端" }),
+  ).toBeVisible();
   await expect(page.getByRole("region", { name: "检索策略图" })).toBeVisible();
   await expect(page.locator(".react-flow")).toHaveCount(0);
   await expect(page.getByText("需求拆解")).toBeVisible();
@@ -254,7 +248,7 @@ test("submits recruiter actions through the Workbench BFF routes", async ({
   );
 
   await page.goto("/conversations/agent_conv_1");
-  await page.getByRole("button", { name: /Python 后端平台经验/ }).click();
+  await page.getByText("Python 后端平台经验").click();
 
   await expect
     .poll(() => latestRequirementOperations())
@@ -320,13 +314,49 @@ test("submits recruiter actions through the Workbench BFF routes", async ({
   ).toContain("workbench:confirm-requirements:");
 });
 
+test("blocks requirement confirmation after a selection update fails", async ({
+  page,
+}) => {
+  let confirmedRequirements: Record<string, unknown> | null = null;
+
+  await page.route(
+    "**/api/agent/workbench/conversations/agent_conv_1/requirements/operations",
+    async (route) => {
+      await route.fulfill({
+        contentType: "application/json",
+        json: {},
+      });
+    },
+  );
+  await page.route(
+    "**/api/agent/workbench/conversations/agent_conv_1/requirements/confirm",
+    async (route) => {
+      confirmedRequirements = route.request().postDataJSON() as Record<
+        string,
+        unknown
+      >;
+      await route.fulfill({
+        contentType: "application/json",
+        json: conversationSnapshot,
+      });
+    },
+  );
+
+  await page.goto("/conversations/agent_conv_1");
+  await page.getByText("Python 后端平台经验").click();
+  await expect(page.getByRole("alert")).toContainText("请求失败，请稍后重试。");
+
+  await page.getByRole("button", { name: "确认需求" }).click();
+  await page.waitForTimeout(250);
+
+  expect(confirmedRequirements).toBeNull();
+});
+
 test("starts a new workbench conversation from the home JD entry", async ({
   page,
 }) => {
-  let createdConversationRequest: Record<string, unknown> | null = null;
-  let submittedJdRequest: Record<string, unknown> | null = null;
-  const latestCreatedConversationRequest = () => createdConversationRequest;
-  const latestSubmittedJdRequest = () => submittedJdRequest;
+  let fromJdRequest: Record<string, unknown> | null = null;
+  const latestFromJdRequest = () => fromJdRequest;
   const createdConversationSnapshot = {
     ...conversationSnapshot,
     conversation: {
@@ -342,20 +372,23 @@ test("starts a new workbench conversation from the home JD entry", async ({
     thinkingProcess: { activeRoundNo: null, rounds: [] },
   };
 
+  await page.route(
+    "**/api/agent/workbench/conversations/from-jd",
+    async (route) => {
+      fromJdRequest = route.request().postDataJSON() as Record<string, unknown>;
+      await route.fulfill({
+        contentType: "application/json",
+        json: createdConversationSnapshot,
+        status: 201,
+      });
+    },
+  );
   await page.route("**/api/agent/workbench/conversations", async (route) => {
     if (route.request().method() !== "POST") {
       await route.fallback();
       return;
     }
-    createdConversationRequest = route.request().postDataJSON() as Record<
-      string,
-      unknown
-    >;
-    await route.fulfill({
-      contentType: "application/json",
-      json: createdConversationSnapshot,
-      status: 201,
-    });
+    throw new Error("New Workbench start should use /conversations/from-jd.");
   });
   await page.route(
     "**/api/agent/workbench/conversations/agent_conv_created",
@@ -366,41 +399,23 @@ test("starts a new workbench conversation from the home JD entry", async ({
       });
     },
   );
-  await page.route(
-    "**/api/agent/workbench/conversations/agent_conv_created/messages",
-    async (route) => {
-      submittedJdRequest = route.request().postDataJSON() as Record<
-        string,
-        unknown
-      >;
-      await route.fulfill({
-        contentType: "application/json",
-        json: createdConversationSnapshot,
-      });
-    },
-  );
-
   const jobDescription =
     "AI Agent 平台工程师 寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。";
 
   await page.goto("/");
   await page.getByLabel("岗位名称和岗位JD").fill(jobDescription);
-  await page.getByRole("button", { name: "开始寻才" }).click();
+  await page.getByLabel("岗位名称和岗位JD").press("Enter");
 
   await expect
-    .poll(() => latestCreatedConversationRequest())
-    .toMatchObject({ title: jobDescription });
-  await expect
-    .poll(() => latestSubmittedJdRequest())
+    .poll(() => latestFromJdRequest())
     .toMatchObject({
+      jobDescription,
       jobTitle: null,
-      messageType: "submitJd",
-      text: jobDescription,
     });
-  expect(latestSubmittedJdRequest()).not.toHaveProperty("sourceKinds");
-  const idempotencyKey = latestSubmittedJdRequest()?.idempotencyKey;
+  expect(latestFromJdRequest()).not.toHaveProperty("sourceKinds");
+  const idempotencyKey = latestFromJdRequest()?.idempotencyKey;
   expect(typeof idempotencyKey === "string" ? idempotencyKey : "").toContain(
-    "workbench:submit-jd:",
+    "workbench:from-jd:",
   );
   await expect(page).toHaveURL(/\/conversations\/agent_conv_created$/);
   await expect(page.getByRole("button", { name: "确认需求" })).toBeVisible();

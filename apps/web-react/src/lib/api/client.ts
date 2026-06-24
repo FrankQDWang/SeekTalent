@@ -9,6 +9,7 @@ import {
   type AgentWorkbenchConversationResponse,
   type WorkbenchAgentMessageRequest,
   type WorkbenchConversationCreateRequest,
+  type WorkbenchConversationFromJdRequest,
   type WorkbenchRequirementAmendRequest,
   type WorkbenchRequirementConfirmRequest,
   type WorkbenchRequirementOperationsRequest,
@@ -119,6 +120,18 @@ export async function createAgentWorkbenchConversation(
   return normalizeAgentWorkbenchConversation(
     requireData(
       await api.POST("/api/agent/workbench/conversations", {
+        body: payload,
+      }),
+    ),
+  );
+}
+
+export async function createAgentWorkbenchConversationFromJd(
+  payload: WorkbenchConversationFromJdRequest,
+): Promise<AgentWorkbenchConversationResponse> {
+  return normalizeAgentWorkbenchConversation(
+    requireData(
+      await api.POST("/api/agent/workbench/conversations/from-jd", {
         body: payload,
       }),
     ),

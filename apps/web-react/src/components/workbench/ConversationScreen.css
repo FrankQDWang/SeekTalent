@@ -111,55 +111,6 @@
   background: var(--st-panel);
 }
 
-@media (max-width: 1080px) {
-  .conversation-view {
-    height: 100vh;
-    min-height: 100vh;
-  }
-
-  .conversation-view__workspace[data-workflow-surface="visible"] {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    overflow: hidden;
-    padding: var(--st-space-3);
-  }
-
-  .conversation-view__workspace[data-workflow-surface="visible"]
-    .conversation-view__panel--chat {
-    border-right: 0;
-  }
-
-  .conversation-view__panel {
-    min-height: 0;
-    width: 100%;
-  }
-
-  .conversation-view__panel--graph {
-    height: auto;
-  }
-
-  .conversation-view__panel--graph .strategy-graph {
-    height: 100%;
-    min-height: 100%;
-  }
-
-  .conversation-view__workspace[data-workflow-surface="hidden"]
-    .conversation-view__panel--chat {
-    display: flex;
-  }
-
-  .workspace-separator {
-    height: 4px;
-    width: auto;
-  }
-
-  .workspace-separator:hover {
-    cursor: row-resize;
-  }
-}
-
 /* --- Resizable panel layout (react-resizable-panels) --- */
 
 .workspace-group {
