@@ -176,14 +176,3 @@
 .detail-approval-item--skeleton span:last-child {
   width: 55%;
 }
-
-@media (max-width: 520px) {
-  .detail-approval-queue,
-  .detail-approval-item {
-    padding: var(--st-space-3);
-  }
-
-  .detail-approval-item__header {
-    flex-direction: column;
-  }
-}

@@ -5,12 +5,14 @@
   grid-template-columns: 257px minmax(0, 1fr) minmax(320px, 360px);
   grid-template-rows: minmax(0, 1fr);
   height: 100vh;
+  min-width: 1100px;
   min-height: 100vh;
   position: relative;
 }
 
 .conversation-shell[data-side="hidden"] {
   grid-template-columns: 257px minmax(0, 1fr);
+  min-width: 780px;
 }
 
 .conversation-shell[data-rail="compact"] {
@@ -19,6 +21,7 @@
 
 .conversation-shell[data-side="hidden"][data-rail="compact"] {
   grid-template-columns: 64px minmax(0, 1fr);
+  min-width: 720px;
 }
 
 .conversation-shell[data-rail="closed"] {
@@ -27,6 +30,7 @@
 
 .conversation-shell[data-side="hidden"][data-rail="closed"] {
   grid-template-columns: minmax(0, 1fr);
+  min-width: 640px;
 }
 
 .conversation-shell__side {
@@ -145,29 +149,4 @@
 .conversation-shell__main .conversation-view {
   height: 100%;
   min-height: 0;
-}
-
-@media (max-width: 1080px) {
-  .conversation-shell {
-    display: flex;
-    flex-direction: column;
-    height: auto;
-    overflow: auto;
-  }
-
-  .conversation-shell__main {
-    flex: 0 0 auto;
-    min-height: 760px;
-    order: 1;
-    overflow: visible;
-  }
-
-  .conversation-shell__side {
-    display: none;
-  }
-
-  .conversation-shell__rail,
-  .conversation-shell__rail-opener {
-    display: none;
-  }
 }

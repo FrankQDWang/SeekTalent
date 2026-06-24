@@ -84,12 +84,22 @@ describe("HomeStartPanel", () => {
     );
   });
 
-  it("renders with collapsing class when collapsing prop is true", () => {
+  it("submits with Enter through the form and keeps Shift+Enter as a textarea newline", async () => {
     expect.hasAssertions();
+    const user = userEvent.setup();
+    const onSubmit = vi.fn(() => Promise.resolve());
 
-    render(<HomeStartPanel collapsing onSubmit={vi.fn()} />);
+    render(<HomeStartPanel onSubmit={onSubmit} />);
 
-    const section = screen.getByRole("region", { name: "新建招聘任务" });
-    expect(section.className).toContain("home-start-panel--collapsing");
+    const textarea = screen.getByLabelText("岗位名称和岗位JD");
+    await user.type(textarea, "第一行{Shift>}{Enter}{/Shift}第二行");
+    expect(textarea).toHaveValue("第一行\n第二行");
+
+    await user.keyboard("{Enter}");
+
+    expect(onSubmit).toHaveBeenCalledWith({
+      jobDescription: "第一行\n第二行",
+      jobTitle: null,
+    });
   });
 });

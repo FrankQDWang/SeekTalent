@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import type {
   AgentWorkbenchConversationResponse,
@@ -19,7 +19,10 @@ export type ConversationScreenCallbacks = {
   onConfirmRequirements?: (() => void) | undefined;
   onSubmitMessage?: ((message: string) => Promise<void> | void) | undefined;
   onToggleRequirementItem?:
-    | ((item: AgentWorkbenchRequirementDraftItem, selected: boolean) => void)
+    | ((
+        item: AgentWorkbenchRequirementDraftItem,
+        selected: boolean,
+      ) => Promise<void> | void)
     | undefined;
   submittingMessage?: boolean | undefined;
   updatingRequirementItemIds?: readonly string[] | undefined;
@@ -46,7 +49,6 @@ export function ConversationScreen({
   updatingRequirementItemIds = [],
   view,
 }: ConversationScreenProps) {
-  const compactWorkspace = useCompactWorkspace();
   const workflowSurfaceVisible = hasConversationWorkflowSurface(view);
   const shouldShowRequirementReview =
     view.pendingActions.allowed.includes("confirm_requirements") ||
@@ -75,12 +77,10 @@ export function ConversationScreen({
     },
     [],
   );
-  const layoutPersistenceProps = compactWorkspace
-    ? {}
-    : {
-        ...(savedLayout === undefined ? {} : { defaultLayout: savedLayout }),
-        onLayoutChanged: handleLayoutChanged,
-      };
+  const layoutPersistenceProps = {
+    ...(savedLayout === undefined ? {} : { defaultLayout: savedLayout }),
+    onLayoutChanged: handleLayoutChanged,
+  };
 
   return (
     <>
@@ -100,15 +100,15 @@ export function ConversationScreen({
           <Group
             className="workspace-group"
             id="chat-graph-layout"
-            orientation={compactWorkspace ? "vertical" : "horizontal"}
+            orientation="horizontal"
             {...layoutPersistenceProps}
           >
             <Panel
               className="workspace-panel workspace-panel--chat"
-              defaultSize={compactWorkspace ? 320 : 386}
+              defaultSize={386}
               id="chat"
-              maxSize={compactWorkspace ? undefined : "50%"}
-              minSize={compactWorkspace ? 240 : 280}
+              maxSize="50%"
+              minSize={280}
             >
               <section
                 aria-label="对话"
@@ -136,7 +136,7 @@ export function ConversationScreen({
             <Panel
               className="workspace-panel workspace-panel--graph"
               id="graph"
-              minSize={compactWorkspace ? 320 : 400}
+              minSize={400}
             >
               <section
                 aria-label="策略图面板"
@@ -182,49 +182,10 @@ export function ConversationScreen({
   );
 }
 
-function useCompactWorkspace(): boolean {
-  const [compact, setCompact] = useState(() => compactWorkspaceMatches());
-
-  useEffect(() => {
-    const media = compactWorkspaceMedia();
-    if (media === null) {
-      return;
-    }
-    const update = () => setCompact(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-
-  return compact;
-}
-
-function compactWorkspaceMatches(): boolean {
-  return compactWorkspaceMedia()?.matches ?? false;
-}
-
-function compactWorkspaceMedia(): MediaQueryList | null {
-  if (
-    typeof window === "undefined" ||
-    typeof window.matchMedia !== "function"
-  ) {
-    return null;
-  }
-  return window.matchMedia("(max-width: 1080px)");
-}
-
 export function hasConversationWorkflowSurface(
   view: AgentWorkbenchConversationResponse,
 ): boolean {
-  return (
-    view.strategyGraph.nodes.length > 0 ||
-    view.strategyGraph.edges.length > 0 ||
-    view.thinkingProcess.rounds.length > 0 ||
-    view.candidates.length > 0 ||
-    view.detailApprovals.length > 0 ||
-    view.reviewArtifacts.length > 0 ||
-    view.finalSummary != null
-  );
+  return view.conversation.workflowStartState !== "not_started";
 }
 
 const CHAT_GRAPH_LAYOUT_STORAGE_KEY = "chat-graph-layout";

@@ -16,10 +16,10 @@ from seektalent_ui.agent_rate_limit import check_agent_write_rate
 from seektalent_ui.agent_request_models import (
     WorkbenchAgentMessageRequest,
     WorkbenchConversationCreateRequest,
+    WorkbenchConversationFromJdRequest,
     WorkbenchRequirementAmendRequest,
     WorkbenchRequirementConfirmRequest,
     WorkbenchRequirementOperationsRequest,
-    WorkbenchSubmitJdMessageRequest,
     WorkflowCommandRequest,
 )
 from seektalent_ui.agent_route_deps import (
@@ -130,6 +130,47 @@ def create_agent_workbench_conversation(
     )
 
 
+@router.post(
+    "/conversations/from-jd",
+    response_model=AgentWorkbenchConversationResponse,
+    status_code=201,
+    responses=WORKBENCH_PROBLEM_RESPONSES,
+)
+def create_agent_workbench_conversation_from_jd(
+    payload: WorkbenchConversationFromJdRequest,
+    request: Request,
+    user: WorkbenchUser = Depends(local_workbench_write_user),
+) -> AgentWorkbenchConversationResponse:
+    service = get_agent_service(request)
+    try:
+        check_agent_write_rate(request, user=user, conversation_id="new")
+        start_result = service.create_conversation_from_jd(
+            owner_user_id=user.user_id,
+            workspace_id=user.workspace_id,
+            jd_text=payload.jobDescription,
+            job_title=payload.jobTitle,
+            notes=payload.notes,
+            source_kinds=payload.sourceKinds,
+            idempotency_key=payload.idempotencyKey,
+        )
+        response = _build_agent_workbench_snapshot(
+            request=request,
+            conversation_id=start_result.conversation_id,
+            user=user,
+        )
+        service.release_requirement_extraction_for_start_request(
+            start_request_id=start_result.start_request_id,
+            owner_user_id=user.user_id,
+            workspace_id=user.workspace_id,
+        )
+    except ConversationAgentError as exc:
+        raise _agent_workbench_error(exc, request) from exc
+    runner = getattr(request.app.state, "requirement_extraction_outbox_runner", None)
+    if runner is not None:
+        runner.wake()
+    return response
+
+
 @router.get("/conversations/{conversation_id}", response_model=AgentWorkbenchConversationResponse)
 def get_agent_workbench_view(
     conversation_id: str,
@@ -214,26 +255,13 @@ async def submit_agent_workbench_message(
     service = get_agent_service(request)
     try:
         check_agent_write_rate(request, user=user, conversation_id=conversation_id)
-        if isinstance(payload, WorkbenchSubmitJdMessageRequest):
-            await run_in_threadpool(
-                service.submit_jd,
-                conversation_id=conversation_id,
-                owner_user_id=user.user_id,
-                workspace_id=user.workspace_id,
-                job_title=payload.jobTitle,
-                jd_text=payload.text,
-                notes=payload.notes,
-                source_kinds=payload.sourceKinds,
-                idempotency_key=payload.idempotencyKey,
-            )
-        else:
-            await service.run_agent_turn(
-                conversation_id=conversation_id,
-                owner_user_id=user.user_id,
-                workspace_id=user.workspace_id,
-                user_message=payload.text,
-                idempotency_key=payload.idempotencyKey,
-            )
+        await service.run_agent_turn(
+            conversation_id=conversation_id,
+            owner_user_id=user.user_id,
+            workspace_id=user.workspace_id,
+            user_message=payload.text,
+            idempotency_key=payload.idempotencyKey,
+        )
     except ConversationAgentError as exc:
         raise _agent_workbench_error(exc, request) from exc
     return await run_in_threadpool(

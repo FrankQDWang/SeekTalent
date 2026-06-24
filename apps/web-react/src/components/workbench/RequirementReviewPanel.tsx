@@ -1,5 +1,5 @@
 import { ClipboardCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   AgentWorkbenchPendingActions,
   AgentWorkbenchRequirementDraft,
@@ -15,7 +15,10 @@ type RequirementReviewPanelProps = {
   onAddOther?: ((text: string) => Promise<void> | void) | undefined;
   onConfirm?: (() => void) | undefined;
   onToggleItem?:
-    | ((item: AgentWorkbenchRequirementDraftItem, selected: boolean) => void)
+    | ((
+        item: AgentWorkbenchRequirementDraftItem,
+        selected: boolean,
+      ) => Promise<void> | void)
     | undefined;
   pendingActions: AgentWorkbenchPendingActions;
   requirementDraft: AgentWorkbenchRequirementDraft | null | undefined;
@@ -37,7 +40,20 @@ export function RequirementReviewPanel({
     confirmingSupplementalRequirement,
     setConfirmingSupplementalRequirement,
   ] = useState(false);
+  const [localSelectedByItemId, setLocalSelectedByItemId] = useState<
+    Record<string, boolean>
+  >({});
   const trimmedOtherText = otherText.trim();
+
+  useEffect(() => {
+    const next: Record<string, boolean> = {};
+    for (const section of requirementDraft?.sections ?? []) {
+      for (const item of section.items) {
+        next[item.itemId] = item.selected;
+      }
+    }
+    setLocalSelectedByItemId(next);
+  }, [requirementDraft]);
 
   if (!requirementDraft && !pendingActions.primary) {
     return null;
@@ -97,26 +113,46 @@ export function RequirementReviewPanel({
                   {items.map((item) => {
                     const canToggle =
                       item.allowedActions.includes("set_selected");
+                    const selected =
+                      localSelectedByItemId[item.itemId] ?? item.selected;
                     const updating = updatingItems.has(item.itemId);
                     return (
-                      <button
-                        aria-pressed={item.selected}
+                      <label
                         className="requirement-review-item"
-                        data-selected={item.selected ? "true" : "false"}
-                        disabled={!canToggle || updating}
+                        data-selected={selected ? "true" : "false"}
+                        data-updating={updating ? "true" : "false"}
                         key={item.itemId}
-                        onClick={() => onToggleItem?.(item, !item.selected)}
-                        type="button"
                       >
+                        <input
+                          checked={selected}
+                          disabled={!canToggle}
+                          onChange={(event) => {
+                            const nextSelected = event.currentTarget.checked;
+                            const previousSelected = selected;
+                            setLocalSelectedByItemId((current) => ({
+                              ...current,
+                              [item.itemId]: nextSelected,
+                            }));
+                            void Promise.resolve(
+                              onToggleItem?.(item, nextSelected),
+                            ).catch(() => {
+                              setLocalSelectedByItemId((current) => ({
+                                ...current,
+                                [item.itemId]: previousSelected,
+                              }));
+                            });
+                          }}
+                          type="checkbox"
+                        />
+                        <span
+                          aria-hidden="true"
+                          className="requirement-review-item__box"
+                        />
                         <span>{item.text}</span>
                         <em>
-                          {updating
-                            ? "更新中"
-                            : item.selected
-                              ? "已选择"
-                              : "未选择"}
+                          {updating ? "更新中" : selected ? "已选择" : "未选择"}
                         </em>
-                      </button>
+                      </label>
                     );
                   })}
                 </div>

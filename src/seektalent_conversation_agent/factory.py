@@ -40,12 +40,24 @@ class RuntimeRequirementExecutor:
         self.settings = settings
         self.runtime_factory = runtime_factory
 
-    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet:
+    def extract_requirements(
+        self,
+        *,
+        job_title: str | None,
+        jd_text: str,
+        notes: str | None,
+        requirement_cache_scope: str | None = None,
+    ) -> RequirementSheet:
         runtime = self.runtime_factory(self.settings)
         extractor = getattr(runtime, "extract_requirements", None)
         if not callable(extractor):
             raise ConversationAgentError("agent_requirement_extractor_unavailable")
-        result = extractor(job_title=job_title, jd=jd_text, notes=notes or "", requirement_cache_scope=None)
+        result = extractor(
+            job_title=job_title,
+            jd=jd_text,
+            notes=notes or "",
+            requirement_cache_scope=requirement_cache_scope,
+        )
         if not isinstance(result, RequirementSheet):
             raise ConversationAgentError("agent_requirement_extractor_invalid_result")
         return result

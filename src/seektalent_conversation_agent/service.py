@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from seektalent_conversation_agent.budget import AgentBudgetPolicy
 from seektalent_conversation_agent.errors import ConversationAgentError
+from seektalent_conversation_agent.first_turn_store import FirstTurnIds, FirstTurnStore
 from seektalent_conversation_agent.job_request_store import JobRequestStore
 from seektalent_conversation_agent.job_requests import (
     JobRequestRevision,
@@ -137,6 +138,12 @@ class RuntimeRunTarget:
         return self.link.runtime_run_id
 
 
+@dataclass(frozen=True)
+class FirstTurnStartResult:
+    conversation_id: str
+    start_request_id: str
+
+
 class ConversationAgentService:
     def __init__(
         self,
@@ -172,6 +179,7 @@ class ConversationAgentService:
         self.agent_runner = agent_runner
         self.budget_policy = budget_policy
         self.job_request_store = JobRequestStore(store.path, busy_timeout_ms=store.busy_timeout_ms)
+        self.first_turn_store = FirstTurnStore(store.path, busy_timeout_ms=store.busy_timeout_ms)
         self.workflow_start_intent_store = WorkflowStartIntentStore(
             store.path,
             busy_timeout_ms=store.busy_timeout_ms,
@@ -865,6 +873,165 @@ class ConversationAgentService:
         link = self.job_request_store.get_requirement_draft_job_request_link(requirement_draft_revision_id)
         if link is None:
             raise ConversationAgentError("requirement_draft_job_request_not_found")
+        return link
+
+    def create_conversation_from_jd(
+        self,
+        *,
+        owner_user_id: str,
+        workspace_id: str,
+        jd_text: str,
+        job_title: str | None,
+        notes: str | None,
+        source_kinds: Sequence[str] | None,
+        idempotency_key: str,
+    ) -> FirstTurnStartResult:
+        user_job_title = _normalize_optional_job_title(job_title)
+        start = self.first_turn_store.create_or_replay_first_turn(
+            ids=FirstTurnIds(
+                conversation_id=self.conversation_id_factory(),
+                job_request_revision_id=f"wts_jobreq_{uuid4().hex}",
+                start_request_id=f"wts_start_{uuid4().hex}",
+                user_message_id=self.message_id_factory(),
+                assistant_progress_message_id=self.message_id_factory(),
+                operation_id=self.operation_id_factory(),
+                outbox_id=f"wts_outbox_{uuid4().hex}",
+            ),
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+            title=_conversation_title_from_jd(job_title=user_job_title, jd_text=jd_text),
+            jd_text=jd_text,
+            job_title=user_job_title,
+            notes=notes,
+            source_kinds=source_kinds,
+            idempotency_key=idempotency_key,
+            workspace_source_policy_id=None,
+            now=self.now(),
+        )
+        return FirstTurnStartResult(
+            conversation_id=start.conversation_id,
+            start_request_id=start.start_request_id,
+        )
+
+    def release_requirement_extraction_for_start_request(
+        self,
+        *,
+        start_request_id: str,
+        owner_user_id: str,
+        workspace_id: str,
+    ) -> object:
+        start = self.first_turn_store.get_start_request(
+            start_request_id=start_request_id,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+        )
+        return self.outbox_store.release_held_item(
+            event_type="requirement_extraction_requested",
+            aggregate_id=start.job_request_revision_id,
+            now=self.now(),
+        )
+
+    def process_requirement_extraction_outbox_item(self, outbox_id: str) -> RequirementDraftJobRequestLink:
+        current_item = self.outbox_store.get(outbox_id)
+        if current_item.event_type != "requirement_extraction_requested":
+            raise ConversationAgentError("workbench_outbox_event_type_invalid")
+        existing_link = self.job_request_store.get_requirement_draft_job_request_link_by_job_request(
+            current_item.aggregate_id
+        )
+        if current_item.status == "done" and existing_link is not None:
+            return existing_link
+        claimed_at = self.now()
+        reclaim_before = _format_time(
+            _parse_time(claimed_at) - timedelta(seconds=_WORKFLOW_START_OUTBOX_CLAIM_TIMEOUT_SECONDS)
+        )
+        item = self.outbox_store.claim_for_processing(
+            outbox_id,
+            claimed_at=claimed_at,
+            reclaim_before=reclaim_before,
+        )
+        if item is None:
+            link = self.job_request_store.get_requirement_draft_job_request_link_by_job_request(
+                current_item.aggregate_id
+            )
+            if link is None:
+                raise ConversationAgentError("requirement_extraction_not_claimed")
+            return link
+        job_request = self.job_request_store.get_job_request_revision(item.aggregate_id)
+        if job_request is None:
+            raise ConversationAgentError("job_request_revision_not_found")
+        existing_link = self.job_request_store.get_requirement_draft_job_request_link_by_job_request(
+            job_request.job_request_revision_id
+        )
+        if existing_link is not None:
+            self.outbox_store.mark_done(outbox_id, updated_at=self.now())
+            return existing_link
+        operation_audit = self._extract_requirements_operation_audit_for_job_request(
+            conversation_id=job_request.conversation_id,
+            job_request=job_request,
+        )
+        draft = self._extract_or_recover_requirement_draft(
+            conversation_id=job_request.conversation_id,
+            job_request=job_request,
+            operation_audit=operation_audit,
+            idempotency_key=job_request.idempotency_key,
+        )
+        extracted_job_title = _extracted_job_title_from_runtime_control(
+            self.service_action_adapter,
+            draft_revision_id=draft.draft_revision_id,
+        )
+        job_request = self.job_request_store.update_extracted_job_title(
+            job_request_revision_id=job_request.job_request_revision_id,
+            extracted_job_title=extracted_job_title,
+            updated_at=self.now(),
+        )
+        effective_job_title = job_request.effective_job_title
+        if effective_job_title is None:
+            self.store.save_operation_audit(
+                operation_id=operation_audit.operation_id,
+                conversation_id=job_request.conversation_id,
+                operation_name="extract_requirements",
+                execution_origin="service",
+                status="failed",
+                args=operation_audit.args,
+                result={"draftRevisionId": draft.draft_revision_id},
+                reason_code="job_request_title_required",
+                started_at=operation_audit.started_at,
+                completed_at=self.now(),
+            )
+            raise ConversationAgentError("job_request_title_required")
+        self._mark_submit_jd_extract_operation_audit_completed(
+            conversation_id=job_request.conversation_id,
+            job_request=job_request,
+            operation_id=operation_audit.operation_id,
+            extracted_job_title=extracted_job_title,
+            effective_job_title=effective_job_title,
+            draft_revision_id=draft.draft_revision_id,
+        )
+        link = self.job_request_store.link_requirement_draft_job_request(
+            draft_revision_id=draft.draft_revision_id,
+            workspace_id=job_request.workspace_id,
+            job_request_revision_id=job_request.job_request_revision_id,
+            conversation_id=job_request.conversation_id,
+            created_at=self.now(),
+        )
+        self.store.link_requirement_draft(
+            conversation_id=job_request.conversation_id,
+            draft_revision_id=draft.draft_revision_id,
+            pending_requirement_review_count=draft.unresolved_review_item_count,
+            updated_at=self.now(),
+        )
+        self.store.update_conversation_status(
+            conversation_id=job_request.conversation_id,
+            status="awaiting_requirement_confirmation",
+            updated_at=self.now(),
+        )
+        self._ensure_requirement_review_message(
+            conversation_id=job_request.conversation_id,
+            source_operation_id=operation_audit.operation_id,
+            draft=draft,
+            idempotency_key=job_request.idempotency_key,
+        )
+        self.outbox_store.mark_done(outbox_id, updated_at=self.now())
         return link
 
     def submit_jd(
@@ -3427,3 +3594,10 @@ def _parse_time(value: str) -> datetime:
 
 def _format_time(value: datetime) -> str:
     return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _conversation_title_from_jd(*, job_title: str | None, jd_text: str) -> str:
+    if job_title:
+        return job_title[:80]
+    first_line = next((line.strip() for line in jd_text.splitlines() if line.strip()), "")
+    return (first_line or "新招聘任务")[:80]

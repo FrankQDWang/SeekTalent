@@ -26,7 +26,14 @@ from seektalent_runtime_control.store import RuntimeControlStore
 
 
 class RequirementExecutor(Protocol):
-    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet: ...
+    def extract_requirements(
+        self,
+        *,
+        job_title: str | None,
+        jd_text: str,
+        notes: str | None,
+        requirement_cache_scope: str | None = None,
+    ) -> RequirementSheet: ...
 
 
 class RuntimeControlService:
@@ -50,7 +57,17 @@ class RuntimeControlService:
         )
         if existing is not None:
             return existing
-        sheet = self.executor.extract_requirements(job_title=job_title, jd_text=jd_text, notes=notes)
+        try:
+            sheet = self.executor.extract_requirements(
+                job_title=job_title,
+                jd_text=jd_text,
+                notes=notes,
+                requirement_cache_scope=conversation_id,
+            )
+        except TypeError as exc:
+            if "requirement_cache_scope" not in str(exc):
+                raise
+            sheet = self.executor.extract_requirements(job_title=job_title, jd_text=jd_text, notes=notes)
         draft = draft_from_requirement_sheet(
             conversation_id=conversation_id,
             draft_revision_id=_new_id("reqdraft"),

@@ -44,7 +44,7 @@ from seektalent_ui.static_frontend import mount_packaged_frontend
 from seektalent_ui.workbench_paths import agent_workbench_stream_db_path, workbench_db_path
 from seektalent_ui.workbench_observability import correlation_id_from_request
 from seektalent_ui.workbench_store import WorkbenchStore
-from seektalent_ui.workflow_start_outbox_runner import WorkflowStartOutboxRunner
+from seektalent_ui.workflow_start_outbox_runner import RequirementExtractionOutboxRunner, WorkflowStartOutboxRunner
 
 
 def create_app(
@@ -74,6 +74,9 @@ def create_app(
     app.state.runtime_control_store = app.state.agent_conversation_service.service_action_adapter.runtime_store
     app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
     app.state.workflow_start_outbox_runner = WorkflowStartOutboxRunner(
+        service=app.state.agent_conversation_service,
+    )
+    app.state.requirement_extraction_outbox_runner = RequirementExtractionOutboxRunner(
         service=app.state.agent_conversation_service,
     )
     app.state.workbench_job_runner = WorkbenchJobRunner(
@@ -189,12 +192,17 @@ def create_app(
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     runner = getattr(app.state, "workflow_start_outbox_runner", None)
+    extraction_runner = getattr(app.state, "requirement_extraction_outbox_runner", None)
     if runner is not None:
         runner.start()
         runner.wake()
+    if extraction_runner is not None:
+        extraction_runner.start()
     try:
         yield
     finally:
+        if extraction_runner is not None:
+            extraction_runner.stop()
         if runner is not None:
             runner.stop()
 

@@ -98,6 +98,22 @@ const stories = [
     "/iframe.html?id=workbench-conversationscreen--requirement-review",
   ],
   [
+    "conversation screen first turn thinking",
+    "/iframe.html?id=workbench-conversationscreen--first-turn-thinking",
+  ],
+  [
+    "conversation screen requirement review long content",
+    "/iframe.html?id=workbench-conversationscreen--requirement-review-long-content",
+  ],
+  [
+    "conversation screen post confirm graph",
+    "/iframe.html?id=workbench-conversationscreen--post-confirm-graph",
+  ],
+  [
+    "conversation screen long transcript and graph",
+    "/iframe.html?id=workbench-conversationscreen--long-transcript-and-graph",
+  ],
+  [
     "conversation screen running stream",
     "/iframe.html?id=workbench-conversationscreen--running-with-stream",
   ],

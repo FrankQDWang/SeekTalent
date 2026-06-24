@@ -71,7 +71,7 @@ class _TranscriptFact:
 
 def _transcript_facts(input: AgentWorkbenchProjectionInput) -> Iterable[_TranscriptFact]:
     runtime_coverages = tuple(_activity_runtime_coverages(input.activity_items))
-    for message in input.messages:
+    for message in filter_completed_requirement_progress_messages(input.messages, input.operation_audit_records):
         event = _message_event(message)
         yield _TranscriptFact(
             sort_key=(event.createdAt, _event_kind_rank(event.kind, message.role), event.eventId),
@@ -110,6 +110,39 @@ def _transcript_facts(input: AgentWorkbenchProjectionInput) -> Iterable[_Transcr
         )
 
 
+def filter_completed_requirement_progress_messages(
+    messages: Iterable[TranscriptMessage],
+    operation_audit_records: Iterable[OperationAuditRecord],
+) -> tuple[TranscriptMessage, ...]:
+    completed_requirement_extractions = _completed_requirement_extraction_job_request_ids(operation_audit_records)
+    return tuple(
+        message
+        for message in messages
+        if not _message_is_completed_requirement_progress(message, completed_requirement_extractions)
+    )
+
+
+def _completed_requirement_extraction_job_request_ids(records: Iterable[OperationAuditRecord]) -> frozenset[str]:
+    job_request_revision_ids: set[str] = set()
+    for record in records:
+        if record.operation_name != "extract_requirements" or record.status in {"started", "running"}:
+            continue
+        job_request_revision_id = record.args.get("jobRequestRevisionId")
+        if isinstance(job_request_revision_id, str) and job_request_revision_id:
+            job_request_revision_ids.add(job_request_revision_id)
+    return frozenset(job_request_revision_ids)
+
+
+def _message_is_completed_requirement_progress(
+    message: TranscriptMessage,
+    completed_requirement_extractions: frozenset[str],
+) -> bool:
+    if message.role != "assistant" or message.message_type != "runtime_progress":
+        return False
+    job_request_revision_id = message.payload.get("jobRequestRevisionId")
+    return isinstance(job_request_revision_id, str) and job_request_revision_id in completed_requirement_extractions
+
+
 def _message_event(message: TranscriptMessage) -> AgentWorkbenchTranscriptEventResponse:
     return AgentWorkbenchTranscriptEventResponse(
         eventId=f"message:{message.message_id}:completed",
@@ -130,7 +163,7 @@ def _operation_event(operation: OperationAuditRecord) -> AgentWorkbenchTranscrip
         itemId=operation.operation_id,
         kind=_operation_kind(status),
         status=status,
-        label=operation.operation_name,
+        label=_operation_label(operation),
         summary=_operation_summary(operation),
         payload=AgentWorkbenchTranscriptPayloadResponse(
             kind="operation",
@@ -327,11 +360,23 @@ def _event_kind_rank(kind: AgentWorkbenchStreamKind, role: str | None = None) ->
 
 
 def _operation_summary(operation: OperationAuditRecord) -> str | None:
+    if operation.operation_name == "extract_requirements" and operation.status in {"started", "running"}:
+        return "正在思考"
     if operation.result is not None:
         summary = operation.result.get("summary")
         if isinstance(summary, str) and summary:
             return summary
     return operation.reason_code
+
+
+def _operation_label(operation: OperationAuditRecord) -> str:
+    if operation.operation_name == "extract_requirements":
+        if operation.status == "completed":
+            return "需求处理完成"
+        if operation.status == "failed":
+            return "需求处理失败"
+        return "正在处理需求"
+    return operation.operation_name
 
 
 def _attr(value: object, name: str) -> object:

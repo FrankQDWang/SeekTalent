@@ -1,5 +1,5 @@
 import { ArrowUp, Check, CornerDownLeft } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { FieldTextarea } from "../primitives/FieldTextarea";
 import "./HomeStartPanel.css";
 
@@ -9,7 +9,6 @@ export type HomeStartPanelSubmitInput = {
 };
 
 type HomeStartPanelProps = {
-  collapsing?: boolean;
   errorMessage?: string | null;
   initialJobDescription?: string;
   loading?: boolean;
@@ -17,12 +16,12 @@ type HomeStartPanelProps = {
 };
 
 export function HomeStartPanel({
-  collapsing = false,
   errorMessage = null,
   initialJobDescription = "",
   loading = false,
   onSubmit,
 }: HomeStartPanelProps) {
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [jobDescription, setJobDescription] = useState(initialJobDescription);
   const [fallbackErrorMessage, setFallbackErrorMessage] = useState<
     string | null
@@ -32,18 +31,14 @@ export function HomeStartPanel({
   const submitDisabled = loading || trimmedJobDescription.length === 0;
 
   return (
-    <section
-      aria-label="新建招聘任务"
-      className={
-        "home-start-panel" + (collapsing ? " home-start-panel--collapsing" : "")
-      }
-    >
+    <section aria-label="新建招聘任务" className="home-start-panel">
       <div className="home-start-panel__body">
         <div className="home-start-panel__copy">
           <h2>Wide Talent Search</h2>
         </div>
         <form
           className="home-start-panel__form"
+          ref={formRef}
           onSubmit={async (event) => {
             event.preventDefault();
             if (submitDisabled) {
@@ -67,6 +62,13 @@ export function HomeStartPanel({
               hideLabel
               label="岗位名称和岗位JD"
               onChange={(event) => setJobDescription(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.shiftKey) {
+                  return;
+                }
+                event.preventDefault();
+                formRef.current?.requestSubmit();
+              }}
               placeholder=""
               rows={5}
               value={jobDescription}

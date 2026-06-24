@@ -10,6 +10,7 @@ import {
 import {
   ConversationScreen,
   ConversationScreenSide,
+  hasConversationWorkflowSurface,
 } from "./ConversationScreen";
 
 vi.mock("./StrategyGraph", () => ({
@@ -32,22 +33,11 @@ describe("ConversationScreen", () => {
     expect(screen.getByLabelText("Agent transcript")).toBeVisible();
   });
 
-  it("renders a resize separator between chat and graph when not compact", () => {
+  it("renders a horizontal resize separator between chat and graph without compact media queries", () => {
     expect.hasAssertions();
 
-    const addEventListener = vi.fn();
-    const removeEventListener = vi.fn();
-
-    vi.stubGlobal("matchMedia", (query: string) => ({
-      addEventListener,
-      addListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-      matches: false,
-      media: query,
-      onchange: null,
-      removeEventListener,
-      removeListener: vi.fn(),
-    }));
+    const matchMedia = vi.fn();
+    vi.stubGlobal("matchMedia", matchMedia);
 
     render(<ConversationScreen view={agentWorkbenchRunningViewFixture} />);
 
@@ -56,6 +46,7 @@ describe("ConversationScreen", () => {
     ).toBeVisible();
     expect(screen.getByRole("region", { name: "对话" })).toBeVisible();
     expect(screen.getByLabelText("检索策略图")).toBeVisible();
+    expect(matchMedia).not.toHaveBeenCalledWith("(max-width: 1080px)");
   });
 
   it("ignores malformed saved resize layouts", () => {
@@ -104,28 +95,42 @@ describe("ConversationScreen", () => {
     ).toBeVisible();
   });
 
-  it("keeps requirement review visible in compact workflow startup", () => {
+  it("does not show graph surface for incidental graph data before workflow starts", () => {
     expect.hasAssertions();
+    const preWorkflowView = {
+      ...agentWorkbenchRequirementReviewViewFixture,
+      strategyGraph: agentWorkbenchRunningViewFixture.strategyGraph,
+      thinkingProcess: agentWorkbenchRunningViewFixture.thinkingProcess,
+    };
 
-    vi.stubGlobal("matchMedia", (query: string) => ({
-      addEventListener: vi.fn(),
-      addListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-      matches: true,
-      media: query,
-      onchange: null,
-      removeEventListener: vi.fn(),
-      removeListener: vi.fn(),
-    }));
-
-    render(
-      <ConversationScreen view={agentWorkbenchRequirementReviewViewFixture} />,
-    );
+    render(<ConversationScreen view={preWorkflowView} />);
 
     expect(screen.getByRole("button", { name: "确认需求" })).toBeVisible();
-    expect(
-      screen.queryByRole("tablist", { name: "工作区" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("检索策略图")).not.toBeInTheDocument();
+    expect(hasConversationWorkflowSurface(preWorkflowView)).toBe(false);
+  });
+
+  it("shows the workflow surface for queued workflow starts before graph data arrives", () => {
+    expect.hasAssertions();
+    const queuedView = {
+      ...agentWorkbenchRequirementReviewViewFixture,
+      conversation: {
+        ...agentWorkbenchRequirementReviewViewFixture.conversation,
+        workflowStartState: "queued" as const,
+      },
+      pendingActions: {
+        ...agentWorkbenchRequirementReviewViewFixture.pendingActions,
+        allowed: ["submit_message"],
+        pendingRequirementReviewCount: 0,
+        primary: "workflow_start_queued",
+      },
+      requirementDraft: null,
+    };
+
+    render(<ConversationScreen view={queuedView} />);
+
+    expect(screen.getByLabelText("检索策略图")).toBeVisible();
+    expect(hasConversationWorkflowSurface(queuedView)).toBe(true);
   });
 
   it("shows permission failure as a stable screen state", () => {
@@ -150,21 +155,10 @@ describe("ConversationScreen", () => {
     ).toBeGreaterThan(0);
   });
 
-  it("does not add synthetic workspace tabs in compact layouts", () => {
+  it("does not add synthetic workspace tabs or compact media listeners", () => {
     expect.hasAssertions();
-    const addEventListener = vi.fn();
-    const removeEventListener = vi.fn();
-
-    vi.stubGlobal("matchMedia", (query: string) => ({
-      addEventListener,
-      addListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-      matches: true,
-      media: query,
-      onchange: null,
-      removeEventListener,
-      removeListener: vi.fn(),
-    }));
+    const matchMedia = vi.fn();
+    vi.stubGlobal("matchMedia", matchMedia);
 
     render(<ConversationScreen view={agentWorkbenchRunningViewFixture} />);
 
@@ -172,10 +166,7 @@ describe("ConversationScreen", () => {
     expect(
       screen.queryByRole("tablist", { name: "工作区" }),
     ).not.toBeInTheDocument();
-    expect(addEventListener).toHaveBeenCalledWith(
-      "change",
-      expect.any(Function),
-    );
+    expect(matchMedia).not.toHaveBeenCalled();
   });
 });
 

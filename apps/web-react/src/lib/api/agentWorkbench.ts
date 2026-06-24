@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   amendAgentWorkbenchRequirementFromText,
   confirmAgentWorkbenchRequirements,
-  createAgentWorkbenchConversation,
+  createAgentWorkbenchConversationFromJd,
   getAgentWorkbenchCandidateDetail,
   getAgentWorkbenchConversation,
   listAgentWorkbenchConversations,
@@ -46,8 +46,7 @@ type PendingOperationKey = {
 
 type PendingCreateFromJdOperation = {
   signature: string;
-  conversationId: string | null;
-  submitIdempotencyKey: string;
+  idempotencyKey: string;
 };
 
 export type CreateAgentWorkbenchConversationFromJdInput = {
@@ -113,25 +112,17 @@ export function useCreateAgentWorkbenchConversationFromJd() {
       if (pendingCreate.current?.signature !== signature) {
         pendingCreate.current = {
           signature,
-          conversationId: null,
-          submitIdempotencyKey: actionIdempotencyKey("submit-jd"),
+          idempotencyKey: actionIdempotencyKey("from-jd"),
         };
       }
       const pending = pendingCreate.current;
-      let conversationId = pending.conversationId;
-      if (conversationId === null) {
-        const title = conversationTitleFromInput(jobTitle, text);
-        const created = await createAgentWorkbenchConversation({ title });
-        conversationId = created.conversation.conversationId;
-        pending.conversationId = conversationId;
-      }
-      const view = await submitAgentWorkbenchMessage(conversationId, {
-        idempotencyKey: pending.submitIdempotencyKey,
+      const view = await createAgentWorkbenchConversationFromJd({
+        idempotencyKey: pending.idempotencyKey,
+        jobDescription: text,
         jobTitle: normalizedJobTitle,
-        messageType: "submitJd",
         notes: null,
-        text,
       });
+      const conversationId = view.conversation.conversationId;
       return { conversationId, view };
     },
     onSuccess: ({ conversationId, view }) => {
@@ -490,28 +481,11 @@ function operationSignature(action: string, payload: unknown): string {
   return JSON.stringify([action, payload]);
 }
 
-function conversationTitleFromInput(
-  jobTitle: string | null | undefined,
-  jobDescription: string,
-): string {
-  const normalizedTitle = normalizeOptionalText(jobTitle);
-  if (normalizedTitle !== null) {
-    return truncateConversationTitle(normalizedTitle);
-  }
-  return truncateConversationTitle(
-    jobDescription.replace(/\s+/g, " ").trim() || "新的寻才任务",
-  );
-}
-
 function normalizeOptionalText(
   value: string | null | undefined,
 ): string | null {
   const normalized = value?.trim() ?? "";
   return normalized.length > 0 ? normalized : null;
-}
-
-function truncateConversationTitle(title: string): string {
-  return title.length > 120 ? title.slice(0, 120) : title;
 }
 
 function markConversationDisconnected(

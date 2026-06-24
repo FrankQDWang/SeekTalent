@@ -221,10 +221,3 @@
 .candidate-detail-drawer__skeleton span:last-child {
   width: 64%;
 }
-
-@media (max-width: 720px) {
-  .candidate-detail-drawer {
-    min-width: 100%;
-    width: 100%;
-  }
-}

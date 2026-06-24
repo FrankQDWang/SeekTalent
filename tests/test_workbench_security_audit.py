@@ -183,8 +183,8 @@ def test_agent_workbench_openapi_documents_problem_details_and_source_kind_enum(
     assert response.status_code == 200
     openapi = response.json()
     schemas = openapi["components"]["schemas"]
-    submit_schema = schemas["WorkbenchSubmitJdMessageRequest"]
-    source_kinds = submit_schema["properties"]["sourceKinds"]
+    first_turn_schema = schemas["WorkbenchConversationFromJdRequest"]
+    source_kinds = first_turn_schema["properties"]["sourceKinds"]
     source_kinds_array = next(
         option
         for option in source_kinds.get("anyOf", [source_kinds])
@@ -192,7 +192,18 @@ def test_agent_workbench_openapi_documents_problem_details_and_source_kind_enum(
     )
     assert source_kinds_array["items"]["enum"] == ["cts", "liepin"]
 
+    first_turn = openapi["paths"]["/api/agent/workbench/conversations/from-jd"]["post"]
+    first_turn_responses = first_turn["responses"]
+    assert "400" in first_turn_responses
+    assert "409" in first_turn_responses
+    assert (
+        first_turn_responses["400"]["content"]["application/json"]["schema"]["$ref"]
+        == "#/components/schemas/ProblemDetails"
+    )
+
     submit_message = openapi["paths"]["/api/agent/workbench/conversations/{conversation_id}/messages"]["post"]
+    request_schema = submit_message["requestBody"]["content"]["application/json"]["schema"]
+    assert request_schema["$ref"] == "#/components/schemas/WorkbenchUserTextMessageRequest"
     responses = submit_message["responses"]
     assert "400" in responses
     assert "409" in responses

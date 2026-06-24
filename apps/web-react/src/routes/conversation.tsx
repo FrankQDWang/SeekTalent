@@ -53,22 +53,11 @@ function WorkbenchRoute() {
 }
 
 function NewConversationFlow() {
-  const [collapsing, setCollapsing] = useState(false);
-  const prefersReducedMotion = usePrefersReducedMotion();
-  const collapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate({ from: "/conversations/$conversationId" });
   const conversationsQuery = useAgentWorkbenchConversations();
   const createConversationMutation =
     useCreateAgentWorkbenchConversationFromJd();
   const [homeErrorMessage, setHomeErrorMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (collapseTimeoutRef.current !== null) {
-        clearTimeout(collapseTimeoutRef.current);
-      }
-    };
-  }, []);
 
   const onHomeSubmit = async (input: HomeStartPanelSubmitInput) => {
     setHomeErrorMessage(null);
@@ -77,27 +66,11 @@ function NewConversationFlow() {
         jobDescription: input.jobDescription,
         jobTitle: input.jobTitle,
       });
-      const navigateToConversation = () => {
-        void navigate({
-          params: { conversationId: result.conversationId },
-          to: "/conversations/$conversationId",
-          replace: true,
-        });
-      };
-
-      if (prefersReducedMotion) {
-        navigateToConversation();
-        return;
-      }
-
-      setCollapsing(true);
-      if (collapseTimeoutRef.current !== null) {
-        clearTimeout(collapseTimeoutRef.current);
-      }
-      collapseTimeoutRef.current = setTimeout(() => {
-        collapseTimeoutRef.current = null;
-        navigateToConversation();
-      }, HOME_START_PANEL_COLLAPSE_MS);
+      void navigate({
+        params: { conversationId: result.conversationId },
+        to: "/conversations/$conversationId",
+        replace: true,
+      });
     } catch (error) {
       setHomeErrorMessage(safeErrorMessage(error));
       throw error;
@@ -108,7 +81,6 @@ function NewConversationFlow() {
     <ConversationShell
       main={
         <HomeStartPanel
-          collapsing={collapsing}
           errorMessage={homeErrorMessage}
           loading={createConversationMutation.isPending}
           onSubmit={onHomeSubmit}
@@ -127,41 +99,6 @@ function NewConversationFlow() {
   );
 }
 
-const HOME_START_PANEL_COLLAPSE_MS = 500;
-
-function usePrefersReducedMotion(): boolean {
-  const [prefersReducedMotion, setPrefersReducedMotion] = useState(() =>
-    reducedMotionMatches(),
-  );
-
-  useEffect(() => {
-    const media = reducedMotionMedia();
-    if (media === null) {
-      return;
-    }
-    const update = () => setPrefersReducedMotion(media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
-
-  return prefersReducedMotion;
-}
-
-function reducedMotionMatches(): boolean {
-  return reducedMotionMedia()?.matches ?? false;
-}
-
-function reducedMotionMedia(): MediaQueryList | null {
-  if (
-    typeof window === "undefined" ||
-    typeof window.matchMedia !== "function"
-  ) {
-    return null;
-  }
-  return window.matchMedia("(prefers-reduced-motion: reduce)");
-}
-
 function ExistingConversationFlow({
   conversationId,
 }: {
@@ -174,6 +111,7 @@ function ExistingConversationFlow({
     [conversationId],
   );
   const requirementMutationChainRef = useRef<Promise<void>>(Promise.resolve());
+  const requirementMutationErrorRef = useRef<unknown>(null);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
     null,
   );
@@ -214,6 +152,7 @@ function ExistingConversationFlow({
 
   useEffect(() => {
     requirementMutationChainRef.current = Promise.resolve();
+    requirementMutationErrorRef.current = null;
     setActionErrorMessage(null);
     setSelectedCandidateId(null);
     setUpdatingRequirementItemIds([]);
@@ -251,8 +190,13 @@ function ExistingConversationFlow({
   const enqueueRequirementMutation = (run: () => Promise<void>) => {
     const next = requirementMutationChainRef.current
       .catch(() => undefined)
-      .then(run);
-    requirementMutationChainRef.current = next.catch(() => undefined);
+      .then(async () => {
+        requirementMutationErrorRef.current = null;
+        await run();
+      });
+    requirementMutationChainRef.current = next.catch((error: unknown) => {
+      requirementMutationErrorRef.current = error;
+    });
     return next;
   };
 
@@ -269,6 +213,12 @@ function ExistingConversationFlow({
   const onConfirmRequirements = async () => {
     setActionErrorMessage(null);
     await requirementMutationChainRef.current.catch(() => undefined);
+    if (requirementMutationErrorRef.current !== null) {
+      setActionErrorMessage(
+        safeErrorMessage(requirementMutationErrorRef.current),
+      );
+      return;
+    }
     const draftRevisionId = latestRequirementDraftRevisionId();
     if (!draftRevisionId) {
       setActionErrorMessage("当前没有可确认的需求草稿。");
@@ -302,6 +252,7 @@ function ExistingConversationFlow({
       });
     } catch (error) {
       setActionErrorMessage(safeErrorMessage(error));
+      throw error;
     } finally {
       setUpdatingRequirementItemIds((current) =>
         current.filter((itemId) => itemId !== item.itemId),
@@ -336,9 +287,7 @@ function ExistingConversationFlow({
             onAddOtherRequirement={onAddOtherRequirement}
             onConfirmRequirements={() => void onConfirmRequirements()}
             onSubmitMessage={onSubmitMessage}
-            onToggleRequirementItem={(item, selected) => {
-              void onToggleRequirementItem(item, selected);
-            }}
+            onToggleRequirementItem={onToggleRequirementItem}
             submittingMessage={submitMessageMutation.isPending}
             updatingRequirementItemIds={updatingRequirementItemIds}
             view={view}

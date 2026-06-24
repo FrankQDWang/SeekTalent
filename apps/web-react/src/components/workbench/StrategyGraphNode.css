@@ -151,10 +151,3 @@
   background: var(--strategy-node-tint) !important;
   color: #26334f;
 }
-
-@media (max-width: 760px) {
-  .strategy-graph-node {
-    border-radius: 14px;
-    padding: 13px 14px;
-  }
-}

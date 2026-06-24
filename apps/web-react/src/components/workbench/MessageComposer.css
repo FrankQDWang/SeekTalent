@@ -17,9 +17,3 @@
 .message-composer .st-field {
   min-width: 0;
 }
-
-@media (max-width: 720px) {
-  .message-composer {
-    grid-template-columns: 1fr;
-  }
-}

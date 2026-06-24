@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -59,11 +59,10 @@ class AgentMessageRequest(RequestModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-class WorkbenchSubmitJdMessageRequest(RequestModel):
+class WorkbenchConversationFromJdRequest(RequestModel):
     model_config = ConfigDict(extra="forbid")
 
-    messageType: Literal["submitJd"]
-    text: str = Field(min_length=1, max_length=MAX_AGENT_MESSAGE_CHARS)
+    jobDescription: str = Field(min_length=1, max_length=MAX_AGENT_MESSAGE_CHARS)
     jobTitle: str | None = Field(default=None, min_length=1, max_length=MAX_JOB_TITLE_CHARS)
     notes: str | None = Field(default=None, max_length=MAX_NOTES_CHARS)
     sourceKinds: list[SourceKind] | None = Field(default=None, min_length=1, max_length=2)
@@ -78,10 +77,7 @@ class WorkbenchUserTextMessageRequest(RequestModel):
     idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
 
 
-WorkbenchAgentMessageRequest = Annotated[
-    WorkbenchSubmitJdMessageRequest | WorkbenchUserTextMessageRequest,
-    Field(discriminator="messageType"),
-]
+WorkbenchAgentMessageRequest = WorkbenchUserTextMessageRequest
 
 
 class WorkbenchConversationCreateRequest(RequestModel):

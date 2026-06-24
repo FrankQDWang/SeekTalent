@@ -98,6 +98,57 @@ class DeterministicRouteRuntime:
         return sample_requirement_sheet(job_title=job_title)
 
 
+class BlockingRequirementRuntime:
+    extract_call_count = 0
+
+    def __init__(self, settings: AppSettings) -> None:
+        self.settings = settings
+
+    def extract_requirements(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str,
+        progress_callback=None,
+        requirement_cache_scope: str | None = None,
+    ) -> object:
+        del job_title, jd, notes, progress_callback, requirement_cache_scope
+        type(self).extract_call_count += 1
+        raise AssertionError("requirement extraction must not run inside first-turn HTTP acceptance")
+
+
+class CapturingRequirementRuntime:
+    extract_call_count = 0
+    requirement_cache_scopes: list[str | None] = []
+
+    def __init__(self, settings: AppSettings) -> None:
+        self.settings = settings
+
+    def extract_requirements(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str,
+        progress_callback=None,
+        requirement_cache_scope: str | None = None,
+    ) -> object:
+        del notes
+        type(self).extract_call_count += 1
+        type(self).requirement_cache_scopes.append(requirement_cache_scope)
+        if callable(progress_callback):
+            progress_callback(
+                ProgressEvent(
+                    type="requirements_completed",
+                    message="岗位需求解析完成。",
+                    payload={"stage": "requirements"},
+                )
+            )
+        title = job_title.strip() if isinstance(job_title, str) and job_title.strip() else "AI Agent 平台工程师"
+        return sample_requirement_sheet(job_title=title)
+
+
 @dataclass
 class StreamingRequest:
     app: object
@@ -105,6 +156,179 @@ class StreamingRequest:
 
     async def is_disconnected(self) -> bool:
         return False
+
+
+def test_workbench_from_jd_returns_transcript_before_requirement_extraction(tmp_path: Path) -> None:
+    BlockingRequirementRuntime.extract_call_count = 0
+    client = _client_with_runtime(tmp_path, BlockingRequirementRuntime)
+    _ensure_local_actor(client)
+
+    response = client.post(
+        "/api/agent/workbench/conversations/from-jd",
+        json={
+            "idempotencyKey": "first-turn-1",
+            "jobDescription": "上海 AI Agent 平台工程师，熟悉 RAG 和 workflow orchestration。",
+            "jobTitle": None,
+            "notes": None,
+            "sourceKinds": ["liepin"],
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["conversation"]["conversationId"].startswith("agent_conv_")
+    assert payload["conversation"]["workflowStartState"] == "not_started"
+    assert payload["requirementDraft"] is None
+    assert payload["strategyGraph"]["nodes"] == []
+    transcript_text = _transcript_text(payload)
+    assert "上海 AI Agent 平台工程师" in transcript_text
+    assert "正在处理需求" in transcript_text or "正在思考" in transcript_text
+    assert BlockingRequirementRuntime.extract_call_count == 0
+
+
+def test_workbench_from_jd_idempotency_replays_same_conversation_and_conflicts_on_changed_payload(
+    tmp_path: Path,
+) -> None:
+    client = _client_with_runtime(tmp_path, BlockingRequirementRuntime)
+    _ensure_local_actor(client)
+    request = {
+        "idempotencyKey": "first-turn-replay-1",
+        "jobDescription": "上海 AI Agent 平台工程师，熟悉 RAG 和 workflow orchestration。",
+        "jobTitle": "AI Agent 平台工程师",
+        "notes": None,
+        "sourceKinds": ["liepin"],
+    }
+
+    first = client.post("/api/agent/workbench/conversations/from-jd", json=request)
+    replay = client.post("/api/agent/workbench/conversations/from-jd", json=request)
+    conflict = client.post(
+        "/api/agent/workbench/conversations/from-jd",
+        json={**request, "jobDescription": "杭州 AI Agent 平台工程师，熟悉 RAG。"},
+    )
+
+    assert first.status_code == 201, first.text
+    assert replay.status_code == 201, replay.text
+    assert first.json()["conversation"]["conversationId"] == replay.json()["conversation"]["conversationId"]
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["reasonCode"] == "idempotency_key_conflict"
+    service = client.app.state.agent_conversation_service
+    with sqlite3.connect(service.store.path) as conn:
+        assert _table_count(conn, "wts_conversation_start_requests") == 1
+        assert _table_count(conn, "agent_conversations") == 1
+        assert _table_count(conn, "wts_job_request_revisions") == 1
+        assert _table_count(conn, "wts_outbox") == 1
+
+
+def test_workbench_from_jd_same_jd_new_conversation_does_not_reuse_old_requirement_draft(tmp_path: Path) -> None:
+    CapturingRequirementRuntime.extract_call_count = 0
+    CapturingRequirementRuntime.requirement_cache_scopes = []
+    client = _client_with_runtime(tmp_path, CapturingRequirementRuntime)
+    _ensure_local_actor(client)
+
+    old_response = client.post(
+        "/api/agent/workbench/conversations/from-jd",
+        json={
+            "idempotencyKey": "first-turn-old",
+            "jobDescription": "上海 AI Agent 平台工程师，熟悉 RAG 和 workflow orchestration。",
+            "jobTitle": "AI Agent 平台工程师",
+            "notes": None,
+            "sourceKinds": ["liepin"],
+        },
+    )
+    assert old_response.status_code == 201, old_response.text
+    old_conversation_id = old_response.json()["conversation"]["conversationId"]
+    assert client.app.state.requirement_extraction_outbox_runner.run_once() == 1
+    old_snapshot = client.get(f"/api/agent/workbench/conversations/{old_conversation_id}").json()
+    old_draft_id = old_snapshot["requirementDraft"]["draftRevisionId"]
+
+    new_response = client.post(
+        "/api/agent/workbench/conversations/from-jd",
+        json={
+            "idempotencyKey": "first-turn-new",
+            "jobDescription": "上海 AI Agent 平台工程师，熟悉 RAG 和 workflow orchestration。",
+            "jobTitle": "AI Agent 平台工程师",
+            "notes": None,
+            "sourceKinds": ["liepin"],
+        },
+    )
+
+    assert new_response.status_code == 201, new_response.text
+    new_payload = new_response.json()
+    new_conversation_id = new_payload["conversation"]["conversationId"]
+    assert new_conversation_id != old_conversation_id
+    assert new_payload["requirementDraft"] is None
+    assert new_payload["strategyGraph"]["nodes"] == []
+    assert "正在处理需求" in _transcript_text(new_payload) or "正在思考" in _transcript_text(new_payload)
+    assert CapturingRequirementRuntime.extract_call_count == 1
+
+    assert client.app.state.requirement_extraction_outbox_runner.run_once() == 1
+    new_snapshot = client.get(f"/api/agent/workbench/conversations/{new_conversation_id}").json()
+    new_draft_id = new_snapshot["requirementDraft"]["draftRevisionId"]
+    assert new_draft_id != old_draft_id
+    assert CapturingRequirementRuntime.extract_call_count == 2
+    assert CapturingRequirementRuntime.requirement_cache_scopes[-1] == new_conversation_id
+
+
+def test_requirement_extraction_outbox_completes_draft_after_fast_accept(tmp_path: Path) -> None:
+    CapturingRequirementRuntime.extract_call_count = 0
+    client = _client_with_runtime(tmp_path, CapturingRequirementRuntime)
+    _ensure_local_actor(client)
+
+    accepted = client.post(
+        "/api/agent/workbench/conversations/from-jd",
+        json={
+            "idempotencyKey": "first-turn-outbox-1",
+            "jobDescription": "上海 AI Agent 平台工程师，熟悉 RAG 和 workflow orchestration。",
+            "jobTitle": "AI Agent 平台工程师",
+            "notes": None,
+            "sourceKinds": ["liepin"],
+        },
+    )
+
+    assert accepted.status_code == 201, accepted.text
+    service = client.app.state.agent_conversation_service
+    with sqlite3.connect(service.store.path) as conn:
+        [row] = conn.execute(
+            "SELECT outbox_id, event_type, status FROM wts_outbox WHERE event_type = 'requirement_extraction_requested'"
+        ).fetchall()
+    assert row[2] == "pending"
+    assert service.process_requirement_extraction_outbox_item(row[0]).draft_revision_id
+    assert CapturingRequirementRuntime.extract_call_count == 1
+
+    payload = client.get(
+        f"/api/agent/workbench/conversations/{accepted.json()['conversation']['conversationId']}"
+    ).json()
+    assert payload["requirementDraft"] is not None
+    transcript_text = _transcript_text(payload)
+    assert "必须满足" in transcript_text
+    assert "正在处理需求" not in transcript_text
+    for section in payload["requirementDraft"]["sections"]:
+        for item in section["items"]:
+            if item.get("canSetSelected", True):
+                assert item["selected"] is True
+
+
+def test_workbench_messages_route_rejects_submit_jd(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _ensure_local_actor(client)
+    conversation_id = client.post(
+        "/api/agent/conversations",
+        json={"title": "资深 Python 后端"},
+    ).json()["conversation"]["conversationId"]
+
+    response = client.post(
+        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        json={
+            "messageType": "submitJd",
+            "text": "JD",
+            "jobTitle": None,
+            "notes": None,
+            "sourceKinds": ["liepin"],
+            "idempotencyKey": "old-submit-jd",
+        },
+    )
+
+    assert response.status_code in {400, 422}, response.text
 
 
 def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
@@ -2013,7 +2237,7 @@ def test_agent_workbench_create_route_returns_bff_snapshot(tmp_path: Path) -> No
     assert payload["schemaVersion"] == "agent.workbench.view.v2"
     assert payload["conversation"]["conversationId"].startswith("agent_conv_")
     assert payload["conversation"]["title"] == "资深 Python 后端"
-    assert payload["strategyGraph"]["nodes"][0]["nodeId"] == "requirements"
+    assert payload["strategyGraph"]["nodes"] == []
     assert payload["streamCursor"]["latestStreamSeq"] == 0
 
 
@@ -2187,25 +2411,12 @@ def test_agent_workbench_routes_project_real_runtime_outputs_into_snapshot_and_e
 def test_workbench_message_action_returns_refreshed_workbench_view(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
-    conversation_id = client.post(
-        "/api/agent/conversations",
-        json={"title": "资深 Python 后端"},
-    ).json()["conversation"]["conversationId"]
 
-    response = client.post(
-        f"/api/agent/workbench/conversations/{conversation_id}/messages",
-        json={
-            "messageType": "submitJd",
-            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
-            "jobTitle": "Python 平台负责人",
-            "notes": None,
-            "sourceKinds": ["cts"],
-            "idempotencyKey": "submit-jd-workbench-view-1",
-        },
+    body = _start_workbench_from_jd_and_process_extraction(
+        client,
+        idempotency_key="submit-jd-workbench-view-1",
     )
 
-    assert response.status_code == 200, response.text
-    body = response.json()
     assert body["schemaVersion"] == "agent.workbench.view.v2"
     assert body["requirementDraft"]["sections"][0]["displayName"] == "必须满足"
     assert body["messages"][0]["payload"]["kind"] == "job_request"
@@ -2214,20 +2425,13 @@ def test_workbench_message_action_returns_refreshed_workbench_view(tmp_path: Pat
 
 def test_workbench_message_action_uses_agent_write_rate_limiter(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    client.app.state.agent_rate_limiter = LocalAgentRateLimiter(max_writes_per_minute=1)
+    client.app.state.agent_rate_limiter = LocalAgentRateLimiter(max_writes_per_minute=0)
     _ensure_local_actor(client)
-    created = client.post(
-        "/api/agent/conversations",
-        json={"title": "资深 Python 后端"},
-    )
-    assert created.status_code == 201, created.text
-    conversation_id = created.json()["conversation"]["conversationId"]
 
     response = client.post(
-        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        "/api/agent/workbench/conversations/from-jd",
         json={
-            "messageType": "submitJd",
-            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobDescription": "需要 Python 平台负责人，负责 API 与平台工程。",
             "jobTitle": "Python 平台负责人",
             "notes": None,
             "sourceKinds": ["cts"],
@@ -2245,23 +2449,12 @@ def test_workbench_message_action_uses_agent_write_rate_limiter(tmp_path: Path) 
 def test_workbench_requirement_operation_returns_refreshed_workbench_view(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
-    conversation_id = client.post(
-        "/api/agent/conversations",
-        json={"title": "资深 Python 后端"},
-    ).json()["conversation"]["conversationId"]
-    submitted = client.post(
-        f"/api/agent/workbench/conversations/{conversation_id}/messages",
-        json={
-            "messageType": "submitJd",
-            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
-            "jobTitle": "Python 平台负责人",
-            "notes": None,
-            "sourceKinds": ["cts"],
-            "idempotencyKey": "submit-jd-workbench-operation-1",
-        },
+    submitted = _start_workbench_from_jd_and_process_extraction(
+        client,
+        idempotency_key="submit-jd-workbench-operation-1",
     )
-    assert submitted.status_code == 200, submitted.text
-    draft = submitted.json()["requirementDraft"]
+    conversation_id = submitted["conversation"]["conversationId"]
+    draft = submitted["requirementDraft"]
     first_item = draft["sections"][0]["items"][0]
 
     response = client.post(
@@ -2285,23 +2478,12 @@ def test_workbench_requirement_operation_returns_refreshed_workbench_view(tmp_pa
 def test_workbench_requirement_operations_reject_request_amplification(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
-    conversation_id = client.post(
-        "/api/agent/conversations",
-        json={"title": "资深 Python 后端"},
-    ).json()["conversation"]["conversationId"]
-    submitted = client.post(
-        f"/api/agent/workbench/conversations/{conversation_id}/messages",
-        json={
-            "messageType": "submitJd",
-            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
-            "jobTitle": "Python 平台负责人",
-            "notes": None,
-            "sourceKinds": ["cts"],
-            "idempotencyKey": "submit-jd-workbench-operation-cap-1",
-        },
+    submitted = _start_workbench_from_jd_and_process_extraction(
+        client,
+        idempotency_key="submit-jd-workbench-operation-cap-1",
     )
-    assert submitted.status_code == 200, submitted.text
-    draft = submitted.json()["requirementDraft"]
+    conversation_id = submitted["conversation"]["conversationId"]
+    draft = submitted["requirementDraft"]
     first_item = draft["sections"][0]["items"][0]
 
     response = client.post(
@@ -2326,23 +2508,12 @@ def test_workbench_requirement_operations_reject_request_amplification(tmp_path:
 def test_workbench_requirement_operations_reject_oversized_edit_text(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
-    conversation_id = client.post(
-        "/api/agent/conversations",
-        json={"title": "资深 Python 后端"},
-    ).json()["conversation"]["conversationId"]
-    submitted = client.post(
-        f"/api/agent/workbench/conversations/{conversation_id}/messages",
-        json={
-            "messageType": "submitJd",
-            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
-            "jobTitle": "Python 平台负责人",
-            "notes": None,
-            "sourceKinds": ["cts"],
-            "idempotencyKey": "submit-jd-workbench-operation-text-cap-1",
-        },
+    submitted = _start_workbench_from_jd_and_process_extraction(
+        client,
+        idempotency_key="submit-jd-workbench-operation-text-cap-1",
     )
-    assert submitted.status_code == 200, submitted.text
-    draft = submitted.json()["requirementDraft"]
+    conversation_id = submitted["conversation"]["conversationId"]
+    draft = submitted["requirementDraft"]
     first_item = draft["sections"][0]["items"][0]
 
     response = client.post(
@@ -2384,7 +2555,11 @@ def test_workbench_message_action_rejects_source_ids_only_submit_jd_contract(tmp
     assert response.status_code == 400, response.text
     problem = response.json()
     assert problem["reasonCode"] == "agent_request_invalid"
-    assert {region["field"] for region in problem["regions"]} >= {"submitJd.sourceIds"}
+    assert {region["field"] for region in problem["regions"]} >= {
+        "messageType",
+        "jobTitle",
+        "sourceIds",
+    }
 
 
 def test_agent_message_route_rejects_explicit_source_alias_conflict(tmp_path: Path) -> None:
@@ -2412,7 +2587,10 @@ def test_agent_message_route_rejects_explicit_source_alias_conflict(tmp_path: Pa
     assert response.json()["reasonCode"] == "job_request_source_kinds_conflict"
 
 
-def test_workbench_submit_jd_route_offloads_sync_work_to_threadpool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_workbench_from_jd_route_does_not_offload_sync_submit_jd_work_to_threadpool(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import seektalent_ui.agent_workbench_routes as routes
 
     calls: list[str] = []
@@ -2422,49 +2600,33 @@ def test_workbench_submit_jd_route_offloads_sync_work_to_threadpool(tmp_path: Pa
         return fn(*args, **kwargs)
 
     monkeypatch.setattr(routes, "run_in_threadpool", fake_run_in_threadpool)
-    client = _client(tmp_path)
+    client = _client_with_runtime(tmp_path, BlockingRequirementRuntime)
     _ensure_local_actor(client)
-    conversation_id = client.post(
-        "/api/agent/conversations",
-        json={"title": "资深 Python 后端"},
-    ).json()["conversation"]["conversationId"]
 
     response = client.post(
-        f"/api/agent/workbench/conversations/{conversation_id}/messages",
+        "/api/agent/workbench/conversations/from-jd",
         json={
-            "messageType": "submitJd",
-            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
+            "jobDescription": "需要 Python 平台负责人，负责 API 与平台工程。",
             "jobTitle": "Python 平台负责人",
             "notes": None,
             "sourceKinds": ["cts"],
-            "idempotencyKey": "submit-jd-workbench-threadpool-1",
+            "idempotencyKey": "from-jd-workbench-no-threadpool-1",
         },
     )
 
-    assert response.status_code == 200, response.text
-    assert calls == ["submit_jd", "_build_agent_workbench_snapshot"]
+    assert response.status_code == 201, response.text
+    assert calls == []
 
 
 def test_workbench_requirement_operation_stale_revision_returns_problem_details(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
-    conversation_id = client.post(
-        "/api/agent/conversations",
-        json={"title": "资深 Python 后端"},
-    ).json()["conversation"]["conversationId"]
-    submitted = client.post(
-        f"/api/agent/workbench/conversations/{conversation_id}/messages",
-        json={
-            "messageType": "submitJd",
-            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
-            "jobTitle": "Python 平台负责人",
-            "notes": None,
-            "sourceKinds": ["cts"],
-            "idempotencyKey": "submit-jd-workbench-stale-operation-1",
-        },
+    submitted = _start_workbench_from_jd_and_process_extraction(
+        client,
+        idempotency_key="submit-jd-workbench-stale-operation-1",
     )
-    assert submitted.status_code == 200, submitted.text
-    draft = submitted.json()["requirementDraft"]
+    conversation_id = submitted["conversation"]["conversationId"]
+    draft = submitted["requirementDraft"]
     first_item = draft["sections"][0]["items"][0]
 
     response = client.post(
@@ -2486,23 +2648,12 @@ def test_workbench_requirement_operation_stale_revision_returns_problem_details(
 def test_workbench_requirement_amend_empty_expected_revision_returns_validation_error(tmp_path: Path) -> None:
     client = _client(tmp_path)
     _ensure_local_actor(client)
-    conversation_id = client.post(
-        "/api/agent/conversations",
-        json={"title": "资深 Python 后端"},
-    ).json()["conversation"]["conversationId"]
-    submitted = client.post(
-        f"/api/agent/workbench/conversations/{conversation_id}/messages",
-        json={
-            "messageType": "submitJd",
-            "text": "需要 Python 平台负责人，负责 API 与平台工程。",
-            "jobTitle": "Python 平台负责人",
-            "notes": None,
-            "sourceKinds": ["cts"],
-            "idempotencyKey": "submit-jd-workbench-empty-amend-1",
-        },
+    submitted = _start_workbench_from_jd_and_process_extraction(
+        client,
+        idempotency_key="submit-jd-workbench-empty-amend-1",
     )
-    assert submitted.status_code == 200, submitted.text
-    draft_id = submitted.json()["requirementDraft"]["draftRevisionId"]
+    conversation_id = submitted["conversation"]["conversationId"]
+    draft_id = submitted["requirementDraft"]["draftRevisionId"]
 
     response = client.post(
         f"/api/agent/workbench/conversations/{conversation_id}/requirements/amend-from-text",
@@ -3627,6 +3778,61 @@ def _client(tmp_path: Path) -> TestClient:
         base_url="http://localhost",
         client=("127.0.0.1", 50000),
     )
+
+
+def _client_with_runtime(tmp_path: Path, runtime_factory: type) -> TestClient:
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        liepin_worker_mode="disabled",
+        liepin_browser_action_backend="disabled",
+    )
+    return TestClient(
+        create_app(settings=settings, runtime_factory=runtime_factory),
+        base_url="http://localhost",
+        client=("127.0.0.1", 50000),
+    )
+
+
+def _start_workbench_from_jd_and_process_extraction(
+    client: TestClient,
+    *,
+    idempotency_key: str,
+    job_description: str = "需要 Python 平台负责人，负责 API 与平台工程。",
+    job_title: str = "Python 平台负责人",
+    notes: str | None = None,
+    source_kinds: list[str] | None = None,
+) -> dict[str, Any]:
+    accepted = client.post(
+        "/api/agent/workbench/conversations/from-jd",
+        json={
+            "jobDescription": job_description,
+            "jobTitle": job_title,
+            "notes": notes,
+            "sourceKinds": source_kinds or ["cts"],
+            "idempotencyKey": idempotency_key,
+        },
+    )
+    assert accepted.status_code == 201, accepted.text
+    assert client.app.state.requirement_extraction_outbox_runner.run_once() == 1
+    conversation_id = accepted.json()["conversation"]["conversationId"]
+    snapshot = client.get(f"/api/agent/workbench/conversations/{conversation_id}")
+    assert snapshot.status_code == 200, snapshot.text
+    return snapshot.json()
+
+
+def _transcript_text(payload: dict[str, Any]) -> str:
+    return json.dumps(
+        {
+            "messages": payload.get("messages"),
+            "transcriptGroups": payload.get("transcriptGroups"),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _table_count(conn: sqlite3.Connection, table: str) -> int:
+    row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
+    return int(row[0])
 
 
 def _ensure_local_actor(client: TestClient) -> dict:

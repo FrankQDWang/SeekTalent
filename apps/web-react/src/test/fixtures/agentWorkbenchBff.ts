@@ -93,7 +93,7 @@ function workbenchView(
       {
         createdAt: now,
         messageId: "msg_001",
-        messageType: "submitJd",
+        messageType: "userText",
         payload: {
           kind: "job_request",
           jobTitle: "AI Agent 平台工程师",
