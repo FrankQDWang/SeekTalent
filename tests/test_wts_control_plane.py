@@ -40,8 +40,9 @@ class FakeRequirementExecutor:
         job_title: str | None,
         jd_text: str,
         notes: str | None,
+        requirement_cache_scope: str | None = None,
     ) -> RequirementSheet:
-        del notes
+        del notes, requirement_cache_scope
         self.received_job_titles.append(job_title)
         self.received_jd_texts.append(jd_text)
         extracted_title = job_title.strip() if isinstance(job_title, str) and job_title.strip() else _derive_title(jd_text)

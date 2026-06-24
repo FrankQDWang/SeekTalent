@@ -150,6 +150,7 @@ def test_submit_jd_route_accepts_omitted_job_title_and_source_kinds(tmp_path: Pa
     assert payload["requirementDraftRevisionId"]
     assert payload["requirementDraft"]["draftRevisionId"] == payload["requirementDraftRevisionId"]
     assert DeterministicRouteRuntime.requirement_calls[0]["job_title"] is None
+    assert DeterministicRouteRuntime.requirement_calls[0]["requirement_cache_scope"] == conversation_id
 
 
 def test_submit_jd_route_rejects_explicit_source_alias_conflict(tmp_path: Path) -> None:
