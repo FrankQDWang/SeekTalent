@@ -100,6 +100,13 @@
   width: 1px;
 }
 
+.requirement-form-event__item
+  input:focus-visible
+  + .requirement-form-event__box {
+  outline: 2px solid var(--st-focus);
+  outline-offset: 2px;
+}
+
 .requirement-form-event__box {
   align-items: center;
   background: var(--st-surface);

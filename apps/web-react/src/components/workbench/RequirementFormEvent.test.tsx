@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -27,7 +29,7 @@ describe("RequirementFormEvent", () => {
     ).toBeVisible();
   });
 
-  it("allows a selected checkbox to be unchecked", async () => {
+  it("allows a backend select-capable checkbox to be unchecked with set_selected", async () => {
     expect.hasAssertions();
     const user = userEvent.setup();
     const onAction = vi.fn(() => Promise.resolve());
@@ -36,7 +38,10 @@ describe("RequirementFormEvent", () => {
       <RequirementFormEvent event={requirementEvent()} onAction={onAction} />,
     );
 
-    await user.click(screen.getByRole("checkbox", { name: /Python 后端经验/ }));
+    const checkbox = screen.getByRole("checkbox", { name: /Python 后端经验/ });
+    expect(checkbox).toBeEnabled();
+
+    await user.click(checkbox);
 
     expect(onAction).toHaveBeenCalledWith({
       action: "set_selected",
@@ -108,6 +113,20 @@ describe("RequirementFormEvent", () => {
     await user.click(screen.getByRole("checkbox", { name: /Python 后端经验/ }));
     expect(onAction).not.toHaveBeenCalled();
   });
+
+  it("keeps the visual checkbox immediately after the hidden input for focus styling", () => {
+    expect.hasAssertions();
+
+    render(<RequirementFormEvent event={requirementEvent()} />);
+
+    const checkbox = screen.getByRole("checkbox", { name: /Python 后端经验/ });
+    expect(checkbox.nextElementSibling).toHaveClass(
+      "requirement-form-event__box",
+    );
+    expect(normalizedCssRulesText()).toContain(
+      ".requirement-form-event__item input:focus-visible + .requirement-form-event__box",
+    );
+  });
 });
 
 function requirementEvent(
@@ -137,7 +156,12 @@ function requirementPayload() {
               item_id: "item_python",
               text: "Python 后端经验",
               selected: true,
-              allowed_actions: ["set_selected"],
+              allowed_actions: [
+                "select",
+                "edit",
+                "delete",
+                "move_to_preferred_capabilities",
+              ],
               status: "active",
             },
           ],
@@ -147,4 +171,11 @@ function requirementPayload() {
       can_confirm: true,
     },
   };
+}
+
+function normalizedCssRulesText(): string {
+  return readFileSync(
+    join(process.cwd(), "src/components/workbench/RequirementFormEvent.css"),
+    "utf8",
+  ).replaceAll(/\s+/g, " ");
 }

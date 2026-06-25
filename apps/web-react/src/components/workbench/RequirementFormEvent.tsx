@@ -261,10 +261,8 @@ function readRequirementItems(
     }
     return [
       {
-        allowedActions: readStringArray(
-          itemRecord,
-          "allowed_actions",
-          "allowedActions",
+        allowedActions: normalizeAllowedActions(
+          readStringArray(itemRecord, "allowed_actions", "allowedActions"),
         ),
         itemId,
         selected: readBoolean(itemRecord, "selected") ?? false,
@@ -273,6 +271,14 @@ function readRequirementItems(
       },
     ];
   });
+}
+
+function normalizeAllowedActions(actions: string[]): string[] {
+  const normalized = new Set(actions);
+  if (normalized.has("select")) {
+    normalized.add("set_selected");
+  }
+  return [...normalized];
 }
 
 function readStringArray(
