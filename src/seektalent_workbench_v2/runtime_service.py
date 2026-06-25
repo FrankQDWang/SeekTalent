@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from inspect import signature
@@ -24,6 +25,12 @@ REQUIREMENT_DRAFT_SOURCE = "workbench_v2_agent"
 RUNTIME_INPUT_REQUIRED = "workbench_v2_runtime_input_required"
 REQUIREMENT_EXTRACTOR_UNAVAILABLE = "workbench_v2_requirement_extractor_unavailable"
 DEFAULT_SOURCE_IDS = ["liepin"]
+
+
+@dataclass(frozen=True)
+class WorkbenchV2RequirementExtraction:
+    draft: RequirementDraft
+    requirement_sheet: RequirementSheet
 
 
 class WorkbenchV2RuntimeService:
@@ -59,6 +66,13 @@ class WorkbenchV2RuntimeService:
         conversation_id: str,
         runtime_input: WorkbenchV2RuntimeInput,
     ) -> RequirementDraft:
+        return self.extract_requirement_bundle(conversation_id, runtime_input).draft
+
+    def extract_requirement_bundle(
+        self,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput,
+    ) -> WorkbenchV2RequirementExtraction:
         job_title, jd_text, notes = _runtime_input_values(runtime_input)
         sheet = _extract_requirements(
             self._requirement_extractor(),
@@ -67,7 +81,7 @@ class WorkbenchV2RuntimeService:
             notes=notes,
             requirement_cache_scope=conversation_id,
         )
-        return draft_from_requirement_sheet(
+        draft = draft_from_requirement_sheet(
             conversation_id=conversation_id,
             draft_revision_id=self.draft_revision_id_factory(),
             base_revision_id=None,
@@ -75,6 +89,7 @@ class WorkbenchV2RuntimeService:
             source=REQUIREMENT_DRAFT_SOURCE,
             created_at=self.now(),
         )
+        return WorkbenchV2RequirementExtraction(draft=draft, requirement_sheet=sheet)
 
     def start_run(
         self,

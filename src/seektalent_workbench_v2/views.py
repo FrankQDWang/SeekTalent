@@ -33,7 +33,9 @@ def conversation_to_list_summary(conversation: WorkbenchV2Conversation) -> Workb
     )
 
 
-def conversation_to_runtime(conversation: WorkbenchV2Conversation) -> WorkbenchV2RuntimeView:
+def conversation_to_runtime(conversation: WorkbenchV2Conversation) -> WorkbenchV2RuntimeView | None:
+    if conversation.runtime_run_id is None:
+        return None
     return WorkbenchV2RuntimeView(
         state=conversation.runtime_state,
         runtimeRunId=conversation.runtime_run_id,
@@ -74,6 +76,10 @@ def _visible_transcript_events(events: list[WorkbenchV2TranscriptEvent]) -> list
 
 def _latest_requirement_form(events: list[WorkbenchV2TranscriptEvent]) -> dict[str, object] | None:
     for event in reversed(events):
+        if event.type == "requirement_form_confirmed":
+            payload = dict(event.payload)
+            payload["readonly"] = True
+            return payload
         if event.type == "requirement_form":
-            return event.payload
+            return dict(event.payload)
     return None

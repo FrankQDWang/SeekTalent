@@ -2,16 +2,30 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Sequence, get_args
 
+import pytest
+from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet
 import seektalent_workbench_v2.service as service_module
 from seektalent_runtime_control.models import RuntimeRunRecord
 from seektalent_runtime_control.requirements import RequirementDraft, RequirementDraftItem, RequirementDraftSection
 from seektalent_workbench_v2.agent_loop import WorkbenchV2AgentOutput, WorkbenchV2RuntimeInput
-from seektalent_workbench_v2.models import WorkbenchV2TranscriptEvent, WorkbenchV2TranscriptEventInput
+from seektalent_workbench_v2.models import (
+    WorkbenchV2ConversationListView,
+    WorkbenchV2ConversationView,
+    WorkbenchV2TranscriptEvent,
+    WorkbenchV2TranscriptEventInput,
+)
 from seektalent_workbench_v2.service import WorkbenchV2Service
 from seektalent_workbench_v2.store import WorkbenchV2Store
+
+
+@dataclass(frozen=True)
+class FakeRequirementExtraction:
+    draft: RequirementDraft
+    requirement_sheet: RequirementSheet
 
 
 class FakeAgentLoop:
@@ -43,24 +57,60 @@ class FakeRuntimeService:
         self,
         draft: object | None = None,
         *,
+        requirement_sheet: RequirementSheet | None = None,
         extract_errors: Sequence[Exception] = (),
         start_errors: Sequence[Exception] = (),
     ) -> None:
         self.draft = draft or _draft_payload()
+        self.requirement_sheet = requirement_sheet or _requirement_sheet_payload()
         self.extract_errors = list(extract_errors)
         self.start_errors = list(start_errors)
         self.extract_calls: list[dict[str, object]] = []
         self.start_calls: list[dict[str, object]] = []
+        self.status_payloads: dict[str, dict[str, object]] = {}
+
+    def extract_requirement_bundle(
+        self,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput,
+    ) -> FakeRequirementExtraction:
+        self.extract_calls.append({"conversation_id": conversation_id, "runtime_input": runtime_input})
+        if self.extract_errors:
+            raise self.extract_errors.pop(0)
+        if not isinstance(self.draft, RequirementDraft):
+            raise TypeError("fake draft must be a RequirementDraft")
+        return FakeRequirementExtraction(draft=self.draft, requirement_sheet=self.requirement_sheet)
 
     def extract_requirements(
         self,
         conversation_id: str,
         runtime_input: WorkbenchV2RuntimeInput,
     ) -> object:
-        self.extract_calls.append({"conversation_id": conversation_id, "runtime_input": runtime_input})
-        if self.extract_errors:
-            raise self.extract_errors.pop(0)
-        return self.draft
+        return self.extract_requirement_bundle(conversation_id, runtime_input).draft
+
+    def start_run(
+        self,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput | None,
+        requirement_sheet: RequirementSheet,
+        *,
+        idempotency_key: str | None = None,
+        draft_revision_id: str | None = None,
+        selected_item_ids: list[str] | None = None,
+        deselected_item_ids: list[str] | None = None,
+    ) -> RuntimeRunRecord:
+        self.start_calls.append(
+            {
+                "conversation_id": conversation_id,
+                "runtime_input": runtime_input,
+                "requirement_sheet": requirement_sheet,
+                "idempotency_key": idempotency_key,
+                "draft_revision_id": draft_revision_id,
+                "selected_item_ids": selected_item_ids,
+                "deselected_item_ids": deselected_item_ids,
+            }
+        )
+        return self._runtime_run(conversation_id, idempotency_key=idempotency_key)
 
     def start_run_from_runtime_input(
         self,
@@ -82,6 +132,13 @@ class FakeRuntimeService:
                 "deselected_item_ids": deselected_item_ids,
             }
         )
+        self.extract_requirement_bundle(conversation_id, runtime_input)
+        return self._runtime_run(conversation_id, idempotency_key=idempotency_key)
+
+    def get_status(self, runtime_run_id: str) -> dict[str, object]:
+        return self.status_payloads[runtime_run_id]
+
+    def _runtime_run(self, conversation_id: str, *, idempotency_key: str | None) -> RuntimeRunRecord:
         if self.start_errors:
             raise self.start_errors.pop(0)
         run_index = len(self.start_calls)
@@ -116,6 +173,13 @@ def test_service_does_not_import_legacy_workbench_modules() -> None:
     assert "projection" not in source
 
 
+def test_public_view_schema_versions_are_literal_contracts() -> None:
+    assert get_args(WorkbenchV2ConversationView.model_fields["schemaVersion"].annotation) == ("agent.workbench.v2",)
+    assert get_args(WorkbenchV2ConversationListView.model_fields["schemaVersion"].annotation) == (
+        "agent.workbench.v2.list",
+    )
+
+
 def test_create_pure_chat_conversation_does_not_extract_requirements(tmp_path: Path) -> None:
     store = _store(tmp_path)
     agent = FakeAgentLoop(_agent_output(intent="chat", message="你好，我可以帮你处理招聘需求。"))
@@ -140,7 +204,7 @@ def test_create_pure_chat_conversation_does_not_extract_requirements(tmp_path: P
         "createdAt",
         "updatedAt",
     }
-    assert payload["runtime"] == {"state": "idle", "runtimeRunId": None}
+    assert payload["runtime"] is None
     assert set(payload["transcriptEvents"][0]) == {"eventId", "step", "type", "role", "status", "payload", "createdAt"}
     assert "conversation_id" not in payload["transcriptEvents"][0]
     assert "dedupe_key" not in payload["transcriptEvents"][0]
@@ -177,6 +241,7 @@ def test_create_jd_conversation_appends_requirement_form(tmp_path: Path) -> None
     form_event = view.transcriptEvents[2]
     assert form_event.payload["runtimeInput"] == runtime_input
     assert form_event.payload["draft"]["draft_revision_id"] == "reqdraft_1"
+    assert form_event.payload["requirementSheet"] == _requirement_sheet_payload().model_dump(mode="json")
     assert view.requirementForm == form_event.payload
     assert runtime.extract_calls == [
         {
@@ -406,15 +471,24 @@ def test_confirm_requirements_starts_runtime_from_current_form(tmp_path: Path) -
         {
             "conversation_id": first_view.conversation.conversationId,
             "runtime_input": WorkbenchV2RuntimeInput.model_validate(runtime_input),
+            "requirement_sheet": RequirementSheet.model_validate(first_view.requirementForm["requirementSheet"]),
             "idempotency_key": "confirm-1",
             "draft_revision_id": "reqdraft_1",
             "selected_item_ids": ["must_have_capabilities_1"],
             "deselected_item_ids": [],
         }
     ]
+    assert runtime.extract_calls == [
+        {
+            "conversation_id": first_view.conversation.conversationId,
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(runtime_input),
+        }
+    ]
     assert payload["conversation"]["runtimeRunId"] == "rtrun_1"
     assert payload["conversation"]["runtimeState"] == "queued"
     assert payload["runtime"] == {"state": "queued", "runtimeRunId": "rtrun_1"}
+    assert payload["requirementForm"]["readonly"] is True
+    assert payload["requirementForm"]["runtimeRunId"] == "rtrun_1"
     confirmed = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
     assert len(confirmed) == 1
     assert confirmed[0]["payload"]["runtimeInput"] == runtime_input
@@ -454,6 +528,38 @@ def test_confirm_requirements_without_current_form_appends_deterministic_error(t
     assert payload["transcriptEvents"][-1]["payload"] == {"text": "当前没有可确认的需求表单，无法启动运行。"}
 
 
+def test_confirm_requirements_with_form_missing_sheet_appends_deterministic_error(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    conversation = store.create_conversation(first_user_text="招一个 AI 平台工程师", idempotency_key="missing-sheet")
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": None,
+    }
+    store.append_event(
+        conversation.id,
+        WorkbenchV2TranscriptEventInput(
+            type="requirement_form",
+            role="assistant",
+            payload={"runtimeInput": runtime_input, "draft": _draft_payload().model_dump(mode="json")},
+        ),
+    )
+    agent = FakeAgentLoop(_agent_output(intent="confirm_requirements", message="确认，开始运行。"))
+    runtime = FakeRuntimeService()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+
+    view = asyncio.run(service.submit_message(conversation.id, "确认需求", idempotency_key="confirm-missing-sheet"))
+    payload = view.model_dump(mode="json")
+
+    assert runtime.extract_calls == []
+    assert runtime.start_calls == []
+    error_events = [event for event in payload["transcriptEvents"] if event["type"] == "error"]
+    assert error_events[-1]["payload"] == {
+        "code": "workbench_v2_requirement_sheet_required",
+        "message": "需求表单缺少 requirementSheet，无法启动运行。",
+    }
+
+
 def test_start_runtime_with_runtime_input_starts_without_current_form(tmp_path: Path) -> None:
     store = _store(tmp_path)
     runtime_input = {
@@ -480,13 +586,13 @@ def test_start_runtime_with_runtime_input_starts_without_current_form(tmp_path: 
             "deselected_item_ids": None,
         }
     ]
-    assert payload["requirementForm"] is None
     confirmed = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
     assert confirmed[-1]["payload"] == {
         "runtimeInput": runtime_input,
         "readonly": True,
         "runtimeRunId": "rtrun_1",
     }
+    assert payload["requirementForm"] == confirmed[-1]["payload"]
     assert payload["runtime"] == {"state": "queued", "runtimeRunId": "rtrun_1"}
 
 
@@ -521,8 +627,18 @@ def test_start_runtime_with_current_form_confirms_output_runtime_input(tmp_path:
     confirmed = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
 
     assert runtime.start_calls[-1]["runtime_input"] == WorkbenchV2RuntimeInput.model_validate(start_runtime_input)
+    assert runtime.start_calls[-1]["requirement_sheet"] == RequirementSheet.model_validate(
+        first_view.requirementForm["requirementSheet"]
+    )
+    assert runtime.extract_calls == [
+        {
+            "conversation_id": first_view.conversation.conversationId,
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(form_runtime_input),
+        }
+    ]
     assert confirmed[-1]["payload"]["runtimeInput"] == start_runtime_input
     assert confirmed[-1]["payload"]["draft"]["draft_revision_id"] == "reqdraft_1"
+    assert confirmed[-1]["payload"]["requirementSheet"] == first_view.requirementForm["requirementSheet"]
 
 
 def test_get_runtime_status_without_run_appends_idle_progress(tmp_path: Path) -> None:
@@ -541,6 +657,54 @@ def test_get_runtime_status_without_run_appends_idle_progress(tmp_path: Path) ->
         "assistant_message",
     ]
     assert payload["transcriptEvents"][1]["payload"] == {"state": "idle", "summary": "当前还没有开始运行。"}
+    assert payload["runtime"] is None
+
+
+@pytest.mark.parametrize("status", ["completed", "failed"])
+def test_get_runtime_status_updates_top_level_state_to_match_progress(tmp_path: Path, status: str) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": None,
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+        _agent_output(intent="confirm_requirements", message="已确认，开始运行。"),
+        _agent_output(intent="get_runtime_status", message="已刷新运行状态。"),
+    )
+    runtime = FakeRuntimeService()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-status"))
+    confirmed_view = asyncio.run(
+        service.submit_message(first_view.conversation.conversationId, "确认需求", idempotency_key="confirm-status")
+    )
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": status,
+        "stage": "finalization",
+        "summary": f"status is {status}",
+    }
+
+    view = asyncio.run(
+        service.submit_message(
+            confirmed_view.conversation.conversationId,
+            "现在运行到哪了？",
+            idempotency_key=f"status-{status}",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    assert payload["conversation"]["runtimeState"] == status
+    assert payload["runtime"] == {"state": status, "runtimeRunId": "rtrun_1"}
+    progress = [event for event in payload["transcriptEvents"] if event["type"] == "runtime_progress"]
+    assert progress[-1]["payload"] == {
+        "runtimeRunId": "rtrun_1",
+        "status": status,
+        "stage": "finalization",
+        "summary": f"status is {status}",
+        "state": status,
+    }
 
 
 def _store(tmp_path: Path) -> WorkbenchV2Store:
@@ -606,4 +770,28 @@ def _draft_payload() -> RequirementDraft:
         can_confirm=True,
         unresolved_review_item_count=0,
         amendment=None,
+    )
+
+
+def _requirement_sheet_payload() -> RequirementSheet:
+    return RequirementSheet(
+        job_title="AI 平台工程师",
+        title_anchor_terms=["AI 平台工程师"],
+        title_anchor_rationale="The job title names the platform role.",
+        role_summary="Build AI agent platform systems.",
+        must_have_capabilities=["Python 后端开发", "Agent 工作流经验"],
+        preferred_capabilities=["RAG 经验"],
+        exclusion_signals=["没有生产系统经验"],
+        hard_constraints=HardConstraintSlots(locations=["杭州"]),
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="AI 平台工程师",
+                source="job_title",
+                category="role_anchor",
+                priority=100,
+                evidence="岗位名称",
+                first_added_round=0,
+            )
+        ],
+        scoring_rationale="Prioritize platform engineering and agent workflow experience.",
     )

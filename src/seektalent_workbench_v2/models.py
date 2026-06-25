@@ -113,15 +113,15 @@ class WorkbenchV2TranscriptEventView(BaseModel):
 class WorkbenchV2ConversationView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schemaVersion: str = WORKBENCH_V2_SCHEMA_VERSION
+    schemaVersion: Literal["agent.workbench.v2"] = WORKBENCH_V2_SCHEMA_VERSION
     conversation: WorkbenchV2ConversationPublic
     transcriptEvents: list[WorkbenchV2TranscriptEventView] = Field(default_factory=list)
     requirementForm: dict[str, object] | None = None
-    runtime: WorkbenchV2RuntimeView
+    runtime: WorkbenchV2RuntimeView | None = None
 
 
 class WorkbenchV2ConversationListView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schemaVersion: str = WORKBENCH_V2_LIST_SCHEMA_VERSION
+    schemaVersion: Literal["agent.workbench.v2.list"] = WORKBENCH_V2_LIST_SCHEMA_VERSION
     conversations: list[WorkbenchV2ConversationListSummary] = Field(default_factory=list)

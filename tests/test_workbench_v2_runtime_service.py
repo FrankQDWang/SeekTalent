@@ -94,6 +94,30 @@ def test_runtime_service_extracts_requirement_form(tmp_path: Path) -> None:
     assert set(item_sources) == {"workbench_v2_agent"}
 
 
+def test_runtime_service_extracts_requirement_bundle_once(tmp_path: Path) -> None:
+    sheet = _requirement_sheet()
+    extractor = RecordingRequirementExtractor(sheet)
+    service = _service(tmp_path, requirement_extractor=extractor)
+
+    bundle = service.extract_requirement_bundle(
+        "agentv2_bundle",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes="杭州"),
+    )
+
+    assert extractor.calls == [
+        {
+            "job_title": "AI 平台工程师",
+            "jd_text": "需要 Agent 系统经验",
+            "notes": "杭州",
+            "requirement_cache_scope": "agentv2_bundle",
+        }
+    ]
+    assert bundle.requirement_sheet == sheet
+    assert bundle.draft.conversation_id == "agentv2_bundle"
+    assert bundle.draft.draft_revision_id == "reqdraft_1"
+    assert bundle.draft.status == "draft_ready"
+
+
 def test_runtime_service_extracts_requirement_form_from_runtime_factory(tmp_path: Path) -> None:
     sheet = _requirement_sheet()
     extractor = RecordingRequirementExtractor(sheet)

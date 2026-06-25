@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Protocol, cast
 
+from seektalent.models import RequirementSheet
 from seektalent_workbench_v2.agent_loop import (
     WorkbenchV2AgentLoop,
     WorkbenchV2AgentOutput,
@@ -19,11 +20,28 @@ from seektalent_workbench_v2.store import WorkbenchV2Store
 from seektalent_workbench_v2.views import conversation_list_to_view, conversation_record_to_view
 
 
+class WorkbenchV2RequirementExtraction(Protocol):
+    draft: object
+    requirement_sheet: RequirementSheet
+
+
 class WorkbenchV2RequirementRuntime(Protocol):
     def extract_requirements(
         self,
         conversation_id: str,
         runtime_input: WorkbenchV2RuntimeInput,
+    ) -> object: ...
+
+    def start_run(
+        self,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput | None,
+        requirement_sheet: RequirementSheet,
+        *,
+        idempotency_key: str | None = None,
+        draft_revision_id: str | None = None,
+        selected_item_ids: list[str] | None = None,
+        deselected_item_ids: list[str] | None = None,
     ) -> object: ...
 
     def start_run_from_runtime_input(
@@ -149,7 +167,7 @@ class WorkbenchV2Service:
                     dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="status"),
                 ),
             )
-            draft = self.runtime_service.extract_requirements(conversation_id, output.runtimeInput)
+            draft, requirement_sheet = self._extract_requirement_form(conversation_id, output.runtimeInput)
             self.store.append_event(
                 conversation_id,
                 WorkbenchV2TranscriptEventInput(
@@ -158,6 +176,7 @@ class WorkbenchV2Service:
                     payload={
                         "runtimeInput": _dump_mapping(output.runtimeInput),
                         "draft": _dump_mapping(draft),
+                        "requirementSheet": _dump_mapping(requirement_sheet),
                     },
                     dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="requirement-form"),
                 ),
@@ -204,6 +223,20 @@ class WorkbenchV2Service:
             dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="assistant"),
         )
 
+    def _extract_requirement_form(
+        self,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput,
+    ) -> tuple[object, RequirementSheet]:
+        extract_bundle = getattr(self.runtime_service, "extract_requirement_bundle", None)
+        if callable(extract_bundle):
+            bundle = cast(
+                "Callable[[str, WorkbenchV2RuntimeInput], WorkbenchV2RequirementExtraction]",
+                extract_bundle,
+            )(conversation_id, runtime_input)
+            return bundle.draft, bundle.requirement_sheet
+        raise RuntimeError("workbench_v2_requirement_bundle_unavailable")
+
     def _confirm_requirements(
         self,
         *,
@@ -233,9 +266,18 @@ class WorkbenchV2Service:
             )
             return
         draft_payload = _mapping_or_none(form_payload.get("draft"))
-        self._start_runtime_from_input(
+        requirement_sheet = _requirement_sheet_from_payload(form_payload.get("requirementSheet"))
+        if requirement_sheet is None:
+            self._append_requirement_sheet_required_error(
+                conversation_id,
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return
+        self._start_runtime_from_requirement_sheet(
             conversation_id=conversation_id,
             runtime_input=runtime_input,
+            requirement_sheet=requirement_sheet,
             confirmed_payload=dict(form_payload),
             message=message,
             scope=scope,
@@ -267,8 +309,29 @@ class WorkbenchV2Service:
         draft_payload = _mapping_or_none(form_payload.get("draft")) if form_payload is not None else None
         confirmed_payload: dict[str, object]
         if form_payload is not None:
+            requirement_sheet = _requirement_sheet_from_payload(form_payload.get("requirementSheet"))
+            if requirement_sheet is None:
+                self._append_requirement_sheet_required_error(
+                    conversation_id,
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                )
+                return
             confirmed_payload = dict(form_payload)
             confirmed_payload["runtimeInput"] = _dump_mapping(runtime_input)
+            self._start_runtime_from_requirement_sheet(
+                conversation_id=conversation_id,
+                runtime_input=runtime_input,
+                requirement_sheet=requirement_sheet,
+                confirmed_payload=confirmed_payload,
+                message=message,
+                scope=scope,
+                idempotency_key=idempotency_key,
+                draft_revision_id=_draft_revision_id(draft_payload),
+                selected_item_ids=_selected_item_ids(draft_payload),
+                deselected_item_ids=_deselected_item_ids(draft_payload),
+            )
+            return
         else:
             confirmed_payload = {"runtimeInput": _dump_mapping(runtime_input)}
         self._start_runtime_from_input(
@@ -281,6 +344,53 @@ class WorkbenchV2Service:
             draft_revision_id=_draft_revision_id(draft_payload),
             selected_item_ids=_selected_item_ids(draft_payload),
             deselected_item_ids=_deselected_item_ids(draft_payload),
+        )
+
+    def _append_requirement_sheet_required_error(
+        self,
+        conversation_id: str,
+        *,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> None:
+        self._append_service_error(
+            conversation_id,
+            code="workbench_v2_requirement_sheet_required",
+            message="需求表单缺少 requirementSheet，无法启动运行。",
+            scope=scope,
+            idempotency_key=idempotency_key,
+        )
+
+    def _start_runtime_from_requirement_sheet(
+        self,
+        *,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput,
+        requirement_sheet: RequirementSheet,
+        confirmed_payload: dict[str, object],
+        message: str,
+        scope: str,
+        idempotency_key: str | None,
+        draft_revision_id: str | None,
+        selected_item_ids: list[str] | None,
+        deselected_item_ids: list[str] | None,
+    ) -> None:
+        run = self.runtime_service.start_run(
+            conversation_id,
+            runtime_input,
+            requirement_sheet,
+            idempotency_key=idempotency_key,
+            draft_revision_id=draft_revision_id,
+            selected_item_ids=selected_item_ids,
+            deselected_item_ids=deselected_item_ids,
+        )
+        self._append_started_runtime(
+            conversation_id=conversation_id,
+            run=run,
+            confirmed_payload=confirmed_payload,
+            message=message,
+            scope=scope,
+            idempotency_key=idempotency_key,
         )
 
     def _start_runtime_from_input(
@@ -304,6 +414,25 @@ class WorkbenchV2Service:
             selected_item_ids=selected_item_ids,
             deselected_item_ids=deselected_item_ids,
         )
+        self._append_started_runtime(
+            conversation_id=conversation_id,
+            run=run,
+            confirmed_payload=confirmed_payload,
+            message=message,
+            scope=scope,
+            idempotency_key=idempotency_key,
+        )
+
+    def _append_started_runtime(
+        self,
+        *,
+        conversation_id: str,
+        run: object,
+        confirmed_payload: dict[str, object],
+        message: str,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> None:
         runtime_run_id = _required_text_attr(run, "runtime_run_id")
         runtime_state = _runtime_state_from_run_status(getattr(run, "status", None))
         self.store.set_runtime(conversation_id, runtime_run_id=runtime_run_id, runtime_state=runtime_state)
@@ -405,7 +534,9 @@ class WorkbenchV2Service:
             return
         status_payload = cast("Mapping[str, object]", get_status(runtime_run_id))
         payload = dict(status_payload)
-        payload.setdefault("state", _runtime_state_from_run_status(payload.get("status")))
+        runtime_state = _runtime_state_from_status_payload(payload)
+        payload["state"] = runtime_state
+        self.store.set_runtime(conversation_id, runtime_run_id=runtime_run_id, runtime_state=runtime_state)
         self.store.append_event(
             conversation_id,
             WorkbenchV2TranscriptEventInput(
@@ -447,6 +578,15 @@ def _runtime_input_from_payload(payload: object) -> WorkbenchV2RuntimeInput | No
         return None
     try:
         return WorkbenchV2RuntimeInput.model_validate(payload)
+    except ValueError:
+        return None
+
+
+def _requirement_sheet_from_payload(payload: object) -> RequirementSheet | None:
+    if not isinstance(payload, Mapping):
+        return None
+    try:
+        return RequirementSheet.model_validate(payload)
     except ValueError:
         return None
 
@@ -524,6 +664,13 @@ def _runtime_state_from_run_status(status: object) -> WorkbenchV2RuntimeState:
     if status in {"cancelled"}:
         return "cancelled"
     return "running"
+
+
+def _runtime_state_from_status_payload(payload: Mapping[str, object]) -> WorkbenchV2RuntimeState:
+    state = payload.get("state")
+    if state in {"idle", "queued", "running", "completed", "failed", "cancelled"}:
+        return cast("WorkbenchV2RuntimeState", state)
+    return _runtime_state_from_run_status(payload.get("status"))
 
 
 def _required_text_attr(value: object, attribute: str) -> str:
