@@ -95,6 +95,7 @@ TEXT_LLM_MODEL_ID_FIELDS = {
     "candidate_feedback_model_id",
     "prf_probe_phrase_proposal_model_id",
     "workbench_note_writer_model_id",
+    "workbench_conversation_model_id",
 }
 LEGACY_TEXT_LLM_PREFIXES = ("openai-chat:", "openai-responses:", "anthropic:")
 TEXT_LLM_ENDPOINT_KIND_BY_PROTOCOL_FAMILY = {
@@ -257,6 +258,8 @@ class TextLLMSettings:
     prf_probe_phrase_proposal_reasoning_effort: ReasoningEffortName
     workbench_note_writer_model_id: str
     workbench_note_writer_reasoning_effort: ReasoningEffort
+    workbench_conversation_model_id: str
+    workbench_conversation_reasoning_effort: ReasoningEffort
     prf_probe_phrase_proposal_timeout_seconds: float
     prf_probe_phrase_proposal_live_harness_timeout_seconds: float
     prf_probe_phrase_proposal_max_output_tokens: int
@@ -524,6 +527,8 @@ class AppSettings(BaseSettings):
     prf_probe_phrase_proposal_reasoning_effort: ReasoningEffortName = "off"
     workbench_note_writer_model_id: str = "deepseek-v4-flash"
     workbench_note_writer_reasoning_effort: ReasoningEffort = "off"
+    workbench_conversation_model_id: str = "deepseek-v4-flash"
+    workbench_conversation_reasoning_effort: ReasoningEffort = "off"
     prf_probe_phrase_proposal_timeout_seconds: float = 3.0
     prf_probe_phrase_proposal_live_harness_timeout_seconds: float = 30.0
     prf_probe_phrase_proposal_max_output_tokens: int = 2048
@@ -863,6 +868,8 @@ class AppSettings(BaseSettings):
             prf_probe_phrase_proposal_reasoning_effort=self.prf_probe_phrase_proposal_reasoning_effort,
             workbench_note_writer_model_id=self.workbench_note_writer_model_id,
             workbench_note_writer_reasoning_effort=self.workbench_note_writer_reasoning_effort,
+            workbench_conversation_model_id=self.workbench_conversation_model_id,
+            workbench_conversation_reasoning_effort=self.workbench_conversation_reasoning_effort,
             prf_probe_phrase_proposal_timeout_seconds=self.prf_probe_phrase_proposal_timeout_seconds,
             prf_probe_phrase_proposal_live_harness_timeout_seconds=(
                 self.prf_probe_phrase_proposal_live_harness_timeout_seconds

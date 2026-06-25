@@ -33,6 +33,7 @@ OPENAI_NATIVE_JSON_SCHEMA_STAGES = frozenset(
         "scoring",
         "judge",
         "structured_repair",
+        "workbench_conversation",
     }
 )
 OPENAI_PROMPTED_JSON_STAGES = frozenset({"tui_summary", "candidate_feedback", "prf_probe_phrase_proposal"})
@@ -49,6 +50,7 @@ STAGE_MODEL_ATTR = {
     "candidate_feedback": "candidate_feedback_model_id",
     "prf_probe_phrase_proposal": "prf_probe_phrase_proposal_model_id",
     "workbench_note_writer": "workbench_note_writer_model_id",
+    "workbench_conversation": "workbench_conversation_model_id",
 }
 TEXT_LLM_BASE_URLS = {
     ("openai_chat_completions_compatible", "bailian_openai_chat_completions", "beijing"): "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -229,6 +231,9 @@ def _resolve_stage_reasoning_policy(
     if stage == "workbench_note_writer":
         effort = settings.workbench_note_writer_reasoning_effort
         return effort != "off", effort
+    if stage == "workbench_conversation":
+        effort = settings.workbench_conversation_reasoning_effort
+        return False, effort
     if stage in {"scoring", "finalize", "tui_summary"}:
         return False, "off"
     raise ValueError(f"Unsupported text-llm stage: {stage}")

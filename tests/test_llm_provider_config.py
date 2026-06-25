@@ -245,6 +245,22 @@ def test_workbench_note_writer_output_spec_is_plain_text() -> None:
     assert not isinstance(output_spec, PromptedOutput)
 
 
+def test_workbench_conversation_stage_uses_bailian_native_strict_schema() -> None:
+    from seektalent.llm import build_output_spec, resolve_stage_model_config, resolve_structured_output_mode
+    from tests.test_llm_provider_config import _json_schema_capable_model
+    from tests.settings_factory import make_settings
+
+    stage = resolve_stage_model_config(make_settings(), stage="workbench_conversation")
+    output_spec = build_output_spec(stage, _json_schema_capable_model(), dict)
+
+    assert stage.provider_label == "bailian"
+    assert stage.endpoint_kind == "bailian_openai_chat_completions"
+    assert stage.model_id == "deepseek-v4-flash"
+    assert stage.reasoning_effort == "off"
+    assert resolve_structured_output_mode(stage) == "native_json_schema"
+    assert output_spec.__class__.__name__ == "NativeOutput"
+
+
 def test_runtime_mode_defaults_to_dev_paths() -> None:
     settings = make_settings()
 
