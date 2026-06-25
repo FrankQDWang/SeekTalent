@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 WORKBENCH_V2_SCHEMA_VERSION = "agent.workbench.v2"
@@ -44,6 +45,15 @@ class WorkbenchV2TranscriptEventInput(BaseModel):
     status: WorkbenchV2EventStatus = "completed"
     parent_event_id: str | None = None
     dedupe_key: str | None = None
+
+    @field_validator("payload")
+    @classmethod
+    def payload_must_be_json_serializable(cls, payload: dict[str, object]) -> dict[str, object]:
+        try:
+            json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("payload must be JSON-serializable") from exc
+        return payload
 
 
 class WorkbenchV2TranscriptEvent(WorkbenchV2TranscriptEventInput):
