@@ -14,25 +14,25 @@ test.beforeEach(({ page }, testInfo) => {
   failOnPageProblems(page);
 });
 
-test("starts clean first-turn conversations from JD without legacy create routes", async ({
+test("starts clean v2 first-turn conversations without legacy JD routes", async ({
   page,
 }) => {
-  const fromJdRequests: Record<string, unknown>[] = [];
-  const firstTurnProgressSnapshot = firstTurnSnapshot("agent_conv_created_1");
-  const secondFirstTurnSnapshot = firstTurnSnapshot("agent_conv_created_2");
+  const createRequests: Record<string, unknown>[] = [];
+  const firstTurnProgressSnapshot = v2FirstTurnSnapshot("agentv2_created_1");
+  const secondFirstTurnSnapshot = v2FirstTurnSnapshot("agentv2_created_2");
   const queuedWorkflowSnapshot = queuedSnapshot(
     "agent_conv_queued_empty_graph",
   );
   const snapshots = new Map<string, unknown>([
-    ["agent_conv_created_1", firstTurnProgressSnapshot],
-    ["agent_conv_created_2", secondFirstTurnSnapshot],
+    ["agentv2_created_1", firstTurnProgressSnapshot],
+    ["agentv2_created_2", secondFirstTurnSnapshot],
     ["agent_conv_queued_empty_graph", queuedWorkflowSnapshot],
   ]);
 
   await page.route("**/api/agent/workbench/conversations", async (route) => {
     if (route.request().method() === "POST") {
       throw new Error(
-        "First-turn Workbench start must use /conversations/from-jd.",
+        "Workbench v2 start must not use the old Workbench create route.",
       );
     }
     await route.fulfill({
@@ -40,19 +40,49 @@ test("starts clean first-turn conversations from JD without legacy create routes
       json: { conversations: [] },
     });
   });
-  await page.route(
-    "**/api/agent/workbench/conversations/from-jd",
-    async (route) => {
+  await page.route("**/api/agent/workbench/conversations/from-jd", (route) => {
+    throw new Error(
+      `Workbench v2 start must not call legacy from-jd route: ${route.request().url()}`,
+    );
+  });
+  await page.route("**/api/agent/workbench/v2/conversations", async (route) => {
+    if (route.request().method() === "POST") {
       const request = route.request().postDataJSON() as Record<string, unknown>;
-      fromJdRequests.push(request);
+      createRequests.push(request);
       const snapshot =
-        fromJdRequests.length === 1
+        createRequests.length === 1
           ? firstTurnProgressSnapshot
           : secondFirstTurnSnapshot;
       await route.fulfill({
         contentType: "application/json",
         json: snapshot,
         status: 201,
+      });
+      return;
+    }
+
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        schemaVersion: "agent.workbench.v2.list",
+        conversations: [...snapshots.values()]
+          .filter(isWorkbenchV2Snapshot)
+          .map((snapshot) => ({
+            conversationId: snapshot.conversation.conversationId,
+            title: snapshot.conversation.title,
+            status: snapshot.conversation.runtimeState,
+            updatedAt: snapshot.conversation.updatedAt,
+          })),
+      },
+    });
+  });
+  await page.route(
+    "**/api/agent/workbench/v2/conversations/agentv2_*",
+    async (route) => {
+      const conversationId = route.request().url().split("/").at(-1) ?? "";
+      await route.fulfill({
+        contentType: "application/json",
+        json: snapshots.get(conversationId),
       });
     },
   );
@@ -77,30 +107,30 @@ test("starts clean first-turn conversations from JD without legacy create routes
     "上海 AI Agent 平台工程师，要求 Python 后端、RAG 和 workflow orchestration。";
 
   await page.goto("/");
-  await page.getByLabel("岗位名称和岗位JD").fill(jobDescription);
-  await page.getByLabel("岗位名称和岗位JD").press("Enter");
+  await page.getByLabel("消息、JD 或招聘需求").fill(jobDescription);
+  await page.getByLabel("消息、JD 或招聘需求").press("Enter");
 
-  await expect.poll(() => fromJdRequests.length).toBe(1);
-  expect(fromJdRequests[0]).toMatchObject({
-    jobDescription,
-    jobTitle: null,
+  await expect.poll(() => createRequests.length).toBe(1);
+  expect(createRequests[0]).toMatchObject({
+    message: jobDescription,
   });
-  expect(fromJdRequests[0]).not.toHaveProperty("sourceKinds");
-  await expect(page).toHaveURL(/\/conversations\/agent_conv_created_1$/);
+  expect(createRequests[0]).not.toHaveProperty("sourceKinds");
+  expect(typeof createRequests[0].idempotencyKey).toBe("string");
+  await expect(page).toHaveURL(/\/conversations\/agentv2_created_1$/);
   await expect(page.getByLabel("Agent transcript")).toContainText("正在思考");
+  await expect(page.getByText("已处理")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "确认需求" })).toHaveCount(0);
   await expect(page.getByRole("region", { name: "检索策略图" })).toHaveCount(0);
 
   await page.goto("/");
-  await page.getByLabel("岗位名称和岗位JD").fill(jobDescription);
-  await page.getByLabel("岗位名称和岗位JD").press("Enter");
+  await page.getByLabel("消息、JD 或招聘需求").fill(jobDescription);
+  await page.getByLabel("消息、JD 或招聘需求").press("Enter");
 
-  await expect.poll(() => fromJdRequests.length).toBe(2);
-  expect(fromJdRequests[1]).toMatchObject({
-    jobDescription,
-    jobTitle: null,
+  await expect.poll(() => createRequests.length).toBe(2);
+  expect(createRequests[1]).toMatchObject({
+    message: jobDescription,
   });
-  await expect(page).toHaveURL(/\/conversations\/agent_conv_created_2$/);
+  await expect(page).toHaveURL(/\/conversations\/agentv2_created_2$/);
   await expect(page.getByRole("button", { name: "确认需求" })).toHaveCount(0);
 
   await page.goto("/conversations/agent_conv_queued_empty_graph");
@@ -114,6 +144,60 @@ test("starts clean first-turn conversations from JD without legacy create routes
     )
     .toBeGreaterThan(900);
 });
+
+function v2FirstTurnSnapshot(conversationId: string) {
+  return {
+    schemaVersion: "agent.workbench.v2",
+    conversation: {
+      conversationId,
+      title: "AI Agent 平台工程师",
+      runtimeState: "idle",
+      runtimeRunId: null,
+      createdAt: "2026-06-13T09:30:00.000Z",
+      updatedAt: "2026-06-13T09:30:04.000Z",
+    },
+    transcriptEvents: [
+      {
+        createdAt: "2026-06-13T09:30:00.000Z",
+        eventId: `${conversationId}:message:first_turn`,
+        payload: {
+          text: "上海 AI Agent 平台工程师，要求 Python 后端、RAG 和 workflow orchestration。",
+        },
+        role: "user",
+        status: "completed",
+        step: 1,
+        type: "user_message",
+      },
+      {
+        createdAt: "2026-06-13T09:30:04.000Z",
+        eventId: `${conversationId}:status:extract_requirements`,
+        payload: { summary: "正在思考" },
+        role: "assistant",
+        status: "running",
+        step: 2,
+        type: "assistant_status",
+      },
+    ],
+    requirementForm: null,
+    runtime: null,
+  };
+}
+
+function isWorkbenchV2Snapshot(snapshot: unknown): snapshot is {
+  conversation: {
+    conversationId: string;
+    runtimeState: string;
+    title: string;
+    updatedAt: string;
+  };
+} {
+  return (
+    typeof snapshot === "object" &&
+    snapshot !== null &&
+    "schemaVersion" in snapshot &&
+    snapshot.schemaVersion === "agent.workbench.v2"
+  );
+}
 
 function firstTurnSnapshot(conversationId: string) {
   return {

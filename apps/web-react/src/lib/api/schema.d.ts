@@ -1167,6 +1167,75 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/agent/workbench/v2/conversations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Conversations */
+    get: operations["list_conversations_api_agent_workbench_v2_conversations_get"];
+    put?: never;
+    /** Create Conversation */
+    post: operations["create_conversation_api_agent_workbench_v2_conversations_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/agent/workbench/v2/conversations/{conversation_id}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Conversation */
+    get: operations["get_conversation_api_agent_workbench_v2_conversations__conversation_id__get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/agent/workbench/v2/conversations/{conversation_id}/messages": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Submit Message */
+    post: operations["submit_message_api_agent_workbench_v2_conversations__conversation_id__messages_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/agent/workbench/v2/conversations/{conversation_id}/requirement-actions": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Apply Requirement Action */
+    post: operations["apply_requirement_action_api_agent_workbench_v2_conversations__conversation_id__requirement_actions_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/workbench/events": {
     parameters: {
       query?: never;
@@ -4518,6 +4587,155 @@ export interface components {
       /** Idempotencykey */
       idempotencyKey: string;
     };
+    /** WorkbenchV2ConversationListSummary */
+    WorkbenchV2ConversationListSummary: {
+      /** Conversationid */
+      conversationId: string;
+      /** Title */
+      title: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        | "idle"
+        | "queued"
+        | "running"
+        | "completed"
+        | "failed"
+        | "cancelled";
+      /** Updatedat */
+      updatedAt: string;
+    };
+    /** WorkbenchV2ConversationListView */
+    WorkbenchV2ConversationListView: {
+      /**
+       * Schemaversion
+       * @default agent.workbench.v2.list
+       * @constant
+       */
+      schemaVersion: "agent.workbench.v2.list";
+      /** Conversations */
+      conversations?: components["schemas"]["WorkbenchV2ConversationListSummary"][];
+    };
+    /** WorkbenchV2ConversationPublic */
+    WorkbenchV2ConversationPublic: {
+      /** Conversationid */
+      conversationId: string;
+      /** Title */
+      title: string;
+      /**
+       * Runtimestate
+       * @default idle
+       * @enum {string}
+       */
+      runtimeState:
+        | "idle"
+        | "queued"
+        | "running"
+        | "completed"
+        | "failed"
+        | "cancelled";
+      /** Runtimerunid */
+      runtimeRunId?: string | null;
+      /** Createdat */
+      createdAt: string;
+      /** Updatedat */
+      updatedAt: string;
+    };
+    /** WorkbenchV2ConversationView */
+    WorkbenchV2ConversationView: {
+      /**
+       * Schemaversion
+       * @default agent.workbench.v2
+       * @constant
+       */
+      schemaVersion: "agent.workbench.v2";
+      conversation: components["schemas"]["WorkbenchV2ConversationPublic"];
+      /** Transcriptevents */
+      transcriptEvents?: components["schemas"]["WorkbenchV2TranscriptEventView"][];
+      /** Requirementform */
+      requirementForm?: {
+        [key: string]: unknown;
+      } | null;
+      runtime?: components["schemas"]["WorkbenchV2RuntimeView"] | null;
+    };
+    /** WorkbenchV2MessageRequest */
+    WorkbenchV2MessageRequest: {
+      /** Message */
+      message: string;
+      /** Idempotencykey */
+      idempotencyKey?: string | null;
+    };
+    /** WorkbenchV2RequirementActionRequest */
+    WorkbenchV2RequirementActionRequest: {
+      /**
+       * Action
+       * @enum {string}
+       */
+      action: "set_selected" | "add_other" | "confirm";
+      /** Itemid */
+      itemId?: string | null;
+      /** Selected */
+      selected?: boolean | null;
+      /** Text */
+      text?: string | null;
+      /** Idempotencykey */
+      idempotencyKey?: string | null;
+    };
+    /** WorkbenchV2RuntimeView */
+    WorkbenchV2RuntimeView: {
+      /**
+       * State
+       * @enum {string}
+       */
+      state:
+        | "idle"
+        | "queued"
+        | "running"
+        | "completed"
+        | "failed"
+        | "cancelled";
+      /** Runtimerunid */
+      runtimeRunId?: string | null;
+    };
+    /** WorkbenchV2TranscriptEventView */
+    WorkbenchV2TranscriptEventView: {
+      /** Eventid */
+      eventId: string;
+      /** Step */
+      step: number;
+      /**
+       * Type
+       * @enum {string}
+       */
+      type:
+        | "user_message"
+        | "assistant_message"
+        | "assistant_status"
+        | "requirement_form"
+        | "requirement_form_confirmed"
+        | "runtime_progress"
+        | "runtime_result"
+        | "error"
+        | "context_summary";
+      /**
+       * Role
+       * @enum {string}
+       */
+      role: "user" | "assistant" | "system" | "runtime";
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "pending" | "running" | "completed" | "failed";
+      /** Payload */
+      payload?: {
+        [key: string]: unknown;
+      };
+      /** Createdat */
+      createdAt: string;
+    };
     /** WorkflowCommandRequest */
     WorkflowCommandRequest: {
       /** Runtimerunid */
@@ -7362,6 +7580,301 @@ export interface operations {
         };
         content: {
           "application/json": unknown;
+        };
+      };
+    };
+  };
+  list_conversations_api_agent_workbench_v2_conversations_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkbenchV2ConversationListView"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+    };
+  };
+  create_conversation_api_agent_workbench_v2_conversations_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkbenchV2MessageRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkbenchV2ConversationView"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+    };
+  };
+  get_conversation_api_agent_workbench_v2_conversations__conversation_id__get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkbenchV2ConversationView"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Workbench v2 conversation not found. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            detail: {
+              /** @enum {string} */
+              reasonCode: "workbench_v2_conversation_not_found";
+            };
+          };
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+    };
+  };
+  submit_message_api_agent_workbench_v2_conversations__conversation_id__messages_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkbenchV2MessageRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkbenchV2ConversationView"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Workbench v2 conversation not found. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            detail: {
+              /** @enum {string} */
+              reasonCode: "workbench_v2_conversation_not_found";
+            };
+          };
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+    };
+  };
+  apply_requirement_action_api_agent_workbench_v2_conversations__conversation_id__requirement_actions_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkbenchV2RequirementActionRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkbenchV2ConversationView"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Workbench v2 conversation not found. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            detail: {
+              /** @enum {string} */
+              reasonCode: "workbench_v2_conversation_not_found";
+            };
+          };
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
         };
       };
     };
