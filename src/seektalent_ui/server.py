@@ -21,7 +21,18 @@ from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
 from seektalent_conversation_agent.factory import build_agent_service
-from seektalent_ui import agent_routes, agent_workbench_routes, event_routes, validation_errors, workbench_routes
+from seektalent_workbench_v2.agent_loop import BailianStrictWorkbenchV2AgentLoop
+from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
+from seektalent_workbench_v2.service import WorkbenchV2Service
+from seektalent_workbench_v2.store import WorkbenchV2Store
+from seektalent_ui import (
+    agent_routes,
+    agent_workbench_routes,
+    agent_workbench_v2_routes,
+    event_routes,
+    validation_errors,
+    workbench_routes,
+)
 from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
 from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.liepin_routes import create_liepin_router
@@ -71,7 +82,23 @@ def create_app(
         runtime_factory=runtime_factory,
     )
     app.state.agent_conversation_store = app.state.agent_conversation_service.store
-    app.state.runtime_control_store = app.state.agent_conversation_service.service_action_adapter.runtime_store
+    runtime_control_store = app.state.agent_conversation_service.service_action_adapter.runtime_store
+    if runtime_control_store is None:
+        raise RuntimeError("runtime_control_store_unavailable")
+    app.state.runtime_control_store = runtime_control_store
+    app.state.workbench_v2_store = WorkbenchV2Store(
+        app_settings.resolve_workspace_path(".seektalent/workbench_v2.sqlite3")
+    )
+    app.state.workbench_v2_store.initialize()
+    app.state.workbench_v2_service = WorkbenchV2Service(
+        store=app.state.workbench_v2_store,
+        agent_loop=BailianStrictWorkbenchV2AgentLoop(settings=app_settings),
+        runtime_service=WorkbenchV2RuntimeService(
+            store=runtime_control_store,
+            settings=app_settings,
+            runtime_factory=lambda: runtime_factory(app_settings),
+        ),
+    )
     app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
     app.state.workflow_start_outbox_runner = WorkflowStartOutboxRunner(
         service=app.state.agent_conversation_service,
@@ -83,7 +110,7 @@ def create_app(
         store=app.state.workbench_store,
         settings=app_settings,
         runtime_factory=runtime_factory,
-        runtime_control_store=app.state.runtime_control_store,
+        runtime_control_store=runtime_control_store,
     )
     app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
@@ -139,6 +166,7 @@ def create_app(
     app.include_router(workbench_routes.router)
     app.include_router(agent_routes.router)
     app.include_router(agent_workbench_routes.router)
+    app.include_router(agent_workbench_v2_routes.router)
     app.include_router(event_routes.router)
     app.include_router(create_liepin_router(settings=app_settings))
 
@@ -175,6 +203,8 @@ def create_app(
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        if _request.url.path.startswith("/api/agent/workbench/v2") and isinstance(exc.detail, dict):
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         if _request.url.path.startswith("/api/agent") and isinstance(exc.detail, dict):
             content = dict(exc.detail)
             if _request.url.path.startswith("/api/agent/workbench") and "type" in content:
