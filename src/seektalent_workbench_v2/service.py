@@ -306,9 +306,33 @@ class WorkbenchV2Service:
             )
             return
         form_payload = _latest_requirement_form_payload(self.store.get_conversation(conversation_id).events)
-        draft_payload = _mapping_or_none(form_payload.get("draft")) if form_payload is not None else None
+        dumped_runtime_input = _dump_mapping(runtime_input)
         confirmed_payload: dict[str, object]
         if form_payload is not None:
+            if not _runtime_input_payload_matches(runtime_input, form_payload.get("runtimeInput")):
+                draft, requirement_sheet = self._extract_requirement_form(conversation_id, runtime_input)
+                dumped_draft = _dump_mapping(draft)
+                confirmed_payload = {
+                    "runtimeInput": dumped_runtime_input,
+                    "draft": dumped_draft,
+                    "requirementSheet": _dump_mapping(requirement_sheet),
+                }
+                draft_payload = _mapping_or_none(dumped_draft)
+                self._start_runtime_from_requirement_sheet(
+                    conversation_id=conversation_id,
+                    runtime_input=runtime_input,
+                    requirement_sheet=requirement_sheet,
+                    confirmed_payload=confirmed_payload,
+                    message=message,
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                    draft_revision_id=_draft_revision_id(draft_payload),
+                    selected_item_ids=_selected_item_ids(draft_payload),
+                    deselected_item_ids=_deselected_item_ids(draft_payload),
+                )
+                return
+
+            draft_payload = _mapping_or_none(form_payload.get("draft"))
             requirement_sheet = _requirement_sheet_from_payload(form_payload.get("requirementSheet"))
             if requirement_sheet is None:
                 self._append_requirement_sheet_required_error(
@@ -318,7 +342,6 @@ class WorkbenchV2Service:
                 )
                 return
             confirmed_payload = dict(form_payload)
-            confirmed_payload["runtimeInput"] = _dump_mapping(runtime_input)
             self._start_runtime_from_requirement_sheet(
                 conversation_id=conversation_id,
                 runtime_input=runtime_input,
@@ -333,7 +356,8 @@ class WorkbenchV2Service:
             )
             return
         else:
-            confirmed_payload = {"runtimeInput": _dump_mapping(runtime_input)}
+            draft_payload = None
+            confirmed_payload = {"runtimeInput": dumped_runtime_input}
         self._start_runtime_from_input(
             conversation_id=conversation_id,
             runtime_input=runtime_input,
@@ -375,15 +399,23 @@ class WorkbenchV2Service:
         selected_item_ids: list[str] | None,
         deselected_item_ids: list[str] | None,
     ) -> None:
-        run = self.runtime_service.start_run(
-            conversation_id,
-            runtime_input,
-            requirement_sheet,
-            idempotency_key=idempotency_key,
-            draft_revision_id=draft_revision_id,
-            selected_item_ids=selected_item_ids,
-            deselected_item_ids=deselected_item_ids,
-        )
+        try:
+            run = self.runtime_service.start_run(
+                conversation_id,
+                runtime_input,
+                requirement_sheet,
+                idempotency_key=idempotency_key,
+                draft_revision_id=draft_revision_id,
+                selected_item_ids=selected_item_ids,
+                deselected_item_ids=deselected_item_ids,
+            )
+        except Exception:  # noqa: BLE001
+            self._append_runtime_start_failed_error(
+                conversation_id,
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return
         self._append_started_runtime(
             conversation_id=conversation_id,
             run=run,
@@ -406,14 +438,22 @@ class WorkbenchV2Service:
         selected_item_ids: list[str] | None,
         deselected_item_ids: list[str] | None,
     ) -> None:
-        run = self.runtime_service.start_run_from_runtime_input(
-            conversation_id,
-            runtime_input,
-            idempotency_key=idempotency_key,
-            draft_revision_id=draft_revision_id,
-            selected_item_ids=selected_item_ids,
-            deselected_item_ids=deselected_item_ids,
-        )
+        try:
+            run = self.runtime_service.start_run_from_runtime_input(
+                conversation_id,
+                runtime_input,
+                idempotency_key=idempotency_key,
+                draft_revision_id=draft_revision_id,
+                selected_item_ids=selected_item_ids,
+                deselected_item_ids=deselected_item_ids,
+            )
+        except Exception:  # noqa: BLE001
+            self._append_runtime_start_failed_error(
+                conversation_id,
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return
         self._append_started_runtime(
             conversation_id=conversation_id,
             run=run,
@@ -467,6 +507,21 @@ class WorkbenchV2Service:
             conversation_id,
             text=message,
             dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="assistant"),
+        )
+
+    def _append_runtime_start_failed_error(
+        self,
+        conversation_id: str,
+        *,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> None:
+        self._append_service_error(
+            conversation_id,
+            code="workbench_v2_runtime_start_failed",
+            message="运行启动失败，请稍后重试。",
+            scope=scope,
+            idempotency_key=idempotency_key,
         )
 
     def _append_service_error(
@@ -589,6 +644,11 @@ def _requirement_sheet_from_payload(payload: object) -> RequirementSheet | None:
         return RequirementSheet.model_validate(payload)
     except ValueError:
         return None
+
+
+def _runtime_input_payload_matches(runtime_input: WorkbenchV2RuntimeInput, payload: object) -> bool:
+    payload_mapping = _mapping_or_none(payload)
+    return payload_mapping == _dump_mapping(runtime_input)
 
 
 def _mapping_or_none(payload: object) -> Mapping[str, object] | None:

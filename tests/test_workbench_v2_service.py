@@ -615,6 +615,14 @@ def test_start_runtime_with_current_form_confirms_output_runtime_input(tmp_path:
     runtime = FakeRuntimeService()
     service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
     first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-start-form"))
+    new_sheet = _requirement_sheet_payload().model_copy(
+        update={
+            "role_summary": "Build production AI platform systems in Shanghai.",
+            "hard_constraints": HardConstraintSlots(locations=["上海"]),
+        }
+    )
+    runtime.requirement_sheet = new_sheet
+    runtime.draft = _draft_payload().model_copy(update={"draft_revision_id": "reqdraft_2"})
 
     view = asyncio.run(
         service.submit_message(
@@ -627,18 +635,91 @@ def test_start_runtime_with_current_form_confirms_output_runtime_input(tmp_path:
     confirmed = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
 
     assert runtime.start_calls[-1]["runtime_input"] == WorkbenchV2RuntimeInput.model_validate(start_runtime_input)
-    assert runtime.start_calls[-1]["requirement_sheet"] == RequirementSheet.model_validate(
-        first_view.requirementForm["requirementSheet"]
-    )
+    assert runtime.start_calls[-1]["requirement_sheet"] == new_sheet
     assert runtime.extract_calls == [
         {
             "conversation_id": first_view.conversation.conversationId,
             "runtime_input": WorkbenchV2RuntimeInput.model_validate(form_runtime_input),
-        }
+        },
+        {
+            "conversation_id": first_view.conversation.conversationId,
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(start_runtime_input),
+        },
     ]
     assert confirmed[-1]["payload"]["runtimeInput"] == start_runtime_input
-    assert confirmed[-1]["payload"]["draft"]["draft_revision_id"] == "reqdraft_1"
-    assert confirmed[-1]["payload"]["requirementSheet"] == first_view.requirementForm["requirementSheet"]
+    assert confirmed[-1]["payload"]["draft"]["draft_revision_id"] == "reqdraft_2"
+    assert confirmed[-1]["payload"]["requirementSheet"] == new_sheet.model_dump(mode="json")
+    assert confirmed[-1]["payload"]["requirementSheet"] != first_view.requirementForm["requirementSheet"]
+
+
+def test_confirm_requirements_runtime_start_failure_appends_terminal_error(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": None,
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+        _agent_output(intent="confirm_requirements", message="已确认，开始运行。"),
+    )
+    runtime = FakeRuntimeService(start_errors=[RuntimeError("boom")])
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-start-fail"))
+
+    view = asyncio.run(
+        service.submit_message(
+            first_view.conversation.conversationId,
+            "确认需求，开始运行",
+            idempotency_key="confirm-start-fail",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    assert len(runtime.start_calls) == 1
+    assert payload["conversation"]["runtimeRunId"] is None
+    assert payload["runtime"] is None
+    assert "readonly" not in payload["requirementForm"]
+    assert not [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
+    assert not [event for event in payload["transcriptEvents"] if event["type"] == "runtime_progress"]
+    assert payload["transcriptEvents"][-2]["type"] == "error"
+    assert payload["transcriptEvents"][-2]["payload"] == {
+        "code": "workbench_v2_runtime_start_failed",
+        "message": "运行启动失败，请稍后重试。",
+    }
+    assert payload["transcriptEvents"][-1]["type"] == "assistant_message"
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "运行启动失败，请稍后重试。"}
+
+
+def test_start_runtime_without_form_start_failure_appends_terminal_error(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": None,
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="start_runtime", message="开始运行。", runtimeInput=runtime_input),
+    )
+    runtime = FakeRuntimeService(start_errors=[RuntimeError("boom")])
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+
+    view = asyncio.run(service.create_conversation("直接开始运行", idempotency_key="start-runtime-fail"))
+    payload = view.model_dump(mode="json")
+
+    assert len(runtime.start_calls) == 1
+    assert payload["conversation"]["runtimeRunId"] is None
+    assert payload["runtime"] is None
+    assert payload["requirementForm"] is None
+    assert not [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
+    assert not [event for event in payload["transcriptEvents"] if event["type"] == "runtime_progress"]
+    assert payload["transcriptEvents"][-2]["type"] == "error"
+    assert payload["transcriptEvents"][-2]["payload"] == {
+        "code": "workbench_v2_runtime_start_failed",
+        "message": "运行启动失败，请稍后重试。",
+    }
+    assert payload["transcriptEvents"][-1]["type"] == "assistant_message"
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "运行启动失败，请稍后重试。"}
 
 
 def test_get_runtime_status_without_run_appends_idle_progress(tmp_path: Path) -> None:
