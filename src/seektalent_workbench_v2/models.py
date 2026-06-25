@@ -68,3 +68,30 @@ class WorkbenchV2ConversationRecord(BaseModel):
 
     conversation: WorkbenchV2Conversation
     events: list[WorkbenchV2TranscriptEvent] = Field(default_factory=list)
+
+
+class WorkbenchV2ConversationSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    title: str
+    createdAt: str
+    updatedAt: str
+    runtimeRunId: str | None = None
+    runtimeState: WorkbenchV2RuntimeState = "idle"
+
+
+class WorkbenchV2ConversationView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: str = WORKBENCH_V2_SCHEMA_VERSION
+    conversation: WorkbenchV2ConversationSummary
+    transcriptEvents: list[WorkbenchV2TranscriptEvent] = Field(default_factory=list)
+    requirementForm: dict[str, object] | None = None
+
+
+class WorkbenchV2ConversationListView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: str = WORKBENCH_V2_SCHEMA_VERSION
+    conversations: list[WorkbenchV2ConversationSummary] = Field(default_factory=list)
