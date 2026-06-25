@@ -52,6 +52,7 @@ module-name = [
     "seektalent_runtime_control",
     "seektalent_conversation_agent",
     "seektalent_agent_memory",
+    "seektalent_workbench_v2",
 ]
 
 [tool.pytest.ini_options]

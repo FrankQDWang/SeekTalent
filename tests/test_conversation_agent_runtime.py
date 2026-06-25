@@ -19,6 +19,14 @@ def test_conversation_agent_package_is_registered_for_build() -> None:
     assert "seektalent_conversation_agent" in modules
 
 
+def test_workbench_v2_package_is_registered_for_build() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    modules = pyproject["tool"]["uv"]["build-backend"]["module-name"]
+
+    assert "seektalent_workbench_v2" in modules
+
+
 def test_agent_runtime_imports_agents_sdk_behind_runtime_boundary() -> None:
     from seektalent_conversation_agent.runtime import AgentRuntime
 
