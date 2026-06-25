@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Literal, Protocol, Sequence
 
 from agents import Agent, AsyncOpenAI, ModelSettings, OpenAIChatCompletionsModel, Runner
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from seektalent.config import AppSettings
 from seektalent.llm import (
@@ -38,12 +38,65 @@ class WorkbenchV2RuntimeInput(BaseModel):
     jd: str = Field(min_length=1)
     notes: str | None = None
 
+    @field_validator("jobTitle", "jd", mode="before")
+    @classmethod
+    def strip_required_strings(cls, value: object) -> object:
+        return _strip_string(value)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def strip_optional_strings(cls, value: object) -> object:
+        return _strip_optional_string(value)
+
+
+class WorkbenchV2RequirementPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    selectedItemIds: list[str] = Field(default_factory=list)
+    deselectedItemIds: list[str] = Field(default_factory=list)
+    otherNotes: str | None = None
+
+    @field_validator("selectedItemIds", "deselectedItemIds", mode="before")
+    @classmethod
+    def strip_item_ids(cls, value: object) -> object:
+        if isinstance(value, list):
+            return [_strip_string(item) for item in value]
+        return value
+
+    @field_validator("selectedItemIds", "deselectedItemIds")
+    @classmethod
+    def reject_blank_item_ids(cls, value: list[str]) -> list[str]:
+        if any(item == "" for item in value):
+            raise ValueError("item ids must not be blank")
+        return value
+
+    @field_validator("otherNotes", mode="before")
+    @classmethod
+    def strip_optional_strings(cls, value: object) -> object:
+        return _strip_optional_string(value)
+
+
+class WorkbenchV2MemoryRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1)
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def strip_required_strings(cls, value: object) -> object:
+        return _strip_string(value)
+
 
 class WorkbenchV2MemoryWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     source: str = Field(min_length=1)
     content: str = Field(min_length=1)
+
+    @field_validator("source", "content", mode="before")
+    @classmethod
+    def strip_required_strings(cls, value: object) -> object:
+        return _strip_string(value)
 
 
 class WorkbenchV2AgentOutput(BaseModel):
@@ -54,16 +107,36 @@ class WorkbenchV2AgentOutput(BaseModel):
     needsClarification: bool = False
     clarifyingQuestion: str | None = None
     runtimeInput: WorkbenchV2RuntimeInput | None = None
-    requirementPatch: dict[str, object] | None = None
-    memoryRead: dict[str, object] | None = None
+    requirementPatch: WorkbenchV2RequirementPatch | None = None
+    memoryRead: WorkbenchV2MemoryRead | None = None
     memoryWrite: WorkbenchV2MemoryWrite | None = None
+
+    @field_validator("message", mode="before")
+    @classmethod
+    def strip_required_strings(cls, value: object) -> object:
+        return _strip_string(value)
+
+    @field_validator("clarifyingQuestion", mode="before")
+    @classmethod
+    def strip_optional_strings(cls, value: object) -> object:
+        return _strip_optional_string(value)
 
     @model_validator(mode="after")
     def validate_action_requirements(self) -> "WorkbenchV2AgentOutput":
-        if self.needsClarification and not (self.clarifyingQuestion or "").strip():
-            raise ValueError("clarifyingQuestion is required when needsClarification is true")
+        if self.needsClarification:
+            if not self.clarifyingQuestion:
+                raise ValueError("clarifyingQuestion is required when needsClarification is true")
+            if any((self.runtimeInput, self.requirementPatch, self.memoryRead, self.memoryWrite)):
+                raise ValueError("action payloads must be absent when needsClarification is true")
+            return self
         if self.intent == "start_runtime" and self.runtimeInput is None:
             raise ValueError("runtimeInput is required for start_runtime")
+        if self.intent == "write_memory" and self.memoryWrite is None:
+            raise ValueError("memoryWrite is required for write_memory")
+        if self.intent == "read_memory" and self.memoryRead is None:
+            raise ValueError("memoryRead is required for read_memory")
+        if self.intent == "update_requirements" and self.requirementPatch is None and self.runtimeInput is None:
+            raise ValueError("requirementPatch or runtimeInput is required for update_requirements")
         return self
 
 
@@ -123,6 +196,21 @@ def _build_agent(config: ResolvedTextModelConfig) -> Agent:
         tools=[],
         output_type=WorkbenchV2AgentOutput,
     )
+
+
+def _strip_string(value: object) -> object:
+    if isinstance(value, str):
+        return value.strip()
+    return value
+
+
+def _strip_optional_string(value: object) -> object:
+    if value is None:
+        return None
+    value = _strip_string(value)
+    if value == "":
+        return None
+    return value
 
 
 def _validate_strict_openai_config(config: ResolvedTextModelConfig) -> None:
