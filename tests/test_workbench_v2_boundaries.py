@@ -11,10 +11,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
 
 
-def test_core_seektalent_package_does_not_import_workbench_v2_or_route_shim() -> None:
+def test_core_seektalent_package_does_not_import_workbench_v2_or_ui() -> None:
     forbidden = {
         "seektalent_workbench_v2",
-        "seektalent_ui.agent_workbench_v2_routes",
+        "seektalent_ui",
     }
 
     violations = _forbidden_imports(SRC_ROOT / "seektalent", forbidden)
