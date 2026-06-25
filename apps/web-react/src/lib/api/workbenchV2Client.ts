@@ -1,0 +1,141 @@
+import {
+  normalizeWorkbenchV2Conversation,
+  normalizeWorkbenchV2ConversationList,
+  type WorkbenchV2ConversationListView,
+  type WorkbenchV2ConversationView,
+  type WorkbenchV2MessageRequest,
+} from "./workbenchV2Types";
+
+const WORKBENCH_V2_CONVERSATIONS_PATH = "/api/agent/workbench/v2/conversations";
+
+export class WorkbenchV2RequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly reasonCode: string | null = null,
+    readonly correlationId: string | null = null,
+  ) {
+    super(message);
+    this.name = "WorkbenchV2RequestError";
+  }
+}
+
+export async function listWorkbenchV2Conversations(): Promise<WorkbenchV2ConversationListView> {
+  return normalizeWorkbenchV2ConversationList(
+    await requestJson<WorkbenchV2ConversationListView>(
+      WORKBENCH_V2_CONVERSATIONS_PATH,
+      { method: "GET" },
+    ),
+  );
+}
+
+export async function createWorkbenchV2Conversation(
+  payload: WorkbenchV2MessageRequest,
+): Promise<WorkbenchV2ConversationView> {
+  return normalizeWorkbenchV2Conversation(
+    await requestJson<WorkbenchV2ConversationView>(
+      WORKBENCH_V2_CONVERSATIONS_PATH,
+      postJsonInit(payload),
+    ),
+  );
+}
+
+export async function getWorkbenchV2Conversation(
+  conversationId: string,
+): Promise<WorkbenchV2ConversationView> {
+  return normalizeWorkbenchV2Conversation(
+    await requestJson<WorkbenchV2ConversationView>(
+      `${WORKBENCH_V2_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}`,
+      { method: "GET" },
+    ),
+  );
+}
+
+export async function submitWorkbenchV2Message(
+  conversationId: string,
+  payload: WorkbenchV2MessageRequest,
+): Promise<WorkbenchV2ConversationView> {
+  return normalizeWorkbenchV2Conversation(
+    await requestJson<WorkbenchV2ConversationView>(
+      `${WORKBENCH_V2_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}/messages`,
+      postJsonInit(payload),
+    ),
+  );
+}
+
+function postJsonInit(payload: WorkbenchV2MessageRequest): RequestInit {
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  };
+}
+
+async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
+  const body = await readJsonBody(response);
+
+  if (!response.ok) {
+    const problem = parseProblemDetails(body);
+    throw new WorkbenchV2RequestError(
+      problem.message,
+      response.status,
+      problem.reasonCode,
+      problem.correlationId,
+    );
+  }
+
+  return body as T;
+}
+
+async function readJsonBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (text.length === 0) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function parseProblemDetails(body: unknown): {
+  message: string;
+  reasonCode: string | null;
+  correlationId: string | null;
+} {
+  const problem = asRecord(body);
+  const detail = asRecord(problem?.detail);
+  const detailMessage =
+    typeof problem?.detail === "string"
+      ? problem.detail
+      : stringField(detail, "message");
+  const reasonCode =
+    stringField(problem, "reasonCode") ?? stringField(detail, "reasonCode");
+  return {
+    message:
+      detailMessage ??
+      stringField(problem, "message") ??
+      stringField(problem, "title") ??
+      reasonCode ??
+      "Request failed.",
+    reasonCode: reasonCode ?? null,
+    correlationId: stringField(problem, "correlationId") ?? null,
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stringField(
+  value: Record<string, unknown> | null,
+  field: string,
+): string | undefined {
+  const fieldValue = value?.[field];
+  return typeof fieldValue === "string" ? fieldValue : undefined;
+}
