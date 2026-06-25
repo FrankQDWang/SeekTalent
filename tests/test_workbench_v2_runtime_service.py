@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,30 @@ class RecordingRequirementExtractor:
             {
                 "job_title": job_title,
                 "jd_text": jd_text,
+                "notes": notes,
+                "requirement_cache_scope": requirement_cache_scope,
+            }
+        )
+        return self.sheet
+
+
+class RecordingJdRequirementExtractor:
+    def __init__(self, sheet: RequirementSheet) -> None:
+        self.sheet = sheet
+        self.calls: list[dict[str, object]] = []
+
+    def extract_requirements(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str,
+        requirement_cache_scope: str,
+    ) -> RequirementSheet:
+        self.calls.append(
+            {
+                "job_title": job_title,
+                "jd": jd,
                 "notes": notes,
                 "requirement_cache_scope": requirement_cache_scope,
             }
@@ -91,6 +116,28 @@ def test_runtime_service_extracts_requirement_form_from_runtime_factory(tmp_path
     assert draft.status == "draft_ready"
 
 
+def test_runtime_service_extracts_requirement_form_from_jd_runtime_signature(tmp_path: Path) -> None:
+    sheet = _requirement_sheet()
+    extractor = RecordingJdRequirementExtractor(sheet)
+    service = _service(tmp_path, runtime_factory=lambda: extractor)
+
+    draft = service.extract_requirements(
+        "agentv2_runtime",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+    )
+
+    assert extractor.calls == [
+        {
+            "job_title": "AI 平台工程师",
+            "jd": "需要 Agent 系统经验",
+            "notes": "",
+            "requirement_cache_scope": "agentv2_runtime",
+        }
+    ]
+    assert draft.conversation_id == "agentv2_runtime"
+    assert draft.status == "draft_ready"
+
+
 @pytest.mark.parametrize(
     "runtime_input",
     [
@@ -144,6 +191,87 @@ def test_runtime_service_enqueues_run_with_job_title_jd_and_notes(tmp_path: Path
         "notes": "杭州",
         "sourceIds": ["liepin"],
     }
+
+
+def test_runtime_service_start_run_replays_default_idempotency_key(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_run_ids = iter(["rtrun_1", "rtrun_2"])
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: next(runtime_run_ids),
+        now=lambda: NOW,
+    )
+    runtime_input = WorkbenchV2RuntimeInput(
+        jobTitle="AI 平台工程师",
+        jd="需要 Python 和 Agent 工作流经验",
+        notes="杭州",
+    )
+
+    first = service.start_run("agentv2_replay", runtime_input, _requirement_sheet())
+    second = service.start_run("agentv2_replay", runtime_input, _requirement_sheet())
+
+    assert first.runtime_run_id == "rtrun_1"
+    assert second.runtime_run_id == "rtrun_1"
+    assert _runtime_run_count(store) == 1
+
+
+def test_runtime_service_start_run_replays_explicit_idempotency_key(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_run_ids = iter(["rtrun_1", "rtrun_2"])
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: next(runtime_run_ids),
+        now=lambda: NOW,
+    )
+    runtime_input = WorkbenchV2RuntimeInput(
+        jobTitle="AI 平台工程师",
+        jd="需要 Python 和 Agent 工作流经验",
+        notes="杭州",
+    )
+
+    first = service.start_run(
+        "agentv2_replay",
+        runtime_input,
+        _requirement_sheet(),
+        idempotency_key="confirm-current-draft",
+    )
+    second = service.start_run(
+        "agentv2_replay",
+        runtime_input,
+        _requirement_sheet(),
+        idempotency_key="confirm-current-draft",
+    )
+
+    assert first.runtime_run_id == "rtrun_1"
+    assert second.runtime_run_id == "rtrun_1"
+    assert _runtime_run_count(store) == 1
+
+
+def test_runtime_service_start_run_preserves_explicit_draft_lineage_and_selected_ids(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        approved_requirement_revision_id_factory=lambda: "reqapproved_1",
+        runtime_run_id_factory=lambda: "rtrun_1",
+        now=lambda: NOW,
+    )
+
+    service.start_run(
+        "agentv2_real_draft",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Python 和 Agent 工作流经验", notes=None),
+        _requirement_sheet(),
+        draft_revision_id="reqdraft_real",
+        selected_item_ids=["sql"],
+        deselected_item_ids=["java"],
+    )
+
+    approved = store.get_approved_requirement("reqapproved_1")
+    assert approved.draft_revision_id == "reqdraft_real"
+    assert approved.selected_item_ids == ["sql"]
+    assert approved.deselected_item_ids == ["java"]
 
 
 def test_runtime_service_module_does_not_import_ui_or_tests() -> None:
@@ -283,6 +411,12 @@ def _store(tmp_path: Path) -> RuntimeControlStore:
     store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
     store.initialize()
     return store
+
+
+def _runtime_run_count(store: RuntimeControlStore) -> int:
+    with sqlite3.connect(store.path) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0]
+    return int(count)
 
 
 def _requirement_sheet() -> RequirementSheet:

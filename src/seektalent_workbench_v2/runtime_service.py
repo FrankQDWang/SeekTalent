@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Protocol
+from hashlib import sha256
+from inspect import signature
+from typing import cast
 from uuid import uuid4
 
 from seektalent.config import AppSettings
@@ -24,17 +26,6 @@ REQUIREMENT_EXTRACTOR_UNAVAILABLE = "workbench_v2_requirement_extractor_unavaila
 DEFAULT_SOURCE_IDS = ["liepin"]
 
 
-class RequirementExtractor(Protocol):
-    def extract_requirements(
-        self,
-        *,
-        job_title: str,
-        jd_text: str,
-        notes: str | None,
-        requirement_cache_scope: str,
-    ) -> RequirementSheet: ...
-
-
 class WorkbenchV2RuntimeService:
     def __init__(
         self,
@@ -54,6 +45,8 @@ class WorkbenchV2RuntimeService:
         self.runtime_factory = runtime_factory
         self.requirement_extractor = requirement_extractor
         self._runtime_executor = executor
+        self._custom_draft_revision_id_factory = draft_revision_id_factory is not None
+        self._custom_approved_requirement_revision_id_factory = approved_requirement_revision_id_factory is not None
         self.draft_revision_id_factory = draft_revision_id_factory or (lambda: _new_id("reqdraft"))
         self.approved_requirement_revision_id_factory = approved_requirement_revision_id_factory or (
             lambda: _new_id("reqapproved")
@@ -67,7 +60,8 @@ class WorkbenchV2RuntimeService:
         runtime_input: WorkbenchV2RuntimeInput,
     ) -> RequirementDraft:
         job_title, jd_text, notes = _runtime_input_values(runtime_input)
-        sheet = self._requirement_extractor().extract_requirements(
+        sheet = _extract_requirements(
+            self._requirement_extractor(),
             job_title=job_title,
             jd_text=jd_text,
             notes=notes,
@@ -87,30 +81,47 @@ class WorkbenchV2RuntimeService:
         conversation_id: str,
         runtime_input: WorkbenchV2RuntimeInput | None,
         requirement_sheet: RequirementSheet,
+        *,
+        idempotency_key: str | None = None,
+        draft_revision_id: str | None = None,
+        selected_item_ids: list[str] | None = None,
+        deselected_item_ids: list[str] | None = None,
     ) -> RuntimeRunRecord:
         job_title, jd_text, notes = _runtime_input_values(runtime_input)
         created_at = self.now()
-        draft = draft_from_requirement_sheet(
+        operation_key = _start_operation_key(conversation_id=conversation_id, idempotency_key=idempotency_key)
+        approved_idempotency_key = f"workbench-v2-runtime-approved:{operation_key}"
+        start_idempotency_key = f"workbench-v2-runtime-start:{operation_key}"
+        saved = self.store.get_approved_requirement_by_idempotency(
             conversation_id=conversation_id,
-            draft_revision_id=self.draft_revision_id_factory(),
-            base_revision_id=None,
-            requirement_sheet=requirement_sheet,
-            source=REQUIREMENT_DRAFT_SOURCE,
-            created_at=created_at,
+            idempotency_key=approved_idempotency_key,
         )
-        approved = ApprovedRequirementRevision(
-            approved_requirement_revision_id=self.approved_requirement_revision_id_factory(),
-            draft_revision_id=draft.draft_revision_id,
-            agent_conversation_id=conversation_id,
-            requirement_sheet=requirement_sheet,
-            selected_item_ids=_selected_item_ids(draft),
-            deselected_item_ids=_deselected_item_ids(draft),
-            created_at=created_at,
-        )
-        saved = self.store.save_approved_requirement(
-            approved,
-            idempotency_key=f"workbench-v2-runtime-approved:{approved.approved_requirement_revision_id}",
-        )
+        if saved is None:
+            resolved_draft_revision_id = draft_revision_id or self._draft_revision_id(operation_key)
+            approved_revision_id = self._approved_requirement_revision_id(operation_key)
+            draft = draft_from_requirement_sheet(
+                conversation_id=conversation_id,
+                draft_revision_id=resolved_draft_revision_id,
+                base_revision_id=None,
+                requirement_sheet=requirement_sheet,
+                source=REQUIREMENT_DRAFT_SOURCE,
+                created_at=created_at,
+            )
+            approved = ApprovedRequirementRevision(
+                approved_requirement_revision_id=approved_revision_id,
+                draft_revision_id=draft.draft_revision_id,
+                agent_conversation_id=conversation_id,
+                requirement_sheet=requirement_sheet,
+                selected_item_ids=list(selected_item_ids) if selected_item_ids is not None else _selected_item_ids(draft),
+                deselected_item_ids=(
+                    list(deselected_item_ids) if deselected_item_ids is not None else _deselected_item_ids(draft)
+                ),
+                created_at=created_at,
+            )
+            saved = self.store.save_approved_requirement(
+                approved,
+                idempotency_key=approved_idempotency_key,
+            )
         return self._executor().enqueue_workflow_run(
             conversation_id=conversation_id,
             workbench_session_id=None,
@@ -119,8 +130,18 @@ class WorkbenchV2RuntimeService:
             jd_text=jd_text,
             notes=notes,
             source_ids=DEFAULT_SOURCE_IDS,
-            start_idempotency_key=f"workbench-v2-runtime-start:{saved.approved_requirement_revision_id}",
+            start_idempotency_key=start_idempotency_key,
         )
+
+    def _draft_revision_id(self, operation_key: str) -> str:
+        if self._custom_draft_revision_id_factory:
+            return self.draft_revision_id_factory()
+        return _stable_id("reqdraft", operation_key)
+
+    def _approved_requirement_revision_id(self, operation_key: str) -> str:
+        if self._custom_approved_requirement_revision_id_factory:
+            return self.approved_requirement_revision_id_factory()
+        return _stable_id("reqapproved", operation_key)
 
     def get_status(self, runtime_run_id: str) -> dict[str, str]:
         run = self.store.get_run(runtime_run_id)
@@ -132,13 +153,14 @@ class WorkbenchV2RuntimeService:
             "summary": _status_summary(run.status, stage),
         }
 
-    def _requirement_extractor(self) -> RequirementExtractor:
+    def _requirement_extractor(self) -> Callable[..., RequirementSheet]:
         extractor = self.requirement_extractor
         if extractor is None and self.runtime_factory is not None:
             extractor = self.runtime_factory()
-        if not callable(getattr(extractor, "extract_requirements", None)):
+        extract_requirements = getattr(extractor, "extract_requirements", None)
+        if not callable(extract_requirements):
             raise RuntimeError(REQUIREMENT_EXTRACTOR_UNAVAILABLE)
-        return extractor
+        return cast("Callable[..., RequirementSheet]", extract_requirements)
 
     def _executor(self) -> WorkflowRuntimeExecutor:
         if self._runtime_executor is None:
@@ -150,6 +172,42 @@ class WorkbenchV2RuntimeService:
                 now=self.now,
             )
         return self._runtime_executor
+
+
+def _extract_requirements(
+    extract_requirements: Callable[..., RequirementSheet],
+    *,
+    job_title: str,
+    jd_text: str,
+    notes: str | None,
+    requirement_cache_scope: str,
+) -> RequirementSheet:
+    parameters = signature(extract_requirements).parameters
+    if "jd_text" in parameters:
+        return extract_requirements(
+            job_title=job_title,
+            jd_text=jd_text,
+            notes=notes,
+            requirement_cache_scope=requirement_cache_scope,
+        )
+    if "jd" in parameters:
+        return extract_requirements(
+            job_title=job_title,
+            jd=jd_text,
+            notes=notes or "",
+            requirement_cache_scope=requirement_cache_scope,
+        )
+    raise RuntimeError(REQUIREMENT_EXTRACTOR_UNAVAILABLE)
+
+
+def _start_operation_key(*, conversation_id: str, idempotency_key: str | None) -> str:
+    if idempotency_key is None:
+        return f"{conversation_id}:primary"
+    return f"{conversation_id}:primary:{idempotency_key}"
+
+
+def _stable_id(prefix: str, value: str) -> str:
+    return f"{prefix}_{sha256(value.encode('utf-8')).hexdigest()[:32]}"
 
 
 def _runtime_input_values(runtime_input: WorkbenchV2RuntimeInput | None) -> tuple[str, str, str | None]:
