@@ -6,6 +6,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from seektalent.config import AppSettings
+from seektalent_ui.agent_request_models import MAX_AGENT_MESSAGE_CHARS, MAX_IDEMPOTENCY_KEY_CHARS
 from seektalent_ui.server import create_app
 from seektalent_workbench_v2.models import (
     WorkbenchV2ConversationListSummary,
@@ -48,6 +49,8 @@ class FakeWorkbenchV2Service:
         idempotency_key: str | None,
     ) -> WorkbenchV2ConversationView:
         self.create_calls.append((message, idempotency_key))
+        if idempotency_key == "same-key" and message == "different message":
+            raise ValueError("workbench_v2_idempotency_conflict")
         return _conversation_view(
             conversation_id="agentv2_created",
             title=message,
@@ -75,6 +78,8 @@ class FakeWorkbenchV2Service:
         self.submit_calls.append((conversation_id, message, idempotency_key))
         if conversation_id == "missing":
             raise KeyError(conversation_id)
+        if idempotency_key == "same-key" and message == "different message":
+            raise ValueError("workbench_v2_idempotency_conflict")
         return _conversation_view(
             conversation_id=conversation_id,
             title="Existing conversation",
@@ -153,6 +158,101 @@ def test_create_payload_rejects_extra_fields_before_service_call(tmp_path: Path)
 
     assert response.status_code == 400, response.text
     assert fake.create_calls == []
+
+
+def test_idempotency_conflict_returns_409_problem_details(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.post(
+        "/api/agent/workbench/v2/conversations",
+        json={"message": "different message", "idempotencyKey": "same-key"},
+    )
+
+    assert response.status_code == 409, response.text
+    payload = response.json()
+    assert payload["status"] == 409
+    assert payload["reasonCode"] == "workbench_v2_idempotency_conflict"
+    assert payload["type"].endswith("/workbench_v2_idempotency_conflict")
+    assert fake.create_calls == [("different message", "same-key")]
+
+
+def test_blank_messages_are_rejected_before_service_call(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    created = client.post(
+        "/api/agent/workbench/v2/conversations",
+        json={"message": "   ", "idempotencyKey": "blank-create"},
+    )
+    submitted = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/messages",
+        json={"message": "\n\t ", "idempotencyKey": "blank-submit"},
+    )
+
+    assert created.status_code == 400, created.text
+    assert submitted.status_code == 400, submitted.text
+    assert created.json()["reasonCode"] == "agent_request_invalid"
+    assert submitted.json()["reasonCode"] == "agent_request_invalid"
+    assert fake.create_calls == []
+    assert fake.submit_calls == []
+
+
+def test_overlong_message_and_key_are_rejected_before_service_call(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    overlong_message = "x" * (MAX_AGENT_MESSAGE_CHARS + 1)
+    overlong_key = "k" * (MAX_IDEMPOTENCY_KEY_CHARS + 1)
+    created = client.post(
+        "/api/agent/workbench/v2/conversations",
+        json={"message": overlong_message, "idempotencyKey": "length-create"},
+    )
+    submitted = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/messages",
+        json={"message": "continue", "idempotencyKey": overlong_key},
+    )
+
+    assert created.status_code == 400, created.text
+    assert submitted.status_code == 400, submitted.text
+    assert fake.create_calls == []
+    assert fake.submit_calls == []
+
+
+def test_message_and_idempotency_key_are_trimmed_before_service_call(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    created = client.post(
+        "/api/agent/workbench/v2/conversations",
+        json={"message": "  hello  ", "idempotencyKey": "  create-key  "},
+    )
+    submitted = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/messages",
+        json={"message": "\tcontinue\n", "idempotencyKey": "  submit-key  "},
+    )
+
+    assert created.status_code == 201, created.text
+    assert submitted.status_code == 200, submitted.text
+    assert fake.create_calls == [("hello", "create-key")]
+    assert fake.submit_calls == [("agentv2_existing", "continue", "submit-key")]
+
+
+def test_openapi_declares_v2_error_responses(tmp_path: Path) -> None:
+    client, _fake = _client(tmp_path)
+
+    paths = client.app.openapi()["paths"]
+    create_responses = paths["/api/agent/workbench/v2/conversations"]["post"]["responses"]
+    get_responses = paths["/api/agent/workbench/v2/conversations/{conversation_id}"]["get"]["responses"]
+    submit_responses = paths["/api/agent/workbench/v2/conversations/{conversation_id}/messages"]["post"][
+        "responses"
+    ]
+
+    assert {"201", "400", "409", "503"}.issubset(create_responses)
+    assert {"404"}.issubset(get_responses)
+    assert {"404"}.issubset(submit_responses)
+    assert create_responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
+    assert create_responses["409"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
+    assert create_responses["503"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
+    assert "reasonCode" in get_responses["404"]["content"]["application/json"]["schema"]["properties"]["detail"][
+        "properties"
+    ]
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, FakeWorkbenchV2Service]:

@@ -204,7 +204,10 @@ def create_app(
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
         if _request.url.path.startswith("/api/agent/workbench/v2") and isinstance(exc.detail, dict):
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+            content = dict(exc.detail)
+            if "type" in content:
+                return no_store_json_response(status_code=exc.status_code, content=content)
+            return JSONResponse(status_code=exc.status_code, content={"detail": content})
         if _request.url.path.startswith("/api/agent") and isinstance(exc.detail, dict):
             content = dict(exc.detail)
             if _request.url.path.startswith("/api/agent/workbench") and "type" in content:
