@@ -79,6 +79,16 @@ def test_agent_output_requires_runtime_input_key_even_when_null() -> None:
         )
 
 
+def test_runtime_input_requires_explicit_notes_key() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2RuntimeInput.model_validate({"jobTitle": "数据科学家", "jd": "JD"})
+
+
+def test_requirement_patch_requires_explicit_keys() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2RequirementPatch.model_validate({"selectedItemIds": ["sql"]})
+
+
 def test_agent_output_validates_recruitment_input() -> None:
     output = WorkbenchV2AgentOutput.model_validate(
         {
@@ -171,6 +181,22 @@ def test_chat_rejects_runtime_input_payload() -> None:
                     "jd": "负责数据分析。",
                     "notes": None,
                 },
+                "requirementPatch": None,
+                "memoryRead": None,
+                "memoryWrite": None,
+            }
+        )
+
+
+def test_clarifying_question_is_rejected_when_not_clarifying() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2AgentOutput.model_validate(
+            {
+                "intent": "chat",
+                "message": "你好。",
+                "needsClarification": False,
+                "clarifyingQuestion": "你想招聘什么岗位？",
+                "runtimeInput": None,
                 "requirementPatch": None,
                 "memoryRead": None,
                 "memoryWrite": None,

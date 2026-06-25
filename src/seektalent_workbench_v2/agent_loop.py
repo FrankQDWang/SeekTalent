@@ -42,7 +42,7 @@ class WorkbenchV2RuntimeInput(BaseModel):
 
     jobTitle: str = Field(min_length=1)
     jd: str = Field(min_length=1)
-    notes: str | None = None
+    notes: str | None
 
     @field_validator("jobTitle", "jd", mode="before")
     @classmethod
@@ -58,9 +58,9 @@ class WorkbenchV2RuntimeInput(BaseModel):
 class WorkbenchV2RequirementPatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    selectedItemIds: list[str] = Field(default_factory=list)
-    deselectedItemIds: list[str] = Field(default_factory=list)
-    otherNotes: str | None = None
+    selectedItemIds: list[str]
+    deselectedItemIds: list[str]
+    otherNotes: str | None
 
     @field_validator("selectedItemIds", "deselectedItemIds", mode="before")
     @classmethod
@@ -152,6 +152,8 @@ class WorkbenchV2AgentOutput(BaseModel):
             if any((self.runtimeInput, self.requirementPatch, self.memoryRead, self.memoryWrite)):
                 raise ValueError("action payloads must be absent when needsClarification is true")
             return self
+        if self.clarifyingQuestion is not None:
+            raise ValueError("clarifyingQuestion is only allowed when needsClarification is true")
 
         if self.intent in {"chat", "confirm_requirements", "get_runtime_status", "get_runtime_results"}:
             reject_payloads("runtimeInput", "requirementPatch", "memoryRead", "memoryWrite")
