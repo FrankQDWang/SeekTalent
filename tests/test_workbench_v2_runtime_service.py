@@ -1,0 +1,209 @@
+from __future__ import annotations
+
+import inspect
+from pathlib import Path
+
+import pytest
+
+from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet
+from seektalent_runtime_control.store import RuntimeControlStore
+from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
+import seektalent_workbench_v2.runtime_service as runtime_service_module
+from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
+
+
+NOW = "2026-06-25T01:02:03.000004+00:00"
+
+
+class RecordingRequirementExtractor:
+    def __init__(self, sheet: RequirementSheet) -> None:
+        self.sheet = sheet
+        self.calls: list[dict[str, object]] = []
+
+    def extract_requirements(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str | None,
+        requirement_cache_scope: str,
+    ) -> RequirementSheet:
+        self.calls.append(
+            {
+                "job_title": job_title,
+                "jd": jd,
+                "notes": notes,
+                "requirement_cache_scope": requirement_cache_scope,
+            }
+        )
+        return self.sheet
+
+
+def test_runtime_service_extracts_requirement_form(tmp_path: Path) -> None:
+    sheet = _requirement_sheet()
+    extractor = RecordingRequirementExtractor(sheet)
+    service = _service(tmp_path, requirement_extractor=extractor)
+
+    draft = service.extract_requirements(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle=" AI 平台工程师 ", jd=" 需要 Agent 系统经验 ", notes="杭州"),
+    )
+
+    assert extractor.calls == [
+        {
+            "job_title": "AI 平台工程师",
+            "jd": "需要 Agent 系统经验",
+            "notes": "杭州",
+            "requirement_cache_scope": "agentv2_1",
+        }
+    ]
+    assert draft.conversation_id == "agentv2_1"
+    assert draft.draft_revision_id == "reqdraft_1"
+    assert draft.status == "draft_ready"
+    item_sources = [
+        item.source
+        for section in draft.sections
+        for item in section.items
+    ]
+    assert item_sources
+    assert set(item_sources) == {"workbench_v2_agent"}
+
+
+@pytest.mark.parametrize(
+    "runtime_input",
+    [
+        None,
+        WorkbenchV2RuntimeInput.model_construct(jobTitle="", jd="需要 Agent 系统经验", notes="杭州"),
+        WorkbenchV2RuntimeInput.model_construct(jobTitle="AI 平台工程师", jd=" ", notes=None),
+    ],
+)
+def test_runtime_service_refuses_start_without_required_fields(
+    tmp_path: Path,
+    runtime_input: WorkbenchV2RuntimeInput | None,
+) -> None:
+    service = _service(tmp_path, runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()))
+
+    with pytest.raises(ValueError, match="^workbench_v2_runtime_input_required$"):
+        service.start_run("agentv2_1", runtime_input, _requirement_sheet())
+
+
+def test_runtime_service_enqueues_run_with_job_title_jd_and_notes(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        draft_revision_id_factory=lambda: "reqdraft_start_1",
+        approved_requirement_revision_id_factory=lambda: "reqapproved_1",
+        runtime_run_id_factory=lambda: "rtrun_1",
+        now=lambda: NOW,
+    )
+    runtime_input = WorkbenchV2RuntimeInput(
+        jobTitle="AI 平台工程师",
+        jd="需要 Python 和 Agent 工作流经验",
+        notes="杭州",
+    )
+
+    run = service.start_run("agentv2_1", runtime_input, _requirement_sheet())
+
+    assert run.runtime_run_id == "rtrun_1"
+    assert run.status == "queued"
+    assert run.source_ids == ["liepin"]
+    approved = store.get_approved_requirement("reqapproved_1")
+    assert approved.agent_conversation_id == "agentv2_1"
+    assert approved.draft_revision_id == "reqdraft_start_1"
+    assert approved.requirement_sheet == _requirement_sheet()
+    assert approved.selected_item_ids
+    assert approved.deselected_item_ids == []
+    snapshot = store.get_snapshot(runtime_run_id=run.runtime_run_id)
+    assert snapshot is not None
+    assert snapshot.snapshot["workflowInput"] == {
+        "jobTitle": "AI 平台工程师",
+        "jdText": "需要 Python 和 Agent 工作流经验",
+        "notes": "杭州",
+        "sourceIds": ["liepin"],
+    }
+
+
+def test_runtime_service_module_does_not_import_ui_or_tests() -> None:
+    source = inspect.getsource(runtime_service_module)
+
+    assert "seektalent_ui" not in source
+    assert "tests." not in source
+
+
+def test_runtime_service_missing_extractor_raises(tmp_path: Path) -> None:
+    service = _service(tmp_path, runtime_factory=lambda: object())
+
+    with pytest.raises(RuntimeError, match="^workbench_v2_requirement_extractor_unavailable$"):
+        service.extract_requirements(
+            "agentv2_1",
+            WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        )
+
+
+def test_runtime_service_get_status_maps_queued_to_readable_summary(tmp_path: Path) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+
+    assert service.get_status(run.runtime_run_id) == {
+        "runtimeRunId": "rtrun_1",
+        "status": "queued",
+        "stage": "queued",
+        "summary": "Run is queued and waiting to start.",
+    }
+
+
+def _service(
+    tmp_path: Path,
+    *,
+    requirement_extractor: object | None = None,
+    runtime_factory: object | None = None,
+    runtime_run_id_factory: object | None = None,
+) -> WorkbenchV2RuntimeService:
+    return WorkbenchV2RuntimeService(
+        store=_store(tmp_path),
+        requirement_extractor=requirement_extractor,
+        runtime_factory=runtime_factory,
+        draft_revision_id_factory=lambda: "reqdraft_1",
+        approved_requirement_revision_id_factory=lambda: "reqapproved_1",
+        runtime_run_id_factory=runtime_run_id_factory,
+        now=lambda: NOW,
+    )
+
+
+def _store(tmp_path: Path) -> RuntimeControlStore:
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    return store
+
+
+def _requirement_sheet() -> RequirementSheet:
+    return RequirementSheet(
+        job_title="AI 平台工程师",
+        title_anchor_terms=["AI 平台工程师"],
+        title_anchor_rationale="The job title names the platform role.",
+        role_summary="Build AI agent platform systems.",
+        must_have_capabilities=["Python 后端开发", "Agent 工作流经验"],
+        preferred_capabilities=["RAG 经验"],
+        exclusion_signals=["没有生产系统经验"],
+        hard_constraints=HardConstraintSlots(locations=["杭州"]),
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="AI 平台工程师",
+                source="job_title",
+                category="role_anchor",
+                priority=100,
+                evidence="岗位名称",
+                first_added_round=0,
+            )
+        ],
+        scoring_rationale="Prioritize platform engineering and agent workflow experience.",
+    )
