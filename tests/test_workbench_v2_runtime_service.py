@@ -24,14 +24,14 @@ class RecordingRequirementExtractor:
         self,
         *,
         job_title: str,
-        jd: str,
+        jd_text: str,
         notes: str | None,
         requirement_cache_scope: str,
     ) -> RequirementSheet:
         self.calls.append(
             {
                 "job_title": job_title,
-                "jd": jd,
+                "jd_text": jd_text,
                 "notes": notes,
                 "requirement_cache_scope": requirement_cache_scope,
             }
@@ -52,7 +52,7 @@ def test_runtime_service_extracts_requirement_form(tmp_path: Path) -> None:
     assert extractor.calls == [
         {
             "job_title": "AI 平台工程师",
-            "jd": "需要 Agent 系统经验",
+            "jd_text": "需要 Agent 系统经验",
             "notes": "杭州",
             "requirement_cache_scope": "agentv2_1",
         }
@@ -67,6 +67,28 @@ def test_runtime_service_extracts_requirement_form(tmp_path: Path) -> None:
     ]
     assert item_sources
     assert set(item_sources) == {"workbench_v2_agent"}
+
+
+def test_runtime_service_extracts_requirement_form_from_runtime_factory(tmp_path: Path) -> None:
+    sheet = _requirement_sheet()
+    extractor = RecordingRequirementExtractor(sheet)
+    service = _service(tmp_path, runtime_factory=lambda: extractor)
+
+    draft = service.extract_requirements(
+        "agentv2_factory",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+    )
+
+    assert extractor.calls == [
+        {
+            "job_title": "AI 平台工程师",
+            "jd_text": "需要 Agent 系统经验",
+            "notes": None,
+            "requirement_cache_scope": "agentv2_factory",
+        }
+    ]
+    assert draft.conversation_id == "agentv2_factory"
+    assert draft.status == "draft_ready"
 
 
 @pytest.mark.parametrize(
@@ -157,8 +179,86 @@ def test_runtime_service_get_status_maps_queued_to_readable_summary(tmp_path: Pa
         "runtimeRunId": "rtrun_1",
         "status": "queued",
         "stage": "queued",
-        "summary": "Run is queued and waiting to start.",
+        "summary": "招聘流程已排队，等待开始。",
     }
+
+
+def test_runtime_service_get_status_includes_current_stage_in_running_summary(tmp_path: Path) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="starting",
+        current_stage="startup",
+        updated_at=NOW,
+    )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="running",
+        current_stage="round",
+        updated_at=NOW,
+    )
+
+    assert service.get_status(run.runtime_run_id) == {
+        "runtimeRunId": "rtrun_1",
+        "status": "running",
+        "stage": "round",
+        "summary": "招聘流程运行中，当前阶段：检索轮次。",
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_summary"),
+    [
+        ("completed", "招聘流程已完成。"),
+        ("failed", "招聘流程失败，请查看运行详情。"),
+        ("cancelled", "招聘流程已取消。"),
+    ],
+)
+def test_runtime_service_get_status_maps_terminal_status_to_chinese_summary(
+    tmp_path: Path,
+    status: str,
+    expected_summary: str,
+) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+    if status == "completed":
+        service.store.update_run_status(
+            runtime_run_id=run.runtime_run_id,
+            status="starting",
+            current_stage="startup",
+            updated_at=NOW,
+        )
+        service.store.update_run_status(
+            runtime_run_id=run.runtime_run_id,
+            status="running",
+            current_stage="round",
+            updated_at=NOW,
+        )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status=status,
+        current_stage="finalization",
+        updated_at=NOW,
+    )
+
+    assert service.get_status(run.runtime_run_id)["summary"] == expected_summary
 
 
 def _service(

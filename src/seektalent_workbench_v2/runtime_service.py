@@ -29,7 +29,7 @@ class RequirementExtractor(Protocol):
         self,
         *,
         job_title: str,
-        jd: str,
+        jd_text: str,
         notes: str | None,
         requirement_cache_scope: str,
     ) -> RequirementSheet: ...
@@ -69,7 +69,7 @@ class WorkbenchV2RuntimeService:
         job_title, jd_text, notes = _runtime_input_values(runtime_input)
         sheet = self._requirement_extractor().extract_requirements(
             job_title=job_title,
-            jd=jd_text,
+            jd_text=jd_text,
             notes=notes,
             requirement_cache_scope=conversation_id,
         )
@@ -124,13 +124,12 @@ class WorkbenchV2RuntimeService:
 
     def get_status(self, runtime_run_id: str) -> dict[str, str]:
         run = self.store.get_run(runtime_run_id)
-        snapshot = self.store.get_snapshot(runtime_run_id=runtime_run_id)
-        stage = snapshot.current_stage if snapshot is not None else run.current_stage
+        stage = run.current_stage
         return {
             "runtimeRunId": run.runtime_run_id,
             "status": run.status,
             "stage": stage,
-            "summary": _status_summary(run.status),
+            "summary": _status_summary(run.status, stage),
         }
 
     def _requirement_extractor(self) -> RequirementExtractor:
@@ -191,20 +190,34 @@ def _deselected_item_ids(draft: RequirementDraft) -> list[str]:
     ]
 
 
-def _status_summary(status: str) -> str:
+def _status_summary(status: str, stage: str) -> str:
     summaries = {
-        "queued": "Run is queued and waiting to start.",
-        "starting": "Run is starting.",
-        "running": "Run is in progress.",
-        "pause_requested": "Run pause has been requested.",
-        "paused": "Run is paused.",
-        "resume_requested": "Run resume has been requested.",
-        "cancellation_requested": "Run cancellation has been requested.",
-        "cancelled": "Run was cancelled.",
-        "completed": "Run completed.",
-        "failed": "Run failed.",
+        "queued": "招聘流程已排队，等待开始。",
+        "starting": f"招聘流程正在启动，当前阶段：{_stage_label(stage)}。",
+        "running": f"招聘流程运行中，当前阶段：{_stage_label(stage)}。",
+        "pause_requested": "招聘流程正在暂停。",
+        "paused": "招聘流程已暂停。",
+        "resume_requested": "招聘流程正在恢复。",
+        "cancellation_requested": "招聘流程正在取消。",
+        "cancelled": "招聘流程已取消。",
+        "completed": "招聘流程已完成。",
+        "failed": "招聘流程失败，请查看运行详情。",
     }
-    return summaries.get(status, f"Run status: {status}.")
+    return summaries.get(status, f"招聘流程状态：{status}。")
+
+
+def _stage_label(stage: str) -> str:
+    labels = {
+        "queued": "排队中",
+        "starting": "启动中",
+        "startup": "启动中",
+        "runtime": "运行中",
+        "round": "检索轮次",
+        "command": "指令处理",
+        "resume": "恢复运行",
+        "finalization": "结果汇总",
+    }
+    return labels.get(stage, stage or "未标记")
 
 
 def _new_id(prefix: str) -> str:
