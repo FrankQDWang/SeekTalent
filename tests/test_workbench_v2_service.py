@@ -696,6 +696,99 @@ def test_requirement_action_idempotency_replay_does_not_append_duplicate_events(
     assert first_confirm.requirementForm == second_confirm.requirementForm
 
 
+def test_requirement_action_idempotency_conflicts_on_different_selected(tmp_path: Path) -> None:
+    service, conversation_id, item_id = _service_with_requirement_form(tmp_path)
+    asyncio.run(
+        service.apply_requirement_action(
+            conversation_id,
+            action="set_selected",
+            item_id=item_id,
+            selected=False,
+            idempotency_key="action-conflict",
+        )
+    )
+
+    with pytest.raises(ValueError, match="workbench_v2_idempotency_conflict"):
+        asyncio.run(
+            service.apply_requirement_action(
+                conversation_id,
+                action="set_selected",
+                item_id=item_id,
+                selected=True,
+                idempotency_key="action-conflict",
+            )
+        )
+
+
+def test_requirement_action_idempotency_conflicts_on_different_item_id(tmp_path: Path) -> None:
+    service, conversation_id, item_id = _service_with_requirement_form(tmp_path)
+    asyncio.run(
+        service.apply_requirement_action(
+            conversation_id,
+            action="set_selected",
+            item_id=item_id,
+            selected=False,
+            idempotency_key="action-conflict",
+        )
+    )
+
+    with pytest.raises(ValueError, match="workbench_v2_idempotency_conflict"):
+        asyncio.run(
+            service.apply_requirement_action(
+                conversation_id,
+                action="set_selected",
+                item_id="must_have_capabilities_missing",
+                selected=False,
+                idempotency_key="action-conflict",
+            )
+        )
+
+
+def test_requirement_action_idempotency_conflicts_on_different_text(tmp_path: Path) -> None:
+    service, conversation_id, _item_id = _service_with_requirement_form(tmp_path)
+    asyncio.run(
+        service.apply_requirement_action(
+            conversation_id,
+            action="add_other",
+            text="熟悉 LangGraph",
+            idempotency_key="action-conflict",
+        )
+    )
+
+    with pytest.raises(ValueError, match="workbench_v2_idempotency_conflict"):
+        asyncio.run(
+            service.apply_requirement_action(
+                conversation_id,
+                action="add_other",
+                text="熟悉 LlamaIndex",
+                idempotency_key="action-conflict",
+            )
+        )
+
+
+def test_requirement_action_idempotency_conflicts_on_different_action(tmp_path: Path) -> None:
+    service, conversation_id, item_id = _service_with_requirement_form(tmp_path)
+    asyncio.run(
+        service.apply_requirement_action(
+            conversation_id,
+            action="set_selected",
+            item_id=item_id,
+            selected=False,
+            idempotency_key="action-conflict",
+        )
+    )
+
+    with pytest.raises(ValueError, match="workbench_v2_idempotency_conflict"):
+        asyncio.run(
+            service.apply_requirement_action(
+                conversation_id,
+                action="add_other",
+                text="熟悉 LangGraph",
+                idempotency_key="action-conflict",
+            )
+        )
+
+
 def test_confirm_requirements_without_current_form_appends_deterministic_error(tmp_path: Path) -> None:
     store = _store(tmp_path)
     agent = FakeAgentLoop(
@@ -985,6 +1078,26 @@ def _store(tmp_path: Path) -> WorkbenchV2Store:
     store = WorkbenchV2Store(tmp_path / "workbench_v2.sqlite3")
     store.initialize()
     return store
+
+
+def _service_with_requirement_form(tmp_path: Path) -> tuple[WorkbenchV2Service, str, str]:
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": "杭州",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+    )
+    service = WorkbenchV2Service(
+        store=_store(tmp_path),
+        agent_loop=agent,
+        runtime_service=FakeRuntimeService(),
+    )
+    view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-action-form"))
+    assert view.requirementForm is not None
+    item_id = view.requirementForm["draft"]["sections"][0]["items"][0]["item_id"]
+    return service, view.conversation.conversationId, item_id
 
 
 def _agent_output(

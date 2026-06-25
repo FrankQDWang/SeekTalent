@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, Protocol, cast
 from uuid import uuid4
@@ -119,11 +121,18 @@ class WorkbenchV2Service:
         text: str | None = None,
         idempotency_key: str | None = None,
     ) -> WorkbenchV2ConversationView:
-        scope = _requirement_action_scope(action)
+        scope = _requirement_action_scope()
+        action_digest = _requirement_action_payload_digest(
+            conversation_id=conversation_id,
+            action=action,
+            item_id=item_id,
+            selected=selected,
+            text=text,
+        )
         if self._has_requirement_action_terminal_event(
             conversation_id,
-            action=action,
             scope=scope,
+            action_digest=action_digest,
             idempotency_key=idempotency_key,
         ):
             return self.get_conversation(conversation_id)
@@ -136,6 +145,7 @@ class WorkbenchV2Service:
                 item_id=item_id,
                 selected=selected,
                 scope=scope,
+                action_digest=action_digest,
                 idempotency_key=idempotency_key,
             )
             return self.get_conversation(conversation_id)
@@ -147,6 +157,7 @@ class WorkbenchV2Service:
                 conversation_id,
                 text=text,
                 scope=scope,
+                action_digest=action_digest,
                 idempotency_key=idempotency_key,
             )
             return self.get_conversation(conversation_id)
@@ -158,6 +169,7 @@ class WorkbenchV2Service:
                 scope=scope,
                 idempotency_key=idempotency_key,
                 raise_domain_errors=True,
+                action_digest=action_digest,
             )
             return self.get_conversation(conversation_id)
 
@@ -308,6 +320,7 @@ class WorkbenchV2Service:
         scope: str,
         idempotency_key: str | None,
         raise_domain_errors: bool = False,
+        action_digest: str | None = None,
     ) -> None:
         form_payload = _latest_requirement_form_payload(self.store.get_conversation(conversation_id).events)
         if form_payload is None:
@@ -319,6 +332,7 @@ class WorkbenchV2Service:
                 message="当前没有可确认的需求表单，无法启动运行。",
                 scope=scope,
                 idempotency_key=idempotency_key,
+                action_digest=action_digest,
             )
             return
         runtime_input = _runtime_input_from_payload(form_payload.get("runtimeInput"))
@@ -331,6 +345,7 @@ class WorkbenchV2Service:
                 message="需求表单缺少 runtimeInput，无法启动运行。",
                 scope=scope,
                 idempotency_key=idempotency_key,
+                action_digest=action_digest,
             )
             return
         draft_payload = _mapping_or_none(form_payload.get("draft"))
@@ -341,6 +356,7 @@ class WorkbenchV2Service:
                 scope=scope,
                 idempotency_key=idempotency_key,
                 raise_domain_error=raise_domain_errors,
+                action_digest=action_digest,
             )
             return
         self._start_runtime_from_requirement_sheet(
@@ -354,6 +370,7 @@ class WorkbenchV2Service:
             draft_revision_id=_draft_revision_id(draft_payload),
             selected_item_ids=_selected_item_ids(draft_payload),
             deselected_item_ids=_deselected_item_ids(draft_payload),
+            action_digest=action_digest,
         )
 
     def _start_runtime(
@@ -446,6 +463,7 @@ class WorkbenchV2Service:
         scope: str,
         idempotency_key: str | None,
         raise_domain_error: bool = False,
+        action_digest: str | None = None,
     ) -> None:
         if raise_domain_error:
             raise ValueError("workbench_v2_requirement_sheet_required")
@@ -455,6 +473,7 @@ class WorkbenchV2Service:
             message="需求表单缺少 requirementSheet，无法启动运行。",
             scope=scope,
             idempotency_key=idempotency_key,
+            action_digest=action_digest,
         )
 
     def _set_requirement_selected(
@@ -464,6 +483,7 @@ class WorkbenchV2Service:
         item_id: str,
         selected: bool,
         scope: str,
+        action_digest: str,
         idempotency_key: str | None,
     ) -> None:
         form_payload, draft, requirement_sheet = self._current_requirement_form_bundle(conversation_id)
@@ -484,6 +504,7 @@ class WorkbenchV2Service:
             draft=_with_new_draft_revision(draft),
             requirement_sheet=requirement_sheet,
             scope=scope,
+            action_digest=action_digest,
             idempotency_key=idempotency_key,
         )
 
@@ -493,6 +514,7 @@ class WorkbenchV2Service:
         *,
         text: str,
         scope: str,
+        action_digest: str,
         idempotency_key: str | None,
     ) -> None:
         form_payload, draft, requirement_sheet = self._current_requirement_form_bundle(conversation_id)
@@ -524,6 +546,7 @@ class WorkbenchV2Service:
             draft=_with_new_draft_revision(draft),
             requirement_sheet=requirement_sheet,
             scope=scope,
+            action_digest=action_digest,
             idempotency_key=idempotency_key,
         )
 
@@ -552,6 +575,7 @@ class WorkbenchV2Service:
         draft: RequirementDraft,
         requirement_sheet: RequirementSheet,
         scope: str,
+        action_digest: str,
         idempotency_key: str | None,
     ) -> None:
         updated_requirement_sheet = requirement_sheet_from_draft(draft, requirement_sheet)
@@ -565,7 +589,12 @@ class WorkbenchV2Service:
                     "draft": _dump_mapping(draft),
                     "requirementSheet": _dump_mapping(updated_requirement_sheet),
                 },
-                dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="requirement-form"),
+                dedupe_key=_action_event_dedupe_key(
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                    action_digest=action_digest,
+                    suffix="requirement-form",
+                ),
             ),
         )
 
@@ -582,6 +611,7 @@ class WorkbenchV2Service:
         draft_revision_id: str | None,
         selected_item_ids: list[str] | None,
         deselected_item_ids: list[str] | None,
+        action_digest: str | None = None,
     ) -> None:
         try:
             run = self.runtime_service.start_run(
@@ -598,6 +628,7 @@ class WorkbenchV2Service:
                 conversation_id,
                 scope=scope,
                 idempotency_key=idempotency_key,
+                action_digest=action_digest,
             )
             return
         self._append_started_runtime(
@@ -607,6 +638,7 @@ class WorkbenchV2Service:
             message=message,
             scope=scope,
             idempotency_key=idempotency_key,
+            action_digest=action_digest,
         )
 
     def _start_runtime_from_input(
@@ -656,6 +688,7 @@ class WorkbenchV2Service:
         message: str,
         scope: str,
         idempotency_key: str | None,
+        action_digest: str | None = None,
     ) -> None:
         runtime_run_id = _required_text_attr(run, "runtime_run_id")
         runtime_state = _runtime_state_from_run_status(getattr(run, "status", None))
@@ -667,9 +700,10 @@ class WorkbenchV2Service:
                 type="requirement_form_confirmed",
                 role="assistant",
                 payload=confirmed_payload,
-                dedupe_key=_dedupe_key(
+                dedupe_key=_action_event_dedupe_key(
                     scope=scope,
                     idempotency_key=idempotency_key,
+                    action_digest=action_digest,
                     suffix="requirement-form-confirmed",
                 ),
             ),
@@ -699,6 +733,7 @@ class WorkbenchV2Service:
         *,
         scope: str,
         idempotency_key: str | None,
+        action_digest: str | None = None,
     ) -> None:
         self._append_service_error(
             conversation_id,
@@ -706,6 +741,7 @@ class WorkbenchV2Service:
             message="运行启动失败，请稍后重试。",
             scope=scope,
             idempotency_key=idempotency_key,
+            action_digest=action_digest,
         )
 
     def _append_service_error(
@@ -716,6 +752,7 @@ class WorkbenchV2Service:
         message: str,
         scope: str,
         idempotency_key: str | None,
+        action_digest: str | None = None,
     ) -> None:
         self.store.append_event(
             conversation_id,
@@ -724,13 +761,23 @@ class WorkbenchV2Service:
                 role="system",
                 status="failed",
                 payload={"code": code, "message": message},
-                dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="error"),
+                dedupe_key=_action_event_dedupe_key(
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                    action_digest=action_digest,
+                    suffix="error",
+                ),
             ),
         )
         self._append_assistant_message(
             conversation_id,
             text=message,
-            dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="assistant"),
+            dedupe_key=_action_event_dedupe_key(
+                scope=scope,
+                idempotency_key=idempotency_key,
+                action_digest=action_digest,
+                suffix="assistant",
+            ),
         )
 
     def _append_assistant_message(
@@ -802,27 +849,24 @@ class WorkbenchV2Service:
         self,
         conversation_id: str,
         *,
-        action: WorkbenchV2RequirementAction,
         scope: str,
+        action_digest: str,
         idempotency_key: str | None,
     ) -> bool:
         if idempotency_key is None:
             return False
-        form_key = _dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="requirement-form")
-        confirmed_key = _dedupe_key(
-            scope=scope,
-            idempotency_key=idempotency_key,
-            suffix="requirement-form-confirmed",
-        )
-        error_key = _dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="error")
+        prefix = _action_event_dedupe_prefix(scope=scope, idempotency_key=idempotency_key)
         record = self.store.get_conversation(conversation_id)
-        if action in {"set_selected", "add_other"}:
-            return any(event.type == "requirement_form" and event.dedupe_key == form_key for event in record.events)
-        return any(
-            (event.type == "requirement_form_confirmed" and event.dedupe_key == confirmed_key)
-            or (event.type == "error" and event.dedupe_key == error_key)
-            for event in record.events
-        )
+        for event in record.events:
+            if event.type not in {"requirement_form", "requirement_form_confirmed", "error"}:
+                continue
+            existing_digest = _action_digest_from_dedupe_key(event.dedupe_key, prefix=prefix)
+            if existing_digest is None:
+                continue
+            if existing_digest != action_digest:
+                raise ValueError("workbench_v2_idempotency_conflict")
+            return True
+        return False
 
 
 def _dedupe_key(*, scope: str, idempotency_key: str | None, suffix: str) -> str | None:
@@ -831,8 +875,52 @@ def _dedupe_key(*, scope: str, idempotency_key: str | None, suffix: str) -> str 
     return f"workbench-v2-service:{scope}:{idempotency_key}:{suffix}"
 
 
-def _requirement_action_scope(action: WorkbenchV2RequirementAction) -> str:
-    return f"requirement-action:{action}"
+def _action_event_dedupe_key(
+    *,
+    scope: str,
+    idempotency_key: str | None,
+    action_digest: str | None,
+    suffix: str,
+) -> str | None:
+    if action_digest is None:
+        return _dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix=suffix)
+    return _dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix=f"{action_digest}:{suffix}")
+
+
+def _action_event_dedupe_prefix(*, scope: str, idempotency_key: str) -> str:
+    return f"workbench-v2-service:{scope}:{idempotency_key}:"
+
+
+def _action_digest_from_dedupe_key(dedupe_key: str | None, *, prefix: str) -> str | None:
+    if dedupe_key is None or not dedupe_key.startswith(prefix):
+        return None
+    digest, separator, _suffix = dedupe_key[len(prefix) :].partition(":")
+    if not separator or len(digest) != 64:
+        return None
+    return digest
+
+
+def _requirement_action_scope() -> str:
+    return "requirement-action"
+
+
+def _requirement_action_payload_digest(
+    *,
+    conversation_id: str,
+    action: WorkbenchV2RequirementAction,
+    item_id: str | None,
+    selected: bool | None,
+    text: str | None,
+) -> str:
+    payload = {
+        "conversationId": conversation_id,
+        "action": action,
+        "itemId": item_id,
+        "selected": selected,
+        "text": text,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _latest_requirement_form_payload(events: Sequence[WorkbenchV2TranscriptEvent]) -> dict[str, object] | None:
