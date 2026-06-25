@@ -7,6 +7,11 @@ import {
   ConversationScreenSide,
   hasConversationWorkflowSurface,
 } from "../components/workbench/ConversationScreen";
+import {
+  ConversationScreenV2,
+  ConversationScreenV2Side,
+  hasConversationV2RuntimeSurface,
+} from "../components/workbench/ConversationScreenV2";
 import { ConversationShell } from "../components/workbench/ConversationShell";
 import { CandidateDetailDrawer } from "../components/workbench/CandidateDetailDrawer";
 import {
@@ -14,12 +19,19 @@ import {
   type HomeStartPanelSubmitInput,
 } from "../components/workbench/HomeStartPanel";
 import {
+  useApplyWorkbenchV2RequirementAction,
+  useCreateWorkbenchV2Conversation,
+  useSubmitWorkbenchV2Message,
+  useWorkbenchV2Conversation,
+  useWorkbenchV2Conversations,
+} from "../lib/api/workbenchV2";
+import { WorkbenchV2RequestError } from "../lib/api/workbenchV2Client";
+import type { WorkbenchV2RequirementActionRequest } from "../lib/api/workbenchV2Types";
+import {
   useAmendAgentWorkbenchRequirementFromText,
   useConfirmAgentWorkbenchRequirements,
   useAgentWorkbenchCandidateDetail,
-  useAgentWorkbenchConversations,
   useAgentWorkbenchLiveConversation,
-  useCreateAgentWorkbenchConversationFromJd,
   useSubmitAgentWorkbenchMessage,
   useUpdateAgentWorkbenchRequirementDraft,
 } from "../lib/api/agentWorkbench";
@@ -44,8 +56,17 @@ function WorkbenchRoute() {
     return <NewConversationFlow />;
   }
 
+  if (isWorkbenchV2ConversationId(conversationId)) {
+    return (
+      <ExistingWorkbenchV2ConversationFlow
+        key={conversationId}
+        conversationId={conversationId}
+      />
+    );
+  }
+
   return (
-    <ExistingConversationFlow
+    <ExistingLegacyConversationFlow
       key={conversationId}
       conversationId={conversationId}
     />
@@ -54,25 +75,23 @@ function WorkbenchRoute() {
 
 function NewConversationFlow() {
   const navigate = useNavigate({ from: "/conversations/$conversationId" });
-  const conversationsQuery = useAgentWorkbenchConversations();
-  const createConversationMutation =
-    useCreateAgentWorkbenchConversationFromJd();
+  const createConversationMutation = useCreateWorkbenchV2Conversation();
   const [homeErrorMessage, setHomeErrorMessage] = useState<string | null>(null);
 
   const onHomeSubmit = async (input: HomeStartPanelSubmitInput) => {
     setHomeErrorMessage(null);
     try {
       const result = await createConversationMutation.mutateAsync({
-        jobDescription: input.jobDescription,
-        jobTitle: input.jobTitle,
+        message: input.message,
+        idempotencyKey: createIdempotencyKey(),
       });
       void navigate({
-        params: { conversationId: result.conversationId },
+        params: { conversationId: result.conversation.conversationId },
         to: "/conversations/$conversationId",
         replace: true,
       });
     } catch (error) {
-      setHomeErrorMessage(safeErrorMessage(error));
+      setHomeErrorMessage(safeWorkbenchV2ErrorMessage(error));
       throw error;
     }
   };
@@ -86,20 +105,113 @@ function NewConversationFlow() {
           onSubmit={onHomeSubmit}
         />
       }
-      rail={
-        conversationsQuery.isSuccess ? (
-          <ConversationList
-            conversations={conversationsQuery.data.conversations}
+      rail={<WorkbenchV2ConversationRail />}
+    />
+  );
+}
+
+function ExistingWorkbenchV2ConversationFlow({
+  conversationId,
+}: {
+  conversationId: string;
+}) {
+  const query = useWorkbenchV2Conversation(conversationId);
+  const submitMessageMutation = useSubmitWorkbenchV2Message(conversationId);
+  const requirementActionMutation =
+    useApplyWorkbenchV2RequirementAction(conversationId);
+  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    setActionErrorMessage(null);
+  }, [conversationId]);
+
+  const onSubmitMessage = async (message: string) => {
+    setActionErrorMessage(null);
+    try {
+      await submitMessageMutation.mutateAsync({
+        message,
+        idempotencyKey: createIdempotencyKey(),
+      });
+    } catch (error) {
+      setActionErrorMessage(safeWorkbenchV2ErrorMessage(error));
+      throw error;
+    }
+  };
+
+  const onRequirementAction = async (
+    payload: WorkbenchV2RequirementActionRequest,
+  ) => {
+    setActionErrorMessage(null);
+    try {
+      await requirementActionMutation.mutateAsync({
+        ...payload,
+        idempotencyKey: payload.idempotencyKey ?? createIdempotencyKey(),
+      });
+    } catch (error) {
+      setActionErrorMessage(safeWorkbenchV2ErrorMessage(error));
+      throw error;
+    }
+  };
+
+  if (query.isPending) {
+    return (
+      <ConversationShell
+        main={<section aria-busy="true" className="conversation-view__state" />}
+        rail={
+          <WorkbenchV2ConversationRail
+            selectedConversationId={conversationId}
           />
-        ) : (
-          <ConversationList />
-        )
+        }
+      />
+    );
+  }
+
+  if (query.isError) {
+    return (
+      <ConversationShell
+        main={
+          <section className="conversation-view__state" role="alert">
+            {safeWorkbenchV2ErrorMessage(query.error)}
+          </section>
+        }
+        rail={
+          <WorkbenchV2ConversationRail
+            selectedConversationId={conversationId}
+          />
+        }
+      />
+    );
+  }
+
+  const view = query.data;
+
+  return (
+    <ConversationShell
+      main={
+        <ConversationScreenV2
+          actionErrorMessage={actionErrorMessage}
+          applyingRequirementAction={requirementActionMutation.isPending}
+          onRequirementAction={onRequirementAction}
+          onSubmitMessage={onSubmitMessage}
+          submittingMessage={submitMessageMutation.isPending}
+          view={view}
+        />
+      }
+      rail={
+        <WorkbenchV2ConversationRail selectedConversationId={conversationId} />
+      }
+      side={
+        hasConversationV2RuntimeSurface(view) ? (
+          <ConversationScreenV2Side view={view} />
+        ) : null
       }
     />
   );
 }
 
-function ExistingConversationFlow({
+function ExistingLegacyConversationFlow({
   conversationId,
 }: {
   conversationId: string;
@@ -324,4 +436,44 @@ function ExistingConversationFlow({
       />
     </>
   );
+}
+
+function WorkbenchV2ConversationRail({
+  selectedConversationId,
+}: {
+  selectedConversationId?: string;
+}) {
+  const conversationsQuery = useWorkbenchV2Conversations();
+  return (
+    <ConversationList
+      conversations={conversationsQuery.data?.conversations ?? []}
+      selectedConversationId={selectedConversationId}
+    />
+  );
+}
+
+function isWorkbenchV2ConversationId(conversationId: string): boolean {
+  return conversationId.startsWith("agentv2_");
+}
+
+function createIdempotencyKey(): string {
+  const globalWithOptionalCrypto = globalThis as {
+    crypto?: { randomUUID?: () => string };
+  };
+  if (typeof globalWithOptionalCrypto.crypto?.randomUUID === "function") {
+    return globalWithOptionalCrypto.crypto.randomUUID();
+  }
+  return `idempotency-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2)}`;
+}
+
+function safeWorkbenchV2ErrorMessage(error: unknown): string {
+  if (error instanceof WorkbenchV2RequestError) {
+    if (error.status > 0) {
+      return `请求失败，状态码 ${String(error.status)}`;
+    }
+    return "网络请求失败，请稍后重试。";
+  }
+  return safeErrorMessage(error);
 }

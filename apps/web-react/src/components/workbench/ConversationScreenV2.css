@@ -1,0 +1,119 @@
+.conversation-v2-view {
+  background: var(--st-bg);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.conversation-v2-view__panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.conversation-v2-view__panel .transcript-v2 {
+  flex: 1;
+  min-height: 0;
+}
+
+.conversation-v2-view__notice {
+  align-items: center;
+  border-bottom: 1px solid var(--st-border);
+  display: grid;
+  gap: var(--st-space-1);
+  min-height: 64px;
+  padding: var(--st-space-4);
+}
+
+.conversation-v2-view__notice strong {
+  color: var(--st-ink);
+  font-size: 0.92rem;
+}
+
+.conversation-v2-view__notice span {
+  color: var(--st-muted);
+  font-size: 0.9rem;
+}
+
+.conversation-v2-view__notice[data-tone="warning"] {
+  background: color-mix(in oklch, var(--st-warning) 16%, var(--st-surface));
+}
+
+.conversation-v2-side {
+  background: var(--st-bg);
+  border-left: 1px solid var(--st-border);
+  display: grid;
+  gap: var(--st-space-4);
+  min-height: 100%;
+  padding: var(--st-space-4);
+}
+
+.conversation-v2-side__header {
+  align-items: center;
+  display: flex;
+  gap: var(--st-space-2);
+  justify-content: space-between;
+}
+
+.conversation-v2-side h2,
+.conversation-v2-side h3,
+.conversation-v2-side p,
+.conversation-v2-side dl,
+.conversation-v2-side dd {
+  margin: 0;
+}
+
+.conversation-v2-side h2 {
+  color: var(--st-ink);
+  font-size: 16px;
+  font-weight: 760;
+}
+
+.conversation-v2-side__header span {
+  background: var(--st-panel);
+  border: 1px solid var(--st-border);
+  border-radius: 999px;
+  color: var(--st-muted);
+  font-size: 12px;
+  font-weight: 720;
+  padding: 3px 8px;
+}
+
+.conversation-v2-side__header span[data-state="running"],
+.conversation-v2-side__header span[data-state="queued"] {
+  color: var(--st-action);
+}
+
+.conversation-v2-side__facts {
+  display: grid;
+  gap: var(--st-space-3);
+}
+
+.conversation-v2-side__facts div,
+.conversation-v2-side__latest {
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: var(--st-radius-md);
+  display: grid;
+  gap: 6px;
+  padding: var(--st-space-3);
+}
+
+.conversation-v2-side dt,
+.conversation-v2-side h3 {
+  color: var(--st-muted);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.conversation-v2-side dd,
+.conversation-v2-side p {
+  color: var(--st-ink);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

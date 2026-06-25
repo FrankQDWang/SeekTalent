@@ -1,16 +1,25 @@
+import { QueryClientProvider } from "@tanstack/react-query";
+import { renderHook } from "@testing-library/react";
+import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyWorkbenchV2RequirementAction,
   createWorkbenchV2Conversation,
   getWorkbenchV2Conversation,
   listWorkbenchV2Conversations,
   submitWorkbenchV2Message,
   WorkbenchV2RequestError,
 } from "./workbenchV2Client";
-import { shouldApplyWorkbenchV2Snapshot } from "./workbenchV2";
+import {
+  shouldApplyWorkbenchV2Snapshot,
+  useApplyWorkbenchV2RequirementAction,
+} from "./workbenchV2";
 import {
   normalizeWorkbenchV2Conversation,
   type WorkbenchV2ConversationView,
 } from "./workbenchV2Types";
+import { createWorkbenchQueryClient } from "../query/client";
+import { queryKeys } from "../query/keys";
 
 describe("Workbench v2 normalization", () => {
   it("sorts transcriptEvents by step without mutating the input", () => {
@@ -213,6 +222,39 @@ describe("Workbench v2 client", () => {
     expect(result.transcriptEvents.map((event) => event.step)).toEqual([4, 5]);
   });
 
+  it("applies a requirement action with a JSON body and normalizes transcriptEvents", async () => {
+    const responseBody = conversationView({
+      transcriptEvents: [
+        transcriptEvent({ eventId: "event_8", step: 8 }),
+        transcriptEvent({ eventId: "event_6", step: 6 }),
+      ],
+    });
+    const fetchMock = stubJsonFetch(responseBody);
+
+    const result = await applyWorkbenchV2RequirementAction("agent conv/1", {
+      action: "set_selected",
+      itemId: "item_1",
+      selected: false,
+      idempotencyKey: "action-1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agent/workbench/v2/conversations/agent%20conv%2F1/requirement-actions",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "set_selected",
+          itemId: "item_1",
+          selected: false,
+          idempotencyKey: "action-1",
+        }),
+      },
+    );
+    expect(result.transcriptEvents.map((event) => event.step)).toEqual([6, 8]);
+  });
+
   it("throws a stable request error with Problem Details status and reason", async () => {
     const fetchMock = stubJsonFetch(
       { detail: { reasonCode: "workbench_v2_conversation_not_found" } },
@@ -310,6 +352,60 @@ describe("Workbench v2 client", () => {
   });
 });
 
+describe("Workbench v2 requirement action hook", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("updates the conversation cache through the snapshot guard and invalidates the list", async () => {
+    expect.hasAssertions();
+    const queryClient = createWorkbenchQueryClient();
+    const queryKey = queryKeys.workbenchV2Conversation("agentv2_1");
+    const current = conversationView({
+      conversation: conversationSummary({
+        updatedAt: "2026-06-25T01:02:03.000004+00:00",
+      }),
+      transcriptEvents: [transcriptEvent({ eventId: "event_1", step: 1 })],
+    });
+    const next = conversationView({
+      conversation: conversationSummary({
+        updatedAt: "2026-06-25T01:02:04.000004+00:00",
+      }),
+      transcriptEvents: [transcriptEvent({ eventId: "event_2", step: 2 })],
+    });
+    queryClient.setQueryData(queryKey, current);
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+    const fetchMock = stubJsonFetch(next);
+
+    const { result } = renderHook(
+      () => useApplyWorkbenchV2RequirementAction("agentv2_1"),
+      { wrapper: wrapperFor(queryClient) },
+    );
+
+    await result.current.mutateAsync({
+      action: "confirm",
+      idempotencyKey: "action-2",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agent/workbench/v2/conversations/agentv2_1/requirement-actions",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "confirm",
+          idempotencyKey: "action-2",
+        }),
+      },
+    );
+    expect(queryClient.getQueryData(queryKey)).toEqual(next);
+    expect(invalidateQueries).toHaveBeenCalledWith({
+      queryKey: queryKeys.workbenchV2Conversations,
+    });
+  });
+});
+
 function stubJsonFetch(body: unknown, status = 200) {
   return stubFetchResponse(jsonResponse(body, status));
 }
@@ -380,4 +476,11 @@ async function captureError(
     return error;
   }
   throw new Error("Expected operation to reject.");
+}
+
+function wrapperFor(
+  queryClient: ReturnType<typeof createWorkbenchQueryClient>,
+) {
+  return ({ children }: { children: ReactNode }) =>
+    createElement(QueryClientProvider, { client: queryClient }, children);
 }

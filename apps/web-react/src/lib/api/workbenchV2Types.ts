@@ -76,6 +76,14 @@ export type WorkbenchV2MessageRequest = {
   idempotencyKey?: string | null;
 };
 
+export type WorkbenchV2RequirementActionRequest = {
+  action: "set_selected" | "add_other" | "confirm";
+  itemId?: string | null;
+  selected?: boolean | null;
+  text?: string | null;
+  idempotencyKey?: string | null;
+};
+
 export function normalizeWorkbenchV2Conversation(
   input: WorkbenchV2ConversationView,
 ): WorkbenchV2ConversationView {

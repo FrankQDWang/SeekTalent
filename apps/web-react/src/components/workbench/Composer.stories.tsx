@@ -8,7 +8,7 @@ function ComposerRequirementDraft() {
     <ConversationShell
       main={
         <HomeStartPanel
-          initialJobDescription={
+          initialMessage={
             "1. 高级后端开发工程师\n2. 负责 AI Agent 平台后端服务和工具调用链路，要求熟悉 Python、RAG、工作流编排和工程化评测。\n3. 有搜索、推荐或候选人排序经验优先，上海团队协作。"
           }
           onSubmit={() => undefined}

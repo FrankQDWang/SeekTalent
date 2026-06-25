@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  applyWorkbenchV2RequirementAction,
   createWorkbenchV2Conversation,
   getWorkbenchV2Conversation,
   listWorkbenchV2Conversations,
@@ -8,6 +9,7 @@ import {
 import type {
   WorkbenchV2ConversationView,
   WorkbenchV2MessageRequest,
+  WorkbenchV2RequirementActionRequest,
 } from "./workbenchV2Types";
 import { queryKeys } from "../query/keys";
 
@@ -92,6 +94,25 @@ export function useSubmitWorkbenchV2Message(conversationId: string) {
   return useMutation({
     mutationFn: (payload: WorkbenchV2MessageRequest) =>
       submitWorkbenchV2Message(conversationId, payload),
+    onSuccess: async (view) => {
+      const queryKey = queryKeys.workbenchV2Conversation(
+        view.conversation.conversationId,
+      );
+      await queryClient.cancelQueries({ queryKey });
+      applyWorkbenchV2Snapshot(queryClient, queryKey, view);
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workbenchV2Conversations,
+      });
+    },
+  });
+}
+
+export function useApplyWorkbenchV2RequirementAction(conversationId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: WorkbenchV2RequirementActionRequest) =>
+      applyWorkbenchV2RequirementAction(conversationId, payload),
     onSuccess: async (view) => {
       const queryKey = queryKeys.workbenchV2Conversation(
         view.conversation.conversationId,
