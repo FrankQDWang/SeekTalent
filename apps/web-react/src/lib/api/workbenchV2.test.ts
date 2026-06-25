@@ -6,6 +6,7 @@ import {
   submitWorkbenchV2Message,
   WorkbenchV2RequestError,
 } from "./workbenchV2Client";
+import { shouldApplyWorkbenchV2Snapshot } from "./workbenchV2";
 import {
   normalizeWorkbenchV2Conversation,
   type WorkbenchV2ConversationView,
@@ -39,6 +40,68 @@ describe("Workbench v2 normalization", () => {
   });
 });
 
+describe("Workbench v2 snapshot freshness", () => {
+  it("accepts a snapshot with a newer updatedAt", () => {
+    const current = conversationView({
+      conversation: conversationSummary({
+        updatedAt: "2026-06-25T01:02:03.000004+00:00",
+      }),
+      transcriptEvents: [transcriptEvent({ step: 3 })],
+    });
+    const next = conversationView({
+      conversation: conversationSummary({
+        updatedAt: "2026-06-25T01:02:04.000004+00:00",
+      }),
+      transcriptEvents: [transcriptEvent({ step: 1 })],
+    });
+
+    expect(shouldApplyWorkbenchV2Snapshot(current, next)).toBe(true);
+  });
+
+  it("rejects a snapshot with an older updatedAt", () => {
+    const current = conversationView({
+      conversation: conversationSummary({
+        updatedAt: "2026-06-25T01:02:04.000004+00:00",
+      }),
+      transcriptEvents: [transcriptEvent({ step: 1 })],
+    });
+    const next = conversationView({
+      conversation: conversationSummary({
+        updatedAt: "2026-06-25T01:02:03.000004+00:00",
+      }),
+      transcriptEvents: [transcriptEvent({ step: 8 })],
+    });
+
+    expect(shouldApplyWorkbenchV2Snapshot(current, next)).toBe(false);
+  });
+
+  it("rejects a same-updatedAt snapshot with a lower transcript step", () => {
+    const current = conversationView({
+      transcriptEvents: [transcriptEvent({ step: 4 })],
+    });
+    const next = conversationView({
+      transcriptEvents: [transcriptEvent({ step: 3 })],
+    });
+
+    expect(shouldApplyWorkbenchV2Snapshot(current, next)).toBe(false);
+  });
+
+  it("accepts a same-updatedAt snapshot with equal or higher transcript step", () => {
+    const current = conversationView({
+      transcriptEvents: [transcriptEvent({ step: 4 })],
+    });
+    const equal = conversationView({
+      transcriptEvents: [transcriptEvent({ step: 4 })],
+    });
+    const higher = conversationView({
+      transcriptEvents: [transcriptEvent({ step: 5 })],
+    });
+
+    expect(shouldApplyWorkbenchV2Snapshot(current, equal)).toBe(true);
+    expect(shouldApplyWorkbenchV2Snapshot(current, higher)).toBe(true);
+  });
+});
+
 describe("Workbench v2 client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -60,6 +123,7 @@ describe("Workbench v2 client", () => {
 
     const result = await listWorkbenchV2Conversations();
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agent/workbench/v2/conversations",
       { method: "GET" },
@@ -83,6 +147,7 @@ describe("Workbench v2 client", () => {
       idempotencyKey: "create-1",
     });
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agent/workbench/v2/conversations",
       {
@@ -111,6 +176,7 @@ describe("Workbench v2 client", () => {
 
     const result = await getWorkbenchV2Conversation("agent conv/1");
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agent/workbench/v2/conversations/agent%20conv%2F1",
       { method: "GET" },
@@ -132,6 +198,7 @@ describe("Workbench v2 client", () => {
       idempotencyKey: "submit-1",
     });
 
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/agent/workbench/v2/conversations/agent%20conv%2F1/messages",
       {
@@ -147,31 +214,108 @@ describe("Workbench v2 client", () => {
   });
 
   it("throws a stable request error with Problem Details status and reason", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          jsonResponse(
-            { detail: { reasonCode: "workbench_v2_conversation_not_found" } },
-            404,
-          ),
-        ),
-      ),
+    const fetchMock = stubJsonFetch(
+      { detail: { reasonCode: "workbench_v2_conversation_not_found" } },
+      404,
     );
 
-    await expect(getWorkbenchV2Conversation("missing")).rejects.toMatchObject({
+    const error = await captureError(() =>
+      getWorkbenchV2Conversation("missing"),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(WorkbenchV2RequestError);
+    expect(error).toMatchObject({
       name: "WorkbenchV2RequestError",
       status: 404,
       reasonCode: "workbench_v2_conversation_not_found",
     });
-    await expect(getWorkbenchV2Conversation("missing")).rejects.toBeInstanceOf(
-      WorkbenchV2RequestError,
+  });
+
+  it("preserves top-level Problem Details reason and correlation ids", async () => {
+    const fetchMock = stubJsonFetch(
+      {
+        detail: "Idempotency conflict.",
+        reasonCode: "workbench_v2_idempotency_conflict",
+        correlationId: "corr_1",
+      },
+      409,
     );
+
+    const error = await captureError(() =>
+      createWorkbenchV2Conversation({
+        message: "different message",
+        idempotencyKey: "same-key",
+      }),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(WorkbenchV2RequestError);
+    expect(error).toMatchObject({
+      message: "Idempotency conflict.",
+      status: 409,
+      reasonCode: "workbench_v2_idempotency_conflict",
+      correlationId: "corr_1",
+    });
+  });
+
+  it("uses a stable fallback for non-ok responses with an empty body", async () => {
+    const fetchMock = stubFetchResponse(new Response(null, { status: 503 }));
+
+    const error = await captureError(() => listWorkbenchV2Conversations());
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(WorkbenchV2RequestError);
+    expect(error).toMatchObject({
+      message: "Request failed.",
+      status: 503,
+      reasonCode: null,
+      correlationId: null,
+    });
+  });
+
+  it("uses a stable fallback for non-ok responses with a non-JSON body", async () => {
+    const fetchMock = stubFetchResponse(
+      new Response("Proxy gateway failure", { status: 502 }),
+    );
+
+    const error = await captureError(() => listWorkbenchV2Conversations());
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(WorkbenchV2RequestError);
+    expect(error).toMatchObject({
+      message: "Request failed.",
+      status: 502,
+      reasonCode: null,
+      correlationId: null,
+    });
+  });
+
+  it("wraps network rejections in a stable request error", async () => {
+    const fetchMock = vi.fn(() => Promise.reject(new Error("Failed to fetch")));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await captureError(() =>
+      getWorkbenchV2Conversation("agentv2_1"),
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(error).toBeInstanceOf(WorkbenchV2RequestError);
+    expect(error).toMatchObject({
+      message: "Network request failed.",
+      status: 0,
+      reasonCode: "workbench_v2_network_error",
+      correlationId: null,
+    });
   });
 });
 
 function stubJsonFetch(body: unknown, status = 200) {
-  const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(body, status)));
+  return stubFetchResponse(jsonResponse(body, status));
+}
+
+function stubFetchResponse(response: Response) {
+  const fetchMock = vi.fn(() => Promise.resolve(response));
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -188,17 +332,24 @@ function conversationView(
 ): WorkbenchV2ConversationView {
   return {
     schemaVersion: "agent.workbench.v2",
-    conversation: {
-      conversationId: "agentv2_1",
-      title: "先聊一下候选人搜索",
-      runtimeState: "idle",
-      runtimeRunId: null,
-      createdAt: "2026-06-25T01:02:03.000004+00:00",
-      updatedAt: "2026-06-25T01:02:03.000004+00:00",
-    },
+    conversation: conversationSummary(),
     transcriptEvents: [transcriptEvent()],
     requirementForm: null,
     runtime: null,
+    ...overrides,
+  };
+}
+
+function conversationSummary(
+  overrides: Partial<WorkbenchV2ConversationView["conversation"]> = {},
+): WorkbenchV2ConversationView["conversation"] {
+  return {
+    conversationId: "agentv2_1",
+    title: "先聊一下候选人搜索",
+    runtimeState: "idle",
+    runtimeRunId: null,
+    createdAt: "2026-06-25T01:02:03.000004+00:00",
+    updatedAt: "2026-06-25T01:02:03.000004+00:00",
     ...overrides,
   };
 }
@@ -218,4 +369,15 @@ function transcriptEvent(
     createdAt: "2026-06-25T01:02:03.000004+00:00",
     ...overrides,
   };
+}
+
+async function captureError(
+  operation: () => Promise<unknown>,
+): Promise<unknown> {
+  try {
+    await operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected operation to reject.");
 }

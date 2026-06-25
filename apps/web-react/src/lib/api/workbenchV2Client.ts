@@ -72,7 +72,17 @@ function postJsonInit(payload: WorkbenchV2MessageRequest): RequestInit {
 }
 
 async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(path, init);
+  let response: Response;
+  try {
+    response = await fetch(path, init);
+  } catch {
+    throw new WorkbenchV2RequestError(
+      "Network request failed.",
+      0,
+      "workbench_v2_network_error",
+    );
+  }
+
   const body = await readJsonBody(response);
 
   if (!response.ok) {
