@@ -18,6 +18,12 @@ from seektalent.llm import (
 from seektalent_workbench_v2.models import WorkbenchV2TranscriptEvent
 
 
+TRUNCATED_SUFFIX = "...[truncated]"
+MAX_CONTEXT_SUMMARY_CHARS = 2000
+MAX_USER_TEXT_CHARS = 4000
+MAX_EVENT_PAYLOAD_JSON_CHARS = 2000
+MAX_RECENT_EVENTS = 20
+
 WorkbenchV2Intent = Literal[
     "chat",
     "extract_requirements",
@@ -76,7 +82,13 @@ class WorkbenchV2RequirementPatch(BaseModel):
         return _strip_optional_string(value)
 
     @model_validator(mode="after")
-    def require_real_change(self) -> "WorkbenchV2RequirementPatch":
+    def validate_change_ids(self) -> "WorkbenchV2RequirementPatch":
+        if len(set(self.selectedItemIds)) != len(self.selectedItemIds):
+            raise ValueError("selectedItemIds must not contain duplicates")
+        if len(set(self.deselectedItemIds)) != len(self.deselectedItemIds):
+            raise ValueError("deselectedItemIds must not contain duplicates")
+        if set(self.selectedItemIds) & set(self.deselectedItemIds):
+            raise ValueError("selectedItemIds and deselectedItemIds must not overlap")
         if self.selectedItemIds or self.deselectedItemIds or self.otherNotes:
             return self
         raise ValueError("requirementPatch must include at least one real change")
@@ -110,12 +122,12 @@ class WorkbenchV2AgentOutput(BaseModel):
 
     intent: WorkbenchV2Intent
     message: str = Field(min_length=1, max_length=2000)
-    needsClarification: bool = False
-    clarifyingQuestion: str | None = None
-    runtimeInput: WorkbenchV2RuntimeInput | None = None
-    requirementPatch: WorkbenchV2RequirementPatch | None = None
-    memoryRead: WorkbenchV2MemoryRead | None = None
-    memoryWrite: WorkbenchV2MemoryWrite | None = None
+    needsClarification: bool
+    clarifyingQuestion: str | None
+    runtimeInput: WorkbenchV2RuntimeInput | None
+    requirementPatch: WorkbenchV2RequirementPatch | None
+    memoryRead: WorkbenchV2MemoryRead | None
+    memoryWrite: WorkbenchV2MemoryWrite | None
 
     @field_validator("message", mode="before")
     @classmethod
@@ -241,6 +253,12 @@ def _strip_optional_string(value: object) -> object:
     return value
 
 
+def _truncate_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - len(TRUNCATED_SUFFIX)] + TRUNCATED_SUFFIX
+
+
 def _validate_strict_openai_config(config: ResolvedTextModelConfig) -> None:
     if config.protocol_family != "openai_chat_completions_compatible":
         raise ValueError("Workbench v2 agent requires OpenAI-compatible Bailian chat completions.")
@@ -272,9 +290,9 @@ def _render_turn_prompt(
 ) -> str:
     payload = {
         "conversationId": conversation_id,
-        "contextSummary": context_summary or "",
-        "recentEvents": [event.model_dump(mode="json") for event in list(recent_events)[-20:]],
-        "currentUserText": user_text,
+        "contextSummary": _truncate_text(context_summary or "", MAX_CONTEXT_SUMMARY_CHARS),
+        "recentEvents": [_render_event(event) for event in list(recent_events)[-MAX_RECENT_EVENTS:]],
+        "currentUserText": _truncate_text(user_text, MAX_USER_TEXT_CHARS),
     }
     return "\n".join(
         [
@@ -283,3 +301,13 @@ def _render_turn_prompt(
             "[WORKBENCH_V2_TURN_INPUT_END]",
         ]
     )
+
+
+def _render_event(event: WorkbenchV2TranscriptEvent) -> dict[str, object]:
+    payload = event.model_dump(mode="json")
+    event_payload = payload.pop("payload")
+    payload["payloadJson"] = _truncate_text(
+        json.dumps(event_payload, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")),
+        MAX_EVENT_PAYLOAD_JSON_CHARS,
+    )
+    return payload

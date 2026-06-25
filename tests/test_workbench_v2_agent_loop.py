@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -14,7 +15,9 @@ from seektalent_workbench_v2.agent_loop import (
     WorkbenchV2MemoryWrite,
     WorkbenchV2RequirementPatch,
     WorkbenchV2RuntimeInput,
+    _render_turn_prompt,
 )
+from seektalent_workbench_v2.models import WorkbenchV2TranscriptEvent
 from tests.settings_factory import make_settings
 
 
@@ -56,6 +59,26 @@ def test_agent_output_validates_pure_chat_without_runtime_input() -> None:
     assert output.runtimeInput is None
 
 
+def test_agent_output_requires_explicit_contract_fields() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2AgentOutput.model_validate({"intent": "chat", "message": "hi"})
+
+
+def test_agent_output_requires_runtime_input_key_even_when_null() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2AgentOutput.model_validate(
+            {
+                "intent": "chat",
+                "message": "hi",
+                "needsClarification": False,
+                "clarifyingQuestion": None,
+                "requirementPatch": None,
+                "memoryRead": None,
+                "memoryWrite": None,
+            }
+        )
+
+
 def test_agent_output_validates_recruitment_input() -> None:
     output = WorkbenchV2AgentOutput.model_validate(
         {
@@ -79,6 +102,44 @@ def test_agent_output_validates_recruitment_input() -> None:
         jd="负责指标体系、A/B Testing、SQL 和 Python 分析。",
         notes="杭州，5 年以上经验。",
     )
+
+
+def test_render_turn_prompt_bounds_recent_context_and_payloads() -> None:
+    events = [
+        WorkbenchV2TranscriptEvent(
+            id=f"event_{index}",
+            conversation_id="conversation_1",
+            step=index,
+            created_at="2026-06-25T00:00:00.000000Z",
+            type="user_message",
+            role="user",
+            payload={"text": f"event-payload-{index}-" + ("x" * 3000)},
+            status="completed",
+            parent_event_id=None,
+            dedupe_key=None,
+        )
+        for index in range(25)
+    ]
+
+    prompt = _render_turn_prompt(
+        conversation_id="conversation_1",
+        context_summary="context-" + ("a" * 5000),
+        recent_events=events,
+        user_text="user-" + ("b" * 5000),
+    )
+    payload = json.loads(prompt.split("\n", 1)[1].rsplit("\n", 1)[0])
+
+    assert len(payload["recentEvents"]) == 20
+    assert payload["recentEvents"][0]["id"] == "event_5"
+    assert payload["recentEvents"][-1]["id"] == "event_24"
+    assert payload["contextSummary"].endswith("...[truncated]")
+    assert payload["currentUserText"].endswith("...[truncated]")
+    assert "payloadJson" in payload["recentEvents"][0]
+    assert "payload" not in payload["recentEvents"][0]
+    assert payload["recentEvents"][0]["payloadJson"].endswith("...[truncated]")
+    assert len(payload["contextSummary"]) < 5000
+    assert len(payload["currentUserText"]) < 5000
+    assert len(payload["recentEvents"][0]["payloadJson"]) < 3000
 
 
 def test_extract_requirements_without_runtime_input_fails_when_not_clarifying() -> None:
@@ -238,6 +299,20 @@ def test_agent_contract_rejects_blank_required_strings(payload: dict[str, object
             WorkbenchV2MemoryRead.model_validate(payload)
         else:
             WorkbenchV2MemoryWrite.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"selectedItemIds": ["sql", "sql"], "deselectedItemIds": [], "otherNotes": None},
+        {"selectedItemIds": [], "deselectedItemIds": ["sql", "sql"], "otherNotes": None},
+        {"selectedItemIds": [" sql "], "deselectedItemIds": ["sql"], "otherNotes": None},
+        {"selectedItemIds": ["   "], "deselectedItemIds": [], "otherNotes": None},
+    ],
+)
+def test_requirement_patch_rejects_duplicate_intersecting_or_blank_ids(payload: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2RequirementPatch.model_validate(payload)
 
 
 def test_start_runtime_intent_requires_runtime_input() -> None:
