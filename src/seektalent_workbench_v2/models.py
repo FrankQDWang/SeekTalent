@@ -50,7 +50,7 @@ class WorkbenchV2TranscriptEventInput(BaseModel):
     @classmethod
     def payload_must_be_json_serializable(cls, payload: dict[str, object]) -> dict[str, object]:
         try:
-            json.dumps(payload, ensure_ascii=False, sort_keys=True)
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
         except (TypeError, ValueError) as exc:
             raise ValueError("payload must be JSON-serializable") from exc
         return payload

@@ -160,3 +160,33 @@ def test_event_input_rejects_non_json_serializable_payload() -> None:
         )
 
     assert "payload must be JSON-serializable" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("score", [float("nan"), float("inf"), float("-inf")])
+def test_event_input_rejects_non_finite_float_payload(score: float) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        WorkbenchV2TranscriptEventInput(
+            type="user_message",
+            role="user",
+            payload={"score": score},
+            status="completed",
+        )
+
+    assert "payload must be JSON-serializable" in str(exc_info.value)
+
+
+def test_store_serialization_rejects_non_finite_float_payload_backstop(tmp_path: Path) -> None:
+    store = WorkbenchV2Store(tmp_path / "workbench_v2.sqlite3")
+    store.initialize()
+    conversation = store.create_conversation(first_user_text="你好", idempotency_key="create-1")
+    event = WorkbenchV2TranscriptEventInput.model_construct(
+        type="user_message",
+        role="user",
+        payload={"score": float("nan")},
+        status="completed",
+        parent_event_id=None,
+        dedupe_key=None,
+    )
+
+    with pytest.raises(ValueError):
+        store.append_event(conversation.id, event)

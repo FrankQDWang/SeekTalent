@@ -132,7 +132,7 @@ CREATE TABLE IF NOT EXISTS workbench_v2_transcript_events (
     step INTEGER NOT NULL,
     type TEXT NOT NULL,
     role TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
     status TEXT NOT NULL,
     parent_event_id TEXT,
     dedupe_key TEXT,
@@ -168,7 +168,7 @@ def _append_event(
 ) -> WorkbenchV2TranscriptEvent:
     now = _now_iso()
     event_id = f"agentv2_event_{uuid4().hex}"
-    payload_json = json.dumps(event.payload, ensure_ascii=False, sort_keys=True)
+    payload_json = json.dumps(event.payload, ensure_ascii=False, sort_keys=True, allow_nan=False)
     if event.dedupe_key:
         row = conn.execute(
             "SELECT * FROM workbench_v2_transcript_events WHERE conversation_id = ? AND dedupe_key = ?",
