@@ -81,6 +81,85 @@ def test_agent_output_validates_recruitment_input() -> None:
     )
 
 
+def test_extract_requirements_without_runtime_input_fails_when_not_clarifying() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2AgentOutput.model_validate(
+            {
+                "intent": "extract_requirements",
+                "message": "我已识别到招聘需求。",
+                "needsClarification": False,
+                "clarifyingQuestion": None,
+                "runtimeInput": None,
+                "requirementPatch": None,
+                "memoryRead": None,
+                "memoryWrite": None,
+            }
+        )
+
+
+def test_chat_rejects_runtime_input_payload() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2AgentOutput.model_validate(
+            {
+                "intent": "chat",
+                "message": "你好。",
+                "needsClarification": False,
+                "clarifyingQuestion": None,
+                "runtimeInput": {
+                    "jobTitle": "数据科学家",
+                    "jd": "负责数据分析。",
+                    "notes": None,
+                },
+                "requirementPatch": None,
+                "memoryRead": None,
+                "memoryWrite": None,
+            }
+        )
+
+
+def test_get_runtime_status_rejects_requirement_patch_payload() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2AgentOutput.model_validate(
+            {
+                "intent": "get_runtime_status",
+                "message": "我会查看进度。",
+                "needsClarification": False,
+                "clarifyingQuestion": None,
+                "runtimeInput": None,
+                "requirementPatch": {
+                    "selectedItemIds": ["sql"],
+                    "deselectedItemIds": [],
+                    "otherNotes": None,
+                },
+                "memoryRead": None,
+                "memoryWrite": None,
+            }
+        )
+
+
+def test_write_memory_rejects_runtime_input_payload() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2AgentOutput.model_validate(
+            {
+                "intent": "write_memory",
+                "message": "我会记录这条记忆。",
+                "needsClarification": False,
+                "clarifyingQuestion": None,
+                "runtimeInput": {
+                    "jobTitle": "数据科学家",
+                    "jd": "负责数据分析。",
+                    "notes": None,
+                },
+                "requirementPatch": None,
+                "memoryRead": None,
+                "memoryWrite": {
+                    "source": "用户明确说明",
+                    "content": "偏好 AI 平台经验。",
+                },
+            }
+        )
+
+
 def test_agents_sdk_prepares_strict_output_schema_without_network() -> None:
     runner = SchemaPreparingRunner()
     loop = BailianStrictWorkbenchV2AgentLoop(

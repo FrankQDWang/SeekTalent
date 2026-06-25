@@ -123,20 +123,42 @@ class WorkbenchV2AgentOutput(BaseModel):
 
     @model_validator(mode="after")
     def validate_action_requirements(self) -> "WorkbenchV2AgentOutput":
+        def reject_payloads(*payload_names: str) -> None:
+            present = [name for name in payload_names if getattr(self, name) is not None]
+            if present:
+                raise ValueError(f"{self.intent} must not include {', '.join(present)}")
+
         if self.needsClarification:
             if not self.clarifyingQuestion:
                 raise ValueError("clarifyingQuestion is required when needsClarification is true")
             if any((self.runtimeInput, self.requirementPatch, self.memoryRead, self.memoryWrite)):
                 raise ValueError("action payloads must be absent when needsClarification is true")
             return self
-        if self.intent == "start_runtime" and self.runtimeInput is None:
-            raise ValueError("runtimeInput is required for start_runtime")
-        if self.intent == "write_memory" and self.memoryWrite is None:
-            raise ValueError("memoryWrite is required for write_memory")
-        if self.intent == "read_memory" and self.memoryRead is None:
-            raise ValueError("memoryRead is required for read_memory")
-        if self.intent == "update_requirements" and self.requirementPatch is None and self.runtimeInput is None:
-            raise ValueError("requirementPatch or runtimeInput is required for update_requirements")
+
+        if self.intent in {"chat", "confirm_requirements", "get_runtime_status", "get_runtime_results"}:
+            reject_payloads("runtimeInput", "requirementPatch", "memoryRead", "memoryWrite")
+        elif self.intent == "extract_requirements":
+            if self.runtimeInput is None:
+                raise ValueError("runtimeInput is required for extract_requirements")
+            reject_payloads("requirementPatch", "memoryRead", "memoryWrite")
+        elif self.intent == "update_requirements":
+            if self.requirementPatch is None and self.runtimeInput is None:
+                raise ValueError("requirementPatch or runtimeInput is required for update_requirements")
+            reject_payloads("memoryRead", "memoryWrite")
+        elif self.intent == "start_runtime":
+            if self.runtimeInput is None:
+                raise ValueError("runtimeInput is required for start_runtime")
+            reject_payloads("requirementPatch", "memoryRead", "memoryWrite")
+        elif self.intent == "read_memory":
+            if self.memoryRead is None:
+                raise ValueError("memoryRead is required for read_memory")
+            reject_payloads("runtimeInput", "requirementPatch", "memoryWrite")
+        elif self.intent == "write_memory":
+            if self.memoryWrite is None:
+                raise ValueError("memoryWrite is required for write_memory")
+            reject_payloads("runtimeInput", "requirementPatch", "memoryRead")
+        else:
+            raise ValueError(f"Unsupported Workbench v2 intent: {self.intent}")
         return self
 
 
