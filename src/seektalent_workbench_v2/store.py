@@ -10,6 +10,7 @@ from uuid import uuid4
 from seektalent_workbench_v2.models import (
     WorkbenchV2Conversation,
     WorkbenchV2ConversationRecord,
+    WorkbenchV2RuntimeState,
     WorkbenchV2TranscriptEvent,
     WorkbenchV2TranscriptEventInput,
 )
@@ -92,6 +93,31 @@ class WorkbenchV2Store:
             )
             conn.commit()
         return event
+
+    def set_runtime(
+        self,
+        conversation_id: str,
+        *,
+        runtime_run_id: str,
+        runtime_state: WorkbenchV2RuntimeState,
+    ) -> WorkbenchV2Conversation:
+        now = _now_iso()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE workbench_v2_conversations
+                SET runtime_run_id = ?, runtime_state = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (runtime_run_id, runtime_state, now, conversation_id),
+            )
+            if cursor.rowcount == 0:
+                conn.rollback()
+                raise KeyError(conversation_id)
+            conversation = _get_conversation(conn, conversation_id).conversation
+            conn.commit()
+        return conversation
 
     def get_event(self, event_id: str) -> WorkbenchV2TranscriptEvent:
         with self._connect() as conn:

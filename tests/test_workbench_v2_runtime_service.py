@@ -274,6 +274,42 @@ def test_runtime_service_start_run_preserves_explicit_draft_lineage_and_selected
     assert approved.deselected_item_ids == ["java"]
 
 
+def test_runtime_service_start_run_from_runtime_input_extracts_sheet_and_enqueues(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    extractor = RecordingRequirementExtractor(_requirement_sheet())
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        requirement_extractor=extractor,
+        runtime_factory=lambda: extractor,
+        approved_requirement_revision_id_factory=lambda: "reqapproved_1",
+        runtime_run_id_factory=lambda: "rtrun_1",
+        now=lambda: NOW,
+    )
+
+    run = service.start_run_from_runtime_input(
+        "agentv2_real_draft",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Python 和 Agent 工作流经验", notes="杭州"),
+        idempotency_key="confirm-current-draft",
+        draft_revision_id="reqdraft_real",
+        selected_item_ids=["sql"],
+        deselected_item_ids=["java"],
+    )
+
+    assert extractor.calls == [
+        {
+            "job_title": "AI 平台工程师",
+            "jd_text": "需要 Python 和 Agent 工作流经验",
+            "notes": "杭州",
+            "requirement_cache_scope": "agentv2_real_draft",
+        }
+    ]
+    assert run.runtime_run_id == "rtrun_1"
+    approved = store.get_approved_requirement("reqapproved_1")
+    assert approved.draft_revision_id == "reqdraft_real"
+    assert approved.selected_item_ids == ["sql"]
+    assert approved.deselected_item_ids == ["java"]
+
+
 def test_runtime_service_module_does_not_import_ui_or_tests() -> None:
     source = inspect.getsource(runtime_service_module)
 

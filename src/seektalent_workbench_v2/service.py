@@ -11,6 +11,7 @@ from seektalent_workbench_v2.agent_loop import (
 from seektalent_workbench_v2.models import (
     WorkbenchV2ConversationListView,
     WorkbenchV2ConversationView,
+    WorkbenchV2RuntimeState,
     WorkbenchV2TranscriptEvent,
     WorkbenchV2TranscriptEventInput,
 )
@@ -23,6 +24,17 @@ class WorkbenchV2RequirementRuntime(Protocol):
         self,
         conversation_id: str,
         runtime_input: WorkbenchV2RuntimeInput,
+    ) -> object: ...
+
+    def start_run_from_runtime_input(
+        self,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput,
+        *,
+        idempotency_key: str | None = None,
+        draft_revision_id: str | None = None,
+        selected_item_ids: list[str] | None = None,
+        deselected_item_ids: list[str] | None = None,
     ) -> object: ...
 
 
@@ -40,7 +52,7 @@ class WorkbenchV2Service:
 
     async def create_conversation(self, message: str, idempotency_key: str | None) -> WorkbenchV2ConversationView:
         conversation = self.store.create_conversation(first_user_text=message, idempotency_key=idempotency_key)
-        if self._has_user_event(conversation.id, scope="create", idempotency_key=idempotency_key):
+        if self._has_terminal_event(conversation.id, scope="create", idempotency_key=idempotency_key):
             return self.get_conversation(conversation.id)
         return await self._append_user_and_run_agent(
             conversation_id=conversation.id,
@@ -55,7 +67,7 @@ class WorkbenchV2Service:
         message: str,
         idempotency_key: str | None,
     ) -> WorkbenchV2ConversationView:
-        if self._has_user_event(conversation_id, scope="submit", idempotency_key=idempotency_key):
+        if self._has_terminal_event(conversation_id, scope="submit", idempotency_key=idempotency_key):
             return self.get_conversation(conversation_id)
         return await self._append_user_and_run_agent(
             conversation_id=conversation_id,
@@ -157,13 +169,199 @@ class WorkbenchV2Service:
             )
             return
 
+        if output.intent == "confirm_requirements":
+            self._confirm_requirements(
+                conversation_id=conversation_id,
+                message=output.message,
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return
+
+        if output.intent == "start_runtime":
+            self._start_runtime(
+                conversation_id=conversation_id,
+                runtime_input=output.runtimeInput,
+                message=output.message,
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return
+
         if output.intent == "get_runtime_status":
             self._append_runtime_status(conversation_id, scope=scope, idempotency_key=idempotency_key)
+            self._append_assistant_message(
+                conversation_id,
+                text=output.message,
+                dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="assistant"),
+            )
+            return
 
         self._append_assistant_message(
             conversation_id,
             text=output.message,
-            payload_extra={"intent": output.intent} if output.intent != "confirm_requirements" else None,
+            payload_extra={"intent": output.intent},
+            dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="assistant"),
+        )
+
+    def _confirm_requirements(
+        self,
+        *,
+        conversation_id: str,
+        message: str,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> None:
+        form_payload = _latest_requirement_form_payload(self.store.get_conversation(conversation_id).events)
+        if form_payload is None:
+            self._append_service_error(
+                conversation_id,
+                code="workbench_v2_requirement_form_required",
+                message="当前没有可确认的需求表单，无法启动运行。",
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return
+        runtime_input = _runtime_input_from_payload(form_payload.get("runtimeInput"))
+        if runtime_input is None:
+            self._append_service_error(
+                conversation_id,
+                code="workbench_v2_runtime_input_required",
+                message="需求表单缺少 runtimeInput，无法启动运行。",
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return
+        draft_payload = _mapping_or_none(form_payload.get("draft"))
+        self._start_runtime_from_input(
+            conversation_id=conversation_id,
+            runtime_input=runtime_input,
+            confirmed_payload=dict(form_payload),
+            message=message,
+            scope=scope,
+            idempotency_key=idempotency_key,
+            draft_revision_id=_draft_revision_id(draft_payload),
+            selected_item_ids=_selected_item_ids(draft_payload),
+            deselected_item_ids=_deselected_item_ids(draft_payload),
+        )
+
+    def _start_runtime(
+        self,
+        *,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput | None,
+        message: str,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> None:
+        if runtime_input is None:
+            self._append_service_error(
+                conversation_id,
+                code="workbench_v2_runtime_input_required",
+                message="缺少 runtimeInput，无法启动运行。",
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return
+        form_payload = _latest_requirement_form_payload(self.store.get_conversation(conversation_id).events)
+        draft_payload = _mapping_or_none(form_payload.get("draft")) if form_payload is not None else None
+        confirmed_payload: dict[str, object]
+        if form_payload is not None:
+            confirmed_payload = dict(form_payload)
+            confirmed_payload["runtimeInput"] = _dump_mapping(runtime_input)
+        else:
+            confirmed_payload = {"runtimeInput": _dump_mapping(runtime_input)}
+        self._start_runtime_from_input(
+            conversation_id=conversation_id,
+            runtime_input=runtime_input,
+            confirmed_payload=confirmed_payload,
+            message=message,
+            scope=scope,
+            idempotency_key=idempotency_key,
+            draft_revision_id=_draft_revision_id(draft_payload),
+            selected_item_ids=_selected_item_ids(draft_payload),
+            deselected_item_ids=_deselected_item_ids(draft_payload),
+        )
+
+    def _start_runtime_from_input(
+        self,
+        *,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput,
+        confirmed_payload: dict[str, object],
+        message: str,
+        scope: str,
+        idempotency_key: str | None,
+        draft_revision_id: str | None,
+        selected_item_ids: list[str] | None,
+        deselected_item_ids: list[str] | None,
+    ) -> None:
+        run = self.runtime_service.start_run_from_runtime_input(
+            conversation_id,
+            runtime_input,
+            idempotency_key=idempotency_key,
+            draft_revision_id=draft_revision_id,
+            selected_item_ids=selected_item_ids,
+            deselected_item_ids=deselected_item_ids,
+        )
+        runtime_run_id = _required_text_attr(run, "runtime_run_id")
+        runtime_state = _runtime_state_from_run_status(getattr(run, "status", None))
+        self.store.set_runtime(conversation_id, runtime_run_id=runtime_run_id, runtime_state=runtime_state)
+        confirmed_payload.update({"readonly": True, "runtimeRunId": runtime_run_id})
+        self.store.append_event(
+            conversation_id,
+            WorkbenchV2TranscriptEventInput(
+                type="requirement_form_confirmed",
+                role="assistant",
+                payload=confirmed_payload,
+                dedupe_key=_dedupe_key(
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                    suffix="requirement-form-confirmed",
+                ),
+            ),
+        )
+        self.store.append_event(
+            conversation_id,
+            WorkbenchV2TranscriptEventInput(
+                type="runtime_progress",
+                role="runtime",
+                payload={
+                    "state": runtime_state,
+                    "runtimeRunId": runtime_run_id,
+                    "summary": "招聘流程已排队，等待开始。",
+                },
+                dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="runtime-progress"),
+            ),
+        )
+        self._append_assistant_message(
+            conversation_id,
+            text=message,
+            dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="assistant"),
+        )
+
+    def _append_service_error(
+        self,
+        conversation_id: str,
+        *,
+        code: str,
+        message: str,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> None:
+        self.store.append_event(
+            conversation_id,
+            WorkbenchV2TranscriptEventInput(
+                type="error",
+                role="system",
+                status="failed",
+                payload={"code": code, "message": message},
+                dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="error"),
+            ),
+        )
+        self._append_assistant_message(
+            conversation_id,
+            text=message,
             dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="assistant"),
         )
 
@@ -192,33 +390,147 @@ class WorkbenchV2Service:
         record = self.store.get_conversation(conversation_id)
         runtime_run_id = record.conversation.runtime_run_id
         if runtime_run_id is None:
+            self.store.append_event(
+                conversation_id,
+                WorkbenchV2TranscriptEventInput(
+                    type="runtime_progress",
+                    role="runtime",
+                    payload={"state": "idle", "summary": "当前还没有开始运行。"},
+                    dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="runtime-status"),
+                ),
+            )
             return
         get_status = getattr(self.runtime_service, "get_status", None)
         if not callable(get_status):
             return
         status_payload = cast("Mapping[str, object]", get_status(runtime_run_id))
+        payload = dict(status_payload)
+        payload.setdefault("state", _runtime_state_from_run_status(payload.get("status")))
         self.store.append_event(
             conversation_id,
             WorkbenchV2TranscriptEventInput(
                 type="runtime_progress",
                 role="runtime",
-                payload=dict(status_payload),
+                payload=payload,
                 dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="runtime-status"),
             ),
         )
 
-    def _has_user_event(self, conversation_id: str, *, scope: str, idempotency_key: str | None) -> bool:
-        dedupe_key = _dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="user")
-        if dedupe_key is None:
+    def _has_terminal_event(self, conversation_id: str, *, scope: str, idempotency_key: str | None) -> bool:
+        assistant_key = _dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="assistant")
+        error_key = _dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="error")
+        if assistant_key is None or error_key is None:
             return False
         record = self.store.get_conversation(conversation_id)
-        return any(event.type == "user_message" and event.dedupe_key == dedupe_key for event in record.events)
+        return any(
+            (event.type == "assistant_message" and event.dedupe_key == assistant_key)
+            or (event.type == "error" and event.dedupe_key == error_key)
+            for event in record.events
+        )
 
 
 def _dedupe_key(*, scope: str, idempotency_key: str | None, suffix: str) -> str | None:
     if idempotency_key is None:
         return None
     return f"workbench-v2-service:{scope}:{idempotency_key}:{suffix}"
+
+
+def _latest_requirement_form_payload(events: Sequence[WorkbenchV2TranscriptEvent]) -> dict[str, object] | None:
+    for event in reversed(events):
+        if event.type == "requirement_form":
+            return dict(event.payload)
+    return None
+
+
+def _runtime_input_from_payload(payload: object) -> WorkbenchV2RuntimeInput | None:
+    if not isinstance(payload, Mapping):
+        return None
+    try:
+        return WorkbenchV2RuntimeInput.model_validate(payload)
+    except ValueError:
+        return None
+
+
+def _mapping_or_none(payload: object) -> Mapping[str, object] | None:
+    if isinstance(payload, Mapping):
+        return {str(key): value for key, value in payload.items()}
+    return None
+
+
+def _draft_revision_id(draft_payload: Mapping[str, object] | None) -> str | None:
+    if draft_payload is None:
+        return None
+    value = draft_payload.get("draft_revision_id")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _selected_item_ids(draft_payload: Mapping[str, object] | None) -> list[str] | None:
+    if draft_payload is None:
+        return None
+    selected = [
+        item_id
+        for item in _draft_items(draft_payload)
+        if (item_id := _draft_item_id(item)) is not None
+        and item.get("selected") is True
+        and item.get("status") == "resolved"
+    ]
+    return selected
+
+
+def _deselected_item_ids(draft_payload: Mapping[str, object] | None) -> list[str] | None:
+    if draft_payload is None:
+        return None
+    deselected = [
+        item_id
+        for item in _draft_items(draft_payload)
+        if (item_id := _draft_item_id(item)) is not None
+        and (item.get("selected") is not True or item.get("status") in {"deleted", "moved", "rejected"})
+    ]
+    return deselected
+
+
+def _draft_items(draft_payload: Mapping[str, object]) -> list[Mapping[str, object]]:
+    sections = draft_payload.get("sections")
+    if not isinstance(sections, list):
+        return []
+    items: list[Mapping[str, object]] = []
+    for section in sections:
+        section_payload = _mapping_or_none(section)
+        if section_payload is None:
+            continue
+        section_items = section_payload.get("items")
+        if not isinstance(section_items, list):
+            continue
+        items.extend(item for item in (_mapping_or_none(item) for item in section_items) if item is not None)
+    return items
+
+
+def _draft_item_id(item: Mapping[str, object]) -> str | None:
+    value = item.get("item_id")
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _runtime_state_from_run_status(status: object) -> WorkbenchV2RuntimeState:
+    if status == "queued":
+        return "queued"
+    if status in {"completed"}:
+        return "completed"
+    if status in {"failed"}:
+        return "failed"
+    if status in {"cancelled"}:
+        return "cancelled"
+    return "running"
+
+
+def _required_text_attr(value: object, attribute: str) -> str:
+    text = getattr(value, attribute, None)
+    if not isinstance(text, str) or not text:
+        raise TypeError(f"{attribute} is required")
+    return text
 
 
 def _dump_mapping(value: object) -> dict[str, object]:

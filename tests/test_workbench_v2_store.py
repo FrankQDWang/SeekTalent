@@ -126,6 +126,21 @@ def test_store_keeps_context_summary_as_event_and_conversation_field(tmp_path: P
     assert refreshed.events[-1].payload["summary"] == "用户正在招聘数据科学家，偏杭州。"
 
 
+def test_store_sets_runtime_link_and_state(tmp_path: Path) -> None:
+    store = WorkbenchV2Store(tmp_path / "workbench_v2.sqlite3")
+    store.initialize()
+    conversation = store.create_conversation(first_user_text="开始运行", idempotency_key="create-runtime")
+
+    updated = store.set_runtime(conversation.id, runtime_run_id="rtrun_1", runtime_state="queued")
+
+    assert updated.runtime_run_id == "rtrun_1"
+    assert updated.runtime_state == "queued"
+    refreshed = store.get_conversation(conversation.id)
+    assert refreshed.conversation.runtime_run_id == "rtrun_1"
+    assert refreshed.conversation.runtime_state == "queued"
+    assert refreshed.conversation.updated_at >= conversation.updated_at
+
+
 def test_context_summary_append_rolls_back_event_when_summary_update_fails(tmp_path: Path) -> None:
     database_path = tmp_path / "workbench_v2.sqlite3"
     store = WorkbenchV2Store(database_path)

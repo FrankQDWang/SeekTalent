@@ -133,6 +133,34 @@ class WorkbenchV2RuntimeService:
             start_idempotency_key=start_idempotency_key,
         )
 
+    def start_run_from_runtime_input(
+        self,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput,
+        *,
+        idempotency_key: str | None = None,
+        draft_revision_id: str | None = None,
+        selected_item_ids: list[str] | None = None,
+        deselected_item_ids: list[str] | None = None,
+    ) -> RuntimeRunRecord:
+        job_title, jd_text, notes = _runtime_input_values(runtime_input)
+        requirement_sheet = _extract_requirements(
+            self._requirement_extractor(),
+            job_title=job_title,
+            jd_text=jd_text,
+            notes=notes,
+            requirement_cache_scope=conversation_id,
+        )
+        return self.start_run(
+            conversation_id,
+            runtime_input,
+            requirement_sheet,
+            idempotency_key=idempotency_key,
+            draft_revision_id=draft_revision_id,
+            selected_item_ids=selected_item_ids,
+            deselected_item_ids=deselected_item_ids,
+        )
+
     def _draft_revision_id(self, operation_key: str) -> str:
         if self._custom_draft_revision_id_factory:
             return self.draft_revision_id_factory()

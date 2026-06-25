@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 WORKBENCH_V2_SCHEMA_VERSION = "agent.workbench.v2"
+WORKBENCH_V2_LIST_SCHEMA_VERSION = "agent.workbench.v2.list"
 
 WorkbenchV2EventType = Literal[
     "user_message",
@@ -70,28 +71,57 @@ class WorkbenchV2ConversationRecord(BaseModel):
     events: list[WorkbenchV2TranscriptEvent] = Field(default_factory=list)
 
 
-class WorkbenchV2ConversationSummary(BaseModel):
+class WorkbenchV2ConversationPublic(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    id: str
+    conversationId: str
     title: str
+    runtimeState: WorkbenchV2RuntimeState = "idle"
+    runtimeRunId: str | None = None
     createdAt: str
     updatedAt: str
+
+
+class WorkbenchV2ConversationListSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conversationId: str
+    title: str
+    status: WorkbenchV2RuntimeState
+    updatedAt: str
+
+
+class WorkbenchV2RuntimeView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: WorkbenchV2RuntimeState
     runtimeRunId: str | None = None
-    runtimeState: WorkbenchV2RuntimeState = "idle"
+
+
+class WorkbenchV2TranscriptEventView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    eventId: str
+    step: int
+    type: WorkbenchV2EventType
+    role: WorkbenchV2Role
+    status: WorkbenchV2EventStatus
+    payload: dict[str, object] = Field(default_factory=dict)
+    createdAt: str
 
 
 class WorkbenchV2ConversationView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schemaVersion: str = WORKBENCH_V2_SCHEMA_VERSION
-    conversation: WorkbenchV2ConversationSummary
-    transcriptEvents: list[WorkbenchV2TranscriptEvent] = Field(default_factory=list)
+    conversation: WorkbenchV2ConversationPublic
+    transcriptEvents: list[WorkbenchV2TranscriptEventView] = Field(default_factory=list)
     requirementForm: dict[str, object] | None = None
+    runtime: WorkbenchV2RuntimeView
 
 
 class WorkbenchV2ConversationListView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    schemaVersion: str = WORKBENCH_V2_SCHEMA_VERSION
-    conversations: list[WorkbenchV2ConversationSummary] = Field(default_factory=list)
+    schemaVersion: str = WORKBENCH_V2_LIST_SCHEMA_VERSION
+    conversations: list[WorkbenchV2ConversationListSummary] = Field(default_factory=list)
