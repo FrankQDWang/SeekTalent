@@ -158,7 +158,7 @@ def _payload_digest(payload: dict[str, object]) -> str:
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _append_event(

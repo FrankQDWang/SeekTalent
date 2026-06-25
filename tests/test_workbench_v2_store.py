@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -58,15 +59,25 @@ def test_store_replays_create_by_idempotency_key(tmp_path: Path) -> None:
     assert first.title == "你好"
 
 
-def test_store_lists_conversations_by_latest_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_store_lists_conversations_by_latest_update_under_rapid_same_second_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     timestamps = iter(
         [
-            "2026-06-25T10:00:00+00:00",
-            "2026-06-25T10:00:01+00:00",
-            "2026-06-25T10:00:02+00:00",
+            datetime(2026, 6, 25, 10, 0, 0, 1, tzinfo=UTC),
+            datetime(2026, 6, 25, 10, 0, 0, 2, tzinfo=UTC),
+            datetime(2026, 6, 25, 10, 0, 0, 3, tzinfo=UTC),
         ]
     )
-    monkeypatch.setattr(store_module, "_now_iso", lambda: next(timestamps))
+
+    class FakeDateTime:
+        @classmethod
+        def now(cls, tz: object) -> datetime:
+            assert tz is UTC
+            return next(timestamps)
+
+    monkeypatch.setattr(store_module, "datetime", FakeDateTime)
 
     store = WorkbenchV2Store(tmp_path / "workbench_v2.sqlite3")
     store.initialize()
@@ -74,7 +85,7 @@ def test_store_lists_conversations_by_latest_update(tmp_path: Path, monkeypatch:
     first = store.create_conversation(first_user_text="第一个需求", idempotency_key="first")
     second = store.create_conversation(first_user_text="第二个需求", idempotency_key="second")
     store.append_event(
-        first.id,
+        second.id,
         WorkbenchV2TranscriptEventInput(
             type="assistant_status",
             role="assistant",
@@ -85,7 +96,8 @@ def test_store_lists_conversations_by_latest_update(tmp_path: Path, monkeypatch:
 
     conversations = store.list_conversations()
 
-    assert [conversation.id for conversation in conversations] == [first.id, second.id]
+    assert [conversation.id for conversation in conversations] == [second.id, first.id]
+    assert conversations[0].updated_at > conversations[1].updated_at
 
 
 def test_store_rejects_idempotency_payload_conflict(tmp_path: Path) -> None:
