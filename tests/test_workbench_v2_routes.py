@@ -6,7 +6,12 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from seektalent.config import AppSettings
-from seektalent_ui.agent_request_models import MAX_AGENT_MESSAGE_CHARS, MAX_IDEMPOTENCY_KEY_CHARS
+from seektalent_ui.agent_request_models import (
+    MAX_AGENT_MESSAGE_CHARS,
+    MAX_IDEMPOTENCY_KEY_CHARS,
+    MAX_REQUEST_ID_CHARS,
+    MAX_REQUIREMENT_TEXT_CHARS,
+)
 from seektalent_ui.server import create_app
 from seektalent_workbench_v2.models import (
     WorkbenchV2ConversationListSummary,
@@ -27,6 +32,7 @@ class FakeWorkbenchV2Service:
     def __init__(self) -> None:
         self.create_calls: list[tuple[str, str | None]] = []
         self.submit_calls: list[tuple[str, str, str | None]] = []
+        self.requirement_action_calls: list[dict[str, object]] = []
         self.get_calls: list[str] = []
         self.list_calls = 0
 
@@ -86,6 +92,37 @@ class FakeWorkbenchV2Service:
             event_id="agentv2_event_submit",
             user_text=message,
         ).model_dump(mode="json")
+
+    async def apply_requirement_action(
+        self,
+        conversation_id: str,
+        *,
+        action: str,
+        item_id: str | None = None,
+        selected: bool | None = None,
+        text: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> WorkbenchV2ConversationView:
+        self.requirement_action_calls.append(
+            {
+                "conversation_id": conversation_id,
+                "action": action,
+                "item_id": item_id,
+                "selected": selected,
+                "text": text,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if conversation_id == "missing":
+            raise KeyError(conversation_id)
+        if item_id == "missing-item":
+            raise ValueError("workbench_v2_requirement_item_not_found")
+        return _conversation_view(
+            conversation_id=conversation_id,
+            title="Existing conversation",
+            event_id=f"agentv2_event_{action}",
+            user_text=action,
+        )
 
 
 def test_create_conversation_returns_201_public_v2_shape(tmp_path: Path) -> None:
@@ -234,6 +271,140 @@ def test_message_and_idempotency_key_are_trimmed_before_service_call(tmp_path: P
     assert fake.submit_calls == [("agentv2_existing", "continue", "submit-key")]
 
 
+def test_requirement_actions_call_service_and_return_view(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    set_selected = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={
+            "action": "set_selected",
+            "itemId": "  must_have_capabilities_1  ",
+            "selected": False,
+            "idempotencyKey": "  select-1  ",
+        },
+    )
+    add_other = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={"action": "add_other", "text": "\t熟悉 LangGraph\n", "idempotencyKey": "other-1"},
+    )
+    confirm = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={"action": "confirm", "idempotencyKey": "confirm-1"},
+    )
+
+    assert set_selected.status_code == 200, set_selected.text
+    assert add_other.status_code == 200, add_other.text
+    assert confirm.status_code == 200, confirm.text
+    assert set_selected.json()["conversation"]["conversationId"] == "agentv2_existing"
+    assert add_other.json()["transcriptEvents"][0]["payload"] == {"text": "add_other"}
+    assert confirm.json()["transcriptEvents"][0]["payload"] == {"text": "confirm"}
+    assert fake.requirement_action_calls == [
+        {
+            "conversation_id": "agentv2_existing",
+            "action": "set_selected",
+            "item_id": "must_have_capabilities_1",
+            "selected": False,
+            "text": None,
+            "idempotency_key": "select-1",
+        },
+        {
+            "conversation_id": "agentv2_existing",
+            "action": "add_other",
+            "item_id": None,
+            "selected": None,
+            "text": "熟悉 LangGraph",
+            "idempotency_key": "other-1",
+        },
+        {
+            "conversation_id": "agentv2_existing",
+            "action": "confirm",
+            "item_id": None,
+            "selected": None,
+            "text": None,
+            "idempotency_key": "confirm-1",
+        },
+    ]
+
+
+def test_invalid_requirement_action_payload_rejected_before_service_call(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    missing_item = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={"action": "set_selected", "selected": True, "idempotencyKey": "select-1"},
+    )
+    blank_text = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={"action": "add_other", "text": "   ", "idempotencyKey": "other-1"},
+    )
+    extra_field = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={"action": "confirm", "unexpected": True},
+    )
+    overlong_item = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={"action": "set_selected", "itemId": "i" * (MAX_REQUEST_ID_CHARS + 1), "selected": True},
+    )
+    overlong_text = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={"action": "add_other", "text": "x" * (MAX_REQUIREMENT_TEXT_CHARS + 1)},
+    )
+
+    assert missing_item.status_code == 400, missing_item.text
+    assert blank_text.status_code == 400, blank_text.text
+    assert extra_field.status_code == 400, extra_field.text
+    assert overlong_item.status_code == 400, overlong_item.text
+    assert overlong_text.status_code == 400, overlong_text.text
+    assert fake.requirement_action_calls == []
+
+
+def test_requirement_action_domain_error_returns_400_problem_details(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={"action": "set_selected", "itemId": "missing-item", "selected": True},
+    )
+
+    assert response.status_code == 400, response.text
+    payload = response.json()
+    assert payload["status"] == 400
+    assert payload["reasonCode"] == "workbench_v2_requirement_item_not_found"
+    assert payload["type"].endswith("/workbench_v2_requirement_item_not_found")
+    assert fake.requirement_action_calls == [
+        {
+            "conversation_id": "agentv2_existing",
+            "action": "set_selected",
+            "item_id": "missing-item",
+            "selected": True,
+            "text": None,
+            "idempotency_key": None,
+        }
+    ]
+
+
+def test_missing_requirement_action_conversation_returns_public_reason_code(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.post(
+        "/api/agent/workbench/v2/conversations/missing/requirement-actions",
+        json={"action": "confirm", "idempotencyKey": "confirm-1"},
+    )
+
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": {"reasonCode": "workbench_v2_conversation_not_found"}}
+    assert fake.requirement_action_calls == [
+        {
+            "conversation_id": "missing",
+            "action": "confirm",
+            "item_id": None,
+            "selected": None,
+            "text": None,
+            "idempotency_key": "confirm-1",
+        }
+    ]
+
+
 def test_openapi_declares_v2_error_responses(tmp_path: Path) -> None:
     client, _fake = _client(tmp_path)
 
@@ -243,13 +414,20 @@ def test_openapi_declares_v2_error_responses(tmp_path: Path) -> None:
     submit_responses = paths["/api/agent/workbench/v2/conversations/{conversation_id}/messages"]["post"][
         "responses"
     ]
+    action_responses = paths[
+        "/api/agent/workbench/v2/conversations/{conversation_id}/requirement-actions"
+    ]["post"]["responses"]
 
     assert {"201", "400", "409", "503"}.issubset(create_responses)
     assert {"404"}.issubset(get_responses)
     assert {"404"}.issubset(submit_responses)
+    assert {"400", "404", "409", "503"}.issubset(action_responses)
     assert create_responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert create_responses["409"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert create_responses["503"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
+    assert action_responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
+    assert action_responses["409"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
+    assert action_responses["503"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert "reasonCode" in get_responses["404"]["content"]["application/json"]["schema"]["properties"]["detail"][
         "properties"
     ]

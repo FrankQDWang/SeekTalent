@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
+from uuid import uuid4
 
 from seektalent.models import RequirementSheet
+from seektalent_runtime_control.requirements import (
+    RequirementDraft,
+    RequirementDraftItem,
+    requirement_sheet_from_draft,
+)
 from seektalent_workbench_v2.agent_loop import (
     WorkbenchV2AgentLoop,
     WorkbenchV2AgentOutput,
@@ -18,6 +24,9 @@ from seektalent_workbench_v2.models import (
 )
 from seektalent_workbench_v2.store import WorkbenchV2Store
 from seektalent_workbench_v2.views import conversation_list_to_view, conversation_record_to_view
+
+
+WorkbenchV2RequirementAction = Literal["set_selected", "add_other", "confirm"]
 
 
 class WorkbenchV2RequirementExtraction(Protocol):
@@ -99,6 +108,60 @@ class WorkbenchV2Service:
 
     def list_conversations(self) -> WorkbenchV2ConversationListView:
         return conversation_list_to_view(self.store.list_conversations())
+
+    async def apply_requirement_action(
+        self,
+        conversation_id: str,
+        *,
+        action: WorkbenchV2RequirementAction,
+        item_id: str | None = None,
+        selected: bool | None = None,
+        text: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> WorkbenchV2ConversationView:
+        scope = _requirement_action_scope(action)
+        if self._has_requirement_action_terminal_event(
+            conversation_id,
+            action=action,
+            scope=scope,
+            idempotency_key=idempotency_key,
+        ):
+            return self.get_conversation(conversation_id)
+
+        if action == "set_selected":
+            if item_id is None or selected is None:
+                raise ValueError("workbench_v2_requirement_action_invalid")
+            self._set_requirement_selected(
+                conversation_id,
+                item_id=item_id,
+                selected=selected,
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return self.get_conversation(conversation_id)
+
+        if action == "add_other":
+            if text is None or not text:
+                raise ValueError("workbench_v2_requirement_action_invalid")
+            self._add_other_requirement(
+                conversation_id,
+                text=text,
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return self.get_conversation(conversation_id)
+
+        if action == "confirm":
+            self._confirm_requirements(
+                conversation_id=conversation_id,
+                message="已确认需求，开始运行。",
+                scope=scope,
+                idempotency_key=idempotency_key,
+                raise_domain_errors=True,
+            )
+            return self.get_conversation(conversation_id)
+
+        raise ValueError("workbench_v2_requirement_action_invalid")
 
     async def _append_user_and_run_agent(
         self,
@@ -244,9 +307,12 @@ class WorkbenchV2Service:
         message: str,
         scope: str,
         idempotency_key: str | None,
+        raise_domain_errors: bool = False,
     ) -> None:
         form_payload = _latest_requirement_form_payload(self.store.get_conversation(conversation_id).events)
         if form_payload is None:
+            if raise_domain_errors:
+                raise ValueError("workbench_v2_requirement_form_required")
             self._append_service_error(
                 conversation_id,
                 code="workbench_v2_requirement_form_required",
@@ -257,6 +323,8 @@ class WorkbenchV2Service:
             return
         runtime_input = _runtime_input_from_payload(form_payload.get("runtimeInput"))
         if runtime_input is None:
+            if raise_domain_errors:
+                raise ValueError("workbench_v2_runtime_input_required")
             self._append_service_error(
                 conversation_id,
                 code="workbench_v2_runtime_input_required",
@@ -272,6 +340,7 @@ class WorkbenchV2Service:
                 conversation_id,
                 scope=scope,
                 idempotency_key=idempotency_key,
+                raise_domain_error=raise_domain_errors,
             )
             return
         self._start_runtime_from_requirement_sheet(
@@ -376,13 +445,128 @@ class WorkbenchV2Service:
         *,
         scope: str,
         idempotency_key: str | None,
+        raise_domain_error: bool = False,
     ) -> None:
+        if raise_domain_error:
+            raise ValueError("workbench_v2_requirement_sheet_required")
         self._append_service_error(
             conversation_id,
             code="workbench_v2_requirement_sheet_required",
             message="需求表单缺少 requirementSheet，无法启动运行。",
             scope=scope,
             idempotency_key=idempotency_key,
+        )
+
+    def _set_requirement_selected(
+        self,
+        conversation_id: str,
+        *,
+        item_id: str,
+        selected: bool,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> None:
+        form_payload, draft, requirement_sheet = self._current_requirement_form_bundle(conversation_id)
+        found = False
+        for section in draft.sections:
+            for item in section.items:
+                if item.item_id == item_id:
+                    item.selected = selected
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            raise ValueError("workbench_v2_requirement_item_not_found")
+        self._append_updated_requirement_form(
+            conversation_id,
+            form_payload=form_payload,
+            draft=_with_new_draft_revision(draft),
+            requirement_sheet=requirement_sheet,
+            scope=scope,
+            idempotency_key=idempotency_key,
+        )
+
+    def _add_other_requirement(
+        self,
+        conversation_id: str,
+        *,
+        text: str,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> None:
+        form_payload, draft, requirement_sheet = self._current_requirement_form_bundle(conversation_id)
+        try:
+            section = draft.section("must_have_capabilities")
+        except KeyError as exc:
+            raise ValueError("workbench_v2_requirement_draft_required") from exc
+        next_sort_order = max((item.sort_order for item in section.items), default=0) + 10
+        section.items.append(
+            RequirementDraftItem(
+                item_id=f"reqitem_user_{uuid4().hex}",
+                selected=True,
+                enabled=True,
+                editable=True,
+                text=text,
+                value=text,
+                source="workbench_v2_user",
+                status="resolved",
+                review_item_id=None,
+                amendment_id=None,
+                source_span_refs=[],
+                sort_order=next_sort_order,
+                allowed_actions=["select", "edit", "delete", "move_to_preferred_capabilities"],
+            )
+        )
+        self._append_updated_requirement_form(
+            conversation_id,
+            form_payload=form_payload,
+            draft=_with_new_draft_revision(draft),
+            requirement_sheet=requirement_sheet,
+            scope=scope,
+            idempotency_key=idempotency_key,
+        )
+
+    def _current_requirement_form_bundle(
+        self,
+        conversation_id: str,
+    ) -> tuple[dict[str, object], RequirementDraft, RequirementSheet]:
+        form_payload = _latest_requirement_form_payload(self.store.get_conversation(conversation_id).events)
+        if form_payload is None:
+            raise ValueError("workbench_v2_requirement_form_required")
+        if not isinstance(form_payload.get("runtimeInput"), Mapping):
+            raise ValueError("workbench_v2_runtime_input_required")
+        draft = _requirement_draft_from_payload(form_payload.get("draft"))
+        if draft is None:
+            raise ValueError("workbench_v2_requirement_draft_required")
+        requirement_sheet = _requirement_sheet_from_payload(form_payload.get("requirementSheet"))
+        if requirement_sheet is None:
+            raise ValueError("workbench_v2_requirement_sheet_required")
+        return form_payload, draft.model_copy(deep=True), requirement_sheet
+
+    def _append_updated_requirement_form(
+        self,
+        conversation_id: str,
+        *,
+        form_payload: Mapping[str, object],
+        draft: RequirementDraft,
+        requirement_sheet: RequirementSheet,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> None:
+        updated_requirement_sheet = requirement_sheet_from_draft(draft, requirement_sheet)
+        self.store.append_event(
+            conversation_id,
+            WorkbenchV2TranscriptEventInput(
+                type="requirement_form",
+                role="assistant",
+                payload={
+                    "runtimeInput": _dump(form_payload["runtimeInput"]),
+                    "draft": _dump_mapping(draft),
+                    "requirementSheet": _dump_mapping(updated_requirement_sheet),
+                },
+                dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="requirement-form"),
+            ),
         )
 
     def _start_runtime_from_requirement_sheet(
@@ -614,6 +798,32 @@ class WorkbenchV2Service:
             for event in record.events
         )
 
+    def _has_requirement_action_terminal_event(
+        self,
+        conversation_id: str,
+        *,
+        action: WorkbenchV2RequirementAction,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> bool:
+        if idempotency_key is None:
+            return False
+        form_key = _dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="requirement-form")
+        confirmed_key = _dedupe_key(
+            scope=scope,
+            idempotency_key=idempotency_key,
+            suffix="requirement-form-confirmed",
+        )
+        error_key = _dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="error")
+        record = self.store.get_conversation(conversation_id)
+        if action in {"set_selected", "add_other"}:
+            return any(event.type == "requirement_form" and event.dedupe_key == form_key for event in record.events)
+        return any(
+            (event.type == "requirement_form_confirmed" and event.dedupe_key == confirmed_key)
+            or (event.type == "error" and event.dedupe_key == error_key)
+            for event in record.events
+        )
+
 
 def _dedupe_key(*, scope: str, idempotency_key: str | None, suffix: str) -> str | None:
     if idempotency_key is None:
@@ -621,11 +831,24 @@ def _dedupe_key(*, scope: str, idempotency_key: str | None, suffix: str) -> str 
     return f"workbench-v2-service:{scope}:{idempotency_key}:{suffix}"
 
 
+def _requirement_action_scope(action: WorkbenchV2RequirementAction) -> str:
+    return f"requirement-action:{action}"
+
+
 def _latest_requirement_form_payload(events: Sequence[WorkbenchV2TranscriptEvent]) -> dict[str, object] | None:
     for event in reversed(events):
         if event.type == "requirement_form":
             return dict(event.payload)
     return None
+
+
+def _requirement_draft_from_payload(payload: object) -> RequirementDraft | None:
+    if not isinstance(payload, Mapping):
+        return None
+    try:
+        return RequirementDraft.model_validate(payload)
+    except ValueError:
+        return None
 
 
 def _runtime_input_from_payload(payload: object) -> WorkbenchV2RuntimeInput | None:
@@ -712,6 +935,13 @@ def _draft_item_id(item: Mapping[str, object]) -> str | None:
     if isinstance(value, str) and value:
         return value
     return None
+
+
+def _with_new_draft_revision(draft: RequirementDraft) -> RequirementDraft:
+    old_revision_id = draft.draft_revision_id
+    draft.base_revision_id = old_revision_id
+    draft.draft_revision_id = f"reqdraft_{uuid4().hex}"
+    return draft
 
 
 def _runtime_state_from_run_status(status: object) -> WorkbenchV2RuntimeState:

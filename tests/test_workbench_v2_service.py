@@ -503,6 +503,199 @@ def test_confirm_requirements_starts_runtime_from_current_form(tmp_path: Path) -
     }
 
 
+def test_requirement_action_set_selected_appends_form_and_updates_sheet(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": "杭州",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+    )
+    runtime = FakeRuntimeService(
+        requirement_sheet=_requirement_sheet_payload().model_copy(
+            update={"must_have_capabilities": ["Python 后端开发"]}
+        )
+    )
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-set"))
+    item_id = first_view.requirementForm["draft"]["sections"][0]["items"][0]["item_id"]
+
+    view = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="set_selected",
+            item_id=item_id,
+            selected=False,
+            idempotency_key="select-1",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    form_events = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form"]
+    assert len(form_events) == 2
+    latest_form = form_events[-1]["payload"]
+    latest_item = latest_form["draft"]["sections"][0]["items"][0]
+    assert latest_item["item_id"] == item_id
+    assert latest_item["selected"] is False
+    assert latest_form["draft"]["base_revision_id"] == "reqdraft_1"
+    assert latest_form["draft"]["draft_revision_id"] != "reqdraft_1"
+    assert latest_form["runtimeInput"] == runtime_input
+    assert latest_form["requirementSheet"]["must_have_capabilities"] == []
+    assert view.requirementForm == latest_form
+
+
+def test_requirement_action_add_other_appends_form_and_updates_sheet(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": "杭州",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+    )
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=FakeRuntimeService())
+    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-add"))
+
+    view = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="add_other",
+            text="熟悉 LangGraph",
+            idempotency_key="other-1",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    form_events = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form"]
+    assert len(form_events) == 2
+    latest_form = form_events[-1]["payload"]
+    must_have_items = latest_form["draft"]["sections"][0]["items"]
+    new_item = must_have_items[-1]
+    assert new_item["text"] == "熟悉 LangGraph"
+    assert new_item["value"] == "熟悉 LangGraph"
+    assert new_item["selected"] is True
+    assert new_item["enabled"] is True
+    assert new_item["editable"] is True
+    assert new_item["source"] == "workbench_v2_user"
+    assert new_item["status"] == "resolved"
+    assert new_item["allowed_actions"] == ["select", "edit", "delete", "move_to_preferred_capabilities"]
+    assert new_item["sort_order"] > must_have_items[-2]["sort_order"]
+    assert "熟悉 LangGraph" in latest_form["requirementSheet"]["must_have_capabilities"]
+    assert latest_form["runtimeInput"] == runtime_input
+
+
+def test_requirement_action_confirm_after_deselect_starts_runtime_from_updated_form(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": "杭州",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+    )
+    runtime = FakeRuntimeService(
+        requirement_sheet=_requirement_sheet_payload().model_copy(
+            update={"must_have_capabilities": ["Python 后端开发"]}
+        )
+    )
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-action-confirm"))
+    item_id = first_view.requirementForm["draft"]["sections"][0]["items"][0]["item_id"]
+    deselected_view = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="set_selected",
+            item_id=item_id,
+            selected=False,
+            idempotency_key="select-before-confirm",
+        )
+    )
+
+    view = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="confirm",
+            idempotency_key="confirm-action",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    assert runtime.start_calls == [
+        {
+            "conversation_id": first_view.conversation.conversationId,
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(runtime_input),
+            "requirement_sheet": RequirementSheet.model_validate(deselected_view.requirementForm["requirementSheet"]),
+            "idempotency_key": "confirm-action",
+            "draft_revision_id": deselected_view.requirementForm["draft"]["draft_revision_id"],
+            "selected_item_ids": [],
+            "deselected_item_ids": [item_id],
+        }
+    ]
+    assert runtime.start_calls[0]["requirement_sheet"].must_have_capabilities == []
+    confirmed = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
+    assert len(confirmed) == 1
+    assert confirmed[0]["payload"]["requirementSheet"]["must_have_capabilities"] == []
+    assert confirmed[0]["payload"]["readonly"] is True
+    assert payload["runtime"] == {"state": "queued", "runtimeRunId": "rtrun_1"}
+
+
+def test_requirement_action_idempotency_replay_does_not_append_duplicate_events(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": "杭州",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+    )
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=FakeRuntimeService())
+    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-idem-action"))
+    item_id = first_view.requirementForm["draft"]["sections"][0]["items"][0]["item_id"]
+
+    first_select = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="set_selected",
+            item_id=item_id,
+            selected=False,
+            idempotency_key="select-idem",
+        )
+    )
+    second_select = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="set_selected",
+            item_id=item_id,
+            selected=False,
+            idempotency_key="select-idem",
+        )
+    )
+    first_confirm = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="confirm",
+            idempotency_key="confirm-idem",
+        )
+    )
+    second_confirm = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="confirm",
+            idempotency_key="confirm-idem",
+        )
+    )
+
+    assert len([event for event in second_select.transcriptEvents if event.type == "requirement_form"]) == 2
+    assert first_select.requirementForm == second_select.requirementForm
+    assert len([event for event in second_confirm.transcriptEvents if event.type == "requirement_form_confirmed"]) == 1
+    assert first_confirm.requirementForm == second_confirm.requirementForm
+
+
 def test_confirm_requirements_without_current_form_appends_deterministic_error(tmp_path: Path) -> None:
     store = _store(tmp_path)
     agent = FakeAgentLoop(
@@ -817,6 +1010,15 @@ def _agent_output(
 
 
 def _draft_payload() -> RequirementDraft:
+    empty_sections = [
+        RequirementDraftSection(section_id=section_id, display_name=display_name, backend_field=backend_field, items=[])
+        for section_id, display_name, backend_field in (
+            ("preferred_capabilities", "加分项", "preferred_capabilities"),
+            ("hard_constraints", "硬性筛选条件", "hard_constraints"),
+            ("exclusion_signals", "排除信号", "exclusion_signals"),
+            ("initial_query_term_pool", "检索关键词", "initial_query_term_pool[].term"),
+        )
+    ]
     return RequirementDraft(
         conversation_id="agentv2_1",
         draft_revision_id="reqdraft_1",
@@ -844,7 +1046,8 @@ def _draft_payload() -> RequirementDraft:
                         allowed_actions=[],
                     )
                 ],
-            )
+            ),
+            *empty_sections,
         ],
         created_at="2026-06-25T01:02:03.000004+00:00",
         latest=True,
