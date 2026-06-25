@@ -178,6 +178,10 @@ def test_agents_sdk_prepares_strict_output_schema_without_network() -> None:
 
     assert output.intent == "chat"
     assert runner.output_schema is not None
+    assert runner.output_schema.is_strict_json_schema() is True
+    schema = runner.output_schema.json_schema()
+    assert schema["additionalProperties"] is False
+    assert schema["$defs"]["WorkbenchV2RequirementPatch"]["additionalProperties"] is False
 
 
 def test_agent_output_strips_required_strings() -> None:
@@ -322,6 +326,75 @@ def test_update_requirements_accepts_requirement_patch() -> None:
         selectedItemIds=["sql"],
         deselectedItemIds=[],
         otherNotes="加强 SQL 要求。",
+    )
+
+
+def test_update_requirements_rejects_both_runtime_input_and_requirement_patch() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2AgentOutput.model_validate(
+            {
+                "intent": "update_requirements",
+                "message": "我会更新当前需求。",
+                "needsClarification": False,
+                "clarifyingQuestion": None,
+                "runtimeInput": {
+                    "jobTitle": "数据科学家",
+                    "jd": "负责数据分析。",
+                    "notes": None,
+                },
+                "requirementPatch": {
+                    "selectedItemIds": ["sql"],
+                    "deselectedItemIds": [],
+                    "otherNotes": None,
+                },
+                "memoryRead": None,
+                "memoryWrite": None,
+            }
+        )
+
+
+def test_update_requirements_rejects_empty_requirement_patch() -> None:
+    with pytest.raises(ValidationError):
+        WorkbenchV2AgentOutput.model_validate(
+            {
+                "intent": "update_requirements",
+                "message": "我会更新当前需求。",
+                "needsClarification": False,
+                "clarifyingQuestion": None,
+                "runtimeInput": None,
+                "requirementPatch": {
+                    "selectedItemIds": [],
+                    "deselectedItemIds": [],
+                    "otherNotes": "   ",
+                },
+                "memoryRead": None,
+                "memoryWrite": None,
+            }
+        )
+
+
+def test_update_requirements_accepts_runtime_input() -> None:
+    output = WorkbenchV2AgentOutput.model_validate(
+        {
+            "intent": "update_requirements",
+            "message": "我已根据补充说明更新当前需求。",
+            "needsClarification": False,
+            "clarifyingQuestion": None,
+            "runtimeInput": {
+                "jobTitle": "数据科学家",
+                "jd": "负责指标体系和实验分析。",
+                "notes": "  需要杭州候选人。  ",
+            },
+            "requirementPatch": None,
+            "memoryRead": None,
+            "memoryWrite": None,
+        }
+    )
+
+    assert output.runtimeInput == WorkbenchV2RuntimeInput(
+        jobTitle="数据科学家",
+        jd="负责指标体系和实验分析。",
+        notes="需要杭州候选人。",
     )
 
 

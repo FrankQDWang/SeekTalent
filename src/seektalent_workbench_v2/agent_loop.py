@@ -75,6 +75,12 @@ class WorkbenchV2RequirementPatch(BaseModel):
     def strip_optional_strings(cls, value: object) -> object:
         return _strip_optional_string(value)
 
+    @model_validator(mode="after")
+    def require_real_change(self) -> "WorkbenchV2RequirementPatch":
+        if self.selectedItemIds or self.deselectedItemIds or self.otherNotes:
+            return self
+        raise ValueError("requirementPatch must include at least one real change")
+
 
 class WorkbenchV2MemoryRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -142,8 +148,8 @@ class WorkbenchV2AgentOutput(BaseModel):
                 raise ValueError("runtimeInput is required for extract_requirements")
             reject_payloads("requirementPatch", "memoryRead", "memoryWrite")
         elif self.intent == "update_requirements":
-            if self.requirementPatch is None and self.runtimeInput is None:
-                raise ValueError("requirementPatch or runtimeInput is required for update_requirements")
+            if (self.requirementPatch is None) == (self.runtimeInput is None):
+                raise ValueError("exactly one of requirementPatch or runtimeInput is required for update_requirements")
             reject_payloads("memoryRead", "memoryWrite")
         elif self.intent == "start_runtime":
             if self.runtimeInput is None:
