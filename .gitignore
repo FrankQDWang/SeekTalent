@@ -32,8 +32,16 @@ wandb/
 tea_debug.log
 /artifacts/
 
-# Local execution plans and historical Superpowers scratch material
-docs/superpowers/
+# Superpowers planning docs
+docs/superpowers/**
+!docs/superpowers/
+!docs/superpowers/specs/
+!docs/superpowers/plans/
+!docs/superpowers/specs/*.md
+!docs/superpowers/plans/*.md
+docs/superpowers/artifacts/**
+docs/superpowers/audits/**
+docs/superpowers/tmp/**
 
 # Local generated product handoff artifacts
 docs/prd-seektalent-startup-states.md
