@@ -117,6 +117,8 @@ class FakeWorkbenchV2Service:
             raise KeyError(conversation_id)
         if idempotency_key == "same-key":
             raise ValueError("workbench_v2_idempotency_conflict")
+        if item_id == "readonly-item":
+            raise ValueError("workbench_v2_requirement_form_readonly")
         if item_id == "missing-item":
             raise ValueError("workbench_v2_requirement_item_not_found")
         return _conversation_view(
@@ -411,6 +413,31 @@ def test_requirement_action_idempotency_conflict_returns_409_problem_details(tmp
             "selected": True,
             "text": None,
             "idempotency_key": "same-key",
+        }
+    ]
+
+
+def test_requirement_action_readonly_error_returns_400_problem_details(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/requirement-actions",
+        json={"action": "set_selected", "itemId": "readonly-item", "selected": True},
+    )
+
+    assert response.status_code == 400, response.text
+    payload = response.json()
+    assert payload["status"] == 400
+    assert payload["reasonCode"] == "workbench_v2_requirement_form_readonly"
+    assert payload["type"].endswith("/workbench_v2_requirement_form_readonly")
+    assert fake.requirement_action_calls == [
+        {
+            "conversation_id": "agentv2_existing",
+            "action": "set_selected",
+            "item_id": "readonly-item",
+            "selected": True,
+            "text": None,
+            "idempotency_key": None,
         }
     ]
 

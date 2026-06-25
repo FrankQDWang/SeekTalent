@@ -789,6 +789,85 @@ def test_requirement_action_idempotency_conflicts_on_different_action(tmp_path: 
         )
 
 
+def test_requirement_action_set_and_add_after_confirm_are_rejected_and_keep_readonly_form(tmp_path: Path) -> None:
+    service, runtime, conversation_id, item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    before_view = service.get_conversation(conversation_id)
+    before_form_count = len([event for event in before_view.transcriptEvents if event.type == "requirement_form"])
+
+    with pytest.raises(ValueError, match="workbench_v2_requirement_form_readonly"):
+        asyncio.run(
+            service.apply_requirement_action(
+                conversation_id,
+                action="set_selected",
+                item_id=item_id,
+                selected=True,
+                idempotency_key="set-after-confirm",
+            )
+        )
+    with pytest.raises(ValueError, match="workbench_v2_requirement_form_readonly"):
+        asyncio.run(
+            service.apply_requirement_action(
+                conversation_id,
+                action="add_other",
+                text="熟悉 LangGraph",
+                idempotency_key="add-after-confirm",
+            )
+        )
+
+    view = service.get_conversation(conversation_id)
+    assert len(runtime.start_calls) == 1
+    assert len([event for event in view.transcriptEvents if event.type == "requirement_form"]) == before_form_count
+    assert len([event for event in view.transcriptEvents if event.type == "requirement_form_confirmed"]) == 1
+    assert view.requirementForm is not None
+    assert view.requirementForm["readonly"] is True
+    assert view.requirementForm["runtimeRunId"] == "rtrun_1"
+
+
+def test_requirement_action_set_after_runtime_started_is_rejected_without_appending_form(tmp_path: Path) -> None:
+    service, conversation_id, item_id = _service_with_requirement_form(tmp_path)
+    service.store.set_runtime(conversation_id, runtime_run_id="rtrun_existing", runtime_state="running")
+    before_view = service.get_conversation(conversation_id)
+    before_form_count = len([event for event in before_view.transcriptEvents if event.type == "requirement_form"])
+
+    with pytest.raises(ValueError, match="workbench_v2_requirement_form_readonly"):
+        asyncio.run(
+            service.apply_requirement_action(
+                conversation_id,
+                action="set_selected",
+                item_id=item_id,
+                selected=False,
+                idempotency_key="set-after-runtime",
+            )
+        )
+
+    view = service.get_conversation(conversation_id)
+    assert len([event for event in view.transcriptEvents if event.type == "requirement_form"]) == before_form_count
+    assert view.runtime is not None
+    assert view.runtime.runtimeRunId == "rtrun_existing"
+
+
+def test_requirement_action_repeated_confirm_after_confirm_returns_current_view_without_second_runtime_start(
+    tmp_path: Path,
+) -> None:
+    service, runtime, conversation_id, _item_id, confirmed_view = _confirmed_requirement_conversation(tmp_path)
+
+    second_key_view = asyncio.run(
+        service.apply_requirement_action(
+            conversation_id,
+            action="confirm",
+            idempotency_key="confirm-second-key",
+        )
+    )
+    no_key_view = asyncio.run(service.apply_requirement_action(conversation_id, action="confirm"))
+
+    assert len(runtime.start_calls) == 1
+    assert len([event for event in no_key_view.transcriptEvents if event.type == "requirement_form_confirmed"]) == 1
+    assert second_key_view.requirementForm == confirmed_view.requirementForm
+    assert no_key_view.requirementForm == confirmed_view.requirementForm
+    assert no_key_view.requirementForm is not None
+    assert no_key_view.requirementForm["readonly"] is True
+
+
 def test_confirm_requirements_without_current_form_appends_deterministic_error(tmp_path: Path) -> None:
     store = _store(tmp_path)
     agent = FakeAgentLoop(
@@ -1098,6 +1177,36 @@ def _service_with_requirement_form(tmp_path: Path) -> tuple[WorkbenchV2Service, 
     assert view.requirementForm is not None
     item_id = view.requirementForm["draft"]["sections"][0]["items"][0]["item_id"]
     return service, view.conversation.conversationId, item_id
+
+
+def _confirmed_requirement_conversation(
+    tmp_path: Path,
+) -> tuple[WorkbenchV2Service, FakeRuntimeService, str, str, WorkbenchV2ConversationView]:
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": "杭州",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+    )
+    runtime = FakeRuntimeService()
+    service = WorkbenchV2Service(
+        store=_store(tmp_path),
+        agent_loop=agent,
+        runtime_service=runtime,
+    )
+    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-confirmed"))
+    assert first_view.requirementForm is not None
+    item_id = first_view.requirementForm["draft"]["sections"][0]["items"][0]["item_id"]
+    confirmed_view = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="confirm",
+            idempotency_key="confirm-in-helper",
+        )
+    )
+    return service, runtime, first_view.conversation.conversationId, item_id, confirmed_view
 
 
 def _agent_output(

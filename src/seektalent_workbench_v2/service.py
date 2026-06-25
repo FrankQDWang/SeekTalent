@@ -140,6 +140,7 @@ class WorkbenchV2Service:
         if action == "set_selected":
             if item_id is None or selected is None:
                 raise ValueError("workbench_v2_requirement_action_invalid")
+            self._raise_if_requirement_form_readonly(conversation_id)
             self._set_requirement_selected(
                 conversation_id,
                 item_id=item_id,
@@ -153,6 +154,7 @@ class WorkbenchV2Service:
         if action == "add_other":
             if text is None or not text:
                 raise ValueError("workbench_v2_requirement_action_invalid")
+            self._raise_if_requirement_form_readonly(conversation_id)
             self._add_other_requirement(
                 conversation_id,
                 text=text,
@@ -163,6 +165,8 @@ class WorkbenchV2Service:
             return self.get_conversation(conversation_id)
 
         if action == "confirm":
+            if self._requirement_form_is_readonly(conversation_id):
+                return self.get_conversation(conversation_id)
             self._confirm_requirements(
                 conversation_id=conversation_id,
                 message="已确认需求，开始运行。",
@@ -322,6 +326,8 @@ class WorkbenchV2Service:
         raise_domain_errors: bool = False,
         action_digest: str | None = None,
     ) -> None:
+        if self._requirement_form_is_readonly(conversation_id):
+            return
         form_payload = _latest_requirement_form_payload(self.store.get_conversation(conversation_id).events)
         if form_payload is None:
             if raise_domain_errors:
@@ -474,6 +480,16 @@ class WorkbenchV2Service:
             scope=scope,
             idempotency_key=idempotency_key,
             action_digest=action_digest,
+        )
+
+    def _raise_if_requirement_form_readonly(self, conversation_id: str) -> None:
+        if self._requirement_form_is_readonly(conversation_id):
+            raise ValueError("workbench_v2_requirement_form_readonly")
+
+    def _requirement_form_is_readonly(self, conversation_id: str) -> bool:
+        record = self.store.get_conversation(conversation_id)
+        return record.conversation.runtime_run_id is not None or any(
+            event.type == "requirement_form_confirmed" for event in record.events
         )
 
     def _set_requirement_selected(

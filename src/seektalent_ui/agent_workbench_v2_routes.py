@@ -24,6 +24,7 @@ WORKBENCH_V2_BAD_REQUEST_REASON_CODES = {
     "workbench_v2_requirement_action_invalid",
     "workbench_v2_requirement_draft_required",
     "workbench_v2_requirement_form_required",
+    "workbench_v2_requirement_form_readonly",
     "workbench_v2_requirement_item_not_found",
     "workbench_v2_requirement_sheet_required",
     "workbench_v2_runtime_input_required",
