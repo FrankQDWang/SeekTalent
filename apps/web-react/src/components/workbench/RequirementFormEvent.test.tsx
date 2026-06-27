@@ -20,6 +20,8 @@ describe("RequirementFormEvent", () => {
     const form = screen.getByRole("region", { name: "需求确认" });
     expect(within(form).getByText("核心条件")).toBeVisible();
     expect(within(form).getByText("Python 后端经验")).toBeVisible();
+    expect(within(form).queryByText("已选择")).not.toBeInTheDocument();
+    expect(within(form).queryByText("未选择")).not.toBeInTheDocument();
     expect(
       within(form).getByRole("checkbox", { name: /Python 后端经验/ }),
     ).toBeChecked();
@@ -84,7 +86,7 @@ describe("RequirementFormEvent", () => {
     expect(onAction).toHaveBeenCalledWith({ action: "confirm" });
   });
 
-  it("keeps confirmed forms visible but disables controls", async () => {
+  it("renders confirmed forms as compact readonly summaries", async () => {
     expect.hasAssertions();
     const user = userEvent.setup();
     const onAction = vi.fn();
@@ -103,18 +105,20 @@ describe("RequirementFormEvent", () => {
     );
 
     expect(screen.getByText("Python 后端经验")).toBeVisible();
+    expect(screen.getByText("需求已确认")).toBeVisible();
     expect(
-      screen.getByRole("checkbox", { name: /Python 后端经验/ }),
-    ).toBeDisabled();
-    expect(screen.getByLabelText("补充其他要求")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "添加补充要求" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "需求已确认" })).toBeDisabled();
+      screen.queryByRole("checkbox", { name: /Python 后端经验/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("补充其他要求")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "添加补充要求" }),
+    ).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("checkbox", { name: /Python 后端经验/ }));
+    await user.click(screen.getByText("Python 后端经验"));
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("keeps the visual checkbox immediately after the hidden input for focus styling", () => {
+  it("keeps checkbox semantics with a visible checkbox mark inside the pill", () => {
     expect.hasAssertions();
 
     render(<RequirementFormEvent event={requirementEvent()} />);
@@ -124,7 +128,16 @@ describe("RequirementFormEvent", () => {
       "requirement-form-event__box",
     );
     expect(normalizedCssRulesText()).toContain(
-      ".requirement-form-event__item input:focus-visible + .requirement-form-event__box",
+      ".requirement-form-event__item:has(input:focus-visible)",
+    );
+    expect(normalizedCssRulesText()).toContain(
+      ".requirement-form-event__box { align-items: center;",
+    );
+    expect(normalizedCssRulesText()).toContain(
+      '.requirement-form-event__item[data-selected="true"] .requirement-form-event__box::after',
+    );
+    expect(normalizedCssRulesText()).not.toContain(
+      ".requirement-form-event__box { display: none;",
     );
   });
 });

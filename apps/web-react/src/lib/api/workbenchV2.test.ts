@@ -6,6 +6,7 @@ import {
   applyWorkbenchV2RequirementAction,
   createWorkbenchV2Conversation,
   getWorkbenchV2Conversation,
+  getWorkbenchV2CandidateDetail,
   listWorkbenchV2Conversations,
   submitWorkbenchV2Message,
   WorkbenchV2RequestError,
@@ -191,6 +192,43 @@ describe("Workbench v2 client", () => {
       { method: "GET" },
     );
     expect(result.transcriptEvents.map((event) => event.step)).toEqual([4, 7]);
+  });
+
+  it("gets candidate detail from the v2 endpoint and normalizes list fields", async () => {
+    const responseBody = {
+      accessState: "allowed",
+      candidateId: "identity/1",
+      detailAvailability: "available",
+      displayName: "吴所谓",
+      evidenceLevel: "detail",
+      headline: "数据科学专家 · 淘天集团",
+      matchScore: 92,
+      reasonCode: null,
+      sections: [
+        {
+          title: "工作经历",
+          items: ["2019.06-至今 平安好医 | 用户体验设计专家"],
+        },
+        {
+          title: "技能标签",
+        },
+      ],
+      sourceKinds: ["liepin"],
+    };
+    const fetchMock = stubJsonFetch(responseBody);
+
+    const result = await getWorkbenchV2CandidateDetail(
+      "agent conv/1",
+      "identity/1",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agent/workbench/v2/conversations/agent%20conv%2F1/candidates/identity%2F1/detail",
+      { method: "GET" },
+    );
+    expect(result.sections[1]).toEqual({ title: "技能标签", items: [] });
+    expect(result.evidence).toEqual([]);
   });
 
   it("submits a message with a JSON body and normalizes transcriptEvents", async () => {
@@ -399,7 +437,9 @@ describe("Workbench v2 requirement action hook", () => {
         }),
       },
     );
-    expect(queryClient.getQueryData(queryKey)).toEqual(next);
+    expect(queryClient.getQueryData(queryKey)).toEqual(
+      normalizeWorkbenchV2Conversation(next),
+    );
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: queryKeys.workbenchV2Conversations,
     });

@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   applyWorkbenchV2RequirementAction,
   createWorkbenchV2Conversation,
+  getWorkbenchV2CandidateDetail,
   getWorkbenchV2Conversation,
   listWorkbenchV2Conversations,
   submitWorkbenchV2Message,
@@ -66,6 +67,25 @@ export function useWorkbenchV2Conversation(conversationId: string) {
         : currentSnapshot;
     },
     refetchInterval: (query) => workbenchV2RefetchInterval(query.state.data),
+  });
+}
+
+export function useWorkbenchV2CandidateDetail(
+  conversationId: string,
+  candidateId: string | null,
+) {
+  return useQuery({
+    enabled: candidateId !== null,
+    queryKey:
+      candidateId === null
+        ? queryKeys.workbenchV2CandidateDetails(conversationId)
+        : queryKeys.workbenchV2CandidateDetail(conversationId, candidateId),
+    queryFn: () => {
+      if (candidateId === null) {
+        throw new Error("Candidate detail query requires a candidate id.");
+      }
+      return getWorkbenchV2CandidateDetail(conversationId, candidateId);
+    },
   });
 }
 

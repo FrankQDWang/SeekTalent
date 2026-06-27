@@ -3,9 +3,9 @@
   color: var(--st-ink);
   display: flex;
   flex-direction: column;
-  height: min(86vh, 900px);
+  height: 100%;
   max-width: 100vw;
-  min-height: 760px;
+  min-height: 0;
   overflow: hidden;
   position: relative;
   width: 100%;
@@ -14,13 +14,14 @@
 .strategy-graph__viewport {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
+  overscroll-behavior: contain;
   position: relative;
 }
 
 .strategy-graph__canvas-frame {
   min-height: 100%;
-  overflow: hidden;
+  overflow: visible;
   position: relative;
   width: 100%;
 }

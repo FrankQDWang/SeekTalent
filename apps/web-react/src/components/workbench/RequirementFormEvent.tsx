@@ -86,13 +86,17 @@ export function RequirementFormEvent({
     await submitAction({ action: "confirm" });
   }
 
+  if (readonly) {
+    return <ConfirmedRequirementSummary draft={draft} />;
+  }
+
   return (
     <section className="requirement-form-event" aria-label="需求确认">
       <div className="requirement-form-event__header">
         <ClipboardCheck aria-hidden="true" size={18} />
         <div>
           <h2>需求确认</h2>
-          <p>{readonly ? "已确认的需求草稿" : "请确认本轮检索需求"}</p>
+          <p>请确认本轮检索需求</p>
         </div>
       </div>
 
@@ -111,7 +115,6 @@ export function RequirementFormEvent({
             >
               <div className="requirement-form-event__section-header">
                 <h3>{section.displayName}</h3>
-                <span>{items.length} 项</span>
               </div>
               <div className="requirement-form-event__items">
                 {items.map((item) => {
@@ -158,7 +161,6 @@ export function RequirementFormEvent({
                       <span className="requirement-form-event__item-text">
                         {item.text}
                       </span>
-                      <em>{selected ? "已选择" : "未选择"}</em>
                     </label>
                   );
                 })}
@@ -193,9 +195,66 @@ export function RequirementFormEvent({
           onClick={() => void confirm()}
           tone="primary"
         >
-          {readonly ? "需求已确认" : "确认需求"}
+          确认需求
         </Button>
       </div>
+    </section>
+  );
+}
+
+function ConfirmedRequirementSummary({ draft }: { draft: RequirementDraft }) {
+  const selectedSections = draft.sections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter(
+        (item) => item.status !== "deleted" && item.selected,
+      ),
+    }))
+    .filter((section) => section.items.length > 0);
+
+  return (
+    <section
+      aria-label="需求确认"
+      className="requirement-form-event requirement-form-event--confirmed"
+    >
+      <div className="requirement-form-event__header">
+        <ClipboardCheck aria-hidden="true" size={18} />
+        <div>
+          <h2>需求确认</h2>
+          <p>已确认需求，后续运行会按这些条件执行</p>
+        </div>
+      </div>
+
+      {selectedSections.length > 0 ? (
+        <div className="requirement-form-event__sections">
+          {selectedSections.map((section) => (
+            <section
+              className="requirement-form-event__section"
+              key={section.sectionId}
+            >
+              <div className="requirement-form-event__section-header">
+                <h3>{section.displayName}</h3>
+              </div>
+              <div className="requirement-form-event__items">
+                {section.items.map((item) => (
+                  <span
+                    className="requirement-form-event__confirmed-item"
+                    key={item.itemId}
+                  >
+                    {item.text}
+                  </span>
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <p className="requirement-form-event__empty-confirmed">
+          没有保留的筛选条件。
+        </p>
+      )}
+
+      <div className="requirement-form-event__confirmed-footer">需求已确认</div>
     </section>
   );
 }

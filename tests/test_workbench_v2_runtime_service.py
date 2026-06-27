@@ -7,6 +7,11 @@ from pathlib import Path
 import pytest
 
 from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet
+from seektalent_runtime_control.models import (
+    RuntimeControlCandidateEvidence,
+    RuntimeControlCandidateIdentity,
+    RuntimeControlEventInput,
+)
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
 import seektalent_workbench_v2.runtime_service as runtime_service_module
@@ -62,6 +67,101 @@ class RecordingJdRequirementExtractor:
             }
         )
         return self.sheet
+
+
+class CandidateFactStore:
+    def list_candidate_identities(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateIdentity]:
+        assert runtime_run_id == "rtrun_candidate"
+        return [
+            RuntimeControlCandidateIdentity(
+                runtime_run_id=runtime_run_id,
+                identity_id="identity_1",
+                canonical_resume_id="resume_1",
+                display_name="吴所谓",
+                title="资深体验设计工程师",
+                company="平安集团",
+                location="上海",
+                summary="可独立主导 0-1 产品体验搭建。",
+                score=92,
+                fit_bucket="fit",
+                payload_hash="identity_hash",
+                updated_at=NOW,
+            )
+        ]
+
+    def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
+        assert runtime_run_id == "rtrun_candidate"
+        return [
+            RuntimeControlCandidateEvidence(
+                runtime_run_id=runtime_run_id,
+                evidence_id="evidence_1",
+                identity_id="identity_1",
+                resume_id="resume_1",
+                source_kind="liepin",
+                evidence_level="detail",
+                provider_candidate_key_hash="provider_hash",
+                score=92,
+                fit_bucket="fit",
+                payload={
+                    "candidateProfile": {
+                        "age": 32,
+                        "gender": "男",
+                        "activeStatus": "近30天内活跃",
+                        "jobState": "在职，看看新机会",
+                        "nowLocation": "上海",
+                        "workYear": 10,
+                        "expectedJobCategory": "高端设计职位",
+                    },
+                    "safeSummary": {"educationLevel": "本科"},
+                    "normalizedProfile": {
+                        "rawTextExcerpt": "URL: https://h.liepin.com/resume/showresumedetail\n新手任务\n账号问候\n页面导航",
+                    },
+                    "safeDetail": {
+                        "candidateName": "吴所谓",
+                        "workExperienceList": [
+                            {
+                                "duration": "2019.06-至今（7年）",
+                                "company": "平安好医",
+                                "title": "用户体验设计专家",
+                                "summary": (
+                                    "提供 B 端及 C 端体验设计方案。\n"
+                                    "声明：该人选信息仅供公司招聘使用，严禁以招聘以外的任何目的使用人选信息。\n"
+                                    "简历备注\n"
+                                    "ICP备案信息"
+                                ),
+                            }
+                        ],
+                    },
+                },
+                payload_hash="evidence_hash",
+                updated_at=NOW,
+            )
+        ]
+
+
+class CandidateIdentityOnlyStore:
+    def list_candidate_identities(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateIdentity]:
+        assert runtime_run_id == "rtrun_candidate"
+        return [
+            RuntimeControlCandidateIdentity(
+                runtime_run_id=runtime_run_id,
+                identity_id="identity_1",
+                canonical_resume_id="resume_1",
+                display_name="候选人A",
+                title="",
+                company="",
+                location="",
+                summary="",
+                score=None,
+                fit_bucket=None,
+                payload_hash="identity_hash",
+                updated_at=NOW,
+            )
+        ]
+
+    def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
+        assert runtime_run_id == "rtrun_candidate"
+        return []
 
 
 def test_runtime_service_extracts_requirement_form(tmp_path: Path) -> None:
@@ -162,6 +262,46 @@ def test_runtime_service_extracts_requirement_form_from_jd_runtime_signature(tmp
     assert draft.status == "draft_ready"
 
 
+def test_runtime_service_candidate_detail_projects_wts_profile_fields() -> None:
+    service = WorkbenchV2RuntimeService(store=CandidateFactStore())  # type: ignore[arg-type]
+
+    detail = service.get_candidate_detail("rtrun_candidate", "identity_1")
+
+    assert detail["displayName"] == "吴所谓"
+    assert detail["headline"] == "资深体验设计工程师 · 平安集团"
+    assert detail["company"] == "平安集团"
+    assert detail["location"] == "上海"
+    assert detail["education"] == "本科"
+    assert detail["experienceYears"] == 10
+    assert detail["age"] == 32
+    assert detail["gender"] == "男"
+    assert detail["activeStatus"] == "近30天内活跃"
+    assert detail["jobStatus"] == "在职，看看新机会"
+    assert detail["sections"][1]["title"] == "求职意向"
+    serialized_sections = "\n".join(
+        item
+        for section in detail["sections"]
+        for item in section["items"]
+    )
+    assert "提供 B 端及 C 端体验设计方案" in serialized_sections
+    assert "h.liepin.com/resume/showresumedetail" not in serialized_sections
+    assert "新手任务" not in serialized_sections
+    assert "声明：该人选信息仅供公司招聘使用" not in serialized_sections
+    assert "简历备注" not in serialized_sections
+    assert "ICP备案信息" not in serialized_sections
+
+
+def test_runtime_service_does_not_claim_source_without_evidence() -> None:
+    service = WorkbenchV2RuntimeService(store=CandidateIdentityOnlyStore())  # type: ignore[arg-type]
+
+    summary = service.list_candidate_summaries("rtrun_candidate")[0]
+    detail = service.get_candidate_detail("rtrun_candidate", "identity_1")
+
+    assert summary["sourceKinds"] == []
+    assert detail["sourceKinds"] == []
+    assert detail["evidenceLevel"] == "unknown"
+
+
 @pytest.mark.parametrize(
     "runtime_input",
     [
@@ -182,12 +322,14 @@ def test_runtime_service_refuses_start_without_required_fields(
 
 def test_runtime_service_enqueues_run_with_job_title_jd_and_notes(tmp_path: Path) -> None:
     store = _store(tmp_path)
+    queued_run_ids: list[str] = []
     service = WorkbenchV2RuntimeService(
         store=store,
         runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
         draft_revision_id_factory=lambda: "reqdraft_start_1",
         approved_requirement_revision_id_factory=lambda: "reqapproved_1",
         runtime_run_id_factory=lambda: "rtrun_1",
+        on_run_queued=queued_run_ids.append,
         now=lambda: NOW,
     )
     runtime_input = WorkbenchV2RuntimeInput(
@@ -200,6 +342,7 @@ def test_runtime_service_enqueues_run_with_job_title_jd_and_notes(tmp_path: Path
 
     assert run.runtime_run_id == "rtrun_1"
     assert run.status == "queued"
+    assert queued_run_ids == ["rtrun_1"]
     assert run.source_ids == ["liepin"]
     approved = store.get_approved_requirement("reqapproved_1")
     assert approved.agent_conversation_id == "agentv2_1"
@@ -214,6 +357,13 @@ def test_runtime_service_enqueues_run_with_job_title_jd_and_notes(tmp_path: Path
         "jdText": "需要 Python 和 Agent 工作流经验",
         "notes": "杭州",
         "sourceIds": ["liepin"],
+        "sourceContext": {
+            "tenant_id": "local",
+            "workspace_id": "default",
+            "actor_id": "local",
+            "connection_id": "liepin-opencli",
+            "provider_account_hash": "liepin-opencli-local",
+        },
     }
 
 
@@ -238,6 +388,45 @@ def test_runtime_service_start_run_replays_default_idempotency_key(tmp_path: Pat
     assert first.runtime_run_id == "rtrun_1"
     assert second.runtime_run_id == "rtrun_1"
     assert _runtime_run_count(store) == 1
+
+
+def test_runtime_service_submits_next_round_requirement_to_runtime_control(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    extractor = RecordingRequirementExtractor(_requirement_sheet())
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        requirement_extractor=extractor,
+        runtime_factory=lambda: extractor,
+        runtime_run_id_factory=lambda: "rtrun_1",
+        now=lambda: NOW,
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Python 和 Agent 工作流经验", notes="杭州"),
+        _requirement_sheet(),
+    )
+
+    result = service.submit_next_round_requirement(
+        run.runtime_run_id,
+        "补充：候选人必须有 LangGraph 经验。",
+        idempotency_key="next-round-1",
+    )
+
+    assert result["status"] == "pending_target_round"
+    assert result["targetRoundNo"] == 1
+    amendments = store.list_runtime_requirement_amendments(
+        runtime_run_id=run.runtime_run_id,
+        target_round_no=1,
+        statuses={"pending_target_round"},
+    )
+    assert len(amendments) == 1
+    assert amendments[0].input_text == "补充：候选人必须有 LangGraph 经验。"
+    assert extractor.calls[-1] == {
+        "job_title": "AI 平台工程师",
+        "jd_text": "补充：候选人必须有 LangGraph 经验。",
+        "notes": None,
+        "requirement_cache_scope": "rtrun_1",
+    }
 
 
 def test_runtime_service_start_run_replays_explicit_idempotency_key(tmp_path: Path) -> None:
@@ -403,6 +592,170 @@ def test_runtime_service_get_status_includes_current_stage_in_running_summary(tm
     }
 
 
+def test_runtime_service_lists_public_progress_events_as_user_readable_payloads(tmp_path: Path) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="starting",
+        current_stage="startup",
+        updated_at=NOW,
+    )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="running",
+        current_stage="source_dispatch",
+        updated_at=NOW,
+    )
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id="evt_internal_checkpoint",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_checkpoint_written",
+            stage="round",
+            status="completed",
+            summary="checkpoint written",
+            payload={},
+            visibility="internal",
+            created_at=NOW,
+        )
+    )
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id="evt_query_round_1",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_round_query_ready",
+            stage="round_query",
+            round_no=1,
+            status="completed",
+            summary="round_query",
+            payload={
+                "details": {
+                    "keywordQuery": "数据科学家 SQL",
+                    "queryTerms": ["数据科学家", "SQL"],
+                }
+            },
+            visibility="public",
+            created_at=NOW,
+        )
+    )
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id="evt_source_result_round_1",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_round_source_result",
+            stage="source_result",
+            round_no=1,
+            source_id="liepin",
+            status="completed",
+            summary="source_result",
+            payload={"counts": {"roundReturned": 9, "roundIdentities": 3}},
+            visibility="public",
+            created_at=NOW,
+        )
+    )
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id="evt_finalization_completed",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_finalization_completed",
+            stage="finalization",
+            status="completed",
+            summary="Selected 10 final candidates by deterministic runtime ranking.",
+            payload={},
+            visibility="public",
+            created_at=NOW,
+        )
+    )
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id="evt_run_completed",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_run_completed",
+            stage="completed",
+            status="completed",
+            summary="Run completed after 7 retrieval rounds; controller stopped in round 8.",
+            payload={},
+            visibility="public",
+            created_at=NOW,
+        )
+    )
+
+    progress = service.list_progress_events(run.runtime_run_id, after_seq=0)
+
+    assert [event["runtimeEventType"] for event in progress] == [
+        "runtime_round_query_ready",
+        "runtime_round_source_result",
+        "runtime_finalization_completed",
+        "runtime_run_completed",
+    ]
+    assert progress[0]["summary"] == "第 1 轮查询策略已生成。"
+    assert progress[0]["details"] == {
+        "keywordQuery": "数据科学家 SQL",
+        "queryTerms": ["数据科学家", "SQL"],
+    }
+    assert progress[1]["summary"] == "第 1 轮猎聘检索完成：返回 9 条，新增 3 位候选人。"
+    assert progress[1]["counts"] == {"roundReturned": 9, "roundIdentities": 3}
+    assert progress[2]["summary"] == "最终短名单已生成。"
+    assert progress[3]["summary"] == "招聘流程已完成。"
+    assert progress[0]["state"] == "completed"
+
+
+def test_runtime_service_ignores_developer_visibility_events_for_progress_and_status(tmp_path: Path) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="starting",
+        current_stage="startup",
+        updated_at=NOW,
+    )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="running",
+        current_stage="round",
+        updated_at=NOW,
+    )
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id="evt_developer_progress",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_search_started",
+            stage="round",
+            round_no=1,
+            status="running",
+            summary="INTERNAL_DEVELOPER_SUMMARY_SHOULD_NOT_RENDER",
+            payload={"details": {"keywordQuery": "INTERNAL_DEVELOPER_QUERY_SHOULD_NOT_RENDER"}},
+            visibility="developer",
+            created_at=NOW,
+        )
+    )
+
+    assert service.list_progress_events(run.runtime_run_id, after_seq=0) == []
+    assert service.get_status(run.runtime_run_id) == {
+        "runtimeRunId": "rtrun_1",
+        "status": "running",
+        "stage": "round",
+        "summary": "招聘流程运行中，当前阶段：检索轮次。",
+    }
+
+
 @pytest.mark.parametrize(
     ("status", "expected_summary"),
     [
@@ -447,6 +800,116 @@ def test_runtime_service_get_status_maps_terminal_status_to_chinese_summary(
     )
 
     assert service.get_status(run.runtime_run_id)["summary"] == expected_summary
+
+
+def test_runtime_service_get_status_uses_latest_public_failure_summary(tmp_path: Path) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id="evt_runtime_search_failed",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_search_failed",
+            stage="source",
+            status="failed",
+            summary="source_browser_backend_unavailable",
+            payload={"reasonCode": "source_browser_backend_unavailable"},
+            visibility="public",
+            created_at=NOW,
+        )
+    )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="failed",
+        current_stage="source",
+        updated_at=NOW,
+    )
+
+    assert service.get_status(run.runtime_run_id)["summary"] == "本轮检索失败：source_browser_backend_unavailable"
+
+
+def test_runtime_service_distinguishes_search_and_run_failure_summaries(tmp_path: Path) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+    for seq, event_type in enumerate(["runtime_search_failed", "runtime_run_failed"], start=1):
+        service.store.append_event(
+            RuntimeControlEventInput(
+                event_id=f"evt_{event_type}",
+                runtime_run_id=run.runtime_run_id,
+                event_type=event_type,
+                stage="source_lanes",
+                round_no=1,
+                status="failed",
+                summary="source_browser_backend_unavailable",
+                payload={"reasonCode": "source_browser_backend_unavailable"},
+                visibility="public",
+                created_at=f"{NOW}-{seq}",
+            )
+        )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="failed",
+        current_stage="source_lanes",
+        updated_at=NOW,
+    )
+
+    progress = service.list_progress_events(run.runtime_run_id, after_seq=0)
+
+    failure_summaries = [
+        event["summary"]
+        for event in progress
+        if event["runtimeEventType"] in {"runtime_search_failed", "runtime_run_failed"}
+    ]
+    assert failure_summaries == [
+        "第 1 轮检索失败：source_browser_backend_unavailable",
+        "招聘流程失败：source_browser_backend_unavailable",
+    ]
+
+
+def test_runtime_service_maps_public_browser_extension_disconnect_reason(tmp_path: Path) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id="evt_runtime_run_failed",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_run_failed",
+            stage="source_lanes",
+            status="failed",
+            summary="source_browser_extension_disconnected",
+            payload={"reasonCode": "source_browser_extension_disconnected"},
+            visibility="public",
+            created_at=NOW,
+        )
+    )
+
+    [event] = service.list_progress_events(run.runtime_run_id, after_seq=0)
+
+    assert event["summary"] == "招聘流程失败：猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
 
 
 def _service(

@@ -22,9 +22,11 @@ from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
 from seektalent_conversation_agent.factory import build_agent_service
 from seektalent_workbench_v2.agent_loop import BailianStrictWorkbenchV2AgentLoop
+from seektalent_workbench_v2.runtime_runner import WorkbenchV2RuntimeQueueRunner
 from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
 from seektalent_workbench_v2.service import WorkbenchV2Service
 from seektalent_workbench_v2.store import WorkbenchV2Store
+from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
 from seektalent_ui import (
     agent_routes,
     agent_workbench_routes,
@@ -90,13 +92,27 @@ def create_app(
         app_settings.resolve_workspace_path(".seektalent/workbench_v2.sqlite3")
     )
     app.state.workbench_v2_store.initialize()
+    def workbench_v2_runtime_factory() -> object:
+        return runtime_factory(app_settings)
+
+    app.state.workbench_v2_runtime_executor = WorkflowRuntimeExecutor(
+        store=runtime_control_store,
+        settings=app_settings,
+        runtime_factory=workbench_v2_runtime_factory,
+    )
+    app.state.workbench_v2_runtime_runner = WorkbenchV2RuntimeQueueRunner(
+        store=runtime_control_store,
+        executor=app.state.workbench_v2_runtime_executor,
+    )
     app.state.workbench_v2_service = WorkbenchV2Service(
         store=app.state.workbench_v2_store,
         agent_loop=BailianStrictWorkbenchV2AgentLoop(settings=app_settings),
         runtime_service=WorkbenchV2RuntimeService(
             store=runtime_control_store,
             settings=app_settings,
-            runtime_factory=lambda: runtime_factory(app_settings),
+            runtime_factory=workbench_v2_runtime_factory,
+            executor=app.state.workbench_v2_runtime_executor,
+            on_run_queued=app.state.workbench_v2_runtime_runner.wake,
         ),
     )
     app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
@@ -231,6 +247,9 @@ async def _lifespan(app: FastAPI):
         runner.wake()
     if extraction_runner is not None:
         extraction_runner.start()
+    v2_runtime_runner = getattr(app.state, "workbench_v2_runtime_runner", None)
+    if v2_runtime_runner is not None:
+        v2_runtime_runner.wake()
     try:
         yield
     finally:

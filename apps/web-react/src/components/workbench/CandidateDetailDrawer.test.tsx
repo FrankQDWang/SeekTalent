@@ -23,7 +23,17 @@ describe("CandidateDetailDrawer", () => {
     render(
       <CandidateDetailDrawer
         candidate={candidate}
-        detail={agentWorkbenchCandidateDetailFixture}
+        detail={{
+          ...agentWorkbenchCandidateDetailFixture,
+          activeStatus: "近30天内活跃",
+          age: 32,
+          company: "平安集团",
+          education: "本科",
+          experienceYears: 10,
+          gender: "男",
+          jobStatus: "在职，看看新机会",
+          location: "上海",
+        }}
         onClose={() => undefined}
         open
         status="ready"
@@ -32,12 +42,47 @@ describe("CandidateDetailDrawer", () => {
 
     expect(screen.getByRole("dialog", { name: "候选人详情" })).toBeVisible();
     expect(screen.getByText("吴所谓")).toBeVisible();
+    expect(screen.getByText("在职，看看新机会")).toBeVisible();
+    expect(screen.getByLabelText("候选人来源已记录")).toHaveTextContent(
+      "猎聘来源",
+    );
+    expect(screen.getByText("近30天内活跃")).toBeVisible();
+    expect(screen.getByText("男")).toBeVisible();
+    expect(screen.getByText("32岁")).toBeVisible();
+    expect(screen.getByText("上海")).toBeVisible();
+    expect(screen.getByText("本科")).toBeVisible();
+    expect(screen.getByText("工作10年")).toBeVisible();
     expect(screen.getByText("工作经历")).toBeVisible();
     expect(screen.getByText("匹配程度")).toBeVisible();
     expect(screen.getByText("多次通过流程重构提升任务完成率。")).toBeVisible();
     expect(
       screen.queryByText("读取完整详情前需要审批"),
     ).not.toBeInTheDocument();
+  });
+
+  it("labels CTS-only candidate sources without claiming Liepin", () => {
+    expect.hasAssertions();
+
+    render(
+      <CandidateDetailDrawer
+        candidate={{
+          ...candidate!,
+          sourceKinds: ["cts"],
+        }}
+        detail={{
+          ...agentWorkbenchCandidateDetailFixture,
+          sourceKinds: ["cts"],
+        }}
+        onClose={() => undefined}
+        open
+        status="ready"
+      />,
+    );
+
+    expect(screen.getByLabelText("候选人来源已记录")).toHaveTextContent(
+      "CTS 实验来源",
+    );
+    expect(screen.queryByText("猎聘来源")).not.toBeInTheDocument();
   });
 
   it("shows approval state without fabricating detail sections", () => {

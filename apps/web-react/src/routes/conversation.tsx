@@ -10,7 +10,7 @@ import {
 import {
   ConversationScreenV2,
   ConversationScreenV2Side,
-  hasConversationV2RuntimeSurface,
+  hasWorkbenchV2WorkflowSurface,
 } from "../components/workbench/ConversationScreenV2";
 import { ConversationShell } from "../components/workbench/ConversationShell";
 import { CandidateDetailDrawer } from "../components/workbench/CandidateDetailDrawer";
@@ -22,11 +22,16 @@ import {
   useApplyWorkbenchV2RequirementAction,
   useCreateWorkbenchV2Conversation,
   useSubmitWorkbenchV2Message,
+  useWorkbenchV2CandidateDetail,
   useWorkbenchV2Conversation,
   useWorkbenchV2Conversations,
 } from "../lib/api/workbenchV2";
 import { WorkbenchV2RequestError } from "../lib/api/workbenchV2Client";
-import type { WorkbenchV2RequirementActionRequest } from "../lib/api/workbenchV2Types";
+import type {
+  WorkbenchV2ConversationView,
+  WorkbenchV2RequirementActionRequest,
+  WorkbenchV2TranscriptEvent,
+} from "../lib/api/workbenchV2Types";
 import {
   useAmendAgentWorkbenchRequirementFromText,
   useConfirmAgentWorkbenchRequirements,
@@ -77,30 +82,63 @@ function NewConversationFlow() {
   const navigate = useNavigate({ from: "/conversations/$conversationId" });
   const createConversationMutation = useCreateWorkbenchV2Conversation();
   const [homeErrorMessage, setHomeErrorMessage] = useState<string | null>(null);
+  const [recoveredHomeMessage, setRecoveredHomeMessage] = useState("");
+  const [pendingInitialTurn, setPendingInitialTurn] = useState<{
+    idempotencyKey: string;
+    message: string;
+  } | null>(null);
 
   const onHomeSubmit = async (input: HomeStartPanelSubmitInput) => {
     setHomeErrorMessage(null);
+    setRecoveredHomeMessage("");
+    const idempotencyKey = createIdempotencyKey();
+    setPendingInitialTurn({ idempotencyKey, message: input.message });
     try {
       const result = await createConversationMutation.mutateAsync({
         message: input.message,
-        idempotencyKey: createIdempotencyKey(),
+        idempotencyKey,
       });
+      setPendingInitialTurn(null);
       void navigate({
         params: { conversationId: result.conversation.conversationId },
         to: "/conversations/$conversationId",
         replace: true,
       });
     } catch (error) {
+      setPendingInitialTurn(null);
+      setRecoveredHomeMessage(input.message);
       setHomeErrorMessage(safeWorkbenchV2ErrorMessage(error));
       throw error;
     }
   };
+
+  if (pendingInitialTurn !== null) {
+    return (
+      <ConversationShell
+        main={
+          <ConversationScreenV2
+            optimisticEvents={optimisticTurnEvents({
+              conversationId: "agentv2_pending",
+              idempotencyKey: pendingInitialTurn.idempotencyKey,
+              message: pendingInitialTurn.message,
+              step: 1,
+            })}
+            submittingMessage
+            view={pendingWorkbenchV2View(pendingInitialTurn.message)}
+          />
+        }
+        rail={<WorkbenchV2ConversationRail />}
+      />
+    );
+  }
 
   return (
     <ConversationShell
       main={
         <HomeStartPanel
           errorMessage={homeErrorMessage}
+          initialMessage={recoveredHomeMessage}
+          key={recoveredHomeMessage}
           loading={createConversationMutation.isPending}
           onSubmit={onHomeSubmit}
         />
@@ -122,19 +160,67 @@ function ExistingWorkbenchV2ConversationFlow({
   const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
     null,
   );
+  const [optimisticEvents, setOptimisticEvents] = useState<
+    WorkbenchV2TranscriptEvent[]
+  >([]);
+  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
+    null,
+  );
+  const detailQuery = useWorkbenchV2CandidateDetail(
+    conversationId,
+    selectedCandidateId,
+  );
 
   useEffect(() => {
     setActionErrorMessage(null);
+    setOptimisticEvents([]);
+    setSelectedCandidateId(null);
   }, [conversationId]);
+
+  const selectedCandidate = useMemo(
+    () =>
+      query.data?.candidates?.find(
+        (candidate) => candidate.candidateId === selectedCandidateId,
+      ) ?? null,
+    [selectedCandidateId, query.data?.candidates],
+  );
+  const closeCandidateDrawer = useCallback(() => {
+    setSelectedCandidateId(null);
+  }, []);
+  const retryCandidateDetail = useCallback(() => {
+    void detailQuery.refetch();
+  }, [detailQuery]);
+  const viewCandidateDetails = useCallback((candidateId: string) => {
+    setActionErrorMessage(null);
+    setSelectedCandidateId(candidateId);
+  }, []);
 
   const onSubmitMessage = async (message: string) => {
     setActionErrorMessage(null);
+    const idempotencyKey = createIdempotencyKey();
+    const turnEvents = optimisticTurnEvents({
+      conversationId,
+      idempotencyKey,
+      message,
+      step: nextOptimisticStep(query.data, optimisticEvents),
+    });
+    setOptimisticEvents((current) => [...current, ...turnEvents]);
     try {
       await submitMessageMutation.mutateAsync({
         message,
-        idempotencyKey: createIdempotencyKey(),
+        idempotencyKey,
       });
+      setOptimisticEvents((current) =>
+        current.filter(
+          (event) => !event.eventId.includes(`:${idempotencyKey}:`),
+        ),
+      );
     } catch (error) {
+      setOptimisticEvents((current) =>
+        current.filter(
+          (event) => !event.eventId.includes(`:${idempotencyKey}:`),
+        ),
+      );
       setActionErrorMessage(safeWorkbenchV2ErrorMessage(error));
       throw error;
     }
@@ -186,28 +272,59 @@ function ExistingWorkbenchV2ConversationFlow({
   }
 
   const view = query.data;
+  const workflowSurfaceVisible = hasWorkbenchV2WorkflowSurface(view);
 
   return (
-    <ConversationShell
-      main={
-        <ConversationScreenV2
-          actionErrorMessage={actionErrorMessage}
-          applyingRequirementAction={requirementActionMutation.isPending}
-          onRequirementAction={onRequirementAction}
-          onSubmitMessage={onSubmitMessage}
-          submittingMessage={submitMessageMutation.isPending}
-          view={view}
-        />
-      }
-      rail={
-        <WorkbenchV2ConversationRail selectedConversationId={conversationId} />
-      }
-      side={
-        hasConversationV2RuntimeSurface(view) ? (
-          <ConversationScreenV2Side view={view} />
-        ) : null
-      }
-    />
+    <>
+      <ConversationShell
+        main={
+          <ConversationScreenV2
+            actionErrorMessage={actionErrorMessage}
+            applyingRequirementAction={requirementActionMutation.isPending}
+            onRequirementAction={onRequirementAction}
+            onSubmitMessage={onSubmitMessage}
+            optimisticEvents={optimisticEvents}
+            submittingMessage={submitMessageMutation.isPending}
+            view={view}
+          />
+        }
+        rail={
+          <WorkbenchV2ConversationRail
+            selectedConversationId={conversationId}
+          />
+        }
+        side={
+          workflowSurfaceVisible ? (
+            <ConversationScreenV2Side
+              onViewCandidateDetails={viewCandidateDetails}
+              selectedCandidateId={selectedCandidateId}
+              view={view}
+            />
+          ) : null
+        }
+      />
+      <CandidateDetailDrawer
+        candidate={selectedCandidate}
+        detail={detailQuery.data ?? null}
+        errorMessage={
+          detailQuery.isError
+            ? safeWorkbenchV2ErrorMessage(detailQuery.error)
+            : undefined
+        }
+        onClose={closeCandidateDrawer}
+        onRetry={retryCandidateDetail}
+        open={selectedCandidateId !== null}
+        status={
+          selectedCandidateId === null
+            ? "idle"
+            : detailQuery.isError
+              ? "error"
+              : detailQuery.isPending
+                ? "loading"
+                : "ready"
+        }
+      />
+    </>
   );
 }
 
@@ -466,6 +583,82 @@ function createIdempotencyKey(): string {
   return `idempotency-${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2)}`;
+}
+
+function pendingWorkbenchV2View(message: string): WorkbenchV2ConversationView {
+  const now = new Date().toISOString();
+  return {
+    schemaVersion: "agent.workbench.v2",
+    conversation: {
+      conversationId: "agentv2_pending",
+      title: conversationTitleFromMessage(message),
+      runtimeState: "idle",
+      runtimeRunId: null,
+      createdAt: now,
+      updatedAt: now,
+    },
+    transcriptEvents: [],
+    requirementForm: null,
+    runtime: null,
+  };
+}
+
+function optimisticTurnEvents({
+  conversationId,
+  idempotencyKey,
+  message,
+  step,
+}: {
+  conversationId: string;
+  idempotencyKey: string;
+  message: string;
+  step: number;
+}): WorkbenchV2TranscriptEvent[] {
+  const now = new Date().toISOString();
+  return [
+    {
+      eventId: `optimistic:${conversationId}:${idempotencyKey}:user`,
+      step,
+      type: "user_message",
+      role: "user",
+      status: "pending",
+      payload: { text: message },
+      createdAt: now,
+    },
+    {
+      eventId: `optimistic:${conversationId}:${idempotencyKey}:status`,
+      step: step + 1,
+      type: "assistant_status",
+      role: "assistant",
+      status: "running",
+      payload: { summary: "正在思考" },
+      createdAt: now,
+    },
+  ];
+}
+
+function nextOptimisticStep(
+  view: WorkbenchV2ConversationView | undefined,
+  optimisticEvents: readonly WorkbenchV2TranscriptEvent[],
+): number {
+  const persistedStep =
+    view?.transcriptEvents.reduce(
+      (maxStep, event) => Math.max(maxStep, event.step),
+      0,
+    ) ?? 0;
+  const optimisticStep = optimisticEvents.reduce(
+    (maxStep, event) => Math.max(maxStep, event.step),
+    0,
+  );
+  return Math.max(persistedStep, optimisticStep) + 1;
+}
+
+function conversationTitleFromMessage(message: string): string {
+  const normalized = message.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 24) {
+    return normalized || "新对话";
+  }
+  return `${normalized.slice(0, 24)}...`;
 }
 
 function safeWorkbenchV2ErrorMessage(error: unknown): string {

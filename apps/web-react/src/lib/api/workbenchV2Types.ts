@@ -1,3 +1,9 @@
+import type {
+  AgentWorkbenchCandidateSummary,
+  AgentWorkbenchStrategyGraph,
+  AgentWorkbenchThinkingProcess,
+} from "./agentWorkbenchTypes";
+
 export type WorkbenchV2EventType =
   | "user_message"
   | "assistant_message"
@@ -57,6 +63,9 @@ export type WorkbenchV2ConversationView = {
   transcriptEvents: WorkbenchV2TranscriptEvent[];
   requirementForm: WorkbenchV2Payload | null;
   runtime: WorkbenchV2Runtime | null;
+  strategyGraph?: AgentWorkbenchStrategyGraph;
+  thinkingProcess?: AgentWorkbenchThinkingProcess;
+  candidates?: AgentWorkbenchCandidateSummary[];
 };
 
 export type WorkbenchV2ConversationListSummary = {
@@ -69,6 +78,14 @@ export type WorkbenchV2ConversationListSummary = {
 export type WorkbenchV2ConversationListView = {
   schemaVersion: "agent.workbench.v2.list";
   conversations: WorkbenchV2ConversationListSummary[];
+};
+
+export type WorkbenchV2ConversationEventsView = {
+  schemaVersion: "agent.workbench.v2.events";
+  conversationId: string;
+  afterStep: number;
+  latestStep: number;
+  events: WorkbenchV2TranscriptEvent[];
 };
 
 export type WorkbenchV2MessageRequest = {
@@ -92,6 +109,12 @@ export function normalizeWorkbenchV2Conversation(
     transcriptEvents: [...input.transcriptEvents].sort(
       (left, right) => left.step - right.step,
     ),
+    strategyGraph: input.strategyGraph ?? { nodes: [], edges: [] },
+    thinkingProcess: input.thinkingProcess ?? {
+      activeRoundNo: null,
+      rounds: [],
+    },
+    candidates: input.candidates ?? [],
   };
 }
 
@@ -101,5 +124,14 @@ export function normalizeWorkbenchV2ConversationList(
   return {
     ...input,
     conversations: [...input.conversations],
+  };
+}
+
+export function normalizeWorkbenchV2ConversationEvents(
+  input: WorkbenchV2ConversationEventsView,
+): WorkbenchV2ConversationEventsView {
+  return {
+    ...input,
+    events: [...input.events].sort((left, right) => left.step - right.step),
   };
 }

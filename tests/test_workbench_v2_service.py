@@ -1,18 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence, get_args
+import inspect
 
 import pytest
 from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet
 import seektalent_workbench_v2.service as service_module
+from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.models import RuntimeRunRecord
 from seektalent_runtime_control.requirements import RequirementDraft, RequirementDraftItem, RequirementDraftSection
 from seektalent_workbench_v2.agent_loop import WorkbenchV2AgentOutput, WorkbenchV2RuntimeInput
 from seektalent_workbench_v2.models import (
+    WorkbenchV2ConversationEventsView,
     WorkbenchV2ConversationListView,
     WorkbenchV2ConversationView,
     WorkbenchV2TranscriptEvent,
@@ -68,6 +70,16 @@ class FakeRuntimeService:
         self.extract_calls: list[dict[str, object]] = []
         self.start_calls: list[dict[str, object]] = []
         self.status_payloads: dict[str, dict[str, object]] = {}
+        self.status_errors: list[Exception] = []
+        self.results_payloads: dict[str, dict[str, object]] = {}
+        self.results_errors: list[Exception] = []
+        self.progress_payloads: dict[str, list[dict[str, object]]] = {}
+        self.candidate_payloads: dict[str, list[dict[str, object]]] = {}
+        self.candidate_errors: list[Exception] = []
+        self.candidate_detail_payloads: dict[tuple[str, str], dict[str, object]] = {}
+        self.next_round_requirement_calls: list[dict[str, object]] = []
+        self.next_round_requirement_errors: list[Exception] = []
+        self.next_round_requirement_results: list[dict[str, object]] = []
 
     def extract_requirement_bundle(
         self,
@@ -136,14 +148,73 @@ class FakeRuntimeService:
         return self._runtime_run(conversation_id, idempotency_key=idempotency_key)
 
     def get_status(self, runtime_run_id: str) -> dict[str, object]:
+        if self.status_errors:
+            raise self.status_errors.pop(0)
         return self.status_payloads[runtime_run_id]
+
+    def get_results(self, runtime_run_id: str) -> dict[str, object]:
+        if self.results_errors:
+            raise self.results_errors.pop(0)
+        return self.results_payloads[runtime_run_id]
+
+    def list_progress_events(self, runtime_run_id: str, *, after_seq: int, limit: int = 200) -> list[dict[str, object]]:
+        return [
+            payload
+            for payload in self.progress_payloads.get(runtime_run_id, [])
+            if isinstance(payload.get("runtimeEventSeq"), int) and payload["runtimeEventSeq"] > after_seq
+        ][:limit]
+
+    def list_candidate_summaries(self, runtime_run_id: str, *, limit: int = 20) -> list[dict[str, object]]:
+        if self.candidate_errors:
+            raise self.candidate_errors.pop(0)
+        return self.candidate_payloads.get(runtime_run_id, [])[:limit]
+
+    def get_candidate_detail(self, runtime_run_id: str, candidate_id: str) -> dict[str, object]:
+        return self.candidate_detail_payloads[(runtime_run_id, candidate_id)]
+
+    def submit_next_round_requirement(
+        self,
+        runtime_run_id: str,
+        text: str,
+        *,
+        idempotency_key: str,
+    ) -> dict[str, object]:
+        self.next_round_requirement_calls.append(
+            {
+                "runtime_run_id": runtime_run_id,
+                "text": text,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if self.next_round_requirement_errors:
+            raise self.next_round_requirement_errors.pop(0)
+        if self.next_round_requirement_results:
+            return self.next_round_requirement_results.pop(0)
+        return {
+            "amendmentId": f"reqamend_{len(self.next_round_requirement_calls)}",
+            "status": "pending_target_round",
+            "targetRoundNo": 2,
+            "effectiveBoundary": "before_round_controller",
+            "approvedRequirementRevisionId": f"reqapproved_next_{len(self.next_round_requirement_calls)}",
+            "reviewRequired": False,
+        }
 
     def _runtime_run(self, conversation_id: str, *, idempotency_key: str | None) -> RuntimeRunRecord:
         if self.start_errors:
             raise self.start_errors.pop(0)
         run_index = len(self.start_calls)
+        runtime_run_id = f"rtrun_{run_index}"
+        self.status_payloads.setdefault(
+            runtime_run_id,
+            {
+                "runtimeRunId": runtime_run_id,
+                "status": "queued",
+                "stage": "queued",
+                "summary": "招聘流程已排队，等待开始。",
+            },
+        )
         return RuntimeRunRecord(
-            runtime_run_id=f"rtrun_{run_index}",
+            runtime_run_id=runtime_run_id,
             run_intent_id=None,
             start_idempotency_key=idempotency_key,
             run_kind="primary",
@@ -161,6 +232,20 @@ class FakeRuntimeService:
             updated_at="2026-06-25T01:02:03.000004+00:00",
             completed_at=None,
         )
+
+
+class AsyncioRunRequirementRuntime(FakeRuntimeService):
+    def extract_requirement_bundle(
+        self,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput,
+    ) -> FakeRequirementExtraction:
+        asyncio.run(_empty_async_step())
+        return super().extract_requirement_bundle(conversation_id, runtime_input)
+
+
+async def _empty_async_step() -> None:
+    return None
 
 
 def test_service_does_not_import_legacy_workbench_modules() -> None:
@@ -195,7 +280,19 @@ def test_create_pure_chat_conversation_does_not_extract_requirements(tmp_path: P
     assert runtime.extract_calls == []
     assert view.requirementForm is None
     assert payload["schemaVersion"] == "agent.workbench.v2"
-    assert set(payload) == {"schemaVersion", "conversation", "transcriptEvents", "requirementForm", "runtime"}
+    assert set(payload) == {
+        "schemaVersion",
+        "conversation",
+        "transcriptEvents",
+        "requirementForm",
+        "runtime",
+        "strategyGraph",
+        "thinkingProcess",
+        "candidates",
+    }
+    assert payload["strategyGraph"] == {"nodes": [], "edges": []}
+    assert payload["thinkingProcess"] == {"activeRoundNo": None, "rounds": []}
+    assert payload["candidates"] == []
     assert set(payload["conversation"]) == {
         "conversationId",
         "title",
@@ -243,6 +340,107 @@ def test_create_jd_conversation_appends_requirement_form(tmp_path: Path) -> None
     assert form_event.payload["draft"]["draft_revision_id"] == "reqdraft_1"
     assert form_event.payload["requirementSheet"] == _requirement_sheet_payload().model_dump(mode="json")
     assert view.requirementForm == form_event.payload
+    assert runtime.extract_calls == [
+        {
+            "conversation_id": view.conversation.conversationId,
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(runtime_input),
+        }
+    ]
+
+
+def test_create_jd_with_runtime_words_still_uses_agent_intent(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "淘天集团-数据科学专家",
+        "jd": "负责数据体系、AB 实验、SQL/Python 分析、因果推断和机器学习建模。",
+        "notes": "数据驱动和结果导向；面试流程：业务+1-业务+2-hrg。",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(
+            intent="extract_requirements",
+            message="我已整理需求，请确认表单。",
+            runtimeInput=runtime_input,
+        )
+    )
+    runtime = FakeRuntimeService()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+    jd_text = (
+        "淘天集团-数据科学专家\n"
+        "岗位职责：负责数据体系建设，数据驱动和结果导向，熟悉 SQL/Python、A/B Testing、因果推断。\n"
+        "岗位要求：5年以上经验，杭州。\n"
+        "面试流程：业务+1-业务+2-hrg。"
+    )
+
+    view = asyncio.run(service.create_conversation(jd_text, idempotency_key="create-jd-runtime-words"))
+
+    assert len(agent.calls) == 1
+    assert [event.type for event in view.transcriptEvents] == [
+        "user_message",
+        "assistant_status",
+        "requirement_form",
+        "assistant_message",
+    ]
+    assert not [event for event in view.transcriptEvents if event.type == "runtime_result"]
+    assert view.requirementForm is not None
+    assert view.requirementForm["runtimeInput"] == runtime_input
+    assert runtime.extract_calls == [
+        {
+            "conversation_id": view.conversation.conversationId,
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(runtime_input),
+        }
+    ]
+
+
+def test_create_jd_conversation_normalizes_form_ready_assistant_message(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": None,
+    }
+    agent = FakeAgentLoop(
+        _agent_output(
+            intent="extract_requirements",
+            message="我将为您生成招聘需求表单，请稍候。",
+            runtimeInput=runtime_input,
+        )
+    )
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=FakeRuntimeService())
+
+    view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-jd-message"))
+
+    assert [event.type for event in view.transcriptEvents] == [
+        "user_message",
+        "assistant_status",
+        "requirement_form",
+        "assistant_message",
+    ]
+    assert view.transcriptEvents[-1].payload == {
+        "text": "已根据你的输入生成需求确认表单，请检查、取消不需要的条件，或补充其他要求。"
+    }
+
+
+def test_create_jd_runs_sync_runtime_extraction_outside_route_event_loop(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": None,
+    }
+    agent = FakeAgentLoop(
+        _agent_output(
+            intent="extract_requirements",
+            message="我已整理需求，请确认表单。",
+            runtimeInput=runtime_input,
+        )
+    )
+    runtime = AsyncioRunRequirementRuntime()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+
+    view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-threaded"))
+
+    assert view.requirementForm is not None
+    assert view.requirementForm["runtimeInput"] == runtime_input
     assert runtime.extract_calls == [
         {
             "conversation_id": view.conversation.conversationId,
@@ -324,6 +522,304 @@ def test_conversation_view_filters_context_summary_and_keeps_flat_events(tmp_pat
     assert [event.type for event in view.transcriptEvents] == ["user_message", "assistant_message"]
     assert [event.step for event in view.transcriptEvents] == [1, 3]
     assert "transcriptGroups" not in view.model_dump(mode="json")
+
+
+def test_conversation_view_projects_workflow_surface_from_backend_events(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 11,
+            "runtimeEventType": "runtime_round_query_ready",
+            "status": "completed",
+            "stage": "round_query",
+            "roundNo": 1,
+            "summary": "第 1 轮查询策略已生成。",
+            "details": {
+                "keywordQuery": '数据科学家 "A/B Testing"',
+                "queryTerms": ["数据科学家", "A/B Testing"],
+            },
+            "state": "running",
+        },
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 25,
+            "runtimeEventType": "runtime_round_feedback_completed",
+            "status": "completed",
+            "stage": "feedback",
+            "roundNo": 1,
+            "summary": "第 1 轮复盘完成。",
+            "details": {
+                "resumeQualityComment": "本轮简历质量偏低，候选人缺少搜索推荐系统落地经验。",
+                "reflectionSummary": "下一轮保留数据科学家，加入 SQL。",
+                "reflectionRationale": "A/B Testing 候选人不足，需要扩大到 SQL 方向。",
+            },
+            "state": "running",
+        },
+    ]
+
+    view = service.get_conversation(conversation_id)
+    payload = view.model_dump(mode="json")
+
+    assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
+        "需求拆解",
+        "第 1 轮 · 查询包",
+        "第 1 轮 · 下一轮策略",
+    ]
+    assert not any(node["kind"] == "final" for node in payload["strategyGraph"]["nodes"])
+    assert payload["thinkingProcess"]["activeRoundNo"] == 1
+    assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
+        {
+            "title": "关键词",
+            "text": '数据科学家 "A/B Testing"',
+            "terms": ["数据科学家", "A/B Testing"],
+        },
+        {
+            "title": "observation",
+            "text": "本轮简历质量偏低，候选人缺少搜索推荐系统落地经验。",
+            "terms": [],
+        },
+        {
+            "title": "反思和下一轮变更",
+            "text": "下一轮保留数据科学家，加入 SQL。",
+            "terms": [],
+        },
+    ]
+    assert payload["candidates"] == []
+
+
+def test_conversation_view_does_not_show_future_graph_nodes_before_events(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 11,
+            "runtimeEventType": "runtime_round_query_ready",
+            "status": "completed",
+            "stage": "round_query",
+            "roundNo": 1,
+            "summary": "第 1 轮查询策略已生成。",
+            "details": {
+                "keywordQuery": "数据科学家 SQL",
+                "queryTerms": ["数据科学家", "SQL"],
+            },
+            "state": "running",
+        }
+    ]
+
+    view = service.get_conversation(conversation_id)
+    payload = view.model_dump(mode="json")
+
+    assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
+        "需求拆解",
+        "第 1 轮 · 查询包",
+    ]
+    assert not any("猎聘检索" in node["label"] for node in payload["strategyGraph"]["nodes"])
+    assert not any("Top Pool" in node["label"] for node in payload["strategyGraph"]["nodes"])
+    assert not any(node["kind"] == "final" for node in payload["strategyGraph"]["nodes"])
+    assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
+        {
+            "title": "关键词",
+            "text": "数据科学家 SQL",
+            "terms": ["数据科学家", "SQL"],
+        }
+    ]
+
+
+def test_list_events_returns_incremental_visible_events_and_refreshes_runtime(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    store = service.store
+    store.append_context_summary(conversation_id, summary="内部摘要，不应该出现在增量事件里。")
+    before_refresh = service.get_conversation(conversation_id)
+    after_step = before_refresh.transcriptEvents[-1].step
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "running",
+        "stage": "source_search",
+        "summary": "正在检索候选人，进度 25%。",
+    }
+
+    events = service.list_events(conversation_id, after_step=after_step, limit=10)
+
+    assert isinstance(events, WorkbenchV2ConversationEventsView)
+    assert events.schemaVersion == "agent.workbench.v2.events"
+    assert events.conversationId == conversation_id
+    assert events.afterStep == after_step
+    assert events.latestStep > after_step
+    assert [event.type for event in events.events] == ["runtime_progress"]
+    assert events.events[0].payload == {
+        "runtimeRunId": "rtrun_1",
+        "status": "running",
+        "stage": "source_search",
+        "summary": "正在检索候选人，进度 25%。",
+        "state": "running",
+    }
+
+
+def test_get_conversation_projects_runtime_events_by_runtime_seq(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 12,
+            "runtimeEventType": "runtime_round_source_dispatch",
+            "status": "running",
+            "stage": "source_dispatch",
+            "roundNo": 1,
+            "summary": "已向猎聘发起候选人检索。",
+            "state": "running",
+        },
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 31,
+            "runtimeEventType": "runtime_round_source_dispatch",
+            "status": "running",
+            "stage": "source_dispatch",
+            "roundNo": 2,
+            "summary": "已向猎聘发起候选人检索。",
+            "state": "running",
+        },
+    ]
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "running",
+        "stage": "source_dispatch",
+        "summary": "已向猎聘发起候选人检索。",
+    }
+
+    first_refresh = service.get_conversation(conversation_id)
+    second_refresh = service.get_conversation(conversation_id)
+
+    progress_events = [event for event in second_refresh.transcriptEvents if event.type == "runtime_progress"]
+    projected_seqs = [
+        event.payload.get("runtimeEventSeq")
+        for event in progress_events
+        if event.payload.get("runtimeRunId") == "rtrun_1"
+    ]
+    assert projected_seqs.count(12) == 1
+    assert projected_seqs.count(31) == 1
+    projected_events = [
+        event
+        for event in first_refresh.transcriptEvents
+        if event.type == "runtime_progress" and event.payload.get("runtimeEventSeq") in {12, 31}
+    ]
+    assert projected_events[-1].payload["runtimeEventSeq"] == 31
+    assert projected_events[-1].payload["roundNo"] == 2
+    assert len(second_refresh.transcriptEvents) == len(first_refresh.transcriptEvents)
+    assert confirmed_view.conversation.runtimeRunId == "rtrun_1"
+    assert [round_view.roundNo for round_view in first_refresh.thinkingProcess.rounds] == [1, 2]
+    assert first_refresh.thinkingProcess.activeRoundNo == 2
+
+
+def test_conversation_view_includes_runtime_candidate_summaries(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.candidate_payloads["rtrun_1"] = [
+        {
+            "candidateId": "identity_1",
+            "rank": 1,
+            "displayName": "候选人 A",
+            "headline": "数据科学家",
+            "company": "某电商平台",
+            "location": "杭州",
+            "education": None,
+            "experienceYears": None,
+            "age": None,
+            "gender": None,
+            "activeStatus": None,
+            "jobStatus": None,
+            "sourceKinds": ["liepin"],
+            "matchScore": 86,
+            "matchSummary": "SQL/Python 和 A/B Testing 经验较匹配。",
+            "status": "fit",
+            "detailAvailability": "available",
+            "accessState": "allowed",
+            "evidenceLevel": "summary",
+        }
+    ]
+
+    view = service.get_conversation(conversation_id)
+    payload = view.model_dump(mode="json")
+
+    assert payload["candidates"] == [
+        {
+            "candidateId": "identity_1",
+            "rank": 1,
+            "displayName": "候选人 A",
+            "headline": "数据科学家",
+            "company": "某电商平台",
+            "location": "杭州",
+            "education": None,
+            "experienceYears": None,
+            "age": None,
+            "gender": None,
+            "activeStatus": None,
+            "jobStatus": None,
+            "sourceKinds": ["liepin"],
+            "matchScore": 86,
+            "matchSummary": "SQL/Python 和 A/B Testing 经验较匹配。",
+            "status": "fit",
+            "detailAvailability": "available",
+            "accessState": "allowed",
+            "evidenceLevel": "summary",
+        }
+    ]
+
+
+def test_conversation_view_surfaces_candidate_summary_read_errors(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.candidate_errors.append(RuntimeError("candidate store unavailable"))
+
+    view = service.get_conversation(conversation_id)
+    payload = view.model_dump(mode="json")
+
+    assert payload["candidates"] == []
+    assert payload["transcriptEvents"][-1]["type"] == "error"
+    assert payload["transcriptEvents"][-1]["payload"] == {
+        "code": "workbench_v2_candidate_summaries_unavailable",
+        "message": "候选人列表读取失败，请稍后重试。",
+    }
+
+
+def test_get_candidate_detail_reads_runtime_candidate_detail_payload(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    conversation = store.create_conversation(first_user_text="找数据科学家", idempotency_key="create-1")
+    store.set_runtime(conversation.id, runtime_run_id="rtrun_1", runtime_state="completed")
+    runtime = FakeRuntimeService()
+    runtime.candidate_detail_payloads[("rtrun_1", "identity_1")] = {
+        "candidateId": "identity_1",
+        "displayName": "吴所谓",
+        "headline": "资深体验设计工程师 · 平安集团",
+        "sourceKinds": ["liepin"],
+        "matchScore": 86,
+        "sections": [
+            {
+                "title": "匹配程度",
+                "items": ["推荐理由：做过复杂 B 端业务流程。"],
+            },
+            {
+                "title": "工作经历",
+                "items": ["2019.06-至今 平安好医｜用户体验设计专家"],
+            },
+        ],
+        "evidence": ["来源：猎聘 detail 证据"],
+        "detailAvailability": "available",
+        "accessState": "allowed",
+        "evidenceLevel": "detail",
+        "reasonCode": None,
+    }
+    service = WorkbenchV2Service(
+        store=store,
+        agent_loop=FakeAgentLoop(),
+        runtime_service=runtime,
+    )
+
+    detail = service.get_candidate_detail(conversation.id, "identity_1")
+    payload = detail.model_dump(mode="json")
+
+    assert payload["candidateId"] == "identity_1"
+    assert payload["displayName"] == "吴所谓"
+    assert payload["sections"][0]["title"] == "匹配程度"
+    assert payload["sections"][1]["items"] == ["2019.06-至今 平安好医｜用户体验设计专家"]
 
 
 def test_list_conversations_returns_v2_schema(tmp_path: Path) -> None:
@@ -412,7 +908,31 @@ def test_submit_replay_with_only_deduped_user_event_continues_turn(tmp_path: Pat
     assert view.transcriptEvents[-1].payload == {"text": "已补充到当前需求上下文。"}
 
 
-def test_extract_failure_replay_recovers_incomplete_turn(tmp_path: Path) -> None:
+def test_submit_idempotency_conflicts_when_replayed_message_changes(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    conversation = store.create_conversation(first_user_text="你好", idempotency_key="create-submit-conflict")
+    store.append_event(
+        conversation.id,
+        WorkbenchV2TranscriptEventInput(
+            type="user_message",
+            role="user",
+            payload={"text": "原始补充需求"},
+            dedupe_key="workbench-v2-service:submit:submit-conflict:user",
+        ),
+    )
+    service = WorkbenchV2Service(
+        store=store,
+        agent_loop=FakeAgentLoop(_agent_output(intent="chat", message="不应执行")),
+        runtime_service=FakeRuntimeService(),
+    )
+
+    with pytest.raises(ValueError, match="workbench_v2_idempotency_conflict"):
+        asyncio.run(service.submit_message(conversation.id, "另一个补充需求", idempotency_key="submit-conflict"))
+
+    assert service.agent_loop.calls == []
+
+
+def test_extract_failure_appends_terminal_error_without_request_failure(tmp_path: Path) -> None:
     store = _store(tmp_path)
     runtime_input = {
         "jobTitle": "AI 平台工程师",
@@ -426,23 +946,27 @@ def test_extract_failure_replay_recovers_incomplete_turn(tmp_path: Path) -> None
     runtime = FakeRuntimeService(extract_errors=[RuntimeError("extract failed")])
     service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
 
-    try:
-        asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-recover"))
-    except RuntimeError as exc:
-        assert str(exc) == "extract failed"
-    else:
-        raise AssertionError("extract failure should propagate")
-    failed_conversation = store.create_conversation(first_user_text="招一个 AI 平台工程师", idempotency_key="create-recover")
-    failed_record = store.get_conversation(failed_conversation.id)
-    assert [event.type for event in failed_record.events] == ["user_message", "assistant_status"]
+    failed_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-recover"))
+    failed_payload = failed_view.model_dump(mode="json")
+
+    assert [event["type"] for event in failed_payload["transcriptEvents"]] == [
+        "user_message",
+        "assistant_status",
+        "error",
+        "assistant_message",
+    ]
+    assert failed_payload["transcriptEvents"][-2]["payload"] == {
+        "code": "workbench_v2_requirement_extract_failed",
+        "message": "需求整理失败，请稍后重试。",
+    }
 
     view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-recover"))
 
-    assert len(agent.calls) == 2
+    assert len(agent.calls) == 1
     assert [event.type for event in view.transcriptEvents] == [
         "user_message",
         "assistant_status",
-        "requirement_form",
+        "error",
         "assistant_message",
     ]
 
@@ -720,6 +1244,308 @@ def test_requirement_action_idempotency_conflicts_on_different_selected(tmp_path
         )
 
 
+def test_agent_update_requirements_patch_updates_current_form(tmp_path: Path) -> None:
+    service, conversation_id, item_id = _service_with_requirement_form(tmp_path)
+    service.agent_loop.outputs.append(
+        _agent_output(
+            intent="update_requirements",
+            message="我已更新当前需求。",
+            requirementPatch={
+                "selectedItemIds": [],
+                "deselectedItemIds": [item_id],
+                "otherNotes": "熟悉 LangGraph",
+            },
+        )
+    )
+
+    view = asyncio.run(service.submit_message(conversation_id, "去掉 Python，补充 LangGraph", idempotency_key="patch"))
+
+    assert view.requirementForm is not None
+    must_have_items = view.requirementForm["draft"]["sections"][0]["items"]
+    existing_item = next(item for item in must_have_items if item["item_id"] == item_id)
+    added_item = next(item for item in must_have_items if item["text"] == "熟悉 LangGraph")
+    assert existing_item["selected"] is False
+    assert added_item["selected"] is True
+    assert view.transcriptEvents[-1].type == "assistant_message"
+    assert view.transcriptEvents[-1].payload == {"text": "我已更新当前需求。"}
+
+
+def test_agent_update_requirements_patch_replay_after_form_append_does_not_duplicate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, conversation_id, item_id = _service_with_requirement_form(tmp_path)
+    patch = {
+        "selectedItemIds": [],
+        "deselectedItemIds": [item_id],
+        "otherNotes": "熟悉 LangGraph",
+    }
+    service.agent_loop.outputs.append(
+        _agent_output(intent="update_requirements", message="我已更新当前需求。", requirementPatch=patch)
+    )
+    original_append_assistant = service._append_assistant_message
+
+    def crash_after_form(*args: object, **kwargs: object) -> object:
+        raise RuntimeError("assistant append failed")
+
+    monkeypatch.setattr(service, "_append_assistant_message", crash_after_form)
+    with pytest.raises(RuntimeError, match="assistant append failed"):
+        asyncio.run(service.submit_message(conversation_id, "去掉 Python，补充 LangGraph", idempotency_key="patch"))
+
+    failed_view = service.get_conversation(conversation_id)
+    assert len([event for event in failed_view.transcriptEvents if event.type == "requirement_form"]) == 2
+
+    monkeypatch.setattr(service, "_append_assistant_message", original_append_assistant)
+    service.agent_loop.outputs.append(
+        _agent_output(intent="update_requirements", message="我已更新当前需求。", requirementPatch=patch)
+    )
+
+    view = asyncio.run(service.submit_message(conversation_id, "去掉 Python，补充 LangGraph", idempotency_key="patch"))
+
+    form_events = [event for event in view.transcriptEvents if event.type == "requirement_form"]
+    assert len(form_events) == 2
+    assert view.transcriptEvents[-1].type == "assistant_message"
+    assert view.transcriptEvents[-1].payload == {"text": "我已更新当前需求。"}
+
+
+def test_agent_update_requirements_patch_replay_with_different_patch_conflicts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, conversation_id, item_id = _service_with_requirement_form(tmp_path)
+    first_patch = {
+        "selectedItemIds": [],
+        "deselectedItemIds": [item_id],
+        "otherNotes": None,
+    }
+    second_patch = {
+        "selectedItemIds": [item_id],
+        "deselectedItemIds": [],
+        "otherNotes": None,
+    }
+    service.agent_loop.outputs.append(
+        _agent_output(intent="update_requirements", message="我已更新当前需求。", requirementPatch=first_patch)
+    )
+    original_append_assistant = service._append_assistant_message
+    monkeypatch.setattr(
+        service,
+        "_append_assistant_message",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("assistant append failed")),
+    )
+    with pytest.raises(RuntimeError, match="assistant append failed"):
+        asyncio.run(service.submit_message(conversation_id, "调整需求", idempotency_key="patch-conflict"))
+
+    monkeypatch.setattr(service, "_append_assistant_message", original_append_assistant)
+    service.agent_loop.outputs.append(
+        _agent_output(intent="update_requirements", message="我已更新另一版需求。", requirementPatch=second_patch)
+    )
+
+    with pytest.raises(ValueError, match="workbench_v2_idempotency_conflict"):
+        asyncio.run(service.submit_message(conversation_id, "调整需求", idempotency_key="patch-conflict"))
+
+    view = service.get_conversation(conversation_id)
+    assert len([event for event in view.transcriptEvents if event.type == "requirement_form"]) == 2
+
+
+def test_agent_update_requirements_without_form_appends_error(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    agent = FakeAgentLoop(
+        _agent_output(
+            intent="update_requirements",
+            message="我会更新当前需求。",
+            requirementPatch={
+                "selectedItemIds": [],
+                "deselectedItemIds": [],
+                "otherNotes": "熟悉 LangGraph",
+            },
+        )
+    )
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=FakeRuntimeService())
+
+    view = asyncio.run(service.create_conversation("补充 LangGraph", idempotency_key="patch-no-form"))
+    payload = view.model_dump(mode="json")
+
+    assert [event["type"] for event in payload["transcriptEvents"]] == ["user_message", "error", "assistant_message"]
+    assert payload["transcriptEvents"][-2]["payload"]["code"] == "workbench_v2_requirement_form_required"
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "当前没有可更新的需求表单，请先发送完整招聘需求。"}
+
+
+def test_agent_update_requirements_after_confirm_records_next_round_requirement(tmp_path: Path) -> None:
+    service, runtime, conversation_id, item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    before_view = service.get_conversation(conversation_id)
+    before_form_count = len([event for event in before_view.transcriptEvents if event.type == "requirement_form"])
+    service.agent_loop.outputs.append(
+        _agent_output(
+            intent="update_requirements",
+            message="已记录补充要求，会在下一轮检索时使用。",
+            requirementPatch={
+                "selectedItemIds": [],
+                "deselectedItemIds": [],
+                "otherNotes": "候选人优先有天猫或淘宝业务经验。",
+            },
+        )
+    )
+
+    view = asyncio.run(
+        service.submit_message(
+            conversation_id,
+            "补充一个额外需求：候选人优先有天猫或淘宝业务经验，下一轮检索请加入这个条件。",
+            idempotency_key="patch-readonly",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    assert len(runtime.start_calls) == 1
+    assert len([event for event in view.transcriptEvents if event.type == "requirement_form"]) == before_form_count
+    assert "error" not in [event["type"] for event in payload["transcriptEvents"][-3:]]
+    assert payload["transcriptEvents"][-2]["type"] == "assistant_status"
+    assert payload["transcriptEvents"][-2]["payload"] == {
+        "amendmentId": "reqamend_1",
+        "phase": "supplemental_requirement",
+        "runtimeRunId": "rtrun_1",
+        "runtimeSubmissionStatus": "pending_target_round",
+        "targetRoundNo": 2,
+        "text": "已记录补充要求，将在第 2 轮检索前生效。",
+        "supplementalRequirement": "候选人优先有天猫或淘宝业务经验。",
+    }
+    assert runtime.next_round_requirement_calls[0]["runtime_run_id"] == "rtrun_1"
+    assert runtime.next_round_requirement_calls[0]["text"] == "候选人优先有天猫或淘宝业务经验。"
+    assert str(runtime.next_round_requirement_calls[0]["idempotency_key"]).startswith(
+        "workbench-v2-service:submit:patch-readonly:runtime-next-round:"
+    )
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "已记录补充要求，会在下一轮检索时使用。"}
+    assert view.requirementForm is not None
+    assert view.requirementForm["readonly"] is True
+
+
+def test_agent_update_requirements_needs_review_overrides_assistant_message(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.next_round_requirement_results.append(
+        {
+            "amendmentId": "reqamend_review_1",
+            "status": "needs_review",
+            "targetRoundNo": 3,
+            "effectiveBoundary": "before_round_controller",
+            "approvedRequirementRevisionId": None,
+            "reviewRequired": True,
+        }
+    )
+    service.agent_loop.outputs.append(
+        _agent_output(
+            intent="update_requirements",
+            message="已记录补充要求，会在下一轮检索时使用。",
+            requirementPatch={
+                "selectedItemIds": [],
+                "deselectedItemIds": [],
+                "otherNotes": "候选人必须有出海业务经验。",
+            },
+        )
+    )
+
+    view = asyncio.run(
+        service.submit_message(
+            conversation_id,
+            "补充：候选人必须有出海业务经验。",
+            idempotency_key="patch-needs-review",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    assert payload["transcriptEvents"][-2]["payload"] == {
+        "amendmentId": "reqamend_review_1",
+        "phase": "supplemental_requirement",
+        "runtimeRunId": "rtrun_1",
+        "runtimeSubmissionStatus": "needs_review",
+        "targetRoundNo": 3,
+        "text": "补充要求已记录，需要复核后才能在后续检索轮次生效。",
+        "supplementalRequirement": "候选人必须有出海业务经验。",
+    }
+    assert payload["transcriptEvents"][-1]["payload"] == {
+        "text": "补充要求已记录，需要复核后才能在后续检索轮次生效。"
+    }
+
+
+def test_agent_update_requirements_after_runtime_completed_records_next_run_note(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.next_round_requirement_errors.append(RuntimeControlError("runtime_command_conflict"))
+    service.agent_loop.outputs.append(
+        _agent_output(
+            intent="update_requirements",
+            message="已记录补充要求，会在下一轮检索时使用。",
+            requirementPatch={
+                "selectedItemIds": [],
+                "deselectedItemIds": [],
+                "otherNotes": "候选人必须杭州本地。",
+            },
+        )
+    )
+
+    view = asyncio.run(
+        service.submit_message(
+            conversation_id,
+            "补充：候选人必须杭州本地。",
+            idempotency_key="patch-after-complete",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    assert payload["transcriptEvents"][-2]["payload"] == {
+        "phase": "supplemental_requirement",
+        "runtimeRunId": "rtrun_1",
+        "runtimeSubmissionStatus": "not_applied",
+        "reasonCode": "runtime_command_conflict",
+        "text": "本次运行已结束，补充要求已记录为后续重新运行或下一次检索参考。",
+        "supplementalRequirement": "候选人必须杭州本地。",
+    }
+    assert payload["transcriptEvents"][-1]["payload"] == {
+        "text": "本次运行已结束，补充要求已记录为后续重新运行或下一次检索参考。"
+    }
+
+
+def test_agent_update_requirements_missing_draft_or_sheet_appends_error(tmp_path: Path) -> None:
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": None,
+    }
+
+    for missing_field, expected_code, expected_text in [
+        ("draft", "workbench_v2_requirement_draft_required", "需求表单缺少 draft，无法更新需求。"),
+        ("requirementSheet", "workbench_v2_requirement_sheet_required", "需求表单缺少 requirementSheet，无法更新需求。"),
+    ]:
+        store = _store(tmp_path / missing_field)
+        conversation = store.create_conversation(first_user_text="招一个 AI 平台工程师", idempotency_key=missing_field)
+        form_payload = {
+            "runtimeInput": runtime_input,
+            "draft": _draft_payload().model_dump(mode="json"),
+            "requirementSheet": _requirement_sheet_payload().model_dump(mode="json"),
+        }
+        del form_payload[missing_field]
+        store.append_event(
+            conversation.id,
+            WorkbenchV2TranscriptEventInput(type="requirement_form", role="assistant", payload=form_payload),
+        )
+        agent = FakeAgentLoop(
+            _agent_output(
+                intent="update_requirements",
+                message="我会更新当前需求。",
+                requirementPatch={
+                    "selectedItemIds": [],
+                    "deselectedItemIds": [],
+                    "otherNotes": "熟悉 LangGraph",
+                },
+            )
+        )
+        service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=FakeRuntimeService())
+
+        view = asyncio.run(service.submit_message(conversation.id, "补充 LangGraph", idempotency_key=f"{missing_field}-patch"))
+        payload = view.model_dump(mode="json")
+
+        assert payload["transcriptEvents"][-2]["type"] == "error"
+        assert payload["transcriptEvents"][-2]["payload"]["code"] == expected_code
+        assert payload["transcriptEvents"][-1]["payload"] == {"text": expected_text}
+
+
 def test_requirement_action_idempotency_conflicts_on_different_item_id(tmp_path: Path) -> None:
     service, conversation_id, item_id = _service_with_requirement_form(tmp_path)
     asyncio.run(
@@ -925,96 +1751,15 @@ def test_confirm_requirements_with_form_missing_sheet_appends_deterministic_erro
     }
 
 
-def test_start_runtime_with_runtime_input_starts_without_current_form(tmp_path: Path) -> None:
-    store = _store(tmp_path)
+def test_agent_schema_rejects_start_runtime_intent(tmp_path: Path) -> None:
+    del tmp_path
     runtime_input = {
         "jobTitle": "AI 平台工程师",
         "jd": "负责 Agent 工作流和 Python 后端。",
         "notes": None,
     }
-    agent = FakeAgentLoop(
-        _agent_output(intent="start_runtime", message="开始运行。", runtimeInput=runtime_input),
-    )
-    runtime = FakeRuntimeService()
-    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
-
-    view = asyncio.run(service.create_conversation("直接开始运行", idempotency_key="start-runtime"))
-    payload = view.model_dump(mode="json")
-
-    assert runtime.start_calls == [
-        {
-            "conversation_id": view.conversation.conversationId,
-            "runtime_input": WorkbenchV2RuntimeInput.model_validate(runtime_input),
-            "idempotency_key": "start-runtime",
-            "draft_revision_id": None,
-            "selected_item_ids": None,
-            "deselected_item_ids": None,
-        }
-    ]
-    confirmed = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
-    assert confirmed[-1]["payload"] == {
-        "runtimeInput": runtime_input,
-        "readonly": True,
-        "runtimeRunId": "rtrun_1",
-    }
-    assert payload["requirementForm"] == confirmed[-1]["payload"]
-    assert payload["runtime"] == {"state": "queued", "runtimeRunId": "rtrun_1"}
-
-
-def test_start_runtime_with_current_form_confirms_output_runtime_input(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    form_runtime_input = {
-        "jobTitle": "AI 平台工程师",
-        "jd": "旧 JD。",
-        "notes": None,
-    }
-    start_runtime_input = {
-        "jobTitle": "AI 平台工程师",
-        "jd": "新的完整 JD。",
-        "notes": "上海",
-    }
-    agent = FakeAgentLoop(
-        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=form_runtime_input),
-        _agent_output(intent="start_runtime", message="开始运行。", runtimeInput=start_runtime_input),
-    )
-    runtime = FakeRuntimeService()
-    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
-    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-start-form"))
-    new_sheet = _requirement_sheet_payload().model_copy(
-        update={
-            "role_summary": "Build production AI platform systems in Shanghai.",
-            "hard_constraints": HardConstraintSlots(locations=["上海"]),
-        }
-    )
-    runtime.requirement_sheet = new_sheet
-    runtime.draft = _draft_payload().model_copy(update={"draft_revision_id": "reqdraft_2"})
-
-    view = asyncio.run(
-        service.submit_message(
-            first_view.conversation.conversationId,
-            "用这份新 JD 直接开始",
-            idempotency_key="start-from-form",
-        )
-    )
-    payload = view.model_dump(mode="json")
-    confirmed = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
-
-    assert runtime.start_calls[-1]["runtime_input"] == WorkbenchV2RuntimeInput.model_validate(start_runtime_input)
-    assert runtime.start_calls[-1]["requirement_sheet"] == new_sheet
-    assert runtime.extract_calls == [
-        {
-            "conversation_id": first_view.conversation.conversationId,
-            "runtime_input": WorkbenchV2RuntimeInput.model_validate(form_runtime_input),
-        },
-        {
-            "conversation_id": first_view.conversation.conversationId,
-            "runtime_input": WorkbenchV2RuntimeInput.model_validate(start_runtime_input),
-        },
-    ]
-    assert confirmed[-1]["payload"]["runtimeInput"] == start_runtime_input
-    assert confirmed[-1]["payload"]["draft"]["draft_revision_id"] == "reqdraft_2"
-    assert confirmed[-1]["payload"]["requirementSheet"] == new_sheet.model_dump(mode="json")
-    assert confirmed[-1]["payload"]["requirementSheet"] != first_view.requirementForm["requirementSheet"]
+    with pytest.raises(Exception):
+        _agent_output(intent="start_runtime", message="开始运行。", runtimeInput=runtime_input)
 
 
 def test_confirm_requirements_runtime_start_failure_appends_terminal_error(tmp_path: Path) -> None:
@@ -1045,37 +1790,6 @@ def test_confirm_requirements_runtime_start_failure_appends_terminal_error(tmp_p
     assert payload["conversation"]["runtimeRunId"] is None
     assert payload["runtime"] is None
     assert "readonly" not in payload["requirementForm"]
-    assert not [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
-    assert not [event for event in payload["transcriptEvents"] if event["type"] == "runtime_progress"]
-    assert payload["transcriptEvents"][-2]["type"] == "error"
-    assert payload["transcriptEvents"][-2]["payload"] == {
-        "code": "workbench_v2_runtime_start_failed",
-        "message": "运行启动失败，请稍后重试。",
-    }
-    assert payload["transcriptEvents"][-1]["type"] == "assistant_message"
-    assert payload["transcriptEvents"][-1]["payload"] == {"text": "运行启动失败，请稍后重试。"}
-
-
-def test_start_runtime_without_form_start_failure_appends_terminal_error(tmp_path: Path) -> None:
-    store = _store(tmp_path)
-    runtime_input = {
-        "jobTitle": "AI 平台工程师",
-        "jd": "负责 Agent 工作流和 Python 后端。",
-        "notes": None,
-    }
-    agent = FakeAgentLoop(
-        _agent_output(intent="start_runtime", message="开始运行。", runtimeInput=runtime_input),
-    )
-    runtime = FakeRuntimeService(start_errors=[RuntimeError("boom")])
-    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
-
-    view = asyncio.run(service.create_conversation("直接开始运行", idempotency_key="start-runtime-fail"))
-    payload = view.model_dump(mode="json")
-
-    assert len(runtime.start_calls) == 1
-    assert payload["conversation"]["runtimeRunId"] is None
-    assert payload["runtime"] is None
-    assert payload["requirementForm"] is None
     assert not [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
     assert not [event for event in payload["transcriptEvents"] if event["type"] == "runtime_progress"]
     assert payload["transcriptEvents"][-2]["type"] == "error"
@@ -1153,6 +1867,592 @@ def test_get_runtime_status_updates_top_level_state_to_match_progress(tmp_path: 
     }
 
 
+def test_runtime_status_question_uses_agent_intent_to_read_runtime_status(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "queued",
+        "stage": "queued",
+        "summary": "招聘流程已排队，等待开始。",
+    }
+    service.agent_loop.outputs.append(
+        _agent_output(
+            intent="get_runtime_status",
+            message="当前招聘流程已排队等待开始，请稍后查看最新进度。",
+        )
+    )
+    agent_call_count = len(service.agent_loop.calls)
+
+    view = asyncio.run(service.submit_message(conversation_id, "现在进度如何？", idempotency_key="status-guard"))
+    payload = view.model_dump(mode="json")
+
+    assert [event["type"] for event in payload["transcriptEvents"][-2:]] == ["user_message", "assistant_message"]
+    assert payload["transcriptEvents"][-2]["payload"] == {"text": "现在进度如何？"}
+    assert payload["transcriptEvents"][-1]["payload"] == {
+        "text": "当前招聘流程已排队等待开始，请稍后查看最新进度。"
+    }
+    progress_events = [event for event in payload["transcriptEvents"] if event["type"] == "runtime_progress"]
+    assert [
+        {"state": event["payload"].get("state"), "summary": event["payload"].get("summary")}
+        for event in progress_events
+    ].count({"state": "queued", "summary": "招聘流程已排队，等待开始。"}) == 1
+    assert len(service.agent_loop.calls) == agent_call_count + 1
+
+
+def test_get_conversation_refreshes_active_runtime_status_without_duplicate_progress(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "running",
+        "stage": "source_search",
+        "summary": "正在检索候选人，进度 25%。",
+    }
+
+    first_refresh = service.get_conversation(conversation_id)
+    second_refresh = service.get_conversation(conversation_id)
+
+    assert first_refresh.conversation.runtimeState == "running"
+    assert second_refresh.conversation.runtimeState == "running"
+    progress_events = [event for event in second_refresh.transcriptEvents if event.type == "runtime_progress"]
+    assert progress_events[-1].payload == {
+        "runtimeRunId": "rtrun_1",
+        "status": "running",
+        "stage": "source_search",
+        "summary": "正在检索候选人，进度 25%。",
+        "state": "running",
+    }
+    assert [event.payload for event in progress_events].count(progress_events[-1].payload) == 1
+
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "stage": "completed",
+        "summary": "本次运行完成，筛选出 2 位候选人。",
+    }
+    runtime.results_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "summary": "最终推荐 2 位候选人。",
+        "facts": [{"label": "候选人", "value": "张三、李四"}],
+    }
+
+    completed_refresh = service.get_conversation(conversation_id)
+    repeated_completed_refresh = service.get_conversation(conversation_id)
+
+    assert repeated_completed_refresh.conversation.runtimeState == "completed"
+    assert repeated_completed_refresh.runtime is not None
+    assert repeated_completed_refresh.runtime.state == "completed"
+    assert [event.type for event in completed_refresh.transcriptEvents[-2:]] == [
+        "runtime_progress",
+        "runtime_result",
+    ]
+    assert completed_refresh.transcriptEvents[-2].payload == {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "stage": "completed",
+        "summary": "本次运行完成，筛选出 2 位候选人。",
+        "state": "completed",
+    }
+    assert completed_refresh.transcriptEvents[-1].payload == {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "summary": "最终推荐 2 位候选人。",
+        "facts": [{"label": "候选人", "value": "张三、李四"}],
+        "state": "completed",
+    }
+    result_events = [event for event in repeated_completed_refresh.transcriptEvents if event.type == "runtime_result"]
+    assert [event.payload for event in result_events].count(completed_refresh.transcriptEvents[-1].payload) == 1
+
+
+def test_get_conversation_sanitizes_internal_terminal_runtime_summaries(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    service.store.append_event(
+        conversation_id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_progress",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "runtimeEventSeq": 17,
+                "runtimeEventType": "runtime_finalization_completed",
+                "status": "completed",
+                "stage": "finalization",
+                "summary": "Selected 10 final candidates by deterministic runtime ranking.",
+                "state": "completed",
+            },
+        ),
+    )
+    service.store.append_event(
+        conversation_id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_result",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "status": "completed",
+                "summary": "Run status: completed. completed",
+                "state": "completed",
+            },
+        ),
+    )
+    service.store.append_event(
+        conversation_id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_progress",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "status": "completed",
+                "stage": "finalization",
+                "summary": "finalization",
+                "state": "completed",
+            },
+        ),
+    )
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "stage": "completed",
+        "summary": "Run completed after 7 retrieval rounds; controller stopped in round 8.",
+    }
+    runtime.results_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "summary": "Run status: completed. completed",
+    }
+
+    view = service.get_conversation(conversation_id)
+    serialized = view.model_dump_json()
+
+    assert "Selected 10 final candidates" not in serialized
+    assert "Run status: completed" not in serialized
+    assert "Run completed after" not in serialized
+    terminal_events = [
+        event
+        for event in view.transcriptEvents
+        if event.type in {"runtime_progress", "runtime_result"} and event.payload.get("state") == "completed"
+    ]
+    assert [event.payload.get("summary") for event in terminal_events][-2:] == [
+        "最终短名单已生成。",
+        "招聘流程已完成，最终候选人列表已生成。",
+    ]
+    terminal_summaries = [event.payload.get("summary") for event in terminal_events]
+    assert terminal_summaries.count("最终短名单已生成。") == 1
+    assert terminal_summaries.count("招聘流程已完成，最终候选人列表已生成。") == 1
+    assert view.strategyGraph.nodes[-1].summary == "招聘流程已完成，最终候选人列表已生成。"
+
+
+def test_get_conversation_sanitizes_legacy_raw_runtime_details_from_graph_and_thinking(
+    tmp_path: Path,
+) -> None:
+    service, _runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    marker = "INTERNAL_PROVIDER_QUERY_SHOULD_NOT_RENDER"
+    service.store.append_event(
+        conversation_id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_progress",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "runtimeEventSeq": 11,
+                "runtimeEventType": "runtime_round_query_ready",
+                "status": "completed",
+                "stage": "round_query",
+                "roundNo": 1,
+                "provider": "internal-provider-top-level",
+                "rawPrompt": "top-level secret prompt text",
+                "summary": "第 1 轮查询策略已生成。",
+                "details": {
+                    "keywordQuery": marker,
+                    "queryTerms": [marker, "SQL"],
+                    "provider": "internal-provider",
+                    "rawPrompt": "secret prompt text",
+                    "plannedQueries": [
+                        {
+                            "keywordQuery": marker,
+                            "queryTerms": [marker],
+                            "provider": "internal-provider",
+                        }
+                    ],
+                },
+                "state": "running",
+            },
+        ),
+    )
+    service.store.append_event(
+        conversation_id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_result",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "status": "completed",
+                "state": "completed",
+                "summary": "招聘流程已完成，最终候选人列表已生成。",
+                "facts": [{"label": "raw", "value": marker}],
+                "details": {"rawPrompt": "result secret prompt text"},
+                "provider": "internal-provider-result",
+            },
+        ),
+    )
+
+    view = service.get_conversation(conversation_id)
+    serialized = view.model_dump_json()
+
+    assert marker not in serialized
+    assert "internal-provider" not in serialized
+    assert "rawPrompt" not in serialized
+    assert "secret prompt text" not in serialized
+
+
+def test_get_conversation_preserves_legitimate_public_prompt_and_internal_terms(tmp_path: Path) -> None:
+    service, _runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    service.store.append_event(
+        conversation_id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_progress",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "runtimeEventSeq": 11,
+                "runtimeEventType": "runtime_round_query_ready",
+                "status": "completed",
+                "stage": "round_query",
+                "roundNo": 1,
+                "summary": "第 1 轮查询策略已生成。",
+                "details": {
+                    "keywordQuery": "Prompt Engineer internal tools",
+                    "queryTerms": ["Prompt Engineering", "internal platform"],
+                },
+                "state": "running",
+            },
+        ),
+    )
+    service.store.append_event(
+        conversation_id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_progress",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "runtimeEventSeq": 25,
+                "runtimeEventType": "runtime_round_feedback_completed",
+                "status": "completed",
+                "stage": "feedback",
+                "roundNo": 1,
+                "summary": "第 1 轮复盘完成。",
+                "details": {
+                    "resumeQualityComment": "Prompt history mentions internal tools.",
+                    "reflectionSummary": "Keep internal platform prompt terms.",
+                },
+                "state": "running",
+            },
+        ),
+    )
+
+    view = service.get_conversation(conversation_id)
+    serialized = view.model_dump_json()
+
+    assert "Prompt Engineer internal tools" in serialized
+    assert "Prompt Engineering" in serialized
+    assert "internal platform" in serialized
+    assert "Prompt history mentions internal tools." in serialized
+    assert "Keep internal platform prompt terms." in serialized
+
+
+def test_get_conversation_does_not_duplicate_same_visible_queued_progress(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "queued",
+        "stage": "queued",
+        "summary": "招聘流程已排队，等待开始。",
+    }
+
+    refreshed = service.get_conversation(conversation_id)
+
+    progress_events = [event for event in refreshed.transcriptEvents if event.type == "runtime_progress"]
+    visible_payloads = [
+        {
+            "state": event.payload.get("state"),
+            "summary": event.payload.get("summary"),
+        }
+        for event in progress_events
+    ]
+    assert visible_payloads.count({"state": "queued", "summary": "招聘流程已排队，等待开始。"}) == 1
+
+
+def test_get_conversation_does_not_duplicate_runtime_event_summary_as_status_snapshot(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    summary = "招聘流程失败：猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 17,
+            "runtimeEventType": "runtime_run_failed",
+            "status": "completed",
+            "stage": "source_lanes",
+            "state": "completed",
+            "summary": summary,
+        },
+    ]
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "failed",
+        "stage": "runtime",
+        "summary": summary,
+    }
+
+    first_refresh = service.get_conversation(conversation_id)
+    second_refresh = service.get_conversation(conversation_id)
+
+    assert first_refresh.conversation.runtimeState == "failed"
+    assert second_refresh.conversation.runtimeState == "failed"
+    progress_summaries = [
+        event.payload.get("summary")
+        for event in second_refresh.transcriptEvents
+        if event.type == "runtime_progress"
+    ]
+    assert progress_summaries.count(summary) == 1
+
+
+def test_get_conversation_refreshes_terminal_runtime_when_summary_changes(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "failed",
+        "stage": "runtime",
+        "summary": "招聘流程失败，请查看运行详情。",
+    }
+
+    failed_refresh = service.get_conversation(conversation_id)
+    assert failed_refresh.conversation.runtimeState == "failed"
+
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "failed",
+        "stage": "source",
+        "summary": "招聘流程失败：source_browser_backend_unavailable",
+    }
+
+    detailed_refresh = service.get_conversation(conversation_id)
+
+    progress_events = [event for event in detailed_refresh.transcriptEvents if event.type == "runtime_progress"]
+    assert progress_events[-1].payload == {
+        "runtimeRunId": "rtrun_1",
+        "status": "failed",
+        "stage": "source",
+        "summary": "招聘流程失败：source_browser_backend_unavailable",
+        "state": "failed",
+    }
+
+
+def test_get_conversation_runtime_status_failure_appends_error_without_duplicate_spam(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.status_errors.extend([RuntimeError("status backend unavailable"), RuntimeError("still down")])
+
+    service.get_conversation(conversation_id)
+    second_refresh = service.get_conversation(conversation_id)
+
+    assert second_refresh.conversation.runtimeState == "queued"
+    error_events = [event for event in second_refresh.transcriptEvents if event.type == "error"]
+    assistant_messages = [event for event in second_refresh.transcriptEvents if event.type == "assistant_message"]
+    assert [event.payload for event in error_events].count(
+        {
+            "code": "workbench_v2_runtime_status_unavailable",
+            "message": "暂时无法读取运行状态，请稍后重试。",
+        }
+    ) == 1
+    assert [event.payload for event in assistant_messages].count(
+        {"text": "暂时无法读取运行状态，请稍后重试。"}
+    ) == 1
+
+
+def test_runtime_status_failure_appends_error_in_transcript_instead_of_raising(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.status_errors.append(RuntimeError("status backend unavailable"))
+    service.agent_loop.outputs.append(
+        _agent_output(intent="get_runtime_status", message="暂时无法读取运行状态，请稍后重试。")
+    )
+
+    view = asyncio.run(service.submit_message(conversation_id, "现在进度如何？", idempotency_key="status-fail"))
+    payload = view.model_dump(mode="json")
+
+    assert [event["type"] for event in payload["transcriptEvents"][-3:]] == [
+        "user_message",
+        "error",
+        "assistant_message",
+    ]
+    assert payload["transcriptEvents"][-2]["payload"] == {
+        "code": "workbench_v2_runtime_status_unavailable",
+        "message": "暂时无法读取运行状态，请稍后重试。",
+    }
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "暂时无法读取运行状态，请稍后重试。"}
+
+
+def test_runtime_summary_question_uses_agent_intent_and_reads_runtime_results(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.results_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "state": "completed",
+        "summary": "本次运行完成，筛选出 2 位候选人。",
+        "facts": [{"label": "Candidate", "value": "张三：匹配 Python 和 Agent 经验"}],
+    }
+    service.agent_loop.outputs.append(_agent_output(intent="get_runtime_results", message="我读取了运行结果。"))
+    agent_call_count = len(service.agent_loop.calls)
+
+    view = asyncio.run(service.submit_message(conversation_id, "请总结这次 run 的结果。", idempotency_key="summary-results"))
+    payload = view.model_dump(mode="json")
+
+    assert [event["type"] for event in payload["transcriptEvents"][-3:]] == [
+        "user_message",
+        "runtime_result",
+        "assistant_message",
+    ]
+    assert payload["transcriptEvents"][-2]["payload"] == {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "state": "completed",
+        "summary": "本次运行完成，筛选出 2 位候选人。",
+        "facts": [{"label": "Candidate", "value": "张三：匹配 Python 和 Agent 经验"}],
+    }
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "本次运行完成，筛选出 2 位候选人。"}
+    assert len(service.agent_loop.calls) == agent_call_count + 1
+
+
+def test_get_runtime_results_does_not_duplicate_existing_completed_result(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.status_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "stage": "completed",
+        "summary": "招聘流程已完成。",
+    }
+    runtime.results_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "summary": "最终推荐 2 位候选人。",
+    }
+    service.get_conversation(conversation_id)
+    service.agent_loop.outputs.append(_agent_output(intent="get_runtime_results", message="我读取了运行结果。"))
+
+    view = asyncio.run(service.submit_message(conversation_id, "总结结果", idempotency_key="summary-after-refresh"))
+    stored_record = service.store.get_conversation(conversation_id)
+
+    assert [event.type for event in view.transcriptEvents[-2:]] == ["user_message", "assistant_message"]
+    assert view.transcriptEvents[-1].payload == {"text": "最终推荐 2 位候选人。"}
+    assert len([event for event in stored_record.events if event.type == "runtime_result"]) == 1
+    assert len([event for event in view.transcriptEvents if event.type == "runtime_result"]) == 1
+
+
+def test_runtime_summary_question_reports_no_results_when_queued(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.results_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "queued",
+        "state": "queued",
+        "stage": "queued",
+        "summary": "招聘流程已排队，等待开始。",
+    }
+    service.agent_loop.outputs.append(_agent_output(intent="get_runtime_results", message="我读取了运行结果。"))
+    agent_call_count = len(service.agent_loop.calls)
+
+    view = asyncio.run(service.submit_message(conversation_id, "请总结这次 run 的结果。", idempotency_key="summary-guard"))
+    payload = view.model_dump(mode="json")
+
+    assert [event["type"] for event in payload["transcriptEvents"][-2:]] == [
+        "user_message",
+        "assistant_message",
+    ]
+    assert payload["transcriptEvents"][-1]["payload"] == {
+        "text": "当前招聘流程尚未完成，还没有最终结果可供总结。请稍后再查询最新进度。"
+    }
+    assert len(service.agent_loop.calls) == agent_call_count + 1
+
+
+def test_get_runtime_results_intent_appends_runtime_result(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.results_payloads["rtrun_1"] = {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "summary": "本次运行完成，筛选出 1 位候选人。",
+    }
+    service.agent_loop.outputs.append(_agent_output(intent="get_runtime_results", message="我读取了运行结果。"))
+
+    view = asyncio.run(service.submit_message(conversation_id, "候选人详情怎么样？", idempotency_key="results-intent"))
+    payload = view.model_dump(mode="json")
+
+    assert [event["type"] for event in payload["transcriptEvents"][-3:]] == [
+        "user_message",
+        "runtime_result",
+        "assistant_message",
+    ]
+    assert payload["transcriptEvents"][-2]["payload"]["summary"] == "本次运行完成，筛选出 1 位候选人。"
+    assert payload["transcriptEvents"][-2]["payload"]["state"] == "completed"
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "本次运行完成，筛选出 1 位候选人。"}
+
+
+def test_agent_runtime_input_after_confirm_records_next_round_requirement_without_new_form(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    confirmed_form_count = len(
+        [event for event in confirmed_view.transcriptEvents if event.type == "requirement_form"]
+    )
+    supplemental_runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "补充：候选人优先有天猫或淘宝业务经验。",
+        "notes": "下一轮生效",
+    }
+    service.agent_loop.outputs.append(
+        _agent_output(
+            intent="update_requirements",
+            message="已记录补充要求，将在下一轮检索时使用。",
+            runtimeInput=supplemental_runtime_input,
+        )
+    )
+
+    view = asyncio.run(
+        service.submit_message(
+            conversation_id,
+            "补充：候选人优先有天猫或淘宝业务经验。",
+            idempotency_key="post-confirm-runtime-input",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    forms = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form"]
+    assert len(forms) == confirmed_form_count
+    assert runtime.extract_calls == [
+        {
+            "conversation_id": conversation_id,
+            "runtime_input": WorkbenchV2RuntimeInput(
+                jobTitle="AI 平台工程师",
+                jd="负责 Agent 工作流和 Python 后端。",
+                notes="杭州",
+            ),
+        }
+    ]
+    assert payload["transcriptEvents"][-2]["type"] == "assistant_status"
+    assert payload["transcriptEvents"][-2]["payload"] == {
+        "amendmentId": "reqamend_1",
+        "phase": "supplemental_requirement",
+        "runtimeRunId": "rtrun_1",
+        "runtimeSubmissionStatus": "pending_target_round",
+        "targetRoundNo": 2,
+        "text": "已记录补充要求，将在第 2 轮检索前生效。",
+        "supplementalRequirement": "职位名称：AI 平台工程师；补充 JD：补充：候选人优先有天猫或淘宝业务经验。；补充说明：下一轮生效",
+    }
+    assert runtime.next_round_requirement_calls[0]["runtime_run_id"] == "rtrun_1"
+    assert (
+        runtime.next_round_requirement_calls[0]["text"]
+        == "职位名称：AI 平台工程师；补充 JD：补充：候选人优先有天猫或淘宝业务经验。；补充说明：下一轮生效"
+    )
+    assert str(runtime.next_round_requirement_calls[0]["idempotency_key"]).startswith(
+        "workbench-v2-service:submit:post-confirm-runtime-input:runtime-next-round:"
+    )
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "已记录补充要求，将在下一轮检索时使用。"}
+
+
 def _store(tmp_path: Path) -> WorkbenchV2Store:
     store = WorkbenchV2Store(tmp_path / "workbench_v2.sqlite3")
     store.initialize()
@@ -1216,6 +2516,8 @@ def _agent_output(
     needsClarification: bool = False,
     clarifyingQuestion: str | None = None,
     runtimeInput: dict[str, object] | None = None,
+    requirementPatch: dict[str, object] | None = None,
+    memoryRead: dict[str, object] | None = None,
 ) -> WorkbenchV2AgentOutput:
     return WorkbenchV2AgentOutput.model_validate(
         {
@@ -1224,8 +2526,8 @@ def _agent_output(
             "needsClarification": needsClarification,
             "clarifyingQuestion": clarifyingQuestion,
             "runtimeInput": runtimeInput,
-            "requirementPatch": None,
-            "memoryRead": None,
+            "requirementPatch": requirementPatch,
+            "memoryRead": memoryRead,
             "memoryWrite": None,
         }
     )

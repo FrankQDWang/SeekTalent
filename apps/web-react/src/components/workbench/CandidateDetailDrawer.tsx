@@ -1,10 +1,8 @@
 import {
   AlertTriangle,
-  BadgeCheck,
   FileText,
   LockKeyhole,
   RefreshCw,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
@@ -13,6 +11,7 @@ import type {
   AgentWorkbenchCandidateSummary,
 } from "../../lib/api/agentWorkbenchTypes";
 import { Button } from "../primitives/Button";
+import { candidateSourceLabel } from "./candidateSource";
 import "./CandidateDetailDrawer.css";
 
 type CandidateDetailDrawerStatus = "idle" | "loading" | "error" | "ready";
@@ -25,15 +24,6 @@ type CandidateDetailDrawerProps = {
   onRetry?: (() => void) | undefined;
   open: boolean;
   status: CandidateDetailDrawerStatus;
-};
-
-type CandidateSourceKind = NonNullable<
-  AgentWorkbenchCandidateSummary["sourceKinds"]
->[number];
-
-const sourceLabels: Record<CandidateSourceKind, string> = {
-  cts: "CTS 实验",
-  liepin: "猎聘",
 };
 
 const focusableSelector = [
@@ -110,7 +100,12 @@ export function CandidateDetailDrawer({
   }
 
   const title = detail?.displayName ?? candidate?.displayName ?? "候选人详情";
-  const headline = detail?.headline ?? candidate?.headline ?? "读取安全详情";
+  const headline = candidateDetailHeadline(detail, candidate);
+  const profileChips = candidateDetailChips(detail, candidate);
+  const jobStatus = detail?.jobStatus ?? candidate?.jobStatus ?? null;
+  const sourceKinds = detail?.sourceKinds ?? candidate?.sourceKinds ?? [];
+  const sourceLabel =
+    sourceKinds.length > 0 ? `${candidateSourceLabel(sourceKinds)}来源` : null;
 
   return (
     <div className="candidate-detail-drawer__backdrop">
@@ -126,17 +121,43 @@ export function CandidateDetailDrawer({
           <span className="candidate-detail-drawer__avatar" aria-hidden="true">
             {title.slice(0, 1)}
           </span>
-          <div>
-            <p>候选人详情</p>
-            <h2>{title}</h2>
-            <span>{headline}</span>
+          <div className="candidate-detail-drawer__profile">
+            <div className="candidate-detail-drawer__title-row">
+              <h2>{title}</h2>
+              {jobStatus ? (
+                <span className="candidate-detail-drawer__job-status">
+                  {jobStatus}
+                </span>
+              ) : null}
+            </div>
+            <p>{headline}</p>
+            {profileChips.length > 0 ? (
+              <div
+                aria-label="候选人基础信息"
+                className="candidate-detail-drawer__profile-chips"
+              >
+                {profileChips.map((chip) => (
+                  <span key={chip}>{chip}</span>
+                ))}
+              </div>
+            ) : null}
           </div>
-          <Button
-            aria-label="关闭候选人详情"
-            className="candidate-detail-drawer__close"
-            icon={<X aria-hidden="true" size={16} />}
-            onClick={onClose}
-          />
+          <div className="candidate-detail-drawer__actions">
+            <Button
+              aria-label="关闭候选人详情"
+              className="candidate-detail-drawer__close"
+              icon={<X aria-hidden="true" size={16} />}
+              onClick={onClose}
+            />
+            {sourceLabel ? (
+              <span
+                aria-label="候选人来源已记录"
+                className="candidate-detail-drawer__source-action"
+              >
+                {sourceLabel}
+              </span>
+            ) : null}
+          </div>
         </header>
 
         {status === "loading" || status === "idle" ? (
@@ -144,7 +165,7 @@ export function CandidateDetailDrawer({
         ) : status === "error" ? (
           <CandidateDetailError message={errorMessage} onRetry={onRetry} />
         ) : detail ? (
-          <CandidateDetailBody candidate={candidate} detail={detail} />
+          <CandidateDetailBody detail={detail} />
         ) : (
           <CandidateDetailError message="候选人详情暂时不可用。" />
         )}
@@ -192,16 +213,10 @@ function CandidateDetailError({
 }
 
 function CandidateDetailBody({
-  candidate,
   detail,
 }: {
-  candidate: AgentWorkbenchCandidateSummary | null;
   detail: AgentWorkbenchCandidateDetailResponse;
 }) {
-  const scoreLabel = matchScoreLabel(
-    detail.matchScore ?? candidate?.matchScore,
-  );
-  const sourceKinds = detail.sourceKinds ?? candidate?.sourceKinds ?? [];
   const access = accessStateCopy(detail.accessState, detail.reasonCode);
   const showDetailSections =
     detail.accessState === "allowed" && detail.sections.length > 0;
@@ -212,39 +227,6 @@ function CandidateDetailBody({
       className="candidate-detail-drawer__body"
       tabIndex={0}
     >
-      <section
-        aria-label="候选人详情状态"
-        className="candidate-detail-drawer__summary"
-      >
-        <div>
-          <BadgeCheck aria-hidden="true" size={18} />
-          <span>{detailAvailabilityLabel(detail.detailAvailability)}</span>
-        </div>
-        <div>
-          <ShieldCheck aria-hidden="true" size={18} />
-          <span>{evidenceLevelLabel(detail.evidenceLevel)}</span>
-        </div>
-        {scoreLabel ? (
-          <div>
-            <FileText aria-hidden="true" size={18} />
-            <span>匹配 {scoreLabel}</span>
-          </div>
-        ) : null}
-      </section>
-
-      <section
-        aria-label="候选人来源"
-        className="candidate-detail-drawer__chips"
-      >
-        {sourceKinds.length > 0 ? (
-          sourceKinds.map((sourceKind) => (
-            <span key={sourceKind}>{sourceLabels[sourceKind]}</span>
-          ))
-        ) : (
-          <span>来源待确认</span>
-        )}
-      </section>
-
       {detail.accessState === "allowed" ? null : (
         <section
           aria-label="候选人详情访问状态"
@@ -261,14 +243,7 @@ function CandidateDetailBody({
       {showDetailSections ? (
         <div className="candidate-detail-drawer__sections">
           {detail.sections.map((section) => (
-            <section className="candidate-detail-section" key={section.title}>
-              <h3>{section.title}</h3>
-              <ul>
-                {section.items.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </section>
+            <CandidateDetailSection key={section.title} section={section} />
           ))}
         </div>
       ) : detail.accessState === "allowed" ? (
@@ -282,7 +257,7 @@ function CandidateDetailBody({
       {detail.evidence.length > 0 ? (
         <section
           aria-label="候选人详情证据"
-          className="candidate-detail-evidence"
+          className="candidate-detail-section"
         >
           <h3>证据</h3>
           <ul>
@@ -296,42 +271,22 @@ function CandidateDetailBody({
   );
 }
 
-function matchScoreLabel(matchScore: number | null | undefined): string | null {
-  if (typeof matchScore !== "number" || !Number.isFinite(matchScore)) {
-    return null;
-  }
-  const normalized = matchScore <= 1 ? matchScore * 100 : matchScore;
-  return `${String(Math.round(normalized))}%`;
-}
-
-function detailAvailabilityLabel(
-  availability: AgentWorkbenchCandidateDetailResponse["detailAvailability"],
-): string {
-  if (availability === "available") {
-    return "详情可读";
-  }
-  if (availability === "approval_required") {
-    return "需要审批";
-  }
-  if (availability === "redacted") {
-    return "安全脱敏";
-  }
-  return "详情不可用";
-}
-
-function evidenceLevelLabel(
-  evidenceLevel: AgentWorkbenchCandidateDetailResponse["evidenceLevel"],
-): string {
-  if (evidenceLevel === "detail") {
-    return "详细证据";
-  }
-  if (evidenceLevel === "final") {
-    return "最终证据";
-  }
-  if (evidenceLevel === "summary") {
-    return "摘要证据";
-  }
-  return "证据待确认";
+function CandidateDetailSection({
+  section,
+}: {
+  section: AgentWorkbenchCandidateDetailResponse["sections"][number];
+}) {
+  const isSkillSection = section.title.includes("技能");
+  return (
+    <section className="candidate-detail-section">
+      <h3>{section.title}</h3>
+      <ul data-style={isSkillSection ? "chips" : "list"}>
+        {section.items.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </section>
+  );
 }
 
 function accessStateCopy(
@@ -360,6 +315,41 @@ function accessStateCopy(
     title: "详情不可读取",
     text: "当前候选人没有可展示的详情权限或详情证据。",
   };
+}
+
+function candidateDetailHeadline(
+  detail: AgentWorkbenchCandidateDetailResponse | null,
+  candidate: AgentWorkbenchCandidateSummary | null,
+): string {
+  const headline = detail?.headline?.trim() ?? candidate?.headline?.trim();
+  const company = detail?.company?.trim() ?? candidate?.company?.trim();
+  if (headline && company && !headline.includes(company)) {
+    return `${headline} · ${company}`;
+  }
+  return headline || company || "读取安全详情";
+}
+
+function candidateDetailChips(
+  detail: AgentWorkbenchCandidateDetailResponse | null,
+  candidate: AgentWorkbenchCandidateSummary | null,
+): string[] {
+  const activeStatus = detail?.activeStatus ?? candidate?.activeStatus ?? null;
+  const gender = detail?.gender ?? candidate?.gender ?? null;
+  const age = detail?.age ?? candidate?.age ?? null;
+  const location = detail?.location ?? candidate?.location ?? null;
+  const education = detail?.education ?? candidate?.education ?? null;
+  const experienceYears =
+    detail?.experienceYears ?? candidate?.experienceYears ?? null;
+  return [
+    activeStatus,
+    gender,
+    typeof age === "number" ? `${String(age)}岁` : null,
+    location,
+    education,
+    typeof experienceYears === "number"
+      ? `工作${String(experienceYears)}年`
+      : null,
+  ].filter((chip): chip is string => Boolean(chip));
 }
 
 function focusableDrawerElements(drawer: HTMLElement | null): HTMLElement[] {

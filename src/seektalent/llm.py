@@ -233,7 +233,7 @@ def _resolve_stage_reasoning_policy(
         return effort != "off", effort
     if stage == "workbench_conversation":
         effort = settings.workbench_conversation_reasoning_effort
-        return False, effort
+        return effort != "off", effort
     if stage in {"scoring", "finalize", "tui_summary"}:
         return False, "off"
     raise ValueError(f"Unsupported text-llm stage: {stage}")

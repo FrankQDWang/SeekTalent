@@ -23,7 +23,7 @@ from seektalent.resources import (
 from seektalent_runtime_control.artifact_policy import normalize_artifact_output_mode
 
 
-ReasoningEffort = Literal["off", "low", "medium", "high"]
+ReasoningEffort = Literal["off", "low", "medium", "high", "xhigh", "max"]
 ReasoningEffortName = ReasoningEffort
 RuntimeMode = Literal["dev", "prod"]
 TextLLMProtocolFamily = Literal[
@@ -528,7 +528,7 @@ class AppSettings(BaseSettings):
     workbench_note_writer_model_id: str = "deepseek-v4-flash"
     workbench_note_writer_reasoning_effort: ReasoningEffort = "off"
     workbench_conversation_model_id: str = "deepseek-v4-flash"
-    workbench_conversation_reasoning_effort: ReasoningEffort = "off"
+    workbench_conversation_reasoning_effort: ReasoningEffort = "max"
     prf_probe_phrase_proposal_timeout_seconds: float = 3.0
     prf_probe_phrase_proposal_live_harness_timeout_seconds: float = 30.0
     prf_probe_phrase_proposal_max_output_tokens: int = 2048

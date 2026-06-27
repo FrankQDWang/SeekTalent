@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, Sequence
 
-from agents import Agent, AsyncOpenAI, ModelSettings, OpenAIChatCompletionsModel, Runner
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from agents import Agent, AsyncOpenAI, ModelSettings, OpenAIChatCompletionsModel, Runner, function_tool
+from agents.exceptions import ModelBehaviorError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from seektalent.config import AppSettings
 from seektalent.llm import (
@@ -29,7 +30,6 @@ WorkbenchV2Intent = Literal[
     "extract_requirements",
     "update_requirements",
     "confirm_requirements",
-    "start_runtime",
     "get_runtime_status",
     "get_runtime_results",
     "read_memory",
@@ -165,10 +165,6 @@ class WorkbenchV2AgentOutput(BaseModel):
             if (self.requirementPatch is None) == (self.runtimeInput is None):
                 raise ValueError("exactly one of requirementPatch or runtimeInput is required for update_requirements")
             reject_payloads("memoryRead", "memoryWrite")
-        elif self.intent == "start_runtime":
-            if self.runtimeInput is None:
-                raise ValueError("runtimeInput is required for start_runtime")
-            reject_payloads("requirementPatch", "memoryRead", "memoryWrite")
         elif self.intent == "read_memory":
             if self.memoryRead is None:
                 raise ValueError("memoryRead is required for read_memory")
@@ -224,8 +220,16 @@ class BailianStrictWorkbenchV2AgentLoop:
             user_text=user_text,
         )
         runner = self.runner or _DefaultAgentRunner()
-        result = await runner.run(agent, prompt)
-        return WorkbenchV2AgentOutput.model_validate(getattr(result, "final_output", result))
+        try:
+            result = await runner.run(agent, prompt)
+        except ModelBehaviorError as exc:
+            if not _is_schema_model_behavior_error(exc):
+                raise
+            return await _run_schema_retry(runner=runner, agent=agent, original_prompt=prompt, validation_error=str(exc))
+        try:
+            return _validate_agent_result(result)
+        except ValidationError as exc:
+            return await _run_schema_retry(runner=runner, agent=agent, original_prompt=prompt, validation_error=str(exc))
 
 
 def _build_agent(config: ResolvedTextModelConfig) -> Agent:
@@ -233,11 +237,142 @@ def _build_agent(config: ResolvedTextModelConfig) -> Agent:
     return Agent(
         name="SeekTalent Workbench v2 Agent",
         model=_build_openai_chat_model(config),
-        model_settings=ModelSettings(extra_body=build_provider_request_policy(config).extra_body),
+        model_settings=ModelSettings(
+            extra_body=build_provider_request_policy(config).extra_body,
+            parallel_tool_calls=False,
+        ),
         instructions=_system_prompt(),
-        tools=[],
+        tools=_workbench_v2_tools(),
         output_type=WorkbenchV2AgentOutput,
     )
+
+
+def _workbench_v2_tools() -> list[object]:
+    return [
+        _tool_extract_requirements,
+        _tool_update_requirements,
+        _tool_confirm_requirements,
+        _tool_start_runtime,
+        _tool_get_runtime_status,
+        _tool_get_runtime_results,
+        _tool_read_memory,
+        _tool_write_memory,
+    ]
+
+
+@function_tool(
+    name_override="extract_requirements",
+    description_override="Normalize a new JD or recruiting request into runtime input fields.",
+    strict_mode=True,
+)
+def _tool_extract_requirements(jobTitle: str, jd: str, notes: str | None = None) -> dict[str, object]:
+    return {"intent": "extract_requirements", "runtimeInput": {"jobTitle": jobTitle, "jd": jd, "notes": notes}}
+
+
+@function_tool(
+    name_override="update_requirements",
+    description_override="Update the active requirement form or record supplemental requirements for the next round.",
+    strict_mode=True,
+)
+def _tool_update_requirements(
+    selectedItemIds: list[str] | None = None,
+    deselectedItemIds: list[str] | None = None,
+    otherNotes: str | None = None,
+) -> dict[str, object]:
+    return {
+        "intent": "update_requirements",
+        "requirementPatch": {
+            "selectedItemIds": selectedItemIds or [],
+            "deselectedItemIds": deselectedItemIds or [],
+            "otherNotes": otherNotes,
+        },
+    }
+
+
+@function_tool(
+    name_override="confirm_requirements",
+    description_override="Confirm the current requirement form after the user explicitly approves it.",
+    strict_mode=True,
+)
+def _tool_confirm_requirements() -> dict[str, object]:
+    return {"intent": "confirm_requirements"}
+
+
+@function_tool(
+    name_override="start_runtime",
+    description_override="Start the recruiting runtime only after requirements have been explicitly confirmed.",
+    strict_mode=True,
+)
+def _tool_start_runtime() -> dict[str, object]:
+    return {"intent": "confirm_requirements"}
+
+
+@function_tool(
+    name_override="get_runtime_status",
+    description_override="Read the current active recruiting run status when the user explicitly asks about progress.",
+    strict_mode=True,
+)
+def _tool_get_runtime_status() -> dict[str, object]:
+    return {"intent": "get_runtime_status"}
+
+
+@function_tool(
+    name_override="get_runtime_results",
+    description_override="Read active recruiting run results or candidate details when the user explicitly asks for them.",
+    strict_mode=True,
+)
+def _tool_get_runtime_results() -> dict[str, object]:
+    return {"intent": "get_runtime_results"}
+
+
+@function_tool(
+    name_override="read_memory",
+    description_override="Read long-term memory only when the user explicitly asks or memory context is necessary.",
+    strict_mode=True,
+)
+def _tool_read_memory(query: str) -> dict[str, object]:
+    return {"intent": "read_memory", "memoryRead": {"query": query}}
+
+
+@function_tool(
+    name_override="write_memory",
+    description_override="Write long-term memory only when the user explicitly provides a source for the memory.",
+    strict_mode=True,
+)
+def _tool_write_memory(source: str, content: str) -> dict[str, object]:
+    return {"intent": "write_memory", "memoryWrite": {"source": source, "content": content}}
+
+
+def _validate_agent_result(result: object) -> WorkbenchV2AgentOutput:
+    return WorkbenchV2AgentOutput.model_validate(getattr(result, "final_output", result))
+
+
+def _is_schema_model_behavior_error(exc: ModelBehaviorError) -> bool:
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "structured output",
+            "invalid json",
+            "json when parsing",
+            "schema",
+            "validation error",
+            "typeadapter",
+            "parsing",
+        )
+    )
+
+
+async def _run_schema_retry(
+    *,
+    runner: WorkbenchV2AgentRunner,
+    agent: Agent,
+    original_prompt: str,
+    validation_error: str,
+) -> WorkbenchV2AgentOutput:
+    retry_prompt = _render_schema_retry_prompt(original_prompt=original_prompt, validation_error=validation_error)
+    retry_result = await runner.run(agent, retry_prompt)
+    return _validate_agent_result(retry_result)
 
 
 def _strip_string(value: object) -> object:
@@ -301,6 +436,21 @@ def _render_turn_prompt(
             "[WORKBENCH_V2_TURN_INPUT_START]",
             json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
             "[WORKBENCH_V2_TURN_INPUT_END]",
+        ]
+    )
+
+
+def _render_schema_retry_prompt(*, original_prompt: str, validation_error: str) -> str:
+    return "\n".join(
+        [
+            "Previous structured output did not satisfy the required schema.",
+            "Return exactly one valid WorkbenchV2AgentOutput object for the original turn input below.",
+            "When there is no active requirement_form, a new JD or recruitment need must use "
+            "extract_requirements with runtimeInput.",
+            "Use update_requirements with requirementPatch only for edits to an existing active requirement_form.",
+            "Never return an empty requirementPatch.",
+            f"Schema validation error: {_truncate_text(validation_error, 1000)}",
+            original_prompt,
         ]
     )
 

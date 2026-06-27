@@ -171,15 +171,38 @@
   line-height: 1.35;
 }
 
-.candidate-card__source {
+.candidate-card__badges {
+  align-items: flex-end;
+  display: grid;
+  flex: 0 0 auto;
+  gap: 6px;
+  justify-items: end;
+}
+
+.candidate-card__badges span {
   background: #f0ecff;
   border-radius: 999px;
   color: #5a43ff;
-  flex: 0 0 auto;
   font-size: 13px;
   font-weight: 730;
   padding: 5px 8px;
   white-space: nowrap;
+}
+
+.candidate-card__badges span[data-status="fit"] {
+  background: #e8fbf1;
+  color: #168a52;
+}
+
+.candidate-card__badges span[data-status="not_fit"] {
+  background: #f5f6fb;
+  color: #7a8498;
+}
+
+.candidate-card__badges span[data-status="reviewing"],
+.candidate-card__badges span[data-status="maybe"] {
+  background: #fff6df;
+  color: #a66300;
 }
 
 .candidate-card__chips {
@@ -198,10 +221,27 @@
   padding: 7px 10px;
 }
 
+.candidate-card__summary {
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--st-muted);
+  display: -webkit-box;
+  font-size: 13px;
+  font-weight: 620;
+  line-height: 1.55;
+  overflow: hidden;
+}
+
 .candidate-card__footer {
   border-top: 1px dashed #dfe2ef;
+  justify-content: space-between;
   padding-top: 12px;
-  justify-content: flex-end;
+}
+
+.candidate-card__score {
+  color: #5a43ff;
+  font-size: 13px;
+  font-weight: 780;
 }
 
 .candidate-card__detail-button.st-button {

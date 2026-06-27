@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -10,8 +10,15 @@ from uuid import uuid4
 
 from seektalent.config import AppSettings
 from seektalent.models import RequirementSheet
+from seektalent_runtime_control.commands import RuntimeCommandService
+from seektalent_runtime_control.detail import RuntimeDetailService
+from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
-from seektalent_runtime_control.models import RuntimeRunRecord
+from seektalent_runtime_control.models import (
+    RuntimeControlCandidateEvidence,
+    RuntimeControlCandidateIdentity,
+    RuntimeRunRecord,
+)
 from seektalent_runtime_control.requirements import (
     ApprovedRequirementRevision,
     RequirementDraft,
@@ -19,6 +26,7 @@ from seektalent_runtime_control.requirements import (
 )
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
+from seektalent_workbench_v2.runtime_display import runtime_event_terminal_summary, safe_runtime_progress_details
 
 
 REQUIREMENT_DRAFT_SOURCE = "workbench_v2_agent"
@@ -33,6 +41,27 @@ class WorkbenchV2RequirementExtraction:
     requirement_sheet: RequirementSheet
 
 
+@dataclass(frozen=True)
+class _NextRoundRequirementExtractorAdapter:
+    extractor: object
+    requirement_cache_scope: str
+
+    def extract_requirements(
+        self,
+        *,
+        job_title: str | None,
+        jd_text: str,
+        notes: str | None,
+    ) -> RequirementSheet:
+        return _extract_requirements(
+            self.extractor,
+            job_title=job_title or "",
+            jd_text=jd_text,
+            notes=notes,
+            requirement_cache_scope=self.requirement_cache_scope,
+        )
+
+
 class WorkbenchV2RuntimeService:
     def __init__(
         self,
@@ -45,6 +74,7 @@ class WorkbenchV2RuntimeService:
         draft_revision_id_factory: Callable[[], str] | None = None,
         approved_requirement_revision_id_factory: Callable[[], str] | None = None,
         runtime_run_id_factory: Callable[[], str] | None = None,
+        on_run_queued: Callable[[str], None] | None = None,
         now: Callable[[], str] | None = None,
     ) -> None:
         self.store = store
@@ -59,6 +89,7 @@ class WorkbenchV2RuntimeService:
             lambda: _new_id("reqapproved")
         )
         self.runtime_run_id_factory = runtime_run_id_factory
+        self.on_run_queued = on_run_queued
         self.now = now or _now_iso
 
     def extract_requirements(
@@ -137,7 +168,7 @@ class WorkbenchV2RuntimeService:
                 approved,
                 idempotency_key=approved_idempotency_key,
             )
-        return self._executor().enqueue_workflow_run(
+        run = self._executor().enqueue_workflow_run(
             conversation_id=conversation_id,
             workbench_session_id=None,
             approved_requirement=saved,
@@ -147,6 +178,9 @@ class WorkbenchV2RuntimeService:
             source_ids=DEFAULT_SOURCE_IDS,
             start_idempotency_key=start_idempotency_key,
         )
+        if run.status in {"queued", "resume_requested"} and self.on_run_queued is not None:
+            self.on_run_queued(run.runtime_run_id)
+        return run
 
     def start_run_from_runtime_input(
         self,
@@ -189,12 +223,171 @@ class WorkbenchV2RuntimeService:
     def get_status(self, runtime_run_id: str) -> dict[str, str]:
         run = self.store.get_run(runtime_run_id)
         stage = run.current_stage
+        event_summary = _latest_runtime_event_summary(
+            self.store,
+            runtime_run_id=run.runtime_run_id,
+            latest_event_seq=run.latest_event_seq,
+            run_status=run.status,
+        )
         return {
             "runtimeRunId": run.runtime_run_id,
             "status": run.status,
             "stage": stage,
-            "summary": _status_summary(run.status, stage),
+            "summary": event_summary or _status_summary(run.status, stage),
         }
+
+    def list_progress_events(
+        self,
+        runtime_run_id: str,
+        *,
+        after_seq: int,
+        limit: int = 200,
+    ) -> list[dict[str, object]]:
+        page = self.store.list_public_events(runtime_run_id=runtime_run_id, after_seq=after_seq, limit=limit)
+        events: list[dict[str, object]] = []
+        for event in page.events:
+            payload = _progress_payload_from_runtime_event(event)
+            if payload is None:
+                continue
+            payload["state"] = _runtime_state_from_event_status(str(getattr(event, "status", "")))
+            events.append(payload)
+        return events
+
+    def list_candidate_summaries(self, runtime_run_id: str, *, limit: int = 20) -> list[dict[str, object]]:
+        identities = self.store.list_candidate_identities(runtime_run_id=runtime_run_id)
+        evidence_by_identity: dict[str, list[RuntimeControlCandidateEvidence]] = {}
+        for evidence in self.store.list_candidate_evidence(runtime_run_id=runtime_run_id):
+            evidence_by_identity.setdefault(evidence.identity_id, []).append(evidence)
+        sorted_identities = sorted(
+            identities,
+            key=lambda identity: (-(identity.score if identity.score is not None else -1), identity.identity_id),
+        )
+        candidates: list[dict[str, object]] = []
+        for index, identity in enumerate(sorted_identities[: max(0, limit)], start=1):
+            evidence = evidence_by_identity.get(identity.identity_id, [])
+            source_kinds = _candidate_source_kinds(evidence)
+            headline = _candidate_headline(identity, evidence)
+            display_name = _candidate_display_name(identity, evidence, fallback=f"候选人 {index}")
+            score = _candidate_score(identity, evidence)
+            evidence_level = _candidate_evidence_level(evidence)
+            detail_availability = _candidate_detail_availability(identity, evidence)
+            candidates.append(
+                {
+                    "candidateId": identity.identity_id,
+                    "rank": index,
+                    "displayName": display_name,
+                    "headline": headline,
+                    "company": identity.company or None,
+                    "location": identity.location or _candidate_location(evidence),
+                    "education": _candidate_education(evidence),
+                    "experienceYears": _candidate_experience_years(evidence),
+                    "age": _candidate_age(evidence),
+                    "gender": _candidate_gender(evidence),
+                    "activeStatus": _candidate_active_status(evidence),
+                    "jobStatus": _candidate_job_status(evidence),
+                    "sourceKinds": source_kinds,
+                    "matchScore": score,
+                    "matchSummary": identity.summary or None,
+                    "status": identity.fit_bucket or "scored",
+                    "detailAvailability": detail_availability,
+                    "accessState": "allowed" if detail_availability != "unavailable" else "denied",
+                    "evidenceLevel": evidence_level,
+                }
+            )
+        return candidates
+
+    def get_candidate_detail(self, runtime_run_id: str, candidate_id: str) -> dict[str, object]:
+        identities = self.store.list_candidate_identities(runtime_run_id=runtime_run_id)
+        identity = next((item for item in identities if item.identity_id == candidate_id), None)
+        if identity is None:
+            raise KeyError(candidate_id)
+        evidence = [
+            item
+            for item in self.store.list_candidate_evidence(runtime_run_id=runtime_run_id)
+            if item.identity_id == candidate_id
+        ]
+        detail_availability = _candidate_detail_availability(identity, evidence)
+        return {
+            "candidateId": identity.identity_id,
+            "displayName": _candidate_display_name(identity, evidence, fallback="候选人"),
+            "headline": _candidate_headline(identity, evidence),
+            "company": identity.company or _candidate_company(evidence),
+            "location": identity.location or _candidate_location(evidence),
+            "education": _candidate_education(evidence),
+            "experienceYears": _candidate_experience_years(evidence),
+            "age": _candidate_age(evidence),
+            "gender": _candidate_gender(evidence),
+            "activeStatus": _candidate_active_status(evidence),
+            "jobStatus": _candidate_job_status(evidence),
+            "sourceKinds": _candidate_source_kinds(evidence),
+            "matchScore": _candidate_score(identity, evidence),
+            "sections": _candidate_detail_sections(identity, evidence),
+            "evidence": _candidate_detail_evidence(evidence),
+            "detailAvailability": detail_availability,
+            "accessState": "allowed" if detail_availability != "unavailable" else "denied",
+            "evidenceLevel": _candidate_evidence_level(evidence),
+            "reasonCode": _candidate_reason_code(evidence),
+        }
+
+    def submit_next_round_requirement(
+        self,
+        runtime_run_id: str,
+        text: str,
+        *,
+        idempotency_key: str,
+    ) -> dict[str, object]:
+        command_service = RuntimeCommandService(
+            store=self.store,
+            requirement_extractor=_NextRoundRequirementExtractorAdapter(
+                extractor=self._requirement_extractor(),
+                requirement_cache_scope=runtime_run_id,
+            ),
+            now=self.now,
+        )
+        result = command_service.submit_next_round_requirement(
+            runtime_run_id=runtime_run_id,
+            text=text,
+            target_section_hint=None,
+            idempotency_key=idempotency_key,
+            provenance={"source": "workbench_v2_agent", "runtimeRunId": runtime_run_id},
+        )
+        return {
+            "amendmentId": result.amendment_id,
+            "status": result.status,
+            "targetRoundNo": result.target_round_no,
+            "effectiveBoundary": result.effective_boundary,
+            "approvedRequirementRevisionId": result.approved_requirement_revision_id,
+            "reviewRequired": result.review_required,
+        }
+
+    def get_results(self, runtime_run_id: str) -> dict[str, object]:
+        run = self.store.get_run(runtime_run_id)
+        if run.status != "completed":
+            return {
+                "runtimeRunId": run.runtime_run_id,
+                "status": run.status,
+                "stage": run.current_stage,
+                "summary": _status_summary(run.status, run.current_stage),
+            }
+        detail_service = RuntimeDetailService(store=self.store, now=self.now)
+        try:
+            summary = detail_service.prepare_final_summary(
+                runtime_run_id=runtime_run_id,
+                user_instruction=None,
+                source_snapshot_event_seq=run.latest_event_seq,
+                idempotency_key=f"workbench-v2-runtime-results:{runtime_run_id}:{run.latest_event_seq}",
+            )
+        except RuntimeControlError:
+            return {
+                "runtimeRunId": run.runtime_run_id,
+                "status": run.status,
+                "stage": run.current_stage,
+                "summary": _status_summary(run.status, run.current_stage),
+            }
+        payload = summary.model_dump(mode="json")
+        payload.setdefault("runtimeRunId", run.runtime_run_id)
+        payload.setdefault("stage", run.current_stage)
+        return payload
 
     def _requirement_extractor(self) -> Callable[..., RequirementSheet]:
         extractor = self.requirement_extractor
@@ -215,6 +408,463 @@ class WorkbenchV2RuntimeService:
                 now=self.now,
             )
         return self._runtime_executor
+
+
+def _candidate_source_kinds(evidence: Sequence[RuntimeControlCandidateEvidence]) -> list[str]:
+    source_kinds = sorted(
+        {
+            "liepin" if item.source_kind == "liepin" else "cts"
+            for item in evidence
+            if item.source_kind in {"liepin", "cts"}
+        }
+    )
+    return source_kinds
+
+
+def _candidate_display_name(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+    *,
+    fallback: str,
+) -> str:
+    detail_name = _first_text_from_payloads(evidence, ("safeDetail", "candidateName"))
+    normalized_name = _first_text_from_payloads(evidence, ("normalizedProfile", "candidateName"))
+    if identity.display_name and not identity.display_name.startswith("Candidate "):
+        return identity.display_name
+    return detail_name or normalized_name or identity.display_name or fallback
+
+
+def _candidate_headline(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> str | None:
+    title = (
+        _clean_text(identity.title)
+        or _first_text_from_payloads(evidence, ("safeDetail", "currentTitle"))
+        or _first_text_from_payloads(evidence, ("normalizedProfile", "currentTitle"))
+        or _first_text_from_payloads(evidence, ("safeSummary", "currentOrRecentTitle"))
+        or _first_text_from_payloads(evidence, ("candidateProfile", "expectedJobCategory"))
+        or _first_text_from_payloads(evidence, ("safeSummary", "displayTitle"))
+    )
+    company = (
+        _clean_text(identity.company)
+        or _first_text_from_payloads(evidence, ("safeDetail", "currentCompany"))
+        or _first_text_from_payloads(evidence, ("normalizedProfile", "currentCompany"))
+        or _first_text_from_payloads(evidence, ("safeSummary", "currentOrRecentCompany"))
+    )
+    if title and company:
+        return f"{title} · {company}"
+    return title or company
+
+
+def _candidate_location(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
+    return (
+        _first_text_from_payloads(evidence, ("candidateProfile", "nowLocation"))
+        or _first_text_from_payloads(evidence, ("safeSummary", "city"))
+        or _first_list_text_from_payloads(evidence, ("normalizedProfile", "locations"))
+        or _first_list_text_from_payloads(evidence, ("safeDetail", "locations"))
+    )
+
+
+def _candidate_company(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
+    return (
+        _first_text_from_payloads(evidence, ("safeDetail", "currentCompany"))
+        or _first_text_from_payloads(evidence, ("normalizedProfile", "currentCompany"))
+        or _first_text_from_payloads(evidence, ("safeSummary", "currentOrRecentCompany"))
+    )
+
+
+def _candidate_education(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
+    return (
+        _first_text_from_payloads(evidence, ("safeSummary", "educationLevel"))
+        or _first_text_from_payloads(evidence, ("normalizedProfile", "educationSummary"))
+        or _first_list_text_from_payloads(evidence, ("candidateProfile", "educationSummaries"))
+    )
+
+
+def _candidate_experience_years(evidence: Sequence[RuntimeControlCandidateEvidence]) -> int | None:
+    return (
+        _first_int_from_payloads(evidence, ("safeSummary", "workYears"))
+        or _first_int_from_payloads(evidence, ("normalizedProfile", "yearsOfExperience"))
+        or _first_int_from_payloads(evidence, ("candidateProfile", "workYear"))
+    )
+
+
+def _candidate_age(evidence: Sequence[RuntimeControlCandidateEvidence]) -> int | None:
+    return _first_int_from_payloads(evidence, ("candidateProfile", "age")) or _first_int_from_payloads(
+        evidence,
+        ("safeSummary", "age"),
+    )
+
+
+def _candidate_gender(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
+    return _first_text_from_payloads(evidence, ("candidateProfile", "gender"))
+
+
+def _candidate_active_status(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
+    return _first_text_from_payloads(evidence, ("candidateProfile", "activeStatus"))
+
+
+def _candidate_job_status(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
+    return _first_text_from_payloads(evidence, ("candidateProfile", "jobState"))
+
+
+def _candidate_score(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> int | None:
+    if identity.score is not None:
+        return identity.score
+    scores = [item.score for item in evidence if item.score is not None]
+    return max(scores) if scores else None
+
+
+def _candidate_evidence_level(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str:
+    levels = {item.evidence_level for item in evidence}
+    if "final" in levels:
+        return "final"
+    if "detail" in levels:
+        return "detail"
+    if levels & {"summary", "card"}:
+        return "summary"
+    return "unknown"
+
+
+def _candidate_detail_availability(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> str:
+    if identity.summary or any(_candidate_evidence_sections(item) for item in evidence):
+        return "available"
+    return "unavailable"
+
+
+def _candidate_detail_sections(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> list[dict[str, object]]:
+    sections = [
+        _section(
+            "匹配程度",
+            [
+                _prefix("推荐理由", identity.summary),
+                *_texts_from_payloads(evidence, ("safeDetail", "summary"), prefix="详情摘要"),
+                *_texts_from_payloads(evidence, ("safeDetail", "profile"), prefix="候选人概况"),
+            ],
+        ),
+        _section(
+            "求职意向",
+            [
+                *_texts_from_payloads(evidence, ("candidateProfile", "expectedJobCategory"), prefix="期望岗位"),
+                *_texts_from_payloads(evidence, ("candidateProfile", "expectedIndustry"), prefix="期望行业"),
+                *_texts_from_payloads(evidence, ("candidateProfile", "expectedLocation"), prefix="期望城市"),
+                *_texts_from_payloads(evidence, ("safeSummary", "expectedCity"), prefix="期望城市"),
+                *_texts_from_payloads(evidence, ("candidateProfile", "expectedSalary"), prefix="期望薪资"),
+                *_texts_from_payloads(evidence, ("safeSummary", "jobIntention"), prefix="求职意向"),
+            ],
+        ),
+        _section("工作经历", _work_experience_items(evidence)),
+        _section("项目经验", _project_items(evidence)),
+        _section("教育经历", _education_items(evidence)),
+        _section("技能标签", _skill_items(evidence)),
+    ]
+    return [section for section in sections if section["items"]]
+
+
+def _candidate_detail_evidence(evidence: Sequence[RuntimeControlCandidateEvidence]) -> list[str]:
+    items: list[str] = []
+    for item in sorted(evidence, key=lambda item: item.evidence_id):
+        source = "猎聘" if item.source_kind == "liepin" else "CTS" if item.source_kind == "cts" else item.source_kind
+        level = "detail" if item.evidence_level == "detail" else "final" if item.evidence_level == "final" else "summary"
+        items.append(f"来源：{source} {level} 证据")
+        provider_rank = _int_from_mapping(item.payload, "providerRank")
+        if provider_rank is not None:
+            items.append(f"检索排名：第 {provider_rank} 位")
+    return _unique_strings(items)[:8]
+
+
+def _candidate_reason_code(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
+    for item in evidence:
+        reason = _text_from_mapping(item.payload, "reasonCode")
+        if reason is not None:
+            return reason
+    return None
+
+
+def _candidate_evidence_sections(item: RuntimeControlCandidateEvidence) -> list[dict[str, object]]:
+    return _candidate_detail_sections(
+        RuntimeControlCandidateIdentity(
+            runtime_run_id=item.runtime_run_id,
+            identity_id=item.identity_id,
+            canonical_resume_id=item.resume_id,
+            display_name="",
+            payload_hash="",
+            updated_at=item.updated_at,
+        ),
+        [item],
+    )
+
+
+def _work_experience_items(evidence: Sequence[RuntimeControlCandidateEvidence]) -> list[str]:
+    items: list[str] = []
+    for payload in _payload_mappings(evidence, "safeDetail"):
+        for entry in _mapping_sequence(payload.get("workExperienceList")):
+            text = _format_experience_entry(entry)
+            if text:
+                items.append(text)
+    for payload in _payload_mappings(evidence, "normalizedProfile"):
+        for entry in _mapping_sequence(payload.get("recentExperiences")):
+            text = _format_experience_entry(entry)
+            if text:
+                items.append(text)
+    items.extend(_list_texts_from_payloads(evidence, ("candidateProfile", "workExperienceSummaries")))
+    items.extend(_list_texts_from_payloads(evidence, ("candidateProfile", "workSummaries")))
+    items.extend(
+        text
+        for item in _texts_from_payloads(evidence, ("safeSummary", "recentExperienceText"))
+        if (text := _clean_candidate_detail_text(item))
+    )
+    return _unique_strings(items)[:8]
+
+
+def _project_items(evidence: Sequence[RuntimeControlCandidateEvidence]) -> list[str]:
+    return _unique_strings(_list_texts_from_payloads(evidence, ("candidateProfile", "projectNames")))[:8]
+
+
+def _education_items(evidence: Sequence[RuntimeControlCandidateEvidence]) -> list[str]:
+    items: list[str] = []
+    for payload in _payload_mappings(evidence, "safeDetail"):
+        for entry in _mapping_sequence(payload.get("educationList")):
+            text = _format_education_entry(entry)
+            if text:
+                items.append(text)
+    school_names = _list_texts_from_payloads(evidence, ("safeSummary", "schoolNames"))
+    major_names = _list_texts_from_payloads(evidence, ("safeSummary", "majorNames"))
+    education_level = _texts_from_payloads(evidence, ("safeSummary", "educationLevel"))
+    if school_names or major_names or education_level:
+        school = "、".join(school_names)
+        major = "、".join(major_names)
+        level = "、".join(education_level)
+        items.append("｜".join(part for part in [school, major, level] if part))
+    items.extend(_list_texts_from_payloads(evidence, ("candidateProfile", "educationSummaries")))
+    items.extend(_texts_from_payloads(evidence, ("normalizedProfile", "educationSummary")))
+    return _unique_strings(items)[:8]
+
+
+def _skill_items(evidence: Sequence[RuntimeControlCandidateEvidence]) -> list[str]:
+    items: list[str] = []
+    for path in (
+        ("safeDetail", "skills"),
+        ("safeDetail", "skillTags"),
+        ("safeDetail", "tags"),
+        ("safeDetail", "keywords"),
+        ("safeSummary", "skillTags"),
+        ("normalizedProfile", "skills"),
+    ):
+        items.extend(_list_texts_from_payloads(evidence, path))
+    return _unique_strings(items)[:20]
+
+
+def _format_experience_entry(entry: Mapping[str, object]) -> str | None:
+    parts = [
+        _clean_candidate_detail_text(_first_present_text(entry, ("duration", "time", "dateRange", "startEndTime"))),
+        _clean_candidate_detail_text(_first_present_text(entry, ("company", "companyName", "org", "organization"))),
+        _clean_candidate_detail_text(_first_present_text(entry, ("title", "position", "positionName", "jobTitle"))),
+    ]
+    summary = _clean_candidate_detail_text(_first_present_text(entry, ("summary", "description", "workContent", "content")))
+    heading = "｜".join(part for part in parts if part)
+    if heading and summary:
+        return f"{heading}。工作内容：{summary}"
+    return heading or summary
+
+
+def _format_education_entry(entry: Mapping[str, object]) -> str | None:
+    parts = [
+        _clean_candidate_detail_text(_first_present_text(entry, ("duration", "time", "dateRange", "startEndTime"))),
+        _clean_candidate_detail_text(_first_present_text(entry, ("school", "schoolName", "college", "university"))),
+        _clean_candidate_detail_text(_first_present_text(entry, ("major", "majorName", "speciality"))),
+        _clean_candidate_detail_text(_first_present_text(entry, ("degree", "education", "educationLevel"))),
+    ]
+    return "｜".join(part for part in parts if part) or None
+
+
+def _section(title: str, items: Sequence[str | None]) -> dict[str, object]:
+    return {"title": title, "items": _unique_strings([item for item in items if item])}
+
+
+def _prefix(label: str, value: object) -> str | None:
+    text = _clean_text(value)
+    return f"{label}：{text}" if text else None
+
+
+def _texts_from_payloads(
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+    path: tuple[str, str],
+    *,
+    prefix: str | None = None,
+) -> list[str]:
+    items = [_text_from_mapping(payload, path[1]) for payload in _payload_mappings(evidence, path[0])]
+    texts = [item for item in items if item is not None]
+    if prefix is None:
+        return texts
+    return [f"{prefix}：{item}" for item in texts]
+
+
+def _list_texts_from_payloads(
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+    path: tuple[str, str],
+) -> list[str]:
+    items: list[str] = []
+    for payload in _payload_mappings(evidence, path[0]):
+        items.extend(_candidate_detail_string_sequence(payload.get(path[1])))
+    return items
+
+
+def _first_text_from_payloads(
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+    path: tuple[str, str],
+) -> str | None:
+    texts = _texts_from_payloads(evidence, path)
+    return texts[0] if texts else None
+
+
+def _first_list_text_from_payloads(
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+    path: tuple[str, str],
+) -> str | None:
+    texts = _list_texts_from_payloads(evidence, path)
+    return texts[0] if texts else None
+
+
+def _first_int_from_payloads(
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+    path: tuple[str, str],
+) -> int | None:
+    for payload in _payload_mappings(evidence, path[0]):
+        value = _int_from_mapping(payload, path[1])
+        if value is not None:
+            return value
+    return None
+
+
+def _payload_mappings(
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+    key: str,
+) -> list[Mapping[str, object]]:
+    return [_mapping_value(item.payload.get(key)) for item in evidence if _mapping_value(item.payload.get(key))]
+
+
+def _mapping_sequence(value: object) -> list[Mapping[str, object]]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    return [_mapping_value(item) for item in value if _mapping_value(item)]
+
+
+def _mapping_value(value: object) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    return {str(key): item for key, item in value.items() if isinstance(key, str)}
+
+
+def _string_sequence(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    return [text for item in value if (text := _clean_text(item))]
+
+
+def _candidate_detail_string_sequence(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    return [text for item in value if (text := _clean_candidate_detail_text(item))]
+
+
+def _first_present_text(value: Mapping[str, object], keys: Sequence[str]) -> str | None:
+    for key in keys:
+        text = _text_from_mapping(value, key)
+        if text is not None:
+            return text
+    return None
+
+
+def _text_from_mapping(value: Mapping[str, object], key: str) -> str | None:
+    return _clean_text(value.get(key))
+
+
+def _int_from_mapping(value: Mapping[str, object], key: str) -> int | None:
+    item = value.get(key)
+    if isinstance(item, bool):
+        return None
+    if isinstance(item, int):
+        return item
+    if isinstance(item, str):
+        try:
+            return int(item)
+        except ValueError:
+            return None
+    return None
+
+
+def _clean_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+_CANDIDATE_DETAIL_STOP_PREFIXES = (
+    "声明：",
+    "简历备注",
+    "简历洞察",
+    "简历信息",
+    "教育经历",
+    "语言能力",
+    "自我评价",
+    "津ICP备",
+    "ICP备",
+    "ICP经营许可证",
+)
+
+_CANDIDATE_DETAIL_NOISE_LINES = {
+    "去查看",
+    "添加备注",
+    "共 条",
+    "0",
+    "新手任务",
+    "账号问候",
+    "页面导航",
+}
+
+
+def _clean_candidate_detail_text(value: object) -> str | None:
+    text = _clean_text(value)
+    if text is None:
+        return None
+    kept: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith(_CANDIDATE_DETAIL_STOP_PREFIXES):
+            break
+        if line.startswith(("http://", "https://", "URL:")):
+            continue
+        if line in _CANDIDATE_DETAIL_NOISE_LINES:
+            continue
+        kept.append(line)
+    cleaned = "\n".join(kept).strip()
+    return cleaned or None
+
+
+def _unique_strings(items: Sequence[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for item in items:
+        text = item.strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+    return result
 
 
 def _extract_requirements(
@@ -291,6 +941,191 @@ def _deselected_item_ids(draft: RequirementDraft) -> list[str]:
     ]
 
 
+def _runtime_state_from_run_status(status: str) -> str:
+    if status == "queued":
+        return "queued"
+    if status == "completed":
+        return "completed"
+    if status == "failed":
+        return "failed"
+    if status == "cancelled":
+        return "cancelled"
+    return "running"
+
+
+def _runtime_state_from_event_status(status: str) -> str:
+    if status == "queued":
+        return "queued"
+    if status == "completed":
+        return "completed"
+    if status in {"blocked", "failed"}:
+        return "failed"
+    if status == "cancelled":
+        return "cancelled"
+    return "running"
+
+
+def _progress_payload_from_runtime_event(event: object) -> dict[str, object] | None:
+    if getattr(event, "visibility", "internal") != "public":
+        return None
+    event_type = str(getattr(event, "event_type", ""))
+    if event_type not in _PROJECTED_RUNTIME_EVENT_TYPES:
+        return None
+    summary = _runtime_event_user_summary(event)
+    if summary is None:
+        return None
+    payload: dict[str, object] = {
+        "runtimeRunId": getattr(event, "runtime_run_id"),
+        "runtimeEventSeq": int(getattr(event, "event_seq")),
+        "runtimeEventType": event_type,
+        "status": getattr(event, "status"),
+        "stage": getattr(event, "stage"),
+        "summary": summary,
+    }
+    round_no = getattr(event, "round_no", None)
+    if isinstance(round_no, int):
+        payload["roundNo"] = round_no
+    source_id = getattr(event, "source_id", None)
+    if isinstance(source_id, str) and source_id:
+        payload["sourceId"] = source_id
+    public_payload = getattr(event, "payload", {})
+    public_payload = public_payload if isinstance(public_payload, dict) else {}
+    source_kind = _payload_text(public_payload.get("sourceKind"))
+    if source_kind is not None:
+        payload["sourceKind"] = source_kind
+    counts = public_payload.get("counts")
+    if isinstance(counts, dict):
+        payload["counts"] = {str(key): value for key, value in counts.items() if isinstance(value, int)}
+    details = public_payload.get("details")
+    safe_details = safe_runtime_progress_details(details)
+    if safe_details:
+        payload["details"] = safe_details
+    safe_reason_code = _payload_text(public_payload.get("safeReasonCode"))
+    if safe_reason_code is not None:
+        payload["safeReasonCode"] = safe_reason_code
+    return payload
+
+
+_PROJECTED_RUNTIME_EVENT_TYPES = {
+    "runtime_run_started",
+    "runtime_requirements_started",
+    "runtime_requirements_completed",
+    "runtime_controller_started",
+    "runtime_search_started",
+    "runtime_round_query_ready",
+    "runtime_round_source_dispatch",
+    "runtime_round_source_result",
+    "runtime_round_merge_completed",
+    "runtime_search_completed",
+    "runtime_scoring_started",
+    "runtime_scoring_completed",
+    "runtime_round_scoring_completed",
+    "runtime_resume_quality_comment_completed",
+    "runtime_reflection_started",
+    "runtime_reflection_completed",
+    "runtime_round_feedback_completed",
+    "runtime_round_completed",
+    "runtime_search_failed",
+    "runtime_run_failed",
+    "runtime_run_completed",
+    "runtime_finalization_completed",
+}
+
+
+def _runtime_event_user_summary(event: object) -> str | None:
+    event_type = str(getattr(event, "event_type", ""))
+    stage = str(getattr(event, "stage", ""))
+    status = str(getattr(event, "status", ""))
+    summary = str(getattr(event, "summary", "") or "").strip()
+    payload = getattr(event, "payload", {})
+    payload = payload if isinstance(payload, dict) else {}
+    round_no = getattr(event, "round_no", None)
+    round_prefix = f"第 {round_no} 轮" if isinstance(round_no, int) else "本轮"
+
+    if event_type == "runtime_run_started":
+        return "招聘流程已开始。"
+    if event_type == "runtime_requirements_started":
+        return "正在解析确认后的岗位需求。"
+    if event_type == "runtime_requirements_completed":
+        job_title = payload.get("job_title")
+        return f"岗位需求解析完成：{job_title}。" if isinstance(job_title, str) and job_title else "岗位需求解析完成。"
+    if event_type == "runtime_controller_started":
+        return f"{round_prefix}正在规划检索策略。"
+    if event_type == "runtime_search_started":
+        return summary or f"{round_prefix}开始检索候选人。"
+    if event_type == "runtime_round_query_ready":
+        return f"{round_prefix}查询策略已生成。"
+    if event_type == "runtime_round_source_dispatch":
+        return f"{round_prefix}已向猎聘发起候选人检索。"
+    if event_type == "runtime_round_source_result":
+        counts = payload.get("counts")
+        counts = counts if isinstance(counts, dict) else {}
+        returned = counts.get("roundReturned")
+        identities = counts.get("roundIdentities")
+        if isinstance(returned, int) and isinstance(identities, int):
+            return f"{round_prefix}猎聘检索完成：返回 {returned} 条，新增 {identities} 位候选人。"
+        if status == "blocked":
+            return f"{round_prefix}猎聘检索受阻：{summary or '需要刷新检索页面后重试。'}"
+        return f"{round_prefix}猎聘检索结果已更新。"
+    if event_type == "runtime_round_merge_completed":
+        counts = payload.get("counts")
+        counts = counts if isinstance(counts, dict) else {}
+        merged = counts.get("mergedIdentities")
+        if isinstance(merged, int):
+            return f"{round_prefix}候选人合并完成：新增 {merged} 位候选人。"
+        return f"{round_prefix}候选人合并完成。"
+    if event_type == "runtime_search_completed":
+        return summary or f"{round_prefix}检索完成。"
+    if event_type == "runtime_scoring_started":
+        return summary or f"{round_prefix}开始候选人评分。"
+    if event_type == "runtime_scoring_completed":
+        return summary or f"{round_prefix}候选人评分完成。"
+    if event_type == "runtime_round_scoring_completed":
+        counts = payload.get("counts")
+        counts = counts if isinstance(counts, dict) else {}
+        top_pool_count = counts.get("topPoolCount")
+        if isinstance(top_pool_count, int):
+            return f"{round_prefix}评分完成，{top_pool_count} 位候选人进入 Top Pool。"
+        return f"{round_prefix}评分完成。"
+    if event_type == "runtime_resume_quality_comment_completed":
+        return summary or f"{round_prefix}简历质量评估完成。"
+    if event_type == "runtime_reflection_started":
+        return summary or f"{round_prefix}开始复盘检索效果。"
+    if event_type == "runtime_reflection_completed":
+        return f"{round_prefix}复盘完成，准备调整下一轮检索策略。"
+    if event_type == "runtime_round_feedback_completed":
+        return f"{round_prefix}复盘完成，准备调整下一轮检索策略。"
+    if event_type == "runtime_round_completed":
+        return summary or f"{round_prefix}完成。"
+    if event_type == "runtime_search_failed":
+        reason = summary or str(payload.get("reasonCode") or payload.get("errorCode") or "").strip()
+        return f"{round_prefix}检索失败：{_runtime_failure_reason(reason)}"
+    if event_type == "runtime_run_failed":
+        reason = summary or str(payload.get("reasonCode") or payload.get("errorCode") or "").strip()
+        return f"招聘流程失败：{_runtime_failure_reason(reason)}"
+    terminal_summary = runtime_event_terminal_summary(event_type)
+    if terminal_summary is not None:
+        return terminal_summary
+    if summary and summary not in _INTERNAL_RUNTIME_EVENT_SUMMARIES:
+        return _runtime_event_summary(status, stage, summary)
+    return None
+
+
+def _payload_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _runtime_failure_reason(reason: str) -> str:
+    if reason == "liepin_opencli_stale_ref":
+        return "猎聘页面引用已失效，需要刷新检索页面后重试。"
+    if reason in {"liepin_opencli_extension_disconnected", "source_browser_extension_disconnected"}:
+        return "猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
+    return reason or "运行失败，请查看详情。"
+
+
 def _status_summary(status: str, stage: str) -> str:
     summaries = {
         "queued": "招聘流程已排队，等待开始。",
@@ -305,6 +1140,70 @@ def _status_summary(status: str, stage: str) -> str:
         "failed": "招聘流程失败，请查看运行详情。",
     }
     return summaries.get(status, f"招聘流程状态：{status}。")
+
+
+def _latest_runtime_event_summary(
+    store: RuntimeControlStore,
+    runtime_run_id: str,
+    latest_event_seq: int,
+    run_status: str,
+) -> str | None:
+    if latest_event_seq <= 0:
+        return None
+    page = store.list_public_events(
+        runtime_run_id=runtime_run_id,
+        after_seq=max(0, latest_event_seq - 20),
+        limit=20,
+    )
+    for event in reversed(page.events):
+        if event.status not in _summary_event_statuses_for_run(run_status) and event.event_type not in {
+            "runtime_search_failed",
+            "runtime_run_failed",
+        }:
+            continue
+        summary = _runtime_event_user_summary(event)
+        if summary:
+            return summary
+    return None
+
+
+_INTERNAL_RUNTIME_EVENT_SUMMARIES = {
+    "workflow run queued",
+    "executor starting",
+    "executor started",
+    "checkpoint written",
+    "runtime worker claimed run",
+    "run completed",
+}
+
+
+def _summary_event_statuses_for_run(run_status: str) -> set[str]:
+    if run_status == "running":
+        return {"running", "blocked", "partial"}
+    if run_status == "failed":
+        return {"failed"}
+    if run_status == "completed":
+        return {"completed", "partial"}
+    return set()
+
+
+def _runtime_event_summary(status: str, stage: str, summary: str) -> str:
+    stage_label = _stage_label(stage)
+    if status == "failed":
+        return f"招聘流程失败：{summary}"
+    if status in {"blocked", "partial"}:
+        return f"招聘流程{_status_label(status)}：{summary}"
+    if status == "running":
+        return f"招聘流程运行中，当前阶段：{stage_label}。{summary}"
+    return summary
+
+
+def _status_label(status: str) -> str:
+    labels = {
+        "blocked": "已阻塞",
+        "partial": "部分完成",
+    }
+    return labels.get(status, status)
 
 
 def _stage_label(stage: str) -> str:

@@ -1,3 +1,4 @@
+import { useLayoutEffect, useMemo, useRef } from "react";
 import type {
   WorkbenchV2RequirementActionRequest,
   WorkbenchV2TranscriptEvent,
@@ -18,9 +19,33 @@ export function TranscriptV2({
   requirementActionPending = false,
   onRequirementAction,
 }: TranscriptV2Props) {
-  const orderedEvents = [...events].sort(
-    (left, right) => left.step - right.step,
+  const transcriptRef = useRef<HTMLElement | null>(null);
+  const shouldStickToBottomRef = useRef(true);
+  const orderedEvents = useMemo(
+    () => [...events].sort((left, right) => left.step - right.step),
+    [events],
   );
+  const latestRequirementFormEventId =
+    latestRequirementFormEvent(orderedEvents)?.eventId ?? null;
+  const latestEventId = orderedEvents.at(-1)?.eventId ?? null;
+
+  useLayoutEffect(() => {
+    const transcript = transcriptRef.current;
+    if (transcript === null || !shouldStickToBottomRef.current) {
+      return;
+    }
+    transcript.scrollTop = transcript.scrollHeight;
+  }, [latestEventId, orderedEvents.length]);
+
+  function handleScroll() {
+    const transcript = transcriptRef.current;
+    if (transcript === null) {
+      return;
+    }
+    const distanceFromBottom =
+      transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight;
+    shouldStickToBottomRef.current = distanceFromBottom <= 96;
+  }
 
   if (orderedEvents.length === 0) {
     return (
@@ -37,10 +62,16 @@ export function TranscriptV2({
   }
 
   return (
-    <section aria-label="Agent transcript" className="transcript-v2">
+    <section
+      aria-label="Agent transcript"
+      className="transcript-v2"
+      onScroll={handleScroll}
+      ref={transcriptRef}
+    >
       {orderedEvents.map((event) => (
         <TranscriptV2Event
           event={event}
+          latestRequirementFormEventId={latestRequirementFormEventId}
           key={event.eventId}
           onRequirementAction={onRequirementAction}
           requirementActionPending={requirementActionPending}
@@ -52,10 +83,12 @@ export function TranscriptV2({
 
 function TranscriptV2Event({
   event,
+  latestRequirementFormEventId,
   onRequirementAction,
   requirementActionPending,
 }: {
   event: WorkbenchV2TranscriptEvent;
+  latestRequirementFormEventId: string | null;
   requirementActionPending: boolean;
   onRequirementAction:
     | ((payload: WorkbenchV2RequirementActionRequest) => Promise<void> | void)
@@ -65,6 +98,9 @@ function TranscriptV2Event({
     event.type === "requirement_form" ||
     event.type === "requirement_form_confirmed"
   ) {
+    if (event.eventId !== latestRequirementFormEventId) {
+      return null;
+    }
     return (
       <RequirementFormEvent
         actionPending={requirementActionPending}
@@ -80,10 +116,13 @@ function TranscriptV2Event({
   }
 
   if (event.type === "user_message" || event.type === "assistant_message") {
+    const longUserMessage =
+      event.type === "user_message" && isLongUserMessage(content);
     return (
       <article
         aria-label={event.type === "user_message" ? "用户消息" : "助手消息"}
         className="transcript-v2__turn"
+        data-length={longUserMessage ? "long" : "normal"}
         data-role={event.type === "user_message" ? "user" : "assistant"}
       >
         <div className="transcript-v2__speaker">
@@ -95,19 +134,59 @@ function TranscriptV2Event({
   }
 
   return (
+    <TranscriptV2ActivityEvent
+      content={content}
+      event={event}
+      label={eventLabel(event)}
+    />
+  );
+}
+
+function TranscriptV2ActivityEvent({
+  content,
+  event,
+  label,
+}: {
+  content: string;
+  event: WorkbenchV2TranscriptEvent;
+  label: string;
+}) {
+  return (
     <article
-      aria-label={eventLabel(event)}
+      aria-label={label}
       className="transcript-v2__event"
       data-status={event.status}
       data-type={event.type}
     >
-      <span>{eventLabel(event)}</span>
-      <p>{content}</p>
+      <span aria-hidden="true" className="transcript-v2__event-marker" />
+      <div className="transcript-v2__event-body">
+        <span>{label}</span>
+        <p>{content}</p>
+      </div>
     </article>
   );
 }
 
+function latestRequirementFormEvent(
+  orderedEvents: readonly WorkbenchV2TranscriptEvent[],
+): WorkbenchV2TranscriptEvent | null {
+  for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+    const event = orderedEvents[index];
+    if (
+      event?.type === "requirement_form" ||
+      event?.type === "requirement_form_confirmed"
+    ) {
+      return event;
+    }
+  }
+  return null;
+}
+
 function eventContent(event: WorkbenchV2TranscriptEvent): string | null {
+  if (event.type === "runtime_result" && !hasDisplayableRuntimeResult(event)) {
+    return null;
+  }
+
   const text =
     readString(event.payload, "text") ??
     readString(event.payload, "message") ??
@@ -135,6 +214,29 @@ function eventContent(event: WorkbenchV2TranscriptEvent): string | null {
     return "请求失败，请稍后重试。";
   }
   return null;
+}
+
+function isLongUserMessage(text: string): boolean {
+  return text.length > 220 || text.includes("\n");
+}
+
+function hasDisplayableRuntimeResult(
+  event: WorkbenchV2TranscriptEvent,
+): boolean {
+  const state = readString(event.payload, "state");
+  const summary = readString(event.payload, "summary");
+  const facts = event.payload["facts"];
+  if (Array.isArray(facts) && facts.length > 0) {
+    return true;
+  }
+  if (state === "completed") {
+    return true;
+  }
+  return (
+    typeof summary === "string" &&
+    summary.trim().length > 0 &&
+    summary.trim() !== "当前还没有运行结果。"
+  );
 }
 
 function eventLabel(event: WorkbenchV2TranscriptEvent): string {

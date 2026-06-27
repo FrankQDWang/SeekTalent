@@ -1,12 +1,10 @@
 import { Eye } from "lucide-react";
 import type { AgentWorkbenchCandidateSummary } from "../../lib/api/agentWorkbenchTypes";
 import { Button } from "../primitives/Button";
+import { candidateSourceLabel } from "./candidateSource";
 import "./CandidateQueue.css";
 
 export type CandidateCardCandidate = AgentWorkbenchCandidateSummary;
-type CandidateSourceKind = NonNullable<
-  CandidateCardCandidate["sourceKinds"]
->[number];
 
 type CandidateCardProps = {
   candidate: CandidateCardCandidate;
@@ -14,37 +12,25 @@ type CandidateCardProps = {
   onViewDetails?: ((candidateId: string) => void) | undefined;
 };
 
-const sourceLabels: Record<CandidateSourceKind, string> = {
-  cts: "CTS 实验",
-  liepin: "猎聘",
-};
-
-function sourceBadgeLabel(
-  sourceKinds: readonly CandidateSourceKind[] | null | undefined,
-): string {
-  const uniqueKinds = [...new Set(sourceKinds ?? [])];
-  if (uniqueKinds.includes("liepin")) {
-    return sourceLabels.liepin;
-  }
-  if (uniqueKinds.includes("cts")) {
-    return sourceLabels.cts;
-  }
-  const [sourceKind] = uniqueKinds;
-  return sourceKind ? sourceLabels[sourceKind] : "来源待确认";
-}
-
 export function CandidateCard({
   candidate,
   onViewDetails,
   selected = false,
 }: CandidateCardProps) {
   const facts = [
+    typeof candidate.age === "number" ? `${String(candidate.age)}岁` : null,
     candidate.location,
     candidate.education,
     typeof candidate.experienceYears === "number"
       ? `工作${String(candidate.experienceYears)}年`
       : null,
   ].filter((fact): fact is string => Boolean(fact));
+  const headline = candidateHeadline(candidate);
+  const score =
+    typeof candidate.matchScore === "number"
+      ? `${String(candidate.matchScore)}分`
+      : null;
+  const status = candidateStatusLabel(candidate.status);
 
   return (
     <article
@@ -61,12 +47,13 @@ export function CandidateCard({
           </span>
           <div className="candidate-card__name-block">
             <h3>{candidate.displayName}</h3>
-            <p>{candidate.headline ?? "候选人安全摘要"}</p>
+            <p>{headline}</p>
           </div>
         </div>
-        <span className="candidate-card__source">
-          {sourceBadgeLabel(candidate.sourceKinds)}
-        </span>
+        <div className="candidate-card__badges">
+          {status ? <span data-status={candidate.status}>{status}</span> : null}
+          <span>{candidateSourceLabel(candidate.sourceKinds)}</span>
+        </div>
       </div>
 
       {facts.length > 0 ? (
@@ -77,7 +64,12 @@ export function CandidateCard({
         </div>
       ) : null}
 
+      {candidate.matchSummary ? (
+        <p className="candidate-card__summary">{candidate.matchSummary}</p>
+      ) : null}
+
       <div className="candidate-card__footer">
+        {score ? <span className="candidate-card__score">{score}</span> : null}
         <Button
           className="candidate-card__detail-button"
           icon={<Eye aria-hidden="true" size={16} />}
@@ -89,4 +81,28 @@ export function CandidateCard({
       </div>
     </article>
   );
+}
+
+function candidateHeadline(candidate: CandidateCardCandidate): string {
+  const headline = candidate.headline?.trim();
+  const company = candidate.company?.trim();
+  if (headline && company && !headline.includes(company)) {
+    return `${headline} · ${company}`;
+  }
+  return headline || company || "候选人安全摘要";
+}
+
+function candidateStatusLabel(
+  status: CandidateCardCandidate["status"],
+): string | null {
+  if (status === "fit") {
+    return "推荐";
+  }
+  if (status === "reviewing" || status === "maybe") {
+    return "待复核";
+  }
+  if (status === "not_fit") {
+    return "暂不推荐";
+  }
+  return status ? "已评分" : null;
 }

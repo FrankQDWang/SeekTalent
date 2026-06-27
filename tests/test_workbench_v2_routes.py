@@ -14,9 +14,12 @@ from seektalent_ui.agent_request_models import (
 )
 from seektalent_ui.server import create_app
 from seektalent_workbench_v2.models import (
+    WorkbenchV2CandidateDetailSectionView,
+    WorkbenchV2CandidateDetailView,
     WorkbenchV2ConversationListSummary,
     WorkbenchV2ConversationListView,
     WorkbenchV2ConversationPublic,
+    WorkbenchV2ConversationEventsView,
     WorkbenchV2ConversationView,
     WorkbenchV2TranscriptEventView,
 )
@@ -34,6 +37,8 @@ class FakeWorkbenchV2Service:
         self.submit_calls: list[tuple[str, str, str | None]] = []
         self.requirement_action_calls: list[dict[str, object]] = []
         self.get_calls: list[str] = []
+        self.event_calls: list[tuple[str, int, int]] = []
+        self.detail_calls: list[tuple[str, str]] = []
         self.list_calls = 0
 
     def list_conversations(self) -> WorkbenchV2ConversationListView:
@@ -73,6 +78,49 @@ class FakeWorkbenchV2Service:
             title="Existing conversation",
             event_id="agentv2_event_get",
             user_text="hello",
+        )
+
+    def list_events(
+        self,
+        conversation_id: str,
+        *,
+        after_step: int,
+        limit: int,
+    ) -> WorkbenchV2ConversationEventsView:
+        self.event_calls.append((conversation_id, after_step, limit))
+        if conversation_id == "missing":
+            raise KeyError(conversation_id)
+        events = [
+            _event_view(event_id="agentv2_event_1", step=1, user_text="hello"),
+            _event_view(event_id="agentv2_event_2", step=2, user_text="progress"),
+        ]
+        return WorkbenchV2ConversationEventsView(
+            conversationId=conversation_id,
+            afterStep=after_step,
+            latestStep=2,
+            events=[event for event in events if event.step > after_step][:limit],
+        )
+
+    def get_candidate_detail(self, conversation_id: str, candidate_id: str) -> WorkbenchV2CandidateDetailView:
+        self.detail_calls.append((conversation_id, candidate_id))
+        if conversation_id == "missing":
+            raise KeyError(conversation_id)
+        return WorkbenchV2CandidateDetailView(
+            candidateId=candidate_id,
+            displayName="吴所谓",
+            headline="资深体验设计工程师 · 平安集团",
+            sourceKinds=["liepin"],
+            matchScore=86,
+            sections=[
+                WorkbenchV2CandidateDetailSectionView(
+                    title="匹配程度",
+                    items=["推荐理由：做过复杂 B 端业务流程。"],
+                )
+            ],
+            evidence=["来源：猎聘 detail 证据"],
+            detailAvailability="available",
+            accessState="allowed",
+            evidenceLevel="detail",
         )
 
     async def submit_message(
@@ -174,6 +222,47 @@ def test_missing_get_returns_public_reason_code(tmp_path: Path) -> None:
     assert response.status_code == 404, response.text
     assert response.json() == {"detail": {"reasonCode": "workbench_v2_conversation_not_found"}}
     assert fake.get_calls == ["missing"]
+
+
+def test_list_events_returns_incremental_v2_events(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.get("/api/agent/workbench/v2/conversations/agentv2_existing/events?afterStep=1&limit=1")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == WorkbenchV2ConversationEventsView(
+        conversationId="agentv2_existing",
+        afterStep=1,
+        latestStep=2,
+        events=[_event_view(event_id="agentv2_event_2", step=2, user_text="progress")],
+    ).model_dump(mode="json")
+    assert fake.event_calls == [("agentv2_existing", 1, 1)]
+
+
+def test_candidate_detail_route_returns_runtime_backed_v2_detail(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.get(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/candidates/identity_1/detail"
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["candidateId"] == "identity_1"
+    assert response.json()["displayName"] == "吴所谓"
+    assert response.json()["sections"] == [
+        {"title": "匹配程度", "items": ["推荐理由：做过复杂 B 端业务流程。"]}
+    ]
+    assert fake.detail_calls == [("agentv2_existing", "identity_1")]
+
+
+def test_missing_list_events_returns_public_reason_code(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.get("/api/agent/workbench/v2/conversations/missing/events")
+
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": {"reasonCode": "workbench_v2_conversation_not_found"}}
+    assert fake.event_calls == [("missing", 0, 100)]
 
 
 def test_missing_submit_returns_public_reason_code(tmp_path: Path) -> None:
@@ -470,6 +559,7 @@ def test_openapi_declares_v2_error_responses(tmp_path: Path) -> None:
     paths = client.app.openapi()["paths"]
     create_responses = paths["/api/agent/workbench/v2/conversations"]["post"]["responses"]
     get_responses = paths["/api/agent/workbench/v2/conversations/{conversation_id}"]["get"]["responses"]
+    event_responses = paths["/api/agent/workbench/v2/conversations/{conversation_id}/events"]["get"]["responses"]
     submit_responses = paths["/api/agent/workbench/v2/conversations/{conversation_id}/messages"]["post"][
         "responses"
     ]
@@ -479,6 +569,7 @@ def test_openapi_declares_v2_error_responses(tmp_path: Path) -> None:
 
     assert {"201", "400", "409", "503"}.issubset(create_responses)
     assert {"404"}.issubset(get_responses)
+    assert {"404"}.issubset(event_responses)
     assert {"404"}.issubset(submit_responses)
     assert {"400", "404", "409", "503"}.issubset(action_responses)
     assert create_responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
@@ -529,16 +620,20 @@ def _conversation_view(
             updatedAt="2026-06-25T01:02:03.000004+00:00",
         ),
         transcriptEvents=[
-            WorkbenchV2TranscriptEventView(
-                eventId=event_id,
-                step=1,
-                type="user_message",
-                role="user",
-                status="completed",
-                payload={"text": user_text},
-                createdAt="2026-06-25T01:02:03.000004+00:00",
-            )
+            _event_view(event_id=event_id, step=1, user_text=user_text)
         ],
         requirementForm=None,
         runtime=None,
+    )
+
+
+def _event_view(*, event_id: str, step: int, user_text: str) -> WorkbenchV2TranscriptEventView:
+    return WorkbenchV2TranscriptEventView(
+        eventId=event_id,
+        step=step,
+        type="user_message",
+        role="user",
+        status="completed",
+        payload={"text": user_text},
+        createdAt="2026-06-25T01:02:03.000004+00:00",
     )

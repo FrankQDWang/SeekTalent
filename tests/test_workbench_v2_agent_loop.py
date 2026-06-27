@@ -5,6 +5,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from agents.exceptions import ModelBehaviorError
 from agents.run import get_output_schema
 from pydantic import ValidationError
 
@@ -15,8 +16,10 @@ from seektalent_workbench_v2.agent_loop import (
     WorkbenchV2MemoryWrite,
     WorkbenchV2RequirementPatch,
     WorkbenchV2RuntimeInput,
+    _build_agent,
     _render_turn_prompt,
 )
+from seektalent.llm import resolve_stage_model_config
 from seektalent_workbench_v2.models import WorkbenchV2TranscriptEvent
 from tests.settings_factory import make_settings
 
@@ -39,6 +42,39 @@ class SchemaPreparingRunner:
                 "memoryWrite": None,
             }
         )
+
+
+class SequencedRunner:
+    def __init__(self, *results: object) -> None:
+        self.results = list(results)
+        self.prompts: list[str] = []
+
+    async def run(self, agent, prompt: str) -> object:
+        self.prompts.append(prompt)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return SimpleNamespace(final_output=result)
+
+
+VALID_CHAT_OUTPUT = {
+    "intent": "chat",
+    "message": "已收到。",
+    "needsClarification": False,
+    "clarifyingQuestion": None,
+    "runtimeInput": None,
+    "requirementPatch": None,
+    "memoryRead": None,
+    "memoryWrite": None,
+}
+
+
+def _validation_error() -> ValidationError:
+    try:
+        WorkbenchV2AgentOutput.model_validate({"intent": "chat"})
+    except ValidationError as exc:
+        return exc
+    raise AssertionError("invalid output should raise ValidationError")
 
 
 def test_agent_output_validates_pure_chat_without_runtime_input() -> None:
@@ -271,6 +307,191 @@ def test_agents_sdk_prepares_strict_output_schema_without_network() -> None:
     assert schema["$defs"]["WorkbenchV2RequirementPatch"]["additionalProperties"] is False
 
 
+def test_agents_sdk_registers_workbench_action_tools_without_network() -> None:
+    config = resolve_stage_model_config(make_settings(text_llm_api_key="test-key"), stage="workbench_conversation")
+    agent = _build_agent(config)
+
+    assert [tool.name for tool in agent.tools] == [
+        "extract_requirements",
+        "update_requirements",
+        "confirm_requirements",
+        "start_runtime",
+        "get_runtime_status",
+        "get_runtime_results",
+        "read_memory",
+        "write_memory",
+    ]
+    assert agent.model_settings.parallel_tool_calls is False
+    assert agent.model_settings.extra_body == {"enable_thinking": True, "reasoning_effort": "max"}
+    for tool in agent.tools:
+        assert tool.strict_json_schema is True
+        assert tool.params_json_schema["additionalProperties"] is False
+
+
+def test_run_turn_retries_once_after_agents_sdk_model_behavior_error() -> None:
+    runner = SequencedRunner(
+        ModelBehaviorError("invalid structured output"),
+        {
+            "intent": "extract_requirements",
+            "message": "我已整理需求，请确认表单。",
+            "needsClarification": False,
+            "clarifyingQuestion": None,
+            "runtimeInput": {
+                "jobTitle": "AI 平台工程师",
+                "jd": "负责 Agent 工作流和 Python 后端。",
+                "notes": None,
+            },
+            "requirementPatch": None,
+            "memoryRead": None,
+            "memoryWrite": None,
+        },
+    )
+    loop = BailianStrictWorkbenchV2AgentLoop(
+        settings=make_settings(text_llm_api_key="test-key"),
+        runner=runner,
+    )
+
+    output = asyncio.run(
+        loop.run_turn(
+            conversation_id="conversation_1",
+            context_summary=None,
+            recent_events=[],
+            user_text="招 AI 平台工程师，负责 Agent 工作流和 Python 后端。",
+        )
+    )
+
+    assert output.intent == "extract_requirements"
+    assert output.runtimeInput is not None
+    assert len(runner.prompts) == 2
+    retry_prompt = runner.prompts[1]
+    assert "[WORKBENCH_V2_TURN_INPUT_START]" in retry_prompt
+    assert "招 AI 平台工程师，负责 Agent 工作流和 Python 后端。" in retry_prompt
+    assert "Previous structured output did not satisfy the required schema." in retry_prompt
+    assert "When there is no active requirement_form" in retry_prompt
+    assert "extract_requirements" in retry_prompt
+    assert "runtimeInput" in retry_prompt
+    assert "Never return an empty requirementPatch." in retry_prompt
+
+
+def test_run_turn_retries_once_after_local_output_validation_error() -> None:
+    runner = SequencedRunner(
+        {
+            "intent": "update_requirements",
+            "message": "我会更新需求。",
+            "needsClarification": False,
+            "clarifyingQuestion": None,
+            "runtimeInput": None,
+            "requirementPatch": {
+                "selectedItemIds": [],
+                "deselectedItemIds": [],
+                "otherNotes": None,
+            },
+            "memoryRead": None,
+            "memoryWrite": None,
+        },
+        VALID_CHAT_OUTPUT,
+    )
+    loop = BailianStrictWorkbenchV2AgentLoop(
+        settings=make_settings(text_llm_api_key="test-key"),
+        runner=runner,
+    )
+
+    output = asyncio.run(
+        loop.run_turn(
+            conversation_id="conversation_1",
+            context_summary=None,
+            recent_events=[],
+            user_text="先随便聊聊",
+        )
+    )
+
+    assert output.intent == "chat"
+    assert len(runner.prompts) == 2
+
+
+def test_run_turn_allows_only_one_schema_retry() -> None:
+    runner = SequencedRunner(
+        ModelBehaviorError("invalid structured output"),
+        ModelBehaviorError("still invalid structured output"),
+    )
+    loop = BailianStrictWorkbenchV2AgentLoop(
+        settings=make_settings(text_llm_api_key="test-key"),
+        runner=runner,
+    )
+
+    with pytest.raises(ModelBehaviorError, match="still invalid"):
+        asyncio.run(
+            loop.run_turn(
+                conversation_id="conversation_1",
+                context_summary=None,
+                recent_events=[],
+                user_text="招 AI 平台工程师",
+            )
+        )
+
+    assert len(runner.prompts) == 2
+
+
+def test_run_turn_does_not_retry_non_schema_model_behavior_error() -> None:
+    runner = SequencedRunner(ModelBehaviorError("Invalid tool call from model"), VALID_CHAT_OUTPUT)
+    loop = BailianStrictWorkbenchV2AgentLoop(
+        settings=make_settings(text_llm_api_key="test-key"),
+        runner=runner,
+    )
+
+    with pytest.raises(ModelBehaviorError, match="Invalid tool call"):
+        asyncio.run(
+            loop.run_turn(
+                conversation_id="conversation_1",
+                context_summary=None,
+                recent_events=[],
+                user_text="你好",
+            )
+        )
+
+    assert len(runner.prompts) == 1
+
+
+def test_run_turn_does_not_retry_non_schema_runtime_errors() -> None:
+    runner = SequencedRunner(TimeoutError("request timed out"), VALID_CHAT_OUTPUT)
+    loop = BailianStrictWorkbenchV2AgentLoop(
+        settings=make_settings(text_llm_api_key="test-key"),
+        runner=runner,
+    )
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        asyncio.run(
+            loop.run_turn(
+                conversation_id="conversation_1",
+                context_summary=None,
+                recent_events=[],
+                user_text="你好",
+            )
+        )
+
+    assert len(runner.prompts) == 1
+
+
+def test_run_turn_does_not_retry_validation_error_raised_by_runner() -> None:
+    runner = SequencedRunner(_validation_error(), VALID_CHAT_OUTPUT)
+    loop = BailianStrictWorkbenchV2AgentLoop(
+        settings=make_settings(text_llm_api_key="test-key"),
+        runner=runner,
+    )
+
+    with pytest.raises(ValidationError):
+        asyncio.run(
+            loop.run_turn(
+                conversation_id="conversation_1",
+                context_summary=None,
+                recent_events=[],
+                user_text="你好",
+            )
+        )
+
+    assert len(runner.prompts) == 1
+
+
 def test_agent_output_strips_required_strings() -> None:
     output = WorkbenchV2AgentOutput.model_validate(
         {
@@ -341,7 +562,7 @@ def test_requirement_patch_rejects_duplicate_intersecting_or_blank_ids(payload: 
         WorkbenchV2RequirementPatch.model_validate(payload)
 
 
-def test_start_runtime_intent_requires_runtime_input() -> None:
+def test_start_runtime_intent_is_not_agent_callable() -> None:
     with pytest.raises(ValidationError):
         WorkbenchV2AgentOutput.model_validate(
             {

@@ -8,7 +8,6 @@ import type {
 import {
   ConversationScreenV2,
   ConversationScreenV2Side,
-  hasConversationV2RuntimeSurface,
 } from "./ConversationScreenV2";
 
 afterEach(() => {
@@ -88,7 +87,7 @@ describe("ConversationScreenV2", () => {
     });
   });
 
-  it("exposes runtime side surface state when runtime is active", () => {
+  it("keeps runtime progress inside the transcript without exposing internal runtime side state", () => {
     expect.hasAssertions();
     const view = conversationView({
       conversation: conversationSummary({
@@ -107,15 +106,280 @@ describe("ConversationScreenV2", () => {
       ],
     });
 
-    expect(hasConversationV2RuntimeSurface(view)).toBe(true);
-    render(<ConversationScreenV2Side view={view} />);
+    render(<ConversationScreenV2 view={view} />);
 
+    const transcript = screen.getByRole("region", { name: "Agent transcript" });
+    expect(within(transcript).getByText("运行进度")).toBeVisible();
+    expect(within(transcript).getByText("正在检索候选人")).toBeVisible();
     expect(
-      screen.getByRole("complementary", { name: "运行状态" }),
-    ).toBeVisible();
-    expect(screen.getByText("running")).toBeVisible();
-    expect(screen.getByText("run_123")).toBeVisible();
-    expect(screen.getByText("正在检索候选人")).toBeVisible();
+      screen.queryByRole("complementary", { name: "运行状态" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("run_123")).not.toBeInTheDocument();
+  });
+
+  it("shows optimistic submitted turns in the transcript while a request is pending", () => {
+    expect.hasAssertions();
+
+    render(
+      <ConversationScreenV2
+        optimisticEvents={[
+          transcriptEvent({
+            eventId: "optimistic_user",
+            step: 2,
+            type: "user_message",
+            status: "pending",
+            payload: { text: "现在进度如何" },
+          }),
+          transcriptEvent({
+            eventId: "optimistic_status",
+            step: 3,
+            type: "assistant_status",
+            role: "assistant",
+            status: "running",
+            payload: { summary: "正在思考" },
+          }),
+        ]}
+        submittingMessage
+        view={conversationView()}
+      />,
+    );
+
+    const transcript = screen.getByRole("region", { name: "Agent transcript" });
+    expect(within(transcript).getByText("现在进度如何")).toBeVisible();
+    expect(within(transcript).getByText("正在思考")).toBeVisible();
+    expect(screen.getByRole("button", { name: "发送" })).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "处理中" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the strategy graph product surface after runtime starts", () => {
+    expect.hasAssertions();
+
+    render(
+      <ConversationScreenV2
+        view={conversationView({
+          conversation: conversationSummary({
+            runtimeState: "running",
+            runtimeRunId: "run_123",
+          }),
+          runtime: { state: "running", runtimeRunId: "run_123" },
+          ...workflowSurface("招聘流程运行中，当前阶段：候选人检索。"),
+          transcriptEvents: [
+            transcriptEvent({
+              eventId: "event_confirmed",
+              step: 1,
+              type: "requirement_form_confirmed",
+              role: "assistant",
+              payload: requirementPayload(),
+            }),
+            transcriptEvent({
+              eventId: "event_progress",
+              step: 2,
+              type: "runtime_progress",
+              role: "runtime",
+              payload: { summary: "招聘流程运行中，当前阶段：候选人检索。" },
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "检索策略图" })).toBeVisible();
+    expect(
+      screen.queryByRole("complementary", { name: "运行状态" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("run_123")).not.toBeInTheDocument();
+  });
+
+  it("renders workflow surfaces from the BFF view instead of local fixed projections", () => {
+    expect.hasAssertions();
+    const view = conversationView({
+      conversation: conversationSummary({
+        runtimeState: "running",
+        runtimeRunId: "run_123",
+      }),
+      runtime: { state: "running", runtimeRunId: "run_123" },
+      strategyGraph: {
+        nodes: [
+          {
+            nodeId: "backend-fact",
+            kind: "phase",
+            label: "后端事实节点",
+            summary: "后端投影的真实进度",
+            roundNo: 1,
+            laneType: null,
+            phase: "source_result",
+            stage: "source_result",
+            status: "running",
+            sourceKind: "liepin",
+            activityId: null,
+            messageId: null,
+          },
+        ],
+        edges: [],
+      },
+      thinkingProcess: {
+        activeRoundNo: 1,
+        rounds: [
+          {
+            roundNo: 1,
+            status: "running",
+            cards: [
+              {
+                title: "observation",
+                text: "右侧来自 BFF 的真实思考过程",
+                terms: [],
+              },
+            ],
+          },
+        ],
+      },
+      candidates: [],
+    });
+
+    render(
+      <>
+        <ConversationScreenV2 view={view} />
+        <ConversationScreenV2Side view={view} />
+      </>,
+    );
+
+    expect(screen.getByText("后端投影的真实进度")).toBeVisible();
+    expect(screen.getByText("右侧来自 BFF 的真实思考过程")).toBeVisible();
+    expect(
+      screen.queryByText("从可用招聘来源检索候选人。"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("expands the strategy graph surface as soon as requirements are confirmed", () => {
+    expect.hasAssertions();
+
+    render(
+      <ConversationScreenV2
+        view={conversationView({
+          ...workflowSurface("需求已确认，正在排队启动检索。"),
+          transcriptEvents: [
+            transcriptEvent({
+              eventId: "event_confirmed",
+              step: 1,
+              type: "requirement_form_confirmed",
+              role: "assistant",
+              payload: {
+                ...requirementPayload(),
+                readonly: true,
+              },
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "检索策略图" })).toBeVisible();
+  });
+
+  it("renders a strategy placeholder when confirmed requirements arrive before graph nodes", () => {
+    expect.hasAssertions();
+
+    render(
+      <ConversationScreenV2
+        view={conversationView({
+          conversation: conversationSummary({
+            runtimeState: "queued",
+            runtimeRunId: "run_queued",
+          }),
+          transcriptEvents: [
+            transcriptEvent({
+              eventId: "event_confirmed",
+              step: 1,
+              type: "requirement_form_confirmed",
+              role: "assistant",
+              payload: {
+                ...requirementPayload(),
+                readonly: true,
+              },
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "检索策略图" })).toBeVisible();
+    expect(screen.getByText("先聊一下候选人搜索")).toBeVisible();
+  });
+
+  it("uses the confirmed runtime job title for the strategy graph root after pure chat", () => {
+    expect.hasAssertions();
+
+    render(
+      <ConversationScreenV2
+        view={conversationView({
+          conversation: conversationSummary({
+            title: "你好",
+            runtimeState: "queued",
+            runtimeRunId: "run_queued",
+          }),
+          transcriptEvents: [
+            transcriptEvent({
+              eventId: "event_confirmed",
+              step: 1,
+              type: "requirement_form_confirmed",
+              role: "assistant",
+              payload: {
+                ...requirementPayload(),
+                readonly: true,
+                runtimeInput: {
+                  jobTitle: "数据科学家",
+                  jd: "负责业务指标体系建设、SQL/Python 数据分析和 A/B Testing。",
+                  notes: "base 杭州",
+                },
+              },
+            }),
+          ],
+        })}
+      />,
+    );
+
+    const strategyGraph = screen.getByRole("region", { name: "检索策略图" });
+    expect(within(strategyGraph).getByText("数据科学家")).toBeVisible();
+    expect(within(strategyGraph).queryByText("你好")).not.toBeInTheDocument();
+  });
+
+  it("does not let empty runtime results pollute the strategy graph summary", () => {
+    expect.hasAssertions();
+
+    render(
+      <ConversationScreenV2
+        view={conversationView({
+          ...workflowSurface("需求已确认，正在排队启动检索。"),
+          transcriptEvents: [
+            transcriptEvent({
+              eventId: "event_confirmed",
+              step: 1,
+              type: "requirement_form_confirmed",
+              role: "assistant",
+              payload: {
+                ...requirementPayload(),
+                readonly: true,
+              },
+            }),
+            transcriptEvent({
+              eventId: "event_result_empty",
+              step: 2,
+              type: "runtime_result",
+              role: "runtime",
+              payload: {
+                state: "idle",
+                summary: "当前还没有运行结果。",
+              },
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("region", { name: "检索策略图" })).toBeVisible();
+    expect(screen.queryByText("当前还没有运行结果。")).not.toBeInTheDocument();
   });
 
   it("submits a generic message through the composer", async () => {
@@ -203,5 +467,72 @@ function requirementPayload() {
       other_input_prompt: "补充其他要求",
       can_confirm: true,
     },
+  };
+}
+
+function workflowSurface(
+  summary: string,
+): Pick<
+  WorkbenchV2ConversationView,
+  "strategyGraph" | "thinkingProcess" | "candidates"
+> {
+  return {
+    strategyGraph: {
+      nodes: [
+        {
+          nodeId: "backend-requirements",
+          kind: "requirements",
+          label: "需求确认",
+          summary: "数据科学家",
+          roundNo: null,
+          laneType: null,
+          phase: null,
+          stage: null,
+          status: "completed",
+          sourceKind: "all",
+          activityId: null,
+          messageId: null,
+        },
+        {
+          nodeId: "backend-source",
+          kind: "phase",
+          label: "候选人检索",
+          summary,
+          roundNo: 1,
+          laneType: null,
+          phase: "source_result",
+          stage: "source_result",
+          status: "running",
+          sourceKind: "liepin",
+          activityId: null,
+          messageId: null,
+        },
+      ],
+      edges: [
+        {
+          edgeId: "backend-requirements->backend-source",
+          fromNodeId: "backend-requirements",
+          toNodeId: "backend-source",
+          label: null,
+        },
+      ],
+    },
+    thinkingProcess: {
+      activeRoundNo: 1,
+      rounds: [
+        {
+          roundNo: 1,
+          status: "running",
+          cards: [
+            {
+              title: "observation",
+              text: summary,
+              terms: [],
+            },
+          ],
+        },
+      ],
+    },
+    candidates: [],
   };
 }

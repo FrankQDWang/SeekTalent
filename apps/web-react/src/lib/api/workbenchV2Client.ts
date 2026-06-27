@@ -1,6 +1,12 @@
 import {
+  normalizeAgentWorkbenchCandidateDetail,
+  type AgentWorkbenchCandidateDetailResponse,
+} from "./agentWorkbenchTypes";
+import {
   normalizeWorkbenchV2Conversation,
+  normalizeWorkbenchV2ConversationEvents,
   normalizeWorkbenchV2ConversationList,
+  type WorkbenchV2ConversationEventsView,
   type WorkbenchV2ConversationListView,
   type WorkbenchV2ConversationView,
   type WorkbenchV2MessageRequest,
@@ -47,6 +53,39 @@ export async function getWorkbenchV2Conversation(
   return normalizeWorkbenchV2Conversation(
     await requestJson<WorkbenchV2ConversationView>(
       `${WORKBENCH_V2_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}`,
+      { method: "GET" },
+    ),
+  );
+}
+
+export async function getWorkbenchV2CandidateDetail(
+  conversationId: string,
+  candidateId: string,
+): Promise<AgentWorkbenchCandidateDetailResponse> {
+  return normalizeAgentWorkbenchCandidateDetail(
+    await requestJson<AgentWorkbenchCandidateDetailResponse>(
+      `${WORKBENCH_V2_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}/candidates/${encodeURIComponent(candidateId)}/detail`,
+      { method: "GET" },
+    ),
+  );
+}
+
+export async function listWorkbenchV2ConversationEvents({
+  afterStep = 0,
+  conversationId,
+  limit = 100,
+}: {
+  afterStep?: number;
+  conversationId: string;
+  limit?: number;
+}): Promise<WorkbenchV2ConversationEventsView> {
+  const params = new URLSearchParams({
+    afterStep: String(afterStep),
+    limit: String(limit),
+  });
+  return normalizeWorkbenchV2ConversationEvents(
+    await requestJson<WorkbenchV2ConversationEventsView>(
+      `${WORKBENCH_V2_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}/events?${params.toString()}`,
       { method: "GET" },
     ),
   );

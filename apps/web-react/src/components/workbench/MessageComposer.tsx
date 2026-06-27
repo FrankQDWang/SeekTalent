@@ -29,11 +29,13 @@ export function MessageComposer({
         if (trimmed.length === 0 || submitDisabled) {
           return;
         }
+        const submittedMessage = trimmed;
+        setMessage("");
         try {
-          await onSubmit?.(trimmed);
-          setMessage("");
+          await onSubmit?.(submittedMessage);
         } catch {
           // The route-level mutation error keeps the text available for retry.
+          setMessage(submittedMessage);
         }
       }}
     >

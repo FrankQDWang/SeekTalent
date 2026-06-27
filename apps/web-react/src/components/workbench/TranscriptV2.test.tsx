@@ -1,4 +1,10 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkbenchV2TranscriptEvent } from "../../lib/api/workbenchV2Types";
 import { TranscriptV2 } from "./TranscriptV2";
@@ -106,6 +112,39 @@ describe("TranscriptV2", () => {
     expect(within(transcript).queryByText(/已处理/)).not.toBeInTheDocument();
   });
 
+  it("only expands the latest requirement form snapshot", () => {
+    expect.hasAssertions();
+
+    render(
+      <TranscriptV2
+        events={[
+          transcriptEvent({
+            eventId: "event_requirement_original",
+            step: 1,
+            type: "requirement_form",
+            role: "assistant",
+            payload: requirementPayload({ selected: true }),
+          }),
+          transcriptEvent({
+            eventId: "event_requirement_updated",
+            step: 2,
+            type: "requirement_form",
+            role: "assistant",
+            payload: requirementPayload({ selected: false }),
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getAllByRole("region", { name: "需求确认" })).toHaveLength(1);
+    expect(
+      screen.queryByText("需求表单已更新，显示最新版本。"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("checkbox", { name: /Python 后端经验/ }),
+    ).not.toBeChecked();
+  });
+
   it("renders compact runtime and error events without raw payload details", () => {
     expect.hasAssertions();
 
@@ -126,6 +165,7 @@ describe("TranscriptV2", () => {
             role: "runtime",
             payload: {
               summary: "正在检索候选人",
+              runtimeRunId: "run_secret",
               provider: "internal-provider",
               tool: "source_search",
             },
@@ -150,6 +190,99 @@ describe("TranscriptV2", () => {
     expect(screen.getByText("检索失败，请稍后重试。")).toBeVisible();
     expect(screen.queryByText("internal-provider")).not.toBeInTheDocument();
     expect(screen.queryByText("source_search")).not.toBeInTheDocument();
+    expect(screen.queryByText("run_secret")).not.toBeInTheDocument();
+  });
+
+  it("does not render empty runtime result placeholders as transcript content", () => {
+    expect.hasAssertions();
+
+    render(
+      <TranscriptV2
+        events={[
+          transcriptEvent({
+            eventId: "event_result_empty",
+            step: 1,
+            type: "runtime_result",
+            role: "runtime",
+            payload: {
+              state: "idle",
+              summary: "当前还没有运行结果。",
+            },
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("运行结果")).not.toBeInTheDocument();
+    expect(screen.queryByText("当前还没有运行结果。")).not.toBeInTheDocument();
+  });
+
+  it("keeps following the newest transcript event while the user is at the bottom", () => {
+    expect.hasAssertions();
+    const firstEvent = transcriptEvent({
+      eventId: "event_user",
+      step: 1,
+      payload: { text: "现在进度如何？" },
+    });
+    const { rerender } = render(<TranscriptV2 events={[firstEvent]} />);
+    const transcript = screen.getByRole("region", {
+      name: "Agent transcript",
+    });
+    setScrollMetrics(transcript, { clientHeight: 400, scrollHeight: 1000 });
+    transcript.scrollTop = 600;
+    fireEvent.scroll(transcript);
+
+    setScrollMetrics(transcript, { clientHeight: 400, scrollHeight: 1400 });
+    rerender(
+      <TranscriptV2
+        events={[
+          firstEvent,
+          transcriptEvent({
+            eventId: "event_assistant",
+            role: "assistant",
+            step: 2,
+            type: "assistant_message",
+            payload: { text: "当前招聘流程失败。" },
+          }),
+        ]}
+      />,
+    );
+
+    expect(transcript.scrollTop).toBe(1400);
+  });
+
+  it("does not force-scroll when the user is reading older transcript content", () => {
+    expect.hasAssertions();
+    const firstEvent = transcriptEvent({
+      eventId: "event_user",
+      step: 1,
+      payload: { text: "现在进度如何？" },
+    });
+    const { rerender } = render(<TranscriptV2 events={[firstEvent]} />);
+    const transcript = screen.getByRole("region", {
+      name: "Agent transcript",
+    });
+    setScrollMetrics(transcript, { clientHeight: 400, scrollHeight: 1000 });
+    transcript.scrollTop = 100;
+    fireEvent.scroll(transcript);
+
+    setScrollMetrics(transcript, { clientHeight: 400, scrollHeight: 1400 });
+    rerender(
+      <TranscriptV2
+        events={[
+          firstEvent,
+          transcriptEvent({
+            eventId: "event_assistant",
+            role: "assistant",
+            step: 2,
+            type: "assistant_message",
+            payload: { text: "当前招聘流程失败。" },
+          }),
+        ]}
+      />,
+    );
+
+    expect(transcript.scrollTop).toBe(100);
   });
 });
 
@@ -168,7 +301,27 @@ function transcriptEvent(
   };
 }
 
-function requirementPayload() {
+function setScrollMetrics(
+  element: HTMLElement,
+  {
+    clientHeight,
+    scrollHeight,
+  }: {
+    clientHeight: number;
+    scrollHeight: number;
+  },
+) {
+  Object.defineProperty(element, "clientHeight", {
+    configurable: true,
+    value: clientHeight,
+  });
+  Object.defineProperty(element, "scrollHeight", {
+    configurable: true,
+    value: scrollHeight,
+  });
+}
+
+function requirementPayload({ selected = true }: { selected?: boolean } = {}) {
   return {
     draft: {
       sections: [
@@ -179,7 +332,7 @@ function requirementPayload() {
             {
               item_id: "item_python",
               text: "Python 后端经验",
-              selected: true,
+              selected,
               allowed_actions: ["set_selected"],
               status: "active",
             },

@@ -2,10 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Literal, NoReturn, Protocol, cast
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import Field, field_validator, model_validator
 
-from seektalent_workbench_v2.models import WorkbenchV2ConversationListView, WorkbenchV2ConversationView
+from seektalent_workbench_v2.models import (
+    WorkbenchV2CandidateDetailView,
+    WorkbenchV2ConversationEventsView,
+    WorkbenchV2ConversationListView,
+    WorkbenchV2ConversationView,
+)
 from seektalent_ui.agent_request_models import (
     MAX_AGENT_MESSAGE_CHARS,
     MAX_IDEMPOTENCY_KEY_CHARS,
@@ -108,6 +113,16 @@ class WorkbenchV2RouteService(Protocol):
 
     def get_conversation(self, conversation_id: str) -> WorkbenchV2ConversationView | dict[str, object]: ...
 
+    def get_candidate_detail(self, conversation_id: str, candidate_id: str) -> WorkbenchV2CandidateDetailView | dict[str, object]: ...
+
+    def list_events(
+        self,
+        conversation_id: str,
+        *,
+        after_step: int,
+        limit: int,
+    ) -> WorkbenchV2ConversationEventsView | dict[str, object]: ...
+
     async def create_conversation(
         self,
         message: str,
@@ -169,6 +184,43 @@ def get_conversation(
 ) -> WorkbenchV2ConversationView | dict[str, object]:
     try:
         return _service(request).get_conversation(conversation_id)
+    except KeyError as exc:
+        raise _not_found() from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}/events",
+    response_model=WorkbenchV2ConversationEventsView,
+    responses=WORKBENCH_V2_RESPONSES_WITH_NOT_FOUND,
+)
+def list_events(
+    conversation_id: str,
+    request: Request,
+    after_step: int = Query(default=0, alias="afterStep", ge=0),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> WorkbenchV2ConversationEventsView | dict[str, object]:
+    try:
+        return _service(request).list_events(
+            conversation_id,
+            after_step=after_step,
+            limit=limit,
+        )
+    except KeyError as exc:
+        raise _not_found() from exc
+
+
+@router.get(
+    "/conversations/{conversation_id}/candidates/{candidate_id}/detail",
+    response_model=WorkbenchV2CandidateDetailView,
+    responses=WORKBENCH_V2_RESPONSES_WITH_NOT_FOUND,
+)
+def get_candidate_detail(
+    conversation_id: str,
+    candidate_id: str,
+    request: Request,
+) -> WorkbenchV2CandidateDetailView | dict[str, object]:
+    try:
+        return _service(request).get_candidate_detail(conversation_id, candidate_id)
     except KeyError as exc:
         raise _not_found() from exc
 

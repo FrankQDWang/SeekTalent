@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 WORKBENCH_V2_SCHEMA_VERSION = "agent.workbench.v2"
 WORKBENCH_V2_LIST_SCHEMA_VERSION = "agent.workbench.v2.list"
+WORKBENCH_V2_EVENTS_SCHEMA_VERSION = "agent.workbench.v2.events"
 
 WorkbenchV2EventType = Literal[
     "user_message",
@@ -23,6 +24,7 @@ WorkbenchV2EventType = Literal[
 WorkbenchV2Role = Literal["user", "assistant", "system", "runtime"]
 WorkbenchV2EventStatus = Literal["pending", "running", "completed", "failed"]
 WorkbenchV2RuntimeState = Literal["idle", "queued", "running", "completed", "failed", "cancelled"]
+WorkbenchV2SurfaceStatus = Literal["pending", "running", "completed", "partial", "blocked", "failed", "cancelled"]
 
 
 class WorkbenchV2Conversation(BaseModel):
@@ -98,6 +100,117 @@ class WorkbenchV2RuntimeView(BaseModel):
     runtimeRunId: str | None = None
 
 
+class WorkbenchV2GraphNodeView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nodeId: str
+    kind: str
+    label: str
+    summary: str | None = None
+    roundNo: int | None = None
+    laneType: str | None = None
+    phase: str | None = None
+    stage: str | None = None
+    status: WorkbenchV2SurfaceStatus
+    sourceKind: str | None = "all"
+    activityId: str | None = None
+    messageId: str | None = None
+
+
+class WorkbenchV2GraphEdgeView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    edgeId: str
+    fromNodeId: str
+    toNodeId: str
+    label: str | None = None
+
+
+class WorkbenchV2StrategyGraphView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    nodes: list[WorkbenchV2GraphNodeView] = Field(default_factory=list)
+    edges: list[WorkbenchV2GraphEdgeView] = Field(default_factory=list)
+
+
+class WorkbenchV2ThinkingProcessCardView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: Literal["关键词", "observation", "反思和下一轮变更"]
+    text: str
+    terms: list[str] = Field(default_factory=list)
+
+
+class WorkbenchV2ThinkingProcessRoundView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    roundNo: int
+    status: WorkbenchV2SurfaceStatus
+    cards: list[WorkbenchV2ThinkingProcessCardView] = Field(default_factory=list)
+
+
+class WorkbenchV2ThinkingProcessView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    activeRoundNo: int | None = None
+    rounds: list[WorkbenchV2ThinkingProcessRoundView] = Field(default_factory=list)
+
+
+class WorkbenchV2CandidateSummaryView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidateId: str
+    rank: int
+    displayName: str
+    headline: str | None = None
+    company: str | None = None
+    location: str | None = None
+    education: str | None = None
+    experienceYears: int | None = None
+    age: int | None = None
+    gender: str | None = None
+    activeStatus: str | None = None
+    jobStatus: str | None = None
+    sourceKinds: list[Literal["cts", "liepin"]] = Field(default_factory=list)
+    matchScore: int | None = Field(default=None, ge=0, le=100)
+    matchSummary: str | None = None
+    status: str
+    detailAvailability: Literal["available", "redacted", "approval_required", "unavailable"] = "unavailable"
+    accessState: Literal["allowed", "redacted", "approval_required", "denied"] = "denied"
+    evidenceLevel: Literal["summary", "detail", "final", "unknown"] = "unknown"
+
+
+class WorkbenchV2CandidateDetailSectionView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    items: list[str] = Field(default_factory=list)
+
+
+class WorkbenchV2CandidateDetailView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    candidateId: str
+    displayName: str
+    headline: str | None = None
+    company: str | None = None
+    location: str | None = None
+    education: str | None = None
+    experienceYears: int | None = None
+    age: int | None = None
+    gender: str | None = None
+    activeStatus: str | None = None
+    jobStatus: str | None = None
+    sourceKinds: list[Literal["cts", "liepin"]] = Field(default_factory=list)
+    matchScore: int | None = Field(default=None, ge=0, le=100)
+    sections: list[WorkbenchV2CandidateDetailSectionView] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    detailAvailability: Literal["available", "redacted", "approval_required", "unavailable"]
+    accessState: Literal["allowed", "redacted", "approval_required", "denied"]
+    evidenceLevel: Literal["summary", "detail", "final", "unknown"]
+    reasonCode: str | None = None
+
+
 class WorkbenchV2TranscriptEventView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -118,6 +231,19 @@ class WorkbenchV2ConversationView(BaseModel):
     transcriptEvents: list[WorkbenchV2TranscriptEventView] = Field(default_factory=list)
     requirementForm: dict[str, object] | None = None
     runtime: WorkbenchV2RuntimeView | None = None
+    strategyGraph: WorkbenchV2StrategyGraphView = Field(default_factory=WorkbenchV2StrategyGraphView)
+    thinkingProcess: WorkbenchV2ThinkingProcessView = Field(default_factory=WorkbenchV2ThinkingProcessView)
+    candidates: list[WorkbenchV2CandidateSummaryView] = Field(default_factory=list)
+
+
+class WorkbenchV2ConversationEventsView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schemaVersion: Literal["agent.workbench.v2.events"] = WORKBENCH_V2_EVENTS_SCHEMA_VERSION
+    conversationId: str
+    afterStep: int
+    latestStep: int
+    events: list[WorkbenchV2TranscriptEventView] = Field(default_factory=list)
 
 
 class WorkbenchV2ConversationListView(BaseModel):
