@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from inspect import signature
-from typing import cast
+from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from seektalent.config import AppSettings
@@ -33,6 +33,30 @@ REQUIREMENT_DRAFT_SOURCE = "workbench_v2_agent"
 RUNTIME_INPUT_REQUIRED = "workbench_v2_runtime_input_required"
 REQUIREMENT_EXTRACTOR_UNAVAILABLE = "workbench_v2_requirement_extractor_unavailable"
 DEFAULT_SOURCE_IDS = ["liepin"]
+
+
+@runtime_checkable
+class _RequirementExtractorWithJdText(Protocol):
+    def __call__(
+        self,
+        *,
+        job_title: str,
+        jd_text: str,
+        notes: str | None,
+        requirement_cache_scope: str,
+    ) -> object: ...
+
+
+@runtime_checkable
+class _RequirementExtractorWithJd(Protocol):
+    def __call__(
+        self,
+        *,
+        job_title: str,
+        jd: str,
+        notes: str,
+        requirement_cache_scope: str,
+    ) -> object: ...
 
 
 @dataclass(frozen=True)
@@ -389,14 +413,11 @@ class WorkbenchV2RuntimeService:
         payload.setdefault("stage", run.current_stage)
         return payload
 
-    def _requirement_extractor(self) -> Callable[..., RequirementSheet]:
+    def _requirement_extractor(self) -> object:
         extractor = self.requirement_extractor
         if extractor is None and self.runtime_factory is not None:
             extractor = self.runtime_factory()
-        extract_requirements = getattr(extractor, "extract_requirements", None)
-        if not callable(extract_requirements):
-            raise RuntimeError(REQUIREMENT_EXTRACTOR_UNAVAILABLE)
-        return cast("Callable[..., RequirementSheet]", extract_requirements)
+        return getattr(extractor, "extract_requirements", None)
 
     def _executor(self) -> WorkflowRuntimeExecutor:
         if self._runtime_executor is None:
@@ -868,29 +889,45 @@ def _unique_strings(items: Sequence[str]) -> list[str]:
 
 
 def _extract_requirements(
-    extract_requirements: Callable[..., RequirementSheet],
+    extract_requirements: object,
     *,
     job_title: str,
     jd_text: str,
     notes: str | None,
     requirement_cache_scope: str,
 ) -> RequirementSheet:
+    if not isinstance(extract_requirements, Callable):
+        raise RuntimeError(REQUIREMENT_EXTRACTOR_UNAVAILABLE)
     parameters = signature(extract_requirements).parameters
     if "jd_text" in parameters:
-        return extract_requirements(
-            job_title=job_title,
-            jd_text=jd_text,
-            notes=notes,
-            requirement_cache_scope=requirement_cache_scope,
+        if not isinstance(extract_requirements, _RequirementExtractorWithJdText):
+            raise RuntimeError(REQUIREMENT_EXTRACTOR_UNAVAILABLE)
+        return _requirement_sheet_result(
+            extract_requirements(
+                job_title=job_title,
+                jd_text=jd_text,
+                notes=notes,
+                requirement_cache_scope=requirement_cache_scope,
+            )
         )
     if "jd" in parameters:
-        return extract_requirements(
-            job_title=job_title,
-            jd=jd_text,
-            notes=notes or "",
-            requirement_cache_scope=requirement_cache_scope,
+        if not isinstance(extract_requirements, _RequirementExtractorWithJd):
+            raise RuntimeError(REQUIREMENT_EXTRACTOR_UNAVAILABLE)
+        return _requirement_sheet_result(
+            extract_requirements(
+                job_title=job_title,
+                jd=jd_text,
+                notes=notes or "",
+                requirement_cache_scope=requirement_cache_scope,
+            )
         )
     raise RuntimeError(REQUIREMENT_EXTRACTOR_UNAVAILABLE)
+
+
+def _requirement_sheet_result(value: object) -> RequirementSheet:
+    if isinstance(value, RequirementSheet):
+        return value
+    return RequirementSheet.model_validate(value)
 
 
 def _start_operation_key(*, conversation_id: str, idempotency_key: str | None) -> str:

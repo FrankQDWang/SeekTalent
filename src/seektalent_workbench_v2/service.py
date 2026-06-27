@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from functools import partial
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol
 from uuid import uuid4
 
 from anyio import to_thread
@@ -60,6 +61,7 @@ POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY = "本次运行已结束，补充要�
 REQUIREMENT_EXTRACT_FAILED_MESSAGE = "需求整理失败，请稍后重试。"
 RUNTIME_STATUS_UNAVAILABLE_MESSAGE = "暂时无法读取运行状态，请稍后重试。"
 RUNTIME_RESULTS_UNAVAILABLE_MESSAGE = "暂时无法读取运行结果，请稍后重试。"
+SERVICE_BOUNDARY_ERRORS = (RuntimeControlError, RuntimeError, ValueError, TypeError, KeyError, AttributeError)
 
 
 class CandidateSummaryReadError(Exception):
@@ -71,7 +73,20 @@ class WorkbenchV2RequirementExtraction(Protocol):
     requirement_sheet: RequirementSheet
 
 
+@dataclass(frozen=True)
+class WorkbenchV2RuntimeSubmission:
+    summary: str
+    assistant_override: str | None
+    payload: dict[str, object]
+
+
 class WorkbenchV2RequirementRuntime(Protocol):
+    def extract_requirement_bundle(
+        self,
+        conversation_id: str,
+        runtime_input: WorkbenchV2RuntimeInput,
+    ) -> WorkbenchV2RequirementExtraction: ...
+
     def extract_requirements(
         self,
         conversation_id: str,
@@ -233,7 +248,7 @@ class WorkbenchV2Service:
             return []
         try:
             payloads = list_candidate_summaries(runtime_run_id, limit=20)
-        except Exception:  # noqa: BLE001
+        except SERVICE_BOUNDARY_ERRORS:
             raise CandidateSummaryReadError from None
         try:
             return [WorkbenchV2CandidateSummaryView.model_validate(payload) for payload in payloads]
@@ -503,7 +518,7 @@ class WorkbenchV2Service:
         )
         try:
             draft, requirement_sheet = self._extract_requirement_form(conversation_id, runtime_input)
-        except Exception:  # noqa: BLE001
+        except SERVICE_BOUNDARY_ERRORS:
             self._append_service_error(
                 conversation_id,
                 code="workbench_v2_requirement_extract_failed",
@@ -536,14 +551,8 @@ class WorkbenchV2Service:
         conversation_id: str,
         runtime_input: WorkbenchV2RuntimeInput,
     ) -> tuple[object, RequirementSheet]:
-        extract_bundle = getattr(self.runtime_service, "extract_requirement_bundle", None)
-        if callable(extract_bundle):
-            bundle = cast(
-                "Callable[[str, WorkbenchV2RuntimeInput], WorkbenchV2RequirementExtraction]",
-                extract_bundle,
-            )(conversation_id, runtime_input)
-            return bundle.draft, bundle.requirement_sheet
-        raise RuntimeError("workbench_v2_requirement_bundle_unavailable")
+        bundle = self.runtime_service.extract_requirement_bundle(conversation_id, runtime_input)
+        return bundle.draft, bundle.requirement_sheet
 
     def _confirm_requirements(
         self,
@@ -725,15 +734,14 @@ class WorkbenchV2Service:
             idempotency_key=idempotency_key,
             action_digest=action_digest,
         )
-        submission_payload = cast(Mapping[str, object], runtime_submission["payload"])
         payload: dict[str, object] = {
             "phase": "supplemental_requirement",
-            "text": cast(str, runtime_submission["summary"]),
+            "text": runtime_submission.summary,
             "supplementalRequirement": supplemental_requirement,
         }
         if record.conversation.runtime_run_id is not None:
             payload["runtimeRunId"] = record.conversation.runtime_run_id
-        payload.update(submission_payload)
+        payload.update(runtime_submission.payload)
         if patch.selectedItemIds:
             payload["selectedItemIds"] = list(patch.selectedItemIds)
         if patch.deselectedItemIds:
@@ -752,7 +760,7 @@ class WorkbenchV2Service:
                 ),
             ),
         )
-        return cast(str | None, runtime_submission["assistantOverride"])
+        return runtime_submission.assistant_override
 
     def _append_post_confirm_runtime_input(
         self,
@@ -771,15 +779,14 @@ class WorkbenchV2Service:
             idempotency_key=idempotency_key,
             action_digest=_service_payload_digest({"runtimeInput": runtime_input.model_dump(mode="json")}),
         )
-        submission_payload = cast(Mapping[str, object], runtime_submission["payload"])
         payload: dict[str, object] = {
             "phase": "supplemental_requirement",
-            "text": cast(str, runtime_submission["summary"]),
+            "text": runtime_submission.summary,
             "supplementalRequirement": supplemental_requirement,
         }
         if record.conversation.runtime_run_id is not None:
             payload["runtimeRunId"] = record.conversation.runtime_run_id
-        payload.update(submission_payload)
+        payload.update(runtime_submission.payload)
         self.store.append_event(
             conversation_id,
             WorkbenchV2TranscriptEventInput(
@@ -789,7 +796,7 @@ class WorkbenchV2Service:
                 dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="post-confirm-runtime-input"),
             ),
         )
-        return cast(str | None, runtime_submission["assistantOverride"])
+        return runtime_submission.assistant_override
 
     def _current_requirement_form_bundle(
         self,
@@ -847,31 +854,34 @@ class WorkbenchV2Service:
         scope: str,
         idempotency_key: str | None,
         action_digest: str,
-    ) -> dict[str, object]:
+    ) -> WorkbenchV2RuntimeSubmission:
         if runtime_run_id is None:
-            return {
-                "summary": POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY,
-                "assistantOverride": POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY,
-                "payload": {"runtimeSubmissionStatus": "not_started"},
-            }
+            return WorkbenchV2RuntimeSubmission(
+                summary=POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY,
+                assistant_override=POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY,
+                payload={"runtimeSubmissionStatus": "not_started"},
+            )
         try:
+            runtime_idempotency_key = _dedupe_key(
+                scope=scope,
+                idempotency_key=idempotency_key,
+                suffix=f"runtime-next-round:{action_digest}",
+            )
+            if runtime_idempotency_key is None:
+                runtime_idempotency_key = f"workbench-v2-runtime-next-round:{runtime_run_id}:{action_digest}"
             result = self.runtime_service.submit_next_round_requirement(
                 runtime_run_id,
                 supplemental_requirement,
-                idempotency_key=_dedupe_key(
-                    scope=scope,
-                    idempotency_key=idempotency_key,
-                    suffix=f"runtime-next-round:{action_digest}",
-                ),
+                idempotency_key=runtime_idempotency_key,
             )
         except RuntimeControlError as exc:
             if str(exc) not in {"runtime_command_conflict", "runtime_no_future_round_available"}:
                 raise
-            return {
-                "summary": POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY,
-                "assistantOverride": POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY,
-                "payload": {"runtimeSubmissionStatus": "not_applied", "reasonCode": str(exc)},
-            }
+            return WorkbenchV2RuntimeSubmission(
+                summary=POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY,
+                assistant_override=POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY,
+                payload={"runtimeSubmissionStatus": "not_applied", "reasonCode": str(exc)},
+            )
         target_round_no = result.get("targetRoundNo")
         status = str(result.get("status") or "submitted")
         summary = (
@@ -883,15 +893,15 @@ class WorkbenchV2Service:
         if status == "needs_review":
             summary = "补充要求已记录，需要复核后才能在后续检索轮次生效。"
             assistant_override = summary
-        return {
-            "summary": summary,
-            "assistantOverride": assistant_override,
-            "payload": {
+        return WorkbenchV2RuntimeSubmission(
+            summary=summary,
+            assistant_override=assistant_override,
+            payload={
                 "runtimeSubmissionStatus": status,
                 "targetRoundNo": target_round_no,
                 "amendmentId": result.get("amendmentId"),
             },
-        }
+        )
 
     def _start_runtime_from_requirement_sheet(
         self,
@@ -918,7 +928,7 @@ class WorkbenchV2Service:
                 selected_item_ids=selected_item_ids,
                 deselected_item_ids=deselected_item_ids,
             )
-        except Exception:  # noqa: BLE001
+        except SERVICE_BOUNDARY_ERRORS:
             self._append_runtime_start_failed_error(
                 conversation_id,
                 scope=scope,
@@ -1109,8 +1119,8 @@ class WorkbenchV2Service:
             )
             return None
         try:
-            status_payload = cast("Mapping[str, object]", get_status(runtime_run_id))
-        except Exception:  # noqa: BLE001
+            status_payload = _required_mapping(get_status(runtime_run_id), "runtime status payload")
+        except SERVICE_BOUNDARY_ERRORS:
             self._append_error_event(
                 conversation_id,
                 code="workbench_v2_runtime_status_unavailable",
@@ -1163,8 +1173,8 @@ class WorkbenchV2Service:
             )
             return None
         try:
-            results_payload = cast("Mapping[str, object]", get_results(runtime_run_id))
-        except Exception:  # noqa: BLE001
+            results_payload = _required_mapping(get_results(runtime_run_id), "runtime results payload")
+        except SERVICE_BOUNDARY_ERRORS:
             self._append_error_event(
                 conversation_id,
                 code="workbench_v2_runtime_results_unavailable",
@@ -1215,8 +1225,8 @@ class WorkbenchV2Service:
             self._append_runtime_refresh_error(conversation_id, runtime_run_id=runtime_run_id)
             return
         try:
-            status_payload = cast("Mapping[str, object]", get_status(runtime_run_id))
-        except Exception:  # noqa: BLE001
+            status_payload = _required_mapping(get_status(runtime_run_id), "runtime status payload")
+        except SERVICE_BOUNDARY_ERRORS:
             self._append_runtime_refresh_error(conversation_id, runtime_run_id=runtime_run_id)
             return
         payload = dict(status_payload)
@@ -1279,7 +1289,7 @@ class WorkbenchV2Service:
         after_seq = _latest_projected_runtime_event_seq(getattr(record, "events", []), runtime_run_id=runtime_run_id)
         try:
             progress_events = list_progress_events(runtime_run_id, after_seq=after_seq, limit=200)
-        except Exception:  # noqa: BLE001
+        except SERVICE_BOUNDARY_ERRORS:
             self._append_runtime_refresh_error(conversation_id, runtime_run_id=runtime_run_id)
             return False
         appended = False
@@ -1310,8 +1320,8 @@ class WorkbenchV2Service:
         if not callable(get_results):
             return
         try:
-            results_payload = cast("Mapping[str, object]", get_results(runtime_run_id))
-        except Exception:  # noqa: BLE001
+            results_payload = _required_mapping(get_results(runtime_run_id), "runtime results payload")
+        except SERVICE_BOUNDARY_ERRORS:
             return
         payload = dict(results_payload)
         runtime_state = _runtime_state_from_status_payload(payload)
@@ -1794,9 +1804,25 @@ def _runtime_state_from_run_status(status: object) -> WorkbenchV2RuntimeState:
 
 def _runtime_state_from_status_payload(payload: Mapping[str, object]) -> WorkbenchV2RuntimeState:
     state = payload.get("state")
-    if state in {"idle", "queued", "running", "completed", "failed", "cancelled"}:
-        return cast("WorkbenchV2RuntimeState", state)
+    if state == "idle":
+        return "idle"
+    if state == "queued":
+        return "queued"
+    if state == "running":
+        return "running"
+    if state == "completed":
+        return "completed"
+    if state == "failed":
+        return "failed"
+    if state == "cancelled":
+        return "cancelled"
     return _runtime_state_from_run_status(payload.get("status"))
+
+
+def _required_mapping(value: object, label: str) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        return {str(key): item for key, item in value.items()}
+    raise TypeError(f"{label} must be a mapping")
 
 
 def _required_text_attr(value: object, attribute: str) -> str:
