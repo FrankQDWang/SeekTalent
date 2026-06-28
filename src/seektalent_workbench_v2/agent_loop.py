@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, Sequence
 
-from agents import Agent, AsyncOpenAI, ModelSettings, OpenAIChatCompletionsModel, Runner, function_tool
+from agents import Agent, AsyncOpenAI, ModelSettings, OpenAIChatCompletionsModel, Runner, Tool, function_tool
 from agents.exceptions import ModelBehaviorError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -247,7 +247,7 @@ def _build_agent(config: ResolvedTextModelConfig) -> Agent:
     )
 
 
-def _workbench_v2_tools() -> list[object]:
+def _workbench_v2_tools() -> list[Tool]:
     return [
         _tool_extract_requirements,
         _tool_update_requirements,

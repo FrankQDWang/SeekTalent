@@ -235,8 +235,9 @@ def _safe_runtime_result_facts(value: object) -> list[dict[str, str]]:
     for item in value:
         if not isinstance(item, Mapping):
             continue
-        label = _safe_detail_text(item.get("label"), max_length=80)
-        fact_value = _safe_detail_text(item.get("value"), max_length=2000)
+        item_map = {str(key): item_value for key, item_value in item.items() if isinstance(key, str)}
+        label = _safe_detail_text(item_map.get("label"), max_length=80)
+        fact_value = _safe_detail_text(item_map.get("value"), max_length=2000)
         if label is None or fact_value is None:
             continue
         facts.append({"label": label, "value": fact_value})

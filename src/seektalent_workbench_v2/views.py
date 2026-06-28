@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from seektalent_workbench_v2.models import (
     WorkbenchV2Conversation,
     WorkbenchV2ConversationEventsView,
@@ -23,6 +25,41 @@ from seektalent_workbench_v2.runtime_display import (
     normalize_runtime_progress_payload,
     normalize_runtime_result_payload,
 )
+
+
+@dataclass(frozen=True)
+class _GraphNodeSpec:
+    node_id: str
+    kind: str
+    label: str
+    summary: str | None
+    round_no: int | None
+    phase: str | None
+    stage: str | None
+    status: WorkbenchV2SurfaceStatus
+    source_kind: str | None
+
+    def to_view(self) -> WorkbenchV2GraphNodeView:
+        return WorkbenchV2GraphNodeView(
+            nodeId=self.node_id,
+            kind=self.kind,
+            label=self.label,
+            summary=self.summary,
+            roundNo=self.round_no,
+            laneType=None,
+            phase=self.phase,
+            stage=self.stage,
+            status=self.status,
+            sourceKind=self.source_kind,
+            activityId=None,
+            messageId=None,
+        )
+
+
+@dataclass(frozen=True)
+class _ThinkingRoundState:
+    status: WorkbenchV2SurfaceStatus
+    cards: list[WorkbenchV2ThinkingProcessCardView]
 
 
 def conversation_to_public(conversation: WorkbenchV2Conversation) -> WorkbenchV2ConversationPublic:
@@ -172,7 +209,7 @@ def _strategy_graph(
 
     requirement_summary = _requirement_summary(record, requirement_form)
     node_order: list[str] = []
-    node_specs: dict[str, dict[str, object]] = {}
+    node_specs: dict[str, _GraphNodeSpec] = {}
     _upsert_graph_node(
         node_order,
         node_specs,
@@ -290,7 +327,7 @@ def _strategy_graph(
         for left, right in zip(node_order, node_order[1:], strict=False)
     ]
     return WorkbenchV2StrategyGraphView(
-        nodes=[WorkbenchV2GraphNodeView(**node_specs[node_id]) for node_id in node_order],
+        nodes=[node_specs[node_id].to_view() for node_id in node_order],
         edges=edges,
     )
 
@@ -312,19 +349,19 @@ def _thinking_process(
     return WorkbenchV2ThinkingProcessView(
         activeRoundNo=active_round,
         rounds=[
-            WorkbenchV2ThinkingProcessRoundView(
-                roundNo=round_no,
-                status=round_state["status"],
-                cards=round_state["cards"],
-            )
-            for round_no, round_state in sorted(round_states.items())
+                WorkbenchV2ThinkingProcessRoundView(
+                    roundNo=round_no,
+                    status=round_state.status,
+                    cards=round_state.cards,
+                )
+                for round_no, round_state in sorted(round_states.items())
         ],
     )
 
 
 def _upsert_graph_node(
     node_order: list[str],
-    node_specs: dict[str, dict[str, object]],
+    node_specs: dict[str, _GraphNodeSpec],
     node_id: str,
     *,
     kind: str,
@@ -338,20 +375,17 @@ def _upsert_graph_node(
 ) -> None:
     if node_id not in node_specs:
         node_order.append(node_id)
-    node_specs[node_id] = {
-        "nodeId": node_id,
-        "kind": kind,
-        "label": label,
-        "summary": summary,
-        "roundNo": roundNo,
-        "laneType": None,
-        "phase": phase,
-        "stage": stage,
-        "status": status,
-        "sourceKind": sourceKind,
-        "activityId": None,
-        "messageId": None,
-    }
+    node_specs[node_id] = _GraphNodeSpec(
+        node_id=node_id,
+        kind=kind,
+        label=label,
+        summary=summary,
+        round_no=roundNo,
+        phase=phase,
+        stage=stage,
+        status=status,
+        source_kind=sourceKind,
+    )
 
 
 def _runtime_progress_events(events: list[WorkbenchV2TranscriptEvent]) -> list[WorkbenchV2TranscriptEvent]:
@@ -368,19 +402,17 @@ def _runtime_event_seq(event: WorkbenchV2TranscriptEvent) -> int:
 
 def _runtime_thinking_round_states(
     events: list[WorkbenchV2TranscriptEvent],
-) -> dict[int, dict[str, object]]:
-    states: dict[int, dict[str, object]] = {}
+) -> dict[int, _ThinkingRoundState]:
+    statuses: dict[int, WorkbenchV2SurfaceStatus] = {}
+    card_states: dict[int, dict[str, WorkbenchV2ThinkingProcessCardView]] = {}
     for event in _runtime_progress_events(events):
         if event.type != "runtime_progress":
             continue
         round_no = _positive_int_or_none(event.payload.get("roundNo"))
         if round_no is None:
             continue
-        state = states.setdefault(round_no, {"status": "completed", "cards": {}})
-        state["status"] = _surface_status_from_event_payload(event.payload)
-        cards = state["cards"]
-        if not isinstance(cards, dict):
-            continue
+        statuses[round_no] = _surface_status_from_event_payload(event.payload)
+        cards = card_states.setdefault(round_no, {})
 
         keyword_query = _keyword_query_from_payload(event.payload)
         if keyword_query is not None:
@@ -406,20 +438,17 @@ def _runtime_thinking_round_states(
                 terms=[],
             )
 
-    compact_states: dict[int, dict[str, object]] = {}
-    for round_no, state in states.items():
-        cards = state.get("cards")
-        if not isinstance(cards, dict):
-            continue
+    compact_states: dict[int, _ThinkingRoundState] = {}
+    for round_no, cards in card_states.items():
         ordered_cards = [
-            cards[key]
+            card
             for key in ("keywords", "observation", "reflection")
-            if isinstance(cards.get(key), WorkbenchV2ThinkingProcessCardView)
+            if (card := cards.get(key)) is not None
         ]
-        compact_states[round_no] = {
-            "status": state.get("status", "completed"),
-            "cards": ordered_cards,
-        }
+        compact_states[round_no] = _ThinkingRoundState(
+            status=statuses.get(round_no, "completed"),
+            cards=ordered_cards,
+        )
     return compact_states
 
 
@@ -496,10 +525,16 @@ def _runtime_round_summaries(
 
 def _surface_status_from_event_payload(payload: dict[str, object]) -> WorkbenchV2SurfaceStatus:
     status = payload.get("status")
-    if status in {"failed", "blocked", "partial", "completed", "cancelled"}:
-        return status
     if status == "running":
         return "running"
+    if status == "failed":
+        return "failed"
+    if status == "blocked":
+        return "blocked"
+    if status == "partial":
+        return "partial"
+    if status == "cancelled":
+        return "cancelled"
     return "completed"
 
 
