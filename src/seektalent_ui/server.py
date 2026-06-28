@@ -17,11 +17,25 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from seektalent.config import AppSettings, load_process_env
 from seektalent.dev_mode import DevModeStatus, build_dev_mode_env_diagnostics
+from seektalent.providers.liepin.runtime_context import local_opencli_liepin_source_context
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
 from seektalent_conversation_agent.factory import build_agent_service
-from seektalent_ui import agent_routes, agent_workbench_routes, event_routes, validation_errors, workbench_routes
+from seektalent_workbench_v2.agent_loop import BailianStrictWorkbenchV2AgentLoop
+from seektalent_workbench_v2.runtime_runner import WorkbenchV2RuntimeQueueRunner
+from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
+from seektalent_workbench_v2.service import WorkbenchV2Service
+from seektalent_workbench_v2.store import WorkbenchV2Store
+from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+from seektalent_ui import (
+    agent_routes,
+    agent_workbench_routes,
+    agent_workbench_v2_routes,
+    event_routes,
+    validation_errors,
+    workbench_routes,
+)
 from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
 from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.liepin_routes import create_liepin_router
@@ -71,7 +85,38 @@ def create_app(
         runtime_factory=runtime_factory,
     )
     app.state.agent_conversation_store = app.state.agent_conversation_service.store
-    app.state.runtime_control_store = app.state.agent_conversation_service.service_action_adapter.runtime_store
+    runtime_control_store = app.state.agent_conversation_service.service_action_adapter.runtime_store
+    if runtime_control_store is None:
+        raise RuntimeError("runtime_control_store_unavailable")
+    app.state.runtime_control_store = runtime_control_store
+    app.state.workbench_v2_store = WorkbenchV2Store(
+        app_settings.resolve_workspace_path(".seektalent/workbench_v2.sqlite3")
+    )
+    app.state.workbench_v2_store.initialize()
+    def workbench_v2_runtime_factory() -> object:
+        return runtime_factory(app_settings)
+
+    app.state.workbench_v2_runtime_executor = WorkflowRuntimeExecutor(
+        store=runtime_control_store,
+        settings=app_settings,
+        runtime_factory=workbench_v2_runtime_factory,
+        source_context_provider=local_opencli_liepin_source_context,
+    )
+    app.state.workbench_v2_runtime_runner = WorkbenchV2RuntimeQueueRunner(
+        store=runtime_control_store,
+        executor=app.state.workbench_v2_runtime_executor,
+    )
+    app.state.workbench_v2_service = WorkbenchV2Service(
+        store=app.state.workbench_v2_store,
+        agent_loop=BailianStrictWorkbenchV2AgentLoop(settings=app_settings),
+        runtime_service=WorkbenchV2RuntimeService(
+            store=runtime_control_store,
+            settings=app_settings,
+            runtime_factory=workbench_v2_runtime_factory,
+            executor=app.state.workbench_v2_runtime_executor,
+            on_run_queued=app.state.workbench_v2_runtime_runner.wake,
+        ),
+    )
     app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
     app.state.workflow_start_outbox_runner = WorkflowStartOutboxRunner(
         service=app.state.agent_conversation_service,
@@ -83,7 +128,7 @@ def create_app(
         store=app.state.workbench_store,
         settings=app_settings,
         runtime_factory=runtime_factory,
-        runtime_control_store=app.state.runtime_control_store,
+        runtime_control_store=runtime_control_store,
     )
     app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
@@ -139,6 +184,7 @@ def create_app(
     app.include_router(workbench_routes.router)
     app.include_router(agent_routes.router)
     app.include_router(agent_workbench_routes.router)
+    app.include_router(agent_workbench_v2_routes.router)
     app.include_router(event_routes.router)
     app.include_router(create_liepin_router(settings=app_settings))
 
@@ -175,6 +221,11 @@ def create_app(
 
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(_request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        if _request.url.path.startswith("/api/agent/workbench/v2") and isinstance(exc.detail, dict):
+            content = dict(exc.detail)
+            if "type" in content:
+                return no_store_json_response(status_code=exc.status_code, content=content)
+            return JSONResponse(status_code=exc.status_code, content={"detail": content})
         if _request.url.path.startswith("/api/agent") and isinstance(exc.detail, dict):
             content = dict(exc.detail)
             if _request.url.path.startswith("/api/agent/workbench") and "type" in content:
@@ -198,6 +249,9 @@ async def _lifespan(app: FastAPI):
         runner.wake()
     if extraction_runner is not None:
         extraction_runner.start()
+    v2_runtime_runner = getattr(app.state, "workbench_v2_runtime_runner", None)
+    if v2_runtime_runner is not None:
+        v2_runtime_runner.wake()
     try:
         yield
     finally:

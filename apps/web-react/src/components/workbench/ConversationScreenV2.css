@@ -1,0 +1,93 @@
+.conversation-v2-view {
+  background: var(--st-bg);
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.conversation-v2-view__notice {
+  align-items: center;
+  border-bottom: 1px solid var(--st-border);
+  display: grid;
+  gap: var(--st-space-1);
+  min-height: 64px;
+  padding: var(--st-space-4);
+}
+
+.conversation-v2-view__notice strong {
+  color: var(--st-ink);
+  font-size: 0.92rem;
+}
+
+.conversation-v2-view__notice span {
+  color: var(--st-muted);
+  font-size: 0.9rem;
+}
+
+.conversation-v2-view__notice[data-tone="warning"] {
+  background: color-mix(in oklch, var(--st-warning) 16%, var(--st-surface));
+}
+
+.conversation-v2-view__workspace {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  transition: grid-template-columns 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.conversation-v2-view__workspace[data-workflow-surface="visible"] {
+  grid-template-columns: minmax(320px, 40%) minmax(320px, 1fr);
+}
+
+.conversation-v2-view__panel {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.conversation-v2-view__panel .transcript-v2 {
+  flex: 1;
+  min-height: 0;
+}
+
+.conversation-v2-view__panel--chat {
+  background: var(--st-bg);
+  min-width: 0;
+}
+
+.conversation-v2-view__workspace[data-workflow-surface="visible"]
+  .conversation-v2-view__panel--chat {
+  background: var(--st-bg);
+  border-right: 1px solid var(--st-border);
+}
+
+.conversation-v2-view__workspace[data-workflow-surface="visible"]
+  .conversation-v2-view__panel--chat
+  .transcript-v2 {
+  background: var(--st-bg);
+  padding-inline: clamp(20px, 3vw, 36px);
+}
+
+.conversation-v2-view__panel--graph {
+  background: rgb(237 243 253);
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-v2-view__workspace {
+    transition: none;
+  }
+}
+
+.conversation-v2-view__panel--graph .strategy-graph {
+  border: 0;
+  border-radius: 0;
+  flex: 1;
+  min-height: 0;
+}

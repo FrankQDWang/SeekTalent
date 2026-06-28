@@ -1,0 +1,222 @@
+.requirement-form-event {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  display: grid;
+  gap: 28px;
+  margin: 10px 0 24px;
+  max-width: min(940px, 100%);
+  padding: 0;
+}
+
+.requirement-form-event__header {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+}
+
+.requirement-form-event__header svg {
+  color: var(--st-action);
+  flex: 0 0 auto;
+}
+
+.requirement-form-event h2,
+.requirement-form-event h3,
+.requirement-form-event p {
+  margin: 0;
+}
+
+.requirement-form-event h2 {
+  color: var(--st-ink);
+  font-size: 22px;
+  font-weight: 760;
+  line-height: 1.2;
+}
+
+.requirement-form-event p {
+  color: var(--st-muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.requirement-form-event__sections {
+  display: grid;
+  gap: 26px;
+}
+
+.requirement-form-event__section {
+  display: grid;
+  gap: 14px;
+}
+
+.requirement-form-event__section-header {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-start;
+}
+
+.requirement-form-event__section-header h3 {
+  color: var(--st-ink);
+  font-size: 15px;
+  font-weight: 760;
+}
+
+.requirement-form-event__items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.requirement-form-event__item {
+  align-items: center;
+  background: var(--st-surface);
+  border: 1px solid var(--st-border);
+  border-radius: 999px;
+  color: var(--st-ink);
+  cursor: pointer;
+  display: inline-flex;
+  gap: 8px;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 7px 16px 7px 12px;
+  transition:
+    background-color 160ms ease-out,
+    border-color 160ms ease-out,
+    color 160ms ease-out;
+}
+
+.requirement-form-event__item:has(input:disabled) {
+  cursor: default;
+}
+
+.requirement-form-event__item input {
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+.requirement-form-event__item:has(input:focus-visible) {
+  outline: 2px solid var(--st-focus);
+  outline-offset: 2px;
+}
+
+.requirement-form-event__box {
+  align-items: center;
+  background: var(--st-surface);
+  border: 1.5px solid var(--st-border-strong);
+  border-radius: 5px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 16px;
+  justify-content: center;
+  width: 16px;
+}
+
+.requirement-form-event__item-text {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.25;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.requirement-form-event__item[data-selected="true"] {
+  background: color-mix(in oklch, var(--st-action) 7%, var(--st-surface));
+  border-color: color-mix(in oklch, var(--st-action) 72%, white);
+  color: var(--st-action);
+}
+
+.requirement-form-event__item[data-selected="true"]
+  .requirement-form-event__box {
+  background: var(--st-action);
+  border-color: var(--st-action);
+}
+
+.requirement-form-event__item[data-selected="true"]
+  .requirement-form-event__box::after {
+  border: solid var(--st-action-ink);
+  border-width: 0 2px 2px 0;
+  content: "";
+  height: 8px;
+  margin-top: -2px;
+  transform: rotate(45deg);
+  width: 4px;
+}
+
+.requirement-form-event__item[data-selected="false"] {
+  background: var(--st-surface);
+  border-color: var(--st-border);
+  color: var(--st-muted);
+}
+
+.requirement-form-event__item[data-selected="false"]
+  .requirement-form-event__box {
+  background: var(--st-surface);
+  border-color: var(--st-border-strong);
+}
+
+.requirement-form-event--confirmed {
+  gap: 20px;
+  margin-bottom: 18px;
+}
+
+.requirement-form-event__confirmed-item {
+  background: color-mix(in oklch, var(--st-success) 8%, var(--st-surface));
+  border: 1px solid color-mix(in oklch, var(--st-success) 42%, var(--st-border));
+  border-radius: 999px;
+  color: var(--st-ink);
+  display: inline-flex;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+  max-width: 100%;
+  min-height: 32px;
+  overflow-wrap: anywhere;
+  padding: 7px 14px;
+}
+
+.requirement-form-event__confirmed-footer {
+  align-items: center;
+  background: color-mix(in oklch, var(--st-success) 10%, var(--st-surface));
+  border: 1px solid color-mix(in oklch, var(--st-success) 40%, var(--st-border));
+  border-radius: 999px;
+  color: var(--st-success);
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 720;
+  justify-self: start;
+  min-height: 34px;
+  padding: 7px 14px;
+}
+
+.requirement-form-event__empty-confirmed {
+  color: var(--st-muted);
+  font-size: 14px;
+}
+
+.requirement-form-event__other {
+  align-items: end;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.requirement-form-event__other .st-field__control--textarea {
+  background: var(--st-surface);
+  min-height: 88px;
+  resize: vertical;
+}
+
+.requirement-form-event__actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.requirement-form-event__actions .st-button {
+  min-width: 132px;
+}

@@ -1,11 +1,16 @@
 import { Circle, CircleCheck, CircleDashed } from "lucide-react";
-import type { AgentWorkbenchConversationSummary } from "../../lib/api/agentWorkbenchTypes";
 import { useAgentWorkbenchConversations } from "../../lib/api/agentWorkbench";
 import "./ConversationList.css";
 
+export type ConversationListSummary = {
+  conversationId: string;
+  status: string;
+  title: string;
+};
+
 type ConversationListProps = {
-  conversations?: readonly AgentWorkbenchConversationSummary[];
-  selectedConversationId?: string;
+  conversations?: readonly ConversationListSummary[];
+  selectedConversationId?: string | undefined;
 };
 
 export function ConversationList({
@@ -60,7 +65,7 @@ function ConversationListView({
   conversations,
   selectedConversationId,
 }: {
-  conversations: readonly AgentWorkbenchConversationSummary[];
+  conversations: readonly ConversationListSummary[];
   selectedConversationId: string | undefined;
 }) {
   return (

@@ -180,7 +180,7 @@ def test_operator_health_cli_reports_product_database_status(
     assert result.status == "warning"
     assert exit_code == 0
     assert "status: warning" in output
-    assert "database_count: 7" in output
+    assert "database_count: 8" in output
     assert "database:runtime_control:ok:db_ok" in output
     assert "database:conversation:warning:db_missing" in output
 
@@ -212,7 +212,7 @@ def test_database_group_backup_cli_writes_manifest_and_reports_partial_status(
     assert exit_code == 0
     assert "status: warning" in output
     assert "reason_code: db_group_backup_partial" in output
-    assert "database_count: 7" in output
+    assert "database_count: 8" in output
     assert "verified_count: 1" in output
 
 

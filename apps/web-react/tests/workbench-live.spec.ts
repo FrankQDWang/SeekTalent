@@ -352,46 +352,47 @@ test("blocks requirement confirmation after a selection update fails", async ({
   expect(confirmedRequirements).toBeNull();
 });
 
-test("starts a new workbench conversation from the home JD entry", async ({
+test("starts a new v2 workbench conversation from the home JD entry", async ({
   page,
 }) => {
-  let fromJdRequest: Record<string, unknown> | null = null;
-  const latestFromJdRequest = () => fromJdRequest;
-  const createdConversationSnapshot = {
-    ...conversationSnapshot,
-    conversation: {
-      ...conversationSnapshot.conversation,
-      conversationId: "agent_conv_created",
-      runtimeRunId: null,
-      status: "needs_confirmation",
-      title: "AI Agent 平台工程师",
-    },
-    candidates: [],
-    runtime: null,
-    strategyGraph: { edges: [], nodes: [] },
-    thinkingProcess: { activeRoundNo: null, rounds: [] },
-  };
+  let createRequest: Record<string, unknown> | null = null;
+  const latestCreateRequest = () => createRequest;
+  const createdConversationSnapshot = v2HomeStartSnapshot("agentv2_created");
 
-  await page.route(
-    "**/api/agent/workbench/conversations/from-jd",
-    async (route) => {
-      fromJdRequest = route.request().postDataJSON() as Record<string, unknown>;
+  await page.route("**/api/agent/workbench/conversations/from-jd", (route) => {
+    throw new Error(
+      `Workbench v2 start must not call legacy from-jd route: ${route.request().url()}`,
+    );
+  });
+  await page.route("**/api/agent/workbench/v2/conversations", async (route) => {
+    if (route.request().method() === "POST") {
+      createRequest = route.request().postDataJSON() as Record<string, unknown>;
       await route.fulfill({
         contentType: "application/json",
         json: createdConversationSnapshot,
         status: 201,
       });
-    },
-  );
-  await page.route("**/api/agent/workbench/conversations", async (route) => {
-    if (route.request().method() !== "POST") {
-      await route.fallback();
       return;
     }
-    throw new Error("New Workbench start should use /conversations/from-jd.");
+
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        schemaVersion: "agent.workbench.v2.list",
+        conversations: [
+          {
+            conversationId:
+              createdConversationSnapshot.conversation.conversationId,
+            title: createdConversationSnapshot.conversation.title,
+            status: createdConversationSnapshot.conversation.runtimeState,
+            updatedAt: createdConversationSnapshot.conversation.updatedAt,
+          },
+        ],
+      },
+    });
   });
   await page.route(
-    "**/api/agent/workbench/conversations/agent_conv_created",
+    "**/api/agent/workbench/v2/conversations/agentv2_created",
     async (route) => {
       await route.fulfill({
         contentType: "application/json",
@@ -403,22 +404,21 @@ test("starts a new workbench conversation from the home JD entry", async ({
     "AI Agent 平台工程师 寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。";
 
   await page.goto("/");
-  await page.getByLabel("岗位名称和岗位JD").fill(jobDescription);
-  await page.getByLabel("岗位名称和岗位JD").press("Enter");
+  await page.getByLabel("消息、JD 或招聘需求").fill(jobDescription);
+  await page.getByLabel("消息、JD 或招聘需求").press("Enter");
 
   await expect
-    .poll(() => latestFromJdRequest())
+    .poll(() => latestCreateRequest())
     .toMatchObject({
-      jobDescription,
-      jobTitle: null,
+      message: jobDescription,
     });
-  expect(latestFromJdRequest()).not.toHaveProperty("sourceKinds");
-  const idempotencyKey = latestFromJdRequest()?.idempotencyKey;
-  expect(typeof idempotencyKey === "string" ? idempotencyKey : "").toContain(
-    "workbench:from-jd:",
+  expect(latestCreateRequest()).not.toHaveProperty("sourceKinds");
+  expect(typeof latestCreateRequest()?.idempotencyKey).toBe("string");
+  await expect(page).toHaveURL(/\/conversations\/agentv2_created$/);
+  await expect(page.getByLabel("Agent transcript")).toContainText(
+    jobDescription,
   );
-  await expect(page).toHaveURL(/\/conversations\/agent_conv_created$/);
-  await expect(page.getByRole("button", { name: "确认需求" })).toBeVisible();
+  await expect(page.getByText("已处理")).toHaveCount(0);
 });
 
 declare global {
@@ -741,3 +741,41 @@ const candidateDetailSnapshot = {
   ],
   sourceKinds: ["liepin"],
 };
+
+function v2HomeStartSnapshot(conversationId: string) {
+  return {
+    schemaVersion: "agent.workbench.v2",
+    conversation: {
+      conversationId,
+      title: "AI Agent 平台工程师",
+      runtimeState: "idle",
+      runtimeRunId: null,
+      createdAt: "2026-06-12T12:02:00+00:00",
+      updatedAt: "2026-06-12T12:02:00+00:00",
+    },
+    transcriptEvents: [
+      {
+        eventId: "event_created_user",
+        step: 1,
+        type: "user_message",
+        role: "user",
+        status: "completed",
+        payload: {
+          text: "AI Agent 平台工程师 寻找上海 AI Agent 平台工程师，要求 Python 后端和检索系统经验。",
+        },
+        createdAt: "2026-06-12T12:02:00+00:00",
+      },
+      {
+        eventId: "event_created_assistant",
+        step: 2,
+        type: "assistant_status",
+        role: "assistant",
+        status: "running",
+        payload: { summary: "正在整理需求" },
+        createdAt: "2026-06-12T12:02:01+00:00",
+      },
+    ],
+    requirementForm: null,
+    runtime: null,
+  };
+}

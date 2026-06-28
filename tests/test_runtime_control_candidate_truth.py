@@ -50,6 +50,61 @@ def test_checkpoint_persists_compact_candidate_truth_without_artifacts(tmp_path:
     assert revisions[0].source_checkpoint_id == "rtcheckpoint_candidates"
 
 
+def test_candidate_truth_safe_detail_uses_field_whitelist() -> None:
+    from seektalent_runtime_control.candidates import candidate_truth_from_run_state
+
+    run_state = _run_state_payload()
+    candidate_store = run_state["candidate_store"]
+    assert isinstance(candidate_store, dict)
+    resume = candidate_store["resume_1"]
+    assert isinstance(resume, dict)
+    resume["raw"] = {
+        "candidate_name": "Alice Chen",
+        "fullText": "https://h.liepin.com/resume/showresumedetail\n新手任务\n页面导航",
+        "workExperienceList": [
+            {
+                "company": "Data Co",
+                "title": "Staff Engineer",
+                "summary": "Built ranking systems.",
+                "browserUrl": "https://h.liepin.com/resume/showresumedetail",
+                "pageChrome": "新手任务",
+            }
+        ],
+        "educationList": [
+            {
+                "school": "浙江大学",
+                "degree": "本科",
+                "pageFooter": "ICP备案信息",
+            }
+        ],
+    }
+
+    truth = candidate_truth_from_run_state(
+        runtime_run_id="runtime_run_candidates",
+        run_state=run_state,
+        source_checkpoint_id="rtcheckpoint_candidates",
+        observed_at="2026-06-17T00:00:10.000000Z",
+    )
+
+    safe_detail = truth.evidence[0].payload["safeDetail"]
+    assert safe_detail == {
+        "candidateName": "Alice Chen",
+        "workExperienceList": [
+            {
+                "company": "Data Co",
+                "title": "Staff Engineer",
+                "summary": "Built ranking systems.",
+            }
+        ],
+        "educationList": [
+            {
+                "school": "浙江大学",
+                "degree": "本科",
+            }
+        ],
+    }
+
+
 def _create_run(store) -> None:
     from seektalent_runtime_control.models import RuntimeRunRecord
 

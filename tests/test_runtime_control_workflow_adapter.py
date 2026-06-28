@@ -7,7 +7,10 @@ from types import SimpleNamespace
 import pytest
 
 from seektalent.models import RequirementSheet
+from seektalent.providers.liepin.runtime_context import local_opencli_liepin_source_context
+from seektalent.providers.liepin.store import LiepinStore
 from seektalent.progress import ProgressEvent
+from tests.settings_factory import make_settings
 
 
 def test_workflow_adapter_persists_run_and_runtime_callbacks(tmp_path: Path) -> None:
@@ -63,6 +66,82 @@ def test_workflow_adapter_persists_run_and_runtime_callbacks(tmp_path: Path) -> 
     assert events[3].payload["workflowRuntimeRunId"] == "workflow_run_1"
     assert events[5].payload["checkpointId"] == "rtcheckpoint_1"
     assert store.get_latest_checkpoint(runtime_run_id="runtime_run_1").run_state == {"round": 1}
+
+
+def test_workflow_adapter_supplies_liepin_source_context(tmp_path: Path) -> None:
+    from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    runtime = CallbackRuntime()
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        liepin_worker_mode="opencli",
+        liepin_browser_action_backend="opencli",
+        liepin_session_store_key_id="unit-session-key",
+    )
+    executor = WorkflowRuntimeExecutor(
+        store=store,
+        settings=settings,
+        runtime_factory=lambda: runtime,
+        runtime_run_id_factory=lambda: "runtime_run_1",
+        executor_id_factory=lambda: "executor_1",
+        checkpoint_id_factory=lambda: "rtcheckpoint_1",
+        source_context_provider=local_opencli_liepin_source_context,
+        now=_clock(
+            "2026-06-08T00:00:00.000000Z",
+            "2026-06-08T00:00:01.000000Z",
+            "2026-06-08T00:00:02.000000Z",
+            "2026-06-08T00:00:03.000000Z",
+            "2026-06-08T00:00:04.000000Z",
+            "2026-06-08T00:00:05.000000Z",
+        ),
+    )
+
+    asyncio.run(
+        executor.start_workflow(
+            conversation_id="agent_conv_1",
+            workbench_session_id="workbench_session_1",
+            approved_requirement=_approved_requirement(),
+            job_title="Senior Python Engineer",
+            jd_text="Build search systems.",
+            notes=None,
+            source_ids=["liepin"],
+        )
+    )
+
+    assert runtime.received["source_context"] == {
+        "actor_id": "local",
+        "backend_mode": "opencli",
+        "compliance_gate_ref": runtime.received["source_context"]["compliance_gate_ref"],
+        "connection_id": "liepin-opencli",
+        "provider_account_hash": "liepin-opencli-local",
+        "tenant_id": "local",
+        "workspace_id": "default",
+    }
+    gate_ref = runtime.received["source_context"]["compliance_gate_ref"]
+    assert isinstance(gate_ref, str)
+    assert gate_ref.startswith("gate_")
+
+    liepin_store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
+    gate = liepin_store.get_compliance_gate(
+        gate_ref=gate_ref,
+        tenant_id="local",
+        workspace_id="default",
+        actor_id="local",
+    )
+    assert gate is not None
+    assert gate.denial_reason(provider_account_hash="liepin-opencli-local", purpose="search") is None
+    session = liepin_store.get_session_metadata(
+        tenant_id="local",
+        workspace_id="default",
+        actor_id="local",
+        connection_id="liepin-opencli",
+    )
+    assert session is not None
+    assert session["status"] == "connected"
+    assert session["provider_account_hash"] == "liepin-opencli-local"
 
 
 def test_workflow_adapter_records_failed_event_before_reraising_runtime_error(tmp_path: Path) -> None:

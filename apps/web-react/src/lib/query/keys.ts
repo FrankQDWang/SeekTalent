@@ -2,6 +2,29 @@ export const queryKeys = {
   agentConversations: ["agent", "workbench", "conversations"] as const,
   agentConversation: (conversationId: string) =>
     ["agent", "workbench", "conversations", conversationId] as const,
+  workbenchV2Conversations: [
+    "agent",
+    "workbench",
+    "v2",
+    "conversations",
+  ] as const,
+  workbenchV2Conversation: (conversationId: string) =>
+    ["agent", "workbench", "v2", "conversations", conversationId] as const,
+  workbenchV2CandidateDetails: (conversationId: string) =>
+    [
+      "agent",
+      "workbench",
+      "v2",
+      "conversations",
+      conversationId,
+      "candidates",
+    ] as const,
+  workbenchV2CandidateDetail: (conversationId: string, candidateId: string) =>
+    [
+      ...queryKeys.workbenchV2CandidateDetails(conversationId),
+      candidateId,
+      "detail",
+    ] as const,
   agentCandidateDetails: (conversationId: string) =>
     [
       "agent",

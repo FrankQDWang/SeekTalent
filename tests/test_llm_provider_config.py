@@ -57,6 +57,8 @@ def test_canonical_text_llm_defaults_use_dual_protocol_surface() -> None:
     assert settings.candidate_feedback_model_id == "deepseek-v4-flash"
     assert settings.workbench_note_writer_model_id == "deepseek-v4-flash"
     assert settings.workbench_note_writer_reasoning_effort == "off"
+    assert settings.workbench_conversation_model_id == "deepseek-v4-flash"
+    assert settings.workbench_conversation_reasoning_effort == "max"
 
 
 def test_legacy_stage_key_in_dotenv_fails_with_migration_error(tmp_path: Path) -> None:
@@ -142,6 +144,8 @@ def test_source_env_template_uses_new_text_llm_keys() -> None:
     assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT=off" in text
     assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID=deepseek-v4-flash" in text
     assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_REASONING_EFFORT=off" in text
+    assert "SEEKTALENT_WORKBENCH_CONVERSATION_MODEL_ID=deepseek-v4-flash" in text
+    assert "SEEKTALENT_WORKBENCH_CONVERSATION_REASONING_EFFORT=max" in text
     assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
     assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_LIVE_HARNESS_TIMEOUT_SECONDS=30.0" in text
     assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS=2048" in text
@@ -243,6 +247,21 @@ def test_workbench_note_writer_output_spec_is_plain_text() -> None:
 
     assert output_spec is str
     assert not isinstance(output_spec, PromptedOutput)
+
+
+def test_workbench_conversation_stage_uses_bailian_native_strict_schema() -> None:
+    stage = resolve_stage_model_config(make_settings(), stage="workbench_conversation")
+    output_spec = build_output_spec(stage, _json_schema_capable_model(), dict)
+    policy = build_provider_request_policy(stage)
+
+    assert stage.provider_label == "bailian"
+    assert stage.endpoint_kind == "bailian_openai_chat_completions"
+    assert stage.model_id == "deepseek-v4-flash"
+    assert stage.thinking_mode is True
+    assert stage.reasoning_effort == "max"
+    assert policy.extra_body == {"enable_thinking": True, "reasoning_effort": "max"}
+    assert resolve_structured_output_mode(stage) == "native_json_schema"
+    assert isinstance(output_spec, NativeOutput)
 
 
 def test_runtime_mode_defaults_to_dev_paths() -> None:

@@ -22,6 +22,9 @@ from seektalent_runtime_control.models import (
 from seektalent_runtime_control.requirements import ApprovedRequirementRevision
 from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, RuntimeControlStore
 
+SourceContext = dict[str, str | int | bool | None]
+SourceContextProvider = Callable[[Sequence[str], AppSettings | None], SourceContext | None]
+
 
 @runtime_checkable
 class RuntimeLike(Protocol):
@@ -42,6 +45,7 @@ class WorkflowRuntimeExecutor:
         lease_seconds: int = 60,
         event_sink: RuntimeEventSink | None = None,
         command_service: RuntimeCommandService | None = None,
+        source_context_provider: SourceContextProvider | None = None,
     ) -> None:
         if runtime_factory is None and settings is None:
             raise ValueError("settings is required when runtime_factory is not provided")
@@ -55,6 +59,7 @@ class WorkflowRuntimeExecutor:
         self.lease_seconds = lease_seconds
         self.event_sink = event_sink or RuntimeControlEventSink(store)
         self.command_service = command_service
+        self.source_context_provider = source_context_provider
 
     async def start_workflow(
         self,
@@ -114,6 +119,7 @@ class WorkflowRuntimeExecutor:
         created_at = self.now()
         runtime_run_id = self.runtime_run_id_factory()
         run_kind_value = _run_kind(run_kind)
+        source_context = self._source_context(source_ids)
         intent_id = run_intent_id or _default_run_intent_id(
             conversation_id=conversation_id,
             workbench_session_id=workbench_session_id,
@@ -144,6 +150,14 @@ class WorkflowRuntimeExecutor:
         if run.latest_event_seq > 0:
             return run
         queued_at = self.now()
+        workflow_input: dict[str, object] = {
+            "jobTitle": job_title,
+            "jdText": jd_text,
+            "notes": notes or "",
+            "sourceIds": list(source_ids),
+        }
+        if source_context is not None:
+            workflow_input["sourceContext"] = source_context
         self.store.append_event(
             _event(
                 runtime_run_id=run.runtime_run_id,
@@ -165,14 +179,7 @@ class WorkflowRuntimeExecutor:
                 current_stage="queued",
                 current_round=None,
                 latest_event_seq=0,
-                snapshot={
-                    "workflowInput": {
-                        "jobTitle": job_title,
-                        "jdText": jd_text,
-                        "notes": notes or "",
-                        "sourceIds": list(source_ids),
-                    }
-                },
+                snapshot={"workflowInput": workflow_input},
                 updated_at=queued_at,
             ),
         )
@@ -199,6 +206,9 @@ class WorkflowRuntimeExecutor:
         resolved_job_title = job_title or _text(workflow_input.get("jobTitle")) or approved.requirement_sheet.job_title
         resolved_jd_text = jd_text if jd_text is not None else _text(workflow_input.get("jdText")) or ""
         resolved_notes = notes if notes is not None else _text(workflow_input.get("notes")) or ""
+        resolved_source_context = _source_context_from_workflow_input(workflow_input) or self._source_context(
+            resolved_source_ids
+        )
 
         self.store.append_executor_event(
             _event(
@@ -311,6 +321,8 @@ class WorkflowRuntimeExecutor:
                 "runtime_checkpoint_callback": runtime_checkpoint_callback,
                 "approved_requirement_sheet": approved.requirement_sheet,
             }
+            if resolved_source_context is not None:
+                runtime_kwargs["source_context"] = resolved_source_context
             if _runtime_accepts_round_boundary_callback(runtime):
                 runtime_kwargs["runtime_round_boundary_callback"] = runtime_round_boundary_callback
             if resume_checkpoint is not None and _runtime_accepts_resume_context(runtime):
@@ -368,6 +380,13 @@ class WorkflowRuntimeExecutor:
             released_at=self.now(),
         )
         return self.store.get_run(run.runtime_run_id)
+
+    def _source_context(self, source_ids: Sequence[str]) -> SourceContext | None:
+        if self.source_context_provider is not None:
+            provided = self.source_context_provider(source_ids, self.settings)
+            if provided is not None:
+                return provided
+        return _default_source_context(source_ids=source_ids, settings=self.settings)
 
     def _load_resume_checkpoint(
         self,
@@ -496,6 +515,39 @@ def _workflow_input(snapshot: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
     return {key: item for key, item in value.items() if isinstance(key, str)}
+
+
+def _source_context_from_workflow_input(workflow_input: dict[str, object]) -> SourceContext | None:
+    value = workflow_input.get("sourceContext")
+    if not isinstance(value, dict):
+        return None
+    context = {
+        key: item
+        for key, item in value.items()
+        if isinstance(key, str) and (item is None or isinstance(item, (str, int, bool)))
+    }
+    return context or None
+
+
+def _default_source_context(
+    *,
+    source_ids: Sequence[str],
+    settings: AppSettings | None,
+) -> SourceContext | None:
+    if "liepin" not in {str(source_id) for source_id in source_ids}:
+        return None
+    worker_mode = str(getattr(settings, "liepin_worker_mode", "") or "")
+    backend_mode = "opencli" if worker_mode in {"managed_local", "opencli"} else worker_mode
+    context: dict[str, str | int | bool | None] = {
+        "actor_id": "local",
+        "connection_id": "liepin-opencli",
+        "provider_account_hash": "liepin-opencli-local",
+        "tenant_id": "local",
+        "workspace_id": "default",
+    }
+    if backend_mode:
+        context["backend_mode"] = backend_mode
+    return context
 
 
 def _snapshot_payload(snapshot: object) -> dict[str, object]:

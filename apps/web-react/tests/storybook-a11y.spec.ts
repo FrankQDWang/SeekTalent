@@ -262,8 +262,11 @@ async function waitForStoryReady(page: Page) {
     return;
   }
 
+  const nodeCount = await firstGraph.locator(".strategy-graph-node").count();
   const graphHasTerminalState =
-    (await firstGraph.locator(".strategy-graph__empty").count()) > 0;
+    (await firstGraph.locator(".strategy-graph__empty").count()) > 0 ||
+    ((await firstGraph.locator(".strategy-graph__job-card").count()) > 0 &&
+      nodeCount === 0);
 
   if (!graphHasTerminalState) {
     await expect(

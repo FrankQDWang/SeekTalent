@@ -7,8 +7,9 @@ const candidateFixture = {
   candidateId: "candidate_001",
   rank: 1,
   displayName: "候选人 A",
-  headline: "平台后端负责人 / 某 AI Infra 公司 / 上海",
+  headline: "平台后端负责人",
   company: "某 AI Infra 公司",
+  age: 32,
   location: "上海",
   education: "本科",
   experienceYears: 10,
@@ -33,13 +34,16 @@ describe("CandidateCard", () => {
       screen.getByRole("article", { name: "候选人 A" }),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("平台后端负责人 / 某 AI Infra 公司 / 上海"),
+      screen.getByText("平台后端负责人 · 某 AI Infra 公司"),
     ).toBeInTheDocument();
     expect(screen.getByText("猎聘")).toBeInTheDocument();
+    expect(screen.getByText("待复核")).toBeInTheDocument();
+    expect(screen.getByText("92分")).toBeInTheDocument();
+    expect(screen.getByText("32岁")).toBeInTheDocument();
     expect(screen.getByText("工作10年")).toBeInTheDocument();
     expect(
-      screen.queryByText("有 Agent 工具调用平台和 RAG 检索链路经验。"),
-    ).not.toBeInTheDocument();
+      screen.getByText("有 Agent 工具调用平台和 RAG 检索链路经验。"),
+    ).toBeInTheDocument();
   });
 
   it("ignores forbidden raw provider, auth, and resume fields when present", () => {

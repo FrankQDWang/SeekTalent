@@ -1,0 +1,53 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "react-agent-workbench-rebuild-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Introduce schema-first Workbench v2 as the replacement path for the abandoned Workbench variants.",
+  "rationale": "This PR intentionally lands the usable Workbench v2 slice across the React transcript UI, BFF v2 routes, schema-first transcript store, conversation prompt contract, runtime progress/result display, and provider configuration. The old local Workbench attempts were backed up and cleaned from main; the replacement path must land as one reviewed PR so the UI, BFF contract, transcript persistence, runtime display data, and model-provider settings stay consistent.",
+  "touched_layers": [
+    "bff",
+    "dependencies",
+    "docs",
+    "frontend",
+    "governance",
+    "other",
+    "provider",
+    "tests"
+  ],
+  "red_files": [
+    ".env.example",
+    "src/seektalent/config.py",
+    "src/seektalent/providers/liepin/runtime_context.py"
+  ],
+  "dependency_files": [
+    "pyproject.toml"
+  ],
+  "dependency_rationale": "Workbench v2 depends on the committed provider/runtime configuration shape and the branch already includes dependency-control changes from the schema-first work. The dependency file is reviewed with the UI/BFF/runtime slice so local dev, CI, and the conversation-agent model provider use the same contract.",
+  "config_env_files": [
+    ".env.example",
+    "src/seektalent/config.py"
+  ],
+  "config_behavior_rationale": "The config/env changes expose the model-provider settings consumed by the Workbench v2 conversation agent while the behavior changes add the transcript/runtime path that uses those settings. They must be reviewed together so the agent loop cannot silently run with an unsupported provider contract.",
+  "verification": [
+    "scripts/verify-dev-workbench.sh",
+    "uv run python scripts/build_packaged_workbench.py",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+    "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
+    "pnpm --dir apps/web-react check",
+    "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+    "uv run pytest tests/test_workbench_v2_service.py tests/test_workbench_v2_runtime_service.py tests/test_workbench_v2_agent_loop.py tests/test_workbench_v2_prompt_contract.py tests/test_workbench_v2_routes.py tests/test_workbench_v2_runtime_runner.py tests/test_runtime_control_candidate_truth.py -q",
+    "pnpm --dir apps/web-react exec vitest run src/components/workbench/CandidateCard.test.tsx src/components/workbench/CandidateDetailDrawer.test.tsx src/components/workbench/ConversationScreenV2.test.tsx src/components/workbench/TranscriptV2.test.tsx src/components/workbench/RequirementFormEvent.test.tsx",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "abandoned first-turn/outbox/transcript-projection Workbench experiments",
+    "local dirty main Workbench variants that were backed up before cleanup",
+    "runtime status projections that show synthetic state instead of runtime-backed progress"
+  ],
+  "risks": [
+    "The v2 transcript must remain the single UI fact source and must not reintroduce old projected transcript chains.",
+    "Provider configuration changes must stay aligned with the conversation-agent prompt contract.",
+    "Runtime display must reflect persisted runtime progress/results rather than frontend-only optimistic state.",
+    "The PR is intentionally broad and should not be merged without green governance, Workbench, Python, and frontend checks."
+  ]
+}

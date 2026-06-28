@@ -5,7 +5,8 @@
 html,
 body,
 #root {
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
 }
 
 #storybook-root {
@@ -24,6 +25,7 @@ body {
   font-family: var(--st-font);
   font-size: 14px;
   line-height: 1.45;
+  overflow: clip;
 }
 
 button,
@@ -43,9 +45,11 @@ button {
 }
 
 .app-shell {
-  min-height: 100vh;
   display: flex;
+  height: 100dvh;
+  min-height: 0;
   min-width: 0;
+  overflow: clip;
 }
 
 .brand-mark {

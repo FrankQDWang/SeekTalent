@@ -25,6 +25,7 @@ def test_group_backup_covers_product_databases_with_manifest_and_verified_copies
     specs = product_database_specs(settings)
     assert {spec.name for spec in specs} == {
         "workbench",
+        "workbench_v2",
         "runtime_control",
         "conversation",
         "workbench_stream",

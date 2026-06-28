@@ -15,6 +15,7 @@ type ThinkingProcessRailProps = {
   candidates: readonly AgentWorkbenchCandidateSummary[];
   defaultTab?: ThinkingProcessRailTab;
   onViewCandidateDetails?: ((candidateId: string) => void) | undefined;
+  selectedCandidateId?: string | null | undefined;
   thinkingProcess: AgentWorkbenchThinkingProcess;
 };
 
@@ -27,6 +28,7 @@ export function ThinkingProcessRail({
   candidates,
   defaultTab = "thinking",
   onViewCandidateDetails,
+  selectedCandidateId = null,
   thinkingProcess,
 }: ThinkingProcessRailProps) {
   const [activeTab, setActiveTab] =
@@ -68,6 +70,7 @@ export function ThinkingProcessRail({
           <CandidateQueue
             candidates={candidates}
             onViewDetails={onViewCandidateDetails}
+            selectedCandidateId={selectedCandidateId}
             totalCount={candidates.length}
           />
         </section>

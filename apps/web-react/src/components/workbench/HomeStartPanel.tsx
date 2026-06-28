@@ -4,31 +4,30 @@ import { FieldTextarea } from "../primitives/FieldTextarea";
 import "./HomeStartPanel.css";
 
 export type HomeStartPanelSubmitInput = {
-  jobDescription: string;
-  jobTitle: string | null;
+  message: string;
 };
 
 type HomeStartPanelProps = {
   errorMessage?: string | null;
-  initialJobDescription?: string;
+  initialMessage?: string;
   loading?: boolean;
   onSubmit: (input: HomeStartPanelSubmitInput) => Promise<void> | void;
 };
 
 export function HomeStartPanel({
   errorMessage = null,
-  initialJobDescription = "",
+  initialMessage = "",
   loading = false,
   onSubmit,
 }: HomeStartPanelProps) {
   const formRef = useRef<HTMLFormElement | null>(null);
-  const [jobDescription, setJobDescription] = useState(initialJobDescription);
+  const [message, setMessage] = useState(initialMessage);
   const [fallbackErrorMessage, setFallbackErrorMessage] = useState<
     string | null
   >(null);
-  const trimmedJobDescription = jobDescription.trim();
+  const trimmedMessage = message.trim();
   const displayErrorMessage = errorMessage ?? fallbackErrorMessage;
-  const submitDisabled = loading || trimmedJobDescription.length === 0;
+  const submitDisabled = loading || trimmedMessage.length === 0;
 
   return (
     <section aria-label="新建招聘任务" className="home-start-panel">
@@ -46,11 +45,8 @@ export function HomeStartPanel({
             }
             setFallbackErrorMessage(null);
             try {
-              await onSubmit({
-                jobDescription: trimmedJobDescription,
-                jobTitle: null,
-              });
-              setJobDescription("");
+              await onSubmit({ message: trimmedMessage });
+              setMessage("");
             } catch {
               setFallbackErrorMessage("请求失败，请稍后重试。");
             }
@@ -60,8 +56,8 @@ export function HomeStartPanel({
             <FieldTextarea
               disabled={loading}
               hideLabel
-              label="岗位名称和岗位JD"
-              onChange={(event) => setJobDescription(event.currentTarget.value)}
+              label="消息、JD 或招聘需求"
+              onChange={(event) => setMessage(event.currentTarget.value)}
               onKeyDown={(event) => {
                 if (event.key !== "Enter" || event.shiftKey) {
                   return;
@@ -71,13 +67,13 @@ export function HomeStartPanel({
               }}
               placeholder=""
               rows={5}
-              value={jobDescription}
+              value={message}
             />
-            {jobDescription.length === 0 ? (
+            {message.length === 0 ? (
               <div aria-hidden="true" className="home-start-panel__placeholder">
-                <span>请粘贴 </span>
-                <strong>岗位名称/岗位JD等</strong>
-                <span> 信息，快速匹配候选人</span>
+                <span>输入 </span>
+                <strong>消息 / JD / 招聘需求</strong>
+                <span>，开始整理候选人搜索</span>
               </div>
             ) : null}
             <div className="home-start-panel__input-footer">
@@ -106,7 +102,7 @@ export function HomeStartPanel({
             <button
               className="home-start-panel__prompt"
               key={`${prompt}-${index.toString()}`}
-              onClick={() => setJobDescription(prompt)}
+              onClick={() => setMessage(prompt)}
               type="button"
             >
               <span>{prompt}</span>
@@ -120,8 +116,8 @@ export function HomeStartPanel({
 }
 
 const examplePrompts = [
+  "你好，先帮我梳理一个招聘需求。",
   "上海 AI Agent 平台工程师，3 年以上 Python 后端经验，熟悉 RAG 和 workflow orchestration。",
   "北京搜索推荐算法负责人，需要多路召回、排序模型和候选人画像系统经验。",
   "杭州 B 端产品设计负责人，负责复杂工作台体验、数据看板和跨团队落地。",
-  "远程 RAG 工具链后端工程师，要求 eval harness、可观测性和生产运行经验。",
 ];

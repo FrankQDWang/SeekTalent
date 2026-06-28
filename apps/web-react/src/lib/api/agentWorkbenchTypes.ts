@@ -16,7 +16,12 @@ export type AgentWorkbenchConversationSummary =
 export type AgentWorkbenchMessage = Schemas["AgentWorkbenchMessageResponse"];
 export type AgentWorkbenchActivity = Schemas["AgentWorkbenchActivityResponse"];
 export type AgentWorkbenchCandidateSummary =
-  Schemas["AgentWorkbenchCandidateSummaryResponse"];
+  Schemas["AgentWorkbenchCandidateSummaryResponse"] & {
+    activeStatus?: string | null;
+    age?: number | null;
+    gender?: string | null;
+    jobStatus?: string | null;
+  };
 export type AgentWorkbenchCandidateDetailSection = Omit<
   Schemas["AgentWorkbenchCandidateDetailSectionResponse"],
   "items"
@@ -161,8 +166,16 @@ export type AgentWorkbenchCandidateDetailResponse = Omit<
   Schemas["AgentWorkbenchCandidateDetailResponse"],
   "sections" | "evidence"
 > & {
+  activeStatus?: string | null;
+  age?: number | null;
+  company?: string | null;
+  education?: string | null;
   sections: AgentWorkbenchCandidateDetailSection[];
   evidence: string[];
+  experienceYears?: number | null;
+  gender?: string | null;
+  jobStatus?: string | null;
+  location?: string | null;
 };
 
 export type WorkbenchUserTextMessageRequest =
