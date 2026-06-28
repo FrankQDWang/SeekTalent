@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from seektalent.config import AppSettings, load_process_env
 from seektalent.dev_mode import DevModeStatus, build_dev_mode_env_diagnostics
+from seektalent.providers.liepin.runtime_context import local_opencli_liepin_source_context
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
@@ -99,6 +100,7 @@ def create_app(
         store=runtime_control_store,
         settings=app_settings,
         runtime_factory=workbench_v2_runtime_factory,
+        source_context_provider=local_opencli_liepin_source_context,
     )
     app.state.workbench_v2_runtime_runner = WorkbenchV2RuntimeQueueRunner(
         store=runtime_control_store,

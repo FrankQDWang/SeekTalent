@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from inspect import Parameter, signature
@@ -23,6 +22,9 @@ from seektalent_runtime_control.models import (
 from seektalent_runtime_control.requirements import ApprovedRequirementRevision
 from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, RuntimeControlStore
 
+SourceContext = dict[str, str | int | bool | None]
+SourceContextProvider = Callable[[Sequence[str], AppSettings | None], SourceContext | None]
+
 
 @runtime_checkable
 class RuntimeLike(Protocol):
@@ -43,6 +45,7 @@ class WorkflowRuntimeExecutor:
         lease_seconds: int = 60,
         event_sink: RuntimeEventSink | None = None,
         command_service: RuntimeCommandService | None = None,
+        source_context_provider: SourceContextProvider | None = None,
     ) -> None:
         if runtime_factory is None and settings is None:
             raise ValueError("settings is required when runtime_factory is not provided")
@@ -56,6 +59,7 @@ class WorkflowRuntimeExecutor:
         self.lease_seconds = lease_seconds
         self.event_sink = event_sink or RuntimeControlEventSink(store)
         self.command_service = command_service
+        self.source_context_provider = source_context_provider
 
     async def start_workflow(
         self,
@@ -115,7 +119,7 @@ class WorkflowRuntimeExecutor:
         created_at = self.now()
         runtime_run_id = self.runtime_run_id_factory()
         run_kind_value = _run_kind(run_kind)
-        source_context = _default_source_context(source_ids=source_ids, settings=self.settings)
+        source_context = self._source_context(source_ids)
         intent_id = run_intent_id or _default_run_intent_id(
             conversation_id=conversation_id,
             workbench_session_id=workbench_session_id,
@@ -146,6 +150,14 @@ class WorkflowRuntimeExecutor:
         if run.latest_event_seq > 0:
             return run
         queued_at = self.now()
+        workflow_input: dict[str, object] = {
+            "jobTitle": job_title,
+            "jdText": jd_text,
+            "notes": notes or "",
+            "sourceIds": list(source_ids),
+        }
+        if source_context is not None:
+            workflow_input["sourceContext"] = source_context
         self.store.append_event(
             _event(
                 runtime_run_id=run.runtime_run_id,
@@ -167,15 +179,7 @@ class WorkflowRuntimeExecutor:
                 current_stage="queued",
                 current_round=None,
                 latest_event_seq=0,
-                snapshot={
-                    "workflowInput": {
-                        "jobTitle": job_title,
-                        "jdText": jd_text,
-                        "notes": notes or "",
-                        "sourceIds": list(source_ids),
-                        "sourceContext": source_context,
-                    }
-                },
+                snapshot={"workflowInput": workflow_input},
                 updated_at=queued_at,
             ),
         )
@@ -202,9 +206,8 @@ class WorkflowRuntimeExecutor:
         resolved_job_title = job_title or _text(workflow_input.get("jobTitle")) or approved.requirement_sheet.job_title
         resolved_jd_text = jd_text if jd_text is not None else _text(workflow_input.get("jdText")) or ""
         resolved_notes = notes if notes is not None else _text(workflow_input.get("notes")) or ""
-        resolved_source_context = _source_context_from_workflow_input(workflow_input) or _default_source_context(
-            source_ids=resolved_source_ids,
-            settings=self.settings,
+        resolved_source_context = _source_context_from_workflow_input(workflow_input) or self._source_context(
+            resolved_source_ids
         )
 
         self.store.append_executor_event(
@@ -378,6 +381,13 @@ class WorkflowRuntimeExecutor:
         )
         return self.store.get_run(run.runtime_run_id)
 
+    def _source_context(self, source_ids: Sequence[str]) -> SourceContext | None:
+        if self.source_context_provider is not None:
+            provided = self.source_context_provider(source_ids, self.settings)
+            if provided is not None:
+                return provided
+        return _default_source_context(source_ids=source_ids, settings=self.settings)
+
     def _load_resume_checkpoint(
         self,
         *,
@@ -507,7 +517,7 @@ def _workflow_input(snapshot: object) -> dict[str, object]:
     return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
-def _source_context_from_workflow_input(workflow_input: dict[str, object]) -> dict[str, str | int | bool | None] | None:
+def _source_context_from_workflow_input(workflow_input: dict[str, object]) -> SourceContext | None:
     value = workflow_input.get("sourceContext")
     if not isinstance(value, dict):
         return None
@@ -523,7 +533,7 @@ def _default_source_context(
     *,
     source_ids: Sequence[str],
     settings: AppSettings | None,
-) -> dict[str, str | int | bool | None] | None:
+) -> SourceContext | None:
     if "liepin" not in {str(source_id) for source_id in source_ids}:
         return None
     worker_mode = str(getattr(settings, "liepin_worker_mode", "") or "")
@@ -537,102 +547,7 @@ def _default_source_context(
     }
     if backend_mode:
         context["backend_mode"] = backend_mode
-    if backend_mode == "opencli":
-        compliance_gate_ref = _ensure_local_opencli_liepin_context(settings=settings, context=context)
-        if compliance_gate_ref:
-            context["compliance_gate_ref"] = compliance_gate_ref
     return context
-
-
-def _ensure_local_opencli_liepin_context(
-    *,
-    settings: AppSettings | object | None,
-    context: dict[str, str | int | bool | None],
-) -> str | None:
-    if settings is None or not hasattr(settings, "resolve_workspace_path"):
-        return None
-    try:
-        connector_db_path = getattr(settings, "liepin_connector_db_path")
-        session_store_key_id = str(getattr(settings, "liepin_session_store_key_id", "") or "local-opencli-session")
-        db_path = settings.resolve_workspace_path(connector_db_path)
-    except (AttributeError, TypeError, ValueError):
-        return None
-
-    from seektalent.providers.liepin.compliance import ComplianceGate
-    from seektalent.providers.liepin.store import LiepinStore
-
-    tenant_id = str(context["tenant_id"] or "local")
-    workspace_id = str(context["workspace_id"] or "default")
-    actor_id = str(context["actor_id"] or "local")
-    connection_id = str(context["connection_id"] or "liepin-opencli")
-    provider_account_hash = str(context["provider_account_hash"] or "liepin-opencli-local")
-
-    store = LiepinStore(db_path)
-    connection = store.get_connection(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        actor_id=actor_id,
-        connection_id=connection_id,
-    )
-    if connection is None:
-        gate = ComplianceGate(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            actor_id=actor_id,
-            provider_account_hash=None,
-            status="pending_account_binding",
-            candidate_personal_info_processing_basis="human initiated recruiting search",
-            personal_information_processor="SeekTalent local workbench",
-            operator_audit_owner=actor_id,
-            account_holder_authorized=True,
-            human_initiated_recruiting=True,
-            allowed_purposes=["search"],
-            retention_policy="run_debug_short",
-            deletion_sla_days=7,
-            deletion_path="local workspace retention cleanup",
-            raw_payload_access_scope="run_only",
-            raw_detail_retention_allowed_after_debug=False,
-            fixture_export_allowed=False,
-            policy_ref="workbench-v2-local-opencli-v1",
-        )
-        gate_ref = store.create_compliance_gate(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            actor_id=actor_id,
-            gate=gate,
-            purpose="search",
-        )
-        store.create_connection(
-            tenant_id=tenant_id,
-            workspace_id=workspace_id,
-            actor_id=actor_id,
-            compliance_gate_ref=gate_ref,
-            connection_id=connection_id,
-        )
-    else:
-        gate_ref = connection.compliance_gate_ref
-
-    state_hash = hashlib.sha256(f"{connection_id}:{provider_account_hash}".encode("utf-8")).hexdigest()
-    session = store.record_session_metadata(
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        actor_id=actor_id,
-        connection_id=connection_id,
-        provider_account_hash=provider_account_hash,
-        session_store_key_id=session_store_key_id,
-        encrypted_state_sha256=state_hash,
-    )
-    if session is None:
-        return gate_ref
-    store.approve_connection_account_hash(
-        gate_ref=gate_ref,
-        tenant_id=tenant_id,
-        workspace_id=workspace_id,
-        actor_id=actor_id,
-        connection_id=connection_id,
-        provider_account_hash=provider_account_hash,
-    )
-    return gate_ref
 
 
 def _snapshot_payload(snapshot: object) -> dict[str, object]:

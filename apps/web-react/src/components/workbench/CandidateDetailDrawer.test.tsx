@@ -9,7 +9,7 @@ import {
 } from "../../test/fixtures/agentWorkbenchBff";
 import { CandidateDetailDrawer } from "./CandidateDetailDrawer";
 
-const candidate = agentWorkbenchRunningViewFixture.candidates[0] ?? null;
+const candidate = requireCandidate();
 
 afterEach(() => {
   cleanup();
@@ -66,7 +66,7 @@ describe("CandidateDetailDrawer", () => {
     render(
       <CandidateDetailDrawer
         candidate={{
-          ...candidate!,
+          ...candidate,
           sourceKinds: ["cts"],
         }}
         detail={{
@@ -243,4 +243,14 @@ function CandidateDetailDrawerHarness() {
       />
     </>
   );
+}
+
+function requireCandidate() {
+  const firstCandidate = agentWorkbenchRunningViewFixture.candidates[0];
+  if (firstCandidate === undefined) {
+    throw new Error(
+      "agentWorkbenchRunningViewFixture must include a candidate",
+    );
+  }
+  return firstCandidate;
 }

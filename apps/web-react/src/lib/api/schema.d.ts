@@ -1202,6 +1202,40 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/agent/workbench/v2/conversations/{conversation_id}/events": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List Events */
+    get: operations["list_events_api_agent_workbench_v2_conversations__conversation_id__events_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/api/agent/workbench/v2/conversations/{conversation_id}/candidates/{candidate_id}/detail": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Get Candidate Detail */
+    get: operations["get_candidate_detail_api_agent_workbench_v2_conversations__conversation_id__candidates__candidate_id__detail_get"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/agent/workbench/v2/conversations/{conversation_id}/messages": {
     parameters: {
       query?: never;
@@ -4587,6 +4621,141 @@ export interface components {
       /** Idempotencykey */
       idempotencyKey: string;
     };
+    /** WorkbenchV2CandidateDetailSectionView */
+    WorkbenchV2CandidateDetailSectionView: {
+      /** Title */
+      title: string;
+      /** Items */
+      items?: string[];
+    };
+    /** WorkbenchV2CandidateDetailView */
+    WorkbenchV2CandidateDetailView: {
+      /** Candidateid */
+      candidateId: string;
+      /** Displayname */
+      displayName: string;
+      /** Headline */
+      headline?: string | null;
+      /** Company */
+      company?: string | null;
+      /** Location */
+      location?: string | null;
+      /** Education */
+      education?: string | null;
+      /** Experienceyears */
+      experienceYears?: number | null;
+      /** Age */
+      age?: number | null;
+      /** Gender */
+      gender?: string | null;
+      /** Activestatus */
+      activeStatus?: string | null;
+      /** Jobstatus */
+      jobStatus?: string | null;
+      /** Sourcekinds */
+      sourceKinds?: ("cts" | "liepin")[];
+      /** Matchscore */
+      matchScore?: number | null;
+      /** Sections */
+      sections?: components["schemas"]["WorkbenchV2CandidateDetailSectionView"][];
+      /** Evidence */
+      evidence?: string[];
+      /**
+       * Detailavailability
+       * @enum {string}
+       */
+      detailAvailability:
+        | "available"
+        | "redacted"
+        | "approval_required"
+        | "unavailable";
+      /**
+       * Accessstate
+       * @enum {string}
+       */
+      accessState: "allowed" | "redacted" | "approval_required" | "denied";
+      /**
+       * Evidencelevel
+       * @enum {string}
+       */
+      evidenceLevel: "summary" | "detail" | "final" | "unknown";
+      /** Reasoncode */
+      reasonCode?: string | null;
+    };
+    /** WorkbenchV2CandidateSummaryView */
+    WorkbenchV2CandidateSummaryView: {
+      /** Candidateid */
+      candidateId: string;
+      /** Rank */
+      rank: number;
+      /** Displayname */
+      displayName: string;
+      /** Headline */
+      headline?: string | null;
+      /** Company */
+      company?: string | null;
+      /** Location */
+      location?: string | null;
+      /** Education */
+      education?: string | null;
+      /** Experienceyears */
+      experienceYears?: number | null;
+      /** Age */
+      age?: number | null;
+      /** Gender */
+      gender?: string | null;
+      /** Activestatus */
+      activeStatus?: string | null;
+      /** Jobstatus */
+      jobStatus?: string | null;
+      /** Sourcekinds */
+      sourceKinds?: ("cts" | "liepin")[];
+      /** Matchscore */
+      matchScore?: number | null;
+      /** Matchsummary */
+      matchSummary?: string | null;
+      /** Status */
+      status: string;
+      /**
+       * Detailavailability
+       * @default unavailable
+       * @enum {string}
+       */
+      detailAvailability:
+        | "available"
+        | "redacted"
+        | "approval_required"
+        | "unavailable";
+      /**
+       * Accessstate
+       * @default denied
+       * @enum {string}
+       */
+      accessState: "allowed" | "redacted" | "approval_required" | "denied";
+      /**
+       * Evidencelevel
+       * @default unknown
+       * @enum {string}
+       */
+      evidenceLevel: "summary" | "detail" | "final" | "unknown";
+    };
+    /** WorkbenchV2ConversationEventsView */
+    WorkbenchV2ConversationEventsView: {
+      /**
+       * Schemaversion
+       * @default agent.workbench.v2.events
+       * @constant
+       */
+      schemaVersion: "agent.workbench.v2.events";
+      /** Conversationid */
+      conversationId: string;
+      /** Afterstep */
+      afterStep: number;
+      /** Lateststep */
+      latestStep: number;
+      /** Events */
+      events?: components["schemas"]["WorkbenchV2TranscriptEventView"][];
+    };
     /** WorkbenchV2ConversationListSummary */
     WorkbenchV2ConversationListSummary: {
       /** Conversationid */
@@ -4659,6 +4828,61 @@ export interface components {
         [key: string]: unknown;
       } | null;
       runtime?: components["schemas"]["WorkbenchV2RuntimeView"] | null;
+      strategyGraph?: components["schemas"]["WorkbenchV2StrategyGraphView"];
+      thinkingProcess?: components["schemas"]["WorkbenchV2ThinkingProcessView"];
+      /** Candidates */
+      candidates?: components["schemas"]["WorkbenchV2CandidateSummaryView"][];
+    };
+    /** WorkbenchV2GraphEdgeView */
+    WorkbenchV2GraphEdgeView: {
+      /** Edgeid */
+      edgeId: string;
+      /** Fromnodeid */
+      fromNodeId: string;
+      /** Tonodeid */
+      toNodeId: string;
+      /** Label */
+      label?: string | null;
+    };
+    /** WorkbenchV2GraphNodeView */
+    WorkbenchV2GraphNodeView: {
+      /** Nodeid */
+      nodeId: string;
+      /** Kind */
+      kind: string;
+      /** Label */
+      label: string;
+      /** Summary */
+      summary?: string | null;
+      /** Roundno */
+      roundNo?: number | null;
+      /** Lanetype */
+      laneType?: string | null;
+      /** Phase */
+      phase?: string | null;
+      /** Stage */
+      stage?: string | null;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        | "pending"
+        | "running"
+        | "completed"
+        | "partial"
+        | "blocked"
+        | "failed"
+        | "cancelled";
+      /**
+       * Sourcekind
+       * @default all
+       */
+      sourceKind: string | null;
+      /** Activityid */
+      activityId?: string | null;
+      /** Messageid */
+      messageId?: string | null;
     };
     /** WorkbenchV2MessageRequest */
     WorkbenchV2MessageRequest: {
@@ -4698,6 +4922,51 @@ export interface components {
         | "cancelled";
       /** Runtimerunid */
       runtimeRunId?: string | null;
+    };
+    /** WorkbenchV2StrategyGraphView */
+    WorkbenchV2StrategyGraphView: {
+      /** Nodes */
+      nodes?: components["schemas"]["WorkbenchV2GraphNodeView"][];
+      /** Edges */
+      edges?: components["schemas"]["WorkbenchV2GraphEdgeView"][];
+    };
+    /** WorkbenchV2ThinkingProcessCardView */
+    WorkbenchV2ThinkingProcessCardView: {
+      /**
+       * Title
+       * @enum {string}
+       */
+      title: "关键词" | "observation" | "反思和下一轮变更";
+      /** Text */
+      text: string;
+      /** Terms */
+      terms?: string[];
+    };
+    /** WorkbenchV2ThinkingProcessRoundView */
+    WorkbenchV2ThinkingProcessRoundView: {
+      /** Roundno */
+      roundNo: number;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status:
+        | "pending"
+        | "running"
+        | "completed"
+        | "partial"
+        | "blocked"
+        | "failed"
+        | "cancelled";
+      /** Cards */
+      cards?: components["schemas"]["WorkbenchV2ThinkingProcessCardView"][];
+    };
+    /** WorkbenchV2ThinkingProcessView */
+    WorkbenchV2ThinkingProcessView: {
+      /** Activeroundno */
+      activeRoundNo?: number | null;
+      /** Rounds */
+      rounds?: components["schemas"]["WorkbenchV2ThinkingProcessRoundView"][];
     };
     /** WorkbenchV2TranscriptEventView */
     WorkbenchV2TranscriptEventView: {
@@ -7700,6 +7969,136 @@ export interface operations {
         };
         content: {
           "application/json": components["schemas"]["WorkbenchV2ConversationView"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Workbench v2 conversation not found. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            detail: {
+              /** @enum {string} */
+              reasonCode: "workbench_v2_conversation_not_found";
+            };
+          };
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+    };
+  };
+  list_events_api_agent_workbench_v2_conversations__conversation_id__events_get: {
+    parameters: {
+      query?: {
+        afterStep?: number;
+        limit?: number;
+      };
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkbenchV2ConversationEventsView"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Workbench v2 conversation not found. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            detail: {
+              /** @enum {string} */
+              reasonCode: "workbench_v2_conversation_not_found";
+            };
+          };
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+    };
+  };
+  get_candidate_detail_api_agent_workbench_v2_conversations__conversation_id__candidates__candidate_id__detail_get: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+        candidate_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkbenchV2CandidateDetailView"];
         };
       };
       /** @description Bad Request */

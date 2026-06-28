@@ -202,7 +202,7 @@
 .candidate-card__badges span[data-status="reviewing"],
 .candidate-card__badges span[data-status="maybe"] {
   background: #fff6df;
-  color: #a66300;
+  color: #754300;
 }
 
 .candidate-card__chips {

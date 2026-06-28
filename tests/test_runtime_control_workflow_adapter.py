@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from seektalent.models import RequirementSheet
+from seektalent.providers.liepin.runtime_context import local_opencli_liepin_source_context
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.progress import ProgressEvent
 from tests.settings_factory import make_settings
@@ -87,6 +88,7 @@ def test_workflow_adapter_supplies_liepin_source_context(tmp_path: Path) -> None
         runtime_run_id_factory=lambda: "runtime_run_1",
         executor_id_factory=lambda: "executor_1",
         checkpoint_id_factory=lambda: "rtcheckpoint_1",
+        source_context_provider=local_opencli_liepin_source_context,
         now=_clock(
             "2026-06-08T00:00:00.000000Z",
             "2026-06-08T00:00:01.000000Z",

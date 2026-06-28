@@ -220,14 +220,3 @@
 .requirement-form-event__actions .st-button {
   min-width: 132px;
 }
-
-@media (max-width: 760px) {
-  .requirement-form-event {
-    max-width: none;
-  }
-
-  .requirement-form-event__other {
-    align-items: stretch;
-    grid-template-columns: 1fr;
-  }
-}

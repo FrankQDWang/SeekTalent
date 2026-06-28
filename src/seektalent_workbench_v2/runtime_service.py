@@ -244,7 +244,7 @@ class WorkbenchV2RuntimeService:
             return self.approved_requirement_revision_id_factory()
         return _stable_id("reqapproved", operation_key)
 
-    def get_status(self, runtime_run_id: str) -> dict[str, str]:
+    def get_status(self, runtime_run_id: str) -> dict[str, object]:
         run = self.store.get_run(runtime_run_id)
         stage = run.current_stage
         event_summary = _latest_runtime_event_summary(

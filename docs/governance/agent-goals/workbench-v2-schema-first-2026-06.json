@@ -11,11 +11,13 @@
     "frontend",
     "governance",
     "other",
+    "provider",
     "tests"
   ],
   "red_files": [
     ".env.example",
-    "src/seektalent/config.py"
+    "src/seektalent/config.py",
+    "src/seektalent/providers/liepin/runtime_context.py"
   ],
   "dependency_files": [
     "pyproject.toml"

@@ -140,8 +140,9 @@ test("Workbench v2 supports chat, JD form, confirmation, progress, and refresh",
   await page.reload();
 
   await expect(page).toHaveURL(/\/conversations\/agentv2_e2e$/);
-  await expect(page.getByRole("region", { name: "需求确认" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "需求已确认" })).toBeVisible();
+  const confirmedRequirements = page.getByRole("region", { name: "需求确认" });
+  await expect(confirmedRequirements).toBeVisible();
+  await expect(confirmedRequirements.getByText("需求已确认")).toBeVisible();
   await expect(
     page.getByRole("complementary", { name: "运行状态" }),
   ).toHaveCount(0);

@@ -146,18 +146,3 @@
     opacity: 1;
   }
 }
-
-@media (max-width: 760px) {
-  .transcript-v2 {
-    padding: var(--st-space-4);
-  }
-
-  .transcript-v2__turn,
-  .transcript-v2__event {
-    max-width: none;
-  }
-
-  .transcript-v2__event {
-    grid-template-columns: 14px minmax(0, 1fr);
-  }
-}
