@@ -231,10 +231,7 @@ def _strategy_graph(
         summary = _string_or_none(event.payload.get("summary")) or "运行进度已更新。"
         status = _surface_status_from_event_payload(event.payload)
         if round_no is None:
-            if event.type == "runtime_result" or event_type in {
-                "runtime_finalization_completed",
-                "runtime_run_completed",
-            }:
+            if _is_final_event(event, event_type):
                 _upsert_graph_node(
                     node_order,
                     node_specs,
@@ -250,73 +247,52 @@ def _strategy_graph(
                 )
             continue
 
-        if event_type in {"runtime_round_query_ready", "runtime_search_started"} or stage == "round_query":
+        if _is_keyword_event(event_type, stage):
             _upsert_graph_node(
                 node_order,
                 node_specs,
-                f"v2-round-{round_no}-query",
+                f"v2-round-{round_no}-keywords",
                 kind="phase",
-                label=f"第 {round_no} 轮 · 查询包",
+                label=f"第 {round_no} 轮 · 关键词",
                 summary=_keyword_query_from_payload(event.payload) or summary,
                 roundNo=round_no,
-                phase="round_query",
+                phase="keywords",
                 stage="round_query",
                 status=status,
                 sourceKind="all",
             )
-        elif event_type in {"runtime_round_source_dispatch", "runtime_round_source_result"} or stage in {
-            "source_dispatch",
-            "source_result",
-        }:
-            _upsert_graph_node(
-                node_order,
-                node_specs,
-                f"v2-round-{round_no}-source",
-                kind="phase",
-                label=f"第 {round_no} 轮 · 猎聘检索",
-                summary=summary,
-                roundNo=round_no,
-                phase="source_result",
-                stage=stage or "source_result",
-                status=status,
-                sourceKind=_source_kind_from_payload(event.payload),
-            )
-        elif event_type in {
-            "runtime_scoring_started",
-            "runtime_scoring_completed",
-            "runtime_round_scoring_completed",
-        } or stage == "scoring":
-            _upsert_graph_node(
-                node_order,
-                node_specs,
-                f"v2-round-{round_no}-top-pool",
-                kind="phase",
-                label=f"第 {round_no} 轮 · Top Pool",
-                summary=summary,
-                roundNo=round_no,
-                phase="scoring",
-                stage="scoring",
-                status=status,
-                sourceKind="all",
-            )
-        elif event_type in {
-            "runtime_round_feedback_completed",
-            "runtime_reflection_completed",
-            "runtime_round_completed",
-        } or stage in {"feedback", "reflection"}:
-            _upsert_graph_node(
-                node_order,
-                node_specs,
-                f"v2-round-{round_no}-feedback",
-                kind="phase",
-                label=f"第 {round_no} 轮 · 下一轮策略",
-                summary=_reflection_text_from_payload(event.payload) or summary,
-                roundNo=round_no,
-                phase="feedback",
-                stage=stage or "feedback",
-                status=status,
-                sourceKind="all",
-            )
+        elif _is_observation_event(event_type, stage):
+            observation = _observation_text_from_payload(event.payload)
+            if observation is not None:
+                _upsert_graph_node(
+                    node_order,
+                    node_specs,
+                    f"v2-round-{round_no}-observation",
+                    kind="phase",
+                    label=f"第 {round_no} 轮 · observation",
+                    summary=observation,
+                    roundNo=round_no,
+                    phase="observation",
+                    stage="scoring",
+                    status=status,
+                    sourceKind="all",
+                )
+        elif _is_reflection_event(event_type, stage):
+            reflection = _reflection_text_from_payload(event.payload)
+            if reflection is not None:
+                _upsert_graph_node(
+                    node_order,
+                    node_specs,
+                    f"v2-round-{round_no}-reflection",
+                    kind="phase",
+                    label=f"第 {round_no} 轮 · 反思",
+                    summary=reflection,
+                    roundNo=round_no,
+                    phase="reflection",
+                    stage=stage or "reflection",
+                    status=status,
+                    sourceKind="all",
+                )
 
     edges = [
         WorkbenchV2GraphEdgeView(
@@ -411,27 +387,33 @@ def _runtime_thinking_round_states(
         round_no = _positive_int_or_none(event.payload.get("roundNo"))
         if round_no is None:
             continue
-        statuses[round_no] = _surface_status_from_event_payload(event.payload)
-        cards = card_states.setdefault(round_no, {})
+        event_type = _string_or_none(event.payload.get("runtimeEventType"))
+        stage = _string_or_none(event.payload.get("stage"))
+        status = _surface_status_from_event_payload(event.payload)
 
-        keyword_query = _keyword_query_from_payload(event.payload)
-        if keyword_query is not None:
+        if _is_keyword_event(event_type, stage) and (keyword_query := _keyword_query_from_payload(event.payload)):
+            statuses[round_no] = status
+            cards = card_states.setdefault(round_no, {})
             cards["keywords"] = WorkbenchV2ThinkingProcessCardView(
                 title="关键词",
                 text=keyword_query,
                 terms=_query_terms_from_payload(event.payload),
             )
 
-        observation = _observation_text_from_payload(event.payload)
-        if observation is not None:
+        if _is_observation_event(event_type, stage) and (
+            observation := _observation_text_from_payload(event.payload)
+        ):
+            statuses[round_no] = status
+            cards = card_states.setdefault(round_no, {})
             cards["observation"] = WorkbenchV2ThinkingProcessCardView(
                 title="observation",
                 text=observation,
                 terms=[],
             )
 
-        reflection = _reflection_text_from_payload(event.payload)
-        if reflection is not None:
+        if _is_reflection_event(event_type, stage) and (reflection := _reflection_text_from_payload(event.payload)):
+            statuses[round_no] = status
+            cards = card_states.setdefault(round_no, {})
             cards["reflection"] = WorkbenchV2ThinkingProcessCardView(
                 title="反思和下一轮变更",
                 text=reflection,
@@ -481,12 +463,30 @@ def _reflection_text_from_payload(payload: dict[str, object]) -> str | None:
     return _string_or_none(details.get("reflectionSummary")) or _string_or_none(details.get("reflectionRationale"))
 
 
+def _is_final_event(event: WorkbenchV2TranscriptEvent, event_type: str | None) -> bool:
+    return event.type == "runtime_result" or event_type in {
+        "runtime_finalization_completed",
+        "runtime_run_completed",
+    }
+
+
+def _is_keyword_event(event_type: str | None, stage: str | None) -> bool:
+    return event_type == "runtime_round_query_ready" or stage == "round_query"
+
+
+def _is_observation_event(event_type: str | None, stage: str | None) -> bool:
+    return event_type == "runtime_round_scoring_completed" or stage == "scoring"
+
+
+def _is_reflection_event(event_type: str | None, stage: str | None) -> bool:
+    return event_type in {
+        "runtime_round_feedback_completed",
+        "runtime_reflection_completed",
+    } or stage in {"feedback", "reflection"}
+
+
 def _runtime_details(payload: dict[str, object]) -> dict[str, object]:
     return _record_or_none(payload.get("details")) or {}
-
-
-def _source_kind_from_payload(payload: dict[str, object]) -> str | None:
-    return _string_or_none(payload.get("sourceKind")) or _string_or_none(payload.get("sourceId")) or "all"
 
 
 def _positive_int_or_none(value: object) -> int | None:

@@ -524,7 +524,7 @@ def test_conversation_view_filters_context_summary_and_keeps_flat_events(tmp_pat
     assert "transcriptGroups" not in view.model_dump(mode="json")
 
 
-def test_conversation_view_projects_workflow_surface_from_backend_events(tmp_path: Path) -> None:
+def test_v2_strategy_graph_does_not_show_final_shortlist_before_runtime_result(tmp_path: Path) -> None:
     service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
     runtime.progress_payloads["rtrun_1"] = [
         {
@@ -544,15 +544,13 @@ def test_conversation_view_projects_workflow_surface_from_backend_events(tmp_pat
         {
             "runtimeRunId": "rtrun_1",
             "runtimeEventSeq": 25,
-            "runtimeEventType": "runtime_round_feedback_completed",
+            "runtimeEventType": "runtime_round_scoring_completed",
             "status": "completed",
-            "stage": "feedback",
+            "stage": "scoring",
             "roundNo": 1,
-            "summary": "第 1 轮复盘完成。",
+            "summary": "第 1 轮评分完成。",
             "details": {
                 "resumeQualityComment": "本轮简历质量偏低，候选人缺少搜索推荐系统落地经验。",
-                "reflectionSummary": "下一轮保留数据科学家，加入 SQL。",
-                "reflectionRationale": "A/B Testing 候选人不足，需要扩大到 SQL 方向。",
             },
             "state": "running",
         },
@@ -563,8 +561,8 @@ def test_conversation_view_projects_workflow_surface_from_backend_events(tmp_pat
 
     assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
         "需求拆解",
-        "第 1 轮 · 查询包",
-        "第 1 轮 · 下一轮策略",
+        "第 1 轮 · 关键词",
+        "第 1 轮 · observation",
     ]
     assert not any(node["kind"] == "final" for node in payload["strategyGraph"]["nodes"])
     assert payload["thinkingProcess"]["activeRoundNo"] == 1
@@ -579,13 +577,62 @@ def test_conversation_view_projects_workflow_surface_from_backend_events(tmp_pat
             "text": "本轮简历质量偏低，候选人缺少搜索推荐系统落地经验。",
             "terms": [],
         },
+    ]
+    assert payload["candidates"] == []
+
+
+def test_v2_strategy_graph_adds_reflection_only_after_reflection_event(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 11,
+            "runtimeEventType": "runtime_round_query_ready",
+            "status": "completed",
+            "stage": "round_query",
+            "roundNo": 1,
+            "summary": "第 1 轮查询策略已生成。",
+            "details": {
+                "keywordQuery": "交互设计 用户研究",
+                "queryTerms": ["交互设计", "用户研究"],
+            },
+            "state": "running",
+        },
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 25,
+            "runtimeEventType": "runtime_round_feedback_completed",
+            "status": "completed",
+            "stage": "reflection",
+            "roundNo": 1,
+            "summary": "第 1 轮复盘完成。",
+            "details": {
+                "reflectionSummary": "下一轮降低行业限制，扩大 B 端体验关键词。",
+            },
+            "state": "running",
+        },
+    ]
+
+    view = service.get_conversation(conversation_id)
+    payload = view.model_dump(mode="json")
+
+    assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
+        "需求拆解",
+        "第 1 轮 · 关键词",
+        "第 1 轮 · 反思",
+    ]
+    assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
+        {
+            "title": "关键词",
+            "text": "交互设计 用户研究",
+            "terms": ["交互设计", "用户研究"],
+        },
         {
             "title": "反思和下一轮变更",
-            "text": "下一轮保留数据科学家，加入 SQL。",
+            "text": "下一轮降低行业限制，扩大 B 端体验关键词。",
             "terms": [],
         },
     ]
-    assert payload["candidates"] == []
 
 
 def test_conversation_view_does_not_show_future_graph_nodes_before_events(tmp_path: Path) -> None:
@@ -612,11 +659,59 @@ def test_conversation_view_does_not_show_future_graph_nodes_before_events(tmp_pa
 
     assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
         "需求拆解",
-        "第 1 轮 · 查询包",
+        "第 1 轮 · 关键词",
     ]
     assert not any("猎聘检索" in node["label"] for node in payload["strategyGraph"]["nodes"])
     assert not any("Top Pool" in node["label"] for node in payload["strategyGraph"]["nodes"])
     assert not any(node["kind"] == "final" for node in payload["strategyGraph"]["nodes"])
+    assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
+        {
+            "title": "关键词",
+            "text": "数据科学家 SQL",
+            "terms": ["数据科学家", "SQL"],
+        }
+    ]
+
+
+def test_v2_source_result_does_not_generate_observation_card(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 11,
+            "runtimeEventType": "runtime_round_query_ready",
+            "status": "completed",
+            "stage": "round_query",
+            "roundNo": 1,
+            "summary": "第 1 轮查询策略已生成。",
+            "details": {
+                "keywordQuery": "数据科学家 SQL",
+                "queryTerms": ["数据科学家", "SQL"],
+            },
+            "state": "running",
+        },
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 20,
+            "runtimeEventType": "runtime_round_source_result",
+            "status": "completed",
+            "stage": "source_result",
+            "roundNo": 1,
+            "summary": "第 1 轮检索完成。",
+            "details": {
+                "resumeQualityComment": "source result 里的候选人摘要不能当 observation。",
+            },
+            "state": "running",
+        },
+    ]
+
+    view = service.get_conversation(conversation_id)
+    payload = view.model_dump(mode="json")
+
+    assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
+        "需求拆解",
+        "第 1 轮 · 关键词",
+    ]
     assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
         {
             "title": "关键词",
@@ -707,8 +802,8 @@ def test_get_conversation_projects_runtime_events_by_runtime_seq(tmp_path: Path)
     assert projected_events[-1].payload["roundNo"] == 2
     assert len(second_refresh.transcriptEvents) == len(first_refresh.transcriptEvents)
     assert confirmed_view.conversation.runtimeRunId == "rtrun_1"
-    assert [round_view.roundNo for round_view in first_refresh.thinkingProcess.rounds] == [1, 2]
-    assert first_refresh.thinkingProcess.activeRoundNo == 2
+    assert first_refresh.thinkingProcess.rounds == []
+    assert first_refresh.thinkingProcess.activeRoundNo is None
 
 
 def test_conversation_view_includes_runtime_candidate_summaries(tmp_path: Path) -> None:
