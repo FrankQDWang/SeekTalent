@@ -407,7 +407,7 @@ def _wts_detail_payload(
 
 def _parse_liepin_full_text(text: str) -> dict[str, object]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if not lines:
+    if not lines or not _looks_like_liepin_resume(lines):
         return {}
 
     result: dict[str, object] = {}
@@ -450,6 +450,18 @@ def _parse_liepin_full_text(text: str) -> dict[str, object]:
     result["educationExperience"] = _parse_timeline_section(lines, "教育经历")
     result["skills"] = _parse_skill_section(lines)
     return _compact_mapping(result)
+
+
+def _looks_like_liepin_resume(lines: Sequence[str]) -> bool:
+    strong_headers = {"工作经历", "教育经历", "求职意向", "项目经历", "技能标签"}
+    present_headers = {line for line in lines if line in strong_headers}
+    if len(present_headers) >= 2:
+        return True
+    has_current_company_line = any(
+        _split_pair(line, separators=(" · ", "·")) is not None for line in lines[:10]
+    )
+    has_core_timeline = "工作经历" in present_headers or "教育经历" in present_headers
+    return has_current_company_line and has_core_timeline
 
 
 def _candidate_name_from_first_line(line: str) -> str | None:
