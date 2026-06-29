@@ -635,6 +635,60 @@ def test_v2_strategy_graph_adds_reflection_only_after_reflection_event(tmp_path:
     ]
 
 
+def test_v2_feedback_observation_without_reflection_emits_only_observation(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 11,
+            "runtimeEventType": "runtime_round_query_ready",
+            "status": "completed",
+            "stage": "round_query",
+            "roundNo": 1,
+            "summary": "第 1 轮查询策略已生成。",
+            "details": {
+                "keywordQuery": "增长产品 用户研究",
+                "queryTerms": ["增长产品", "用户研究"],
+            },
+            "state": "running",
+        },
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 25,
+            "runtimeEventType": "runtime_round_feedback_completed",
+            "status": "completed",
+            "stage": "feedback",
+            "roundNo": 1,
+            "summary": "第 1 轮复盘完成。",
+            "details": {
+                "resumeQualityComment": "候选人简历质量较高，但增长实验经验需要继续确认。",
+            },
+            "state": "running",
+        },
+    ]
+
+    view = service.get_conversation(conversation_id)
+    payload = view.model_dump(mode="json")
+
+    assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
+        "需求拆解",
+        "第 1 轮 · 关键词",
+        "第 1 轮 · observation",
+    ]
+    assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
+        {
+            "title": "关键词",
+            "text": "增长产品 用户研究",
+            "terms": ["增长产品", "用户研究"],
+        },
+        {
+            "title": "observation",
+            "text": "候选人简历质量较高，但增长实验经验需要继续确认。",
+            "terms": [],
+        },
+    ]
+
+
 def test_conversation_view_does_not_show_future_graph_nodes_before_events(tmp_path: Path) -> None:
     service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
     runtime.progress_payloads["rtrun_1"] = [

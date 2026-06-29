@@ -261,7 +261,7 @@ def _strategy_graph(
                 status=status,
                 sourceKind="all",
             )
-        elif _is_observation_event(event_type, stage):
+        if _is_observation_event(event_type, stage):
             observation = _observation_text_from_payload(event.payload)
             if observation is not None:
                 _upsert_graph_node(
@@ -273,11 +273,11 @@ def _strategy_graph(
                     summary=observation,
                     roundNo=round_no,
                     phase="observation",
-                    stage="scoring",
+                    stage=stage or "scoring",
                     status=status,
                     sourceKind="all",
                 )
-        elif _is_reflection_event(event_type, stage):
+        if _is_reflection_event(event_type, stage):
             reflection = _reflection_text_from_payload(event.payload)
             if reflection is not None:
                 _upsert_graph_node(
@@ -475,7 +475,10 @@ def _is_keyword_event(event_type: str | None, stage: str | None) -> bool:
 
 
 def _is_observation_event(event_type: str | None, stage: str | None) -> bool:
-    return event_type == "runtime_round_scoring_completed" or stage == "scoring"
+    return event_type in {
+        "runtime_round_scoring_completed",
+        "runtime_round_feedback_completed",
+    } or stage in {"scoring", "feedback"}
 
 
 def _is_reflection_event(event_type: str | None, stage: str | None) -> bool:
