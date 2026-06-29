@@ -223,6 +223,36 @@ def test_candidate_truth_ignores_unknown_full_text_for_wts_fields() -> None:
     assert wts == {}
 
 
+def test_candidate_truth_ignores_header_only_chrome_text_for_wts_fields() -> None:
+    from seektalent_runtime_control.candidates import candidate_truth_from_run_state
+
+    run_state = _run_state_payload()
+    candidate_store = run_state["candidate_store"]
+    assert isinstance(candidate_store, dict)
+    resume = candidate_store["resume_1"]
+    assert isinstance(resume, dict)
+    resume.clear()
+    resume.update(
+        {
+            "resume_id": "resume_1",
+            "raw": {
+                "fullText": "系统提示\n工作经历\n教育经历\n上海本科用户增长\n在职页面展示",
+            },
+        }
+    )
+    run_state["normalized_store"] = {"resume_1": {}}
+
+    truth = candidate_truth_from_run_state(
+        runtime_run_id="runtime_run_candidates",
+        run_state=run_state,
+        source_checkpoint_id="rtcheckpoint_candidates",
+        observed_at="2026-06-17T00:00:10.000000Z",
+    )
+
+    wts = truth.evidence[0].payload.get("wtsDetail")
+    assert wts == {}
+
+
 def _create_run(store) -> None:
     from seektalent_runtime_control.models import RuntimeRunRecord
 

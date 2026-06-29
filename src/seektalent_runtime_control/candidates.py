@@ -453,15 +453,65 @@ def _parse_liepin_full_text(text: str) -> dict[str, object]:
 
 
 def _looks_like_liepin_resume(lines: Sequence[str]) -> bool:
-    strong_headers = {"工作经历", "教育经历", "求职意向", "项目经历", "技能标签"}
-    present_headers = {line for line in lines if line in strong_headers}
-    if len(present_headers) >= 2:
+    if not _has_real_timeline_item(lines):
+        return False
+    if _has_current_title_company_line(lines):
         return True
-    has_current_company_line = any(
-        _split_pair(line, separators=(" · ", "·")) is not None for line in lines[:10]
+    return _has_top_profile_signal(lines)
+
+
+def _has_current_title_company_line(lines: Sequence[str]) -> bool:
+    prefix = []
+    for line in lines:
+        if _is_section_header(line):
+            break
+        prefix.append(line)
+    return any(_split_pair(line, separators=(" · ", "·", "｜", "|")) is not None for line in prefix[:10])
+
+
+def _has_top_profile_signal(lines: Sequence[str]) -> bool:
+    if not lines or _candidate_name_from_first_line(lines[0]) is None:
+        return False
+    has_status = any(
+        _job_status_from_line(line) is not None or _active_status_from_line(line) is not None
+        for line in lines[1:5]
     )
-    has_core_timeline = "工作经历" in present_headers or "教育经历" in present_headers
-    return has_current_company_line and has_core_timeline
+    has_demographic = any(_has_demographic_summary(line) for line in lines[1:6])
+    return has_status and has_demographic
+
+
+def _has_demographic_summary(line: str) -> bool:
+    has_age = _extract_number_before(line, "岁") is not None
+    has_work_years = _extract_number_after(line, "工作") is not None
+    signals = [
+        has_age,
+        has_work_years,
+        _gender_from_line(line) is not None,
+        _city_from_line(line) is not None,
+        _education_from_line(line) is not None,
+    ]
+    return (has_age or has_work_years) and sum(signals) >= 3
+
+
+def _has_real_timeline_item(lines: Sequence[str]) -> bool:
+    for index, line in enumerate(lines[:-1]):
+        if not _is_timeline_line(line):
+            continue
+        next_line = lines[index + 1].strip()
+        if _looks_like_timeline_identity_line(next_line):
+            return True
+    return False
+
+
+def _looks_like_timeline_identity_line(line: str) -> bool:
+    if not line or _is_section_header(line) or _is_timeline_line(line):
+        return False
+    if "://" in line or "页面" in line or "系统提示" in line:
+        return False
+    label, _ = _split_label_value(line)
+    if label in {"工作内容", "项目内容", "项目描述", "职责描述", "工作描述"}:
+        return False
+    return True
 
 
 def _candidate_name_from_first_line(line: str) -> str | None:
