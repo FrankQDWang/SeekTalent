@@ -274,7 +274,7 @@ class LiepinSiteAdapter:
         self._touch_lease()
 
     def _click_native_filter_ref(self, ref: str) -> None:
-        self._run_opencli_call(lambda: self._automation.click_ref(ref))
+        self._run_stale_ref_retry_once(lambda: self._automation.click_ref(ref))
         self._touch_lease()
 
     def _click_native_filter_menu(self, filter_name: str, *, section: str = "legacy") -> None:
@@ -1563,6 +1563,15 @@ class LiepinSiteAdapter:
         except OpenCliBrowserError as exc:
             raise liepin_error_from_opencli_error(exc) from exc
 
+    def _run_stale_ref_retry_once(self, call: Callable[[], str]) -> str:
+        try:
+            return self._run_opencli_call(call)
+        except OpenCliBrowserError as exc:
+            if exc.safe_reason_code != "liepin_opencli_stale_ref":
+                raise
+            self.state()
+            return self._run_opencli_call(call)
+
     def _click_known_modal_close_ref(self, ref: str) -> None:
         if not _is_safe_page_id(ref):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
@@ -1572,7 +1581,7 @@ class LiepinSiteAdapter:
     def _click_liepin_detail_ref(self, ref: str) -> None:
         if not _is_safe_page_id(ref):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-        self._run_opencli_call(lambda: self._automation.click_ref(ref))
+        self._run_stale_ref_retry_once(lambda: self._automation.click_ref(ref))
         self._touch_lease()
 
     def _open_liepin_detail_ref_controlled(self, ref: str, *, source_run_id: str) -> bool:
