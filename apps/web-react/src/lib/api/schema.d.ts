@@ -4634,6 +4634,10 @@ export interface components {
       candidateId: string;
       /** Displayname */
       displayName: string;
+      /** Avatarlabel */
+      avatarLabel?: string | null;
+      /** Avatarcolorkey */
+      avatarColorKey?: string | null;
       /** Headline */
       headline?: string | null;
       /** Company */
@@ -4656,6 +4660,20 @@ export interface components {
       sourceKinds?: ("cts" | "liepin")[];
       /** Matchscore */
       matchScore?: number | null;
+      match?: components["schemas"]["WorkbenchV2CandidateMatchView"] | null;
+      jobIntention?:
+        | components["schemas"]["WorkbenchV2CandidateJobIntentionView"]
+        | null;
+      /** Workexperience */
+      workExperience?: components["schemas"]["WorkbenchV2CandidateTimelineItemView"][];
+      /** Projectexperience */
+      projectExperience?: components["schemas"]["WorkbenchV2CandidateTimelineItemView"][];
+      /** Educationexperience */
+      educationExperience?: components["schemas"]["WorkbenchV2CandidateTimelineItemView"][];
+      /** Skills */
+      skills?: string[];
+      /** Sourceurl */
+      sourceUrl?: string | null;
       /** Sections */
       sections?: components["schemas"]["WorkbenchV2CandidateDetailSectionView"][];
       /** Evidence */
@@ -4682,6 +4700,30 @@ export interface components {
       /** Reasoncode */
       reasonCode?: string | null;
     };
+    /** WorkbenchV2CandidateJobIntentionView */
+    WorkbenchV2CandidateJobIntentionView: {
+      /** Expectedrole */
+      expectedRole?: string | null;
+      /** Expectedindustry */
+      expectedIndustry?: string | null;
+      /** Expectedcity */
+      expectedCity?: string | null;
+      /** Expectedsalary */
+      expectedSalary?: string | null;
+    };
+    /** WorkbenchV2CandidateMatchView */
+    WorkbenchV2CandidateMatchView: {
+      /** Summary */
+      summary?: string | null;
+      /** Strengths */
+      strengths?: string[];
+      /** Weaknesses */
+      weaknesses?: string[];
+      /** Score */
+      score?: number | null;
+      /** Fitbucket */
+      fitBucket?: string | null;
+    };
     /** WorkbenchV2CandidateSummaryView */
     WorkbenchV2CandidateSummaryView: {
       /** Candidateid */
@@ -4690,6 +4732,10 @@ export interface components {
       rank: number;
       /** Displayname */
       displayName: string;
+      /** Avatarlabel */
+      avatarLabel?: string | null;
+      /** Avatarcolorkey */
+      avatarColorKey?: string | null;
       /** Headline */
       headline?: string | null;
       /** Company */
@@ -4710,6 +4756,8 @@ export interface components {
       jobStatus?: string | null;
       /** Sourcekinds */
       sourceKinds?: ("cts" | "liepin")[];
+      /** Sourcelabel */
+      sourceLabel?: string | null;
       /** Matchscore */
       matchScore?: number | null;
       /** Matchsummary */
@@ -4738,6 +4786,27 @@ export interface components {
        * @enum {string}
        */
       evidenceLevel: "summary" | "detail" | "final" | "unknown";
+    };
+    /** WorkbenchV2CandidateTimelineItemView */
+    WorkbenchV2CandidateTimelineItemView: {
+      /** Daterange */
+      dateRange?: string | null;
+      /** Title */
+      title?: string | null;
+      /** Company */
+      company?: string | null;
+      /** School */
+      school?: string | null;
+      /** Major */
+      major?: string | null;
+      /** Degree */
+      degree?: string | null;
+      /** Name */
+      name?: string | null;
+      /** Role */
+      role?: string | null;
+      /** Description */
+      description?: string | null;
     };
     /** WorkbenchV2ConversationEventsView */
     WorkbenchV2ConversationEventsView: {
