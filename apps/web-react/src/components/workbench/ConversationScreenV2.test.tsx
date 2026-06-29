@@ -252,6 +252,156 @@ describe("ConversationScreenV2", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows the WTS right rail for workflow conversations with only candidate and thinking tabs", () => {
+    expect.hasAssertions();
+
+    const view = conversationView({
+      ...workflowSurface("招聘流程运行中，当前阶段：候选人检索。"),
+      candidates: [candidateSummary()],
+      transcriptEvents: [
+        transcriptEvent({
+          eventId: "event_confirmed",
+          step: 1,
+          type: "requirement_form_confirmed",
+          role: "assistant",
+          payload: requirementPayload(),
+        }),
+      ],
+    });
+
+    render(
+      <>
+        <ConversationScreenV2 view={view} />
+        <ConversationScreenV2Side view={view} />
+      </>,
+    );
+
+    expect(screen.getByRole("region", { name: "对话" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "检索策略图" })).toBeVisible();
+    expect(
+      screen.getByRole("complementary", { name: "运行右栏" }),
+    ).toBeVisible();
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "候选人",
+      "思考过程",
+    ]);
+    expect(screen.getByRole("tab", { name: "候选人" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(
+      screen.queryByRole("complementary", { name: "运行状态" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("run_123")).not.toBeInTheDocument();
+  });
+
+  it("shows the WTS thinking tab by default when workflow conversations have no candidates", () => {
+    expect.hasAssertions();
+
+    render(
+      <ConversationScreenV2Side
+        view={conversationView({
+          ...workflowSurface("招聘流程运行中，当前阶段：候选人检索。"),
+          candidates: [],
+          transcriptEvents: [
+            transcriptEvent({
+              eventId: "event_confirmed",
+              step: 1,
+              type: "requirement_form_confirmed",
+              role: "assistant",
+              payload: requirementPayload(),
+            }),
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("tab", { name: "思考过程" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("keeps the WTS right rail visible after requirement confirmation with the exact empty thinking copy", () => {
+    expect.hasAssertions();
+
+    const view = conversationView({
+      transcriptEvents: [
+        transcriptEvent({
+          eventId: "event_confirmed",
+          step: 1,
+          type: "requirement_form_confirmed",
+          role: "assistant",
+          payload: requirementPayload(),
+        }),
+      ],
+    });
+
+    render(
+      <>
+        <ConversationScreenV2 view={view} />
+        <ConversationScreenV2Side view={view} />
+      </>,
+    );
+
+    expect(screen.getByRole("region", { name: "检索策略图" })).toBeVisible();
+    expect(
+      screen.getByRole("complementary", { name: "运行右栏" }),
+    ).toBeVisible();
+    expect(screen.getByRole("status")).toHaveTextContent(/^思考过程尚未生成$/);
+    expect(
+      screen.queryByRole("complementary", { name: "运行状态" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("maps WTS thinking card titles without exposing raw card keys", () => {
+    expect.hasAssertions();
+
+    render(
+      <ConversationScreenV2Side
+        view={conversationView({
+          thinkingProcess: {
+            activeRoundNo: 1,
+            rounds: [
+              {
+                roundNo: 1,
+                status: "running",
+                cards: [
+                  {
+                    title: "keywords",
+                    text: "AI agent, LLM",
+                    terms: [],
+                  },
+                  {
+                    title: "observation",
+                    text: "初次搜索拿到 10 位新候选人。",
+                    terms: [],
+                  },
+                  {
+                    title: "reflection",
+                    text: "下一轮加入 LangChain 和 RAG。",
+                    terms: [],
+                  },
+                ],
+              },
+            ],
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "第 1 轮" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "关键词" })).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "observation（结果）" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("heading", { name: "反思和下一轮变更" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "keywords" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "reflection" })).toBeNull();
+  });
+
   it("expands the strategy graph surface as soon as requirements are confirmed", () => {
     expect.hasAssertions();
 
@@ -467,6 +617,28 @@ function requirementPayload() {
       other_input_prompt: "补充其他要求",
       can_confirm: true,
     },
+  };
+}
+
+function candidateSummary(): NonNullable<
+  WorkbenchV2ConversationView["candidates"]
+>[number] {
+  return {
+    candidateId: "candidate_001",
+    rank: 1,
+    displayName: "候选人 A",
+    headline: "资深体验设计工程师",
+    company: "小米科技",
+    location: "上海",
+    education: "本科",
+    experienceYears: 10,
+    sourceKinds: ["liepin"],
+    matchScore: 90,
+    matchSummary: "交互设计功底扎实，能独立负责大型复杂项目的设计。",
+    status: "reviewing",
+    detailAvailability: "redacted",
+    accessState: "redacted",
+    evidenceLevel: "summary",
   };
 }
 

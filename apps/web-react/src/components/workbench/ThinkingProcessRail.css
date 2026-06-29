@@ -3,8 +3,10 @@
   border-left: 1px solid #dfe5f2;
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .thinking-process-rail__tabs {
@@ -45,6 +47,7 @@
 }
 
 .thinking-process-rail__panel {
+  flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 0 18px 24px;
@@ -117,10 +120,12 @@
   min-height: 28px;
 }
 
-.thinking-round__header span {
+.thinking-round__header h2 {
   color: #172036;
   font-size: 18px;
   font-weight: 800;
+  line-height: 1.35;
+  margin: 0;
 }
 
 .thinking-round__header em {

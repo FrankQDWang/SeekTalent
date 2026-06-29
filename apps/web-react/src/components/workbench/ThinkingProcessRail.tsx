@@ -1,4 +1,5 @@
 import { BrainCircuit, UsersRound } from "lucide-react";
+import type { ReactNode } from "react";
 import { useId, useState } from "react";
 import type {
   AgentWorkbenchCandidateSummary,
@@ -126,7 +127,7 @@ function ThinkingRound({
     <article className="thinking-round" data-active={active ? "true" : "false"}>
       <span className="thinking-round__dot" aria-hidden="true" />
       <div className="thinking-round__header">
-        <span>第 {round.roundNo} 轮</span>
+        <h2>第 {round.roundNo} 轮</h2>
         <em>
           {round.status === "running" ? "运行中" : statusLabel(round.status)}
         </em>
@@ -134,7 +135,7 @@ function ThinkingRound({
       <div className="thinking-round__cards">
         {round.cards.map((card) => (
           <section className="thinking-card" key={card.title}>
-            <h3>{card.title}</h3>
+            <h3>{thinkingCardTitle(card.title)}</h3>
             <p>{card.text}</p>
             {card.terms.length > 0 ? (
               <div className="thinking-card__terms">
@@ -148,6 +149,38 @@ function ThinkingRound({
       </div>
     </article>
   );
+}
+
+function thinkingCardTitle(title: string): ReactNode {
+  const normalized = title.trim().toLowerCase();
+  if (
+    normalized === "keyword" ||
+    normalized === "keywords" ||
+    normalized === "search_keywords"
+  ) {
+    return "关键词";
+  }
+  if (
+    normalized === "observation" ||
+    normalized === "observations" ||
+    normalized === "result" ||
+    normalized === "results"
+  ) {
+    return (
+      <>
+        <span>observation</span>
+        <span>（结果）</span>
+      </>
+    );
+  }
+  if (
+    normalized === "reflection" ||
+    normalized === "reflections" ||
+    normalized === "next_round_changes"
+  ) {
+    return "反思和下一轮变更";
+  }
+  return title;
 }
 
 function statusLabel(status: string): string {
