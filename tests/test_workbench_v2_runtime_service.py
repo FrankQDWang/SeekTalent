@@ -216,6 +216,91 @@ class CandidateIdentityOnlyStore:
         return []
 
 
+class CandidateMergedEvidenceStore:
+    def list_candidate_identities(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateIdentity]:
+        assert runtime_run_id == "rtrun_candidate"
+        return [
+            RuntimeControlCandidateIdentity(
+                runtime_run_id=runtime_run_id,
+                identity_id="identity_merged",
+                canonical_resume_id="resume_merged",
+                display_name="Candidate 1",
+                title="",
+                company="",
+                location="",
+                summary="identity fallback summary",
+                score=None,
+                fit_bucket=None,
+                payload_hash="identity_hash",
+                updated_at=NOW,
+            )
+        ]
+
+    def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
+        assert runtime_run_id == "rtrun_candidate"
+        return [
+            RuntimeControlCandidateEvidence(
+                runtime_run_id=runtime_run_id,
+                evidence_id="evidence_cts_sparse",
+                identity_id="identity_merged",
+                resume_id="resume_merged",
+                source_kind="cts",
+                evidence_level="summary",
+                provider_candidate_key_hash="provider_hash_cts",
+                score=70,
+                fit_bucket="possible",
+                payload={
+                    "match": {"score": 70, "fitBucket": "possible"},
+                    "wtsDetail": {
+                        "candidateName": "CTS占位",
+                        "skills": ["CTS标签"],
+                    },
+                },
+                payload_hash="evidence_hash_cts",
+                updated_at=NOW,
+            ),
+            RuntimeControlCandidateEvidence(
+                runtime_run_id=runtime_run_id,
+                evidence_id="evidence_liepin_detail",
+                identity_id="identity_merged",
+                resume_id="resume_merged",
+                source_kind="liepin",
+                evidence_level="detail",
+                provider_candidate_key_hash="provider_hash_liepin",
+                score=95,
+                fit_bucket="fit",
+                payload={
+                    "match": {
+                        "score": 95,
+                        "fitBucket": "fit",
+                        "reasoningSummary": "猎聘详情显示候选人与岗位高度匹配。",
+                        "strengths": ["有完整 0-1 体验设计项目经验。"],
+                        "weaknesses": ["AI 项目经验需要面试确认。"],
+                    },
+                    "wtsDetail": {
+                        "candidateName": "吴所谓",
+                        "jobIntention": {
+                            "expectedRole": "高端设计职位",
+                            "expectedCity": "上海",
+                            "expectedSalary": "20-24k*14薪",
+                        },
+                        "workExperience": [
+                            {
+                                "dateRange": "2019.06-至今（7年）",
+                                "company": "平安好医",
+                                "title": "用户体验设计专家",
+                            }
+                        ],
+                        "skills": ["用户研究", "交互设计"],
+                        "sourceUrl": "https://h.liepin.com/resume/showresumedetail/?res_id_encode=rich",
+                    },
+                },
+                payload_hash="evidence_hash_liepin",
+                updated_at=NOW,
+            ),
+        ]
+
+
 def test_runtime_service_extracts_requirement_form(tmp_path: Path) -> None:
     sheet = _requirement_sheet()
     extractor = RecordingRequirementExtractor(sheet)
@@ -355,6 +440,31 @@ def test_runtime_service_candidate_detail_projects_wts_profile_fields() -> None:
     assert "声明：该人选信息仅供公司招聘使用" not in serialized_sections
     assert "简历备注" not in serialized_sections
     assert "ICP备案信息" not in serialized_sections
+
+
+def test_runtime_service_candidate_detail_prefers_rich_liepin_evidence_over_sparse_cts() -> None:
+    service = WorkbenchV2RuntimeService(store=CandidateMergedEvidenceStore())  # type: ignore[arg-type]
+
+    detail = service.get_candidate_detail("rtrun_candidate", "identity_merged")
+
+    assert detail["displayName"] == "吴所谓"
+    assert detail["sourceUrl"] == "https://h.liepin.com/resume/showresumedetail/?res_id_encode=rich"
+    assert detail["workExperience"] == [
+        {
+            "dateRange": "2019.06-至今（7年）",
+            "company": "平安好医",
+            "title": "用户体验设计专家",
+        }
+    ]
+    assert detail["jobIntention"]["expectedSalary"] == "20-24k*14薪"
+    assert detail["skills"] == ["用户研究", "交互设计"]
+    assert detail["match"] == {
+        "summary": "猎聘详情显示候选人与岗位高度匹配。",
+        "strengths": ["有完整 0-1 体验设计项目经验。"],
+        "weaknesses": ["AI 项目经验需要面试确认。"],
+        "score": 95,
+        "fitBucket": "fit",
+    }
 
 
 def test_runtime_service_does_not_claim_source_without_evidence() -> None:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -616,11 +616,121 @@ def _candidate_match(
 
 
 def _candidate_match_payload(evidence: Sequence[RuntimeControlCandidateEvidence]) -> Mapping[str, object]:
-    return _first_mapping_from_payloads(evidence, "match") or {}
+    payloads = [(item, _mapping_value(item.payload.get("match"))) for item in evidence]
+    ranked_payloads = [
+        (item, payload)
+        for item, payload in payloads
+        if payload
+    ]
+    ranked_payloads.sort(key=lambda candidate: _match_payload_rank(candidate[0], candidate[1]))
+    return _merge_payload_mappings(payload for _item, payload in ranked_payloads)
 
 
 def _candidate_wts_detail(evidence: Sequence[RuntimeControlCandidateEvidence]) -> Mapping[str, object]:
-    return _first_mapping_from_payloads(evidence, "wtsDetail") or {}
+    payloads = [(item, _mapping_value(item.payload.get("wtsDetail"))) for item in evidence]
+    ranked_payloads = [
+        (item, payload)
+        for item, payload in payloads
+        if payload
+    ]
+    ranked_payloads.sort(key=lambda candidate: _wts_detail_payload_rank(candidate[0], candidate[1]))
+    return _merge_payload_mappings(payload for _item, payload in ranked_payloads)
+
+
+def _wts_detail_payload_rank(
+    evidence: RuntimeControlCandidateEvidence,
+    payload: Mapping[str, object],
+) -> tuple[int, int, int, int, str]:
+    return (
+        _candidate_source_priority(evidence.source_kind),
+        _candidate_evidence_level_priority(evidence.evidence_level),
+        _payload_richness(payload),
+        evidence.score if evidence.score is not None else -1,
+        evidence.evidence_id,
+    )
+
+
+def _match_payload_rank(
+    evidence: RuntimeControlCandidateEvidence,
+    payload: Mapping[str, object],
+) -> tuple[int, int, int, int, int, str]:
+    return (
+        _match_signal_priority(payload),
+        _int_from_mapping(payload, "score") or evidence.score or -1,
+        _candidate_source_priority(evidence.source_kind),
+        _candidate_evidence_level_priority(evidence.evidence_level),
+        _payload_richness(payload),
+        evidence.evidence_id,
+    )
+
+
+def _match_signal_priority(payload: Mapping[str, object]) -> int:
+    signals = 0
+    if _text_from_mapping(payload, "reasoningSummary") or _text_from_mapping(payload, "summary"):
+        signals += 1
+    if _list_texts_from_mapping(payload, "strengths"):
+        signals += 1
+    if _list_texts_from_mapping(payload, "weaknesses"):
+        signals += 1
+    return signals
+
+
+def _candidate_source_priority(source_kind: str) -> int:
+    if source_kind == "liepin":
+        return 3
+    if source_kind == "cts":
+        return 2
+    return 1
+
+
+def _candidate_evidence_level_priority(evidence_level: str) -> int:
+    if evidence_level == "final":
+        return 4
+    if evidence_level == "detail":
+        return 3
+    if evidence_level in {"summary", "card"}:
+        return 2
+    return 1
+
+
+def _merge_payload_mappings(payloads: Iterable[Mapping[str, object]]) -> dict[str, object]:
+    merged: dict[str, object] = {}
+    for payload in payloads:
+        _merge_payload_mapping(merged, payload)
+    return merged
+
+
+def _merge_payload_mapping(target: dict[str, object], source: Mapping[str, object]) -> None:
+    for key, value in source.items():
+        if not _payload_value_present(value):
+            continue
+        current = target.get(key)
+        if isinstance(value, Mapping) and isinstance(current, Mapping):
+            nested = dict(_mapping_value(current))
+            _merge_payload_mapping(nested, _mapping_value(value))
+            target[key] = nested
+            continue
+        target[key] = value
+
+
+def _payload_richness(value: object) -> int:
+    if isinstance(value, Mapping):
+        return sum(_payload_richness(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return sum(_payload_richness(item) for item in value)
+    return 1 if _payload_value_present(value) else 0
+
+
+def _payload_value_present(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping):
+        return any(_payload_value_present(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return any(_payload_value_present(item) for item in value)
+    return True
 
 
 def _candidate_job_intention(evidence: Sequence[RuntimeControlCandidateEvidence]) -> dict[str, object] | None:
@@ -841,17 +951,6 @@ def _texts_from_payloads(
     if prefix is None:
         return texts
     return [f"{prefix}：{item}" for item in texts]
-
-
-def _first_mapping_from_payloads(
-    evidence: Sequence[RuntimeControlCandidateEvidence],
-    key: str,
-) -> dict[str, object] | None:
-    for item in evidence:
-        value = _mapping_value(item.payload.get(key))
-        if value:
-            return dict(value)
-    return None
 
 
 def _list_texts_from_mapping(payload: Mapping[str, object], key: str) -> list[str]:
