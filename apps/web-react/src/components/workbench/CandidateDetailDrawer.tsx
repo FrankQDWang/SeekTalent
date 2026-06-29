@@ -1,10 +1,4 @@
-import {
-  AlertTriangle,
-  FileText,
-  LockKeyhole,
-  RefreshCw,
-  X,
-} from "lucide-react";
+import { AlertTriangle, LockKeyhole, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type {
   AgentWorkbenchCandidateDetailResponse,
@@ -105,7 +99,15 @@ export function CandidateDetailDrawer({
   const jobStatus = detail?.jobStatus ?? candidate?.jobStatus ?? null;
   const sourceKinds = detail?.sourceKinds ?? candidate?.sourceKinds ?? [];
   const sourceLabel =
-    sourceKinds.length > 0 ? `${candidateSourceLabel(sourceKinds)}来源` : null;
+    detail?.sourceLabel?.trim() ||
+    candidate?.sourceLabel?.trim() ||
+    (sourceKinds.length > 0
+      ? `${candidateSourceLabel(sourceKinds)}来源`
+      : null);
+  const sourceUrl = detail?.sourceUrl?.trim() || null;
+  const avatarLabel = candidateAvatarLabel(detail, candidate);
+  const avatarColorKey =
+    detail?.avatarColorKey ?? candidate?.avatarColorKey ?? "default";
 
   return (
     <div className="candidate-detail-drawer__backdrop">
@@ -118,8 +120,12 @@ export function CandidateDetailDrawer({
         tabIndex={-1}
       >
         <header className="candidate-detail-drawer__header">
-          <span className="candidate-detail-drawer__avatar" aria-hidden="true">
-            {title.slice(0, 1)}
+          <span
+            aria-hidden="true"
+            className="candidate-detail-drawer__avatar"
+            data-avatar-color={avatarColorKey}
+          >
+            {avatarLabel}
           </span>
           <div className="candidate-detail-drawer__profile">
             <div className="candidate-detail-drawer__title-row">
@@ -143,13 +149,16 @@ export function CandidateDetailDrawer({
             ) : null}
           </div>
           <div className="candidate-detail-drawer__actions">
-            <Button
-              aria-label="关闭候选人详情"
-              className="candidate-detail-drawer__close"
-              icon={<X aria-hidden="true" size={16} />}
-              onClick={onClose}
-            />
-            {sourceLabel ? (
+            {sourceUrl ? (
+              <a
+                className="candidate-detail-drawer__source-action"
+                href={sourceUrl}
+                rel="noreferrer"
+                target="_blank"
+              >
+                查看来源
+              </a>
+            ) : sourceLabel ? (
               <span
                 aria-label="候选人来源已记录"
                 className="candidate-detail-drawer__source-action"
@@ -157,6 +166,12 @@ export function CandidateDetailDrawer({
                 {sourceLabel}
               </span>
             ) : null}
+            <Button
+              aria-label="关闭候选人详情"
+              className="candidate-detail-drawer__close"
+              icon={<X aria-hidden="true" size={16} />}
+              onClick={onClose}
+            />
           </div>
         </header>
 
@@ -218,8 +233,13 @@ function CandidateDetailBody({
   detail: AgentWorkbenchCandidateDetailResponse;
 }) {
   const access = accessStateCopy(detail.accessState, detail.reasonCode);
-  const showDetailSections =
-    detail.accessState === "allowed" && detail.sections.length > 0;
+  const structuredSections = buildStructuredSections(detail);
+  const fallbackSections =
+    detail.accessState === "allowed"
+      ? mergeFallbackSections(detail.sections, detail.evidence)
+      : [];
+  const sections =
+    structuredSections.length > 0 ? structuredSections : fallbackSections;
 
   return (
     <div
@@ -240,31 +260,16 @@ function CandidateDetailBody({
         </section>
       )}
 
-      {showDetailSections ? (
+      {sections.length > 0 ? (
         <div className="candidate-detail-drawer__sections">
-          {detail.sections.map((section) => (
+          {sections.map((section) => (
             <CandidateDetailSection key={section.title} section={section} />
           ))}
         </div>
       ) : detail.accessState === "allowed" ? (
         <section className="candidate-detail-drawer__state" role="status">
-          <FileText aria-hidden="true" size={22} />
-          <strong>暂无详情段落</strong>
-          <p>暂时没有可展示的简历段落。</p>
-        </section>
-      ) : null}
-
-      {detail.evidence.length > 0 ? (
-        <section
-          aria-label="候选人详情证据"
-          className="candidate-detail-section"
-        >
-          <h3>证据</h3>
-          <ul>
-            {detail.evidence.map((evidence) => (
-              <li key={evidence}>{evidence}</li>
-            ))}
-          </ul>
+          <strong>暂无候选人详情</strong>
+          <p>当前还没有可展示的履历信息。</p>
         </section>
       ) : null}
     </div>
@@ -296,13 +301,13 @@ function accessStateCopy(
   if (accessState === "approval_required") {
     return {
       title: "读取完整详情前需要审批",
-      text: "当前只显示安全摘要。审批完成后，这里会刷新为可读详情。",
+      text: "审批完成后，这里会刷新为完整候选人详情。",
     };
   }
   if (accessState === "redacted") {
     return {
-      title: "详情已按来源策略脱敏",
-      text: "当前候选人的原始简历字段未进入产品界面，只展示可公开复核的摘要。",
+      title: "详情暂时不可用",
+      text: "当前来源暂未返回完整候选人详情。",
     };
   }
   if (reasonCode) {
@@ -321,12 +326,26 @@ function candidateDetailHeadline(
   detail: AgentWorkbenchCandidateDetailResponse | null,
   candidate: AgentWorkbenchCandidateSummary | null,
 ): string {
+  const currentTitle =
+    detail?.currentTitle?.trim() ?? candidate?.currentTitle?.trim();
+  const currentCompany =
+    detail?.currentCompany?.trim() ?? candidate?.currentCompany?.trim();
+  if (currentTitle && currentCompany) {
+    return `${currentTitle} · ${currentCompany}`;
+  }
+  if (currentTitle || currentCompany) {
+    return currentTitle || currentCompany || "";
+  }
   const headline = detail?.headline?.trim() ?? candidate?.headline?.trim();
-  const company = detail?.company?.trim() ?? candidate?.company?.trim();
+  const company =
+    detail?.company?.trim() ??
+    detail?.currentCompany?.trim() ??
+    candidate?.company?.trim() ??
+    candidate?.currentCompany?.trim();
   if (headline && company && !headline.includes(company)) {
     return `${headline} · ${company}`;
   }
-  return headline || company || "读取安全详情";
+  return headline || company || "候选人详情待补充";
 }
 
 function candidateDetailChips(
@@ -336,10 +355,19 @@ function candidateDetailChips(
   const activeStatus = detail?.activeStatus ?? candidate?.activeStatus ?? null;
   const gender = detail?.gender ?? candidate?.gender ?? null;
   const age = detail?.age ?? candidate?.age ?? null;
-  const location = detail?.location ?? candidate?.location ?? null;
+  const location =
+    detail?.city ??
+    detail?.location ??
+    candidate?.city ??
+    candidate?.location ??
+    null;
   const education = detail?.education ?? candidate?.education ?? null;
   const experienceYears =
-    detail?.experienceYears ?? candidate?.experienceYears ?? null;
+    detail?.workYears ??
+    detail?.experienceYears ??
+    candidate?.workYears ??
+    candidate?.experienceYears ??
+    null;
   return [
     activeStatus,
     gender,
@@ -350,6 +378,178 @@ function candidateDetailChips(
       ? `工作${String(experienceYears)}年`
       : null,
   ].filter((chip): chip is string => Boolean(chip));
+}
+
+function candidateAvatarLabel(
+  detail: AgentWorkbenchCandidateDetailResponse | null,
+  candidate: AgentWorkbenchCandidateSummary | null,
+): string {
+  return (
+    detail?.avatarLabel?.trim() ||
+    candidate?.avatarLabel?.trim() ||
+    detail?.displayName.slice(0, 1) ||
+    candidate?.displayName.slice(0, 1) ||
+    "候"
+  );
+}
+
+function buildStructuredSections(
+  detail: AgentWorkbenchCandidateDetailResponse,
+): AgentWorkbenchCandidateDetailResponse["sections"] {
+  return [
+    matchSection(detail.match),
+    jobIntentionSection(detail.jobIntention),
+    timelineSection(
+      "工作经历",
+      detail.workExperience,
+      formatWorkExperienceItem,
+    ),
+    timelineSection(
+      "项目经历",
+      detail.projectExperience,
+      formatProjectExperienceItem,
+    ),
+    timelineSection(
+      "教育经历",
+      detail.educationExperience,
+      formatEducationExperienceItem,
+    ),
+    skillsSection(detail.skills),
+  ].filter(
+    (
+      section,
+    ): section is AgentWorkbenchCandidateDetailResponse["sections"][number] =>
+      section !== null,
+  );
+}
+
+function matchSection(
+  match: AgentWorkbenchCandidateDetailResponse["match"],
+): AgentWorkbenchCandidateDetailResponse["sections"][number] | null {
+  if (!match) {
+    return null;
+  }
+  const items = [
+    match.summary ? `推荐理由：${match.summary}` : null,
+    ...match.strengths.map((strength) => `候选人强项：${strength}`),
+    ...match.weaknesses.map((weakness) => `候选人弱项：${weakness}`),
+  ].filter((item): item is string => Boolean(item));
+  return items.length > 0 ? { title: "匹配程度", items } : null;
+}
+
+function jobIntentionSection(
+  jobIntention: AgentWorkbenchCandidateDetailResponse["jobIntention"],
+): AgentWorkbenchCandidateDetailResponse["sections"][number] | null {
+  if (!jobIntention) {
+    return null;
+  }
+  const items = [
+    jobIntention.expectedRole ? `期望岗位：${jobIntention.expectedRole}` : null,
+    jobIntention.expectedIndustry
+      ? `期望行业：${jobIntention.expectedIndustry}`
+      : null,
+    jobIntention.expectedCity ? `期望地点：${jobIntention.expectedCity}` : null,
+    jobIntention.expectedSalary
+      ? `期望薪资：${jobIntention.expectedSalary}`
+      : null,
+  ].filter((item): item is string => Boolean(item));
+  return items.length > 0 ? { title: "求职意向", items } : null;
+}
+
+function timelineSection(
+  title: string,
+  items: AgentWorkbenchCandidateDetailResponse["workExperience"],
+  formatItem: (item: NonNullable<typeof items>[number]) => string[],
+): AgentWorkbenchCandidateDetailResponse["sections"][number] | null {
+  const normalizedItems = (items ?? []).flatMap(formatItem);
+  return normalizedItems.length > 0 ? { title, items: normalizedItems } : null;
+}
+
+function formatWorkExperienceItem(
+  item: NonNullable<
+    AgentWorkbenchCandidateDetailResponse["workExperience"]
+  >[number],
+): string[] {
+  return compactLines([
+    item.dateRange,
+    joinWithSeparator(" | ", [item.company, item.title]),
+    item.description,
+  ]);
+}
+
+function formatProjectExperienceItem(
+  item: NonNullable<
+    AgentWorkbenchCandidateDetailResponse["projectExperience"]
+  >[number],
+): string[] {
+  return compactLines([
+    item.dateRange,
+    joinWithSeparator(" | ", [item.name, item.role]),
+    item.description,
+  ]);
+}
+
+function formatEducationExperienceItem(
+  item: NonNullable<
+    AgentWorkbenchCandidateDetailResponse["educationExperience"]
+  >[number],
+): string[] {
+  return compactLines([
+    item.dateRange,
+    joinWithSpace([item.school, item.major, item.degree]),
+  ]);
+}
+
+function skillsSection(
+  skills: AgentWorkbenchCandidateDetailResponse["skills"],
+): AgentWorkbenchCandidateDetailResponse["sections"][number] | null {
+  const items = (skills ?? []).filter((skill): skill is string =>
+    Boolean(skill),
+  );
+  return items.length > 0 ? { title: "技能标签", items } : null;
+}
+
+function compactLines(lines: Array<string | null | undefined>): string[] {
+  return lines
+    .map((line) => line?.trim())
+    .filter((line): line is string => Boolean(line));
+}
+
+function mergeFallbackSections(
+  sections: AgentWorkbenchCandidateDetailResponse["sections"],
+  evidence: AgentWorkbenchCandidateDetailResponse["evidence"],
+): AgentWorkbenchCandidateDetailResponse["sections"] {
+  const normalizedSections = sections
+    .filter((section) => section.items.length > 0)
+    .map((section) => ({ ...section, items: [...section.items] }));
+
+  if (evidence.length === 0) {
+    return normalizedSections;
+  }
+
+  if (normalizedSections.length === 0) {
+    return [{ title: "补充说明", items: [...evidence] }];
+  }
+
+  normalizedSections[0] = {
+    ...normalizedSections[0],
+    items: [...normalizedSections[0].items, ...evidence],
+  };
+  return normalizedSections;
+}
+
+function joinWithSeparator(
+  separator: string,
+  parts: Array<string | null | undefined>,
+): string | null {
+  const values = parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part));
+  return values.length > 0 ? values.join(separator) : null;
+}
+
+function joinWithSpace(parts: Array<string | null | undefined>): string | null {
+  return joinWithSeparator(" ", parts);
 }
 
 function focusableDrawerElements(drawer: HTMLElement | null): HTMLElement[] {

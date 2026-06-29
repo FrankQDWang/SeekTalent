@@ -60,6 +60,139 @@ describe("CandidateDetailDrawer", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("renders WTS structured match, intention, timeline, skills, and source link", () => {
+    expect.hasAssertions();
+
+    render(
+      <CandidateDetailDrawer
+        candidate={{
+          ...candidate,
+          avatarLabel: "吴",
+          avatarColorKey: "indigo",
+          currentTitle: "资深体验设计工程师",
+          currentCompany: "平安集团",
+          sourceLabel: "猎聘",
+        }}
+        detail={{
+          ...agentWorkbenchCandidateDetailFixture,
+          avatarLabel: "吴",
+          avatarColorKey: "indigo",
+          activeStatus: "近30天内活跃",
+          currentTitle: "资深体验设计工程师",
+          currentCompany: "平安集团",
+          gender: "男",
+          age: 32,
+          location: "上海",
+          education: "本科",
+          workYears: 10,
+          sourceLabel: "猎聘",
+          sourceUrl: "https://example.test/candidate/1",
+          match: {
+            summary: "可独立主导 0-1 产品体验搭建，擅长拆解复杂 B 端业务流程。",
+            strengths: ["搭建可量化体验度量体系", "具备完整设计系统经验"],
+            weaknesses: ["AI 产品体验设计项目未在简历中明确体现"],
+            score: 92,
+            fitBucket: "strong_fit",
+          },
+          jobIntention: {
+            expectedRole: "高端设计职位，设计，设计经理/主管",
+            expectedIndustry: "互联网，其他",
+            expectedCity: "上海",
+            expectedSalary: "20-24k*14薪",
+          },
+          workExperience: [
+            {
+              dateRange: "2019.06-至今（7年）",
+              company: "平安好医",
+              title: "用户体验设计专家",
+              description: "提供 B 端及 C 端体验设计方案。",
+            },
+          ],
+          projectExperience: [
+            {
+              dateRange: "2020.05-至今（6年1个月）",
+              name: "助力 C 端业务增长",
+              role: "项目职务：-",
+              description: "通过设计调研提升转化率。",
+            },
+          ],
+          educationExperience: [
+            {
+              dateRange: "2011.09-2014.07（2年10个月）",
+              school: "华东师范大学",
+              major: "工业设计",
+              degree: "硕士",
+            },
+          ],
+          skills: ["技能标签1", "技能标签2"],
+          sections: [],
+        }}
+        onClose={() => undefined}
+        open
+        status="ready"
+      />,
+    );
+
+    expect(screen.getByText("吴")).toBeVisible();
+    expect(screen.getByText("资深体验设计工程师 · 平安集团")).toBeVisible();
+    expect(screen.getByRole("link", { name: "查看来源" })).toHaveAttribute(
+      "href",
+      "https://example.test/candidate/1",
+    );
+    expect(screen.getByText("匹配程度")).toBeVisible();
+    expect(screen.getByText(/推荐理由：可独立主导/)).toBeVisible();
+    expect(
+      screen.getByText(/候选人强项：搭建可量化体验度量体系/),
+    ).toBeVisible();
+    expect(screen.getByText(/候选人弱项：AI 产品体验设计项目/)).toBeVisible();
+    expect(screen.getByText("求职意向")).toBeVisible();
+    expect(
+      screen.getByText("期望岗位：高端设计职位，设计，设计经理/主管"),
+    ).toBeVisible();
+    expect(screen.getByText("工作经历")).toBeVisible();
+    expect(screen.getByText("平安好医 | 用户体验设计专家")).toBeVisible();
+    expect(screen.getByText("项目经历")).toBeVisible();
+    expect(screen.getByText("助力 C 端业务增长 | 项目职务：-")).toBeVisible();
+    expect(screen.getByText("教育经历")).toBeVisible();
+    expect(screen.getByText("华东师范大学 工业设计 硕士")).toBeVisible();
+    expect(screen.getByText("技能标签")).toBeVisible();
+    expect(screen.getByText("技能标签1")).toBeVisible();
+  });
+
+  it("falls back to sections when structured WTS detail fields are missing", () => {
+    expect.hasAssertions();
+
+    render(
+      <CandidateDetailDrawer
+        candidate={candidate}
+        detail={{
+          ...agentWorkbenchCandidateDetailFixture,
+          match: undefined,
+          jobIntention: undefined,
+          workExperience: [],
+          projectExperience: [],
+          educationExperience: [],
+          skills: [],
+          sections: [
+            {
+              title: "工作经历",
+              items: ["2019.06-至今 平安好医 | 用户体验设计专家"],
+            },
+          ],
+        }}
+        onClose={() => undefined}
+        open
+        status="ready"
+      />,
+    );
+
+    expect(screen.getByText("工作经历")).toBeVisible();
+    expect(
+      screen.getByText("2019.06-至今 平安好医 | 用户体验设计专家"),
+    ).toBeVisible();
+    expect(screen.queryByText("暂无详情段落")).not.toBeInTheDocument();
+  });
+
   it("labels CTS-only candidate sources without claiming Liepin", () => {
     expect.hasAssertions();
 

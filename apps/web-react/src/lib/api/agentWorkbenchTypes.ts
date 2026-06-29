@@ -19,8 +19,15 @@ export type AgentWorkbenchCandidateSummary =
   Schemas["AgentWorkbenchCandidateSummaryResponse"] & {
     activeStatus?: string | null;
     age?: number | null;
+    avatarColorKey?: string | null;
+    avatarLabel?: string | null;
+    city?: string | null;
+    currentCompany?: string | null;
+    currentTitle?: string | null;
     gender?: string | null;
     jobStatus?: string | null;
+    sourceLabel?: string | null;
+    workYears?: number | null;
   };
 export type AgentWorkbenchCandidateDetailSection = Omit<
   Schemas["AgentWorkbenchCandidateDetailSectionResponse"],
@@ -168,14 +175,55 @@ export type AgentWorkbenchCandidateDetailResponse = Omit<
 > & {
   activeStatus?: string | null;
   age?: number | null;
+  avatarColorKey?: string | null;
+  avatarLabel?: string | null;
+  city?: string | null;
   company?: string | null;
+  currentCompany?: string | null;
+  currentTitle?: string | null;
   education?: string | null;
+  educationExperience?: WorkbenchV2CandidateTimelineItem[];
   sections: AgentWorkbenchCandidateDetailSection[];
   evidence: string[];
   experienceYears?: number | null;
   gender?: string | null;
   jobStatus?: string | null;
+  jobIntention?: WorkbenchV2CandidateJobIntention | null;
   location?: string | null;
+  match?: WorkbenchV2CandidateMatch | null;
+  projectExperience?: WorkbenchV2CandidateTimelineItem[];
+  skills?: string[];
+  sourceLabel?: string | null;
+  sourceUrl?: string | null;
+  workExperience?: WorkbenchV2CandidateTimelineItem[];
+  workYears?: number | null;
+};
+
+export type WorkbenchV2CandidateMatch = {
+  summary?: string | null;
+  strengths: string[];
+  weaknesses: string[];
+  score?: number | null;
+  fitBucket?: string | null;
+};
+
+export type WorkbenchV2CandidateJobIntention = {
+  expectedRole?: string | null;
+  expectedIndustry?: string | null;
+  expectedCity?: string | null;
+  expectedSalary?: string | null;
+};
+
+export type WorkbenchV2CandidateTimelineItem = {
+  dateRange?: string | null;
+  title?: string | null;
+  company?: string | null;
+  school?: string | null;
+  major?: string | null;
+  degree?: string | null;
+  name?: string | null;
+  role?: string | null;
+  description?: string | null;
 };
 
 export type WorkbenchUserTextMessageRequest =
@@ -198,12 +246,63 @@ export type WorkbenchRequirementAmendRequest =
 export type RequirementDraftOperationRequest =
   Schemas["RequirementDraftOperationRequest"];
 
-type GeneratedConversationResponse =
-  Schemas["AgentWorkbenchConversationResponse"];
+type GeneratedConversationResponse = Omit<
+  Schemas["AgentWorkbenchConversationResponse"],
+  "candidates"
+> & {
+  candidates?: GeneratedCandidateSummaryResponse[] | null;
+};
 type GeneratedConversationListResponse =
   Schemas["AgentWorkbenchConversationListResponse"];
-type GeneratedCandidateDetailResponse =
-  Schemas["AgentWorkbenchCandidateDetailResponse"];
+type GeneratedCandidateSummaryResponse =
+  Schemas["AgentWorkbenchCandidateSummaryResponse"] & {
+    avatarColorKey?: string | null;
+    avatarLabel?: string | null;
+    city?: string | null;
+    currentCompany?: string | null;
+    currentTitle?: string | null;
+    sourceLabel?: string | null;
+    workYears?: number | null;
+  };
+type GeneratedCandidateMatch = Omit<
+  WorkbenchV2CandidateMatch,
+  "strengths" | "weaknesses"
+> & {
+  strengths?: string[] | null;
+  weaknesses?: string[] | null;
+};
+type GeneratedCandidateDetailSection = Omit<
+  AgentWorkbenchCandidateDetailSection,
+  "items"
+> & {
+  items?: string[] | null;
+};
+type GeneratedCandidateDetailResponse = Omit<
+  Schemas["AgentWorkbenchCandidateDetailResponse"],
+  | "educationExperience"
+  | "evidence"
+  | "match"
+  | "projectExperience"
+  | "sections"
+  | "skills"
+  | "workExperience"
+> & {
+  avatarColorKey?: string | null;
+  avatarLabel?: string | null;
+  city?: string | null;
+  currentCompany?: string | null;
+  currentTitle?: string | null;
+  educationExperience?: WorkbenchV2CandidateTimelineItem[] | null;
+  evidence?: string[] | null;
+  match?: GeneratedCandidateMatch | null;
+  projectExperience?: WorkbenchV2CandidateTimelineItem[] | null;
+  sections?: GeneratedCandidateDetailSection[] | null;
+  skills?: string[] | null;
+  sourceLabel?: string | null;
+  sourceUrl?: string | null;
+  workExperience?: WorkbenchV2CandidateTimelineItem[] | null;
+  workYears?: number | null;
+};
 
 export function normalizeAgentWorkbenchConversationList(
   response: GeneratedConversationListResponse,
@@ -231,7 +330,9 @@ export function normalizeAgentWorkbenchConversation(
     },
     thinkingProcess: normalizeThinkingProcess(response.thinkingProcess),
     sourceConnections: response.sourceConnections ?? [],
-    candidates: response.candidates ?? [],
+    candidates: (response.candidates ?? []).map(
+      normalizeAgentWorkbenchCandidateSummary,
+    ),
     detailApprovals: response.detailApprovals ?? [],
     reviewArtifacts: response.reviewArtifacts ?? [],
     pendingActions: {
@@ -253,11 +354,38 @@ export function normalizeAgentWorkbenchCandidateDetail(
   return {
     ...response,
     sourceKinds: response.sourceKinds ?? [],
+    match: normalizeCandidateMatch(response.match),
+    workExperience: response.workExperience ?? [],
+    projectExperience: response.projectExperience ?? [],
+    educationExperience: response.educationExperience ?? [],
+    skills: response.skills ?? [],
     sections: (response.sections ?? []).map((section) => ({
       ...section,
       items: section.items ?? [],
     })),
     evidence: response.evidence ?? [],
+  };
+}
+
+export function normalizeAgentWorkbenchCandidateSummary(
+  response: GeneratedCandidateSummaryResponse,
+): AgentWorkbenchCandidateSummary {
+  return {
+    ...response,
+    sourceKinds: response.sourceKinds ?? [],
+  };
+}
+
+function normalizeCandidateMatch(
+  match: GeneratedCandidateMatch | null | undefined,
+): WorkbenchV2CandidateMatch | null {
+  if (!match) {
+    return null;
+  }
+  return {
+    ...match,
+    strengths: match.strengths ?? [],
+    weaknesses: match.weaknesses ?? [],
   };
 }
 

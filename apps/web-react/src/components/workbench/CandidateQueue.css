@@ -130,15 +130,42 @@
   width: 32px;
 }
 
-.candidate-card[data-rank="2"] .candidate-card__avatar {
+.candidate-card[data-avatar-color="indigo"] .candidate-card__avatar {
+  background: #6a4cff;
+}
+
+.candidate-card[data-avatar-color="violet"] .candidate-card__avatar {
+  background: #8b5cf6;
+}
+
+.candidate-card[data-avatar-color="pink"] .candidate-card__avatar {
+  background: #ec4899;
+}
+
+.candidate-card[data-avatar-color="blue"] .candidate-card__avatar {
+  background: #2563eb;
+}
+
+.candidate-card[data-avatar-color="teal"] .candidate-card__avatar {
+  background: #0f766e;
+}
+
+.candidate-card[data-avatar-color="amber"] .candidate-card__avatar {
+  background: #d97706;
+}
+
+.candidate-card[data-avatar-color="default"][data-rank="2"]
+  .candidate-card__avatar {
   background: #ff9f1c;
 }
 
-.candidate-card[data-rank="3"] .candidate-card__avatar {
+.candidate-card[data-avatar-color="default"][data-rank="3"]
+  .candidate-card__avatar {
   background: #2fb4ce;
 }
 
-.candidate-card[data-rank="4"] .candidate-card__avatar {
+.candidate-card[data-avatar-color="default"][data-rank="4"]
+  .candidate-card__avatar {
   background: #0fbf92;
 }
 

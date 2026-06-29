@@ -48,6 +48,50 @@ describe("Workbench v2 normalization", () => {
       "event_2",
     ]);
   });
+
+  it("normalizes WTS candidate summary fields without dropping typed display data", () => {
+    const input = conversationView({
+      candidates: [
+        {
+          candidateId: "candidate_001",
+          rank: 1,
+          displayName: "吴所谓",
+          avatarLabel: "吴",
+          avatarColorKey: "indigo",
+          sourceLabel: "猎聘",
+          currentTitle: "资深体验设计工程师",
+          currentCompany: "小米科技",
+          city: "上海",
+          workYears: 10,
+          headline: null,
+          company: null,
+          location: null,
+          education: "本科",
+          experienceYears: null,
+          sourceKinds: undefined,
+          matchScore: 92,
+          matchSummary: "可独立主导 0-1 产品体验搭建。",
+          status: "running",
+          detailAvailability: "available",
+          accessState: "allowed",
+          evidenceLevel: "detail",
+        },
+      ],
+    });
+
+    const normalized = normalizeWorkbenchV2Conversation(input);
+
+    expect(normalized.candidates?.[0]).toMatchObject({
+      avatarLabel: "吴",
+      avatarColorKey: "indigo",
+      sourceLabel: "猎聘",
+      currentTitle: "资深体验设计工程师",
+      currentCompany: "小米科技",
+      city: "上海",
+      workYears: 10,
+      sourceKinds: [],
+    });
+  });
 });
 
 describe("Workbench v2 snapshot freshness", () => {
@@ -229,6 +273,78 @@ describe("Workbench v2 client", () => {
     );
     expect(result.sections[1]).toEqual({ title: "技能标签", items: [] });
     expect(result.evidence).toEqual([]);
+  });
+
+  it("gets candidate detail from the v2 endpoint and preserves WTS structured fields", async () => {
+    const responseBody = {
+      accessState: "allowed",
+      candidateId: "identity/1",
+      detailAvailability: "available",
+      displayName: "吴所谓",
+      avatarLabel: "吴",
+      avatarColorKey: "indigo",
+      evidenceLevel: "detail",
+      currentTitle: "资深体验设计工程师",
+      currentCompany: "平安集团",
+      city: "上海",
+      education: "本科",
+      workYears: 10,
+      sourceKinds: ["liepin"],
+      sourceLabel: "猎聘",
+      sourceUrl: "https://example.test/candidate/1",
+      match: {
+        summary: "可独立主导 0-1 产品体验搭建。",
+      },
+      jobIntention: {
+        expectedRole: "高端设计职位，设计，设计经理/主管",
+      },
+      workExperience: [
+        {
+          dateRange: "2019.06-至今（7年）",
+          company: "平安好医",
+          title: "用户体验设计专家",
+        },
+      ],
+      sections: [],
+    };
+    const fetchMock = stubJsonFetch(responseBody);
+
+    const result = await getWorkbenchV2CandidateDetail(
+      "agent conv/1",
+      "identity/1",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      avatarLabel: "吴",
+      avatarColorKey: "indigo",
+      currentTitle: "资深体验设计工程师",
+      currentCompany: "平安集团",
+      city: "上海",
+      workYears: 10,
+      sourceLabel: "猎聘",
+      sourceUrl: "https://example.test/candidate/1",
+      match: {
+        summary: "可独立主导 0-1 产品体验搭建。",
+        strengths: [],
+        weaknesses: [],
+      },
+      jobIntention: {
+        expectedRole: "高端设计职位，设计，设计经理/主管",
+      },
+      workExperience: [
+        {
+          dateRange: "2019.06-至今（7年）",
+          company: "平安好医",
+          title: "用户体验设计专家",
+        },
+      ],
+      projectExperience: [],
+      educationExperience: [],
+      skills: [],
+      sections: [],
+      evidence: [],
+    });
   });
 
   it("submits a message with a JSON body and normalizes transcriptEvents", async () => {

@@ -99,6 +99,30 @@
   width: 64px;
 }
 
+.candidate-detail-drawer__avatar[data-avatar-color="indigo"] {
+  background: #6a4cff;
+}
+
+.candidate-detail-drawer__avatar[data-avatar-color="violet"] {
+  background: #8b5cf6;
+}
+
+.candidate-detail-drawer__avatar[data-avatar-color="pink"] {
+  background: #ec4899;
+}
+
+.candidate-detail-drawer__avatar[data-avatar-color="blue"] {
+  background: #2563eb;
+}
+
+.candidate-detail-drawer__avatar[data-avatar-color="teal"] {
+  background: #0f766e;
+}
+
+.candidate-detail-drawer__avatar[data-avatar-color="amber"] {
+  background: #d97706;
+}
+
 .candidate-detail-drawer__actions {
   align-items: end;
   display: grid;
@@ -118,10 +142,12 @@
   border: 1px solid #d6dbe8;
   border-radius: 8px;
   color: var(--st-ink);
+  display: inline-flex;
   font-size: 14px;
   font-weight: 740;
   line-height: 1;
   padding: 12px 20px;
+  text-decoration: none;
   white-space: nowrap;
 }
 

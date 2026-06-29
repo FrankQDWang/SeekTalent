@@ -82,7 +82,7 @@ export function CandidateQueue({
         <div className="candidate-queue__empty" role="status">
           <Search aria-hidden="true" size={28} />
           <strong>暂无候选人简历</strong>
-          <span>候选人安全摘要生成后会显示在这里。</span>
+          <span>检索到候选人后会显示在这里。</span>
         </div>
       </section>
     );

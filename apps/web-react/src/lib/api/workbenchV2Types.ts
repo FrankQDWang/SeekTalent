@@ -1,7 +1,8 @@
-import type {
-  AgentWorkbenchCandidateSummary,
-  AgentWorkbenchStrategyGraph,
-  AgentWorkbenchThinkingProcess,
+import {
+  normalizeAgentWorkbenchCandidateSummary,
+  type AgentWorkbenchCandidateSummary,
+  type AgentWorkbenchStrategyGraph,
+  type AgentWorkbenchThinkingProcess,
 } from "./agentWorkbenchTypes";
 
 export type WorkbenchV2EventType =
@@ -114,7 +115,9 @@ export function normalizeWorkbenchV2Conversation(
       activeRoundNo: null,
       rounds: [],
     },
-    candidates: input.candidates ?? [],
+    candidates: (input.candidates ?? []).map(
+      normalizeAgentWorkbenchCandidateSummary,
+    ),
   };
 }
 

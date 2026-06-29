@@ -19,10 +19,10 @@ export function CandidateCard({
 }: CandidateCardProps) {
   const facts = [
     typeof candidate.age === "number" ? `${String(candidate.age)}岁` : null,
-    candidate.location,
+    candidate.city ?? candidate.location,
     candidate.education,
-    typeof candidate.experienceYears === "number"
-      ? `工作${String(candidate.experienceYears)}年`
+    typeof (candidate.workYears ?? candidate.experienceYears) === "number"
+      ? `工作${String(candidate.workYears ?? candidate.experienceYears)}年`
       : null,
   ].filter((fact): fact is string => Boolean(fact));
   const headline = candidateHeadline(candidate);
@@ -31,11 +31,17 @@ export function CandidateCard({
       ? `${String(candidate.matchScore)}分`
       : null;
   const status = candidateStatusLabel(candidate.status);
+  const sourceLabel =
+    candidate.sourceLabel?.trim() ||
+    candidateSourceLabel(candidate.sourceKinds);
+  const avatarLabel =
+    candidate.avatarLabel?.trim() || candidate.displayName.slice(0, 1);
 
   return (
     <article
       aria-label={candidate.displayName}
       className="candidate-card"
+      data-avatar-color={candidate.avatarColorKey ?? "default"}
       data-rank={candidate.rank}
       data-source={candidate.sourceKinds?.join(" ") ?? "unknown"}
       data-selected={selected ? "true" : "false"}
@@ -43,7 +49,7 @@ export function CandidateCard({
       <div className="candidate-card__header">
         <div className="candidate-card__identity">
           <span className="candidate-card__avatar" aria-hidden="true">
-            {candidate.displayName.slice(0, 1)}
+            {avatarLabel}
           </span>
           <div className="candidate-card__name-block">
             <h3>{candidate.displayName}</h3>
@@ -52,7 +58,7 @@ export function CandidateCard({
         </div>
         <div className="candidate-card__badges">
           {status ? <span data-status={candidate.status}>{status}</span> : null}
-          <span>{candidateSourceLabel(candidate.sourceKinds)}</span>
+          <span>{sourceLabel}</span>
         </div>
       </div>
 
@@ -84,12 +90,20 @@ export function CandidateCard({
 }
 
 function candidateHeadline(candidate: CandidateCardCandidate): string {
+  const currentTitle = candidate.currentTitle?.trim();
+  const currentCompany = candidate.currentCompany?.trim();
+  if (currentTitle && currentCompany) {
+    return `${currentTitle} · ${currentCompany}`;
+  }
+  if (currentTitle || currentCompany) {
+    return currentTitle || currentCompany || "";
+  }
   const headline = candidate.headline?.trim();
   const company = candidate.company?.trim();
   if (headline && company && !headline.includes(company)) {
     return `${headline} · ${company}`;
   }
-  return headline || company || "候选人安全摘要";
+  return headline || company || "候选人详情待补充";
 }
 
 function candidateStatusLabel(

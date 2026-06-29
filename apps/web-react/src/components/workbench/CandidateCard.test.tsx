@@ -7,11 +7,17 @@ const candidateFixture = {
   candidateId: "candidate_001",
   rank: 1,
   displayName: "候选人 A",
+  avatarLabel: "吴",
+  avatarColorKey: "indigo",
+  sourceLabel: "猎聘",
+  currentTitle: "资深体验设计工程师",
+  currentCompany: "小米科技",
   headline: "平台后端负责人",
   company: "某 AI Infra 公司",
   age: 32,
   location: "上海",
   education: "本科",
+  workYears: 10,
   experienceYears: 10,
   sourceKinds: ["liepin"],
   matchScore: 92,
@@ -33,13 +39,16 @@ describe("CandidateCard", () => {
     expect(
       screen.getByRole("article", { name: "候选人 A" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("吴")).toBeInTheDocument();
     expect(
-      screen.getByText("平台后端负责人 · 某 AI Infra 公司"),
+      screen.getByText("资深体验设计工程师 · 小米科技"),
     ).toBeInTheDocument();
     expect(screen.getByText("猎聘")).toBeInTheDocument();
     expect(screen.getByText("待复核")).toBeInTheDocument();
     expect(screen.getByText("92分")).toBeInTheDocument();
     expect(screen.getByText("32岁")).toBeInTheDocument();
+    expect(screen.getByText("上海")).toBeInTheDocument();
+    expect(screen.getByText("本科")).toBeInTheDocument();
     expect(screen.getByText("工作10年")).toBeInTheDocument();
     expect(
       screen.getByText("有 Agent 工具调用平台和 RAG 检索链路经验。"),
