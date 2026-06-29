@@ -8,6 +8,7 @@ import pytest
 
 from seektalent.models import ResumeCandidate
 from seektalent.runtime import WorkflowRuntime
+from seektalent.runtime.public_events import make_runtime_public_event
 from seektalent.runtime.source_lanes import build_runtime_source_plan
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
 from seektalent.source_adapters import build_source_enabled_runtime
@@ -82,6 +83,20 @@ def test_runtime_feedback_public_event_includes_liepin_executed_queries(tmp_path
     assert {item["sourceKind"] for item in executed_queries} >= {"cts", "liepin"}
 
 
+def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_unavailable() -> None:
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="source_result",
+        event_seq=131,
+        round_no=1,
+        source_kind="liepin",
+        status="blocked",
+        safe_reason_code="liepin_opencli_stale_ref",
+    )
+
+    assert event["safeReasonCode"] == "source_browser_backend_unavailable"
+
+
 def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
@@ -135,10 +150,13 @@ def test_source_round_empty_coverage_does_not_block_next_runtime_step(tmp_path) 
 
     assert coverage_summary.status == "empty"
     assert coverage_summary.empty_source_kinds == ("cts",)
-    assert runtime._source_round_not_ready_reason(
-        coverage_summary=coverage_summary,
-        dispatch_result=dispatch_result,
-    ) is None
+    assert (
+        runtime._source_round_not_ready_reason(
+            coverage_summary=coverage_summary,
+            dispatch_result=dispatch_result,
+        )
+        is None
+    )
 
 
 def test_source_round_unknown_coverage_status_remains_blocking(tmp_path) -> None:
@@ -168,8 +186,7 @@ def _runtime_public_event_payloads(progress_events: list[object]) -> list[dict[s
     return [
         event.payload
         for event in progress_events
-        if event.type == "runtime_public_event"
-        and event.payload.get("schemaVersion") == "runtime_public_event_v1"
+        if event.type == "runtime_public_event" and event.payload.get("schemaVersion") == "runtime_public_event_v1"
     ]
 
 
@@ -192,11 +209,7 @@ def _multi_source_runtime_public_event_payloads(
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
     progress_events = []
-    source_context = (
-        {"backend_mode": "fake_fixture", "status": "ready"}
-        if "liepin" in source_kinds
-        else None
-    )
+    source_context = {"backend_mode": "fake_fixture", "status": "ready"} if "liepin" in source_kinds else None
     source_plan = build_runtime_source_plan(
         source_kinds=source_kinds,
         settings=settings,
@@ -244,7 +257,9 @@ def _completed_source_round_adapters(runtime: WorkflowRuntime, context):
             )
         return SourceRoundAdapterResult(**result_kwargs)
 
-    return {source_id: (lambda request, source_id=source_id: adapter(request, source_id)) for source_id in ("cts", "liepin")}
+    return {
+        source_id: (lambda request, source_id=source_id: adapter(request, source_id)) for source_id in ("cts", "liepin")
+    }
 
 
 def _public_event_candidate(source: str) -> ResumeCandidate:

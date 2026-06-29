@@ -371,9 +371,7 @@ def _scan_legacy_text_llm_inputs(
     if env_file is not None:
         sources.append(_read_env_kv_pairs(env_file))
     init_values = {
-        str(key): str(value)
-        for key, value in init_data.items()
-        if value is not None and not str(key).startswith("_")
+        str(key): str(value) for key, value in init_data.items() if value is not None and not str(key).startswith("_")
     }
     sources.append(init_values)
     for source in sources:
@@ -416,12 +414,7 @@ def _scan_removed_prf_inputs(
         }
     )
 
-    removed_keys = [
-        key
-        for source in sources
-        for key in sorted(REMOVED_PRF_ENV_KEYS)
-        if key in source
-    ]
+    removed_keys = [key for source in sources for key in sorted(REMOVED_PRF_ENV_KEYS) if key in source]
     if removed_keys:
         detail = ", ".join(dict.fromkeys(removed_keys))
         raise PRFConfigMigrationError(
@@ -519,6 +512,7 @@ class AppSettings(BaseSettings):
     reasoning_effort: ReasoningEffort = "off"
     judge_reasoning_effort: ReasoningEffort | None = "off"
     controller_enable_thinking: bool = False
+    controller_timeout_seconds: float = 60.0
     reflection_enable_thinking: bool = False
     candidate_feedback_enabled: bool = True
     candidate_feedback_model_id: str = "deepseek-v4-flash"
@@ -728,6 +722,8 @@ class AppSettings(BaseSettings):
             raise ValueError("agent_monthly_cost_budget_cents must be >= 0")
         if self.agent_model_timeout_seconds <= 0:
             raise ValueError("agent_model_timeout_seconds must be > 0")
+        if self.controller_timeout_seconds <= 0:
+            raise ValueError("controller_timeout_seconds must be > 0")
         if self.agent_tool_timeout_seconds <= 0:
             raise ValueError("agent_tool_timeout_seconds must be > 0")
         if self.agent_stream_heartbeat_seconds <= 0:
@@ -742,14 +738,17 @@ class AppSettings(BaseSettings):
             raise ValueError("liepin_exploit_detail_target must be between 1 and 10")
         if not 1 <= self.liepin_explore_detail_target <= 10:
             raise ValueError("liepin_explore_detail_target must be between 1 and 10")
-        if min(
-            self.liepin_opencli_max_actions_per_task,
-            self.liepin_opencli_max_pages_per_task,
-            self.liepin_opencli_max_cards_per_task,
-            self.liepin_opencli_timeout_seconds,
-            self.liepin_opencli_detail_open_timeout_seconds,
-            self.liepin_opencli_idle_close_seconds,
-        ) < 1:
+        if (
+            min(
+                self.liepin_opencli_max_actions_per_task,
+                self.liepin_opencli_max_pages_per_task,
+                self.liepin_opencli_max_cards_per_task,
+                self.liepin_opencli_timeout_seconds,
+                self.liepin_opencli_detail_open_timeout_seconds,
+                self.liepin_opencli_idle_close_seconds,
+            )
+            < 1
+        ):
             raise ValueError("OpenCLI Liepin budgets and timeout must be >= 1")
         if self.liepin_opencli_pacing_min_ms < 0 or self.liepin_opencli_pacing_max_ms < 0:
             raise ValueError("liepin_opencli_pacing values must be non-negative")
@@ -977,7 +976,9 @@ class AppSettings(BaseSettings):
             or resolved_path.name == "runs"
             or any(parent.name == "runs" for parent in resolved_path.parents)
         ):
-            raise ValueError("The legacy runs/ root is decommissioned as an active output target. Use artifacts/ instead.")
+            raise ValueError(
+                "The legacy runs/ root is decommissioned as an active output target. Use artifacts/ instead."
+            )
         return path
 
     @property
@@ -1004,9 +1005,7 @@ class AppSettings(BaseSettings):
 
     def require_cts_credentials(self) -> None:
         if not self.cts_tenant_key or not self.cts_tenant_secret:
-            raise ValueError(
-                "Real CTS mode requires SEEKTALENT_CTS_TENANT_KEY and SEEKTALENT_CTS_TENANT_SECRET."
-            )
+            raise ValueError("Real CTS mode requires SEEKTALENT_CTS_TENANT_KEY and SEEKTALENT_CTS_TENANT_SECRET.")
 
     def with_overrides(self, **overrides: object) -> "AppSettings":
         filtered = {key: value for key, value in overrides.items() if value is not None}

@@ -80,6 +80,8 @@ class FakeRuntimeService:
         self.next_round_requirement_calls: list[dict[str, object]] = []
         self.next_round_requirement_errors: list[Exception] = []
         self.next_round_requirement_results: list[dict[str, object]] = []
+        self.amend_requirement_calls: list[dict[str, object]] = []
+        self.amend_requirement_results: list[FakeRequirementExtraction] = []
 
     def extract_requirement_bundle(
         self,
@@ -99,6 +101,62 @@ class FakeRuntimeService:
         runtime_input: WorkbenchV2RuntimeInput,
     ) -> object:
         return self.extract_requirement_bundle(conversation_id, runtime_input).draft
+
+    def amend_requirement_bundle(
+        self,
+        conversation_id: str,
+        *,
+        base_draft: RequirementDraft,
+        base_requirement_sheet: RequirementSheet,
+        text: str,
+        idempotency_key: str,
+    ) -> FakeRequirementExtraction:
+        self.amend_requirement_calls.append(
+            {
+                "conversation_id": conversation_id,
+                "base_draft_revision_id": base_draft.draft_revision_id,
+                "base_requirement_sheet": base_requirement_sheet,
+                "text": text,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if self.amend_requirement_results:
+            return self.amend_requirement_results.pop(0)
+        effective_base_sheet = service_module.requirement_sheet_from_draft(base_draft, base_requirement_sheet)
+        amended_sheet = effective_base_sheet.model_copy(
+            update={
+                "must_have_capabilities": [
+                    *effective_base_sheet.must_have_capabilities,
+                    f"抽取后：{text}",
+                ]
+            }
+        )
+        amended_draft = base_draft.model_copy(
+            deep=True,
+            update={
+                "draft_revision_id": f"reqdraft_amended_{len(self.amend_requirement_calls)}",
+                "base_revision_id": base_draft.draft_revision_id,
+            },
+        )
+        must_have_section = amended_draft.section("must_have_capabilities")
+        must_have_section.items.append(
+            RequirementDraftItem(
+                item_id=f"reqitem_amended_{len(self.amend_requirement_calls)}",
+                selected=True,
+                enabled=True,
+                editable=True,
+                text=f"抽取后：{text}",
+                value=f"抽取后：{text}",
+                source="workbench_v2_agent",
+                status="resolved",
+                review_item_id=None,
+                amendment_id=f"reqamend_{len(self.amend_requirement_calls)}",
+                source_span_refs=[],
+                sort_order=(len(must_have_section.items) + 1) * 10,
+                allowed_actions=[],
+            )
+        )
+        return FakeRequirementExtraction(draft=amended_draft, requirement_sheet=amended_sheet)
 
     def start_run(
         self,
@@ -1219,7 +1277,9 @@ def test_requirement_action_set_selected_appends_form_and_updates_sheet(tmp_path
     assert view.requirementForm == latest_form
 
 
-def test_requirement_action_add_other_appends_form_and_updates_sheet(tmp_path: Path) -> None:
+def test_requirement_action_confirm_with_supplement_reextracts_requirement_form_before_starting_runtime(
+    tmp_path: Path,
+) -> None:
     store = _store(tmp_path)
     runtime_input = {
         "jobTitle": "AI 平台工程师",
@@ -1229,35 +1289,68 @@ def test_requirement_action_add_other_appends_form_and_updates_sheet(tmp_path: P
     agent = FakeAgentLoop(
         _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
     )
-    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=FakeRuntimeService())
+    runtime = FakeRuntimeService()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
     first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-add"))
 
     view = asyncio.run(
         service.apply_requirement_action(
             first_view.conversation.conversationId,
-            action="add_other",
+            action="confirm",
             text="熟悉 LangGraph",
             idempotency_key="other-1",
         )
     )
     payload = view.model_dump(mode="json")
 
+    assert runtime.amend_requirement_calls == [
+        {
+            "conversation_id": first_view.conversation.conversationId,
+            "base_draft_revision_id": first_view.requirementForm["draft"]["draft_revision_id"],
+            "base_requirement_sheet": RequirementSheet.model_validate(first_view.requirementForm["requirementSheet"]),
+            "text": "熟悉 LangGraph",
+            "idempotency_key": "other-1",
+        }
+    ]
+    assert payload["conversation"]["runtimeState"] == "queued"
+    assert [event["type"] for event in payload["transcriptEvents"]][-6:] == [
+        "user_message",
+        "assistant_status",
+        "requirement_form",
+        "requirement_form_confirmed",
+        "runtime_progress",
+        "assistant_message",
+    ]
+    assert payload["transcriptEvents"][-6]["payload"] == {"text": "熟悉 LangGraph"}
+    assert payload["transcriptEvents"][-5]["payload"] == {
+        "phase": "requirement_amendment",
+        "text": "正在根据补充要求更新需求，请稍候。",
+    }
     form_events = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form"]
     assert len(form_events) == 2
     latest_form = form_events[-1]["payload"]
-    must_have_items = latest_form["draft"]["sections"][0]["items"]
-    new_item = must_have_items[-1]
-    assert new_item["text"] == "熟悉 LangGraph"
-    assert new_item["value"] == "熟悉 LangGraph"
-    assert new_item["selected"] is True
-    assert new_item["enabled"] is True
-    assert new_item["editable"] is True
-    assert new_item["source"] == "workbench_v2_user"
-    assert new_item["status"] == "resolved"
-    assert new_item["allowed_actions"] == ["select", "edit", "delete", "move_to_preferred_capabilities"]
-    assert new_item["sort_order"] > must_have_items[-2]["sort_order"]
-    assert "熟悉 LangGraph" in latest_form["requirementSheet"]["must_have_capabilities"]
+    must_have_texts = [item["text"] for item in latest_form["draft"]["sections"][0]["items"]]
+    assert "熟悉 LangGraph" not in must_have_texts
+    assert "抽取后：熟悉 LangGraph" in must_have_texts
+    assert "抽取后：熟悉 LangGraph" in latest_form["requirementSheet"]["must_have_capabilities"]
     assert latest_form["runtimeInput"] == runtime_input
+    assert runtime.start_calls == [
+        {
+            "conversation_id": first_view.conversation.conversationId,
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(runtime_input),
+            "requirement_sheet": RequirementSheet.model_validate(latest_form["requirementSheet"]),
+            "idempotency_key": "other-1",
+            "draft_revision_id": latest_form["draft"]["draft_revision_id"],
+            "selected_item_ids": [item["item_id"] for item in latest_form["draft"]["sections"][0]["items"]],
+            "deselected_item_ids": [],
+        }
+    ]
+    confirmed = [event for event in payload["transcriptEvents"] if event["type"] == "requirement_form_confirmed"]
+    assert len(confirmed) == 1
+    assert confirmed[0]["payload"]["requirementSheet"] == latest_form["requirementSheet"]
+    assert confirmed[0]["payload"]["readonly"] is True
+    assert view.requirementForm == confirmed[0]["payload"]
+    assert payload["runtime"] == {"state": "queued", "runtimeRunId": "rtrun_1"}
 
 
 def test_requirement_action_confirm_after_deselect_starts_runtime_from_updated_form(tmp_path: Path) -> None:
@@ -1412,9 +1505,15 @@ def test_agent_update_requirements_patch_updates_current_form(tmp_path: Path) ->
     assert view.requirementForm is not None
     must_have_items = view.requirementForm["draft"]["sections"][0]["items"]
     existing_item = next(item for item in must_have_items if item["item_id"] == item_id)
-    added_item = next(item for item in must_have_items if item["text"] == "熟悉 LangGraph")
+    added_item = next(item for item in must_have_items if item["text"] == "抽取后：熟悉 LangGraph")
     assert existing_item["selected"] is False
     assert added_item["selected"] is True
+    assert view.requirementForm["requirementSheet"]["must_have_capabilities"] == ["抽取后：熟悉 LangGraph"]
+    assert [event.type for event in view.transcriptEvents][-3:] == [
+        "assistant_status",
+        "requirement_form",
+        "assistant_message",
+    ]
     assert view.transcriptEvents[-1].type == "assistant_message"
     assert view.transcriptEvents[-1].payload == {"text": "我已更新当前需求。"}
 
@@ -2682,7 +2781,13 @@ def _agent_output(
     )
 
 
-def _draft_payload() -> RequirementDraft:
+def _draft_payload(
+    *,
+    draft_revision_id: str = "reqdraft_1",
+    base_revision_id: str | None = None,
+    must_have_capabilities: list[str] | None = None,
+) -> RequirementDraft:
+    resolved_must_have_capabilities = must_have_capabilities or ["Python 后端开发"]
     empty_sections = [
         RequirementDraftSection(section_id=section_id, display_name=display_name, backend_field=backend_field, items=[])
         for section_id, display_name, backend_field in (
@@ -2694,8 +2799,8 @@ def _draft_payload() -> RequirementDraft:
     ]
     return RequirementDraft(
         conversation_id="agentv2_1",
-        draft_revision_id="reqdraft_1",
-        base_revision_id=None,
+        draft_revision_id=draft_revision_id,
+        base_revision_id=base_revision_id,
         status="draft_ready",
         sections=[
             RequirementDraftSection(
@@ -2704,20 +2809,21 @@ def _draft_payload() -> RequirementDraft:
                 backend_field="must_have_capabilities",
                 items=[
                     RequirementDraftItem(
-                        item_id="must_have_capabilities_1",
+                        item_id=f"must_have_capabilities_{index}",
                         selected=True,
                         enabled=True,
                         editable=True,
-                        text="Python 后端开发",
-                        value="Python 后端开发",
+                        text=capability,
+                        value=capability,
                         source="workbench_v2_agent",
                         status="resolved",
                         review_item_id=None,
                         amendment_id=None,
                         source_span_refs=[],
-                        sort_order=0,
+                        sort_order=index * 10,
                         allowed_actions=[],
                     )
+                    for index, capability in enumerate(resolved_must_have_capabilities, start=1)
                 ],
             ),
             *empty_sections,

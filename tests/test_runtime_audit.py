@@ -33,7 +33,11 @@ from seektalent.models import (
 )
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import LoadedPrompt
-from seektalent.runtime.context_builder import build_controller_context, build_finalize_context, build_reflection_context
+from seektalent.runtime.context_builder import (
+    build_controller_context,
+    build_finalize_context,
+    build_reflection_context,
+)
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.artifacts import ArtifactStore
 from seektalent.runtime.runtime_diagnostics import (
@@ -54,7 +58,13 @@ from seektalent.runtime.retrieval_runtime import RetrievalRuntime, _provider_req
 from seektalent.runtime.source_lanes import build_runtime_source_plan
 from seektalent.scoring.scorer import ResumeScorer
 from seektalent.source_adapters import build_source_enabled_runtime
-from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer, json_sha256, provider_usage_from_result
+from seektalent.tracing import (
+    LLMCallSnapshot,
+    ProviderUsageSnapshot,
+    RunTracer,
+    json_sha256,
+    provider_usage_from_result,
+)
 from tests.settings_factory import make_settings
 from tests.test_context_builder import _run_state_for_stop_gate, _scored_candidate
 
@@ -206,7 +216,9 @@ def test_run_tracer_runtime_failure_marks_run_manifest_failed(tmp_path: Path, mo
     runtime = _workflow_runtime(settings)
 
     monkeypatch.setattr(runtime, "_write_run_preamble", lambda **kwargs: None)
-    monkeypatch.setattr(runtime, "_require_live_llm_config", lambda: (_ for _ in ()).throw(RuntimeError("boom failure")))
+    monkeypatch.setattr(
+        runtime, "_require_live_llm_config", lambda: (_ for _ in ()).throw(RuntimeError("boom failure"))
+    )
 
     with pytest.raises(RuntimeError, match="boom failure"):
         runtime.run(source_kinds=["cts"], job_title="Python Engineer", jd="JD", notes="")
@@ -802,8 +814,12 @@ def test_collect_llm_schema_pressure_tolerates_historical_company_discovery_arti
     session = store.create_root(kind="run", display_name="seek talent workflow run", producer="WorkflowRuntime")
     _register_runtime_call_artifact(session, "runtime.requirements_call")
     _register_runtime_call_artifact(session, "runtime.finalizer_call")
-    session.write_json("runtime.requirements_call", _aux_call_artifact(stage="requirements", prompt_name="requirements"))
-    session.write_json("round.01.controller.controller_call", _aux_call_artifact(stage="controller", prompt_name="controller"))
+    session.write_json(
+        "runtime.requirements_call", _aux_call_artifact(stage="requirements", prompt_name="requirements")
+    )
+    session.write_json(
+        "round.01.controller.controller_call", _aux_call_artifact(stage="controller", prompt_name="controller")
+    )
     session.write_json(
         "round.01.retrieval.company_discovery_plan_call",
         _aux_call_artifact(stage="company_discovery_plan", prompt_name="company_discovery_plan"),
@@ -816,7 +832,9 @@ def test_collect_llm_schema_pressure_tolerates_historical_company_discovery_arti
         "round.01.retrieval.company_discovery_reduce_call",
         _aux_call_artifact(stage="company_discovery_reduce", prompt_name="company_discovery_reduce"),
     )
-    session.write_json("round.01.reflection.reflection_call", _aux_call_artifact(stage="reflection", prompt_name="reflection"))
+    session.write_json(
+        "round.01.reflection.reflection_call", _aux_call_artifact(stage="reflection", prompt_name="reflection")
+    )
     session.write_json("runtime.finalizer_call", _aux_call_artifact(stage="finalize", prompt_name="finalize"))
 
     pressure = collect_llm_schema_pressure(session.root)
@@ -856,9 +874,15 @@ def test_collect_llm_schema_pressure_ignores_legacy_company_discovery_run_config
             },
         },
     )
-    session.write_json("runtime.requirements_call", _aux_call_artifact(stage="requirements", prompt_name="requirements"))
-    session.write_json("round.01.controller.controller_call", _aux_call_artifact(stage="controller", prompt_name="controller"))
-    session.write_json("round.01.reflection.reflection_call", _aux_call_artifact(stage="reflection", prompt_name="reflection"))
+    session.write_json(
+        "runtime.requirements_call", _aux_call_artifact(stage="requirements", prompt_name="requirements")
+    )
+    session.write_json(
+        "round.01.controller.controller_call", _aux_call_artifact(stage="controller", prompt_name="controller")
+    )
+    session.write_json(
+        "round.01.reflection.reflection_call", _aux_call_artifact(stage="reflection", prompt_name="reflection")
+    )
     session.write_json("runtime.finalizer_call", _aux_call_artifact(stage="finalize", prompt_name="finalize"))
 
     pressure = collect_llm_schema_pressure(session.root)
@@ -868,6 +892,8 @@ def test_collect_llm_schema_pressure_ignores_legacy_company_discovery_run_config
         "controller",
         "reflection",
     ]
+
+
 def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypatch) -> None:
     captured_extra_specs: list[str] | None = None
 
@@ -968,7 +994,17 @@ class DuplicatePagingCTS:
         fetch_mode="summary",
         cursor=None,
     ) -> SearchResult:
-        del query_terms, query_role, keyword_query, adapter_notes, provider_filters, runtime_constraints, round_no, trace_id, fetch_mode
+        del (
+            query_terms,
+            query_role,
+            keyword_query,
+            adapter_notes,
+            provider_filters,
+            runtime_constraints,
+            round_no,
+            trace_id,
+            fetch_mode,
+        )
         page = int(cursor or "1")
         if page == 1:
             candidates = [_make_candidate("dup-1"), _make_candidate("dup-1")]
@@ -1309,26 +1345,26 @@ class FailingScorer:
                 "prompt_snapshot_path": "assets/prompts/scoring.md",
                 "output_mode": "native_strict",
                 "retries": 0,
-                    "output_retries": 2,
-                    "started_at": "stub",
-                    "latency_ms": 1,
-                    "status": "failed",
-                    "input_artifact_refs": [
-                        f"round.{contexts[0].round_no:02d}.scoring.scoring_input_refs",
-                        f"resumes/{candidate.resume_id}.json",
-                        "input.scoring_policy",
-                    ],
-                    "output_artifact_refs": [],
-                    "input_payload_sha256": "stub-input",
-                    "structured_output_sha256": None,
-                    "prompt_chars": 0,
-                    "input_payload_chars": 0,
-                    "output_chars": 0,
-                    "input_summary": f"round={contexts[0].round_no}; resume_id={candidate.resume_id}",
-                    "output_summary": None,
-                    "error_message": failure.error_message,
-                    "validator_retry_count": 0,
-                },
+                "output_retries": 2,
+                "started_at": "stub",
+                "latency_ms": 1,
+                "status": "failed",
+                "input_artifact_refs": [
+                    f"round.{contexts[0].round_no:02d}.scoring.scoring_input_refs",
+                    f"resumes/{candidate.resume_id}.json",
+                    "input.scoring_policy",
+                ],
+                "output_artifact_refs": [],
+                "input_payload_sha256": "stub-input",
+                "structured_output_sha256": None,
+                "prompt_chars": 0,
+                "input_payload_chars": 0,
+                "output_chars": 0,
+                "input_summary": f"round={contexts[0].round_no}; resume_id={candidate.resume_id}",
+                "output_summary": None,
+                "error_message": failure.error_message,
+                "validator_retry_count": 0,
+            },
         )
         tracer.emit(
             "score_branch_failed",
@@ -1941,7 +1977,9 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     search_diagnostics = _read_json(_runtime_artifact(artifacts.run_dir, "search_diagnostics"))
     term_surface_audit = _read_json(_runtime_artifact(artifacts.run_dir, "term_surface_audit"))
     run_summary = _output_artifact(artifacts.run_dir, "run_summary", extension="md").read_text(encoding="utf-8")
-    round_review = _round_artifact(artifacts.run_dir, 1, "reflection", "round_review", extension="md").read_text(encoding="utf-8")
+    round_review = _round_artifact(artifacts.run_dir, 1, "reflection", "round_review", extension="md").read_text(
+        encoding="utf-8"
+    )
     events = _read_jsonl(_runtime_artifact(artifacts.run_dir, "events", extension="jsonl"))
 
     assert len(controller_decision["proposed_query_terms"]) == 2
@@ -2063,7 +2101,11 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "structured_output" not in scoring_calls[0]
     assert scoring_calls[0]["input_payload_sha256"]
     assert scoring_calls[0]["structured_output_sha256"]
-    assert scoring_calls[0]["input_artifact_refs"] == ["round.01.scoring.scoring_input_refs", "resumes/mock-r001.json", "input.scoring_policy"]
+    assert scoring_calls[0]["input_artifact_refs"] == [
+        "round.01.scoring.scoring_input_refs",
+        "resumes/mock-r001.json",
+        "input.scoring_policy",
+    ]
     assert finalization_call["stage"] == "finalization"
     assert finalization_call["engine"] == "deterministic_runtime"
     assert finalization_call["status"] == "succeeded"
@@ -2120,7 +2162,10 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     }
     assert audit_terms["python"]["used_rounds"] == [1]
     assert audit_terms["python"]["sent_query_count"] == 1
-    assert audit_terms["python"]["queries_containing_term_raw_candidate_count"] == search_observation["raw_candidate_count"]
+    assert (
+        audit_terms["python"]["queries_containing_term_raw_candidate_count"]
+        == search_observation["raw_candidate_count"]
+    )
     assert audit_terms["python"]["queries_containing_term_unique_new_count"] == search_observation["unique_new_count"]
     assert audit_terms["python"]["queries_containing_term_duplicate_count"] == sum(
         item["batch_duplicate_count"] for item in search_attempts
@@ -2284,7 +2329,7 @@ def test_runtime_emits_tui_progress_events(tmp_path: Path, monkeypatch) -> None:
             "query_role": "exploit",
             "lane_type": "exploit",
             "query_terms": ["python", "resume matching"],
-            "keyword_query": "python \"resume matching\"",
+            "keyword_query": 'python "resume matching"',
         }
     ]
     assert round_event.payload["unique_new_count"] > 0
@@ -2312,15 +2357,27 @@ def test_runtime_round_payload_includes_resume_quality_comment(tmp_path: Path, m
     cast(Any, runtime).resume_quality_commenter = StubResumeQualityCommenter()
     progress_events: list[ProgressEvent] = []
 
-    runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes", progress_callback=progress_events.append)
+    runtime.run(
+        source_kinds=["cts"],
+        job_title="Senior Python Engineer",
+        jd="JD",
+        notes="Notes",
+        progress_callback=progress_events.append,
+    )
 
     round_event = next(event for event in progress_events if event.type == "round_completed")
     quality_event = next(event for event in progress_events if event.type == "resume_quality_comment_completed")
     event_types = [event.type for event in progress_events]
-    assert round_event.payload["resume_quality_comment"] == "本轮简历整体质量较好，Python 和检索经验集中，少数候选人管理经验仍需复核。"
+    assert (
+        round_event.payload["resume_quality_comment"]
+        == "本轮简历整体质量较好，Python 和检索经验集中，少数候选人管理经验仍需复核。"
+    )
     assert round_event.payload["resume_quality_comment_error"] is None
     assert round_event.payload["reflection_summary"] == "No reflection changes."
-    assert quality_event.message == "本轮简历质量：本轮简历整体质量较好，Python 和检索经验集中，少数候选人管理经验仍需复核。"
+    assert (
+        quality_event.message
+        == "本轮简历质量：本轮简历整体质量较好，Python 和检索经验集中，少数候选人管理经验仍需复核。"
+    )
     assert event_types.index("scoring_completed") < event_types.index("resume_quality_comment_completed")
     assert event_types.index("resume_quality_comment_completed") < event_types.index("reflection_started")
 
@@ -2381,7 +2438,13 @@ def test_runtime_resume_quality_comment_failure_does_not_block_reflection(tmp_pa
     cast(Any, runtime).resume_quality_commenter = FailingResumeQualityCommenter()
     progress_events: list[ProgressEvent] = []
 
-    runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes", progress_callback=progress_events.append)
+    runtime.run(
+        source_kinds=["cts"],
+        job_title="Senior Python Engineer",
+        jd="JD",
+        notes="Notes",
+        progress_callback=progress_events.append,
+    )
 
     event_types = [event.type for event in progress_events]
     round_event = next(event for event in progress_events if event.type == "round_completed")
@@ -2425,6 +2488,7 @@ def test_runtime_writes_repair_call_artifacts(tmp_path: Path, monkeypatch) -> No
     assert repair_requirements_call["prompt_snapshot_path"] == "assets/prompts/repair_requirements.md"
     assert repair_controller_call["prompt_snapshot_path"] == "assets/prompts/repair_controller.md"
     assert repair_reflection_call["prompt_snapshot_path"] == "assets/prompts/repair_reflection.md"
+
 
 def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
@@ -2503,7 +2567,13 @@ def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_pa
     assert adoption["ignored_drop_terms"] == ["resume matching"]
     assert adoption["accepted_terms"] == ["python"]
     assert adoption["ignored_terms"] == ["django"]
-    assert adoption["suggested_filter_fields"] == ["position", "company_names", "degree_requirement", "work_content", "school_names"]
+    assert adoption["suggested_filter_fields"] == [
+        "position",
+        "company_names",
+        "degree_requirement",
+        "work_content",
+        "school_names",
+    ]
     assert adoption["accepted_keep_filter_fields"] == []
     assert adoption["ignored_keep_filter_fields"] == ["position"]
     assert adoption["accepted_add_filter_fields"] == ["work_content"]
@@ -2535,7 +2605,9 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
     _install_runtime_stubs(runtime, controller=SurfaceController(), resume_scorer=StubScorer())
     cast(Any, runtime).requirement_extractor = SurfaceRequirementExtractor()
 
-    artifacts = runtime.run(source_kinds=["cts"], job_title="AI Agent Engineer", jd="Build MultiAgent 架构.", notes="Notes")
+    artifacts = runtime.run(
+        source_kinds=["cts"], job_title="AI Agent Engineer", jd="Build MultiAgent 架构.", notes="Notes"
+    )
 
     events = _read_jsonl(_runtime_artifact(artifacts.run_dir, "events", extension="jsonl"))
     run_summary = _output_artifact(artifacts.run_dir, "run_summary", extension="md").read_text(encoding="utf-8")
@@ -2659,9 +2731,45 @@ def test_controller_failure_snapshot_records_provider_usage(tmp_path: Path, monk
     else:  # pragma: no cover
         raise AssertionError("Expected controller failure")
 
-    controller_call = _read_json(_round_artifact(_single_run_dir(settings.artifacts_path), 1, "controller", "controller_call"))
+    controller_call = _read_json(
+        _round_artifact(_single_run_dir(settings.artifacts_path), 1, "controller", "controller_call")
+    )
     assert controller_call["status"] == "failed"
     assert controller_call["provider_usage"] == provider_usage.model_dump(mode="json")
+
+
+def test_controller_timeout_snapshot_records_failed_call(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        artifacts_dir=str(tmp_path / "artifacts"),
+        mock_cts=True,
+        min_rounds=1,
+        max_rounds=1,
+        controller_timeout_seconds=0.01,
+    )
+    runtime = _workflow_runtime(settings)
+
+    class SlowController:
+        last_validator_retry_count = 0
+        last_validator_retry_reasons: list[str] = []
+        last_provider_usage: ProviderUsageSnapshot | None = None
+
+        async def decide(self, *, context):  # noqa: ANN001
+            del context
+            await asyncio.sleep(1)
+            raise AssertionError("controller timeout should cancel this call")
+
+    _install_runtime_stubs(runtime, controller=SlowController(), resume_scorer=StubScorer())
+
+    with pytest.raises(RuntimeError, match="controller call timed out after 0.01s"):
+        runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
+
+    controller_call = _read_json(
+        _round_artifact(_single_run_dir(settings.artifacts_path), 1, "controller", "controller_call")
+    )
+    assert controller_call["status"] == "failed"
+    assert controller_call["error_message"] == "controller call timed out after 0.01s"
 
 
 def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
@@ -2694,7 +2802,9 @@ def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monk
     else:  # pragma: no cover
         raise AssertionError("Expected reflection failure")
 
-    reflection_call = _read_json(_round_artifact(_single_run_dir(settings.artifacts_path), 1, "reflection", "reflection_call"))
+    reflection_call = _read_json(
+        _round_artifact(_single_run_dir(settings.artifacts_path), 1, "reflection", "reflection_call")
+    )
     assert reflection_call["status"] == "failed"
     assert reflection_call["provider_usage"] == provider_usage.model_dump(mode="json")
 

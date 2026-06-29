@@ -54,6 +54,7 @@ _PUBLIC_REASON_MAP = {
     "source_location_filter_unsupported": "source_filter_unavailable",
     "source_filter_unsupported": "source_filter_unavailable",
     "source_filter_applied": "source_filter_applied",
+    "liepin_opencli_stale_ref": "source_browser_backend_unavailable",
 }
 
 _PUBLIC_COUNT_KEYS = {

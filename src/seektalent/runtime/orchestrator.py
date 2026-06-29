@@ -61,7 +61,11 @@ from seektalent.flywheel.outcomes import (
     build_runtime_query_outcome_rows_from_hits,
     build_term_outcome_rows,
 )
-from seektalent.flywheel.runtime import build_run_query_rows, materialize_flywheel_run_artifacts, query_hit_rows_from_hits
+from seektalent.flywheel.runtime import (
+    build_run_query_rows,
+    materialize_flywheel_run_artifacts,
+    query_hit_rows_from_hits,
+)
 from seektalent.flywheel.store import FlywheelStore
 from seektalent.llm import preflight_models, resolve_stage_model_config
 from seektalent.models import (
@@ -696,12 +700,17 @@ class WorkflowRuntime:
             raise RunStageError("source_lanes", "Approved detail enrichment received stale base finalization revision.")
         if detail_lane_request.lane_mode != "detail":
             raise RunStageError("source_lanes", "Approved detail enrichment requires a detail lane request.")
-        if detail_lane_request.runtime_run_id is not None and detail_lane_request.runtime_run_id != base_run_artifacts.run_id:
+        if (
+            detail_lane_request.runtime_run_id is not None
+            and detail_lane_request.runtime_run_id != base_run_artifacts.run_id
+        ):
             raise RunStageError("source_lanes", "Approved detail lease is bound to a different runtime run.")
 
         run_state = base_run_artifacts.run_state
         lane_result = await self.run_source_lane_async(detail_lane_request, source_client=source_client)
-        selected_sources = base_run_artifacts.finalization_revision.selected_source_kinds or (detail_lane_request.source,)
+        selected_sources = base_run_artifacts.finalization_revision.selected_source_kinds or (
+            detail_lane_request.source,
+        )
         source_order = {source: index for index, source in enumerate(selected_sources)}
         apply_source_lane_result(run_state=run_state, result=lane_result, source_order=source_order)
         unscored_candidates = [
@@ -854,15 +863,17 @@ class WorkflowRuntime:
                 run_id=tracer.run_id,
                 run_dir=str(tracer.run_dir),
             )
-            final_result, final_markdown, finalization_stage_state = await (
-                finalize_runtime.run_deterministic_finalization_stage(
-                    finalize_context=finalize_context,
-                    tracer=tracer,
-                    progress_callback=progress_callback,
-                    emit_progress=self._emit_progress,
-                    slim_finalize_context=self._slim_finalize_context,
-                    render_final_markdown=self._render_final_markdown,
-                )
+            (
+                final_result,
+                final_markdown,
+                finalization_stage_state,
+            ) = await finalize_runtime.run_deterministic_finalization_stage(
+                finalize_context=finalize_context,
+                tracer=tracer,
+                progress_callback=progress_callback,
+                emit_progress=self._emit_progress,
+                slim_finalize_context=self._slim_finalize_context,
+                render_final_markdown=self._render_final_markdown,
             )
             finalization_completed_artifacts = post_finalize_runtime.write_post_finalize_artifacts(
                 settings=self.settings,
@@ -946,7 +957,9 @@ class WorkflowRuntime:
                     terminal_controller_round.stop_guidance if terminal_controller_round is not None else None
                 ),
                 artifact_lifecycle_ref=tracer.artifact_lifecycle_ref(),
-                finalization_revision=run_state.finalization_revisions[-1] if run_state.finalization_revisions else None,
+                finalization_revision=run_state.finalization_revisions[-1]
+                if run_state.finalization_revisions
+                else None,
                 source_coverage_summary=run_state.source_coverage_summary,
                 run_state=run_state,
             )
@@ -1739,9 +1752,7 @@ class WorkflowRuntime:
     ) -> RetrievalExecutionResult:
         del query_states
         retrieval_results = [
-            result.retrieval_result
-            for result in dispatch_result.source_results
-            if result.retrieval_result is not None
+            result.retrieval_result for result in dispatch_result.source_results if result.retrieval_result is not None
         ]
         executed_queries = [query for result in retrieval_results for query in result.executed_queries]
         sent_query_records = [record for result in retrieval_results for record in result.sent_query_records]
@@ -2242,12 +2253,15 @@ class WorkflowRuntime:
             resume_quality_comment: str | None = None
             resume_quality_comment_error: str | None = None
             try:
-                resume_quality_comment = await self.resume_quality_commenter.comment(
-                    round_no=round_no,
-                    query_terms=retrieval_plan.query_terms,
-                    candidates=sorted(scored_this_round, key=scored_candidate_sort_key)[:5],
-                    normalized_store=run_state.normalized_store,
-                ) or None
+                resume_quality_comment = (
+                    await self.resume_quality_commenter.comment(
+                        round_no=round_no,
+                        query_terms=retrieval_plan.query_terms,
+                        candidates=sorted(scored_this_round, key=scored_candidate_sort_key)[:5],
+                        normalized_store=run_state.normalized_store,
+                    )
+                    or None
+                )
             except Exception as exc:  # noqa: BLE001
                 resume_quality_comment_error = str(exc)
             tui_summary_output_refs: list[str] = []
@@ -2436,9 +2450,7 @@ class WorkflowRuntime:
         resume_quality_comment_error: str | None = None,
     ) -> dict[str, object]:
         scored_this_round = [
-            candidate
-            for candidate in run_state.scorecards_by_resume_id.values()
-            if candidate.source_round == round_no
+            candidate for candidate in run_state.scorecards_by_resume_id.values() if candidate.source_round == round_no
         ]
         decision_counts = Counter(item.decision for item in pool_decisions)
         return {
@@ -2878,7 +2890,9 @@ class WorkflowRuntime:
             reason=reason,
         )
 
-    def _choose_rescue_decision(self, *, run_state: RunState, controller_context: ControllerContext, round_no: int) -> RescueDecision:
+    def _choose_rescue_decision(
+        self, *, run_state: RunState, controller_context: ControllerContext, round_no: int
+    ) -> RescueDecision:
         reserve = rescue_execution_runtime.untried_admitted_non_anchor_reserve(run_state.retrieval_state)
         seed_candidates = [
             run_state.scorecards_by_resume_id[resume_id]
@@ -2968,7 +2982,9 @@ class WorkflowRuntime:
             emit_progress=self._emit_progress,
         )
 
-    def _force_anchor_only_decision(self, *, run_state: RunState, round_no: int, reason: str) -> SearchControllerDecision:
+    def _force_anchor_only_decision(
+        self, *, run_state: RunState, round_no: int, reason: str
+    ) -> SearchControllerDecision:
         return rescue_execution_runtime.force_anchor_only_decision(
             run_state=run_state,
             round_no=round_no,
@@ -3096,6 +3112,7 @@ class WorkflowRuntime:
                 "judge_reasoning_effort": self.settings.effective_judge_reasoning_effort,
                 "requirements_enable_thinking": self.settings.requirements_enable_thinking,
                 "controller_enable_thinking": self.settings.controller_enable_thinking,
+                "controller_timeout_seconds": self.settings.controller_timeout_seconds,
                 "reflection_enable_thinking": self.settings.reflection_enable_thinking,
                 "structured_repair_model_id": self.settings.structured_repair_model_id,
                 "structured_repair_reasoning_effort": self.settings.structured_repair_reasoning_effort,
@@ -3106,9 +3123,7 @@ class WorkflowRuntime:
                 "prf_probe_phrase_proposal_reasoning_effort": (
                     self.settings.prf_probe_phrase_proposal_reasoning_effort
                 ),
-                "prf_probe_phrase_proposal_timeout_seconds": (
-                    self.settings.prf_probe_phrase_proposal_timeout_seconds
-                ),
+                "prf_probe_phrase_proposal_timeout_seconds": (self.settings.prf_probe_phrase_proposal_timeout_seconds),
                 "prf_probe_phrase_proposal_max_output_tokens": (
                     self.settings.prf_probe_phrase_proposal_max_output_tokens
                 ),
@@ -3454,10 +3469,7 @@ class WorkflowRuntime:
             return f"candidates={len(output.get('candidates') or [])}; {self._preview_text(str(output.get('summary', '')), limit=140)}"
         if stage == "repair_requirements" and isinstance(output, dict):
             job_title = self._job_title_from_llm_input(input_payload)
-            return (
-                f"job_title={job_title!r}; "
-                f"title_anchors={len(output.get('title_anchor_terms') or [])}"
-            )
+            return f"job_title={job_title!r}; title_anchors={len(output.get('title_anchor_terms') or [])}"
         if stage == "repair_controller" and isinstance(output, dict):
             action = output.get("action")
             return f"action={action}; query_terms={len(output.get('proposed_query_terms') or [])}"
@@ -3931,9 +3943,7 @@ class WorkflowRuntime:
             retrieval_query_terms=retrieval_plan.query_terms,
             existing_query_terms=[item.term for item in run_state.retrieval_state.query_term_pool],
             sent_query_terms=[
-                term
-                for record in run_state.retrieval_state.sent_query_history
-                for term in record.query_terms
+                term for record in run_state.retrieval_state.sent_query_history for term in record.query_terms
             ],
             tried_term_family_ids=tried_term_family_ids,
             normalized_resumes_by_id=run_state.normalized_store,
@@ -3947,9 +3957,7 @@ class WorkflowRuntime:
                 retrieval_query_terms=list(retrieval_plan.query_terms),
                 existing_query_terms=[item.term for item in run_state.retrieval_state.query_term_pool],
                 sent_query_terms=[
-                    term
-                    for record in run_state.retrieval_state.sent_query_history
-                    for term in record.query_terms
+                    term for record in run_state.retrieval_state.sent_query_history for term in record.query_terms
                 ],
                 tried_term_family_ids=tried_term_family_ids,
                 seed_resume_ids=[item.resume_id for item in seeds],
@@ -4269,7 +4277,9 @@ class WorkflowRuntime:
         tracer: RunTracer,
         score_for_query_outcome=None,
         query_outcome_thresholds: QueryOutcomeThresholds | None = None,
-    ) -> tuple[list[ProviderQuery], list[SentQueryRecord], list[ResumeCandidate], SearchObservation, list[SearchAttempt]]:
+    ) -> tuple[
+        list[ProviderQuery], list[SentQueryRecord], list[ResumeCandidate], SearchObservation, list[SearchAttempt]
+    ]:
         result = await self.retrieval_runtime.execute_round_search(
             round_no=round_no,
             retrieval_plan=retrieval_plan,

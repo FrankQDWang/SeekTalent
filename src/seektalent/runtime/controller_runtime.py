@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from datetime import datetime
 from time import perf_counter
@@ -83,17 +84,23 @@ async def run_controller_stage(
     )
     try:
         if isinstance(controller, ReActController):
-            controller_decision = await controller.decide(
+            controller_call = controller.decide(
                 context=controller_context,
                 prompt_cache_key=controller_prompt_cache_key,
             )
         else:
-            controller_decision = await controller.decide(context=controller_context)  # ty:ignore[unresolved-attribute]
+            controller_call = controller.decide(context=controller_context)  # ty:ignore[unresolved-attribute]
+        try:
+            controller_decision = await asyncio.wait_for(controller_call, timeout=settings.controller_timeout_seconds)
+        except TimeoutError as exc:
+            raise TimeoutError(f"controller call timed out after {settings.controller_timeout_seconds:g}s") from exc
     except Exception as exc:  # noqa: BLE001
         latency_ms = max(1, int((perf_counter() - controller_started_clock) * 1000))
         controller_repair_attempt_count = int(getattr(controller, "last_repair_attempt_count", 0))
         controller_repair_model = (
-            _resolved_stage_model_id(settings, stage="structured_repair") if controller_repair_attempt_count > 0 else None
+            _resolved_stage_model_id(settings, stage="structured_repair")
+            if controller_repair_attempt_count > 0
+            else None
         )
         controller_provider_usage = getattr(controller, "last_provider_usage", None)
         tracer.session.register_path(
@@ -228,7 +235,9 @@ def finalize_controller_stage(
             repair_attempt_count=controller_repair_attempt_count,
             repair_succeeded=bool(getattr(controller, "last_repair_succeeded", False)),
             repair_model=(
-                _resolved_stage_model_id(settings, stage="structured_repair") if controller_repair_attempt_count > 0 else None
+                _resolved_stage_model_id(settings, stage="structured_repair")
+                if controller_repair_attempt_count > 0
+                else None
             ),
             repair_reason=getattr(controller, "last_repair_reason", None),
             full_retry_count=int(getattr(controller, "last_full_retry_count", 0)),

@@ -52,7 +52,7 @@ describe("RequirementFormEvent", () => {
     });
   });
 
-  it("submits add-other text inline and clears the input after success", async () => {
+  it("keeps supplemental text local and sends it with confirm", async () => {
     expect.hasAssertions();
     const user = userEvent.setup();
     const onAction = vi.fn(() => Promise.resolve());
@@ -63,13 +63,16 @@ describe("RequirementFormEvent", () => {
 
     const input = screen.getByLabelText("补充其他要求");
     await user.type(input, "需要 LangGraph 生产经验");
-    await user.click(screen.getByRole("button", { name: "添加补充要求" }));
+    expect(
+      screen.queryByRole("button", { name: "添加补充要求" }),
+    ).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "确认需求" }));
 
     expect(onAction).toHaveBeenCalledWith({
-      action: "add_other",
+      action: "confirm",
       text: "需要 LangGraph 生产经验",
     });
-    expect(input).toHaveValue("");
   });
 
   it("submits the confirm action inline", async () => {

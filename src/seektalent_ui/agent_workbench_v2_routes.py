@@ -101,10 +101,8 @@ class WorkbenchV2RequirementActionRequest(RequestModel):
                 raise ValueError("text is required for add_other")
             if self.itemId is not None or self.selected is not None:
                 raise ValueError("itemId and selected are not allowed for add_other")
-        if self.action == "confirm" and (
-            self.itemId is not None or self.selected is not None or self.text is not None
-        ):
-            raise ValueError("itemId, selected, and text are not allowed for confirm")
+        if self.action == "confirm" and (self.itemId is not None or self.selected is not None):
+            raise ValueError("itemId and selected are not allowed for confirm")
         return self
 
 

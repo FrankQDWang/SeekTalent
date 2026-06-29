@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -14,6 +15,7 @@ from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+from seektalent_runtime_control.normalizer import merge_requirement_sheet_supplement
 from seektalent_runtime_control.models import (
     RuntimeControlCandidateEvidence,
     RuntimeControlCandidateIdentity,
@@ -23,6 +25,7 @@ from seektalent_runtime_control.requirements import (
     ApprovedRequirementRevision,
     RequirementDraft,
     draft_from_requirement_sheet,
+    requirement_sheet_from_draft,
 )
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
@@ -145,6 +148,35 @@ class WorkbenchV2RuntimeService:
             created_at=self.now(),
         )
         return WorkbenchV2RequirementExtraction(draft=draft, requirement_sheet=sheet)
+
+    def amend_requirement_bundle(
+        self,
+        conversation_id: str,
+        *,
+        base_draft: RequirementDraft,
+        base_requirement_sheet: RequirementSheet,
+        text: str,
+        idempotency_key: str,
+    ) -> WorkbenchV2RequirementExtraction:
+        base_sheet = requirement_sheet_from_draft(base_draft, base_requirement_sheet)
+        supplement = _extract_requirements(
+            self._requirement_extractor(),
+            job_title=base_sheet.job_title,
+            jd_text=text,
+            notes=None,
+            requirement_cache_scope=f"{conversation_id}:{idempotency_key}",
+        )
+        merged_sheet = merge_requirement_sheet_supplement(base_sheet, supplement)
+        draft = _draft_with_supplement_items(
+            base_draft,
+            supplement=supplement,
+            draft_revision_id=self.draft_revision_id_factory(),
+            created_at=self.now(),
+        )
+        return WorkbenchV2RequirementExtraction(
+            draft=draft,
+            requirement_sheet=requirement_sheet_from_draft(draft, merged_sheet),
+        )
 
     def start_run(
         self,
@@ -1154,6 +1186,57 @@ def _requirement_sheet_result(value: object) -> RequirementSheet:
     if isinstance(value, RequirementSheet):
         return value
     return RequirementSheet.model_validate(value)
+
+
+def _draft_with_supplement_items(
+    base_draft: RequirementDraft,
+    *,
+    supplement: RequirementSheet,
+    draft_revision_id: str,
+    created_at: str,
+) -> RequirementDraft:
+    draft = base_draft.model_copy(
+        deep=True,
+        update={
+            "draft_revision_id": draft_revision_id,
+            "base_revision_id": base_draft.draft_revision_id,
+            "created_at": created_at,
+        },
+    )
+    supplement_draft = draft_from_requirement_sheet(
+        conversation_id=base_draft.conversation_id,
+        draft_revision_id=f"{draft_revision_id}_supplement",
+        base_revision_id=None,
+        requirement_sheet=supplement,
+        source="workbench_v2_agent",
+        created_at=created_at,
+    )
+    for supplement_section in supplement_draft.sections:
+        target_section = draft.section(supplement_section.section_id)
+        seen = {_draft_item_key(item) for item in target_section.items if item.status != "deleted"}
+        for item in supplement_section.items:
+            key = _draft_item_key(item)
+            if key in seen:
+                continue
+            target_section.items.append(
+                item.model_copy(
+                    deep=True,
+                    update={
+                        "item_id": _new_id("reqitem"),
+                        "source": "workbench_v2_agent",
+                        "sort_order": (len(target_section.items) + 1) * 10,
+                    },
+                )
+            )
+            seen.add(key)
+    return draft
+
+
+def _draft_item_key(item: object) -> tuple[str, str, str]:
+    text = str(getattr(item, "text", "") or "").strip().casefold()
+    value = getattr(item, "value", None)
+    encoded_value = json.dumps(value, ensure_ascii=False, sort_keys=True) if isinstance(value, dict) else repr(value)
+    return (text, type(value).__name__, encoded_value)
 
 
 def _start_operation_key(*, conversation_id: str, idempotency_key: str | None) -> str:

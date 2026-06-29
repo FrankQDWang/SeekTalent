@@ -13,7 +13,6 @@ from seektalent.models import RequirementSheet
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.requirements import (
     RequirementDraft,
-    RequirementDraftItem,
     requirement_sheet_from_draft,
 )
 from seektalent_workbench_v2.agent_loop import (
@@ -54,6 +53,7 @@ AGENT_PATCH_ERROR_MESSAGES = {
     "workbench_v2_requirement_sheet_required": "需求表单缺少 requirementSheet，无法更新需求。",
     "workbench_v2_runtime_input_required": "需求表单缺少 runtimeInput，无法更新需求。",
     "workbench_v2_requirement_item_not_found": "未找到要修改的需求项，无法更新需求。",
+    "workbench_v2_requirement_amendment_failed": "补充需求整理失败，请稍后重试。",
 }
 REQUIREMENT_FORM_READY_MESSAGE = "已根据你的输入生成需求确认表单，请检查、取消不需要的条件，或补充其他要求。"
 POST_CONFIRM_SUPPLEMENTAL_SUMMARY = "已记录补充要求，将在下一轮检索时使用。"
@@ -95,6 +95,16 @@ class WorkbenchV2RequirementRuntime(Protocol):
         conversation_id: str,
         runtime_input: WorkbenchV2RuntimeInput,
     ) -> object: ...
+
+    def amend_requirement_bundle(
+        self,
+        conversation_id: str,
+        *,
+        base_draft: RequirementDraft,
+        base_requirement_sheet: RequirementSheet,
+        text: str,
+        idempotency_key: str,
+    ) -> WorkbenchV2RequirementExtraction: ...
 
     def start_run(
         self,
@@ -302,7 +312,7 @@ class WorkbenchV2Service:
             if text is None or not text:
                 raise ValueError("workbench_v2_requirement_action_invalid")
             self._raise_if_requirement_form_readonly(conversation_id)
-            self._add_other_requirement(
+            self._amend_requirement_form_from_text(
                 conversation_id,
                 text=text,
                 scope=scope,
@@ -314,6 +324,17 @@ class WorkbenchV2Service:
         if action == "confirm":
             if self._requirement_form_is_readonly(conversation_id):
                 return self.get_conversation(conversation_id)
+            supplemental_text = str(text or "").strip()
+            if supplemental_text:
+                amended = self._amend_requirement_form_from_text(
+                    conversation_id,
+                    text=supplemental_text,
+                    scope=scope,
+                    action_digest=action_digest,
+                    idempotency_key=idempotency_key,
+                )
+                if not amended:
+                    return self.get_conversation(conversation_id)
             self._confirm_requirements(
                 conversation_id=conversation_id,
                 message="已确认需求，开始运行。",
@@ -687,18 +708,45 @@ class WorkbenchV2Service:
         for item_id in patch.deselectedItemIds:
             _set_draft_item_selected(draft, item_id=item_id, selected=False)
         if patch.otherNotes:
-            _append_other_requirement(draft, text=patch.otherNotes)
+            self.store.append_event(
+                conversation_id,
+                WorkbenchV2TranscriptEventInput(
+                    type="assistant_status",
+                    role="assistant",
+                    payload={"phase": "requirement_amendment", "text": "正在根据补充要求更新需求，请稍候。"},
+                    dedupe_key=_action_event_dedupe_key(
+                        scope=scope,
+                        idempotency_key=idempotency_key,
+                        action_digest=action_digest,
+                        suffix="supplement-status",
+                    ),
+                ),
+            )
+            try:
+                amendment = self.runtime_service.amend_requirement_bundle(
+                    conversation_id,
+                    base_draft=draft,
+                    base_requirement_sheet=requirement_sheet,
+                    text=patch.otherNotes,
+                    idempotency_key=idempotency_key or f"workbench-v2-requirement-amend:{conversation_id}:{action_digest}",
+                )
+            except SERVICE_BOUNDARY_ERRORS as exc:
+                raise ValueError("workbench_v2_requirement_amendment_failed") from exc
+            if not isinstance(amendment.draft, RequirementDraft):
+                raise ValueError("workbench_v2_requirement_draft_required")
+            draft = amendment.draft
+            requirement_sheet = amendment.requirement_sheet
         self._append_updated_requirement_form(
             conversation_id,
             form_payload=form_payload,
-            draft=_with_new_draft_revision(draft),
+            draft=(_with_new_draft_revision(draft) if not patch.otherNotes else draft),
             requirement_sheet=requirement_sheet,
             scope=scope,
             action_digest=action_digest,
             idempotency_key=idempotency_key,
         )
 
-    def _add_other_requirement(
+    def _amend_requirement_form_from_text(
         self,
         conversation_id: str,
         *,
@@ -706,18 +754,74 @@ class WorkbenchV2Service:
         scope: str,
         action_digest: str,
         idempotency_key: str | None,
-    ) -> None:
+    ) -> bool:
         form_payload, draft, requirement_sheet = self._current_requirement_form_bundle(conversation_id)
-        _append_other_requirement(draft, text=text)
+        self.store.append_event(
+            conversation_id,
+            WorkbenchV2TranscriptEventInput(
+                type="user_message",
+                role="user",
+                payload={"text": text},
+                dedupe_key=_action_event_dedupe_key(
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                    action_digest=action_digest,
+                    suffix="supplement-user",
+                ),
+            ),
+        )
+        self.store.append_event(
+            conversation_id,
+            WorkbenchV2TranscriptEventInput(
+                type="assistant_status",
+                role="assistant",
+                payload={"phase": "requirement_amendment", "text": "正在根据补充要求更新需求，请稍候。"},
+                dedupe_key=_action_event_dedupe_key(
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                    action_digest=action_digest,
+                    suffix="supplement-status",
+                ),
+            ),
+        )
+        try:
+            amendment = self.runtime_service.amend_requirement_bundle(
+                conversation_id,
+                base_draft=draft,
+                base_requirement_sheet=requirement_sheet,
+                text=text,
+                idempotency_key=idempotency_key or f"workbench-v2-requirement-amend:{conversation_id}:{action_digest}",
+            )
+        except SERVICE_BOUNDARY_ERRORS:
+            self._append_service_error(
+                conversation_id,
+                code="workbench_v2_requirement_amendment_failed",
+                message="补充需求整理失败，请稍后重试。",
+                scope=scope,
+                idempotency_key=idempotency_key,
+                action_digest=action_digest,
+            )
+            return False
+        if not isinstance(amendment.draft, RequirementDraft):
+            self._append_service_error(
+                conversation_id,
+                code="workbench_v2_requirement_draft_required",
+                message=AGENT_PATCH_ERROR_MESSAGES["workbench_v2_requirement_draft_required"],
+                scope=scope,
+                idempotency_key=idempotency_key,
+                action_digest=action_digest,
+            )
+            return False
         self._append_updated_requirement_form(
             conversation_id,
             form_payload=form_payload,
-            draft=_with_new_draft_revision(draft),
-            requirement_sheet=requirement_sheet,
+            draft=amendment.draft,
+            requirement_sheet=amendment.requirement_sheet,
             scope=scope,
             action_digest=action_digest,
             idempotency_key=idempotency_key,
         )
+        return True
 
     def _append_post_confirm_requirement_patch(
         self,
@@ -1513,31 +1617,6 @@ def _set_draft_item_selected(draft: RequirementDraft, *, item_id: str, selected:
                 item.selected = selected
                 return
     raise ValueError("workbench_v2_requirement_item_not_found")
-
-
-def _append_other_requirement(draft: RequirementDraft, *, text: str) -> None:
-    try:
-        section = draft.section("must_have_capabilities")
-    except KeyError as exc:
-        raise ValueError("workbench_v2_requirement_draft_required") from exc
-    next_sort_order = max((item.sort_order for item in section.items), default=0) + 10
-    section.items.append(
-        RequirementDraftItem(
-            item_id=f"reqitem_user_{uuid4().hex}",
-            selected=True,
-            enabled=True,
-            editable=True,
-            text=text,
-            value=text,
-            source="workbench_v2_user",
-            status="resolved",
-            review_item_id=None,
-            amendment_id=None,
-            source_span_refs=[],
-            sort_order=next_sort_order,
-            allowed_actions=["select", "edit", "delete", "move_to_preferred_capabilities"],
-        )
-    )
 
 
 def _latest_requirement_form_payload(events: Sequence[WorkbenchV2TranscriptEvent]) -> dict[str, object] | None:

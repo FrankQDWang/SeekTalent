@@ -12,6 +12,7 @@ from seektalent_runtime_control.models import (
     RuntimeControlCandidateIdentity,
     RuntimeControlEventInput,
 )
+from seektalent_runtime_control.requirements import draft_from_requirement_sheet
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
 import seektalent_workbench_v2.runtime_service as runtime_service_module
@@ -353,6 +354,61 @@ def test_runtime_service_extracts_requirement_bundle_once(tmp_path: Path) -> Non
     assert bundle.draft.conversation_id == "agentv2_bundle"
     assert bundle.draft.draft_revision_id == "reqdraft_1"
     assert bundle.draft.status == "draft_ready"
+
+
+def test_runtime_service_amends_requirement_bundle_without_losing_deselected_items(tmp_path: Path) -> None:
+    base_sheet = _requirement_sheet()
+    supplement_sheet = base_sheet.model_copy(
+        update={
+            "must_have_capabilities": ["熟悉 LangGraph"],
+            "preferred_capabilities": [],
+            "exclusion_signals": [],
+            "initial_query_term_pool": [
+                QueryTermCandidate(
+                    term="LangGraph",
+                    source="notes",
+                    category="tooling",
+                    priority=90,
+                    evidence="补充要求",
+                    first_added_round=0,
+                )
+            ],
+        }
+    )
+    base_draft = draft_from_requirement_sheet(
+        conversation_id="agentv2_1",
+        draft_revision_id="reqdraft_base",
+        base_revision_id=None,
+        requirement_sheet=base_sheet,
+        source="workbench_v2_agent",
+        created_at=NOW,
+    )
+    base_draft.section("must_have_capabilities").items[0].selected = False
+    extractor = RecordingRequirementExtractor(supplement_sheet)
+    service = _service(tmp_path, requirement_extractor=extractor)
+
+    bundle = service.amend_requirement_bundle(
+        "agentv2_1",
+        base_draft=base_draft,
+        base_requirement_sheet=base_sheet,
+        text="熟悉 LangGraph",
+        idempotency_key="confirm-1",
+    )
+
+    assert extractor.calls == [
+        {
+            "job_title": "AI 平台工程师",
+            "jd_text": "熟悉 LangGraph",
+            "notes": None,
+            "requirement_cache_scope": "agentv2_1:confirm-1",
+        }
+    ]
+    assert bundle.draft.base_revision_id == "reqdraft_base"
+    must_have_items = bundle.draft.section("must_have_capabilities").items
+    assert must_have_items[0].text == "Python 后端开发"
+    assert must_have_items[0].selected is False
+    assert any(item.text == "熟悉 LangGraph" and item.selected for item in must_have_items)
+    assert bundle.requirement_sheet.must_have_capabilities == ["Agent 工作流经验", "熟悉 LangGraph"]
 
 
 def test_runtime_service_extracts_requirement_form_from_runtime_factory(tmp_path: Path) -> None:

@@ -71,19 +71,16 @@ export function RequirementFormEvent({
     await onAction?.(payload);
   }
 
-  async function addOther() {
-    if (trimmedOtherText.length === 0 || disabled) {
-      return;
-    }
-    await submitAction({ action: "add_other", text: trimmedOtherText });
-    setOtherText("");
-  }
-
   async function confirm() {
     if (disabled || !draft?.canConfirm) {
       return;
     }
-    await submitAction({ action: "confirm" });
+    await submitAction(
+      trimmedOtherText.length > 0
+        ? { action: "confirm", text: trimmedOtherText }
+        : { action: "confirm" },
+    );
+    setOtherText("");
   }
 
   if (readonly) {
@@ -181,12 +178,6 @@ export function RequirementFormEvent({
           rows={2}
           value={otherText}
         />
-        <Button
-          disabled={disabled || trimmedOtherText.length === 0}
-          onClick={() => void addOther()}
-        >
-          添加补充要求
-        </Button>
       </div>
 
       <div className="requirement-form-event__actions">
