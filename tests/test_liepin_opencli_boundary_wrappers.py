@@ -441,6 +441,65 @@ def test_liepin_site_adapter_reobserves_and_retries_stale_ref_once(tmp_path: Pat
     assert automation.state_calls == 1
 
 
+def test_liepin_site_adapter_propagates_persistent_stale_ref_after_single_retry(tmp_path: Path) -> None:
+    from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserError, OpenCliBrowserResult
+    from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
+    from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
+
+    class Automation:
+        commands = object()
+        window_counter = object()
+        blank_window_closer = object()
+        current_tab_opener = object()
+
+        def __init__(self) -> None:
+            self.click_calls = 0
+            self.state_calls = 0
+
+        def status(self) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(ok=True, action="status")
+
+        def run_browser_command(self, command: str, args: tuple[str, ...]) -> str:
+            if command == "state":
+                self.state_calls += 1
+                return "猎聘 搜索结果 [ref=44] 查看详情"
+            if command == "get" and args == ("url",):
+                return LIEPIN_RECRUITER_SEARCH_URL
+            return ""
+
+        def find_css(self, selector: str, *, limit: int, text_max: int) -> str:
+            del selector, limit, text_max
+            return '{"entries":[]}'
+
+        def click_ref(self, ref: str) -> str:
+            assert ref == "44"
+            self.click_calls += 1
+            raise OpenCliBrowserError("opencli_stale_ref")
+
+    automation = Automation()
+    adapter = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            command=("opencli",),
+            session="seektalent-liepin",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("www.liepin.com", "h.liepin.com"),
+            allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
+            lease_dir=tmp_path,
+        ),
+        automation=automation,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        adapter._click_liepin_detail_ref("44")
+
+    assert raised.value.safe_reason_code == "liepin_opencli_stale_ref"
+    assert automation.click_calls == 2
+    assert automation.state_calls == 1
+
+
 def test_liepin_site_adapter_launches_idle_cleanup_worker_at_provider_boundary(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
