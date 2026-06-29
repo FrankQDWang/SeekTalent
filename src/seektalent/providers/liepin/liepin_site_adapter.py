@@ -990,7 +990,41 @@ class LiepinSiteAdapter:
                     retry_input_ref = extract_liepin_search_input_ref(retry_state_text)
                     fill_target = retry_input_ref or fill_target
             events.append({"action_kind": "click_search", "route_kind": "search"})
-            self.click(target="搜索")
+            for attempt_index in range(2):
+                try:
+                    self.click(target="搜索")
+                    break
+                except OpenCliBrowserError as exc:
+                    if exc.safe_reason_code not in {
+                        "liepin_opencli_stale_ref",
+                        "liepin_opencli_status_unavailable",
+                    } or attempt_index == 1:
+                        raise
+                    events.append(
+                        {
+                            "action_kind": "click_search_retry",
+                            "route_kind": "search",
+                            "safe_reason_code": exc.safe_reason_code,
+                        }
+                    )
+                    self.wait_time(seconds=2)
+                    retry_state = self.state()
+                    events.append(
+                        {
+                            "action_kind": "observe_before_click_retry",
+                            "route_kind": "search",
+                            "ok": retry_state.ok,
+                        }
+                    )
+                    if not retry_state.ok:
+                        return self._blocked_cards_envelope(
+                            source_run_id=source_run_id,
+                            query=query,
+                            safe_reason_code=retry_state.safe_reason_code,
+                            safe_run_id=safe_run_id,
+                            pages_visited=pages_visited,
+                            events=events,
+                        )
             final_state: OpenCliBrowserResult | None = None
             for attempt_index in range(3):
                 try:

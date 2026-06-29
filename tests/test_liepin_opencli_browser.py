@@ -3033,6 +3033,53 @@ def test_search_liepin_cards_retries_stale_search_input_ref(tmp_path: Path) -> N
     assert {"action_kind": "fill_search_retry", "route_kind": "search", "chars": 6} in trace["events"]
 
 
+def test_search_liepin_cards_retries_stale_search_button_ref(tmp_path: Path) -> None:
+    search_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "<span>包含全部关键词</span>\n"
+        "  [25]<div />\n"
+        "    [26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    result_state = (
+        "王** 男 40岁 工作14年 硕士 上海\n"
+        "求职期望：上海 数据开发专家\n"
+        "海光集成电路 · 高级主管工程师 2023.10-至今"
+    )
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [search_state, search_state, result_state],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): [
+                subprocess.CalledProcessError(
+                    1,
+                    ["opencli"],
+                    output='{"error":{"code":"stale_ref","message":"target disappeared","hint":"refresh state"}}',
+                    stderr="",
+                ),
+                '{"clicked":true}',
+            ],
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索")) == 2
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert {"action_kind": "click_search_retry", "route_kind": "search", "safe_reason_code": "liepin_opencli_stale_ref"} in trace[
+        "events"
+    ]
+
+
 def test_search_liepin_cards_retries_repeated_transient_fill_status(tmp_path: Path) -> None:
     search_state = (
         "URL: https://h.liepin.com/search/getConditionItem#session\n"
