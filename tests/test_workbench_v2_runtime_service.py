@@ -415,6 +415,7 @@ def test_runtime_service_candidate_detail_projects_wts_profile_fields() -> None:
     assert detail["activeStatus"] == "近30天内活跃"
     assert detail["jobStatus"] == "在职，看看新机会"
     assert detail["avatarLabel"] == "吴"
+    assert detail["avatarColorKey"] in {f"avatar-{index}" for index in range(6)}
     assert detail["match"] == {
         "summary": "可独立主导 0-1 产品体验搭建。",
         "strengths": ["擅长通过定量和定性调研挖掘真实痛点。"],
@@ -474,7 +475,9 @@ def test_runtime_service_does_not_claim_source_without_evidence() -> None:
     detail = service.get_candidate_detail("rtrun_candidate", "identity_1")
 
     assert summary["sourceKinds"] == []
+    assert summary["avatarColorKey"] in {f"avatar-{index}" for index in range(6)}
     assert detail["sourceKinds"] == []
+    assert detail["avatarColorKey"] in {f"avatar-{index}" for index in range(6)}
     assert detail["evidenceLevel"] == "unknown"
 
 

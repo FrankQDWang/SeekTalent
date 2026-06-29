@@ -236,7 +236,7 @@ function CandidateDetailBody({
   const structuredSections = buildStructuredSections(detail);
   const fallbackSections =
     detail.accessState === "allowed"
-      ? mergeFallbackSections(detail.sections, detail.evidence)
+      ? fallbackSectionsFromDetail(detail.sections)
       : [];
   const sections =
     structuredSections.length > 0 ? structuredSections : fallbackSections;
@@ -515,33 +515,12 @@ function compactLines(lines: Array<string | null | undefined>): string[] {
     .filter((line): line is string => Boolean(line));
 }
 
-function mergeFallbackSections(
+function fallbackSectionsFromDetail(
   sections: AgentWorkbenchCandidateDetailResponse["sections"],
-  evidence: AgentWorkbenchCandidateDetailResponse["evidence"],
 ): AgentWorkbenchCandidateDetailResponse["sections"] {
-  const normalizedSections = sections
+  return sections
     .filter((section) => section.items.length > 0)
     .map((section) => ({ ...section, items: [...section.items] }));
-
-  if (evidence.length === 0) {
-    return normalizedSections;
-  }
-
-  if (normalizedSections.length === 0) {
-    return [{ title: "补充说明", items: [...evidence] }];
-  }
-
-  const firstSection = normalizedSections[0];
-  if (firstSection === undefined) {
-    return [{ title: "补充说明", items: [...evidence] }];
-  }
-  return [
-    {
-      ...firstSection,
-      items: [...firstSection.items, ...evidence],
-    },
-    ...normalizedSections.slice(1),
-  ];
 }
 
 function safeExternalSourceUrl(

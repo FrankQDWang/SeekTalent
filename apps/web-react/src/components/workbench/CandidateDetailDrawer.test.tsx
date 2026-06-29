@@ -17,7 +17,7 @@ afterEach(() => {
 });
 
 describe("CandidateDetailDrawer", () => {
-  it("renders safe candidate detail sections and evidence", () => {
+  it("renders WTS detail sections without exposing raw evidence copy", () => {
     expect.hasAssertions();
 
     render(
@@ -54,7 +54,14 @@ describe("CandidateDetailDrawer", () => {
     expect(screen.getByText("工作10年")).toBeVisible();
     expect(screen.getByText("工作经历")).toBeVisible();
     expect(screen.getByText("匹配程度")).toBeVisible();
-    expect(screen.getByText("多次通过流程重构提升任务完成率。")).toBeVisible();
+    expect(
+      screen.queryByText("多次通过流程重构提升任务完成率。"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "可独立主导 0-1 产品体验搭建，擅长拆解复杂 B 端业务流程。",
+      ),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByText("读取完整详情前需要审批"),
     ).not.toBeInTheDocument();
