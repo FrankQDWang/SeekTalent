@@ -300,6 +300,8 @@ class WorkbenchV2RuntimeService:
                     "candidateId": identity.identity_id,
                     "rank": index,
                     "displayName": display_name,
+                    "avatarLabel": _candidate_avatar_label(display_name),
+                    "avatarColorKey": _candidate_avatar_color_key(identity.identity_id),
                     "headline": headline,
                     "company": identity.company or None,
                     "location": identity.location or _candidate_location(evidence),
@@ -310,6 +312,7 @@ class WorkbenchV2RuntimeService:
                     "activeStatus": _candidate_active_status(evidence),
                     "jobStatus": _candidate_job_status(evidence),
                     "sourceKinds": source_kinds,
+                    "sourceLabel": _candidate_source_label(source_kinds),
                     "matchScore": score,
                     "matchSummary": identity.summary or None,
                     "status": identity.fit_bucket or "scored",
@@ -331,9 +334,12 @@ class WorkbenchV2RuntimeService:
             if item.identity_id == candidate_id
         ]
         detail_availability = _candidate_detail_availability(identity, evidence)
+        display_name = _candidate_display_name(identity, evidence, fallback="候选人")
         return {
             "candidateId": identity.identity_id,
-            "displayName": _candidate_display_name(identity, evidence, fallback="候选人"),
+            "displayName": display_name,
+            "avatarLabel": _candidate_avatar_label(display_name),
+            "avatarColorKey": _candidate_avatar_color_key(identity.identity_id),
             "headline": _candidate_headline(identity, evidence),
             "company": identity.company or _candidate_company(evidence),
             "location": identity.location or _candidate_location(evidence),
@@ -345,6 +351,13 @@ class WorkbenchV2RuntimeService:
             "jobStatus": _candidate_job_status(evidence),
             "sourceKinds": _candidate_source_kinds(evidence),
             "matchScore": _candidate_score(identity, evidence),
+            "match": _candidate_match(identity, evidence),
+            "jobIntention": _candidate_job_intention(evidence),
+            "workExperience": _candidate_timeline(evidence, "workExperience"),
+            "projectExperience": _candidate_timeline(evidence, "projectExperience"),
+            "educationExperience": _candidate_timeline(evidence, "educationExperience"),
+            "skills": _candidate_skills(evidence),
+            "sourceUrl": _text_from_mapping(_candidate_wts_detail(evidence), "sourceUrl"),
             "sections": _candidate_detail_sections(identity, evidence),
             "evidence": _candidate_detail_evidence(evidence),
             "detailAvailability": detail_availability,
@@ -442,25 +455,48 @@ def _candidate_source_kinds(evidence: Sequence[RuntimeControlCandidateEvidence])
     return source_kinds
 
 
+def _candidate_source_label(source_kinds: Sequence[str]) -> str | None:
+    if "liepin" in source_kinds:
+        return "猎聘"
+    if "cts" in source_kinds:
+        return "CTS 实验"
+    return None
+
+
+def _candidate_avatar_label(display_name: str) -> str:
+    clean = display_name.strip()
+    if not clean or clean.startswith("候选人 "):
+        return "候"
+    return clean[0]
+
+
+def _candidate_avatar_color_key(identity_id: str) -> str:
+    bucket = sum(ord(character) for character in identity_id) % 6
+    return f"avatar-{bucket}"
+
+
 def _candidate_display_name(
     identity: RuntimeControlCandidateIdentity,
     evidence: Sequence[RuntimeControlCandidateEvidence],
     *,
     fallback: str,
 ) -> str:
+    wts_name = _text_from_mapping(_candidate_wts_detail(evidence), "candidateName")
     detail_name = _first_text_from_payloads(evidence, ("safeDetail", "candidateName"))
     normalized_name = _first_text_from_payloads(evidence, ("normalizedProfile", "candidateName"))
     if identity.display_name and not identity.display_name.startswith("Candidate "):
         return identity.display_name
-    return detail_name or normalized_name or identity.display_name or fallback
+    return wts_name or detail_name or normalized_name or identity.display_name or fallback
 
 
 def _candidate_headline(
     identity: RuntimeControlCandidateIdentity,
     evidence: Sequence[RuntimeControlCandidateEvidence],
 ) -> str | None:
+    wts = _candidate_wts_detail(evidence)
     title = (
         _clean_text(identity.title)
+        or _text_from_mapping(wts, "currentTitle")
         or _first_text_from_payloads(evidence, ("safeDetail", "currentTitle"))
         or _first_text_from_payloads(evidence, ("normalizedProfile", "currentTitle"))
         or _first_text_from_payloads(evidence, ("safeSummary", "currentOrRecentTitle"))
@@ -469,6 +505,7 @@ def _candidate_headline(
     )
     company = (
         _clean_text(identity.company)
+        or _text_from_mapping(wts, "currentCompany")
         or _first_text_from_payloads(evidence, ("safeDetail", "currentCompany"))
         or _first_text_from_payloads(evidence, ("normalizedProfile", "currentCompany"))
         or _first_text_from_payloads(evidence, ("safeSummary", "currentOrRecentCompany"))
@@ -480,7 +517,8 @@ def _candidate_headline(
 
 def _candidate_location(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
     return (
-        _first_text_from_payloads(evidence, ("candidateProfile", "nowLocation"))
+        _text_from_mapping(_candidate_wts_detail(evidence), "city")
+        or _first_text_from_payloads(evidence, ("candidateProfile", "nowLocation"))
         or _first_text_from_payloads(evidence, ("safeSummary", "city"))
         or _first_list_text_from_payloads(evidence, ("normalizedProfile", "locations"))
         or _first_list_text_from_payloads(evidence, ("safeDetail", "locations"))
@@ -489,7 +527,8 @@ def _candidate_location(evidence: Sequence[RuntimeControlCandidateEvidence]) -> 
 
 def _candidate_company(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
     return (
-        _first_text_from_payloads(evidence, ("safeDetail", "currentCompany"))
+        _text_from_mapping(_candidate_wts_detail(evidence), "currentCompany")
+        or _first_text_from_payloads(evidence, ("safeDetail", "currentCompany"))
         or _first_text_from_payloads(evidence, ("normalizedProfile", "currentCompany"))
         or _first_text_from_payloads(evidence, ("safeSummary", "currentOrRecentCompany"))
     )
@@ -497,7 +536,8 @@ def _candidate_company(evidence: Sequence[RuntimeControlCandidateEvidence]) -> s
 
 def _candidate_education(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
     return (
-        _first_text_from_payloads(evidence, ("safeSummary", "educationLevel"))
+        _text_from_mapping(_candidate_wts_detail(evidence), "education")
+        or _first_text_from_payloads(evidence, ("safeSummary", "educationLevel"))
         or _first_text_from_payloads(evidence, ("normalizedProfile", "educationSummary"))
         or _first_list_text_from_payloads(evidence, ("candidateProfile", "educationSummaries"))
     )
@@ -505,29 +545,43 @@ def _candidate_education(evidence: Sequence[RuntimeControlCandidateEvidence]) ->
 
 def _candidate_experience_years(evidence: Sequence[RuntimeControlCandidateEvidence]) -> int | None:
     return (
-        _first_int_from_payloads(evidence, ("safeSummary", "workYears"))
+        _int_from_mapping(_candidate_wts_detail(evidence), "workYears")
+        or _first_int_from_payloads(evidence, ("safeSummary", "workYears"))
         or _first_int_from_payloads(evidence, ("normalizedProfile", "yearsOfExperience"))
         or _first_int_from_payloads(evidence, ("candidateProfile", "workYear"))
     )
 
 
 def _candidate_age(evidence: Sequence[RuntimeControlCandidateEvidence]) -> int | None:
-    return _first_int_from_payloads(evidence, ("candidateProfile", "age")) or _first_int_from_payloads(
-        evidence,
-        ("safeSummary", "age"),
+    return (
+        _int_from_mapping(_candidate_wts_detail(evidence), "age")
+        or _first_int_from_payloads(evidence, ("candidateProfile", "age"))
+        or _first_int_from_payloads(
+            evidence,
+            ("safeSummary", "age"),
+        )
     )
 
 
 def _candidate_gender(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
-    return _first_text_from_payloads(evidence, ("candidateProfile", "gender"))
+    return _text_from_mapping(_candidate_wts_detail(evidence), "gender") or _first_text_from_payloads(
+        evidence,
+        ("candidateProfile", "gender"),
+    )
 
 
 def _candidate_active_status(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
-    return _first_text_from_payloads(evidence, ("candidateProfile", "activeStatus"))
+    return _text_from_mapping(_candidate_wts_detail(evidence), "activeStatus") or _first_text_from_payloads(
+        evidence,
+        ("candidateProfile", "activeStatus"),
+    )
 
 
 def _candidate_job_status(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
-    return _first_text_from_payloads(evidence, ("candidateProfile", "jobState"))
+    return _text_from_mapping(_candidate_wts_detail(evidence), "jobStatus") or _first_text_from_payloads(
+        evidence,
+        ("candidateProfile", "jobState"),
+    )
 
 
 def _candidate_score(
@@ -537,7 +591,61 @@ def _candidate_score(
     if identity.score is not None:
         return identity.score
     scores = [item.score for item in evidence if item.score is not None]
-    return max(scores) if scores else None
+    if scores:
+        return max(scores)
+    return _int_from_mapping(_candidate_match_payload(evidence), "score")
+
+
+def _candidate_match(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> dict[str, object] | None:
+    match_payload = _candidate_match_payload(evidence)
+    summary = _text_from_mapping(match_payload, "reasoningSummary") or _text_from_mapping(
+        match_payload,
+        "summary",
+    ) or _clean_text(identity.summary)
+    payload = {
+        "summary": summary,
+        "strengths": _list_texts_from_mapping(match_payload, "strengths"),
+        "weaknesses": _list_texts_from_mapping(match_payload, "weaknesses"),
+        "score": _candidate_score(identity, evidence),
+        "fitBucket": _text_from_mapping(match_payload, "fitBucket") or _clean_text(identity.fit_bucket),
+    }
+    return {key: value for key, value in payload.items() if value not in (None, [], "")} or None
+
+
+def _candidate_match_payload(evidence: Sequence[RuntimeControlCandidateEvidence]) -> Mapping[str, object]:
+    return _first_mapping_from_payloads(evidence, "match") or {}
+
+
+def _candidate_wts_detail(evidence: Sequence[RuntimeControlCandidateEvidence]) -> Mapping[str, object]:
+    return _first_mapping_from_payloads(evidence, "wtsDetail") or {}
+
+
+def _candidate_job_intention(evidence: Sequence[RuntimeControlCandidateEvidence]) -> dict[str, object] | None:
+    intention = _mapping_value(_candidate_wts_detail(evidence).get("jobIntention"))
+    payload = {
+        key: text
+        for key in ("expectedRole", "expectedIndustry", "expectedCity", "expectedSalary")
+        if (text := _text_from_mapping(intention, key)) is not None
+    }
+    return payload or None
+
+
+def _candidate_timeline(evidence: Sequence[RuntimeControlCandidateEvidence], key: str) -> list[dict[str, object]]:
+    fields = ("dateRange", "title", "company", "school", "major", "degree", "name", "role", "description")
+    entries: list[dict[str, object]] = []
+    for item in _mapping_sequence(_candidate_wts_detail(evidence).get(key)):
+        entry = {field: text for field in fields if (text := _text_from_mapping(item, field)) is not None}
+        if entry:
+            entries.append(entry)
+    return entries
+
+
+def _candidate_skills(evidence: Sequence[RuntimeControlCandidateEvidence]) -> list[str]:
+    skills = _string_sequence(_candidate_wts_detail(evidence).get("skills"))
+    return _unique_strings(skills)[:24] or _skill_items(evidence)
 
 
 def _candidate_evidence_level(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str:
@@ -555,7 +663,11 @@ def _candidate_detail_availability(
     identity: RuntimeControlCandidateIdentity,
     evidence: Sequence[RuntimeControlCandidateEvidence],
 ) -> str:
-    if identity.summary or any(_candidate_evidence_sections(item) for item in evidence):
+    if (
+        identity.summary
+        or _candidate_wts_detail(evidence)
+        or any(_candidate_evidence_sections(item) for item in evidence)
+    ):
         return "available"
     return "unavailable"
 
@@ -729,6 +841,21 @@ def _texts_from_payloads(
     if prefix is None:
         return texts
     return [f"{prefix}：{item}" for item in texts]
+
+
+def _first_mapping_from_payloads(
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+    key: str,
+) -> dict[str, object] | None:
+    for item in evidence:
+        value = _mapping_value(item.payload.get(key))
+        if value:
+            return dict(value)
+    return None
+
+
+def _list_texts_from_mapping(payload: Mapping[str, object], key: str) -> list[str]:
+    return _string_sequence(payload.get(key))
 
 
 def _list_texts_from_payloads(

@@ -10,6 +10,15 @@ WORKBENCH_V2_SCHEMA_VERSION = "agent.workbench.v2"
 WORKBENCH_V2_LIST_SCHEMA_VERSION = "agent.workbench.v2.list"
 WORKBENCH_V2_EVENTS_SCHEMA_VERSION = "agent.workbench.v2.events"
 
+
+def _is_none(value: object) -> bool:
+    return value is None
+
+
+def _is_empty_list(value: object) -> bool:
+    return isinstance(value, list) and not value
+
+
 WorkbenchV2EventType = Literal[
     "user_message",
     "assistant_message",
@@ -156,12 +165,47 @@ class WorkbenchV2ThinkingProcessView(BaseModel):
     rounds: list[WorkbenchV2ThinkingProcessRoundView] = Field(default_factory=list)
 
 
+class WorkbenchV2CandidateMatchView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    summary: str | None = None
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    score: int | None = Field(default=None, ge=0, le=100)
+    fitBucket: str | None = None
+
+
+class WorkbenchV2CandidateJobIntentionView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expectedRole: str | None = None
+    expectedIndustry: str | None = None
+    expectedCity: str | None = None
+    expectedSalary: str | None = None
+
+
+class WorkbenchV2CandidateTimelineItemView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    dateRange: str | None = None
+    title: str | None = None
+    company: str | None = None
+    school: str | None = None
+    major: str | None = None
+    degree: str | None = None
+    name: str | None = None
+    role: str | None = None
+    description: str | None = None
+
+
 class WorkbenchV2CandidateSummaryView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidateId: str
     rank: int
     displayName: str
+    avatarLabel: str | None = Field(default=None, exclude_if=_is_none)
+    avatarColorKey: str | None = Field(default=None, exclude_if=_is_none)
     headline: str | None = None
     company: str | None = None
     location: str | None = None
@@ -172,6 +216,7 @@ class WorkbenchV2CandidateSummaryView(BaseModel):
     activeStatus: str | None = None
     jobStatus: str | None = None
     sourceKinds: list[Literal["cts", "liepin"]] = Field(default_factory=list)
+    sourceLabel: str | None = Field(default=None, exclude_if=_is_none)
     matchScore: int | None = Field(default=None, ge=0, le=100)
     matchSummary: str | None = None
     status: str
@@ -192,6 +237,8 @@ class WorkbenchV2CandidateDetailView(BaseModel):
 
     candidateId: str
     displayName: str
+    avatarLabel: str | None = Field(default=None, exclude_if=_is_none)
+    avatarColorKey: str | None = Field(default=None, exclude_if=_is_none)
     headline: str | None = None
     company: str | None = None
     location: str | None = None
@@ -203,6 +250,13 @@ class WorkbenchV2CandidateDetailView(BaseModel):
     jobStatus: str | None = None
     sourceKinds: list[Literal["cts", "liepin"]] = Field(default_factory=list)
     matchScore: int | None = Field(default=None, ge=0, le=100)
+    match: WorkbenchV2CandidateMatchView | None = Field(default=None, exclude_if=_is_none)
+    jobIntention: WorkbenchV2CandidateJobIntentionView | None = Field(default=None, exclude_if=_is_none)
+    workExperience: list[WorkbenchV2CandidateTimelineItemView] = Field(default_factory=list, exclude_if=_is_empty_list)
+    projectExperience: list[WorkbenchV2CandidateTimelineItemView] = Field(default_factory=list, exclude_if=_is_empty_list)
+    educationExperience: list[WorkbenchV2CandidateTimelineItemView] = Field(default_factory=list, exclude_if=_is_empty_list)
+    skills: list[str] = Field(default_factory=list, exclude_if=_is_empty_list)
+    sourceUrl: str | None = Field(default=None, exclude_if=_is_none)
     sections: list[WorkbenchV2CandidateDetailSectionView] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
     detailAvailability: Literal["available", "redacted", "approval_required", "unavailable"]

@@ -116,6 +116,58 @@ class CandidateFactStore:
                     "normalizedProfile": {
                         "rawTextExcerpt": "URL: https://h.liepin.com/resume/showresumedetail\n新手任务\n账号问候\n页面导航",
                     },
+                    "match": {
+                        "score": 92,
+                        "fitBucket": "fit",
+                        "reasoningSummary": "可独立主导 0-1 产品体验搭建。",
+                        "strengths": ["擅长通过定量和定性调研挖掘真实痛点。"],
+                        "weaknesses": ["AI 产品体验设计项目未在简历中明确体现。"],
+                        "sourceRound": 1,
+                    },
+                    "wtsDetail": {
+                        "candidateName": "吴所谓",
+                        "activeStatus": "近30天内活跃",
+                        "jobStatus": "在职，看看新机会",
+                        "gender": "男",
+                        "age": 32,
+                        "city": "上海",
+                        "education": "本科",
+                        "workYears": 10,
+                        "currentTitle": "资深体验设计工程师",
+                        "currentCompany": "平安集团",
+                        "jobIntention": {
+                            "expectedRole": "高端设计职位",
+                            "expectedIndustry": "互联网、其他",
+                            "expectedCity": "上海",
+                            "expectedSalary": "20-24k*14薪",
+                        },
+                        "workExperience": [
+                            {
+                                "dateRange": "2019.06-至今（7年）",
+                                "company": "平安好医",
+                                "title": "用户体验设计专家",
+                                "description": "提供 B 端及 C 端体验设计方案。",
+                            }
+                        ],
+                        "projectExperience": [
+                            {
+                                "dateRange": "2020.05-至今（6年1个月）",
+                                "name": "助力C端业务增长",
+                                "role": "-",
+                                "description": "通过设计调研提升转化率。",
+                            }
+                        ],
+                        "educationExperience": [
+                            {
+                                "dateRange": "2011.09-2014.07（2年10个月）",
+                                "school": "华东师范大学",
+                                "major": "工业设计",
+                                "degree": "硕士",
+                            }
+                        ],
+                        "skills": ["用户研究", "交互设计"],
+                        "sourceUrl": "https://h.liepin.com/resume/showresumedetail/?res_id_encode=test",
+                    },
                     "safeDetail": {
                         "candidateName": "吴所谓",
                         "workExperienceList": [
@@ -277,6 +329,20 @@ def test_runtime_service_candidate_detail_projects_wts_profile_fields() -> None:
     assert detail["gender"] == "男"
     assert detail["activeStatus"] == "近30天内活跃"
     assert detail["jobStatus"] == "在职，看看新机会"
+    assert detail["avatarLabel"] == "吴"
+    assert detail["match"] == {
+        "summary": "可独立主导 0-1 产品体验搭建。",
+        "strengths": ["擅长通过定量和定性调研挖掘真实痛点。"],
+        "weaknesses": ["AI 产品体验设计项目未在简历中明确体现。"],
+        "score": 92,
+        "fitBucket": "fit",
+    }
+    assert detail["jobIntention"]["expectedSalary"] == "20-24k*14薪"
+    assert detail["workExperience"][0]["company"] == "平安好医"
+    assert detail["projectExperience"][0]["name"] == "助力C端业务增长"
+    assert detail["educationExperience"][0]["school"] == "华东师范大学"
+    assert detail["skills"] == ["用户研究", "交互设计"]
+    assert detail["sourceUrl"].startswith("https://h.liepin.com/resume/showresumedetail/")
     assert detail["sections"][1]["title"] == "求职意向"
     serialized_sections = "\n".join(
         item
