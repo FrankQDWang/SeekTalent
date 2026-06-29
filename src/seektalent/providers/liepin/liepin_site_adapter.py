@@ -51,7 +51,6 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     OWNED_PAGE_MARKER_TTL_SECONDS,
     _LiepinDetailTarget,
     _bounded_public_text,
-    _current_title_from_detail as _current_title_from_detail,
     _detail_provider_key_material,
     _detail_targets_payload,
     _fixed_readonly_eval_probe_script,
@@ -69,7 +68,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _rank_liepin_result_card_targets,
     _safe_artifact_segment,
     _safe_card_summary_from_block,
-    _safe_detail_payload_from_state,
+    _safe_detail_payload_from_probe_output,
     _safe_filename,
     _safe_visible_card_text,
     _state_url as _state_url,
@@ -86,6 +85,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     extract_allowed_click_refs as extract_allowed_click_refs,
     extract_known_modal_close_ref,
     extract_liepin_card_summaries,
+    extract_liepin_search_button_ref,
     extract_liepin_search_input_ref,
 )
 
@@ -102,6 +102,13 @@ class LiepinOpenCliSiteConfig:
     idle_close_seconds: int = 120
     close_blank_window: bool = False
     cleanup_worker_enabled: bool = True
+
+
+_RECOVERABLE_CONNECTION_REASONS = {
+    "liepin_opencli_extension_disconnected",
+    "liepin_opencli_daemon_stale",
+    "liepin_opencli_status_unavailable",
+}
 
 
 class LiepinSiteAdapter:
@@ -128,10 +135,6 @@ class LiepinSiteAdapter:
     def _blank_window_closer(self):
         return self._automation.blank_window_closer
 
-    @property
-    def _current_tab_opener(self):
-        return self._automation.current_tab_opener
-
     def _pace_before_action(self, action: str) -> None:
         if action in {"fill", "click", "scroll"}:
             self._automation.pace_before_action(action)
@@ -148,6 +151,38 @@ class LiepinSiteAdapter:
 
     def status(self) -> OpenCliBrowserResult:
         return liepin_result_from_opencli_result(self._automation.status())
+
+    def recover_connection(self) -> OpenCliBrowserResult:
+        status = self.status()
+        if status.ok:
+            return OpenCliBrowserResult(ok=True, action="recover_connection", counts={"already_ready": 1})
+        if status.safe_reason_code not in _RECOVERABLE_CONNECTION_REASONS:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="recover_connection",
+                safe_reason_code=status.safe_reason_code,
+                private_output=status.private_output,
+            )
+        opened = self._automation.current_tab_opener.open_tab(LIEPIN_RECRUITER_SEARCH_URL)
+        if not opened:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="recover_connection",
+                safe_reason_code=status.safe_reason_code,
+                private_output=status.private_output,
+            )
+        last_status = status
+        for _attempt in range(5):
+            time.sleep(1)
+            last_status = self.status()
+            if last_status.ok:
+                return OpenCliBrowserResult(ok=True, action="recover_connection", counts={"opened": 1})
+        return OpenCliBrowserResult(
+            ok=False,
+            action="recover_connection",
+            safe_reason_code=last_status.safe_reason_code,
+            private_output=last_status.private_output,
+        )
 
     def open_liepin_tab(self, url: str) -> OpenCliBrowserResult:
         self._validate_start_url(url)
@@ -497,7 +532,11 @@ class LiepinSiteAdapter:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
             safe_run_id = _safe_artifact_segment(source_run_id)
             detail_text = self._detail_state_text_until_resume_ready()
-            payload = _safe_detail_payload_from_state(detail_text)
+            detail_payload_text = self._run_fixed_readonly_eval_probe(
+                probe_name="liepin_detail_resume_payload",
+                ref="current",
+            )
+            payload = _safe_detail_payload_from_probe_output(detail_payload_text)
             url_result = self.get_url()
             page_url_hash = None
             source_url = None
@@ -1007,10 +1046,56 @@ class LiepinSiteAdapter:
                         retry_state_text = retry_state.private_output or str(retry_state.observation.get("text") or "")
                     retry_input_ref = extract_liepin_search_input_ref(retry_state_text)
                     fill_target = retry_input_ref or fill_target
+            click_ready_state = self.state()
+            events.append(
+                {
+                    "action_kind": "observe_before_click_search",
+                    "route_kind": "search",
+                    "ok": click_ready_state.ok,
+                }
+            )
+            if not click_ready_state.ok:
+                return self._blocked_cards_envelope(
+                    source_run_id=source_run_id,
+                    query=query,
+                    safe_reason_code=click_ready_state.safe_reason_code,
+                    safe_run_id=safe_run_id,
+                    pages_visited=pages_visited,
+                    events=events,
+                )
+            click_ready_state_text = click_ready_state.private_output or str(
+                click_ready_state.observation.get("text") or ""
+            )
+            modal_close_ref = extract_known_modal_close_ref(click_ready_state_text)
+            if modal_close_ref is not None:
+                events.append({"action_kind": "close_known_modal_before_click_search", "route_kind": "search"})
+                self._click_known_modal_close_ref(modal_close_ref)
+                self.wait_time(seconds=1)
+                click_ready_state = self.state()
+                events.append(
+                    {
+                        "action_kind": "observe_after_click_search_modal_close",
+                        "route_kind": "search",
+                        "ok": click_ready_state.ok,
+                    }
+                )
+                if not click_ready_state.ok:
+                    return self._blocked_cards_envelope(
+                        source_run_id=source_run_id,
+                        query=query,
+                        safe_reason_code=click_ready_state.safe_reason_code,
+                        safe_run_id=safe_run_id,
+                        pages_visited=pages_visited,
+                        events=events,
+                    )
+                click_ready_state_text = click_ready_state.private_output or str(
+                    click_ready_state.observation.get("text") or ""
+                )
             events.append({"action_kind": "click_search", "route_kind": "search"})
-            for attempt_index in range(2):
+            search_click_state_text = click_ready_state_text
+            for attempt_index in range(3):
                 try:
-                    self.click(target="搜索")
+                    self._click_liepin_search_button(search_click_state_text)
                     break
                 except OpenCliBrowserError as exc:
                     if (
@@ -1019,7 +1104,7 @@ class LiepinSiteAdapter:
                             "liepin_opencli_stale_ref",
                             "liepin_opencli_status_unavailable",
                         }
-                        or attempt_index == 1
+                        or attempt_index == 2
                     ):
                         raise
                     events.append(
@@ -1046,6 +1131,34 @@ class LiepinSiteAdapter:
                             safe_run_id=safe_run_id,
                             pages_visited=pages_visited,
                             events=events,
+                        )
+                    search_click_state_text = retry_state.private_output or str(
+                        retry_state.observation.get("text") or ""
+                    )
+                    modal_close_ref = extract_known_modal_close_ref(search_click_state_text)
+                    if modal_close_ref is not None:
+                        events.append({"action_kind": "close_known_modal_before_click_retry", "route_kind": "search"})
+                        self._click_known_modal_close_ref(modal_close_ref)
+                        self.wait_time(seconds=1)
+                        retry_state = self.state()
+                        events.append(
+                            {
+                                "action_kind": "observe_after_click_retry_modal_close",
+                                "route_kind": "search",
+                                "ok": retry_state.ok,
+                            }
+                        )
+                        if not retry_state.ok:
+                            return self._blocked_cards_envelope(
+                                source_run_id=source_run_id,
+                                query=query,
+                                safe_reason_code=retry_state.safe_reason_code,
+                                safe_run_id=safe_run_id,
+                                pages_visited=pages_visited,
+                                events=events,
+                            )
+                        search_click_state_text = retry_state.private_output or str(
+                            retry_state.observation.get("text") or ""
                         )
             final_state: OpenCliBrowserResult | None = None
             for attempt_index in range(3):
@@ -1612,18 +1725,6 @@ class LiepinSiteAdapter:
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
         return [tab for tab in parsed if isinstance(tab, dict)]
 
-    def _bind_current_window(self) -> None:
-        self._run_browser_command("bind", ())
-
-    def _unbind_current_session(self) -> None:
-        self._run_browser_command("unbind", ())
-
-    def _unbind_current_session_best_effort(self) -> None:
-        try:
-            self._unbind_current_session()
-        except OpenCliBrowserError:
-            return
-
     def _is_owned_liepin_tab(self, tab_url: str) -> bool:
         tab = urlparse(tab_url)
         if (tab.hostname or "") not in self._site_config.allowed_hosts:
@@ -1660,6 +1761,16 @@ class LiepinSiteAdapter:
             return self._run_opencli_call(call)
 
     def _click_known_modal_close_ref(self, ref: str) -> None:
+        if not _is_safe_page_id(ref):
+            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        self._run_opencli_call(lambda: self._automation.click_ref(ref))
+        self._touch_lease()
+
+    def _click_liepin_search_button(self, state_text: str) -> None:
+        ref = extract_liepin_search_button_ref(state_text)
+        if ref is None:
+            self.click(target="搜索")
+            return
         if not _is_safe_page_id(ref):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         self._run_opencli_call(lambda: self._automation.click_ref(ref))
@@ -1926,28 +2037,19 @@ class LiepinSiteAdapter:
         return page_id
 
     def _open_new_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
-        return self._open_current_window_liepin_tab(url=url, source_run_id=source_run_id)
+        return self._open_opencli_managed_liepin_tab(url=url, source_run_id=source_run_id)
 
-    def _open_current_window_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
+    def _open_opencli_managed_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
         self._validate_start_or_detail_url(url)
-        current_url = self._current_window_liepin_url_after_bind(url=url, attempts=2)
-        if current_url is None:
-            if _is_liepin_detail_url(url):
-                raise OpenCliBrowserError("liepin_opencli_status_unavailable")
-            raise OpenCliBrowserError("liepin_opencli_window_policy_blocked")
-        if not _url_matches_start_or_detail_surface(current_url, url):
-            if _is_liepin_detail_url(url):
-                raise OpenCliBrowserError("liepin_opencli_status_unavailable")
-            if not self._is_liepin_search_context_url(current_url):
-                raise OpenCliBrowserError("liepin_opencli_window_policy_blocked")
-            self._run_browser_command("open", (url,))
-            current_url = self._current_url()
-        if not _url_matches_start_or_detail_surface(current_url, url):
-            raise OpenCliBrowserError("liepin_opencli_status_unavailable")
-        page_id = self._current_tab_page_id(current_url)
-        if page_id is None:
-            raise OpenCliBrowserError("liepin_opencli_status_unavailable")
-        owner_nonce = self._owned_page_marker_nonce(page_id) or uuid.uuid4().hex
+        try:
+            output = self._run_browser_command("tab", ("new", url))
+        except OpenCliBrowserError as exc:
+            if exc.safe_reason_code != "liepin_opencli_window_policy_blocked":
+                raise
+            self._run_browser_command("unbind", ())
+            output = self._run_browser_command("tab", ("new", url))
+        page_id = _parse_page_id(output)
+        owner_nonce = uuid.uuid4().hex
         self._write_lease(page_id=page_id, url=url, owner_nonce=owner_nonce)
         self._write_owned_page_marker(
             page_id=page_id,
@@ -1959,29 +2061,6 @@ class LiepinSiteAdapter:
         )
         return page_id
 
-    def _current_window_liepin_url_after_bind(self, *, url: str, attempts: int) -> str | None:
-        for _ in range(max(1, attempts)):
-            self._unbind_current_session_best_effort()
-            if not self._current_tab_opener.open_tab(url):
-                continue
-            self._bind_current_window()
-            try:
-                current_url = self._current_url()
-            except OpenCliBrowserError:
-                current_url = None
-            if current_url is None:
-                continue
-            if _url_matches_start_or_detail_surface(current_url, url):
-                return current_url
-            if not _is_liepin_detail_url(url) and self._is_liepin_search_context_url(current_url):
-                return current_url
-        return None
-
-    def _reset_current_liepin_search_tab(self, *, url: str) -> None:
-        self._validate_start_url(url)
-        self._run_browser_command("open", (url,))
-        self._touch_lease()
-
     def _reuse_liepin_search_page(self, *, page_id: str, url: str) -> None:
         try:
             self._run_browser_command("tab", ("select", page_id))
@@ -1990,11 +2069,9 @@ class LiepinSiteAdapter:
         except OpenCliBrowserError as exc:
             if exc.safe_reason_code != "liepin_opencli_window_policy_blocked":
                 raise
-        self._bind_current_window()
-        if self._current_url() != url:
-            self._open_current_window_liepin_tab(url=url)
-            return
-        self._reset_current_liepin_search_tab(url=url)
+        self._forget_owned_page_marker(page_id)
+        self._delete_lease()
+        self._open_opencli_managed_liepin_tab(url=url)
 
     def _reset_liepin_search_tab(self, *, page_id: str, url: str) -> None:
         if not _is_safe_page_id(page_id):
@@ -2334,6 +2411,7 @@ class LiepinSiteAdapter:
         if self._site_config.lease_dir is not None:
             env["SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR"] = str(self._site_config.lease_dir)
         env["SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS"] = str(self._site_config.idle_close_seconds)
+        env["SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE"] = self._browser_config.window_mode
         env["SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"] = (
             "true" if self._site_config.close_blank_window else "false"
         )

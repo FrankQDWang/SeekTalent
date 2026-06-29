@@ -230,12 +230,34 @@ function ExistingWorkbenchV2ConversationFlow({
     payload: WorkbenchV2RequirementActionRequest,
   ) => {
     setActionErrorMessage(null);
+    const idempotencyKey = payload.idempotencyKey ?? createIdempotencyKey();
+    const requestPayload = { ...payload, idempotencyKey };
+    const actionEvents = optimisticRequirementActionEvents({
+      conversationId,
+      idempotencyKey,
+      payload: requestPayload,
+      step: nextOptimisticStep(query.data, optimisticEvents),
+    });
+    if (actionEvents.length > 0) {
+      setOptimisticEvents((current) => [...current, ...actionEvents]);
+    }
     try {
-      await requirementActionMutation.mutateAsync({
-        ...payload,
-        idempotencyKey: payload.idempotencyKey ?? createIdempotencyKey(),
-      });
+      await requirementActionMutation.mutateAsync(requestPayload);
+      if (actionEvents.length > 0) {
+        setOptimisticEvents((current) =>
+          current.filter(
+            (event) => !event.eventId.includes(`:${idempotencyKey}:`),
+          ),
+        );
+      }
     } catch (error) {
+      if (actionEvents.length > 0) {
+        setOptimisticEvents((current) =>
+          current.filter(
+            (event) => !event.eventId.includes(`:${idempotencyKey}:`),
+          ),
+        );
+      }
       setActionErrorMessage(safeWorkbenchV2ErrorMessage(error));
       throw error;
     }
@@ -632,6 +654,50 @@ function optimisticTurnEvents({
       role: "assistant",
       status: "running",
       payload: { summary: "正在思考" },
+      createdAt: now,
+    },
+  ];
+}
+
+export function optimisticRequirementActionEvents({
+  conversationId,
+  idempotencyKey,
+  payload,
+  step,
+}: {
+  conversationId: string;
+  idempotencyKey: string;
+  payload: WorkbenchV2RequirementActionRequest;
+  step: number;
+}): WorkbenchV2TranscriptEvent[] {
+  if (payload.action !== "confirm" && payload.action !== "add_other") {
+    return [];
+  }
+  const text = String(payload.text ?? "").trim();
+  if (text.length === 0) {
+    return [];
+  }
+  const now = new Date().toISOString();
+  return [
+    {
+      eventId: `optimistic:${conversationId}:${idempotencyKey}:requirement-supplement-user`,
+      step,
+      type: "user_message",
+      role: "user",
+      status: "pending",
+      payload: { text },
+      createdAt: now,
+    },
+    {
+      eventId: `optimistic:${conversationId}:${idempotencyKey}:requirement-supplement-status`,
+      step: step + 1,
+      type: "assistant_status",
+      role: "assistant",
+      status: "running",
+      payload: {
+        phase: "requirement_amendment",
+        text: "正在根据补充要求更新需求，请稍候。",
+      },
       createdAt: now,
     },
   ];

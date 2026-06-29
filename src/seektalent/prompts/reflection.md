@@ -36,6 +36,7 @@ Review whether the next round should consider adjusted query terms or non-locati
 - If admitted non-anchor terms or families in the term bank have not appeared in sent query history and the top pool is not clearly strong, prefer `suggest_stop=false` and activate or keep one high-signal unused term.
 - Do not dismiss unused concrete terms as unlikely without first trying them, unless the top pool is already clearly strong.
 - Return structured term/filter advice, `reflection_rationale`, and stop fields. Do not add assessment, critique, or summary fields.
+- All natural-language output fields must be written in Simplified Chinese. Keep term-bank query terms, enum values, and schema field names unchanged when they come from the existing data.
 
 ## Term Advice Discipline
 

@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Literal
+
+
+OpenCliWindowMode = Literal["foreground", "background"]
 
 
 @dataclass(frozen=True)
@@ -9,6 +13,7 @@ class OpenCliBrowserConfig:
     command: tuple[str, ...]
     session: str
     timeout_seconds: int
+    window_mode: OpenCliWindowMode = "background"
     current_tab_reuse_url_fragments: tuple[str, ...] = ()
     pacing_enabled: bool = True
     pacing_min_ms: int = 700

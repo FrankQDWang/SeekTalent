@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -14,7 +15,7 @@ FORBIDDEN_BROWSER_COMMANDS = frozenset({"eval", "network", "upload", "console", 
 
 
 class OpenCliCommandRunner(Protocol):
-    def run(self, argv: Sequence[str], *, timeout: int) -> str: ...
+    def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str: ...
 
 
 class ChromeWindowCounter(Protocol):
@@ -31,13 +32,18 @@ class CurrentChromeTabOpener(Protocol):
 
 @dataclass(frozen=True)
 class SubprocessOpenCliCommandRunner:
-    def run(self, argv: Sequence[str], *, timeout: int) -> str:
+    def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
+        process_env = None
+        if env:
+            process_env = os.environ.copy()
+            process_env.update(env)
         completed = subprocess.run(
             list(argv),
             check=True,
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=process_env,
         )
         return completed.stdout
 
@@ -112,6 +118,7 @@ on run argv
       end repeat
       if tabUrl is targetUrl or shouldReuse then
         set active tab index of front window to i
+        set URL of active tab of front window to targetUrl
         return URL of active tab of front window
       end if
     end repeat

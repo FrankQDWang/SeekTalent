@@ -1,5 +1,12 @@
-import { BriefcaseBusiness } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  BriefcaseBusiness,
+  Maximize2,
+  Minimize2,
+  Minus,
+  Plus,
+  RotateCcw,
+} from "lucide-react";
+import { useRef, useState, type PointerEvent } from "react";
 import {
   projectStrategyTimelineGraph,
   type AgentStrategyGraph,
@@ -12,13 +19,29 @@ type StrategyGraphProps = {
   jobTitle?: string | null;
 };
 
+type PanState = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  scrollLeft: number;
+  scrollTop: number;
+};
+
+const DEFAULT_ZOOM = 1;
+const MIN_ZOOM = 0.6;
+const MAX_ZOOM = 1.8;
+const ZOOM_STEP = 0.15;
+
 export function StrategyGraph({ graph, jobTitle = null }: StrategyGraphProps) {
   const rootCard = jobTitle ? jobRootCard(jobTitle, graph) : null;
   const projection = projectStrategyTimelineGraph(graph, {
     reserveRootColumn: rootCard !== null,
   });
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const [viewportWidth, setViewportWidth] = useState(0);
+  const panStateRef = useRef<PanState | null>(null);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const [zoom, setZoom] = useState(DEFAULT_ZOOM);
   const canvasWidth = Math.max(
     projection.width,
     rootCard ? rootCard.x + rootCard.width + 80 : 0,
@@ -27,105 +50,203 @@ export function StrategyGraph({ graph, jobTitle = null }: StrategyGraphProps) {
     projection.height,
     rootCard ? rootCard.y + rootCard.height + 80 : 0,
   );
-  const canvasScale =
-    viewportWidth > 0 ? Math.min(1, viewportWidth / canvasWidth) : 1;
-  const scaledCanvasHeight = Math.ceil(canvasHeight * canvasScale);
+  const frameWidth = Math.ceil(canvasWidth * zoom);
+  const frameHeight = Math.ceil(canvasHeight * zoom);
 
-  useEffect(() => {
+  const resizeZoom = (direction: "in" | "out") => {
+    setZoom((current) =>
+      clampZoom(current + (direction === "in" ? ZOOM_STEP : -ZOOM_STEP)),
+    );
+  };
+
+  const resetViewport = () => {
+    setZoom(DEFAULT_ZOOM);
     const viewport = viewportRef.current;
-    if (!viewport) {
-      return undefined;
+    if (viewport) {
+      viewport.scrollTo({ left: 0, top: 0 });
     }
+  };
 
-    const updateWidth = () => setViewportWidth(viewport.clientWidth);
-    updateWidth();
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest("button, a")) return;
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    panStateRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      scrollLeft: viewport.scrollLeft,
+      scrollTop: viewport.scrollTop,
+    };
+    viewport.setPointerCapture(event.pointerId);
+    setIsPanning(true);
+    event.preventDefault();
+  };
 
-    if (typeof ResizeObserver === "undefined") {
-      window.addEventListener("resize", updateWidth);
-      return () => window.removeEventListener("resize", updateWidth);
+  const handlePointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const panState = panStateRef.current;
+    const viewport = viewportRef.current;
+    if (!panState || !viewport || event.pointerId !== panState.pointerId) {
+      return;
     }
+    viewport.scrollLeft =
+      panState.scrollLeft - (event.clientX - panState.startX);
+    viewport.scrollTop = panState.scrollTop - (event.clientY - panState.startY);
+  };
 
-    const observer = new ResizeObserver(updateWidth);
-    observer.observe(viewport);
-    return () => observer.disconnect();
-  }, []);
+  const stopPanning = (event: PointerEvent<HTMLDivElement>) => {
+    const panState = panStateRef.current;
+    const viewport = viewportRef.current;
+    if (!panState || !viewport || event.pointerId !== panState.pointerId) {
+      return;
+    }
+    panStateRef.current = null;
+    if (viewport.hasPointerCapture(event.pointerId)) {
+      viewport.releasePointerCapture(event.pointerId);
+    }
+    setIsPanning(false);
+  };
 
   return (
-    <section className="strategy-graph" aria-label="检索策略图">
+    <section
+      aria-label="检索策略图"
+      className="strategy-graph"
+      data-maximized={isMaximized ? "true" : "false"}
+    >
       {projection.nodes.length === 0 && rootCard === null ? (
         <div className="strategy-graph__empty">等待检索策略生成</div>
       ) : (
-        <div
-          aria-label="检索策略图画布"
-          className="strategy-graph__viewport"
-          ref={viewportRef}
-          tabIndex={0}
-        >
+        <>
           <div
-            className="strategy-graph__canvas-frame"
-            style={{
-              height: scaledCanvasHeight,
-            }}
+            aria-label="检索策略图画布"
+            className="strategy-graph__viewport"
+            data-panning={isPanning ? "true" : "false"}
+            onPointerCancel={stopPanning}
+            onPointerDown={handlePointerDown}
+            onPointerLeave={stopPanning}
+            onPointerMove={handlePointerMove}
+            onPointerUp={stopPanning}
+            ref={viewportRef}
+            tabIndex={0}
           >
             <div
-              className="strategy-graph__canvas"
+              className="strategy-graph__canvas-frame"
               style={{
-                height: canvasHeight,
-                transform: `scale(${String(canvasScale)})`,
-                width: canvasWidth,
+                height: frameHeight,
+                width: frameWidth,
               }}
             >
-              <svg
-                aria-hidden="true"
-                className="strategy-graph__edges"
-                height={canvasHeight}
-                viewBox={[
-                  "0",
-                  "0",
-                  String(canvasWidth),
-                  String(canvasHeight),
-                ].join(" ")}
-                width={canvasWidth}
+              <div
+                className="strategy-graph__canvas"
+                style={{
+                  height: canvasHeight,
+                  transform: `scale(${String(zoom)})`,
+                  width: canvasWidth,
+                }}
               >
-                <defs>
-                  <marker
-                    id="strategy-graph-arrow"
-                    markerHeight="8"
-                    markerWidth="8"
-                    orient="auto"
-                    refX="7"
-                    refY="4"
-                    viewBox="0 0 8 8"
-                  >
-                    <path d="M 0 0 L 8 4 L 0 8 z" />
-                  </marker>
-                </defs>
-                {rootCard && projection.nodes[0] ? (
-                  <path
-                    className="strategy-graph__edge strategy-graph__edge--root"
-                    data-edge-id="job-root->strategy-root"
-                    d={rootToFirstPath(rootCard, projection.nodes[0])}
-                  />
-                ) : null}
-                {projection.edges.map((edge) => (
-                  <path
-                    className="strategy-graph__edge"
-                    data-edge-id={edge.edge.edgeId}
-                    d={edge.path}
-                    key={edge.edge.edgeId}
-                  />
+                <svg
+                  aria-hidden="true"
+                  className="strategy-graph__edges"
+                  height={canvasHeight}
+                  viewBox={[
+                    "0",
+                    "0",
+                    String(canvasWidth),
+                    String(canvasHeight),
+                  ].join(" ")}
+                  width={canvasWidth}
+                >
+                  <defs>
+                    <marker
+                      id="strategy-graph-arrow"
+                      markerHeight="8"
+                      markerWidth="8"
+                      orient="auto"
+                      refX="7"
+                      refY="4"
+                      viewBox="0 0 8 8"
+                    >
+                      <path d="M 0 0 L 8 4 L 0 8 z" />
+                    </marker>
+                  </defs>
+                  {rootCard && projection.nodes[0] ? (
+                    <path
+                      className="strategy-graph__edge strategy-graph__edge--root"
+                      data-edge-id="job-root->strategy-root"
+                      d={rootToFirstPath(rootCard, projection.nodes[0])}
+                    />
+                  ) : null}
+                  {projection.edges.map((edge) => (
+                    <path
+                      className="strategy-graph__edge"
+                      data-edge-id={edge.edge.edgeId}
+                      d={edge.path}
+                      key={edge.edge.edgeId}
+                    />
+                  ))}
+                </svg>
+                {rootCard ? <JobRootCard item={rootCard} /> : null}
+                {projection.nodes.map((node) => (
+                  <StrategyGraphNode item={node} key={node.node.nodeId} />
                 ))}
-              </svg>
-              {rootCard ? <JobRootCard item={rootCard} /> : null}
-              {projection.nodes.map((node) => (
-                <StrategyGraphNode item={node} key={node.node.nodeId} />
-              ))}
+              </div>
             </div>
           </div>
-        </div>
+          <div aria-label="检索策略图控制" className="strategy-graph__controls">
+            <button
+              aria-label="放大策略图"
+              onClick={() => resizeZoom("in")}
+              title="放大"
+              type="button"
+            >
+              <Plus aria-hidden="true" size={18} />
+            </button>
+            <button
+              aria-label="缩小策略图"
+              onClick={() => resizeZoom("out")}
+              title="缩小"
+              type="button"
+            >
+              <Minus aria-hidden="true" size={18} />
+            </button>
+            <button
+              aria-label="最大化策略图"
+              onClick={() => setIsMaximized(true)}
+              title="最大化"
+              type="button"
+            >
+              <Maximize2 aria-hidden="true" size={17} />
+            </button>
+            <button
+              aria-label="恢复策略图初始位置"
+              onClick={resetViewport}
+              title="恢复初始位置"
+              type="button"
+            >
+              <RotateCcw aria-hidden="true" size={17} />
+            </button>
+          </div>
+          {isMaximized ? (
+            <button
+              aria-label="退出策略图最大化"
+              className="strategy-graph__minimize"
+              onClick={() => setIsMaximized(false)}
+              title="退出最大化"
+              type="button"
+            >
+              <Minimize2 aria-hidden="true" size={18} />
+            </button>
+          ) : null}
+        </>
       )}
     </section>
   );
+}
+
+function clampZoom(value: number): number {
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Number(value.toFixed(2))));
 }
 
 type JobRootCard = {

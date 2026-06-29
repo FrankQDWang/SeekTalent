@@ -97,6 +97,20 @@ def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_una
     assert event["safeReasonCode"] == "source_browser_backend_unavailable"
 
 
+def test_source_result_public_event_maps_liepin_extension_disconnected() -> None:
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="source_result",
+        event_seq=131,
+        round_no=1,
+        source_kind="liepin",
+        status="blocked",
+        safe_reason_code="liepin_opencli_extension_disconnected",
+    )
+
+    assert event["safeReasonCode"] == "source_browser_extension_disconnected"
+
+
 def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(

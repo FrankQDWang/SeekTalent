@@ -16,9 +16,8 @@ from seektalent.providers.liepin.opencli_card_text import (
     looks_like_liepin_card,
     looks_like_liepin_card_start,
 )
-from seektalent.providers.liepin.opencli_resume_parser import build_liepin_opencli_detail_payload
 
-FIXED_READONLY_EVAL_PROBES = frozenset({"liepin_detail_url_for_card"})
+FIXED_READONLY_EVAL_PROBES = frozenset({"liepin_detail_url_for_card", "liepin_detail_resume_payload"})
 LIEPIN_ALLOWED_HOSTS = frozenset({"www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"})
 LIEPIN_RISK_HOSTS = frozenset({"safe.liepin.com"})
 OWNED_PAGE_MARKER_TTL_SECONDS = 24 * 60 * 60
@@ -141,6 +140,22 @@ def extract_allowed_click_refs(text: str) -> tuple[str, ...]:
                 seen.add(ref)
                 refs.append(ref)
     return tuple(refs)
+
+
+def extract_liepin_search_button_ref(text: str) -> str | None:
+    for line in text.splitlines():
+        normalized = " ".join(line.strip().split())
+        lowered = normalized.lower()
+        if "<button" not in lowered and "role=button" not in lowered:
+            continue
+        if any(fragment in lowered for fragment in FORBIDDEN_ACTION_TARGET_FRAGMENTS):
+            continue
+        if "搜 索" not in normalized and "搜索" not in normalized and "查询" not in normalized:
+            continue
+        refs = _extract_refs_from_line(line)
+        if refs:
+            return refs[0]
+    return None
 
 
 def extract_liepin_search_input_ref(text: str) -> str | None:
@@ -391,26 +406,18 @@ def _looks_like_liepin_detail_resume_state(text: str) -> bool:
     return has_work_years and has_profile_context
 
 
-_CONTACT_TEXT_PATTERN = re.compile(
-    r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b|(?:\+?86[-\s]?)?1[3-9]\d{9}\b|"
-    r"(?:手机|电话|邮箱|微信|weixin|wechat|wx[:：])",
-    re.IGNORECASE,
-)
-
-
-def _safe_detail_payload_from_state(text: str) -> dict[str, object]:
+def _safe_detail_payload_from_probe_output(text: str) -> dict[str, object]:
     try:
-        payload = build_liepin_opencli_detail_payload(text)
-    except ValueError:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+    if not isinstance(payload, dict):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    if payload.get("ok") is False:
+        raise OpenCliBrowserError(str(payload.get("safeReasonCode") or "liepin_opencli_detail_not_opened"))
+    if not isinstance(payload.get("candidate_name"), str) or not payload["candidate_name"].strip():
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
     return payload
-
-
-def _current_title_from_detail(text: str) -> str | None:
-    match = re.search(r"当前职位[:：]\s*([^\n]{2,60})", text)
-    if match:
-        return _bounded_public_text(match.group(1), max_chars=80)
-    return _job_intention_from_block(text)
 
 
 def _detail_provider_key_material(*, safe_run_id: str, rank: int, payload: Mapping[str, object]) -> str:
@@ -637,7 +644,11 @@ def _opencli_result_text(result: OpenCliBrowserResult) -> str:
 
 
 def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
-    if probe_name != "liepin_detail_url_for_card" or not _is_safe_page_id(ref):
+    if not _is_safe_page_id(ref):
+        raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+    if probe_name == "liepin_detail_resume_payload":
+        return _liepin_detail_resume_payload_probe_script()
+    if probe_name != "liepin_detail_url_for_card":
         raise OpenCliBrowserError("liepin_opencli_forbidden_command")
     return (
         "(() => {"
@@ -654,6 +665,129 @@ def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
         "+ '&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal';"
         "})()"
     )
+
+
+def _liepin_detail_resume_payload_probe_script() -> str:
+    return r"""
+(() => {
+  const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const text = (node) => clean(node && (node.innerText || node.textContent));
+  const splitSep = (node) =>
+    Array.from(node ? node.childNodes : [])
+      .map((child) => clean(child.textContent))
+      .filter(Boolean);
+  const lines = (node) =>
+    String((node && node.innerText) || "")
+      .split(/\n+/)
+      .map(clean)
+      .filter(Boolean);
+  const bounded = (value, max) => {
+    const next = clean(value);
+    return next ? next.slice(0, max) : null;
+  };
+  const intFrom = (value, pattern) => {
+    const match = clean(value).match(pattern);
+    return match ? Number(match[1]) : null;
+  };
+  const labelValue = (line) => {
+    const match = clean(line).match(/^([^:：]{1,16})[:：]\s*(.+)$/);
+    return match ? [match[1], match[2]] : [null, null];
+  };
+  const afterLabel = (item, label) => {
+    const itemLines = lines(item);
+    const index = itemLines.findIndex((line) => line === label || line === `${label}：` || line === `${label}:`);
+    if (index < 0) return null;
+    const values = [];
+    for (const line of itemLines.slice(index + 1)) {
+      if (/^(工作地点|职责业绩|项目职务|所在公司|项目描述|项目业绩|询问TA)[:：]?$/.test(line)) break;
+      if (line !== "询问TA") values.push(line);
+    }
+    return bounded(values.join("\n"), 6000);
+  };
+  const basic = document.querySelector("#resume-detail-basic-info");
+  if (!basic) {
+    return JSON.stringify({ ok: false, safeReasonCode: "liepin_opencli_detail_not_opened" });
+  }
+  const nameNode = basic.querySelector(".name[title], h4[title], .name, h4");
+  const candidateName = bounded(nameNode && (nameNode.getAttribute("title") || nameNode.textContent), 120);
+  if (!candidateName) {
+    return JSON.stringify({ ok: false, safeReasonCode: "liepin_opencli_malformed_state" });
+  }
+  const profileRows = Array.from(basic.querySelectorAll(".basic-cont > .sep-info")).map(splitSep);
+  const profile = profileRows[0] || [];
+  const current = profileRows[1] || [];
+  const jobIntention = {};
+  const jobSection = document.querySelector("#resume-detail-job-exp-info");
+  const jobLines = lines(jobSection).filter((line) => line !== "求职意向" && !line.startsWith("查看全部"));
+  if (jobLines[0]) jobIntention.expectedRole = bounded(jobLines[0], 160);
+  if (jobLines[1]) jobIntention.expectedSalary = bounded(jobLines[1], 120);
+  if (jobLines[2]) jobIntention.expectedCity = bounded(jobLines[2], 200);
+  if (jobLines[3]) jobIntention.expectedIndustry = bounded(jobLines.slice(3).join("、"), 200);
+  const timelineItems = (sectionSelector, itemSelector, kind) => {
+    const section = document.querySelector(sectionSelector);
+    return Array.from(section ? section.querySelectorAll(itemSelector) : []).slice(0, 8).map((item) => {
+      const itemLines = lines(item);
+      const payload = {};
+      const companyNode = item.querySelector("h5[title], h5");
+      const titleNode = item.querySelector("h6[title], h6");
+      const durationLine = itemLines.find((line) => /\d{4}\.\d{2}\s*-/.test(line)) || null;
+      if (kind === "work") {
+        payload.company = bounded(companyNode && (companyNode.getAttribute("title") || companyNode.textContent), 160);
+        payload.title = bounded(titleNode && (titleNode.getAttribute("title") || titleNode.textContent), 160);
+        payload.industry = bounded(text(item.querySelector("i")), 120);
+        payload.location = afterLabel(item, "工作地点");
+        payload.summary = afterLabel(item, "职责业绩");
+        payload.description = payload.summary;
+      } else if (kind === "project") {
+        payload.name = bounded(itemLines[0], 180);
+        payload.role = afterLabel(item, "项目职务");
+        payload.company = afterLabel(item, "所在公司");
+        payload.summary = afterLabel(item, "项目描述") || afterLabel(item, "项目业绩");
+        payload.description = payload.summary;
+      } else if (kind === "education") {
+        const schoolLine = text(item.querySelector(".edu-school-cont")) || itemLines[0] || "";
+        const schoolParts = schoolLine.split("·").map(clean).filter(Boolean);
+        payload.school = bounded(schoolParts[0], 160);
+        payload.major = bounded(schoolParts[1], 160);
+        payload.degree = bounded((schoolParts[2] || "").replace(/\d{4}\.\d{2}.*$/, ""), 80);
+        payload.summary = bounded(
+          [
+            text(item.querySelector(".edu-school-tags")),
+            text(item.querySelector(".edu-school-exp")),
+          ].filter(Boolean).join("\n"),
+          2000
+        );
+      }
+      if (durationLine) {
+        payload.duration = bounded(durationLine.replace(/[（）]/g, ""), 120);
+        payload.dateRange = payload.duration;
+      }
+      return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== null && value !== undefined && value !== ""));
+    }).filter((item) => Object.keys(item).length > 0);
+  };
+  const skills = Array.from(document.querySelectorAll("#resume-detail-skill-info .skill-tag"))
+    .map((node) => text(node))
+    .filter((item, index, items) => item && items.indexOf(item) === index);
+  return JSON.stringify({
+    candidate_name: candidateName,
+    activeStatus: bounded(text(basic.querySelector(".res-online-desc")), 120),
+    jobStatus: bounded(text(basic.querySelector(".user-status-tag")), 120),
+    gender: profile.find((item) => item === "男" || item === "女") || null,
+    age: intFrom(profile.join(" "), /(\d{1,2})岁/),
+    city: profile.find((item) => !/^(男|女|\d{1,2}岁|本科|硕士|博士|大专|工作\d{1,2}年|群众|共青团员|党员)$/.test(item)) || null,
+    education: profile.find((item) => /^(本科|硕士|博士|大专)$/.test(item)) || null,
+    workYears: intFrom(profile.join(" "), /工作(\d{1,2})年/),
+    currentTitle: bounded(current[0], 180),
+    currentCompany: bounded(current[1], 180),
+    jobIntention,
+    workExperienceList: timelineItems("#resume-detail-work-info", ".rd-work-item-cont", "work"),
+    projectExperienceList: timelineItems("#resume-detail-project-info", ".rd-project-item-cont, .rd-info-tpl-item", "project"),
+    educationList: timelineItems("#resume-detail-edu-info", ".resume-edu-info-item-wrap", "education"),
+    skills,
+    fullText: bounded(text(document.querySelector("#resume-detail-single")), 20000)
+  });
+})()
+"""
 
 def _url_matches_start_surface(url: str, start_url: str) -> bool:
     parsed = urlparse(url)

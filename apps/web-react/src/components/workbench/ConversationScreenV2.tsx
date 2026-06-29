@@ -1,3 +1,5 @@
+import { useEffect, useMemo, useState } from "react";
+import { Group, Panel, Separator, type Layout } from "react-resizable-panels";
 import type {
   WorkbenchV2ConversationView,
   WorkbenchV2RequirementActionRequest,
@@ -21,6 +23,11 @@ type ConversationScreenV2Props = {
   view: WorkbenchV2ConversationView;
 };
 
+type ChatGraphLayout = Layout & {
+  chat: number;
+  graph: number;
+};
+
 const EMPTY_STRATEGY_GRAPH = {
   nodes: [],
   edges: [],
@@ -39,8 +46,65 @@ export function ConversationScreenV2({
     view.transcriptEvents,
     optimisticEvents,
   );
+  const [requirementSupplementText, setRequirementSupplementText] =
+    useState("");
   const workflowSurfaceVisible = hasWorkbenchV2WorkflowSurface(view);
   const workflowJobTitle = workbenchV2WorkflowJobTitle(view);
+  const [savedLayout, setSavedLayout] = useState<ChatGraphLayout | undefined>(
+    () => loadSavedChatGraphLayout(),
+  );
+  const handleLayoutChanged = useMemo(
+    () => (layout: Layout) => {
+      const chatGraphLayout = normalizeChatGraphLayout(layout);
+      if (chatGraphLayout === undefined) return;
+      setSavedLayout(chatGraphLayout);
+      persistChatGraphLayout(chatGraphLayout);
+    },
+    [],
+  );
+  const layoutPersistenceProps = {
+    ...(savedLayout === undefined ? {} : { defaultLayout: savedLayout }),
+    onLayoutChanged: handleLayoutChanged,
+  };
+
+  useEffect(() => {
+    setRequirementSupplementText("");
+  }, [view.conversation.conversationId]);
+
+  const chatPanel = (
+    <section
+      aria-label="对话"
+      className="conversation-v2-view__panel conversation-v2-view__panel--chat"
+      role="region"
+    >
+      <TranscriptV2
+        events={transcriptEvents}
+        onRequirementAction={onRequirementAction}
+        onRequirementSupplementTextChange={setRequirementSupplementText}
+        requirementActionPending={applyingRequirementAction}
+        requirementSupplementText={requirementSupplementText}
+      />
+      <MessageComposer
+        disabled={onSubmitMessage === undefined || submittingMessage}
+        loading={false}
+        onSubmit={onSubmitMessage}
+        placeholder="输入消息、JD 或下一步招聘需求"
+      />
+    </section>
+  );
+
+  const graphPanel = workflowSurfaceVisible ? (
+    <section
+      aria-label="策略图面板"
+      className="conversation-v2-view__panel conversation-v2-view__panel--graph"
+      role="region"
+    >
+      <StrategyGraph
+        graph={view.strategyGraph ?? EMPTY_STRATEGY_GRAPH}
+        jobTitle={workflowJobTitle}
+      />
+    </section>
+  ) : null;
 
   return (
     <div className="conversation-v2-view">
@@ -54,40 +118,43 @@ export function ConversationScreenV2({
           <span>{actionErrorMessage}</span>
         </section>
       ) : null}
-      <div
-        className="conversation-v2-view__workspace"
-        data-workflow-surface={workflowSurfaceVisible ? "visible" : "hidden"}
-      >
-        <section
-          aria-label="对话"
-          className="conversation-v2-view__panel conversation-v2-view__panel--chat"
-          role="region"
+      {workflowSurfaceVisible ? (
+        <Group
+          className="conversation-v2-view__workspace conversation-v2-view__workspace-group"
+          data-workflow-surface="visible"
+          id="chat-graph-layout"
+          orientation="horizontal"
+          {...layoutPersistenceProps}
         >
-          <TranscriptV2
-            events={transcriptEvents}
-            onRequirementAction={onRequirementAction}
-            requirementActionPending={applyingRequirementAction}
-          />
-          <MessageComposer
-            disabled={onSubmitMessage === undefined || submittingMessage}
-            loading={false}
-            onSubmit={onSubmitMessage}
-            placeholder="输入消息、JD 或下一步招聘需求"
-          />
-        </section>
-        {workflowSurfaceVisible ? (
-          <section
-            aria-label="策略图面板"
-            className="conversation-v2-view__panel conversation-v2-view__panel--graph"
-            role="region"
+          <Panel
+            className="conversation-v2-view__workspace-panel conversation-v2-view__workspace-panel--chat"
+            defaultSize={386}
+            id="chat"
+            maxSize="50%"
+            minSize={280}
           >
-            <StrategyGraph
-              graph={view.strategyGraph ?? EMPTY_STRATEGY_GRAPH}
-              jobTitle={workflowJobTitle}
-            />
-          </section>
-        ) : null}
-      </div>
+            {chatPanel}
+          </Panel>
+          <Separator
+            aria-label="调整对话和策略图宽度"
+            className="conversation-v2-view__separator"
+          />
+          <Panel
+            className="conversation-v2-view__workspace-panel conversation-v2-view__workspace-panel--graph"
+            id="graph"
+            minSize={400}
+          >
+            {graphPanel}
+          </Panel>
+        </Group>
+      ) : (
+        <div
+          className="conversation-v2-view__workspace"
+          data-workflow-surface="hidden"
+        >
+          {chatPanel}
+        </div>
+      )}
     </div>
   );
 }
@@ -131,6 +198,52 @@ function mergeTranscriptEvents(
     ...persistedEvents,
     ...optimisticEvents.filter((event) => !persistedIds.has(event.eventId)),
   ];
+}
+
+const CHAT_GRAPH_LAYOUT_STORAGE_KEY = "chat-graph-layout";
+
+function loadSavedChatGraphLayout(): ChatGraphLayout | undefined {
+  try {
+    if (typeof localStorage === "undefined") return undefined;
+    const stored = localStorage.getItem(CHAT_GRAPH_LAYOUT_STORAGE_KEY);
+    if (stored === null) return undefined;
+    const parsed = JSON.parse(stored) as unknown;
+    const layout = normalizeChatGraphLayout(parsed);
+    if (layout !== undefined) return layout;
+    localStorage.removeItem(CHAT_GRAPH_LAYOUT_STORAGE_KEY);
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeChatGraphLayout(
+  layout: unknown,
+): ChatGraphLayout | undefined {
+  if (layout === null || typeof layout !== "object") {
+    return undefined;
+  }
+  const values = layout as Record<string, unknown>;
+  if (
+    !isPositiveFiniteNumber(values.chat) ||
+    !isPositiveFiniteNumber(values.graph)
+  ) {
+    return undefined;
+  }
+  return { chat: values.chat, graph: values.graph };
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function persistChatGraphLayout(layout: ChatGraphLayout) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(CHAT_GRAPH_LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+  } catch {
+    // storage unavailable
+  }
 }
 
 export function hasWorkbenchV2WorkflowSurface(

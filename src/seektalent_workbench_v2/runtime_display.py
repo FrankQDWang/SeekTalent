@@ -76,6 +76,10 @@ def normalize_runtime_progress_payload(payload: Mapping[str, object]) -> dict[st
     counts = _safe_counts(payload.get("counts"))
     if counts:
         normalized["counts"] = counts
+    blocked_source_result_summary = _blocked_source_result_summary(normalized)
+    if blocked_source_result_summary is not None:
+        normalized["summary"] = blocked_source_result_summary
+        return normalized
     terminal_summary = runtime_event_terminal_summary(normalized.get("runtimeEventType"))
     if terminal_summary is not None:
         normalized["summary"] = terminal_summary
@@ -118,6 +122,35 @@ def runtime_progress_visible_summary(payload: Mapping[str, object] | None) -> st
         return None
     stripped = summary.strip()
     return stripped or None
+
+
+def _blocked_source_result_summary(payload: Mapping[str, object]) -> str | None:
+    if payload.get("runtimeEventType") != "runtime_round_source_result":
+        return None
+    if str(payload.get("status") or "") != "blocked":
+        return None
+    round_no = payload.get("roundNo")
+    round_prefix = f"第 {round_no} 轮" if isinstance(round_no, int) else "本轮"
+    reason = _safe_detail_text(
+        payload.get("safeReasonCode") or payload.get("summary"),
+        max_length=500,
+    )
+    return f"{round_prefix}猎聘检索受阻：{_runtime_failure_reason(reason)}"
+
+
+def _runtime_failure_reason(reason: str | None) -> str:
+    if reason == "liepin_opencli_stale_ref":
+        return "猎聘页面引用已失效，需要刷新检索页面后重试。"
+    if reason in {"liepin_opencli_extension_disconnected", "source_browser_extension_disconnected"}:
+        return "猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
+    if reason in {
+        "liepin_opencli_daemon_not_running",
+        "liepin_opencli_daemon_stale",
+        "liepin_opencli_status_unavailable",
+        "source_browser_backend_unavailable",
+    }:
+        return "猎聘浏览器桥暂不可用，系统会先尝试恢复连接；如果仍失败，请稍后重试。"
+    return reason or "猎聘检索受阻，请稍后重试。"
 
 
 def safe_runtime_progress_details(value: object) -> dict[str, object]:

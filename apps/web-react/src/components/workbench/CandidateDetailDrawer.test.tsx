@@ -52,8 +52,7 @@ describe("CandidateDetailDrawer", () => {
     expect(screen.getByText("上海")).toBeVisible();
     expect(screen.getByText("本科")).toBeVisible();
     expect(screen.getByText("工作10年")).toBeVisible();
-    expect(screen.getByText("工作经历")).toBeVisible();
-    expect(screen.getByText("匹配程度")).toBeVisible();
+    expect(screen.getByText("暂无候选人详情")).toBeVisible();
     expect(
       screen.queryByText("多次通过流程重构提升任务完成率。"),
     ).not.toBeInTheDocument();
@@ -152,10 +151,8 @@ describe("CandidateDetailDrawer", () => {
     );
     expect(screen.getByText("匹配程度")).toBeVisible();
     expect(screen.getByText(/推荐理由：可独立主导/)).toBeVisible();
-    expect(
-      screen.getByText(/候选人强项：搭建可量化体验度量体系/),
-    ).toBeVisible();
-    expect(screen.getByText(/候选人弱项：AI 产品体验设计项目/)).toBeVisible();
+    expect(screen.queryAllByText(/候选人强项/)).toHaveLength(0);
+    expect(screen.queryAllByText(/候选人弱项/)).toHaveLength(0);
     expect(screen.getByText("求职意向")).toBeVisible();
     expect(
       screen.getByText("期望岗位：高端设计职位，设计，设计经理/主管"),
@@ -170,7 +167,7 @@ describe("CandidateDetailDrawer", () => {
     expect(screen.getByText("技能标签1")).toBeVisible();
   });
 
-  it("falls back to sections when structured WTS detail fields are missing", () => {
+  it("does not fall back to legacy sections when structured WTS detail fields are missing", () => {
     expect.hasAssertions();
 
     render(
@@ -178,6 +175,8 @@ describe("CandidateDetailDrawer", () => {
         candidate={candidate}
         detail={{
           ...agentWorkbenchCandidateDetailFixture,
+          match: null,
+          jobIntention: null,
           workExperience: [],
           projectExperience: [],
           educationExperience: [],
@@ -195,11 +194,10 @@ describe("CandidateDetailDrawer", () => {
       />,
     );
 
-    expect(screen.getByText("工作经历")).toBeVisible();
     expect(
-      screen.getByText("2019.06-至今 平安好医 | 用户体验设计专家"),
-    ).toBeVisible();
-    expect(screen.queryByText("暂无详情段落")).not.toBeInTheDocument();
+      screen.queryByText("2019.06-至今 平安好医 | 用户体验设计专家"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("暂无候选人详情")).toBeVisible();
   });
 
   it("does not render unsafe sourceUrl values as external links", () => {

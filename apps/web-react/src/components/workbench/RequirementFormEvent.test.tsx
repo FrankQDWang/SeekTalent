@@ -134,6 +134,14 @@ describe("RequirementFormEvent", () => {
       ".requirement-form-event__item:has(input:focus-visible)",
     );
     expect(normalizedCssRulesText()).toContain(
+      ".requirement-form-event__item { align-items: center;",
+    );
+    expect(normalizedCssRulesText()).toContain("position: relative;");
+    expect(normalizedCssRulesText()).toContain(
+      ".requirement-form-event__item input { cursor: inherit;",
+    );
+    expect(normalizedCssRulesText()).toContain("inset: 0;");
+    expect(normalizedCssRulesText()).toContain(
       ".requirement-form-event__box { align-items: center;",
     );
     expect(normalizedCssRulesText()).toContain(

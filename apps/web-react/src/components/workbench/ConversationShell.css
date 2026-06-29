@@ -1,43 +1,55 @@
 .conversation-shell {
   background: var(--st-bg);
-  display: grid;
+  display: flex;
   flex: 1;
-  grid-template-columns: 257px minmax(0, 1fr) minmax(300px, 340px);
-  grid-template-rows: minmax(0, 1fr);
   height: 100%;
-  min-width: 1024px;
+  min-width: 0;
   min-height: 0;
   overflow: clip;
   position: relative;
-  transition: grid-template-columns 180ms ease-out;
 }
 
-.conversation-shell[data-side="hidden"] {
-  grid-template-columns: 257px minmax(0, 1fr);
-  min-width: 780px;
+.conversation-shell__layout {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
 }
 
-.conversation-shell[data-rail="compact"] {
-  grid-template-columns: 64px minmax(0, 1fr) minmax(300px, 340px);
+.conversation-shell__panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.conversation-shell[data-side="hidden"][data-rail="compact"] {
-  grid-template-columns: 64px minmax(0, 1fr);
-  min-width: 720px;
+.conversation-shell__separator {
+  background: transparent;
+  flex-shrink: 0;
+  outline: none;
+  transition: background-color 150ms ease-out;
+  width: 6px;
 }
 
-.conversation-shell[data-rail="closed"] {
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
-}
-
-.conversation-shell[data-side="hidden"][data-rail="closed"] {
-  grid-template-columns: minmax(0, 1fr);
-  min-width: 640px;
+.conversation-shell__separator:hover,
+.conversation-shell__separator:focus-visible,
+.conversation-shell__separator[data-resize-handle-active] {
+  background: color-mix(in oklch, var(--st-action) 72%, transparent);
+  cursor: col-resize;
 }
 
 .conversation-shell__side {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   min-height: 0;
-  overflow: auto;
+  min-width: 0;
+  overflow: hidden;
   opacity: 1;
   transition: opacity 180ms ease-out;
 }
@@ -47,7 +59,9 @@
   border-right: 1px solid var(--st-border);
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -145,6 +159,7 @@
 .conversation-shell__main {
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
   min-width: 0;
   overflow: hidden;

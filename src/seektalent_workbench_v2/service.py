@@ -312,12 +312,15 @@ class WorkbenchV2Service:
             if text is None or not text:
                 raise ValueError("workbench_v2_requirement_action_invalid")
             self._raise_if_requirement_form_readonly(conversation_id)
-            self._amend_requirement_form_from_text(
-                conversation_id,
-                text=text,
-                scope=scope,
-                action_digest=action_digest,
-                idempotency_key=idempotency_key,
+            await to_thread.run_sync(
+                partial(
+                    self._amend_requirement_form_from_text,
+                    conversation_id,
+                    text=text,
+                    scope=scope,
+                    action_digest=action_digest,
+                    idempotency_key=idempotency_key,
+                )
             )
             return self.get_conversation(conversation_id)
 
@@ -326,22 +329,28 @@ class WorkbenchV2Service:
                 return self.get_conversation(conversation_id)
             supplemental_text = str(text or "").strip()
             if supplemental_text:
-                amended = self._amend_requirement_form_from_text(
-                    conversation_id,
-                    text=supplemental_text,
-                    scope=scope,
-                    action_digest=action_digest,
-                    idempotency_key=idempotency_key,
+                amended = await to_thread.run_sync(
+                    partial(
+                        self._amend_requirement_form_from_text,
+                        conversation_id,
+                        text=supplemental_text,
+                        scope=scope,
+                        action_digest=action_digest,
+                        idempotency_key=idempotency_key,
+                    )
                 )
                 if not amended:
                     return self.get_conversation(conversation_id)
-            self._confirm_requirements(
-                conversation_id=conversation_id,
-                message="已确认需求，开始运行。",
-                scope=scope,
-                idempotency_key=idempotency_key,
-                raise_domain_errors=True,
-                action_digest=action_digest,
+            await to_thread.run_sync(
+                partial(
+                    self._confirm_requirements,
+                    conversation_id=conversation_id,
+                    message="已确认需求，开始运行。",
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                    raise_domain_errors=True,
+                    action_digest=action_digest,
+                )
             )
             return self.get_conversation(conversation_id)
 
@@ -410,10 +419,11 @@ class WorkbenchV2Service:
             return
 
         if output.intent in {"extract_requirements", "update_requirements"} and output.runtimeInput is not None:
+            runtime_input = _runtime_input_with_full_jd_fallback(output.runtimeInput, user_text)
             if self._requirement_form_is_readonly(conversation_id):
                 assistant_text_override = self._append_post_confirm_runtime_input(
                     conversation_id,
-                    runtime_input=output.runtimeInput,
+                    runtime_input=runtime_input,
                     scope=scope,
                     idempotency_key=idempotency_key,
                 )
@@ -425,7 +435,7 @@ class WorkbenchV2Service:
                 return
             self._append_requirement_form_from_runtime_input(
                 conversation_id,
-                runtime_input=output.runtimeInput,
+                runtime_input=runtime_input,
                 scope=scope,
                 idempotency_key=idempotency_key,
             )
@@ -1437,22 +1447,32 @@ class WorkbenchV2Service:
         payload["state"] = runtime_state
         payload.setdefault("runtimeRunId", runtime_run_id)
         payload = normalize_runtime_result_payload(payload)
-        if _has_runtime_result_visible_summary(
-            self.store.get_conversation(conversation_id).events,
+        record = self.store.get_conversation(conversation_id)
+        result_exists = _has_runtime_result_visible_summary(
+            record.events,
             runtime_run_id=runtime_run_id,
             visible_summary=str(payload["summary"]),
-        ):
-            return
-        self.store.append_event(
-            conversation_id,
-            WorkbenchV2TranscriptEventInput(
-                type="runtime_result",
-                role="runtime",
-                payload=payload,
-                dedupe_key=(
-                    "workbench-v2-service:runtime-refresh:"
-                    f"{runtime_run_id}:{_service_payload_digest(payload)}:runtime-results"
+        )
+        payload_digest = _service_payload_digest(payload)
+        if not result_exists:
+            self.store.append_event(
+                conversation_id,
+                WorkbenchV2TranscriptEventInput(
+                    type="runtime_result",
+                    role="runtime",
+                    payload=payload,
+                    dedupe_key=(
+                        "workbench-v2-service:runtime-refresh:"
+                        f"{runtime_run_id}:{payload_digest}:runtime-results"
+                    ),
                 ),
+            )
+        self._append_assistant_message(
+            conversation_id,
+            text=_runtime_final_assistant_reply(payload),
+            dedupe_key=(
+                "workbench-v2-service:runtime-refresh:"
+                f"{runtime_run_id}:{payload_digest}:assistant-final-summary"
             ),
         )
 
@@ -1852,16 +1872,79 @@ def _post_confirm_runtime_input_text(runtime_input: WorkbenchV2RuntimeInput) -> 
     return "；".join(parts)
 
 
+def _runtime_input_with_full_jd_fallback(
+    runtime_input: WorkbenchV2RuntimeInput,
+    user_text: str,
+) -> WorkbenchV2RuntimeInput:
+    source_jd = user_text.strip()
+    if not _runtime_jd_should_use_source_text(runtime_input.jd, source_jd):
+        return runtime_input
+    return runtime_input.model_copy(update={"jd": source_jd})
+
+
+def _runtime_jd_should_use_source_text(jd: str, source_jd: str) -> bool:
+    candidate = jd.strip()
+    if not candidate or len(source_jd) <= len(candidate):
+        return False
+    placeholder_phrases = ("如上", "同上", "见上文", "同用户输入", "省略")
+    has_placeholder = any(phrase in candidate for phrase in placeholder_phrases)
+    has_ellipsis = "..." in candidate or "…" in candidate
+    if has_placeholder or has_ellipsis:
+        return True
+    return _source_text_looks_like_jd(source_jd) and len(candidate) < int(len(source_jd) * 0.9)
+
+
+def _source_text_looks_like_jd(text: str) -> bool:
+    if len(text) < 80:
+        return False
+    jd_markers = (
+        "JD",
+        "职位",
+        "岗位",
+        "职责",
+        "要求",
+        "任职",
+        "工作城市",
+        "薪资",
+        "面试",
+        "招聘",
+    )
+    return "\n" in text or any(marker in text for marker in jd_markers)
+
+
 def _runtime_result_question_reply(result_payload: Mapping[str, object] | None) -> str:
     if result_payload is None:
         return RUNTIME_RESULTS_UNAVAILABLE_MESSAGE
     state = result_payload.get("state")
-    summary = result_payload.get("summary")
     if state == "idle":
         return "当前还没有运行结果。"
     if state != "completed":
         return "当前招聘流程尚未完成，还没有最终结果可供总结。请稍后再查询最新进度。"
-    return runtime_result_summary(summary, "completed")
+    return _runtime_final_assistant_reply(result_payload)
+
+
+def _runtime_final_assistant_reply(result_payload: Mapping[str, object]) -> str:
+    fact_values = _runtime_result_fact_values(result_payload.get("facts"))
+    if fact_values:
+        recommended = "；".join(fact_values)
+        return f"招聘流程已完成，最终候选人列表已生成。本次最终推荐：{recommended}。你可以在右侧查看候选人详情。"
+    return runtime_result_summary(result_payload.get("summary"), "completed")
+
+
+def _runtime_result_fact_values(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    fact_values: list[str] = []
+    for fact in value:
+        if not isinstance(fact, Mapping):
+            continue
+        fact_value = fact.get("value")
+        if not isinstance(fact_value, str):
+            continue
+        stripped = fact_value.strip().rstrip("。")
+        if stripped:
+            fact_values.append(stripped)
+    return fact_values
 
 
 def _runtime_result_summary_for_state(state: WorkbenchV2RuntimeState) -> str:

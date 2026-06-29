@@ -100,7 +100,13 @@ describe("StrategyGraph", () => {
     expect(screen.queryByText(/单轮检索|\d+ 轮检索/)).not.toBeInTheDocument();
     expect(screen.queryByText(/CTS/i)).not.toBeInTheDocument();
     expect(container.querySelector(".react-flow")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("检索策略图控制")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("检索策略图控制")).toBeVisible();
+    expect(screen.getByRole("button", { name: "放大策略图" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "缩小策略图" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "最大化策略图" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "恢复策略图初始位置" }),
+    ).toBeVisible();
     expect(
       container.querySelector('[data-edge-id="job-root->strategy-root"]'),
     ).toHaveClass("strategy-graph__edge--root");

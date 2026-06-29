@@ -55,8 +55,8 @@ describe("CandidateCard", () => {
     expect(screen.getByText("本科")).toBeInTheDocument();
     expect(screen.getByText("工作10年")).toBeInTheDocument();
     expect(
-      screen.getByText("有 Agent 工具调用平台和 RAG 检索链路经验。"),
-    ).toBeInTheDocument();
+      screen.getByRole("article", { name: "候选人 A" }),
+    ).not.toHaveTextContent("有 Agent 工具调用平台和 RAG 检索链路经验。");
   });
 
   it("ignores forbidden raw provider, auth, and resume fields when present", () => {

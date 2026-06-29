@@ -208,9 +208,13 @@ class WorkbenchV2CandidateSummaryView(BaseModel):
     avatarColorKey: str | None = Field(default=None, exclude_if=_is_none)
     headline: str | None = None
     company: str | None = None
+    currentTitle: str | None = Field(default=None, exclude_if=_is_none)
+    currentCompany: str | None = Field(default=None, exclude_if=_is_none)
     location: str | None = None
+    city: str | None = Field(default=None, exclude_if=_is_none)
     education: str | None = None
     experienceYears: int | None = None
+    workYears: int | None = Field(default=None, exclude_if=_is_none)
     age: int | None = None
     gender: str | None = None
     activeStatus: str | None = None
@@ -241,14 +245,19 @@ class WorkbenchV2CandidateDetailView(BaseModel):
     avatarColorKey: str | None = Field(default=None, exclude_if=_is_none)
     headline: str | None = None
     company: str | None = None
+    currentTitle: str | None = Field(default=None, exclude_if=_is_none)
+    currentCompany: str | None = Field(default=None, exclude_if=_is_none)
     location: str | None = None
+    city: str | None = Field(default=None, exclude_if=_is_none)
     education: str | None = None
     experienceYears: int | None = None
+    workYears: int | None = Field(default=None, exclude_if=_is_none)
     age: int | None = None
     gender: str | None = None
     activeStatus: str | None = None
     jobStatus: str | None = None
     sourceKinds: list[Literal["cts", "liepin"]] = Field(default_factory=list)
+    sourceLabel: str | None = Field(default=None, exclude_if=_is_none)
     matchScore: int | None = Field(default=None, ge=0, le=100)
     match: WorkbenchV2CandidateMatchView | None = Field(default=None, exclude_if=_is_none)
     jobIntention: WorkbenchV2CandidateJobIntentionView | None = Field(default=None, exclude_if=_is_none)

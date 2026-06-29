@@ -233,13 +233,7 @@ function CandidateDetailBody({
   detail: AgentWorkbenchCandidateDetailResponse;
 }) {
   const access = accessStateCopy(detail.accessState, detail.reasonCode);
-  const structuredSections = buildStructuredSections(detail);
-  const fallbackSections =
-    detail.accessState === "allowed"
-      ? fallbackSectionsFromDetail(detail.sections)
-      : [];
-  const sections =
-    structuredSections.length > 0 ? structuredSections : fallbackSections;
+  const sections = buildStructuredSections(detail);
 
   return (
     <div
@@ -429,12 +423,9 @@ function matchSection(
   if (!match) {
     return null;
   }
-  const items = [
-    match.summary ? `推荐理由：${match.summary}` : null,
-    ...match.strengths.map((strength) => `候选人强项：${strength}`),
-    ...match.weaknesses.map((weakness) => `候选人弱项：${weakness}`),
-  ].filter((item): item is string => Boolean(item));
-  return items.length > 0 ? { title: "匹配程度", items } : null;
+  return match.summary
+    ? { title: "匹配程度", items: [`推荐理由：${match.summary}`] }
+    : null;
 }
 
 function jobIntentionSection(
@@ -513,14 +504,6 @@ function compactLines(lines: Array<string | null | undefined>): string[] {
   return lines
     .map((line) => line?.trim())
     .filter((line): line is string => Boolean(line));
-}
-
-function fallbackSectionsFromDetail(
-  sections: AgentWorkbenchCandidateDetailResponse["sections"],
-): AgentWorkbenchCandidateDetailResponse["sections"] {
-  return sections
-    .filter((section) => section.items.length > 0)
-    .map((section) => ({ ...section, items: [...section.items] }));
 }
 
 function safeExternalSourceUrl(

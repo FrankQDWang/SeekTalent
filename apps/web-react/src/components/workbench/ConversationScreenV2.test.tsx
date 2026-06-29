@@ -87,6 +87,58 @@ describe("ConversationScreenV2", () => {
     });
   });
 
+  it("keeps draft supplemental text when a checkbox update replaces the requirement form event", async () => {
+    expect.hasAssertions();
+    const user = userEvent.setup();
+    const onRequirementAction = vi.fn(() => Promise.resolve());
+    const firstRequirementEvent = transcriptEvent({
+      eventId: "event_requirement_1",
+      step: 1,
+      type: "requirement_form",
+      role: "assistant",
+      payload: requirementPayload(),
+    });
+    const revisedPayload = requirementPayload();
+    revisedPayload.draft.sections[0].items[0].selected = false;
+    const revisedRequirementEvent = transcriptEvent({
+      eventId: "event_requirement_2",
+      step: 2,
+      type: "requirement_form",
+      role: "assistant",
+      payload: revisedPayload,
+    });
+
+    const { rerender } = render(
+      <ConversationScreenV2
+        onRequirementAction={onRequirementAction}
+        view={conversationView({
+          transcriptEvents: [firstRequirementEvent],
+        })}
+      />,
+    );
+
+    await user.type(
+      screen.getByLabelText("补充其他要求"),
+      "需要熟悉 AI 编程工具",
+    );
+    await user.click(
+      screen.getByRole("checkbox", { name: /Python 后端经验/ }),
+    );
+
+    rerender(
+      <ConversationScreenV2
+        onRequirementAction={onRequirementAction}
+        view={conversationView({
+          transcriptEvents: [firstRequirementEvent, revisedRequirementEvent],
+        })}
+      />,
+    );
+
+    expect(screen.getByLabelText("补充其他要求")).toHaveValue(
+      "需要熟悉 AI 编程工具",
+    );
+  });
+
   it("keeps runtime progress inside the transcript without exposing internal runtime side state", () => {
     expect.hasAssertions();
     const view = conversationView({

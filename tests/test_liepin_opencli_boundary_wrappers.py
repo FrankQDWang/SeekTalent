@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -81,8 +81,9 @@ class RecordingOpenCliCommands:
     outputs: dict[tuple[str, ...], str | BaseException] = field(default_factory=dict)
     calls: list[tuple[str, ...]] = field(default_factory=list)
 
-    def run(self, argv: Sequence[str], *, timeout: int) -> str:
+    def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
         del timeout
+        del env
         key = tuple(argv)
         self.calls.append(key)
         output = self.outputs.get(key, "")

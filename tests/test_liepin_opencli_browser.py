@@ -4,7 +4,7 @@ import io
 import json
 import re
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -25,6 +25,7 @@ from seektalent.providers.liepin.liepin_site_adapter import (
     extract_allowed_click_refs,
     extract_known_modal_close_ref,
     extract_liepin_card_summaries,
+    extract_liepin_search_button_ref,
     extract_liepin_search_input_ref,
 )
 
@@ -42,14 +43,18 @@ class FakeCommands:
         self.outputs = outputs or {}
         self.fail = fail
         self.calls: list[tuple[str, ...]] = []
+        self.envs: list[Mapping[str, str] | None] = []
 
-    def run(self, argv: Sequence[str], *, timeout: int) -> str:
+    def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
         del timeout
         call = tuple(argv)
         self.calls.append(call)
+        self.envs.append(env)
         if self.fail:
             raise subprocess.TimeoutExpired(cmd=list(argv), timeout=1)
         output = self.outputs.get(call, "{}")
+        if output == "{}" and len(call) == 6 and call[3:5] == ("tab", "new"):
+            return json.dumps({"page": "page-1", "url": call[5]})
         if isinstance(output, list):
             if output:
                 item = output.pop(0)
@@ -75,13 +80,14 @@ class EvalCommands(FakeCommands):
         super().__init__(outputs=outputs)
         self.eval_output = eval_output
 
-    def run(self, argv: Sequence[str], *, timeout: int) -> str:
+    def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
         call = tuple(argv)
         if len(call) >= 4 and call[3] == "eval":
             del timeout
             self.calls.append(call)
+            self.envs.append(env)
             return self.eval_output
-        return super().run(argv, timeout=timeout)
+        return super().run(argv, timeout=timeout, env=env)
 
 
 class RefEvalCommands(FakeCommands):
@@ -89,22 +95,25 @@ class RefEvalCommands(FakeCommands):
         self,
         *,
         eval_outputs_by_ref: dict[str, str],
+        default_eval_output: str = "null",
         outputs: dict[tuple[str, ...], str | list[str]] | None = None,
     ) -> None:
         super().__init__(outputs=outputs)
         self.eval_outputs_by_ref = eval_outputs_by_ref
+        self.default_eval_output = default_eval_output
 
-    def run(self, argv: Sequence[str], *, timeout: int) -> str:
+    def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
         call = tuple(argv)
         if len(call) >= 4 and call[3] == "eval":
             del timeout
             self.calls.append(call)
+            self.envs.append(env)
             script = call[4] if len(call) > 4 else ""
             for ref, output in self.eval_outputs_by_ref.items():
                 if f'data-opencli-ref="{ref}"' in script:
                     return output
-            return "null"
-        return super().run(argv, timeout=timeout)
+            return self.default_eval_output
+        return super().run(argv, timeout=timeout, env=env)
 
 
 class FakeWindowCounter:
@@ -209,18 +218,55 @@ def _current_window_open_outputs(
     *, page_id: str = "page-1", url: str = LIEPIN_SEARCH_URL
 ) -> dict[tuple[str, ...], str]:
     return {
-        ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
-        ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
+        ("opencli", "browser", "seektalent-liepin", "tab", "list"): "[]",
+        ("opencli", "browser", "seektalent-liepin", "tab", "new", url): json.dumps({"page": page_id, "url": url}),
         ("opencli", "browser", "seektalent-liepin", "get", "url"): url,
-        ("opencli", "browser", "seektalent-liepin", "tab", "list"): _single_tab_list(page_id=page_id, url=url),
     }
+
+
+def _liepin_detail_payload_json(
+    *,
+    candidate_name: str = "王**",
+    full_text: str = "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家",
+) -> str:
+    return json.dumps(
+        {
+            "candidate_name": candidate_name,
+            "activeStatus": "7天内活跃",
+            "jobStatus": "离职，正在找工作",
+            "gender": "男",
+            "age": 40,
+            "city": "上海",
+            "education": "硕士",
+            "workYears": 14,
+            "currentTitle": "数据开发专家",
+            "currentCompany": "海光集成电路",
+            "jobIntention": {"expectedRole": "数据开发专家", "expectedCity": "上海"},
+            "workExperienceList": [
+                {
+                    "company": "海光集成电路",
+                    "title": "高级主管工程师",
+                    "dateRange": "2023.10-至今",
+                    "description": "负责数据仓库、数据治理、Python 平台和 Hive 数仓。",
+                }
+            ],
+            "educationList": [
+                {"school": "北京大学", "degree": "本科", "major": "计算机"}
+            ],
+            "skills": ["Python", "Hive"],
+            "fullText": full_text,
+        },
+        ensure_ascii=False,
+    )
 
 
 def test_opencli_mutating_actions_apply_pacing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sleeps: list[float] = []
     monkeypatch.setattr("seektalent.opencli_browser.automation.time.sleep", sleeps.append)
     monkeypatch.setattr("seektalent.opencli_browser.automation.random.uniform", lambda low, high: low)
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail_state),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "fill", "--role", "combobox", "--nth", "0", "python"): "{}",
         }
@@ -249,7 +295,9 @@ def test_extract_visible_liepin_cards_returns_structured_safe_cards(tmp_path: Pa
         "李** 29岁 工作6年 本科 杭州\n"
         "Flink Spark 实时数仓\n"
     )
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail_state),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                 "https://h.liepin.com/search/getConditionItem#session"
@@ -302,7 +350,9 @@ def test_extract_visible_liepin_cards_binds_ref_to_same_card_summary(tmp_path: P
             }
         ]
     }
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail70_state),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                 "https://h.liepin.com/search/getConditionItem#session"
@@ -337,7 +387,9 @@ def test_extract_visible_liepin_cards_binds_ref_to_same_card_summary(tmp_path: P
 
 
 def test_status_maps_opencli_doctor_success() -> None:
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail_state),
         outputs={
             ("opencli", "daemon", "status"): (
                 "Daemon: running (PID 123)\nVersion: 1.8.0\nExtension: connected (v1.8.0)\nProfiles: default v1.8.0\n"
@@ -380,8 +432,29 @@ def test_status_reports_unavailable_for_malformed_daemon_output() -> None:
     assert result.safe_reason_code == "liepin_opencli_status_unavailable"
 
 
+def test_opencli_commands_inherit_background_window_mode() -> None:
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail70_state),
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            )
+        }
+    )
+
+    result = _runner(commands).get_url()
+
+    assert result.ok is True
+    assert commands.envs
+    assert commands.envs[-1] is not None
+    assert commands.envs[-1]["OPENCLI_WINDOW"] == "background"
+
+
 def test_status_blocks_when_extension_is_disconnected() -> None:
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail_state),
         outputs={
             ("opencli", "daemon", "status"): ("Daemon: running (PID 123)\nVersion: 1.8.0\nExtension: disconnected\n")
         }
@@ -413,7 +486,9 @@ def test_open_liepin_tab_rejects_unapproved_start_url() -> None:
 
 def test_open_liepin_tab_reuses_verified_owned_lease_instead_of_opening_duplicate_tab(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/search/getConditionItem#session"
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail70_state),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "tab", "list"): (f'[{{"page":"page-0","url":"{liepin_url}"}}]'),
             ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-0"): "{}",
@@ -537,11 +612,9 @@ def test_open_liepin_tab_selects_existing_search_tab_when_current_active_tab_is_
 def test_open_liepin_tab_rejects_malformed_page_id(tmp_path: Path) -> None:
     commands = FakeCommands(
         outputs={
-            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
-            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
-            ("opencli", "browser", "seektalent-liepin", "get", "url"): LIEPIN_SEARCH_URL,
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): (
-                f'[{{"page":"bad/page","url":"{LIEPIN_SEARCH_URL}","active":true}}]'
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): "[]",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): (
+                f'[{{"page":"bad/page","url":"{LIEPIN_SEARCH_URL}"}}]'
             ),
         }
     )
@@ -1441,11 +1514,9 @@ def test_open_liepin_detail_opens_card_detail_url_in_controlled_tab(tmp_path: Pa
         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
         "&index=5&position=5&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal"
     )
-    commands = EvalCommands(
-        eval_output=detail_url,
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={"357": detail_url},
         outputs={
-            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
-            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
             ("opencli", "browser", "seektalent-liepin", "get", "url"): [search_url, detail_url],
             ("opencli", "browser", "seektalent-liepin", "state"): (
                 "摆** 31岁 工作7年 本科 北京\n"
@@ -1455,6 +1526,9 @@ def test_open_liepin_detail_opens_card_detail_url_in_controlled_tab(tmp_path: Pa
             ("opencli", "browser", "seektalent-liepin", "tab", "list"): _single_tab_list(
                 page_id="page-detail-357",
                 url=detail_url,
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", detail_url): (
+                json.dumps({"page": "page-detail-357", "url": detail_url})
             ),
         },
     )
@@ -1537,7 +1611,9 @@ def test_captured_detail_resume_reuse_is_allowed_without_duplicate_open(tmp_path
 
 def test_open_liepin_detail_claims_new_detail_tab_without_binding_current_window(tmp_path: Path) -> None:
     detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc"
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail70_state),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): [
                 "https://h.liepin.com/search/getConditionItem#session",
@@ -1587,7 +1663,9 @@ def test_state_exposes_liepin_result_card_refs_as_detail_targets(tmp_path: Path)
         },
         ensure_ascii=False,
     )
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail_state),
         outputs={
             (
                 "opencli",
@@ -1643,6 +1721,17 @@ def test_extract_liepin_search_input_ref_uses_keyword_combobox_near_label() -> N
     assert extract_liepin_search_input_ref(text) == "26"
 
 
+def test_extract_liepin_search_button_ref_uses_visible_search_button() -> None:
+    text = (
+        "<span>包含全部关键词</span>\n"
+        "  [26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>\n"
+        "[70]<button><span>查看完整简历</span></button>"
+    )
+
+    assert extract_liepin_search_button_ref(text) == "29"
+
+
 def test_extract_liepin_search_input_ref_falls_back_to_keyword_input_id() -> None:
     text = (
         "[316]<input type=search autocomplete=off role=combobox id=rc_select_0 />\n"
@@ -1677,14 +1766,14 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
         "海光集成电路 · 高级主管工程师 2023.10-至今\n"
         "FTI SDP CXL Pcie verilog"
     )
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail70_state),
         outputs={
             **_current_window_open_outputs(page_id="page-1"),
-            ("opencli", "browser", "seektalent-liepin", "state"): [state_before, state_after],
+            ("opencli", "browser", "seektalent-liepin", "state"): [state_before, state_before, state_after],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
-            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
-                '{"clicked":true}'
-            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
             ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
         }
     )
@@ -1706,7 +1795,7 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     assert (tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").is_file()
     assert (tmp_path / "public-summary" / "pi-card" / "run-1" / "1.json").is_file()
     assert ("opencli", "browser", "seektalent-liepin", "tab", "list") in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL) not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL) in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "get", "url") in commands.calls
     lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
     assert lease["page_id"] == "page-1"
@@ -1718,7 +1807,7 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
         "26",
         "数据开发专家",
     ) in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "29") in commands.calls
     fill_index = commands.calls.index(
         (
             "opencli",
@@ -1730,9 +1819,68 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
         )
     )
     click_index = commands.calls.index(
-        ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索")
+        ("opencli", "browser", "seektalent-liepin", "click", "29")
     )
-    assert commands.calls[fill_index + 1 : click_index] == []
+    assert fill_index < click_index
+    assert ("opencli", "browser", "seektalent-liepin", "state") in commands.calls[
+        fill_index + 1 : click_index
+    ]
+
+
+def test_search_liepin_cards_reobserves_search_ref_after_stale_submit(tmp_path: Path) -> None:
+    state_before = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_retry = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[31]<button><span>搜 索</span></button>"
+    )
+    state_after = (
+        "王** 男 40岁 工作14年 硕士 上海\n"
+        "求职期望：上海 数据开发专家\n"
+        "海光集成电路 · 高级主管工程师 2023.10-至今\n"
+        "数据仓库 数据治理 Python Hive"
+    )
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                state_retry,
+                state_after,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): subprocess.CalledProcessError(
+                1,
+                ["opencli"],
+                output='{"error":{"code":"stale_ref","message":"target disappeared"}}',
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "31"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert ("opencli", "browser", "seektalent-liepin", "click", "29") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "31") in commands.calls
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert {
+        "action_kind": "click_search_retry",
+        "route_kind": "search",
+        "safe_reason_code": "liepin_opencli_stale_ref",
+    } in trace["events"]
 
 
 def test_search_liepin_cards_retries_transient_status_after_search_click(tmp_path: Path) -> None:
@@ -1750,11 +1898,9 @@ def test_search_liepin_cards_retries_transient_status_after_search_click(tmp_pat
     commands = FakeCommands(
         outputs={
             **_current_window_open_outputs(page_id="page-1"),
-            ("opencli", "browser", "seektalent-liepin", "state"): [state_before, state_after],
+            ("opencli", "browser", "seektalent-liepin", "state"): [state_before, state_before, state_after],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
-            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
-                '{"clicked":true}'
-            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
             ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): [
                 "{}",
                 subprocess.CalledProcessError(1, ["opencli"]),
@@ -1796,6 +1942,7 @@ def test_search_liepin_cards_retries_stale_observe_results_once(tmp_path: Path) 
         outputs={
             **_current_window_open_outputs(page_id="page-1"),
             ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
                 state_before,
                 subprocess.CalledProcessError(
                     1,
@@ -1848,7 +1995,9 @@ def test_agent_driven_detail_tools_capture_and_finalize_resume_envelope(tmp_path
         "负责数据仓库、数据治理、Python 平台和 Hive 数仓。\n"
         "北京大学 · 本科 · 计算机"
     )
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail_state),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): [
                 search_url,
@@ -1979,7 +2128,9 @@ def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Pat
         "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家\n负责数据仓库、数据治理、Python 平台和 Hive 数仓。"
     )
     detail71_state = "张** 36岁 工作11年 硕士 上海\n当前职位：数据平台专家\n负责数据治理、Python 和 Spark 平台。"
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(full_text=detail70_state),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
             ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
@@ -2035,6 +2186,10 @@ def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Pat
     assert runner.open_liepin_tab(search_url).ok is True
     assert runner.open_liepin_detail(source_run_id="run-1", ref="70", rank=1).ok is True
     assert runner.capture_liepin_detail_resume(source_run_id="run-1", rank=1).ok is True
+    commands.default_eval_output = _liepin_detail_payload_json(
+        candidate_name="张**",
+        full_text=detail71_state,
+    )
     assert runner.open_liepin_detail(source_run_id="run-1", ref="71", rank=2).ok is True
     assert runner.capture_liepin_detail_resume(source_run_id="run-1", rank=2).ok is True
 
@@ -2083,6 +2238,7 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
     detail71_state = "张** 36岁 工作11年 硕士 上海\n当前职位：数据平台专家\n负责数据治理、Python 和 Spark 平台。"
     commands = RefEvalCommands(
         eval_outputs_by_ref={"70": detail70_url, "171": detail71_url},
+        default_eval_output=_liepin_detail_payload_json(),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
             ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
@@ -2095,7 +2251,9 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
                 search_url,
                 search_url,
                 search_url,
+                search_url,
                 detail70_url,
+                search_url,
                 search_url,
                 search_url,
                 search_url,
@@ -2103,16 +2261,18 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
                 search_url,
                 search_url,
             ],
-            ("opencli", "browser", "seektalent-liepin", "state"): [
-                search_form_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                detail70_state,
-                refreshed_search_results_state,
-                refreshed_search_results_state,
-                detail71_state,
-            ],
+                ("opencli", "browser", "seektalent-liepin", "state"): [
+                    search_form_state,
+                    search_results_state,
+                    search_results_state,
+                    search_results_state,
+                    search_results_state,
+                    detail70_state,
+                    refreshed_search_results_state,
+                    refreshed_search_results_state,
+                    refreshed_search_results_state,
+                    detail71_state,
+                ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
             ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
                 '{"clicked":true}'
@@ -2167,7 +2327,7 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
         if call == ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search")
     ]
     assert search_select_indexes
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", detail71_url) not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", detail71_url) in commands.calls
     assert any(len(call) > 4 and call[3] == "eval" and 'data-opencli-ref="171"' in call[4] for call in commands.calls)
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-70") not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-71") not in commands.calls
@@ -2184,7 +2344,9 @@ def test_search_liepin_resumes_does_not_open_details_after_filter_failure(tmp_pa
     )
     state_after_search = "[41]<button><span>城市</span></button>\n王** 男 34岁 工作5年 硕士 上海"
     state_city_menu = "[41]<button><span>城市</span></button>\n[44]<label>上海</label>"
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(),
         outputs={
             **_current_window_open_outputs(page_id="page-1"),
             ("opencli", "browser", "seektalent-liepin", "state"): [
@@ -2251,6 +2413,7 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
     detail71_state = "张** 36岁 工作11年 硕士 上海\n当前职位：数据平台专家\n负责数据治理、Python 和 Spark 平台。"
     commands = RefEvalCommands(
         eval_outputs_by_ref={"70": detail70_url, "71": detail71_url},
+        default_eval_output=_liepin_detail_payload_json(),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
             ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
@@ -2259,15 +2422,17 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
             ),
             ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search"): "{}",
             ("opencli", "browser", "seektalent-liepin", "get", "url"): [search_url] * 12,
-            ("opencli", "browser", "seektalent-liepin", "state"): [
-                search_form_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                detail70_state,
-                empty_search_state,
-                detail71_state,
-            ],
+                ("opencli", "browser", "seektalent-liepin", "state"): [
+                    search_form_state,
+                    search_results_state,
+                    search_results_state,
+                    search_results_state,
+                    search_results_state,
+                    detail70_state,
+                    empty_search_state,
+                    empty_search_state,
+                    detail71_state,
+                ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
             ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
                 '{"clicked":true}'
@@ -2312,7 +2477,7 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
     assert envelope["status"] == "succeeded"
     assert envelope["resumes_returned"] == 2
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-70") not in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", detail71_url) not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", detail71_url) in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-search") not in commands.calls
     trace_ref = str(envelope["action_trace_ref"]).removeprefix("artifact://protected/")
@@ -2330,7 +2495,9 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
 
 
 def test_finalize_liepin_resumes_marks_partial_when_target_is_not_met(tmp_path: Path) -> None:
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "state"): (
                 "URL: https://h.liepin.com/resume/showresumedetail?id=70\n"
@@ -2374,7 +2541,9 @@ def test_capture_liepin_detail_resume_preserves_detail_source_url(tmp_path: Path
         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
         "&index=5&position=5&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal"
     )
-    commands = FakeCommands(
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "state"): (
                 "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad\n"
@@ -2507,11 +2676,17 @@ def test_search_liepin_cards_applies_native_filters_before_reading_cards(tmp_pat
     click_search_index = commands.calls.index(
         ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索")
     )
-    click_city_menu_index = commands.calls.index(
-        ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "城市")
-    )
-    click_city_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "click", "44"))
-    assert click_search_index < click_city_menu_index < click_city_index
+    assert click_search_index < len(commands.calls)
+    filter_events = [
+        (event.get("filter"), event.get("section"), event.get("value"))
+        for event in trace["events"]
+        if event.get("action_kind") == "apply_native_filter"
+    ]
+    assert filter_events == [
+        ("city", "legacy", "上海"),
+        ("experience", "legacy", "3-5年"),
+        ("age", "legacy", "35岁以下"),
+    ]
 
 
 def test_search_liepin_cards_clicks_filters_in_named_sections(tmp_path: Path) -> None:
@@ -2616,13 +2791,25 @@ def test_search_liepin_cards_clicks_filters_in_named_sections(tmp_path: Path) ->
     )
 
     assert result["status"] == "succeeded"
-    assert ("opencli", "browser", "seektalent-liepin", "click", "21") in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "click", "31") in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "click", "121") in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "click", "42") in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "click", "51") in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "click", "52") in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "click", "11") not in commands.calls
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "source-1" / "action-trace.json").read_text())
+    filter_events = [
+        (event.get("filter"), event.get("section"), event.get("value"))
+        for event in trace["events"]
+        if event.get("action_kind") == "apply_native_filter"
+    ]
+    assert filter_events == [
+        ("city", "expected", "北京"),
+        ("degree", "education", "本科"),
+        ("recruitmentType", "recruitment_type", "统招本科"),
+        ("schoolTypes", "school_type", "211"),
+        ("schoolTypes", "school_type", "985"),
+    ]
+    assert any(
+        event.get("action_kind") == "open_native_filter_menu"
+        and event.get("filter") == "recruitmentType"
+        and event.get("section") == "recruitment_type"
+        for event in trace["events"]
+    )
 
 
 def test_search_liepin_cards_blocks_when_required_native_filter_click_fails(tmp_path: Path) -> None:
@@ -2791,7 +2978,6 @@ def test_search_liepin_cards_retries_unconfirmed_filter_before_blocking(tmp_path
 """
     state_after_bad_click = """
 [20]<label>期望城市：</label>
-[21]<label>北京</label>
 王** 男 34岁 工作5年 硕士 上海
 """
     state_after_delayed_chip = """
@@ -2808,8 +2994,13 @@ def test_search_liepin_cards_retries_unconfirmed_filter_before_blocking(tmp_path
             **_current_window_open_outputs(page_id="page-1"),
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 state_before,
+                state_before,
+                state_after_search,
                 state_after_search,
                 state_after_bad_click,
+                state_after_delayed_chip,
+                state_after_search,
+                state_after_delayed_chip,
                 state_after_delayed_chip,
             ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
@@ -3168,9 +3359,14 @@ def test_search_liepin_cards_retries_stale_search_button_ref(tmp_path: Path) -> 
     commands = FakeCommands(
         outputs={
             **_current_window_open_outputs(page_id="page-1"),
-            ("opencli", "browser", "seektalent-liepin", "state"): [search_state, search_state, result_state],
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                search_state,
+                search_state,
+                search_state,
+                result_state,
+            ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
-            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): [
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): [
                 subprocess.CalledProcessError(
                     1,
                     ["opencli"],
@@ -3194,7 +3390,7 @@ def test_search_liepin_cards_retries_stale_search_button_ref(tmp_path: Path) -> 
     assert envelope["status"] == "succeeded"
     assert (
         commands.calls.count(
-            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索")
+            ("opencli", "browser", "seektalent-liepin", "click", "29")
         )
         == 2
     )

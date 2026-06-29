@@ -48,6 +48,7 @@ const REQUIREMENTS_X_WITH_ROOT = 340;
 const ROUND_STAGE_START_X = 638;
 const STAGE_X_GAP = 286;
 const CANVAS_PADDING = 36;
+const EDGE_ROUTE_PADDING = 88;
 const NEXT_ROUND_LOOP_LEFT_GAP = 52;
 const NEXT_ROUND_LOOP_TOP_GAP = 24;
 
@@ -124,7 +125,7 @@ export function projectStrategyTimelineGraph(
   return {
     nodes: visibleNodes,
     edges: visibleEdges,
-    width: extents.width,
+    width: extents.width + EDGE_ROUTE_PADDING,
     height: extents.height,
   };
 }
@@ -288,9 +289,11 @@ function nextRoundLoopPath(
   from: StrategyTimelineNode,
   to: StrategyTimelineNode,
 ): string {
-  const startX = from.x + from.width / 2;
+  const startX = from.x + from.width;
+  const startY = from.y + from.height / 2;
   const endX = to.x;
   const endY = to.y + to.height / 2;
+  const rightX = startX + NEXT_ROUND_LOOP_LEFT_GAP;
   const leftX = Math.max(CANVAS_PADDING, endX - NEXT_ROUND_LOOP_LEFT_GAP);
   const gapTop = from.y + from.height;
   const gapBottom = to.y;
@@ -299,7 +302,21 @@ function nextRoundLoopPath(
       ? Math.max(gapTop + 12, gapBottom - NEXT_ROUND_LOOP_TOP_GAP)
       : gapTop;
 
-  return ["M", startX, routeY, "H", leftX, "V", endY, "H", endX]
+  return [
+    "M",
+    startX,
+    startY,
+    "H",
+    rightX,
+    "V",
+    routeY,
+    "H",
+    leftX,
+    "V",
+    endY,
+    "H",
+    endX,
+  ]
     .map(String)
     .join(" ");
 }

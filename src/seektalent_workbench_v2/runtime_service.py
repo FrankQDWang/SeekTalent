@@ -327,6 +327,8 @@ class WorkbenchV2RuntimeService:
             score = _candidate_score(identity, evidence)
             evidence_level = _candidate_evidence_level(evidence)
             detail_availability = _candidate_detail_availability(identity, evidence)
+            city = identity.location or _candidate_location(evidence)
+            work_years = _candidate_experience_years(evidence)
             candidates.append(
                 {
                     "candidateId": identity.identity_id,
@@ -336,9 +338,13 @@ class WorkbenchV2RuntimeService:
                     "avatarColorKey": _candidate_avatar_color_key(identity.identity_id),
                     "headline": headline,
                     "company": identity.company or None,
-                    "location": identity.location or _candidate_location(evidence),
+                    "currentTitle": _candidate_current_title(identity, evidence),
+                    "currentCompany": _candidate_current_company(identity, evidence),
+                    "location": city,
+                    "city": city,
                     "education": _candidate_education(evidence),
-                    "experienceYears": _candidate_experience_years(evidence),
+                    "experienceYears": work_years,
+                    "workYears": work_years,
                     "age": _candidate_age(evidence),
                     "gender": _candidate_gender(evidence),
                     "activeStatus": _candidate_active_status(evidence),
@@ -367,6 +373,9 @@ class WorkbenchV2RuntimeService:
         ]
         detail_availability = _candidate_detail_availability(identity, evidence)
         display_name = _candidate_display_name(identity, evidence, fallback="候选人")
+        city = identity.location or _candidate_location(evidence)
+        work_years = _candidate_experience_years(evidence)
+        source_kinds = _candidate_source_kinds(evidence)
         return {
             "candidateId": identity.identity_id,
             "displayName": display_name,
@@ -374,14 +383,19 @@ class WorkbenchV2RuntimeService:
             "avatarColorKey": _candidate_avatar_color_key(identity.identity_id),
             "headline": _candidate_headline(identity, evidence),
             "company": identity.company or _candidate_company(evidence),
-            "location": identity.location or _candidate_location(evidence),
+            "currentTitle": _candidate_current_title(identity, evidence),
+            "currentCompany": _candidate_current_company(identity, evidence),
+            "location": city,
+            "city": city,
             "education": _candidate_education(evidence),
-            "experienceYears": _candidate_experience_years(evidence),
+            "experienceYears": work_years,
+            "workYears": work_years,
             "age": _candidate_age(evidence),
             "gender": _candidate_gender(evidence),
             "activeStatus": _candidate_active_status(evidence),
             "jobStatus": _candidate_job_status(evidence),
-            "sourceKinds": _candidate_source_kinds(evidence),
+            "sourceKinds": source_kinds,
+            "sourceLabel": _candidate_source_label(source_kinds),
             "matchScore": _candidate_score(identity, evidence),
             "match": _candidate_match(identity, evidence),
             "jobIntention": _candidate_job_intention(evidence),
@@ -545,6 +559,32 @@ def _candidate_headline(
     if title and company:
         return f"{title} · {company}"
     return title or company
+
+
+def _candidate_current_title(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> str | None:
+    return (
+        _clean_text(identity.title)
+        or _text_from_mapping(_candidate_wts_detail(evidence), "currentTitle")
+        or _first_text_from_payloads(evidence, ("safeDetail", "currentTitle"))
+        or _first_text_from_payloads(evidence, ("normalizedProfile", "currentTitle"))
+        or _first_text_from_payloads(evidence, ("safeSummary", "currentOrRecentTitle"))
+    )
+
+
+def _candidate_current_company(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> str | None:
+    return (
+        _clean_text(identity.company)
+        or _text_from_mapping(_candidate_wts_detail(evidence), "currentCompany")
+        or _first_text_from_payloads(evidence, ("safeDetail", "currentCompany"))
+        or _first_text_from_payloads(evidence, ("normalizedProfile", "currentCompany"))
+        or _first_text_from_payloads(evidence, ("safeSummary", "currentOrRecentCompany"))
+    )
 
 
 def _candidate_location(evidence: Sequence[RuntimeControlCandidateEvidence]) -> str | None:
@@ -776,10 +816,20 @@ def _candidate_job_intention(evidence: Sequence[RuntimeControlCandidateEvidence]
 
 
 def _candidate_timeline(evidence: Sequence[RuntimeControlCandidateEvidence], key: str) -> list[dict[str, object]]:
-    fields = ("dateRange", "title", "company", "school", "major", "degree", "name", "role", "description")
     entries: list[dict[str, object]] = []
     for item in _mapping_sequence(_candidate_wts_detail(evidence).get(key)):
-        entry = {field: text for field in fields if (text := _text_from_mapping(item, field)) is not None}
+        entry = {
+            "dateRange": _text_from_mapping(item, "dateRange") or _text_from_mapping(item, "duration"),
+            "title": _text_from_mapping(item, "title"),
+            "company": _text_from_mapping(item, "company"),
+            "school": _text_from_mapping(item, "school"),
+            "major": _text_from_mapping(item, "major"),
+            "degree": _text_from_mapping(item, "degree"),
+            "name": _text_from_mapping(item, "name"),
+            "role": _text_from_mapping(item, "role"),
+            "description": _text_from_mapping(item, "description") or _text_from_mapping(item, "summary"),
+        }
+        entry = {field: text for field, text in entry.items() if text is not None}
         if entry:
             entries.append(entry)
     return entries
@@ -1406,12 +1456,13 @@ def _runtime_event_user_summary(event: object) -> str | None:
     if event_type == "runtime_round_source_result":
         counts = payload.get("counts")
         counts = counts if isinstance(counts, dict) else {}
+        if status == "blocked":
+            reason = _payload_text(payload.get("safeReasonCode")) or summary
+            return f"{round_prefix}猎聘检索受阻：{_runtime_failure_reason(reason)}"
         returned = counts.get("roundReturned")
         identities = counts.get("roundIdentities")
         if isinstance(returned, int) and isinstance(identities, int):
             return f"{round_prefix}猎聘检索完成：返回 {returned} 条，新增 {identities} 位候选人。"
-        if status == "blocked":
-            return f"{round_prefix}猎聘检索受阻：{summary or '需要刷新检索页面后重试。'}"
         return f"{round_prefix}猎聘检索结果已更新。"
     if event_type == "runtime_round_merge_completed":
         counts = payload.get("counts")

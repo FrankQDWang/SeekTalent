@@ -7,6 +7,8 @@ body,
 #root {
   height: 100%;
   min-height: 0;
+  overflow: hidden;
+  width: 100%;
 }
 
 #storybook-root {
@@ -25,7 +27,6 @@ body {
   font-family: var(--st-font);
   font-size: 14px;
   line-height: 1.45;
-  overflow: clip;
 }
 
 button,
@@ -49,7 +50,8 @@ button {
   height: 100dvh;
   min-height: 0;
   min-width: 0;
-  overflow: clip;
+  overflow: hidden;
+  width: 100%;
 }
 
 .brand-mark {

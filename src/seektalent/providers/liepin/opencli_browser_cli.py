@@ -46,6 +46,7 @@ def main() -> int:
 
 def _runner_from_env() -> LiepinSiteAdapter:
     command = tuple(shlex.split(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or DEFAULT_LIEPIN_OPENCLI_COMMAND))
+    window_mode = _env_window_mode(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE"))
     allowed_hosts = _json_tuple(
         os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON"),
         default=("www.liepin.com", "h.liepin.com"),
@@ -58,6 +59,7 @@ def _runner_from_env() -> LiepinSiteAdapter:
         command=command,
         session=os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_SESSION") or "seektalent-liepin",
         timeout_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS") or "900"),
+        window_mode=window_mode,
         current_tab_reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
         pacing_enabled=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED"), default=True),
         pacing_min_ms=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_MIN_MS") or "700"),
@@ -210,6 +212,15 @@ def _env_bool(value: str | None, *, default: bool) -> bool:
     if value is None or value == "":
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_window_mode(value: str | None) -> str:
+    if value is None or value == "":
+        return "background"
+    normalized = value.strip().lower()
+    if normalized in {"foreground", "background"}:
+        return normalized
+    raise SystemExit("SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE must be foreground or background")
 
 
 def _print(result: OpenCliBrowserResult) -> None:

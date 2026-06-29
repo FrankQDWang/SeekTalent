@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { PanelLeft, PanelLeftOpen, SquarePen } from "lucide-react";
+import { Group, Panel, Separator } from "react-resizable-panels";
 import "./ConversationShell.css";
 
 type ConversationShellProps = {
@@ -34,13 +35,16 @@ export function ConversationShell({
     });
   }, [hasSide]);
 
-  return (
-    <div
-      className="conversation-shell"
-      data-rail={railMode}
-      data-side={hasSide ? "visible" : "hidden"}
-    >
-      {railVisible ? (
+  const railPanel = railVisible ? (
+    <>
+      <Panel
+        className="conversation-shell__panel conversation-shell__panel--rail"
+        defaultSize={railMode === "compact" ? 64 : 257}
+        groupResizeBehavior="preserve-pixel-size"
+        id="rail"
+        maxSize={railMode === "compact" ? 92 : 420}
+        minSize={railMode === "compact" ? 56 : 180}
+      >
         <aside aria-label="会话列表" className="conversation-shell__rail">
           <div className="conversation-shell__rail-toolbar">
             <div aria-label="Wide Talent Search" className="brand-mark">
@@ -74,7 +78,21 @@ export function ConversationShell({
             {rail}
           </div>
         </aside>
-      ) : (
+      </Panel>
+      <Separator
+        aria-label="调整会话列表和工作区宽度"
+        className="conversation-shell__separator"
+      />
+    </>
+  ) : null;
+
+  return (
+    <div
+      className="conversation-shell"
+      data-rail={railMode}
+      data-side={hasSide ? "visible" : "hidden"}
+    >
+      {!railVisible ? (
         <button
           aria-label="打开会话列表"
           className="conversation-shell__rail-opener"
@@ -86,13 +104,43 @@ export function ConversationShell({
         >
           <PanelLeftOpen aria-hidden="true" size={18} />
         </button>
-      )}
-      <section className="conversation-shell__main">{main}</section>
-      {hasSide ? (
-        <aside aria-label="运行详情" className="conversation-shell__side">
-          {side}
-        </aside>
       ) : null}
+      <Group
+        className="conversation-shell__layout"
+        id="conversation-shell-layout"
+        orientation="horizontal"
+        resizeTargetMinimumSize={{ coarse: 28, fine: 12 }}
+      >
+        {railPanel}
+        <Panel
+          className="conversation-shell__panel conversation-shell__panel--main"
+          defaultSize={hasSide ? "72%" : "100%"}
+          id="main"
+          minSize={hasSide ? 520 : 640}
+        >
+          <section className="conversation-shell__main">{main}</section>
+        </Panel>
+        {hasSide ? (
+          <>
+            <Separator
+              aria-label="调整工作区和运行详情宽度"
+              className="conversation-shell__separator"
+            />
+            <Panel
+              className="conversation-shell__panel conversation-shell__panel--side"
+              defaultSize={340}
+              groupResizeBehavior="preserve-pixel-size"
+              id="side"
+              maxSize={560}
+              minSize={300}
+            >
+              <aside aria-label="运行详情" className="conversation-shell__side">
+                {side}
+              </aside>
+            </Panel>
+          </>
+        ) : null}
+      </Group>
     </div>
   );
 }

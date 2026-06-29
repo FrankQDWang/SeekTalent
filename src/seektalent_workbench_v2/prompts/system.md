@@ -6,6 +6,7 @@ Do not assume arbitrary text is a JD.
 Intent rules:
 - Pure chat: answer directly, do not call runtime tools, and set runtimeInput to null.
 - New JD or recruitment need: normalize the text into jobTitle, jd, and optional notes.
+- runtimeInput.jd must copy the complete original JD/recruitment description text from the user turn when the user provides a pasted JD; never rewrite, summarize, deduplicate, shorten, abbreviate with ellipses, use placeholders, or reference "same as above".
 - supplementary requirement: update the current requirement form before confirmation instead of creating a new unrelated run.
 - New JD or recruitment need without an active requirement form: use `extract_requirements` with `runtimeInput` when jobTitle/JD/notes can be inferred.
 - Existing active requirement form edits: use `update_requirements` only when the user is modifying the current draft.

@@ -27,6 +27,26 @@ ALLOWED_RAW_KEYS = {
     "score_evidence_source",
 }
 
+ALLOWED_DETAIL_RAW_KEYS = ALLOWED_RAW_KEYS | {
+    "candidate_name",
+    "fullText",
+    "activeStatus",
+    "jobStatus",
+    "gender",
+    "age",
+    "city",
+    "education",
+    "workYears",
+    "currentTitle",
+    "currentCompany",
+    "jobIntention",
+    "workExperienceList",
+    "projectExperienceList",
+    "educationList",
+    "skills",
+    "sourceUrl",
+}
+
 FORBIDDEN_RAW_KEYS = {
     "raw_payload",
     "payload",
@@ -75,6 +95,23 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
         payload={
             "candidateId": "candidate-1",
             "listingId": "listing-1",
+            "candidate_name": "吴**",
+            "fullText": "吴** 32岁 上海 本科 工作10年",
+            "activeStatus": "近30天内活跃",
+            "jobStatus": "在职，看看新机会",
+            "gender": "男",
+            "age": 32,
+            "city": "上海",
+            "education": "本科",
+            "workYears": 10,
+            "currentTitle": "资深体验设计工程师",
+            "currentCompany": "平安集团",
+            "jobIntention": {"expectedSalary": "20-24k*14薪"},
+            "workExperienceList": [{"company": "平安好医", "title": "用户体验设计专家"}],
+            "projectExperienceList": [{"name": "助力C端业务增长"}],
+            "educationList": [{"school": "华东师范大学", "degree": "硕士"}],
+            "skills": ["用户研究", "交互设计"],
+            "sourceUrl": "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc",
             "detailBody": "<html>Liepin private detail body</html>",
             "resumeText": "Detailed private resume text with one@example.com",
             "phone": "13800000000",
@@ -192,7 +229,12 @@ def test_safe_card_summary_does_not_copy_raw_payload_contact_material() -> None:
 def test_detail_mapping_keeps_raw_payload_and_detail_body_out_of_resume_candidate_raw() -> None:
     mapped = map_liepin_worker_detail(_worker_detail(), raw_payload_artifact_ref="worker://details/candidate-1.json")
 
-    assert set(mapped.candidate.raw) == ALLOWED_RAW_KEYS
+    assert set(mapped.candidate.raw) == ALLOWED_DETAIL_RAW_KEYS
+    assert mapped.candidate.raw["candidate_name"] == "吴**"
+    assert mapped.candidate.raw["activeStatus"] == "近30天内活跃"
+    assert mapped.candidate.raw["jobIntention"] == {"expectedSalary": "20-24k*14薪"}
+    assert mapped.candidate.raw["projectExperienceList"] == [{"name": "助力C端业务增长"}]
+    assert mapped.candidate.raw["sourceUrl"].startswith("https://h.liepin.com/resume/showresumedetail/")
     assert not (set(mapped.candidate.raw) & FORBIDDEN_RAW_KEYS)
     assert "Liepin private detail body" not in str(mapped.candidate.raw)
     assert "Detailed private resume text" not in str(mapped.candidate.raw)

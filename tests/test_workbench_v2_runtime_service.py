@@ -458,18 +458,30 @@ def test_runtime_service_extracts_requirement_form_from_jd_runtime_signature(tmp
 def test_runtime_service_candidate_detail_projects_wts_profile_fields() -> None:
     service = WorkbenchV2RuntimeService(store=CandidateFactStore())  # type: ignore[arg-type]
 
+    summary = service.list_candidate_summaries("rtrun_candidate")[0]
     detail = service.get_candidate_detail("rtrun_candidate", "identity_1")
 
+    assert summary["displayName"] == "吴所谓"
+    assert summary["currentTitle"] == "资深体验设计工程师"
+    assert summary["currentCompany"] == "平安集团"
+    assert summary["city"] == "上海"
+    assert summary["workYears"] == 10
+    assert summary["sourceLabel"] == "猎聘"
     assert detail["displayName"] == "吴所谓"
     assert detail["headline"] == "资深体验设计工程师 · 平安集团"
     assert detail["company"] == "平安集团"
+    assert detail["currentTitle"] == "资深体验设计工程师"
+    assert detail["currentCompany"] == "平安集团"
     assert detail["location"] == "上海"
+    assert detail["city"] == "上海"
     assert detail["education"] == "本科"
     assert detail["experienceYears"] == 10
+    assert detail["workYears"] == 10
     assert detail["age"] == 32
     assert detail["gender"] == "男"
     assert detail["activeStatus"] == "近30天内活跃"
     assert detail["jobStatus"] == "在职，看看新机会"
+    assert detail["sourceLabel"] == "猎聘"
     assert detail["avatarLabel"] == "吴"
     assert detail["avatarColorKey"] in {f"avatar-{index}" for index in range(6)}
     assert detail["match"] == {

@@ -310,7 +310,7 @@ def test_materialized_reflection_prose_does_not_invent_terms() -> None:
     )
 
     assert "AutoGen" not in advice.reflection_summary
-    assert advice.reflection_summary == "Round 2 yielded 1 new candidate. Keywords: No keyword changes. Filters: no filter changes. Continue."
+    assert advice.reflection_summary == "第 2 轮新增 1 份候选简历。关键词建议：不调整关键词。筛选建议：不调整筛选字段。继续搜索。"
 
 
 def test_materialized_reflection_drops_non_admitted_keyword_advice() -> None:
@@ -415,7 +415,7 @@ def test_materialized_reflection_forces_continue_when_untried_admitted_terms_rem
     assert advice.suggest_stop is False
     assert advice.suggested_stop_reason is None
     assert "Paimon" in advice.reflection_summary
-    assert "Continue: untried admitted reserve terms remain" in advice.reflection_summary
+    assert "继续搜索：仍有未尝试的准入备用词" in advice.reflection_summary
 
 
 def test_materialized_reflection_uses_runtime_term_pool_for_stop_suppression() -> None:

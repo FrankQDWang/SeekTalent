@@ -176,8 +176,7 @@
 }
 
 .candidate-card__name-block h3,
-.candidate-card__name-block p,
-.candidate-card__summary {
+.candidate-card__name-block p {
   margin: 0;
 }
 
@@ -246,17 +245,6 @@
   font-weight: 680;
   line-height: 1.2;
   padding: 7px 10px;
-}
-
-.candidate-card__summary {
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  color: var(--st-muted);
-  display: -webkit-box;
-  font-size: 13px;
-  font-weight: 620;
-  line-height: 1.55;
-  overflow: hidden;
 }
 
 .candidate-card__footer {

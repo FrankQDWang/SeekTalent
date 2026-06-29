@@ -14,6 +14,8 @@ type RequirementFormEventProps = {
   onAction?:
     | ((payload: WorkbenchV2RequirementActionRequest) => Promise<void> | void)
     | undefined;
+  onSupplementTextChange?: ((text: string) => void) | undefined;
+  supplementText?: string | undefined;
 };
 
 type RequirementDraft = {
@@ -40,15 +42,18 @@ export function RequirementFormEvent({
   actionPending = false,
   event,
   onAction,
+  onSupplementTextChange,
+  supplementText,
 }: RequirementFormEventProps) {
   const draft = useMemo(() => readRequirementDraft(event.payload), [event]);
   const readonly =
     readBoolean(event.payload, "readonly") === true ||
     event.type === "requirement_form_confirmed";
-  const [otherText, setOtherText] = useState("");
+  const [localOtherText, setLocalOtherText] = useState("");
   const [localSelectedByItemId, setLocalSelectedByItemId] = useState<
     Record<string, boolean>
   >({});
+  const otherText = supplementText ?? localOtherText;
   const trimmedOtherText = otherText.trim();
 
   useEffect(() => {
@@ -71,6 +76,14 @@ export function RequirementFormEvent({
     await onAction?.(payload);
   }
 
+  function updateOtherText(text: string) {
+    if (onSupplementTextChange !== undefined) {
+      onSupplementTextChange(text);
+      return;
+    }
+    setLocalOtherText(text);
+  }
+
   async function confirm() {
     if (disabled || !draft?.canConfirm) {
       return;
@@ -80,7 +93,7 @@ export function RequirementFormEvent({
         ? { action: "confirm", text: trimmedOtherText }
         : { action: "confirm" },
     );
-    setOtherText("");
+    updateOtherText("");
   }
 
   if (readonly) {
@@ -172,7 +185,7 @@ export function RequirementFormEvent({
           disabled={disabled}
           label={draft.otherInputPrompt}
           onChange={(inputEvent) =>
-            setOtherText(inputEvent.currentTarget.value)
+            updateOtherText(inputEvent.currentTarget.value)
           }
           placeholder="输入补充要求"
           rows={2}

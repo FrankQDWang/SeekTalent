@@ -48,3 +48,13 @@ def test_dev_launcher_uses_liepin_opencli_helper_without_legacy_mcp_adapter() ->
     assert "node_modules/pi-mcp-adapter/index.ts" not in script
     assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND" not in script
     assert "DOKOBOT_MCP_COMMAND" not in script
+
+
+def test_dev_launcher_waits_for_backend_before_starting_vite() -> None:
+    script = Path("scripts/start-dev-workbench.sh").read_text(encoding="utf-8")
+
+    assert "wait_for_backend_ready()" in script
+    backend_pid_index = script.index("backend_pid=$!")
+    wait_call_index = script.index("\nwait_for_backend_ready\n")
+    vite_index = script.index("pnpm exec vite")
+    assert backend_pid_index < wait_call_index < vite_index

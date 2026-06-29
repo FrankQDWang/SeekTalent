@@ -39,6 +39,7 @@ TextLLMEndpointRegion = Literal["beijing", "singapore"]
 ProviderName = Literal["cts", "liepin"]
 LiepinWorkerMode = Literal["disabled", "fake_fixture", "managed_local", "external_http", "opencli"]
 LiepinBrowserActionBackend = Literal["disabled", "opencli"]
+OpenCliWindowMode = Literal["foreground", "background"]
 DEV_ARTIFACTS_DIR = "artifacts"
 DEV_RUNS_DIR = "runs"
 DEV_LLM_CACHE_DIR = ".seektalent/cache"
@@ -200,6 +201,7 @@ class SourceProviderSettings:
     liepin_browser_action_backend: LiepinBrowserActionBackend
     liepin_opencli_command: str
     liepin_opencli_session: str
+    liepin_opencli_window_mode: OpenCliWindowMode
     liepin_opencli_allowed_hosts_json: str
     liepin_opencli_allowed_start_urls_json: str
     liepin_opencli_max_actions_per_task: int
@@ -464,6 +466,7 @@ class AppSettings(BaseSettings):
     liepin_browser_action_backend: LiepinBrowserActionBackend = "opencli"
     liepin_opencli_command: str = DEFAULT_LIEPIN_OPENCLI_COMMAND
     liepin_opencli_session: str = DEFAULT_LIEPIN_OPENCLI_SESSION
+    liepin_opencli_window_mode: OpenCliWindowMode = "background"
     liepin_opencli_allowed_hosts_json: str = '["www.liepin.com","h.liepin.com","c.liepin.com","lpt.liepin.com"]'
     liepin_opencli_allowed_start_urls_json: str = '["https://h.liepin.com/search/getConditionItem#session"]'
     liepin_opencli_max_actions_per_task: int = 80
@@ -808,6 +811,7 @@ class AppSettings(BaseSettings):
             liepin_browser_action_backend=self.liepin_browser_action_backend,
             liepin_opencli_command=self.liepin_opencli_command,
             liepin_opencli_session=self.liepin_opencli_session,
+            liepin_opencli_window_mode=self.liepin_opencli_window_mode,
             liepin_opencli_allowed_hosts_json=self.liepin_opencli_allowed_hosts_json,
             liepin_opencli_allowed_start_urls_json=self.liepin_opencli_allowed_start_urls_json,
             liepin_opencli_max_actions_per_task=self.liepin_opencli_max_actions_per_task,

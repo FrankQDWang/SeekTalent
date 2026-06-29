@@ -227,6 +227,84 @@ def test_opencli_retriever_returns_blocked_reason_when_browser_not_ready(tmp_pat
         )
 
 
+def test_opencli_retriever_recovers_extension_connection_before_search(tmp_path: Path) -> None:
+    class RecoveringRunner(FakeOpenCliRunner):
+        recover_calls = 0
+
+        def status(self) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="status",
+                safe_reason_code="liepin_opencli_extension_disconnected",
+            )
+
+        def recover_connection(self) -> OpenCliBrowserResult:
+            self.recover_calls += 1
+            return OpenCliBrowserResult(ok=True, action="recover_connection")
+
+    runner = RecoveringRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+    retriever = LiepinOpenCliResumeRetriever(runner=runner)
+
+    response = retriever.search_resumes(
+        LiepinOpenCliResumeRequest(
+            source_run_id="run-1",
+            keyword_query="数据开发 Python",
+            query_terms=("数据开发", "Python"),
+            target_resumes=2,
+            max_cards=10,
+            max_pages=1,
+            requirement_sheet={"job_title": "数据开发专家"},
+            native_filters=None,
+        )
+    )
+
+    assert runner.recover_calls == 1
+    assert len(response.resumes) == 2
+
+
+def test_opencli_retriever_retries_search_after_extension_recovery(tmp_path: Path) -> None:
+    class RetryRunner(FakeOpenCliRunner):
+        recover_calls = 0
+        search_calls = 0
+
+        def search_liepin_resumes(self, **kwargs: object) -> dict[str, object]:
+            self.search_calls += 1
+            if self.search_calls == 1:
+                return {
+                    "schema_version": "seektalent.liepin_opencli_resumes.v1",
+                    "status": "blocked",
+                    "safe_reason_code": "liepin_opencli_extension_disconnected",
+                    "stop_reason": "liepin_opencli_extension_disconnected",
+                    "cards_seen": 0,
+                    "resumes": [],
+                }
+            return super().search_liepin_resumes(**kwargs)
+
+        def recover_connection(self) -> OpenCliBrowserResult:
+            self.recover_calls += 1
+            return OpenCliBrowserResult(ok=True, action="recover_connection")
+
+    runner = RetryRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+    retriever = LiepinOpenCliResumeRetriever(runner=runner)
+
+    response = retriever.search_resumes(
+        LiepinOpenCliResumeRequest(
+            source_run_id="run-1",
+            keyword_query="数据开发 Python",
+            query_terms=("数据开发", "Python"),
+            target_resumes=2,
+            max_cards=10,
+            max_pages=1,
+            requirement_sheet={"job_title": "数据开发专家"},
+            native_filters=None,
+        )
+    )
+
+    assert runner.recover_calls == 1
+    assert runner.search_calls == 2
+    assert len(response.resumes) == 2
+
+
 def test_opencli_retriever_runner_protocol_is_site_level() -> None:
     import seektalent.providers.liepin.opencli_retriever as module
 

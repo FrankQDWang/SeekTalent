@@ -9,15 +9,19 @@ import "./TranscriptV2.css";
 type TranscriptV2Props = {
   events: readonly WorkbenchV2TranscriptEvent[];
   requirementActionPending?: boolean;
+  requirementSupplementText?: string | undefined;
   onRequirementAction?:
     | ((payload: WorkbenchV2RequirementActionRequest) => Promise<void> | void)
     | undefined;
+  onRequirementSupplementTextChange?: ((text: string) => void) | undefined;
 };
 
 export function TranscriptV2({
   events,
   requirementActionPending = false,
+  requirementSupplementText,
   onRequirementAction,
+  onRequirementSupplementTextChange,
 }: TranscriptV2Props) {
   const transcriptRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -25,9 +29,11 @@ export function TranscriptV2({
     () => [...events].sort((left, right) => left.step - right.step),
     [events],
   );
-  const latestRequirementFormEventId =
-    latestRequirementFormEvent(orderedEvents)?.eventId ?? null;
-  const latestEventId = orderedEvents.at(-1)?.eventId ?? null;
+  const requirementFormRenderState = requirementFormRenderStateFor(
+    orderedEvents,
+  );
+  const latestAutoScrollEventId =
+    latestAutoScrollEvent(orderedEvents)?.eventId ?? null;
 
   useLayoutEffect(() => {
     const transcript = transcriptRef.current;
@@ -35,7 +41,7 @@ export function TranscriptV2({
       return;
     }
     transcript.scrollTop = transcript.scrollHeight;
-  }, [latestEventId, orderedEvents.length]);
+  }, [latestAutoScrollEventId]);
 
   function handleScroll() {
     const transcript = transcriptRef.current;
@@ -71,10 +77,14 @@ export function TranscriptV2({
       {orderedEvents.map((event) => (
         <TranscriptV2Event
           event={event}
-          latestRequirementFormEventId={latestRequirementFormEventId}
+          requirementFormRenderState={requirementFormRenderState}
           key={event.eventId}
           onRequirementAction={onRequirementAction}
+          onRequirementSupplementTextChange={
+            onRequirementSupplementTextChange
+          }
           requirementActionPending={requirementActionPending}
+          requirementSupplementText={requirementSupplementText}
         />
       ))}
     </section>
@@ -83,29 +93,38 @@ export function TranscriptV2({
 
 function TranscriptV2Event({
   event,
-  latestRequirementFormEventId,
+  requirementFormRenderState,
   onRequirementAction,
+  onRequirementSupplementTextChange,
   requirementActionPending,
+  requirementSupplementText,
 }: {
   event: WorkbenchV2TranscriptEvent;
-  latestRequirementFormEventId: string | null;
+  requirementFormRenderState: RequirementFormRenderState | null;
   requirementActionPending: boolean;
   onRequirementAction:
     | ((payload: WorkbenchV2RequirementActionRequest) => Promise<void> | void)
     | undefined;
+  onRequirementSupplementTextChange: ((text: string) => void) | undefined;
+  requirementSupplementText: string | undefined;
 }) {
   if (
     event.type === "requirement_form" ||
     event.type === "requirement_form_confirmed"
   ) {
-    if (event.eventId !== latestRequirementFormEventId) {
+    if (
+      requirementFormRenderState === null ||
+      event.eventId !== requirementFormRenderState.anchorEventId
+    ) {
       return null;
     }
     return (
       <RequirementFormEvent
         actionPending={requirementActionPending}
-        event={event}
+        event={requirementFormRenderState.displayEvent}
         onAction={onRequirementAction}
+        onSupplementTextChange={onRequirementSupplementTextChange}
+        supplementText={requirementSupplementText}
       />
     );
   }
@@ -167,19 +186,51 @@ function TranscriptV2ActivityEvent({
   );
 }
 
-function latestRequirementFormEvent(
+type RequirementFormRenderState = {
+  anchorEventId: string;
+  displayEvent: WorkbenchV2TranscriptEvent;
+};
+
+function requirementFormRenderStateFor(
+  orderedEvents: readonly WorkbenchV2TranscriptEvent[],
+): RequirementFormRenderState | null {
+  let anchorEventId: string | null = null;
+  let displayEvent: WorkbenchV2TranscriptEvent | null = null;
+  for (const event of orderedEvents) {
+    if (
+      event.type === "requirement_form" ||
+      event.type === "requirement_form_confirmed"
+    ) {
+      anchorEventId ??= event.eventId;
+      displayEvent = event;
+    }
+  }
+  if (anchorEventId === null || displayEvent === null) {
+    return null;
+  }
+  return { anchorEventId, displayEvent };
+}
+
+function latestAutoScrollEvent(
   orderedEvents: readonly WorkbenchV2TranscriptEvent[],
 ): WorkbenchV2TranscriptEvent | null {
   for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
     const event = orderedEvents[index];
-    if (
-      event?.type === "requirement_form" ||
-      event?.type === "requirement_form_confirmed"
-    ) {
+    if (event === undefined) {
+      continue;
+    }
+    if (!isRequirementFormEvent(event)) {
       return event;
     }
   }
-  return null;
+  return orderedEvents.at(-1) ?? null;
+}
+
+function isRequirementFormEvent(event: WorkbenchV2TranscriptEvent): boolean {
+  return (
+    event.type === "requirement_form" ||
+    event.type === "requirement_form_confirmed"
+  );
 }
 
 function eventContent(event: WorkbenchV2TranscriptEvent): string | null {

@@ -386,6 +386,7 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         command=settings.liepin_opencli_command_argv,
         session=settings.liepin_opencli_session,
         timeout_seconds=settings.liepin_opencli_timeout_seconds,
+        window_mode=settings.liepin_opencli_window_mode,
         current_tab_reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
         pacing_enabled=settings.liepin_opencli_pacing_enabled,
         pacing_min_ms=settings.liepin_opencli_pacing_min_ms,

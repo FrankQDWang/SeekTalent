@@ -30,6 +30,7 @@ def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.Mo
     assert settings.liepin_opencli_command_argv[1:] == ("-m", "seektalent.opencli_launcher")
     assert Path(settings.liepin_opencli_command_argv[0]).exists()
     assert settings.liepin_opencli_session == "seektalent-liepin"
+    assert settings.liepin_opencli_window_mode == "background"
     assert settings.liepin_opencli_allowed_hosts == (
         "www.liepin.com",
         "h.liepin.com",

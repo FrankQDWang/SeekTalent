@@ -92,6 +92,41 @@ wait_for_opencli_extension() {
   return 1
 }
 
+wait_for_backend_ready() {
+  local timeout="${SEEKTALENT_DEV_BACKEND_READY_TIMEOUT_SECONDS:-60}"
+  uv run python - "$BACKEND_HOST" "$BACKEND_PORT" "$timeout" "$backend_pid" <<'PY'
+import os
+import socket
+import sys
+import time
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+timeout = float(sys.argv[3])
+backend_pid = int(sys.argv[4])
+deadline = time.monotonic() + timeout
+
+while True:
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            raise SystemExit(0)
+    except OSError:
+        pass
+
+    try:
+        os.kill(backend_pid, 0)
+    except OSError:
+        print("SeekTalent backend exited before it was ready.", file=sys.stderr)
+        raise SystemExit(1)
+
+    if time.monotonic() >= deadline:
+        print(f"Timed out waiting for SeekTalent backend at {host}:{port}.", file=sys.stderr)
+        raise SystemExit(1)
+
+    time.sleep(0.2)
+PY
+}
+
 OPENCLI_START_DAEMON="$(env_or_file SEEKTALENT_LIEPIN_OPENCLI_START_DAEMON)"
 if [[ "$OPENCLI_START_DAEMON" == "1" || "$OPENCLI_START_DAEMON" == "true" ]]; then
   echo "Starting OpenCLI browser bridge daemon for Liepin local browser actions..." >&2
@@ -138,6 +173,7 @@ env \
   SEEKTALENT_LIEPIN_WORKER_MODE="opencli" \
   SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND="opencli" \
   SEEKTALENT_LIEPIN_OPENCLI_COMMAND="$OPENCLI_BIN" \
+  SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE="${SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE:-background}" \
   SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS="${SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS:-900}" \
   SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS="${SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS:-90}" \
   uv run seektalent-ui-api \
@@ -148,6 +184,9 @@ env \
 backend_pid=$!
 
 echo "SeekTalent backend: http://$BACKEND_HOST:$BACKEND_PORT" >&2
+echo "Waiting for SeekTalent backend to accept connections..." >&2
+wait_for_backend_ready
+echo "SeekTalent backend is ready." >&2
 echo "SeekTalent React workbench: http://$FRONTEND_HOST:$FRONTEND_PORT" >&2
 echo "Liepin worker mode: opencli via deterministic local browser retrieval" >&2
 

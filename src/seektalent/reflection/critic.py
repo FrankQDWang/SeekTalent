@@ -33,25 +33,25 @@ def _join_terms(terms: Iterable[str]) -> str:
 def _keyword_summary(keyword_advice: ReflectionKeywordAdvice) -> str:
     parts: list[str] = []
     if keyword_advice.suggested_activate_terms:
-        parts.append(f"Activate {_join_terms(keyword_advice.suggested_activate_terms)} from the reserve term bank.")
+        parts.append(f"激活备用词库中的 {_join_terms(keyword_advice.suggested_activate_terms)}。")
     if keyword_advice.suggested_keep_terms:
-        parts.append(f"Keep {_join_terms(keyword_advice.suggested_keep_terms)}.")
+        parts.append(f"保留 {_join_terms(keyword_advice.suggested_keep_terms)}。")
     if keyword_advice.suggested_deprioritize_terms:
-        parts.append(f"De-prioritize {_join_terms(keyword_advice.suggested_deprioritize_terms)}.")
+        parts.append(f"降低 {_join_terms(keyword_advice.suggested_deprioritize_terms)} 的优先级。")
     if keyword_advice.suggested_drop_terms:
-        parts.append(f"Drop {_join_terms(keyword_advice.suggested_drop_terms)}.")
-    return " ".join(parts) if parts else "No keyword changes."
+        parts.append(f"移除 {_join_terms(keyword_advice.suggested_drop_terms)}。")
+    return "".join(parts) if parts else "不调整关键词。"
 
 
 def _filter_summary(draft: ReflectionAdviceDraft) -> str:
     parts: list[str] = []
     if draft.filter_advice.suggested_keep_filter_fields:
-        parts.append(f"keep filters {_join_terms(draft.filter_advice.suggested_keep_filter_fields)}")
+        parts.append(f"保留筛选字段 {_join_terms(draft.filter_advice.suggested_keep_filter_fields)}")
     if draft.filter_advice.suggested_drop_filter_fields:
-        parts.append(f"drop filters {_join_terms(draft.filter_advice.suggested_drop_filter_fields)}")
+        parts.append(f"移除筛选字段 {_join_terms(draft.filter_advice.suggested_drop_filter_fields)}")
     if draft.filter_advice.suggested_add_filter_fields:
-        parts.append(f"add filters {_join_terms(draft.filter_advice.suggested_add_filter_fields)}")
-    return "; ".join(parts) if parts else "no filter changes"
+        parts.append(f"新增筛选字段 {_join_terms(draft.filter_advice.suggested_add_filter_fields)}")
+    return "；".join(parts) if parts else "不调整筛选字段"
 
 
 def _public_reflection_reason(*, suggest_stop: bool) -> str:
@@ -210,7 +210,8 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
             (
                 "TASK\n"
                 "Review this retrieval round and return structured keyword/filter advice, "
-                "a reflection_rationale explanation, and stop advice."
+                "a reflection_rationale explanation, and stop advice.\n"
+                "All natural-language output fields must be written in Simplified Chinese."
             ),
             "REQUIREMENTS\n" + render_untrusted_text_block("REQUIREMENT_SHEET", requirements_text),
             "TERM BANK\n" + render_untrusted_text_block("TERM_BANK", _term_bank_rows(context)),
@@ -281,16 +282,15 @@ def materialize_reflection_advice(*, context: ReflectionContext, draft: Reflecti
     public_reason = _public_reflection_reason(suggest_stop=suggest_stop)
     suggested_stop_reason = public_reason if suggest_stop else None
     new_count = context.search_observation.unique_new_count
-    noun = "candidate" if new_count == 1 else "candidates"
-    summary_parts = [f"Round {context.round_no} yielded {new_count} new {noun}."]
-    summary_parts.append(f"Keywords: {keyword_summary}")
-    summary_parts.append(f"Filters: {_filter_summary(draft)}.")
+    summary_parts = [f"第 {context.round_no} 轮新增 {new_count} 份候选简历。"]
+    summary_parts.append(f"关键词建议：{keyword_summary}")
+    summary_parts.append(f"筛选建议：{_filter_summary(draft)}。")
     if suggest_stop and suggested_stop_reason:
-        summary_parts.append(f"Stop: {suggested_stop_reason}.")
+        summary_parts.append("停止建议：当前候选池已足够强，可结束检索。")
     elif suppress_reflection_stop_advice:
-        summary_parts.append(f"Continue: untried admitted reserve terms remain: {_join_terms(untried_terms[:3])}.")
+        summary_parts.append(f"继续搜索：仍有未尝试的准入备用词：{_join_terms(untried_terms[:3])}。")
     else:
-        summary_parts.append("Continue.")
+        summary_parts.append("继续搜索。")
     return ReflectionAdvice(
         keyword_advice=keyword_advice,
         filter_advice=ReflectionFilterAdvice(
@@ -301,7 +301,7 @@ def materialize_reflection_advice(*, context: ReflectionContext, draft: Reflecti
         reflection_rationale=public_reason,
         suggest_stop=suggest_stop,
         suggested_stop_reason=suggested_stop_reason,
-        reflection_summary=" ".join(summary_parts),
+        reflection_summary="".join(summary_parts),
     )
 
 

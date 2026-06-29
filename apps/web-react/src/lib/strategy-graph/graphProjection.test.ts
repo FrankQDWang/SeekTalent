@@ -166,6 +166,8 @@ describe("projectStrategyTimelineGraph", () => {
 
     const projected = projectStrategyTimelineGraph(multiRoundGraph);
 
-    expect(projected.edges[0]?.path).toBe("M 1601 208 H 586 V 277 H 638");
+    expect(projected.edges[0]?.path).toBe(
+      "M 1706 109 H 1758 V 208 H 586 V 277 H 638",
+    );
   });
 });

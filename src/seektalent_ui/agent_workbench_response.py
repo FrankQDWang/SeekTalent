@@ -697,7 +697,10 @@ def _observation_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
 
 
 def _reflection_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
-    parts = [item for item in [payload.reflectionSummary, payload.reflectionRationale] if item]
+    rationale = payload.reflectionRationale
+    if rationale in {"reflection_continue", "reflection_stop"}:
+        rationale = None
+    parts = [item for item in [payload.reflectionSummary, rationale] if item]
     parts.extend(_filter_suggestion_lines(payload))
     return " ".join(parts) if parts else "No reflection has been projected yet."
 

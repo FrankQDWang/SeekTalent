@@ -156,7 +156,13 @@ class OpenCliBrowserAutomation:
 
     def _run(self, argv: Sequence[str]) -> str:
         try:
-            return strip_opencli_stdout_notice(self.commands.run(tuple(argv), timeout=self.config.timeout_seconds))
+            return strip_opencli_stdout_notice(
+                self.commands.run(
+                    tuple(argv),
+                    timeout=self.config.timeout_seconds,
+                    env={"OPENCLI_WINDOW": self.config.window_mode},
+                )
+            )
         except FileNotFoundError as exc:
             raise OpenCliBrowserError(OPENCLI_COMMAND_MISSING) from exc
         except subprocess.TimeoutExpired as exc:
@@ -192,7 +198,9 @@ def _validate_command_shape(command: str, args: tuple[str, ...]) -> None:
         raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
     if command == "open" and len(args) == 3 and not _is_safe_page_id(args[1]):
         raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
-    if command == "tab" and args[0] in {"new", "select", "close"} and not _is_safe_page_id(args[1]):
+    if command == "tab" and args[0] == "new" and ("\x00" in args[1] or not args[1].strip()):
+        raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+    if command == "tab" and args[0] in {"select", "close"} and not _is_safe_page_id(args[1]):
         raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
 
 

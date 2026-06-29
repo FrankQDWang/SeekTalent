@@ -247,52 +247,77 @@ def _strategy_graph(
                 )
             continue
 
-        if _is_keyword_event(event_type, stage):
+        if _is_graph_query_event(event_type, stage):
             _upsert_graph_node(
                 node_order,
                 node_specs,
-                f"v2-round-{round_no}-keywords",
+                f"v2-round-{round_no}-query",
                 kind="phase",
-                label=f"第 {round_no} 轮 · 关键词",
+                label=f"第 {round_no} 轮 · 查询包",
                 summary=_keyword_query_from_payload(event.payload) or summary,
                 roundNo=round_no,
-                phase="keywords",
+                phase="query",
                 stage="round_query",
                 status=status,
                 sourceKind="all",
             )
-        if _is_observation_event(event_type, stage):
-            observation = _observation_text_from_payload(event.payload)
-            if observation is not None:
-                _upsert_graph_node(
-                    node_order,
-                    node_specs,
-                    f"v2-round-{round_no}-observation",
-                    kind="phase",
-                    label=f"第 {round_no} 轮 · observation",
-                    summary=observation,
-                    roundNo=round_no,
-                    phase="observation",
-                    stage=stage or "scoring",
-                    status=status,
-                    sourceKind="all",
-                )
-        if _is_reflection_event(event_type, stage):
-            reflection = _reflection_text_from_payload(event.payload)
-            if reflection is not None:
-                _upsert_graph_node(
-                    node_order,
-                    node_specs,
-                    f"v2-round-{round_no}-reflection",
-                    kind="phase",
-                    label=f"第 {round_no} 轮 · 反思",
-                    summary=reflection,
-                    roundNo=round_no,
-                    phase="reflection",
-                    stage=stage or "reflection",
-                    status=status,
-                    sourceKind="all",
-                )
+        if _is_graph_source_event(event_type, stage):
+            source_kind = _graph_source_kind(event.payload)
+            _upsert_graph_node(
+                node_order,
+                node_specs,
+                f"v2-round-{round_no}-source-{source_kind}",
+                kind="phase",
+                label=f"第 {round_no} 轮 · {_source_graph_title(source_kind)}检索",
+                summary=summary,
+                roundNo=round_no,
+                phase="source",
+                stage="source_result",
+                status=status,
+                sourceKind=source_kind,
+            )
+        if _is_graph_merge_event(event_type, stage):
+            _upsert_graph_node(
+                node_order,
+                node_specs,
+                f"v2-round-{round_no}-merge",
+                kind="phase",
+                label=f"第 {round_no} 轮 · 去重合并",
+                summary=summary,
+                roundNo=round_no,
+                phase="merge",
+                stage="merge",
+                status=status,
+                sourceKind="all",
+            )
+        if _is_graph_scoring_event(event_type, stage):
+            _upsert_graph_node(
+                node_order,
+                node_specs,
+                f"v2-round-{round_no}-top-pool",
+                kind="phase",
+                label=f"第 {round_no} 轮 · Top Pool",
+                summary=summary,
+                roundNo=round_no,
+                phase="top_pool",
+                stage="scoring",
+                status=status,
+                sourceKind="all",
+            )
+        if _is_graph_feedback_event(event_type, stage):
+            _upsert_graph_node(
+                node_order,
+                node_specs,
+                f"v2-round-{round_no}-next-strategy",
+                kind="phase",
+                label=f"第 {round_no} 轮 · 下一轮策略",
+                summary=_reflection_text_from_payload(event.payload) or summary,
+                roundNo=round_no,
+                phase="reflection",
+                stage="feedback",
+                status=status,
+                sourceKind="all",
+            )
 
     edges = [
         WorkbenchV2GraphEdgeView(
@@ -472,6 +497,44 @@ def _is_final_event(event: WorkbenchV2TranscriptEvent, event_type: str | None) -
 
 def _is_keyword_event(event_type: str | None, stage: str | None) -> bool:
     return event_type == "runtime_round_query_ready" or stage == "round_query"
+
+
+def _is_graph_query_event(event_type: str | None, stage: str | None) -> bool:
+    return event_type == "runtime_round_query_ready" or stage == "round_query"
+
+
+def _is_graph_source_event(event_type: str | None, stage: str | None) -> bool:
+    return event_type in {
+        "runtime_round_source_dispatch",
+        "runtime_round_source_result",
+    } or stage in {"source_dispatch", "source_result"}
+
+
+def _is_graph_merge_event(event_type: str | None, stage: str | None) -> bool:
+    return event_type == "runtime_round_merge_completed" or stage == "merge"
+
+
+def _is_graph_scoring_event(event_type: str | None, stage: str | None) -> bool:
+    return event_type == "runtime_round_scoring_completed" or stage == "scoring"
+
+
+def _is_graph_feedback_event(event_type: str | None, stage: str | None) -> bool:
+    return event_type == "runtime_round_feedback_completed" or stage in {"feedback", "reflection"}
+
+
+def _graph_source_kind(payload: dict[str, object]) -> str:
+    source_kind = _string_or_none(payload.get("sourceKind")) or _string_or_none(payload.get("sourceId"))
+    if source_kind in {"liepin", "cts"}:
+        return source_kind
+    return "all"
+
+
+def _source_graph_title(source_kind: str | None) -> str:
+    if source_kind == "liepin":
+        return "猎聘"
+    if source_kind == "cts":
+        return "CTS"
+    return ""
 
 
 def _is_observation_event(event_type: str | None, stage: str | None) -> bool:

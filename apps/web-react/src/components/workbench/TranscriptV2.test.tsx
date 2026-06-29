@@ -145,6 +145,118 @@ describe("TranscriptV2", () => {
     ).not.toBeChecked();
   });
 
+  it("keeps requirement form anchored when a later snapshot updates checkbox state", () => {
+    expect.hasAssertions();
+    const userEvent = transcriptEvent({
+      eventId: "event_user",
+      step: 1,
+      type: "user_message",
+      role: "user",
+      payload: { text: "这是 JD" },
+    });
+    const originalForm = transcriptEvent({
+      eventId: "event_requirement_original",
+      step: 2,
+      type: "requirement_form",
+      role: "assistant",
+      payload: requirementPayload({ selected: true }),
+    });
+    const statusEvent = transcriptEvent({
+      eventId: "event_status_after_form",
+      step: 3,
+      type: "assistant_status",
+      role: "assistant",
+      payload: { text: "已记录修改" },
+    });
+    const updatedForm = transcriptEvent({
+      eventId: "event_requirement_updated",
+      step: 4,
+      type: "requirement_form",
+      role: "assistant",
+      payload: requirementPayload({ selected: false }),
+    });
+
+    const { container } = render(
+      <TranscriptV2
+        events={[userEvent, originalForm, statusEvent, updatedForm]}
+      />,
+    );
+
+    const children = Array.from(
+      container.querySelector(".transcript-v2")?.children ?? [],
+    );
+    const requirementIndex = children.findIndex((child) =>
+      child.classList.contains("requirement-form-event"),
+    );
+    const statusIndex = children.findIndex((child) =>
+      child.textContent?.includes("已记录修改"),
+    );
+
+    expect(requirementIndex).toBeGreaterThan(-1);
+    expect(statusIndex).toBeGreaterThan(-1);
+    expect(requirementIndex).toBeLessThan(statusIndex);
+    expect(
+      screen.getByRole("checkbox", { name: /Python 后端经验/ }),
+    ).not.toBeChecked();
+  });
+
+  it("does not force-scroll when only a requirement form snapshot changes", () => {
+    expect.hasAssertions();
+    const userEvent = transcriptEvent({
+      eventId: "event_user",
+      step: 1,
+      type: "user_message",
+      role: "user",
+      payload: { text: "这是 JD" },
+    });
+    const originalForm = transcriptEvent({
+      eventId: "event_requirement_original",
+      step: 2,
+      type: "requirement_form",
+      role: "assistant",
+      payload: requirementPayload({ selected: true }),
+    });
+    const statusEvent = transcriptEvent({
+      eventId: "event_status_after_form",
+      step: 3,
+      type: "assistant_status",
+      role: "assistant",
+      payload: { text: "已记录修改" },
+    });
+    const { rerender } = render(
+      <TranscriptV2 events={[userEvent, originalForm, statusEvent]} />,
+    );
+    const transcript = screen.getByRole("region", {
+      name: "Agent transcript",
+    });
+    setScrollMetrics(transcript, { clientHeight: 400, scrollHeight: 1000 });
+    transcript.scrollTop = 600;
+    fireEvent.scroll(transcript);
+
+    setScrollMetrics(transcript, { clientHeight: 400, scrollHeight: 1300 });
+    rerender(
+      <TranscriptV2
+        events={[
+          userEvent,
+          originalForm,
+          statusEvent,
+          transcriptEvent({
+            eventId: "event_requirement_updated",
+            step: 4,
+            type: "requirement_form",
+            role: "assistant",
+            payload: requirementPayload({ selected: false }),
+          }),
+        ]}
+      />,
+    );
+
+    expect(transcript.scrollTop).toBe(600);
+    expect(
+      screen.getByRole("checkbox", { name: /Python 后端经验/ }),
+    ).not.toBeChecked();
+  });
+
   it("renders compact runtime and error events without raw payload details", () => {
     expect.hasAssertions();
 

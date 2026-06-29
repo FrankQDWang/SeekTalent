@@ -45,6 +45,20 @@
   .conversation-view__panel--chat {
   background: rgb(246 248 252);
   border-right: 1px solid var(--st-border);
+  position: relative;
+}
+
+.conversation-view__panel--chat {
+  --chat-inline-padding: clamp(12px, 3vw, 36px);
+
+  container-type: inline-size;
+  position: relative;
+}
+
+@supports (width: 1cqw) {
+  .conversation-view__panel--chat {
+    --chat-inline-padding: clamp(12px, 3cqw, 36px);
+  }
 }
 
 .conversation-view__workspace[data-workflow-surface="visible"]
@@ -68,6 +82,11 @@
 
 .conversation-view__panel .transcript {
   overflow: auto;
+}
+
+.conversation-view__panel--chat .transcript {
+  padding-bottom: calc(var(--message-composer-height, 62px) + 48px);
+  padding-inline: var(--chat-inline-padding);
 }
 
 .conversation-view__state {

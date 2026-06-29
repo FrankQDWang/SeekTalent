@@ -301,6 +301,24 @@ class AsyncioRunRequirementRuntime(FakeRuntimeService):
         asyncio.run(_empty_async_step())
         return super().extract_requirement_bundle(conversation_id, runtime_input)
 
+    def amend_requirement_bundle(
+        self,
+        conversation_id: str,
+        *,
+        base_draft: RequirementDraft,
+        base_requirement_sheet: RequirementSheet,
+        text: str,
+        idempotency_key: str,
+    ) -> FakeRequirementExtraction:
+        asyncio.run(_empty_async_step())
+        return super().amend_requirement_bundle(
+            conversation_id,
+            base_draft=base_draft,
+            base_requirement_sheet=base_requirement_sheet,
+            text=text,
+            idempotency_key=idempotency_key,
+        )
+
 
 async def _empty_async_step() -> None:
     return None
@@ -440,11 +458,103 @@ def test_create_jd_with_runtime_words_still_uses_agent_intent(tmp_path: Path) ->
     ]
     assert not [event for event in view.transcriptEvents if event.type == "runtime_result"]
     assert view.requirementForm is not None
-    assert view.requirementForm["runtimeInput"] == runtime_input
+    expected_runtime_input = {
+        **runtime_input,
+        "jd": jd_text,
+    }
+    assert view.requirementForm["runtimeInput"] == expected_runtime_input
     assert runtime.extract_calls == [
         {
             "conversation_id": view.conversation.conversationId,
-            "runtime_input": WorkbenchV2RuntimeInput.model_validate(runtime_input),
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(expected_runtime_input),
+        }
+    ]
+
+
+def test_agent_must_not_send_abbreviated_jd_to_runtime(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    full_jd_text = (
+        "淘天集团-数据科学专家\n"
+        "岗位职责：负责指标体系、AB 实验、SQL/Python 数据分析、因果推断和机器学习建模。\n"
+        "岗位要求：5年以上经验，杭州，知名互联网或 AI 高科技公司背景。"
+    )
+    runtime_input = {
+        "jobTitle": "数据科学专家",
+        "jd": "淘天集团-数据科学专家...",
+        "notes": "工作城市：杭州；必备条件：知名互联网或 AI 高科技公司背景。",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(
+            intent="extract_requirements",
+            message="我已整理需求，请确认表单。",
+            runtimeInput=runtime_input,
+        )
+    )
+    runtime = FakeRuntimeService()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+
+    view = asyncio.run(service.create_conversation(full_jd_text, idempotency_key="create-abbreviated-jd"))
+
+    assert view.requirementForm is not None
+    assert view.requirementForm["runtimeInput"] == {
+        **runtime_input,
+        "jd": full_jd_text,
+    }
+    assert runtime.extract_calls == [
+        {
+            "conversation_id": view.conversation.conversationId,
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(
+                {
+                    **runtime_input,
+                    "jd": full_jd_text,
+                }
+            ),
+        }
+    ]
+
+
+def test_agent_must_not_send_compacted_jd_to_runtime(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    full_jd_text = (
+        "淘天集团-数据科学专家\n"
+        "岗位职责：\n"
+        "1. 为淘天核心业务策略、创新商业策略建立完整、科学的指标监控、预测、评估、洞察的数据体系；\n"
+        "2. 数据驱动和结果导向，设计合适的分析和数科解决方案，利用运筹优化、博弈论、因果推断、机器学习建模等方法提升业务增长；\n"
+        "3. 数据产品建设，负责科学分析能力产品落地，主要包括多维分析、归因分析、智能 tips 等数据科学组件。\n"
+        "岗位要求：\n"
+        "1. 统计、数学、计算机、大数据相关专业，本科及以上学历，至少 5 年以上数据分析/数据挖掘/数据科学工作经验；\n"
+        "2. 熟练运用 SQL 和 Python，熟悉 A/B Testing 实验理论和流程；\n"
+        "3. 喜欢并善于从海量数据中发现规律，能基于业务目标确定指标体系；\n"
+        "4. 有管理咨询、商业分析、应用算法进行数据挖掘经验者优先。\n"
+        "工作城市：杭州。必备条件：知名互联网或 AI 高科技公司背景，五年三跳不要。"
+    )
+    compacted_runtime_input = {
+        "jobTitle": "数据科学专家",
+        "jd": "负责指标体系建设、AB 实验、SQL/Python 数据分析、因果推断、机器学习建模和业务增长分析。",
+        "notes": "杭州；知名互联网或 AI 高科技公司背景；五年三跳不要。",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(
+            intent="extract_requirements",
+            message="我已整理需求，请确认表单。",
+            runtimeInput=compacted_runtime_input,
+        )
+    )
+    runtime = FakeRuntimeService()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+
+    view = asyncio.run(service.create_conversation(full_jd_text, idempotency_key="create-compacted-jd"))
+
+    expected_runtime_input = {
+        **compacted_runtime_input,
+        "jd": full_jd_text,
+    }
+    assert view.requirementForm is not None
+    assert view.requirementForm["runtimeInput"] == expected_runtime_input
+    assert runtime.extract_calls == [
+        {
+            "conversation_id": view.conversation.conversationId,
+            "runtime_input": WorkbenchV2RuntimeInput.model_validate(expected_runtime_input),
         }
     ]
 
@@ -601,6 +711,29 @@ def test_v2_strategy_graph_does_not_show_final_shortlist_before_runtime_result(t
         },
         {
             "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 20,
+            "runtimeEventType": "runtime_round_source_result",
+            "status": "completed",
+            "stage": "source_result",
+            "roundNo": 1,
+            "sourceKind": "liepin",
+            "summary": "第 1 轮猎聘检索完成。",
+            "details": {},
+            "state": "running",
+        },
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 24,
+            "runtimeEventType": "runtime_round_merge_completed",
+            "status": "completed",
+            "stage": "merge",
+            "roundNo": 1,
+            "summary": "第 1 轮候选人合并完成。",
+            "details": {},
+            "state": "running",
+        },
+        {
+            "runtimeRunId": "rtrun_1",
             "runtimeEventSeq": 25,
             "runtimeEventType": "runtime_round_scoring_completed",
             "status": "completed",
@@ -619,8 +752,10 @@ def test_v2_strategy_graph_does_not_show_final_shortlist_before_runtime_result(t
 
     assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
         "需求拆解",
-        "第 1 轮 · 关键词",
-        "第 1 轮 · observation",
+        "第 1 轮 · 查询包",
+        "第 1 轮 · 猎聘检索",
+        "第 1 轮 · 去重合并",
+        "第 1 轮 · Top Pool",
     ]
     assert not any(node["kind"] == "final" for node in payload["strategyGraph"]["nodes"])
     assert payload["thinkingProcess"]["activeRoundNo"] == 1
@@ -676,8 +811,8 @@ def test_v2_strategy_graph_adds_reflection_only_after_reflection_event(tmp_path:
 
     assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
         "需求拆解",
-        "第 1 轮 · 关键词",
-        "第 1 轮 · 反思",
+        "第 1 轮 · 查询包",
+        "第 1 轮 · 下一轮策略",
     ]
     assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
         {
@@ -730,8 +865,8 @@ def test_v2_feedback_observation_without_reflection_emits_only_observation(tmp_p
 
     assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
         "需求拆解",
-        "第 1 轮 · 关键词",
-        "第 1 轮 · observation",
+        "第 1 轮 · 查询包",
+        "第 1 轮 · 下一轮策略",
     ]
     assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
         {
@@ -771,7 +906,7 @@ def test_conversation_view_does_not_show_future_graph_nodes_before_events(tmp_pa
 
     assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
         "需求拆解",
-        "第 1 轮 · 关键词",
+        "第 1 轮 · 查询包",
     ]
     assert not any("猎聘检索" in node["label"] for node in payload["strategyGraph"]["nodes"])
     assert not any("Top Pool" in node["label"] for node in payload["strategyGraph"]["nodes"])
@@ -809,6 +944,7 @@ def test_v2_source_result_does_not_generate_observation_card(tmp_path: Path) -> 
             "status": "completed",
             "stage": "source_result",
             "roundNo": 1,
+            "sourceKind": "liepin",
             "summary": "第 1 轮检索完成。",
             "details": {
                 "resumeQualityComment": "source result 里的候选人摘要不能当 observation。",
@@ -822,7 +958,8 @@ def test_v2_source_result_does_not_generate_observation_card(tmp_path: Path) -> 
 
     assert [node["label"] for node in payload["strategyGraph"]["nodes"]] == [
         "需求拆解",
-        "第 1 轮 · 关键词",
+        "第 1 轮 · 查询包",
+        "第 1 轮 · 猎聘检索",
     ]
     assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
         {
@@ -831,6 +968,32 @@ def test_v2_source_result_does_not_generate_observation_card(tmp_path: Path) -> 
             "terms": ["数据科学家", "SQL"],
         }
     ]
+
+
+def test_v2_blocked_liepin_source_result_reports_actionable_reason(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 20,
+            "runtimeEventType": "runtime_round_source_result",
+            "status": "blocked",
+            "stage": "source_result",
+            "roundNo": 1,
+            "summary": "source_result",
+            "counts": {"roundReturned": 0, "roundIdentities": 0},
+            "safeReasonCode": "source_browser_extension_disconnected",
+            "state": "running",
+        }
+    ]
+
+    view = service.get_conversation(conversation_id)
+    progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
+
+    assert progress_events[-1].payload["summary"] == (
+        "第 1 轮猎聘检索受阻：猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
+    )
+    assert "猎聘检索完成" not in progress_events[-1].payload["summary"]
 
 
 def test_list_events_returns_incremental_visible_events_and_refreshes_runtime(tmp_path: Path) -> None:
@@ -1351,6 +1514,89 @@ def test_requirement_action_confirm_with_supplement_reextracts_requirement_form_
     assert confirmed[0]["payload"]["readonly"] is True
     assert view.requirementForm == confirmed[0]["payload"]
     assert payload["runtime"] == {"state": "queued", "runtimeRunId": "rtrun_1"}
+
+
+def test_requirement_action_add_other_runs_amendment_outside_route_event_loop(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": None,
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+    )
+    runtime = AsyncioRunRequirementRuntime()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-add-threaded"))
+
+    view = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="add_other",
+            text="熟悉 Claude、Cursor、Codex",
+            idempotency_key="add-other-threaded",
+        )
+    )
+
+    assert runtime.amend_requirement_calls == [
+        {
+            "conversation_id": first_view.conversation.conversationId,
+            "base_draft_revision_id": first_view.requirementForm["draft"]["draft_revision_id"],
+            "base_requirement_sheet": RequirementSheet.model_validate(first_view.requirementForm["requirementSheet"]),
+            "text": "熟悉 Claude、Cursor、Codex",
+            "idempotency_key": "add-other-threaded",
+        }
+    ]
+    assert view.requirementForm is not None
+    assert view.requirementForm["draft"]["draft_revision_id"] == "reqdraft_amended_1"
+    assert view.transcriptEvents[-1].type == "requirement_form"
+    assert not any(event.type == "error" for event in view.transcriptEvents)
+
+
+def test_requirement_action_confirm_with_supplement_runs_amendment_outside_route_event_loop(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": None,
+    }
+    agent = FakeAgentLoop(
+        _agent_output(intent="extract_requirements", message="我已整理需求，请确认表单。", runtimeInput=runtime_input),
+    )
+    runtime = AsyncioRunRequirementRuntime()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-confirm-threaded"))
+
+    view = asyncio.run(
+        service.apply_requirement_action(
+            first_view.conversation.conversationId,
+            action="confirm",
+            text="熟悉 Claude、Cursor、Codex",
+            idempotency_key="confirm-threaded",
+        )
+    )
+
+    assert runtime.amend_requirement_calls == [
+        {
+            "conversation_id": first_view.conversation.conversationId,
+            "base_draft_revision_id": first_view.requirementForm["draft"]["draft_revision_id"],
+            "base_requirement_sheet": RequirementSheet.model_validate(first_view.requirementForm["requirementSheet"]),
+            "text": "熟悉 Claude、Cursor、Codex",
+            "idempotency_key": "confirm-threaded",
+        }
+    ]
+    assert "抽取后：熟悉 Claude、Cursor、Codex" in runtime.start_calls[0]["requirement_sheet"].must_have_capabilities
+    assert view.conversation.runtimeState == "queued"
+    assert [event.type for event in view.transcriptEvents][-4:] == [
+        "requirement_form",
+        "requirement_form_confirmed",
+        "runtime_progress",
+        "assistant_message",
+    ]
+    assert not any(event.type == "error" for event in view.transcriptEvents)
 
 
 def test_requirement_action_confirm_after_deselect_starts_runtime_from_updated_form(tmp_path: Path) -> None:
@@ -2190,26 +2436,32 @@ def test_get_conversation_refreshes_active_runtime_status_without_duplicate_prog
     assert repeated_completed_refresh.conversation.runtimeState == "completed"
     assert repeated_completed_refresh.runtime is not None
     assert repeated_completed_refresh.runtime.state == "completed"
-    assert [event.type for event in completed_refresh.transcriptEvents[-2:]] == [
+    assert [event.type for event in completed_refresh.transcriptEvents[-3:]] == [
         "runtime_progress",
         "runtime_result",
+        "assistant_message",
     ]
-    assert completed_refresh.transcriptEvents[-2].payload == {
+    assert completed_refresh.transcriptEvents[-3].payload == {
         "runtimeRunId": "rtrun_1",
         "status": "completed",
         "stage": "completed",
         "summary": "本次运行完成，筛选出 2 位候选人。",
         "state": "completed",
     }
-    assert completed_refresh.transcriptEvents[-1].payload == {
+    assert completed_refresh.transcriptEvents[-2].payload == {
         "runtimeRunId": "rtrun_1",
         "status": "completed",
         "summary": "最终推荐 2 位候选人。",
         "facts": [{"label": "候选人", "value": "张三、李四"}],
         "state": "completed",
     }
+    assert completed_refresh.transcriptEvents[-1].payload == {
+        "text": "招聘流程已完成，最终候选人列表已生成。本次最终推荐：张三、李四。你可以在右侧查看候选人详情。"
+    }
     result_events = [event for event in repeated_completed_refresh.transcriptEvents if event.type == "runtime_result"]
-    assert [event.payload for event in result_events].count(completed_refresh.transcriptEvents[-1].payload) == 1
+    assistant_events = [event for event in repeated_completed_refresh.transcriptEvents if event.type == "assistant_message"]
+    assert [event.payload for event in result_events].count(completed_refresh.transcriptEvents[-2].payload) == 1
+    assert [event.payload for event in assistant_events].count(completed_refresh.transcriptEvents[-1].payload) == 1
 
 
 def test_get_conversation_sanitizes_internal_terminal_runtime_summaries(tmp_path: Path) -> None:
@@ -2565,7 +2817,9 @@ def test_runtime_summary_question_uses_agent_intent_and_reads_runtime_results(tm
         "summary": "本次运行完成，筛选出 2 位候选人。",
         "facts": [{"label": "Candidate", "value": "张三：匹配 Python 和 Agent 经验"}],
     }
-    assert payload["transcriptEvents"][-1]["payload"] == {"text": "本次运行完成，筛选出 2 位候选人。"}
+    assert payload["transcriptEvents"][-1]["payload"] == {
+        "text": "招聘流程已完成，最终候选人列表已生成。本次最终推荐：张三：匹配 Python 和 Agent 经验。你可以在右侧查看候选人详情。"
+    }
     assert len(service.agent_loop.calls) == agent_call_count + 1
 
 

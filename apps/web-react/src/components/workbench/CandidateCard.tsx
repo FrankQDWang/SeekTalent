@@ -70,10 +70,6 @@ export function CandidateCard({
         </div>
       ) : null}
 
-      {candidate.matchSummary ? (
-        <p className="candidate-card__summary">{candidate.matchSummary}</p>
-      ) : null}
-
       <div className="candidate-card__footer">
         {score ? <span className="candidate-card__score">{score}</span> : null}
         <Button

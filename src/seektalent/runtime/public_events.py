@@ -54,6 +54,15 @@ _PUBLIC_REASON_MAP = {
     "source_location_filter_unsupported": "source_filter_unavailable",
     "source_filter_unsupported": "source_filter_unavailable",
     "source_filter_applied": "source_filter_applied",
+    "liepin_opencli_extension_disconnected": "source_browser_extension_disconnected",
+    "liepin_opencli_daemon_not_running": "source_browser_backend_unavailable",
+    "liepin_opencli_daemon_stale": "source_browser_backend_unavailable",
+    "liepin_opencli_status_unavailable": "source_browser_backend_unavailable",
+    "liepin_opencli_timeout": "source_browser_timeout",
+    "liepin_opencli_login_required": "source_login_required",
+    "liepin_opencli_risk_page": "source_risk_or_verification_required",
+    "liepin_opencli_identity_intercept": "source_risk_or_verification_required",
+    "liepin_opencli_filter_unapplied": "source_filter_unavailable",
     "liepin_opencli_stale_ref": "source_browser_backend_unavailable",
 }
 

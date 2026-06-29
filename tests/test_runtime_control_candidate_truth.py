@@ -132,7 +132,7 @@ def test_candidate_truth_safe_detail_uses_field_whitelist() -> None:
     }
 
 
-def test_candidate_truth_extracts_wts_fields_from_liepin_full_text() -> None:
+def test_candidate_truth_projects_wts_fields_from_structured_liepin_detail_payload() -> None:
     from seektalent_runtime_control.candidates import candidate_truth_from_run_state
 
     run_state = _run_state_payload()
@@ -141,30 +141,47 @@ def test_candidate_truth_extracts_wts_fields_from_liepin_full_text() -> None:
     resume = candidate_store["resume_1"]
     assert isinstance(resume, dict)
     resume["raw"] = {
-        "fullText": (
-            "潘**\n"
-            "在职，看看新机会\n"
-            "近30天内活跃 男 32岁 上海 本科 工作10年\n"
-            "资深体验设计工程师 · 平安集团\n"
-            "求职意向\n"
-            "期望岗位：高端设计职位、设计经理/主管\n"
-            "期望行业：互联网、其他\n"
-            "期望地点：上海\n"
-            "期望薪资：20-24k*14薪\n"
-            "工作经历\n"
-            "2019.06-至今（7年）\n"
-            "平安好医｜用户体验设计专家\n"
-            "工作内容：提供B端及C端体验设计方案。\n"
-            "项目经历\n"
-            "2020.05-至今（6年1个月）\n"
-            "助力C端业务增长｜项目职务：-\n"
-            "项目内容：通过设计调研提升转化率。\n"
-            "教育经历\n"
-            "2011.09-2014.07（2年10个月）\n"
-            "华东师范大学 工业设计 硕士\n"
-            "技能标签\n"
-            "用户研究 交互设计 数据分析"
-        )
+        "candidate_name": "潘**",
+        "activeStatus": "近30天内活跃",
+        "jobStatus": "在职，看看新机会",
+        "gender": "男",
+        "age": 32,
+        "city": "上海",
+        "education": "本科",
+        "workYears": 10,
+        "currentTitle": "资深体验设计工程师",
+        "currentCompany": "平安集团",
+        "jobIntention": {
+            "expectedRole": "高端设计职位、设计经理/主管",
+            "expectedIndustry": "互联网、其他",
+            "expectedCity": "上海",
+            "expectedSalary": "20-24k*14薪",
+        },
+        "workExperienceList": [
+            {
+                "company": "平安好医",
+                "title": "用户体验设计专家",
+                "dateRange": "2019.06-至今（7年）",
+                "description": "提供B端及C端体验设计方案。",
+            }
+        ],
+        "projectExperienceList": [
+            {
+                "name": "助力C端业务增长",
+                "role": "-",
+                "dateRange": "2020.05-至今（6年1个月）",
+                "description": "通过设计调研提升转化率。",
+            }
+        ],
+        "educationList": [
+            {
+                "school": "华东师范大学",
+                "major": "工业设计",
+                "degree": "硕士",
+                "dateRange": "2011.09-2014.07（2年10个月）",
+            }
+        ],
+        "skills": ["用户研究", "交互设计", "数据分析"],
     }
     run_state["normalized_store"] = {"resume_1": {}}
 
@@ -191,6 +208,38 @@ def test_candidate_truth_extracts_wts_fields_from_liepin_full_text() -> None:
     assert wts["projectExperience"][0]["name"] == "助力C端业务增长"
     assert wts["educationExperience"][0]["school"] == "华东师范大学"
     assert "交互设计" in wts["skills"]
+
+
+def test_candidate_truth_ignores_full_text_and_normalized_for_wts_detail_fields() -> None:
+    from seektalent_runtime_control.candidates import candidate_truth_from_run_state
+
+    run_state = _run_state_payload()
+    candidate_store = run_state["candidate_store"]
+    assert isinstance(candidate_store, dict)
+    resume = candidate_store["resume_1"]
+    assert isinstance(resume, dict)
+    resume["raw"] = {
+        "fullText": "provider page shell and resume prose are not a WTS detail field source"
+    }
+    run_state["normalized_store"] = {
+        "resume_1": {
+            "candidate_name": "Normalized Name",
+            "current_title": "Normalized Title",
+            "current_company": "Normalized Company",
+        }
+    }
+
+    truth = candidate_truth_from_run_state(
+        runtime_run_id="runtime_run_candidates",
+        run_state=run_state,
+        source_checkpoint_id="rtcheckpoint_candidates",
+        observed_at="2026-06-17T00:00:10.000000Z",
+    )
+
+    wts = truth.evidence[0].payload["wtsDetail"]
+    safe_detail = truth.evidence[0].payload["safeDetail"]
+    assert wts == {}
+    assert safe_detail == {}
 
 
 def test_candidate_truth_ignores_unknown_full_text_for_wts_fields() -> None:

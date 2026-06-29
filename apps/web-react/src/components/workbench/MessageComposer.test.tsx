@@ -38,4 +38,28 @@ describe("MessageComposer", () => {
     expect(onSubmit).toHaveBeenCalledWith("继续补充");
     expect(screen.getByPlaceholderText("输入下一步要求")).toHaveValue("");
   });
+
+  it("submits with Enter repeatedly and keeps Shift+Enter as a newline", async () => {
+    expect.hasAssertions();
+    const user = userEvent.setup();
+    const onSubmit = vi.fn(() => Promise.resolve());
+
+    render(<MessageComposer onSubmit={onSubmit} />);
+
+    const textarea = screen.getByPlaceholderText("输入下一步要求");
+    await user.type(textarea, "第一行{Shift>}{Enter}{/Shift}第二行");
+    expect(textarea).toHaveValue("第一行\n第二行");
+
+    await user.keyboard("{Enter}");
+    expect(onSubmit).toHaveBeenCalledWith("第一行\n第二行");
+    expect(textarea).toHaveFocus();
+
+    await user.type(textarea, "第二次");
+    await user.keyboard("{Enter}");
+
+    expect(onSubmit).toHaveBeenLastCalledWith("第二次");
+    expect(onSubmit).toHaveBeenCalledTimes(2);
+    expect(textarea).toHaveValue("");
+    expect(textarea).toHaveFocus();
+  });
 });

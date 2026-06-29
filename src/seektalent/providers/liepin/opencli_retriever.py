@@ -28,6 +28,12 @@ class LiepinResumeSearchSite(Protocol):
 
 OpenCliResumeRunner = LiepinResumeSearchSite
 
+_RECOVERABLE_OPENCLI_READY_REASONS = {
+    "liepin_opencli_extension_disconnected",
+    "liepin_opencli_daemon_stale",
+    "liepin_opencli_status_unavailable",
+}
+
 
 @dataclass(frozen=True, kw_only=True)
 class LiepinOpenCliResumeRequest:
@@ -47,12 +53,22 @@ class LiepinOpenCliResumeRetriever:
 
     def ensure_ready(self) -> None:
         status = self._runner.status()
-        if not status.ok:
-            raise RuntimeError(str(status.safe_reason_code or "liepin_opencli_status_unavailable"))
+        if status.ok:
+            return
+        reason = str(status.safe_reason_code or "liepin_opencli_status_unavailable")
+        if reason in _RECOVERABLE_OPENCLI_READY_REASONS and self._recover_connection():
+            return
+        raise RuntimeError(reason)
 
     def search_resumes(self, request: LiepinOpenCliResumeRequest) -> LiepinResumeSearchResponse:
         self.ensure_ready()
-        envelope = self._runner.search_liepin_resumes(
+        envelope = self._search_liepin_resumes(request)
+        if _envelope_reason(envelope) in _RECOVERABLE_OPENCLI_READY_REASONS and self._recover_connection():
+            envelope = self._search_liepin_resumes(request)
+        return _response_from_opencli_envelope(envelope)
+
+    def _search_liepin_resumes(self, request: LiepinOpenCliResumeRequest) -> dict[str, object]:
+        return self._runner.search_liepin_resumes(
             source_run_id=request.source_run_id,
             query=request.keyword_query,
             target_resumes=request.target_resumes,
@@ -60,7 +76,22 @@ class LiepinOpenCliResumeRetriever:
             max_cards=request.max_cards,
             native_filters=request.native_filters,
         )
-        return _response_from_opencli_envelope(envelope)
+
+    def _recover_connection(self) -> bool:
+        recover = getattr(self._runner, "recover_connection", None)
+        if not callable(recover):
+            return False
+        result = recover()
+        return bool(getattr(result, "ok", False))
+
+
+def _envelope_reason(envelope: Mapping[str, object]) -> str | None:
+    if envelope.get("status") not in {"blocked", "failed"}:
+        return None
+    reason = envelope.get("safe_reason_code") or envelope.get("stop_reason")
+    if isinstance(reason, str) and reason:
+        return reason
+    return None
 
 
 def _response_from_opencli_envelope(envelope: Mapping[str, object]) -> LiepinResumeSearchResponse:
