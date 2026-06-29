@@ -368,7 +368,7 @@ describe("ConversationScreenV2", () => {
                 status: "running",
                 cards: [
                   {
-                    title: "keywords",
+                    title: "关键词",
                     text: "AI agent, LLM",
                     terms: [],
                   },
@@ -378,7 +378,7 @@ describe("ConversationScreenV2", () => {
                     terms: [],
                   },
                   {
-                    title: "reflection",
+                    title: "反思和下一轮变更",
                     text: "下一轮加入 LangChain 和 RAG。",
                     terms: [],
                   },

@@ -104,7 +104,7 @@ export function CandidateDetailDrawer({
     (sourceKinds.length > 0
       ? `${candidateSourceLabel(sourceKinds)}来源`
       : null);
-  const sourceUrl = detail?.sourceUrl?.trim() || null;
+  const sourceUrl = safeExternalSourceUrl(detail?.sourceUrl);
   const avatarLabel = candidateAvatarLabel(detail, candidate);
   const avatarColorKey =
     detail?.avatarColorKey ?? candidate?.avatarColorKey ?? "default";
@@ -531,11 +531,34 @@ function mergeFallbackSections(
     return [{ title: "补充说明", items: [...evidence] }];
   }
 
-  normalizedSections[0] = {
-    ...normalizedSections[0],
-    items: [...normalizedSections[0].items, ...evidence],
-  };
-  return normalizedSections;
+  const firstSection = normalizedSections[0];
+  if (firstSection === undefined) {
+    return [{ title: "补充说明", items: [...evidence] }];
+  }
+  return [
+    {
+      ...firstSection,
+      items: [...firstSection.items, ...evidence],
+    },
+    ...normalizedSections.slice(1),
+  ];
+}
+
+function safeExternalSourceUrl(
+  value: string | null | undefined,
+): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:"
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function joinWithSeparator(

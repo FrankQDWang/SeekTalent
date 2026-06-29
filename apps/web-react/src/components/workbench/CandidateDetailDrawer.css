@@ -99,27 +99,27 @@
   width: 64px;
 }
 
-.candidate-detail-drawer__avatar[data-avatar-color="indigo"] {
+.candidate-detail-drawer__avatar[data-avatar-color="avatar-0"] {
   background: #6a4cff;
 }
 
-.candidate-detail-drawer__avatar[data-avatar-color="violet"] {
+.candidate-detail-drawer__avatar[data-avatar-color="avatar-1"] {
   background: #8b5cf6;
 }
 
-.candidate-detail-drawer__avatar[data-avatar-color="pink"] {
+.candidate-detail-drawer__avatar[data-avatar-color="avatar-2"] {
   background: #ec4899;
 }
 
-.candidate-detail-drawer__avatar[data-avatar-color="blue"] {
+.candidate-detail-drawer__avatar[data-avatar-color="avatar-3"] {
   background: #2563eb;
 }
 
-.candidate-detail-drawer__avatar[data-avatar-color="teal"] {
+.candidate-detail-drawer__avatar[data-avatar-color="avatar-4"] {
   background: #0f766e;
 }
 
-.candidate-detail-drawer__avatar[data-avatar-color="amber"] {
+.candidate-detail-drawer__avatar[data-avatar-color="avatar-5"] {
   background: #d97706;
 }
 

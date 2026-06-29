@@ -8,7 +8,7 @@ const candidateFixture = {
   rank: 1,
   displayName: "候选人 A",
   avatarLabel: "吴",
-  avatarColorKey: "indigo",
+  avatarColorKey: "avatar-0",
   sourceLabel: "猎聘",
   currentTitle: "资深体验设计工程师",
   currentCompany: "小米科技",
@@ -39,6 +39,10 @@ describe("CandidateCard", () => {
     expect(
       screen.getByRole("article", { name: "候选人 A" }),
     ).toBeInTheDocument();
+    expect(screen.getByRole("article", { name: "候选人 A" })).toHaveAttribute(
+      "data-avatar-color",
+      "avatar-0",
+    );
     expect(screen.getByText("吴")).toBeInTheDocument();
     expect(
       screen.getByText("资深体验设计工程师 · 小米科技"),

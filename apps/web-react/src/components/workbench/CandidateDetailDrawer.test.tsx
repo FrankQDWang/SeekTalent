@@ -68,7 +68,7 @@ describe("CandidateDetailDrawer", () => {
         candidate={{
           ...candidate,
           avatarLabel: "吴",
-          avatarColorKey: "indigo",
+          avatarColorKey: "avatar-0",
           currentTitle: "资深体验设计工程师",
           currentCompany: "平安集团",
           sourceLabel: "猎聘",
@@ -76,7 +76,7 @@ describe("CandidateDetailDrawer", () => {
         detail={{
           ...agentWorkbenchCandidateDetailFixture,
           avatarLabel: "吴",
-          avatarColorKey: "indigo",
+          avatarColorKey: "avatar-0",
           activeStatus: "近30天内活跃",
           currentTitle: "资深体验设计工程师",
           currentCompany: "平安集团",
@@ -134,6 +134,10 @@ describe("CandidateDetailDrawer", () => {
     );
 
     expect(screen.getByText("吴")).toBeVisible();
+    expect(screen.getByText("吴")).toHaveAttribute(
+      "data-avatar-color",
+      "avatar-0",
+    );
     expect(screen.getByText("资深体验设计工程师 · 平安集团")).toBeVisible();
     expect(screen.getByRole("link", { name: "查看来源" })).toHaveAttribute(
       "href",
@@ -167,8 +171,6 @@ describe("CandidateDetailDrawer", () => {
         candidate={candidate}
         detail={{
           ...agentWorkbenchCandidateDetailFixture,
-          match: undefined,
-          jobIntention: undefined,
           workExperience: [],
           projectExperience: [],
           educationExperience: [],
@@ -191,6 +193,35 @@ describe("CandidateDetailDrawer", () => {
       screen.getByText("2019.06-至今 平安好医 | 用户体验设计专家"),
     ).toBeVisible();
     expect(screen.queryByText("暂无详情段落")).not.toBeInTheDocument();
+  });
+
+  it("does not render unsafe sourceUrl values as external links", () => {
+    expect.hasAssertions();
+
+    for (const sourceUrl of [
+      "javascript:alert(1)",
+      "data:text/html,<script>alert(1)</script>",
+    ]) {
+      const { unmount } = render(
+        <CandidateDetailDrawer
+          candidate={candidate}
+          detail={{
+            ...agentWorkbenchCandidateDetailFixture,
+            sourceLabel: "猎聘",
+            sourceUrl,
+          }}
+          onClose={() => undefined}
+          open
+          status="ready"
+        />,
+      );
+
+      expect(screen.queryByRole("link", { name: "查看来源" })).toBeNull();
+      expect(screen.getByLabelText("候选人来源已记录")).toHaveTextContent(
+        "猎聘",
+      );
+      unmount();
+    }
   });
 
   it("labels CTS-only candidate sources without claiming Liepin", () => {

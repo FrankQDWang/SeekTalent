@@ -102,19 +102,70 @@ export type WorkbenchV2RequirementActionRequest = {
   idempotencyKey?: string | null;
 };
 
+type GeneratedWorkbenchV2StrategyGraph = Omit<
+  AgentWorkbenchStrategyGraph,
+  "edges" | "nodes"
+> & {
+  edges?: AgentWorkbenchStrategyGraph["edges"] | null;
+  nodes?: AgentWorkbenchStrategyGraph["nodes"] | null;
+};
+
+type GeneratedWorkbenchV2ThinkingProcessCard = Omit<
+  AgentWorkbenchThinkingProcess["rounds"][number]["cards"][number],
+  "terms"
+> & {
+  terms?: string[] | null;
+};
+
+type GeneratedWorkbenchV2ThinkingProcessRound = Omit<
+  AgentWorkbenchThinkingProcess["rounds"][number],
+  "cards"
+> & {
+  cards?: GeneratedWorkbenchV2ThinkingProcessCard[] | null;
+};
+
+type GeneratedWorkbenchV2ThinkingProcess = Omit<
+  AgentWorkbenchThinkingProcess,
+  "activeRoundNo" | "rounds"
+> & {
+  activeRoundNo?: number | null;
+  rounds?: GeneratedWorkbenchV2ThinkingProcessRound[] | null;
+};
+
+type GeneratedWorkbenchV2ConversationView = Omit<
+  WorkbenchV2ConversationView,
+  "candidates" | "strategyGraph" | "thinkingProcess" | "transcriptEvents"
+> & {
+  candidates?: AgentWorkbenchCandidateSummary[] | null;
+  strategyGraph?: GeneratedWorkbenchV2StrategyGraph | null;
+  thinkingProcess?: GeneratedWorkbenchV2ThinkingProcess | null;
+  transcriptEvents?: WorkbenchV2TranscriptEvent[] | null;
+};
+
+type GeneratedWorkbenchV2ConversationListView = Omit<
+  WorkbenchV2ConversationListView,
+  "conversations"
+> & {
+  conversations?: WorkbenchV2ConversationListSummary[] | null;
+};
+
+type GeneratedWorkbenchV2ConversationEventsView = Omit<
+  WorkbenchV2ConversationEventsView,
+  "events"
+> & {
+  events?: WorkbenchV2TranscriptEvent[] | null;
+};
+
 export function normalizeWorkbenchV2Conversation(
-  input: WorkbenchV2ConversationView,
+  input: GeneratedWorkbenchV2ConversationView,
 ): WorkbenchV2ConversationView {
   return {
     ...input,
-    transcriptEvents: [...input.transcriptEvents].sort(
+    transcriptEvents: [...(input.transcriptEvents ?? [])].sort(
       (left, right) => left.step - right.step,
     ),
-    strategyGraph: input.strategyGraph ?? { nodes: [], edges: [] },
-    thinkingProcess: input.thinkingProcess ?? {
-      activeRoundNo: null,
-      rounds: [],
-    },
+    strategyGraph: normalizeWorkbenchV2StrategyGraph(input.strategyGraph),
+    thinkingProcess: normalizeWorkbenchV2ThinkingProcess(input.thinkingProcess),
     candidates: (input.candidates ?? []).map(
       normalizeAgentWorkbenchCandidateSummary,
     ),
@@ -122,19 +173,47 @@ export function normalizeWorkbenchV2Conversation(
 }
 
 export function normalizeWorkbenchV2ConversationList(
-  input: WorkbenchV2ConversationListView,
+  input: GeneratedWorkbenchV2ConversationListView,
 ): WorkbenchV2ConversationListView {
   return {
     ...input,
-    conversations: [...input.conversations],
+    conversations: [...(input.conversations ?? [])],
   };
 }
 
 export function normalizeWorkbenchV2ConversationEvents(
-  input: WorkbenchV2ConversationEventsView,
+  input: GeneratedWorkbenchV2ConversationEventsView,
 ): WorkbenchV2ConversationEventsView {
   return {
     ...input,
-    events: [...input.events].sort((left, right) => left.step - right.step),
+    events: [...(input.events ?? [])].sort(
+      (left, right) => left.step - right.step,
+    ),
+  };
+}
+
+function normalizeWorkbenchV2StrategyGraph(
+  strategyGraph: GeneratedWorkbenchV2StrategyGraph | null | undefined,
+): AgentWorkbenchStrategyGraph {
+  return {
+    ...(strategyGraph ?? {}),
+    nodes: strategyGraph?.nodes ?? [],
+    edges: strategyGraph?.edges ?? [],
+  };
+}
+
+function normalizeWorkbenchV2ThinkingProcess(
+  thinkingProcess: GeneratedWorkbenchV2ThinkingProcess | null | undefined,
+): AgentWorkbenchThinkingProcess {
+  return {
+    ...(thinkingProcess ?? {}),
+    activeRoundNo: thinkingProcess?.activeRoundNo ?? null,
+    rounds: (thinkingProcess?.rounds ?? []).map((round) => ({
+      ...round,
+      cards: (round.cards ?? []).map((card) => ({
+        ...card,
+        terms: card.terms ?? [],
+      })),
+    })),
   };
 }

@@ -17,6 +17,8 @@ import {
 } from "./workbenchV2";
 import {
   normalizeWorkbenchV2Conversation,
+  normalizeWorkbenchV2ConversationEvents,
+  normalizeWorkbenchV2ConversationList,
   type WorkbenchV2ConversationView,
 } from "./workbenchV2Types";
 import { createWorkbenchQueryClient } from "../query/client";
@@ -57,7 +59,7 @@ describe("Workbench v2 normalization", () => {
           rank: 1,
           displayName: "吴所谓",
           avatarLabel: "吴",
-          avatarColorKey: "indigo",
+          avatarColorKey: "avatar-0",
           sourceLabel: "猎聘",
           currentTitle: "资深体验设计工程师",
           currentCompany: "小米科技",
@@ -68,7 +70,6 @@ describe("Workbench v2 normalization", () => {
           location: null,
           education: "本科",
           experienceYears: null,
-          sourceKinds: undefined,
           matchScore: 92,
           matchSummary: "可独立主导 0-1 产品体验搭建。",
           status: "running",
@@ -83,7 +84,7 @@ describe("Workbench v2 normalization", () => {
 
     expect(normalized.candidates?.[0]).toMatchObject({
       avatarLabel: "吴",
-      avatarColorKey: "indigo",
+      avatarColorKey: "avatar-0",
       sourceLabel: "猎聘",
       currentTitle: "资深体验设计工程师",
       currentCompany: "小米科技",
@@ -91,6 +92,56 @@ describe("Workbench v2 normalization", () => {
       workYears: 10,
       sourceKinds: [],
     });
+  });
+
+  it("defaults omitted v2 array fields to empty arrays", () => {
+    const normalizedConversation = normalizeWorkbenchV2Conversation({
+      schemaVersion: "agent.workbench.v2",
+      conversation: conversationSummary(),
+      requirementForm: null,
+      runtime: null,
+      strategyGraph: {},
+      thinkingProcess: {
+        activeRoundNo: 1,
+        rounds: [
+          {
+            roundNo: 1,
+            status: "running",
+          },
+        ],
+      },
+    });
+
+    expect(normalizedConversation.transcriptEvents).toEqual([]);
+    expect(normalizedConversation.strategyGraph).toEqual({
+      nodes: [],
+      edges: [],
+    });
+    expect(normalizedConversation.thinkingProcess).toEqual({
+      activeRoundNo: 1,
+      rounds: [
+        {
+          roundNo: 1,
+          status: "running",
+          cards: [],
+        },
+      ],
+    });
+    expect(normalizedConversation.candidates).toEqual([]);
+
+    expect(
+      normalizeWorkbenchV2ConversationEvents({
+        schemaVersion: "agent.workbench.v2.events",
+        conversationId: "agentv2_1",
+        afterStep: 0,
+        latestStep: 0,
+      }).events,
+    ).toEqual([]);
+    expect(
+      normalizeWorkbenchV2ConversationList({
+        schemaVersion: "agent.workbench.v2.list",
+      }).conversations,
+    ).toEqual([]);
   });
 });
 
@@ -282,7 +333,7 @@ describe("Workbench v2 client", () => {
       detailAvailability: "available",
       displayName: "吴所谓",
       avatarLabel: "吴",
-      avatarColorKey: "indigo",
+      avatarColorKey: "avatar-0",
       evidenceLevel: "detail",
       currentTitle: "资深体验设计工程师",
       currentCompany: "平安集团",
@@ -317,7 +368,7 @@ describe("Workbench v2 client", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({
       avatarLabel: "吴",
-      avatarColorKey: "indigo",
+      avatarColorKey: "avatar-0",
       currentTitle: "资深体验设计工程师",
       currentCompany: "平安集团",
       city: "上海",
