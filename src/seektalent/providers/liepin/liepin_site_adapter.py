@@ -218,7 +218,10 @@ class LiepinSiteAdapter:
                 counts={"reused": 1},
             )
         page_id = self._open_new_liepin_tab(url=url)
-        return OpenCliBrowserResult(ok=True, action="open_liepin_tab", private_output=page_id)
+        counts = {"opened": 1}
+        if page_id is None:
+            counts["unleased"] = 1
+        return OpenCliBrowserResult(ok=True, action="open_liepin_tab", counts=counts, private_output=page_id or "")
 
     def state(self) -> OpenCliBrowserResult:
         current_url = self._current_url()
@@ -2033,10 +2036,10 @@ class LiepinSiteAdapter:
             return None
         return page_id
 
-    def _open_new_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
+    def _open_new_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str | None:
         return self._open_opencli_managed_liepin_tab(url=url, source_run_id=source_run_id)
 
-    def _open_opencli_managed_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
+    def _open_opencli_managed_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str | None:
         self._validate_start_or_detail_url(url)
         before_urls = self._tab_urls_before_open()
         try:
@@ -2051,6 +2054,8 @@ class LiepinSiteAdapter:
                 before_urls = self._tab_urls_before_open()
                 output = self._run_browser_command("tab", ("new", url))
         page_id = self._parse_opened_tab_page_id(output=output, url=url, before_urls=before_urls)
+        if page_id is None:
+            return None
         owner_nonce = uuid.uuid4().hex
         self._write_lease(page_id=page_id, url=url, owner_nonce=owner_nonce)
         self._write_owned_page_marker(
@@ -2069,7 +2074,7 @@ class LiepinSiteAdapter:
         except OpenCliBrowserError:
             return {}
 
-    def _parse_opened_tab_page_id(self, *, output: str, url: str, before_urls: Mapping[str, str]) -> str:
+    def _parse_opened_tab_page_id(self, *, output: str, url: str, before_urls: Mapping[str, str]) -> str | None:
         try:
             return _parse_page_id(output)
         except OpenCliBrowserError as exc:
@@ -2084,6 +2089,8 @@ class LiepinSiteAdapter:
             raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
         page_id = self._opened_tab_page_id_from_list(url=url, before_urls=before_urls)
         if page_id is None:
+            if self._current_bound_page_matches_requested_url(url):
+                return None
             raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
         return page_id
 
@@ -2114,6 +2121,13 @@ class LiepinSiteAdapter:
         if _is_liepin_detail_url(requested_url):
             return False
         return self._is_liepin_search_context_url(tab_url)
+
+    def _current_bound_page_matches_requested_url(self, requested_url: str) -> bool:
+        try:
+            current_url = self._current_url()
+        except OpenCliBrowserError:
+            return False
+        return self._opened_tab_url_matches_requested_url(current_url, requested_url)
 
     def _reuse_liepin_search_page(self, *, page_id: str, url: str) -> None:
         try:

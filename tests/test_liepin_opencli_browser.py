@@ -762,6 +762,47 @@ def test_open_liepin_tab_recovers_when_tab_new_reports_status_unavailable_but_wi
     assert lease["page_id"] == "page-2"
 
 
+def test_open_liepin_tab_allows_bound_liepin_page_when_page_id_is_unavailable(tmp_path: Path) -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
+                "[]",
+                "[]",
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): "opened",
+            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): LIEPIN_SEARCH_URL,
+        }
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(LIEPIN_SEARCH_URL)
+
+    assert result.ok is True
+    assert result.counts == {"opened": 1, "unleased": 1}
+    assert not (tmp_path / "seektalent-liepin.json").exists()
+
+
+def test_open_liepin_tab_keeps_failing_when_bound_page_is_not_liepin(tmp_path: Path) -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
+                "[]",
+                "[]",
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): "opened",
+            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://example.com/",
+        }
+    )
+
+    with pytest.raises(OpenCliBrowserError) as error:
+        _runner(commands, lease_dir=tmp_path).open_liepin_tab(LIEPIN_SEARCH_URL)
+
+    assert error.value.safe_reason_code == "liepin_opencli_tab_response_malformed"
+
+
 def test_cleanup_idle_lease_releases_lease_without_closing_tabs(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/resume/showresumedetail?id=357"
     commands = FakeCommands(
