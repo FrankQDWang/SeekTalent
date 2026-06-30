@@ -91,8 +91,6 @@ def bucket_text(text: str) -> dict[str, int]:
 
 
 def build_observation(text: str, *, max_chars: int = 12_000) -> dict[str, object]:
-    if _looks_sensitive(text):
-        raise OpenCliBrowserError("liepin_opencli_malformed_state")
     observation: dict[str, object] = {
         "text": text[:max_chars],
         "chars": len(text),
@@ -214,8 +212,6 @@ def classify_liepin_state(*, url: str, text: str) -> str | None:
 
 
 def extract_liepin_card_summaries(text: str, *, max_cards: int) -> tuple[dict[str, object], ...]:
-    if _looks_sensitive(text):
-        raise OpenCliBrowserError("liepin_opencli_malformed_state")
     lines = clean_state_lines(text)
     cards: list[dict[str, object]] = []
     seen: set[str] = set()
@@ -547,8 +543,6 @@ def _positive_int(value: object, *, default: int = 0) -> int:
 
 def _bounded_public_text(text: str, *, max_chars: int) -> str:
     cleaned = re.sub(r"\s+", " ", text).strip()
-    if _looks_sensitive(cleaned):
-        raise OpenCliBrowserError("liepin_opencli_malformed_state")
     return cleaned[:max_chars]
 
 
@@ -565,23 +559,6 @@ def _is_forbidden_liepin_url(url: str) -> bool:
     parsed = urlparse(url)
     path = unquote(parsed.path or "").lower()
     return any(fragment in path for fragment in FORBIDDEN_LIEPIN_PATH_FRAGMENTS)
-
-
-def _looks_sensitive(text: str) -> bool:
-    lowered = text.lower()
-    forbidden = (
-        "document.cookie",
-        "cookie=",
-        "cookie:",
-        "localstorage",
-        "sessionstorage",
-        "authorization:",
-        "bearer ",
-        "storagestate",
-        "<script",
-        "<html",
-    )
-    return any(marker in lowered for marker in forbidden)
 
 
 def _positive_int_or_none(value: object) -> int | None:

@@ -1794,7 +1794,11 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
     reason = _workbench_action_reason(first)
     if reason in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
         if not _restart_workbench_opencli_daemon(runtime, env=env):
-            _print_workbench_reason(reason, _workbench_reason_message(reason))
+            _print_workbench_reason(
+                reason,
+                _workbench_reason_message(reason),
+                action=_workbench_action_name(first),
+            )
             return False
         status = _wait_for_workbench_opencli_status(env=env)
         if _workbench_action_ok(status):
@@ -1802,10 +1806,14 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
             if _workbench_action_ok(second):
                 return True
             reason = _workbench_action_reason(second)
+            failing_action = _workbench_action_name(second)
         else:
             reason = _workbench_action_reason(status)
+            failing_action = _workbench_action_name(status)
+    else:
+        failing_action = _workbench_action_name(first)
 
-    _print_workbench_reason(reason, _workbench_reason_message(reason))
+    _print_workbench_reason(reason, _workbench_reason_message(reason), action=failing_action)
     return False
 
 
@@ -1910,6 +1918,13 @@ def _workbench_action_reason(payload: Mapping[str, object]) -> str:
     return "liepin_opencli_status_unavailable"
 
 
+def _workbench_action_name(payload: Mapping[str, object]) -> str | None:
+    action = payload.get("action")
+    if isinstance(action, str) and action:
+        return action
+    return None
+
+
 def _workbench_reason_from_text(text: str) -> str:
     for reason in (
         "liepin_opencli_login_required",
@@ -1938,8 +1953,9 @@ def _workbench_reason_message(reason: str) -> str:
     }.get(reason, "OpenCLI/Liepin preflight failed.")
 
 
-def _print_workbench_reason(reason: str, message: str) -> None:
-    print(f"reason_code={reason} {message}", file=sys.stderr)
+def _print_workbench_reason(reason: str, message: str, *, action: str | None = None) -> None:
+    action_part = f" action={action}" if action else ""
+    print(f"reason_code={reason}{action_part} {message}", file=sys.stderr)
 
 
 def _workbench_command(args: argparse.Namespace) -> int:

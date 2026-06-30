@@ -58,7 +58,6 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _is_safe_page_id,
     _looks_like_liepin_detail_resume_state,
     _looks_like_liepin_search_result_page,
-    _looks_sensitive,
     _merge_liepin_detail_targets,
     _opencli_result_text,
     _parse_page_id as _parse_page_id,
@@ -1819,8 +1818,6 @@ class LiepinSiteAdapter:
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         script = _fixed_readonly_eval_probe_script(probe_name=probe_name, ref=ref)
         output = self._run_opencli_call(lambda: self._automation.readonly_eval(script))
-        if _looks_sensitive(output):
-            raise OpenCliBrowserError("liepin_opencli_malformed_state")
         self._touch_lease()
         return output
 
@@ -2168,8 +2165,6 @@ class LiepinSiteAdapter:
 
     def _detail_state_text(self) -> str:
         output = self._run_browser_command("state", ())
-        if _looks_sensitive(output):
-            raise OpenCliBrowserError("liepin_opencli_malformed_state")
         self._touch_lease()
         return output
 

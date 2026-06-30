@@ -771,6 +771,7 @@ def test_workbench_command_reports_liepin_login_required(
 
     captured = capsys.readouterr()
     assert "reason_code=liepin_opencli_login_required" in captured.err
+    assert "action=state" in captured.err
     assert launch_calls == []
 
 

@@ -349,7 +349,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     dev_mode_env_diagnostics = None
     try:
-        settings = AppSettings().with_overrides(
+        base_settings = AppSettings(_env_file=None) if args.runtime_mode == "prod" and args.serve_frontend else AppSettings()
+        settings = base_settings.with_overrides(
             mock_cts=args.mock_cts,
             runtime_mode=args.runtime_mode,
             liepin_worker_mode=args.liepin_worker_mode,

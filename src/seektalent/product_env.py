@@ -14,6 +14,18 @@ PRODUCT_USER_ENV_VARS = frozenset(
     }
 )
 
+_PASSTHROUGH_ENV_VARS = frozenset(
+    {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "SHELL",
+        "TMPDIR",
+        "USER",
+    }
+)
+
 
 def load_product_user_env(
     env: MutableMapping[str, str],
@@ -33,8 +45,17 @@ def build_workbench_command_env(
     *,
     env_file: str | Path | None = None,
 ) -> dict[str, str]:
-    env = dict(os.environ if base_env is None else base_env)
+    source_env = os.environ if base_env is None else base_env
+    env = {key: value for key, value in source_env.items() if key in _PASSTHROUGH_ENV_VARS}
+    for key in PRODUCT_USER_ENV_VARS:
+        value = source_env.get(key)
+        if value:
+            env[key] = value
     env["SEEKTALENT_WORKSPACE_ROOT"] = str(Path.home())
+    env["SEEKTALENT_RUNTIME_MODE"] = "prod"
+    env["SEEKTALENT_PROVIDER_NAME"] = "liepin"
+    env["SEEKTALENT_LIEPIN_WORKER_MODE"] = "opencli"
+    env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] = "opencli"
     load_product_user_env(env, env_file=env_file)
     env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = DEFAULT_LIEPIN_OPENCLI_COMMAND
     ensure_workbench_internal_liepin_env(env)

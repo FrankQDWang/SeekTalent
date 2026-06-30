@@ -260,6 +260,24 @@ def _liepin_detail_payload_json(
     )
 
 
+detail_state = (
+    "王** 40岁 工作14年 硕士 上海\n"
+    "当前职位：数据开发专家\n"
+    "海光集成电路 · 高级主管工程师 2023.10-至今\n"
+    "负责数据仓库、数据治理、Python 平台和 Hive 数仓。\n"
+    "北京大学 · 本科 · 计算机"
+)
+
+detail70_state = "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家\n负责数据仓库、数据治理、Python 平台和 Hive 数仓。"
+
+
+def test_build_observation_does_not_block_browser_markup_text() -> None:
+    observation = build_observation("<html><script></script>localStorage cookie=placeholder</html>")
+
+    assert observation["chars"] > 0
+    assert "<html>" in str(observation["text"])
+
+
 def test_opencli_mutating_actions_apply_pacing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sleeps: list[float] = []
     monkeypatch.setattr("seektalent.opencli_browser.automation.time.sleep", sleeps.append)
@@ -1157,16 +1175,6 @@ def test_forbidden_opencli_command_is_rejected() -> None:
     assert commands.calls == []
 
 
-def test_internal_detail_url_probe_rejects_sensitive_output(tmp_path: Path) -> None:
-    commands = EvalCommands(eval_output="cookie=secret", outputs={})
-    runner = _runner(commands, lease_dir=tmp_path)
-
-    with pytest.raises(OpenCliBrowserError) as error:
-        runner._liepin_detail_url_for_ref("70")
-
-    assert error.value.safe_reason_code == "liepin_opencli_malformed_state"
-
-
 def test_internal_detail_url_probe_rejects_unknown_probe_name(tmp_path: Path) -> None:
     commands = FakeCommands()
     runner = _runner(commands, lease_dir=tmp_path)
@@ -1240,26 +1248,6 @@ def test_public_payload_does_not_include_raw_output() -> None:
     payload = result.to_public_payload()
     assert payload == {"ok": True, "action": "state", "safeReasonCode": "configured", "counts": {}}
     assert "搜索职位" not in json.dumps(payload, ensure_ascii=False)
-
-
-def test_state_rejects_sensitive_observation() -> None:
-    commands = FakeCommands(
-        outputs={
-            (
-                "opencli",
-                "browser",
-                "seektalent-liepin",
-                "get",
-                "url",
-            ): "https://h.liepin.com/search/getConditionItem#session",
-            ("opencli", "browser", "seektalent-liepin", "state"): "document.cookie=secret",
-        }
-    )
-
-    with pytest.raises(OpenCliBrowserError) as error:
-        _runner(commands).state()
-
-    assert error.value.safe_reason_code == "liepin_opencli_malformed_state"
 
 
 def test_state_classifier_blocks_login_and_risk_pages_before_next_action() -> None:
@@ -2053,8 +2041,9 @@ def test_finalize_liepin_resumes_leaves_owned_detail_tabs_for_user_cleanup(tmp_p
         "摆** 31岁 工作7年 本科 北京\n数据开发 ETL Python\n[357]<div class=detail-resume-card-wrap>查看完整简历</div>"
     )
     detail_state = "摆** 31岁 工作7年 本科 北京\n当前职位：数据开发专家\n负责 ETL、Python、离线数仓和数据治理。"
-    commands = EvalCommands(
-        eval_output=detail_url,
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={"357": detail_url},
+        default_eval_output=_liepin_detail_payload_json(candidate_name="摆**", full_text=detail_state),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
             ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
