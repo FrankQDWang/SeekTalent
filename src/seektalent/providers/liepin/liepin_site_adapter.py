@@ -2038,14 +2038,16 @@ class LiepinSiteAdapter:
 
     def _open_opencli_managed_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
         self._validate_start_or_detail_url(url)
+        before_urls = _tab_urls_by_page_id(self._list_tabs())
         try:
             output = self._run_browser_command("tab", ("new", url))
         except OpenCliBrowserError as exc:
             if exc.safe_reason_code != "liepin_opencli_window_policy_blocked":
                 raise
             self._run_browser_command("unbind", ())
+            before_urls = _tab_urls_by_page_id(self._list_tabs())
             output = self._run_browser_command("tab", ("new", url))
-        page_id = _parse_page_id(output)
+        page_id = self._parse_opened_tab_page_id(output=output, url=url, before_urls=before_urls)
         owner_nonce = uuid.uuid4().hex
         self._write_lease(page_id=page_id, url=url, owner_nonce=owner_nonce)
         self._write_owned_page_marker(
@@ -2057,6 +2059,29 @@ class LiepinSiteAdapter:
             owner_nonce=owner_nonce,
         )
         return page_id
+
+    def _parse_opened_tab_page_id(self, *, output: str, url: str, before_urls: Mapping[str, str]) -> str:
+        try:
+            return _parse_page_id(output)
+        except OpenCliBrowserError as exc:
+            if exc.safe_reason_code != "liepin_opencli_tab_response_malformed":
+                raise
+        after_tabs = self._list_tabs()
+        candidates: list[tuple[int, str]] = []
+        for tab in after_tabs:
+            page_id = _tab_page_id(tab)
+            tab_url = str(tab.get("url") or "")
+            if not _is_safe_page_id(page_id) or tab_url != url:
+                continue
+            score = 0
+            if page_id not in before_urls:
+                score += 100
+            if tab.get("active") is True:
+                score += 10
+            candidates.append((score, page_id))
+        if not candidates:
+            raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
+        return max(candidates, key=lambda item: item[0])[1]
 
     def _reuse_liepin_search_page(self, *, page_id: str, url: str) -> None:
         try:

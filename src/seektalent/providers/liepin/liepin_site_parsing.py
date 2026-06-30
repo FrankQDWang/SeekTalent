@@ -814,9 +814,11 @@ def _parse_page_id(output: str) -> str:
         parsed = json.loads(output)
     except json.JSONDecodeError as exc:
         raise OpenCliBrowserError("liepin_opencli_tab_response_malformed") from exc
+    if isinstance(parsed, list) and len(parsed) == 1:
+        parsed = parsed[0]
     if not isinstance(parsed, dict):
         raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
-    page_id = parsed.get("page")
+    page_id = _tab_page_id(parsed)
     if not isinstance(page_id, str) or not _is_safe_page_id(page_id):
         raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
     return page_id
