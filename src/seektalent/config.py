@@ -610,9 +610,11 @@ class AppSettings(BaseSettings):
         if not isinstance(value, str):
             return value
         normalized = value.strip()
+        if info.field_name == "domi_llm_base_url":
+            normalized = normalized.rstrip("/")
         if not normalized:
             raise ValueError(f"{info.field_name} must not be empty")
-        return normalized.rstrip("/") if info.field_name == "domi_llm_base_url" else normalized
+        return normalized
 
     @field_validator("agent_monthly_cost_budget_cents", mode="before")
     @classmethod

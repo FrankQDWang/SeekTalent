@@ -93,6 +93,9 @@ def test_empty_domi_base_url_and_channel_are_rejected() -> None:
     with pytest.raises(ValidationError, match="domi_llm_base_url"):
         make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt", domi_llm_base_url="")
 
+    with pytest.raises(ValidationError, match="domi_llm_base_url"):
+        make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt", domi_llm_base_url="///")
+
     with pytest.raises(ValidationError, match="domi_llm_channel"):
         make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt", domi_llm_channel="")
 
