@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     if shutil.which("pnpm") is None:
         raise SystemExit("pnpm is required to build the packaged Workbench frontend.")
     subprocess.run(["pnpm", "install", "--frozen-lockfile"], cwd=WEB_DIR, check=True)
-    subprocess.run(["pnpm", "build"], cwd=WEB_DIR, check=True)
+    subprocess.run(["pnpm", "exec", "vite", "build"], cwd=WEB_DIR, check=True)
     _copy_frontend()
     _validate_frontend()
     print(f"Packaged Workbench frontend written to {PACKAGE_FRONTEND_DIR}")
