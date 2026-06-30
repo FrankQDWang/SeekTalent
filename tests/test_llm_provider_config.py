@@ -97,6 +97,14 @@ def test_empty_domi_base_url_and_channel_are_rejected() -> None:
         make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt", domi_llm_channel="")
 
 
+def test_non_string_domi_transport_values_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="domi_llm_base_url"):
+        make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt", domi_llm_base_url=123)
+
+    with pytest.raises(ValidationError, match="domi_llm_channel"):
+        make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt", domi_llm_channel=True)
+
+
 def test_legacy_stage_key_in_dotenv_fails_with_migration_error(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(

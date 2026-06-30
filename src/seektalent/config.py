@@ -606,8 +606,10 @@ class AppSettings(BaseSettings):
 
     @field_validator("domi_llm_base_url", "domi_llm_channel", mode="before")
     @classmethod
-    def validate_non_empty_domi_strings(cls, value: object, info: ValidationInfo) -> str:
-        normalized = str(value or "").strip()
+    def validate_non_empty_domi_strings(cls, value: object, info: ValidationInfo) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
         if not normalized:
             raise ValueError(f"{info.field_name} must not be empty")
         return normalized.rstrip("/") if info.field_name == "domi_llm_base_url" else normalized
