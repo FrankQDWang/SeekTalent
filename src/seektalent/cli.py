@@ -6,13 +6,14 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from collections import deque
+from collections.abc import Mapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from queue import Queue
-from collections.abc import Sequence
 from typing import TYPE_CHECKING, Callable, cast
 
 from pydantic import ValidationError
@@ -133,6 +134,17 @@ SKIPPED_BENCHMARK_FILE_PATTERNS = (
     "*.only.jsonl",
     "*.subset.jsonl",
 )
+_WORKBENCH_OPENCLI_BROWSER_CLI = "seektalent.providers.liepin.opencli_browser_cli"
+_WORKBENCH_OPENCLI_RECOVERABLE_REASONS = {
+    "liepin_opencli_daemon_not_running",
+    "liepin_opencli_daemon_stale",
+    "liepin_opencli_extension_disconnected",
+    "liepin_opencli_status_unavailable",
+}
+_WORKBENCH_OPENCLI_STATUS_ATTEMPTS = 15
+_WORKBENCH_OPENCLI_STATUS_POLL_SECONDS = 1.0
+_WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS = 30
+_WORKBENCH_PREFLIGHT_LIEPIN_URL = "https://h.liepin.com/search/getConditionItem#session"
 ROOT_HELP_EPILOG = """Primary workflow:
   1. seektalent doctor
   2. seektalent
@@ -141,8 +153,10 @@ ROOT_HELP_EPILOG = """Primary workflow:
 
 Required environment variables:
   SEEKTALENT_TEXT_LLM_API_KEY
-  SEEKTALENT_CTS_TENANT_KEY
-  SEEKTALENT_CTS_TENANT_SECRET
+
+Default source:
+  Liepin through the local OpenCLI browser bridge. CTS is optional and only required when
+  SEEKTALENT_PROVIDER_NAME=cts is set explicitly.
 
 Inputs:
   Provide the job title with --job-title or --job-title-file, and the job description with --jd or --jd-file.
@@ -1107,8 +1121,8 @@ def _inspect_payload() -> dict[str, object]:
                 "seektalent workbench",
                 "seektalent workbench --host 0.0.0.0 --lan --allowed-host recruiting.internal",
             ],
-            "outputs": "Starts the local API server and serves the packaged Workbench frontend.",
-            "side_effects": "Creates or updates local Workbench data under the configured workspace root.",
+            "outputs": "Starts the local API server and serves the packaged Workbench frontend; preflight failures print reason_code diagnostics on stderr.",
+            "side_effects": "May download managed Node/OpenCLI under ~/.seektalent/opencli-runtime, open or reuse a Liepin browser tab, and create or update local Workbench data under the configured workspace root.",
         },
         "llm-prf-live-validate": {
             "description": "Run the manual live LLM PRF validation harness on checked input cases.",
@@ -1178,7 +1192,7 @@ def _inspect_payload() -> dict[str, object]:
     return {
         "tool": "seektalent",
         "version": __version__,
-        "summary": "Deterministic local resume matching CLI for CTS retrieval and shortlist generation.",
+        "summary": "Deterministic local resume matching CLI for Liepin retrieval and shortlist generation.",
         "recommended_workflow": [
             "seektalent --help",
             "seektalent doctor",
@@ -1189,10 +1203,12 @@ def _inspect_payload() -> dict[str, object]:
         "environment": {
             "required_for_default_run": [
                 "SEEKTALENT_TEXT_LLM_API_KEY",
+            ],
+            "optional_provider_vars": [
+                "SEEKTALENT_PROVIDER_NAME",
                 "SEEKTALENT_CTS_TENANT_KEY",
                 "SEEKTALENT_CTS_TENANT_SECRET",
             ],
-            "optional_provider_vars": [],
             "optional_runtime_vars": OPTIONAL_RUNTIME_ENV_VARS,
             "env_file_support": "run and doctor accept --env-file to load values from a file; shell environment variables remain first-class.",
         },
@@ -1204,7 +1220,7 @@ def _inspect_payload() -> dict[str, object]:
         },
         "runtime_source_lanes": {
             "contract_version": "runtime-source-lane-v1",
-            "default_sources": ["cts"],
+            "default_sources": ["liepin"],
             "supported_sources": ["cts", "liepin"],
             "workbench_lane_api": "WorkflowRuntime.run_source_lane_async",
             "public_payload_policy": "allowlist_serializers_only",
@@ -1751,10 +1767,173 @@ def _doctor_command(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
+    if not str(env.get("SEEKTALENT_TEXT_LLM_API_KEY") or "").strip():
+        _print_workbench_reason(
+            "seektalent_text_llm_api_key_missing",
+            "SEEKTALENT_TEXT_LLM_API_KEY is required. Set it in the shell or ~/.seektalent/.env.",
+        )
+        return False
+
+    try:
+        from seektalent.opencli_launcher import BootstrapError, ensure_opencli_runtime
+
+        runtime = ensure_opencli_runtime()
+    except BootstrapError as exc:
+        _print_workbench_reason(
+            "liepin_opencli_bootstrap_failed",
+            f"Managed OpenCLI/Node bootstrap failed: {exc}",
+        )
+        return False
+
+    status = _run_workbench_liepin_action("status", env=env)
+    if not _workbench_action_ok(status):
+        reason = _workbench_action_reason(status)
+        if reason in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
+            if not _restart_workbench_opencli_daemon(runtime, env=env):
+                _print_workbench_reason(reason, _workbench_reason_message(reason))
+                return False
+            status = _wait_for_workbench_opencli_status(env=env)
+            reason = _workbench_action_reason(status)
+        if not _workbench_action_ok(status):
+            _print_workbench_reason(reason, _workbench_reason_message(reason))
+            return False
+
+    opened = _run_workbench_liepin_action(
+        "open_liepin_tab",
+        payload={"url": _WORKBENCH_PREFLIGHT_LIEPIN_URL},
+        env=env,
+    )
+    if not _workbench_action_ok(opened):
+        reason = _workbench_action_reason(opened)
+        _print_workbench_reason(reason, _workbench_reason_message(reason))
+        return False
+
+    state = _run_workbench_liepin_action("state", env=env)
+    if not _workbench_action_ok(state):
+        reason = _workbench_action_reason(state)
+        _print_workbench_reason(reason, _workbench_reason_message(reason))
+        return False
+
+    return True
+
+
+def _run_workbench_liepin_action(
+    action: str,
+    *,
+    env: Mapping[str, str],
+    payload: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", _WORKBENCH_OPENCLI_BROWSER_CLI, action],
+            input=json.dumps(dict(payload or {}), ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=dict(env),
+            timeout=_WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_timeout"}
+    except OSError:
+        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_status_unavailable"}
+    output = (completed.stdout or "").strip()
+    if not output:
+        reason = "liepin_opencli_status_unavailable"
+        if completed.returncode != 0 and completed.stderr:
+            reason = _workbench_reason_from_text(completed.stderr)
+        return {"ok": False, "action": action, "safeReasonCode": reason}
+    try:
+        loaded = json.loads(output)
+    except json.JSONDecodeError:
+        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_status_unavailable"}
+    if not isinstance(loaded, dict):
+        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_status_unavailable"}
+    return loaded
+
+
+def _restart_workbench_opencli_daemon(runtime: object, *, env: Mapping[str, str]) -> bool:
+    node = getattr(runtime, "node", None)
+    opencli_main = getattr(runtime, "opencli_main", None)
+    node_bin_dir = getattr(runtime, "node_bin_dir", None)
+    if node is None or opencli_main is None or node_bin_dir is None:
+        return False
+    restart_env = dict(env)
+    restart_env["PATH"] = os.pathsep.join((str(node_bin_dir), restart_env.get("PATH", "")))
+    try:
+        completed = subprocess.run(
+            (str(node), str(opencli_main), "daemon", "restart"),
+            check=False,
+            env=restart_env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return completed.returncode == 0
+
+
+def _wait_for_workbench_opencli_status(*, env: Mapping[str, str]) -> dict[str, object]:
+    last = {"ok": False, "action": "status", "safeReasonCode": "liepin_opencli_status_unavailable"}
+    for _attempt in range(_WORKBENCH_OPENCLI_STATUS_ATTEMPTS):
+        last = _run_workbench_liepin_action("status", env=env)
+        if _workbench_action_ok(last):
+            return last
+        if _workbench_action_reason(last) not in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
+            return last
+        time.sleep(_WORKBENCH_OPENCLI_STATUS_POLL_SECONDS)
+    return last
+
+
+def _workbench_action_ok(payload: Mapping[str, object]) -> bool:
+    return payload.get("ok") is True
+
+
+def _workbench_action_reason(payload: Mapping[str, object]) -> str:
+    reason = payload.get("safeReasonCode") or payload.get("safe_reason_code")
+    if isinstance(reason, str) and reason:
+        return reason
+    return "liepin_opencli_status_unavailable"
+
+
+def _workbench_reason_from_text(text: str) -> str:
+    for reason in (
+        "liepin_opencli_login_required",
+        "liepin_opencli_extension_disconnected",
+        "liepin_opencli_daemon_stale",
+        "liepin_opencli_daemon_not_running",
+        "liepin_opencli_timeout",
+    ):
+        if reason in text:
+            return reason
+    return "liepin_opencli_status_unavailable"
+
+
+def _workbench_reason_message(reason: str) -> str:
+    return {
+        "liepin_opencli_login_required": "Liepin is not logged in. Open Liepin in Chrome, finish login, then run seektalent workbench again.",
+        "liepin_opencli_identity_intercept": "Liepin requires account identity selection before search can run.",
+        "liepin_opencli_risk_page": "Liepin risk verification or captcha is blocking browser automation.",
+        "liepin_opencli_extension_disconnected": "OpenCLI browser bridge extension is not connected. Check the Chrome extension, then retry.",
+        "liepin_opencli_daemon_stale": "OpenCLI browser bridge daemon is stale.",
+        "liepin_opencli_daemon_not_running": "OpenCLI browser bridge daemon is not running.",
+        "liepin_opencli_bootstrap_failed": "Managed OpenCLI/Node bootstrap failed.",
+        "liepin_opencli_timeout": "OpenCLI browser bridge did not respond before timeout.",
+    }.get(reason, "OpenCLI/Liepin preflight failed.")
+
+
+def _print_workbench_reason(reason: str, message: str) -> None:
+    print(f"reason_code={reason} {message}", file=sys.stderr)
+
+
 def _workbench_command(args: argparse.Namespace) -> int:
     from seektalent.product_env import build_workbench_command_env
 
     env = build_workbench_command_env(os.environ)
+    if not _workbench_startup_preflight(env):
+        return 1
     argv = [
         _console_script_path("seektalent-ui-api"),
         "--host",

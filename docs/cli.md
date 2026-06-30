@@ -163,6 +163,8 @@ seektalent workbench
 
 The command starts the FastAPI backend and serves the packaged React Workbench from the same loopback origin. It does not require pnpm, Node, Vite, or a repository checkout on the user's machine.
 
+On first use, `seektalent workbench` downloads and pins the managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` when needed. Users still need the OpenCLI Chrome extension connected and Liepin already logged in in their local Chrome profile. If the LLM key, OpenCLI bootstrap, daemon, extension connection, or Liepin login check fails, startup exits before launching the server and prints a `reason_code=...` diagnostic on stderr.
+
 ## Failure Behavior
 
 The CLI fails fast when:
@@ -171,6 +173,7 @@ The CLI fails fast when:
 - mutually exclusive input flags are used together
 - settings validation fails
 - required provider credentials are missing
+- `seektalent workbench` cannot bootstrap OpenCLI, connect the OpenCLI Chrome extension, or verify Liepin login
 - CTS credentials are missing in real CTS mode
 - mock CTS is requested through the published CLI path
 - any runtime stage raises an exception

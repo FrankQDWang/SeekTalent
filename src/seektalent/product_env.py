@@ -10,8 +10,6 @@ from seektalent.workbench_internal_secrets import ensure_workbench_internal_liep
 PRODUCT_USER_ENV_VARS = frozenset(
     {
         "SEEKTALENT_TEXT_LLM_API_KEY",
-        "SEEKTALENT_CTS_TENANT_KEY",
-        "SEEKTALENT_CTS_TENANT_SECRET",
     }
 )
 

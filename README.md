@@ -1,6 +1,6 @@
 # SeekTalent
 
-`SeekTalent` is a local-first recruiter workbench with a stable CLI and a local browser UI. It turns a required job title, a job description, and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, controlled CTS retrieval, per-resume scoring, reflection, and finalization.
+`SeekTalent` is a local-first recruiter workbench with a stable CLI and a local browser UI. It turns a required job title, a job description, and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, local Liepin retrieval through OpenCLI, per-resume scoring, reflection, and finalization.
 
 The current product shape is local-first:
 
@@ -16,7 +16,7 @@ The current product shape is local-first:
 - DB-first local control plane for conversation turns, workflow runs, public progress, checkpoints, candidate truth, and recruiter Workbench projections
 - Bounded artifact modes: production keeps product state in SQLite; development can emit compact diagnostics; `debug_full_local` is explicit and short-lived
 - Explicit text-LLM configuration using `SEEKTALENT_TEXT_LLM_*` plus bare `*_MODEL_ID` values
-- Real CTS integration with explicit credential requirements
+- Real Liepin integration through the local OpenCLI browser bridge
 
 ## Quick Start
 
@@ -24,20 +24,21 @@ The current product shape is local-first:
 
 - Python `3.12+`
 - one supported LLM provider credential
-- CTS credentials for real CTS mode
+- OpenCLI Chrome extension installed and connected
+- Liepin already logged in in the local browser profile
 
 ### Install as a CLI
 
 Recommended for end users:
 
 ```bash
-pipx install seektalent==0.6.7
+pipx install seektalent==0.7.1
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install seektalent==0.6.7
+pip install seektalent==0.7.1
 ```
 
 The current starter env defaults to the canonical text-LLM surface, with `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`, the matching `SEEKTALENT_TEXT_LLM_ENDPOINT_*` values, and bare stage `*_MODEL_ID` settings. Dual-protocol support still exists through the same `SEEKTALENT_TEXT_LLM_*` surface.
@@ -48,32 +49,26 @@ The current starter env defaults to the canonical text-LLM surface, with `SEEKTA
 seektalent init
 ```
 
-For installed PyPI users, `seektalent init` writes a minimal `.env` with only three required values:
+For installed PyPI users, `seektalent init` writes a minimal `.env` with one required value:
 
 ```env
 SEEKTALENT_TEXT_LLM_API_KEY=
-SEEKTALENT_CTS_TENANT_KEY=
-SEEKTALENT_CTS_TENANT_SECRET=
 ```
 
-All other runtime, output, cleanup, and model settings use product defaults. Source checkout developers should use `.env.example` for the full development configuration surface.
+All other runtime, output, cleanup, source, OpenCLI, Liepin, and model settings use product defaults.
 
-### Fill the required values in `.env`
+### Fill the required value in `.env`
 
 At minimum:
 
 ```dotenv
 SEEKTALENT_TEXT_LLM_API_KEY=your-text-llm-key
-SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
-SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 ```
 
-Users can also set the same three keys directly in the current terminal and start immediately:
+Users can also set the same key directly in the current terminal and start immediately:
 
 ```bash
 export SEEKTALENT_TEXT_LLM_API_KEY=your-text-llm-key
-export SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
-export SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 seektalent workbench
 ```
 
@@ -91,7 +86,7 @@ Installed PyPI users start the local Workbench with the packaged frontend:
 seektalent workbench
 ```
 
-The command starts the backend and serves the built React Workbench from the same loopback origin. It defaults the Workbench to CTS + Liepin, with Liepin using OpenCLI through the user's local browser. No extra SeekTalent env configuration is required beyond the three keys above. SeekTalent downloads and pins its managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` on first use when needed. The user still installs and connects the OpenCLI Chrome plugin in their own Chrome profile. The packaged frontend does not require pnpm, Vite, or a repository checkout on the user's machine.
+The command starts the backend and serves the built React Workbench from the same loopback origin. It defaults the Workbench to Liepin through OpenCLI in the user's local browser. No extra SeekTalent env configuration is required beyond the LLM API key. SeekTalent downloads and pins its managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` on first use when needed. The user still installs and connects the OpenCLI Chrome plugin in their own Chrome profile, and Liepin must already be logged in. If OpenCLI bootstrap, daemon, extension, or Liepin login checks fail, startup exits before launching the server and prints a `reason_code=...` diagnostic. The packaged frontend does not require pnpm, Vite, Node, OpenCLI CLI, or a repository checkout on the user's machine.
 
 For source checkout development, use the repo-local OpenCLI/React launcher:
 
@@ -101,7 +96,7 @@ scripts/start-dev-workbench.sh
 
 The development launcher installs React dependencies with pnpm when needed, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at `apps/web-react/node_modules/.bin/opencli`, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` plus `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, then starts the backend on `127.0.0.1:8012` and the React Workbench on `127.0.0.1:5178`. The user still installs and connects the OpenCLI Chrome extension in their own Chrome profile. When OpenCLI is selected and ready, Liepin behavior is real local browser behavior, not fixture data.
 
-`doctor`, `inspect --json`, cleanup, and Workbench startup do not upload local databases, provider cookies, browser sessions, raw resumes, or configured secrets. Runtime network calls are limited to the configured LLM provider and CTS provider. Remote eval logging through W&B/Weave is off by default and requires explicit configuration.
+`doctor`, `inspect --json`, cleanup, and Workbench startup do not upload local databases, provider cookies, browser sessions, raw resumes, or configured secrets. Runtime network calls are limited to the configured LLM provider and the local browser's Liepin session unless an optional provider is explicitly configured. Remote eval logging through W&B/Weave is off by default and requires explicit configuration.
 
 ### Recommended black-box workflow
 
@@ -159,7 +154,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install seektalent==0.6.7
+pipx install seektalent==0.7.1
 ```
 
 This gives you the `seektalent` command directly.
@@ -167,7 +162,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install seektalent==0.6.7
+pip install seektalent==0.7.1
 ```
 
 Then:
@@ -265,7 +260,7 @@ Environment variables are read from `.env` by default. You will usually configur
 
 - the canonical text-LLM runtime credential `SEEKTALENT_TEXT_LLM_API_KEY`
 - text-LLM protocol and endpoint settings under `SEEKTALENT_TEXT_LLM_*`, plus bare stage `*_MODEL_ID` values
-- CTS settings such as `SEEKTALENT_CTS_BASE_URL`, `SEEKTALENT_CTS_TENANT_KEY`, and `SEEKTALENT_CTS_TENANT_SECRET`
+- optional CTS settings only when `SEEKTALENT_PROVIDER_NAME=cts` is set explicitly
 - runtime settings such as round limits, concurrency, and output directory
 
 Full configuration reference:
@@ -315,7 +310,7 @@ Current boundaries are intentional:
 
 - SeekTalent is local-first, not a hosted multi-tenant recruiting SaaS
 - the Workbench is the primary browser UI for local recruiter workflows
-- the CTS adapter is scoped to the fields and semantics implemented in this repository
+- source adapters are scoped to the fields and semantics implemented in this repository
 - the runtime is built for auditable deterministic control flow, not open-ended autonomous tool use
 
 ## Docs

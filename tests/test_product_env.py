@@ -26,8 +26,8 @@ def test_load_product_user_env_reads_only_product_keys(tmp_path: Path) -> None:
     load_product_user_env(env, env_file=env_file)
 
     assert env["SEEKTALENT_TEXT_LLM_API_KEY"] == "shell-text-key"
-    assert env["SEEKTALENT_CTS_TENANT_KEY"] == "file-cts-key"
-    assert env["SEEKTALENT_CTS_TENANT_SECRET"] == "file-cts-secret"
+    assert "SEEKTALENT_CTS_TENANT_KEY" not in env
+    assert "SEEKTALENT_CTS_TENANT_SECRET" not in env
     assert "SEEKTALENT_LIEPIN_OPENCLI_SESSION" not in env
 
 
@@ -56,8 +56,8 @@ def test_build_workbench_command_env_adds_product_keys_and_internal_liepin_secre
 
     assert env["SEEKTALENT_WORKSPACE_ROOT"] == str(home)
     assert env["SEEKTALENT_TEXT_LLM_API_KEY"] == "user-text-key"
-    assert env["SEEKTALENT_CTS_TENANT_KEY"] == "user-cts-key"
-    assert env["SEEKTALENT_CTS_TENANT_SECRET"] == "user-cts-secret"
+    assert "SEEKTALENT_CTS_TENANT_KEY" not in env
+    assert "SEEKTALENT_CTS_TENANT_SECRET" not in env
     assert "SEEKTALENT_LIEPIN_OPENCLI_SESSION" not in env
     for name in (
         "SEEKTALENT_LIEPIN_API_TOKEN",

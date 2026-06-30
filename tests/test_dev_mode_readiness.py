@@ -34,6 +34,7 @@ def test_raw_env_diagnostics_do_not_expose_secret_values(tmp_path: Path) -> None
 
     payload = build_dev_mode_env_diagnostics(env, workspace_root=tmp_path).model_dump(mode="json")
     raw = json.dumps(payload, sort_keys=True)
+    components = {component["name"]: component for component in payload["components"]}
 
     assert "sk-secret-value" not in raw
     assert "tenant-key-secret" not in raw
@@ -42,6 +43,7 @@ def test_raw_env_diagnostics_do_not_expose_secret_values(tmp_path: Path) -> None
     assert "--token secret" not in raw
     assert str(skill_path) not in raw
     assert payload["overallStatus"] == "needs_setup"
+    assert "cts" not in components
 
 
 def test_raw_env_diagnostics_reports_local_data_root_posture(tmp_path: Path) -> None:
@@ -167,6 +169,7 @@ def test_valid_settings_status_reports_configured_components(tmp_path: Path) -> 
     opencli_bin = _write_opencli_binary(tmp_path)
     settings = make_settings(
         workspace_root=str(tmp_path),
+        provider_name="cts",
         text_llm_api_key="sk-live",
         cts_tenant_key="tenant-key",
         cts_tenant_secret="tenant-secret",
@@ -199,6 +202,7 @@ def test_dev_mode_status_uses_configured_opencli_env(monkeypatch: pytest.MonkeyP
     status = build_dev_mode_status(AppSettings(_env_file=None))
 
     components = {item.name: item for item in status.components}
+    assert "cts" not in components
     assert components["liepin_opencli_browser"].status == "configured"
     assert components["liepin_opencli_browser"].reasonCode == "configured"
     assert not any(name.startswith("liepin_pi") for name in components)

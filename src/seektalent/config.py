@@ -459,7 +459,7 @@ class AppSettings(BaseSettings):
     cts_timeout_seconds: float = 20.0
     cts_spec_path: str = DEFAULT_CTS_SPEC_NAME
 
-    provider_name: ProviderName = "cts"
+    provider_name: ProviderName = "liepin"
     liepin_worker_mode: LiepinWorkerMode = "opencli"
     liepin_allow_fake_fixture_worker: bool = False
     liepin_worker_base_url: str | None = None

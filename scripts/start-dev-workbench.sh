@@ -26,7 +26,7 @@ if [[ ! -x "$OPENCLI_BIN" ]]; then
 fi
 
 if [[ ! -x "$OPENCLI_BIN" ]]; then
-  echo "Repo-local OpenCLI browser helper is missing after dependency install: apps/web-react/node_modules/.bin/opencli" >&2
+  echo "reason_code=liepin_opencli_command_missing Repo-local OpenCLI browser helper is missing after dependency install: apps/web-react/node_modules/.bin/opencli" >&2
   exit 1
 fi
 
@@ -131,21 +131,21 @@ OPENCLI_START_DAEMON="$(env_or_file SEEKTALENT_LIEPIN_OPENCLI_START_DAEMON)"
 if [[ "$OPENCLI_START_DAEMON" == "1" || "$OPENCLI_START_DAEMON" == "true" ]]; then
   echo "Starting OpenCLI browser bridge daemon for Liepin local browser actions..." >&2
   if ! "$OPENCLI_BIN" daemon restart >&2; then
-    echo "OpenCLI browser bridge daemon did not start; Liepin OpenCLI source will fail closed." >&2
+    echo "reason_code=liepin_opencli_daemon_not_running OpenCLI browser bridge daemon did not start; Liepin OpenCLI source will fail closed." >&2
   elif ! wait_for_opencli_extension; then
-    echo "OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
+    echo "reason_code=liepin_opencli_extension_disconnected OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
   fi
 elif opencli_daemon_stale; then
-  echo "OpenCLI browser bridge daemon is stale; restarting daemon and waiting..." >&2
+  echo "reason_code=liepin_opencli_daemon_stale OpenCLI browser bridge daemon is stale; restarting daemon and waiting..." >&2
   if ! "$OPENCLI_BIN" daemon restart >&2 || ! wait_for_opencli_extension; then
-    echo "OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
+    echo "reason_code=liepin_opencli_extension_disconnected OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
   fi
 elif ! "$OPENCLI_BIN" daemon status >/dev/null 2>&1; then
-  echo "OpenCLI browser bridge daemon is not running; Liepin OpenCLI source will fail closed." >&2
+  echo "reason_code=liepin_opencli_daemon_not_running OpenCLI browser bridge daemon is not running; Liepin OpenCLI source will fail closed." >&2
 elif ! opencli_extension_connected; then
   echo "OpenCLI browser bridge daemon is running but the extension is not connected; restarting daemon and waiting..." >&2
   if ! "$OPENCLI_BIN" daemon restart >&2 || ! wait_for_opencli_extension; then
-    echo "OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
+    echo "reason_code=liepin_opencli_extension_disconnected OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
   fi
 fi
 

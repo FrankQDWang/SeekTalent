@@ -16,7 +16,7 @@ from tests.settings_factory import make_settings
 
 
 def test_provider_registry_returns_cts_adapter() -> None:
-    settings = make_settings()
+    settings = make_settings(provider_name="cts")
 
     provider = get_provider_adapter(settings)
 

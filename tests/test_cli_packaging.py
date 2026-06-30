@@ -89,8 +89,6 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     assert "inspect" in inspect_payload["commands"]
     assert inspect_payload["environment"]["required_for_default_run"] == [
         "SEEKTALENT_TEXT_LLM_API_KEY",
-        "SEEKTALENT_CTS_TENANT_KEY",
-        "SEEKTALENT_CTS_TENANT_SECRET",
     ]
 
     workbench_help = subprocess.run(
@@ -143,15 +141,10 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     ]
     assert env_lines == [
         "SEEKTALENT_TEXT_LLM_API_KEY=",
-        "SEEKTALENT_CTS_TENANT_KEY=",
-        "SEEKTALENT_CTS_TENANT_SECRET=",
     ]
 
     doctor_env = work_dir / "doctor.env"
-    doctor_env.write_text(
-        "SEEKTALENT_TEXT_LLM_API_KEY=test-key\nSEEKTALENT_CTS_TENANT_KEY=cts-key\nSEEKTALENT_CTS_TENANT_SECRET=cts-secret\n",
-        encoding="utf-8",
-    )
+    doctor_env.write_text("SEEKTALENT_TEXT_LLM_API_KEY=test-key\n", encoding="utf-8")
     doctor_result = subprocess.run(
         [str(cli), "doctor", "--env-file", str(doctor_env), "--json"],
         cwd=work_dir,

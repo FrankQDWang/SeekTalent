@@ -410,7 +410,7 @@ def _session_sources(session: object) -> list[SourceKind]:
             sources.append("cts")
         elif source == "liepin" and source not in sources:
             sources.append("liepin")
-    default_sources: list[SourceKind] = ["cts"]
+    default_sources: list[SourceKind] = ["liepin"]
     return sources or default_sources
 
 

@@ -213,6 +213,8 @@ def test_main_shows_root_help(capsys: pytest.CaptureFixture[str]) -> None:
     assert "update" in help_text
     assert "inspect" in help_text
     assert "SEEKTALENT_TEXT_LLM_API_KEY" in help_text
+    assert "SEEKTALENT_CTS_TENANT_KEY" not in help_text
+    assert "SEEKTALENT_CTS_TENANT_SECRET" not in help_text
     assert "seektalent doctor" in help_text
     assert "seektalent inspect --json" in help_text
     assert "pi-agent" not in help_text
@@ -339,8 +341,6 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert "pi-agent" not in liepin_smoke_examples
     assert payload["environment"]["required_for_default_run"] == [
         "SEEKTALENT_TEXT_LLM_API_KEY",
-        "SEEKTALENT_CTS_TENANT_KEY",
-        "SEEKTALENT_CTS_TENANT_SECRET",
     ]
     assert payload["artifacts"]["top_level_files"] == [
         "runtime/trace.log",
@@ -406,7 +406,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert local_product["data_root_posture"]["overall_status"] in {"safe", "warning", "error", "unknown"}
     source_lanes = payload["runtime_source_lanes"]
     assert source_lanes["contract_version"] == "runtime-source-lane-v1"
-    assert source_lanes["default_sources"] == ["cts"]
+    assert source_lanes["default_sources"] == ["liepin"]
     assert source_lanes["supported_sources"] == ["cts", "liepin"]
 
     root_names = set(local_product["data_root_posture"]["roots"])
@@ -452,15 +452,29 @@ def test_workbench_command_runs_packaged_frontend_in_prod(
     calls = []
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
 
     class Completed:
+        stdout = ""
+        stderr = ""
         returncode = 0
 
-    def fake_run(argv, *, check, env):
-        assert check is False
-        calls.append((argv, env))
+    class Runtime:
+        node = tmp_path / "node"
+        opencli_main = tmp_path / "opencli-main.js"
+        node_bin_dir = tmp_path
+
+    def fake_run(argv, **kwargs):
+        assert kwargs.get("check") is False
+        if "seektalent.providers.liepin.opencli_browser_cli" in list(argv):
+            action = list(argv)[-1]
+            completed = Completed()
+            completed.stdout = json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"})
+            return completed
+        calls.append((argv, kwargs.get("env")))
         return Completed()
 
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
@@ -482,6 +496,223 @@ def test_workbench_command_runs_packaged_frontend_in_prod(
         assert env[name]
         assert env[name] not in {"local-development", "local-development-liepin-api-token"}
     assert (home / ".seektalent" / "workbench-secrets.env").exists()
+
+
+def test_workbench_command_requires_text_llm_key_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = []
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv)
+        raise AssertionError("workbench server should not launch without SEEKTALENT_TEXT_LLM_API_KEY")
+
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench"]) == 1
+
+    captured = capsys.readouterr()
+    assert "reason_code=seektalent_text_llm_api_key_missing" in captured.err
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" in captured.err
+    assert calls == []
+
+
+def test_workbench_command_runs_opencli_preflight_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    opencli_actions: list[str] = []
+    launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
+    ensured: list[bool] = []
+
+    class Runtime:
+        node = tmp_path / "node"
+        opencli_main = tmp_path / "opencli-main.js"
+        node_bin_dir = tmp_path
+
+    class Completed:
+        def __init__(self, *, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def ensure_runtime():
+        ensured.append(True)
+        return Runtime()
+
+    def fake_run(argv, **kwargs):
+        argv_list = list(argv)
+        if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
+            action = argv_list[-1]
+            opencli_actions.append(action)
+            return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
+        launch_calls.append((argv_list, kwargs.get("env")))
+        return Completed()
+
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", ensure_runtime)
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench", "--port", "8123"]) == 0
+
+    assert ensured == [True]
+    assert opencli_actions == ["status", "open_liepin_tab", "state"]
+    assert launch_calls[0][0][0] == "seektalent-ui-api"
+
+
+def test_workbench_command_reports_opencli_extension_disconnected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_ATTEMPTS", 1)
+    monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_POLL_SECONDS", 0)
+    restart_calls: list[list[str]] = []
+    launch_calls: list[list[str]] = []
+
+    class Runtime:
+        node = tmp_path / "node"
+        opencli_main = tmp_path / "opencli-main.js"
+        node_bin_dir = tmp_path
+
+    class Completed:
+        def __init__(self, *, stdout: str = "") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(argv, **_kwargs):
+        argv_list = list(argv)
+        if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
+            return Completed(
+                stdout=json.dumps(
+                    {
+                        "ok": False,
+                        "action": "status",
+                        "safeReasonCode": "liepin_opencli_extension_disconnected",
+                    }
+                )
+            )
+        if argv_list[-2:] == ["daemon", "restart"]:
+            restart_calls.append(argv_list)
+            return Completed()
+        launch_calls.append(argv_list)
+        return Completed()
+
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench"]) == 1
+
+    captured = capsys.readouterr()
+    assert "reason_code=liepin_opencli_extension_disconnected" in captured.err
+    assert restart_calls
+    assert launch_calls == []
+
+
+def test_workbench_command_restarts_daemon_when_extension_is_disconnected(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_POLL_SECONDS", 0)
+    status_calls = 0
+    restart_calls: list[list[str]] = []
+    launch_calls: list[list[str]] = []
+
+    class Runtime:
+        node = tmp_path / "node"
+        opencli_main = tmp_path / "opencli-main.js"
+        node_bin_dir = tmp_path
+
+    class Completed:
+        def __init__(self, *, stdout: str = "", returncode: int = 0) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(argv, **_kwargs):
+        nonlocal status_calls
+        argv_list = list(argv)
+        if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
+            action = argv_list[-1]
+            if action == "status":
+                status_calls += 1
+                if status_calls == 1:
+                    return Completed(
+                        stdout=json.dumps(
+                            {
+                                "ok": False,
+                                "action": "status",
+                                "safeReasonCode": "liepin_opencli_extension_disconnected",
+                            }
+                        )
+                    )
+            return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
+        if argv_list[-2:] == ["daemon", "restart"]:
+            restart_calls.append(argv_list)
+            return Completed()
+        launch_calls.append(argv_list)
+        return Completed()
+
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench"]) == 0
+
+    assert restart_calls
+    assert launch_calls[0][0] == "seektalent-ui-api"
+
+
+def test_workbench_command_reports_liepin_login_required(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    launch_calls: list[list[str]] = []
+
+    class Runtime:
+        node = tmp_path / "node"
+        opencli_main = tmp_path / "opencli-main.js"
+        node_bin_dir = tmp_path
+
+    class Completed:
+        def __init__(self, *, stdout: str = "") -> None:
+            self.returncode = 0
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(argv, **_kwargs):
+        argv_list = list(argv)
+        if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
+            action = argv_list[-1]
+            ok = action != "state"
+            reason = "configured" if ok else "liepin_opencli_login_required"
+            return Completed(stdout=json.dumps({"ok": ok, "action": action, "safeReasonCode": reason}))
+        launch_calls.append(argv_list)
+        return Completed()
+
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench"]) == 1
+
+    captured = capsys.readouterr()
+    assert "reason_code=liepin_opencli_login_required" in captured.err
+    assert launch_calls == []
 
 
 def test_inspect_json_hides_flywheel_root_in_prod(
@@ -679,30 +910,12 @@ def test_init_writes_env_template(tmp_path: Path, capsys: pytest.CaptureFixture[
     text = env_file.read_text(encoding="utf-8")
     assert text == Path(".env.example").read_text(encoding="utf-8")
     assert text == read_env_example_template()
-    assert "SEEKTALENT_TEXT_LLM_API_KEY=" in text
-    assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible" in text
-    assert "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND=bailian_openai_chat_completions" in text
-    assert "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=beijing" in text
-    assert "SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID=deepseek-v4-flash" in text
-    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID=deepseek-v4-flash" in text
-    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_REASONING_EFFORT=off" in text
-    assert "SEEKTALENT_REQUIREMENTS_MODEL_ID=deepseek-v4-pro" in text
-    assert "SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro" in text
+    lines = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
+    assert lines == ["SEEKTALENT_TEXT_LLM_API_KEY="]
+    assert "SEEKTALENT_CTS_TENANT_KEY=" not in lines
+    assert "SEEKTALENT_CTS_TENANT_SECRET=" not in lines
     assert "SEEKTALENT_REQUIREMENTS_MODEL=" not in text
     assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=" not in text
-    assert "SEEKTALENT_REASONING_EFFORT=off" in text
-    assert "SEEKTALENT_JUDGE_REASONING_EFFORT=off" in text
-    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash" in text
-    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
-    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_LIVE_HARNESS_TIMEOUT_SECONDS=30.0" in text
-    assert "SEEKTALENT_MAX_ROUNDS=10" in text
-    assert "SEEKTALENT_JUDGE_MAX_CONCURRENCY=5" in text
-    assert "SEEKTALENT_ENABLE_EVAL=false" in text
-    for key in LIEPIN_ENV_TEMPLATE_KEYS:
-        assert f"{key}=" in text
-    assert "SEEKTALENT_WANDB_PROJECT=seektalent" in text
-    assert "SEEKTALENT_WEAVE_ENTITY=frankqdwang1-personal-creations" in text
-    assert "SEEKTALENT_WEAVE_PROJECT=seektalent" in text
     assert str(env_file) in capsys.readouterr().out
 
 
@@ -738,10 +951,7 @@ def test_init_refuses_to_overwrite_without_force(tmp_path: Path, capsys: pytest.
 
 def test_doctor_json_success(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text(
-        "SEEKTALENT_TEXT_LLM_API_KEY=test-key\nSEEKTALENT_CTS_TENANT_KEY=cts-key\nSEEKTALENT_CTS_TENANT_SECRET=cts-secret\n",
-        encoding="utf-8",
-    )
+    env_file.write_text("SEEKTALENT_TEXT_LLM_API_KEY=test-key\n", encoding="utf-8")
 
     assert main(
         [
@@ -806,7 +1016,7 @@ def test_doctor_fails_for_missing_real_cts_credentials(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("SEEKTALENT_TEXT_LLM_API_KEY=test-key\n", encoding="utf-8")
+    env_file.write_text("SEEKTALENT_TEXT_LLM_API_KEY=test-key\nSEEKTALENT_PROVIDER_NAME=cts\n", encoding="utf-8")
 
     assert main(["doctor", "--env-file", str(env_file)]) == 1
 
@@ -2046,8 +2256,8 @@ def test_run_fails_fast_with_missing_environment_variables(
     error = capsys.readouterr().err
     assert "Missing required environment variables" in error
     assert "SEEKTALENT_TEXT_LLM_API_KEY" in error
-    assert "SEEKTALENT_CTS_TENANT_KEY" in error
-    assert "SEEKTALENT_CTS_TENANT_SECRET" in error
+    assert "SEEKTALENT_CTS_TENANT_KEY" not in error
+    assert "SEEKTALENT_CTS_TENANT_SECRET" not in error
 
 
 def test_run_liepin_provider_does_not_require_cts_credentials(

@@ -132,24 +132,13 @@ def test_explicit_env_file_none_skips_default_dotenv(tmp_path: Path, monkeypatch
     assert settings.requirements_model_id == "deepseek-v4-pro"
 
 
-def test_source_env_template_uses_new_text_llm_keys() -> None:
+def test_source_env_template_is_minimal_release_setup() -> None:
     text = SOURCE_ENV_TEMPLATE.read_text(encoding="utf-8")
+    lines = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
 
-    assert "SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=" in text
-    assert "SEEKTALENT_TEXT_LLM_ENDPOINT_KIND=" in text
-    assert "SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=" in text
-    assert "SEEKTALENT_REQUIREMENTS_MODEL_ID=deepseek-v4-pro" in text
-    assert "SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro" in text
-    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash" in text
-    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT=off" in text
-    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_MODEL_ID=deepseek-v4-flash" in text
-    assert "SEEKTALENT_WORKBENCH_NOTE_WRITER_REASONING_EFFORT=off" in text
-    assert "SEEKTALENT_WORKBENCH_CONVERSATION_MODEL_ID=deepseek-v4-flash" in text
-    assert "SEEKTALENT_WORKBENCH_CONVERSATION_REASONING_EFFORT=max" in text
-    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=3.0" in text
-    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_LIVE_HARNESS_TIMEOUT_SECONDS=30.0" in text
-    assert "SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS=2048" in text
-    assert "SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND=" not in text
+    assert lines == ["SEEKTALENT_TEXT_LLM_API_KEY="]
+    assert "SEEKTALENT_CTS_TENANT_KEY=" not in lines
+    assert "SEEKTALENT_CTS_TENANT_SECRET=" not in lines
     assert "SEEKTALENT_REQUIREMENTS_MODEL=" not in text
     assert "SEEKTALENT_JUDGE_OPENAI_BASE_URL=" not in text
 
@@ -162,8 +151,6 @@ def test_packaged_env_template_is_minimal_user_setup() -> None:
 
     assert lines == [
         "SEEKTALENT_TEXT_LLM_API_KEY=",
-        "SEEKTALENT_CTS_TENANT_KEY=",
-        "SEEKTALENT_CTS_TENANT_SECRET=",
     ]
 
 

@@ -25,6 +25,7 @@ def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.Mo
 
     settings = AppSettings(_env_file=None)
 
+    assert settings.provider_name == "liepin"
     assert settings.liepin_worker_mode == "opencli"
     assert settings.liepin_browser_action_backend == "opencli"
     assert settings.liepin_opencli_command_argv[1:] == ("-m", "seektalent.opencli_launcher")

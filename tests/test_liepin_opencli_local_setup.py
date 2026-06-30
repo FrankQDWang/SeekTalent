@@ -20,8 +20,6 @@ def test_env_diagnostics_reports_configured_opencli_without_legacy_mcp(tmp_path:
     status = build_dev_mode_env_diagnostics(
         {
             "SEEKTALENT_TEXT_LLM_API_KEY": "sk-test",
-            "SEEKTALENT_CTS_TENANT_KEY": "tenant-key",
-            "SEEKTALENT_CTS_TENANT_SECRET": "tenant-secret",
             "SEEKTALENT_LIEPIN_WORKER_MODE": "opencli",
             "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "opencli",
             "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "account-secret",
@@ -48,6 +46,10 @@ def test_dev_launcher_uses_liepin_opencli_helper_without_legacy_mcp_adapter() ->
     assert "node_modules/pi-mcp-adapter/index.ts" not in script
     assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND" not in script
     assert "DOKOBOT_MCP_COMMAND" not in script
+    assert "reason_code=liepin_opencli_command_missing" in script
+    assert "reason_code=liepin_opencli_daemon_not_running" in script
+    assert "reason_code=liepin_opencli_daemon_stale" in script
+    assert "reason_code=liepin_opencli_extension_disconnected" in script
 
 
 def test_dev_launcher_waits_for_backend_before_starting_vite() -> None:

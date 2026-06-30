@@ -44,6 +44,7 @@ class DevModeStatus(BaseModel):
 
 
 def build_dev_mode_env_diagnostics(env: Mapping[str, str | None], *, workspace_root: Path) -> DevModeStatus:
+    provider_name = _env_text(env, "SEEKTALENT_PROVIDER_NAME") or "liepin"
     worker_mode = _env_text(env, "SEEKTALENT_LIEPIN_WORKER_MODE") or "disabled"
     browser_backend = _browser_action_backend(env)
     opencli_enabled = worker_mode == "opencli" and browser_backend == "opencli"
@@ -52,13 +53,6 @@ def build_dev_mode_env_diagnostics(env: Mapping[str, str | None], *, workspace_r
             "text_llm",
             "Text LLM",
             "configured" if _env_text(env, "SEEKTALENT_TEXT_LLM_API_KEY") else "missing",
-        ),
-        _component(
-            "cts",
-            "CTS",
-            "configured"
-            if _env_text(env, "SEEKTALENT_CTS_TENANT_KEY") and _env_text(env, "SEEKTALENT_CTS_TENANT_SECRET")
-            else "missing",
         ),
         _component(
             "liepin_worker_mode",
@@ -80,6 +74,17 @@ def build_dev_mode_env_diagnostics(env: Mapping[str, str | None], *, workspace_r
             else ("needs_setup" if worker_mode == "opencli" else "missing"),
         ),
     ]
+    if provider_name == "cts":
+        components.insert(
+            1,
+            _component(
+                "cts",
+                "CTS",
+                "configured"
+                if _env_text(env, "SEEKTALENT_CTS_TENANT_KEY") and _env_text(env, "SEEKTALENT_CTS_TENANT_SECRET")
+                else "missing",
+            ),
+        )
     data_roots = _data_roots_from_values(
         workspace_root=workspace_root,
         artifacts_dir=_env_text(env, "SEEKTALENT_ARTIFACTS_DIR") or "artifacts",
@@ -97,7 +102,6 @@ def build_dev_mode_status(settings: AppSettings) -> DevModeStatus:
     liepin_opencli_enabled = settings.liepin_worker_mode == "opencli" and settings.liepin_browser_action_backend == "opencli"
     components = [
         _component("text_llm", "Text LLM", "configured" if settings.text_llm_api_key else "missing"),
-        _component("cts", "CTS", "configured" if settings.cts_tenant_key and settings.cts_tenant_secret else "missing"),
         _component("liepin_worker_mode", "Liepin worker mode", "configured" if settings.liepin_worker_mode == "opencli" else "missing"),
         _opencli_browser_component(
             opencli_enabled=liepin_opencli_enabled,
@@ -111,6 +115,11 @@ def build_dev_mode_status(settings: AppSettings) -> DevModeStatus:
             else ("needs_setup" if liepin_opencli_enabled else "missing"),
         ),
     ]
+    if settings.provider_name == "cts":
+        components.insert(
+            1,
+            _component("cts", "CTS", "configured" if settings.cts_tenant_key and settings.cts_tenant_secret else "missing"),
+        )
     data_roots = _data_roots_from_values(
         workspace_root=settings.project_root,
         artifacts_dir=settings.artifacts_dir or "artifacts",

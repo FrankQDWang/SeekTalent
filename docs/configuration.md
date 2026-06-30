@@ -3,25 +3,21 @@
 `SeekTalent` reads runtime settings from environment variables.
 
 - `SEEKTALENT_*` variables are loaded by `pydantic-settings`.
-- Provider-native variables such as `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, and `GOOGLE_API_KEY` are also imported from `.env` into the process environment at startup.
+- Provider-native variables such as `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, and `GOOGLE_API_KEY` remain optional compatibility inputs when explicitly configured.
 - The canonical text-LLM runtime surface is the `SEEKTALENT_TEXT_LLM_*` tuple plus bare `*_MODEL_ID` variables. The provider-native variables do not replace that surface.
-- `seektalent init` writes the starter env template from `.env.example` in a source checkout, or the minimal packaged template from `src/seektalent/default.env` in an installed package.
+- `seektalent init` writes the starter env template from `.env.example` in a source checkout, or the packaged template from `src/seektalent/default.env` in an installed package.
 
-In this repository, `.env.example` is the editable source-checkout starter env. `src/seektalent/default.env` is the packaged user template.
-
-The checked-in starter env is the operator-facing default. Some code-level fallbacks in `AppSettings` still differ when no env template is present. For example, the starter env pins `SEEKTALENT_REASONING_EFFORT=off` and `SEEKTALENT_SCORING_MAX_CONCURRENCY=5`, while code-level fallbacks remain valid without the template.
+In this repository, `.env.example` and `src/seektalent/default.env` are intentionally minimal user templates. Product defaults live in `AppSettings`.
 
 ## Minimal Setup
 
-For a real CTS run, you need:
+For the default Liepin/OpenCLI run, you need one value:
 
 ```dotenv
 SEEKTALENT_TEXT_LLM_API_KEY=your-text-llm-key
-SEEKTALENT_CTS_TENANT_KEY=your-cts-tenant-key
-SEEKTALENT_CTS_TENANT_SECRET=your-cts-tenant-secret
 ```
 
-The current starter env defaults the text runtime to Bailian's OpenAI-compatible chat-completions endpoint in Beijing:
+The code defaults the text runtime to Bailian's OpenAI-compatible chat-completions endpoint in Beijing:
 
 ```dotenv
 SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible
@@ -32,81 +28,25 @@ SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=beijing
 
 Leave `SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE` empty unless you need to override the built-in endpoint mapping.
 
-For installed PyPI users, `seektalent init` writes a minimal `.env` with only three required values:
+For installed PyPI users and source checkout users, `seektalent init` writes a minimal `.env` with one required value:
 
 ```env
 SEEKTALENT_TEXT_LLM_API_KEY=
-SEEKTALENT_CTS_TENANT_KEY=
-SEEKTALENT_CTS_TENANT_SECRET=
 ```
 
-All other runtime, output, cleanup, and model settings use product defaults. Source checkout developers should use `.env.example` for the full development configuration surface.
+All other runtime, output, cleanup, source, OpenCLI, Liepin, and model settings use product defaults.
+
+For installed PyPI users, `seektalent workbench` also prepares the managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` when needed. The OpenCLI Chrome extension and Liepin login are still user-owned browser state; startup checks them and reports a `reason_code=...` diagnostic if either is unavailable.
 
 ## Source Checkout Starter Env Snapshot
 
-The source checkout starter env currently uses these main values:
+The checked-in source checkout starter env currently contains only:
 
 ```dotenv
 SEEKTALENT_TEXT_LLM_API_KEY=
-OPENAI_API_KEY=
-OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
-ANTHROPIC_API_KEY=
-GOOGLE_API_KEY=
-
-SEEKTALENT_CTS_BASE_URL=https://link.hewa.cn
-SEEKTALENT_CTS_TENANT_KEY=
-SEEKTALENT_CTS_TENANT_SECRET=
-SEEKTALENT_CTS_TIMEOUT_SECONDS=20
-SEEKTALENT_CTS_SPEC_PATH=cts.validated.yaml
-
-SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible
-SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=bailian
-SEEKTALENT_TEXT_LLM_ENDPOINT_KIND=bailian_openai_chat_completions
-SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=beijing
-SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE=
-SEEKTALENT_REQUIREMENTS_MODEL_ID=deepseek-v4-pro
-SEEKTALENT_CONTROLLER_MODEL_ID=deepseek-v4-pro
-SEEKTALENT_SCORING_MODEL_ID=deepseek-v4-flash
-SEEKTALENT_FINALIZE_MODEL_ID=deepseek-v4-flash
-SEEKTALENT_REFLECTION_MODEL_ID=deepseek-v4-pro
-SEEKTALENT_REQUIREMENTS_ENABLE_THINKING=true
-SEEKTALENT_STRUCTURED_REPAIR_MODEL_ID=deepseek-v4-flash
-SEEKTALENT_STRUCTURED_REPAIR_REASONING_EFFORT=off
-SEEKTALENT_JUDGE_MODEL_ID=deepseek-v4-pro
-SEEKTALENT_TUI_SUMMARY_MODEL_ID=
-SEEKTALENT_REASONING_EFFORT=off
-SEEKTALENT_JUDGE_REASONING_EFFORT=high
-SEEKTALENT_CONTROLLER_ENABLE_THINKING=true
-SEEKTALENT_REFLECTION_ENABLE_THINKING=true
-SEEKTALENT_CANDIDATE_FEEDBACK_ENABLED=true
-SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID=deepseek-v4-flash
-SEEKTALENT_CANDIDATE_FEEDBACK_REASONING_EFFORT=off
-SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND=llm_deepseek_v4_flash
-SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID=deepseek-v4-flash
-SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT=off
-SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS=30
-SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS=2048
-
-SEEKTALENT_MIN_ROUNDS=3
-SEEKTALENT_MAX_ROUNDS=10
-SEEKTALENT_SCORING_MAX_CONCURRENCY=5
-SEEKTALENT_JUDGE_MAX_CONCURRENCY=5
-SEEKTALENT_SEARCH_MAX_PAGES_PER_ROUND=3
-SEEKTALENT_SEARCH_MAX_ATTEMPTS_PER_ROUND=3
-SEEKTALENT_SEARCH_NO_PROGRESS_LIMIT=2
-SEEKTALENT_RUNTIME_MODE=dev
-SEEKTALENT_LLM_CACHE_DIR=.seektalent/cache
-SEEKTALENT_OPENAI_PROMPT_CACHE_ENABLED=false
-SEEKTALENT_OPENAI_PROMPT_CACHE_RETENTION=
-SEEKTALENT_MOCK_CTS=false
-SEEKTALENT_ENABLE_EVAL=false
-SEEKTALENT_ENABLE_REFLECTION=true
-SEEKTALENT_WANDB_PROJECT=seektalent
-SEEKTALENT_WEAVE_PROJECT=seektalent
-SEEKTALENT_RUNS_DIR=runs
 ```
 
-See `.env.example` for the full template, including PRF and local sidecar settings.
+Advanced settings are documented below and should be set only when the default product behavior is not enough.
 
 ## Provider Boundary Variables
 
@@ -116,17 +56,19 @@ These variables exist at the process boundary. Only `SEEKTALENT_TEXT_LLM_API_KEY
 | --- | --- | --- |
 | `SEEKTALENT_TEXT_LLM_API_KEY` | Required for active text-LLM calls | Canonical runtime credential for both supported text protocols. |
 | `OPENAI_API_KEY` | Optional | Convenience mirror for tools or integrations that expect the provider-native OpenAI env var. |
-| `OPENAI_BASE_URL` | Optional | Convenience mirror for tools that expect the provider-native OpenAI base URL. The starter template mirrors the default Bailian OpenAI-compatible endpoint here. |
+| `OPENAI_BASE_URL` | Optional | Convenience mirror for tools that expect the provider-native OpenAI base URL. |
 | `ANTHROPIC_API_KEY` | Optional | Convenience mirror for tools or integrations that expect the Anthropic-native env var. |
 | `GOOGLE_API_KEY` | Optional | Convenience mirror for tools or integrations that expect the Google-native env var. |
 
-## CTS Variables
+## Optional CTS Variables
+
+CTS is not part of the default run path. These variables are required only when `SEEKTALENT_PROVIDER_NAME=cts` is set explicitly.
 
 | Variable | Required | Starter value | Notes |
 | --- | --- | --- | --- |
 | `SEEKTALENT_CTS_BASE_URL` | No | `https://link.hewa.cn` | Base URL for CTS. |
-| `SEEKTALENT_CTS_TENANT_KEY` | Required in real CTS mode | empty | Sent as the `tenant_key` header. |
-| `SEEKTALENT_CTS_TENANT_SECRET` | Required in real CTS mode | empty | Sent as the `tenant_secret` header. |
+| `SEEKTALENT_CTS_TENANT_KEY` | Required only when `SEEKTALENT_PROVIDER_NAME=cts` | empty | Sent as the `tenant_key` header. |
+| `SEEKTALENT_CTS_TENANT_SECRET` | Required only when `SEEKTALENT_PROVIDER_NAME=cts` | empty | Sent as the `tenant_secret` header. |
 | `SEEKTALENT_CTS_TIMEOUT_SECONDS` | No | `20` | HTTP timeout for CTS requests. |
 | `SEEKTALENT_CTS_SPEC_PATH` | No | `cts.validated.yaml` | Default resolves to the packaged CTS spec. Custom values resolve relative to the current working directory unless absolute. |
 
@@ -220,8 +162,8 @@ The checked-in three-case fixture is only a harness smoke test. Production promo
 | `SEEKTALENT_MAX_ROUNDS` | `10` | Hard cap for controller/search rounds. Must be `>= min_rounds` and `<= 10`. |
 | `SEEKTALENT_SCORING_MAX_CONCURRENCY` | `5` | Max concurrent per-resume scoring calls. |
 | `SEEKTALENT_JUDGE_MAX_CONCURRENCY` | `5` | Max concurrent judge calls. |
-| `SEEKTALENT_SEARCH_MAX_PAGES_PER_ROUND` | `3` | Per-round CTS page budget. |
-| `SEEKTALENT_SEARCH_MAX_ATTEMPTS_PER_ROUND` | `3` | Per-round CTS attempt budget. |
+| `SEEKTALENT_SEARCH_MAX_PAGES_PER_ROUND` | `3` | Per-round source page budget. |
+| `SEEKTALENT_SEARCH_MAX_ATTEMPTS_PER_ROUND` | `3` | Per-round source attempt budget. |
 | `SEEKTALENT_SEARCH_NO_PROGRESS_LIMIT` | `2` | Repeated no-progress threshold. |
 | `SEEKTALENT_RUNTIME_MODE` | `dev` | Resolves default SQLite, artifact, cache, backup, and maintenance behavior for source checkouts versus packaged runs. |
 | `SEEKTALENT_LLM_CACHE_DIR` | `.seektalent/cache` | Local cache root. Relative paths resolve from the workspace root. |
@@ -270,7 +212,7 @@ DB-group backup uses SQLite online backup copies plus a group manifest for the p
 
 ## Privacy Defaults
 
-`doctor`, `inspect --json`, cleanup, and Workbench startup do not upload local databases, provider cookies, browser sessions, raw resumes, or configured secrets. Runtime network calls are limited to the configured LLM provider and CTS provider. Remote eval logging through W&B/Weave is off by default and requires explicit configuration.
+`doctor`, `inspect --json`, cleanup, and Workbench startup do not upload local databases, provider cookies, browser sessions, raw resumes, or configured secrets. Runtime network calls are limited to the configured LLM provider and the local browser's Liepin session unless an optional provider is explicitly configured. Remote eval logging through W&B/Weave is off by default and requires explicit configuration.
 
 ## Liepin Local Browser Retrieval
 
@@ -326,7 +268,7 @@ Before each run, the runtime validates the active config surface:
 
 - `SEEKTALENT_TEXT_LLM_ENDPOINT_KIND` must match `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY`.
 - `SEEKTALENT_TEXT_LLM_API_KEY` is required for active text-LLM calls.
-- Real CTS mode requires both CTS tenant credentials.
+- CTS tenant credentials are required only when `SEEKTALENT_PROVIDER_NAME=cts` is set explicitly.
 - Removed legacy text-LLM keys and provider-prefixed `*_MODEL_ID` values now fail fast with a migration error.
 
 Use `seektalent doctor` to validate local configuration without making network calls.
