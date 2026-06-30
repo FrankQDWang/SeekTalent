@@ -7,18 +7,20 @@ import pytest
 from seektalent import opencli_launcher
 
 
-def test_ensure_opencli_runtime_uses_supported_system_node(
+def test_ensure_opencli_runtime_ignores_supported_system_node(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     node = _write_fake_node(tmp_path / "bin", exit_code=0)
+    managed_node = _write_fake_node(tmp_path / "managed-bin", exit_code=0)
     _write_fake_npm(node.parent)
     _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("PATH", str(node.parent))
+    monkeypatch.setattr(opencli_launcher, "_ensure_managed_node", lambda *_args, **_kwargs: managed_node)
 
     runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
 
-    assert runtime.node == node
+    assert runtime.node == managed_node
     assert runtime.opencli_main.name == "main.js"
 
 
@@ -57,6 +59,18 @@ def test_launcher_delegates_to_managed_opencli(
     assert argv[1:] == ["browser", "seektalent-liepin", "state"]
 
 
+def test_opencli_install_requires_managed_npm(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    node = _write_fake_node(tmp_path / "managed-bin", exit_code=0)
+    _write_fake_npm(tmp_path / "system-bin")
+    monkeypatch.setenv("PATH", str(tmp_path / "system-bin"))
+
+    with pytest.raises(opencli_launcher.BootstrapError):
+        opencli_launcher._npm_for_node(node)
+
+
 def _write_managed_opencli(root: Path) -> Path:
     package_dir = root / "opencli" / opencli_launcher.OPENCLI_VERSION / "node_modules" / "@jackwener" / "opencli"
     main = package_dir / "dist" / "src" / "main.js"
@@ -86,6 +100,7 @@ def _write_fake_node(bin_dir: Path, *, exit_code: int, log_path: Path | None = N
 
 def _write_fake_npm(bin_dir: Path) -> Path:
     npm = bin_dir / "npm"
+    npm.parent.mkdir(parents=True, exist_ok=True)
     npm.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     npm.chmod(0o755)
     return npm

@@ -19,7 +19,6 @@ from pathlib import Path
 OPENCLI_PACKAGE = "@jackwener/opencli"
 OPENCLI_VERSION = "1.8.0"
 NODE_VERSION = "v24.16.0"
-MIN_SYSTEM_NODE_MAJOR = 20
 RUNTIME_ROOT = Path.home() / ".seektalent" / "opencli-runtime"
 NODE_DIST_BASE_URL = "https://nodejs.org/dist"
 
@@ -60,34 +59,9 @@ def ensure_opencli_runtime(
     runtime_root = (root or RUNTIME_ROOT).expanduser()
     runtime_root.mkdir(parents=True, exist_ok=True)
     with _runtime_lock(runtime_root):
-        node = _system_node_if_supported() or _ensure_managed_node(runtime_root, node_version=node_version)
+        node = _ensure_managed_node(runtime_root, node_version=node_version)
         opencli_main = _ensure_managed_opencli(runtime_root, node=node, opencli_version=opencli_version)
     return OpenCliRuntime(node=node, opencli_main=opencli_main)
-
-
-def _system_node_if_supported() -> Path | None:
-    node = shutil.which("node")
-    if not node:
-        return None
-    try:
-        completed = subprocess.run((node, "--version"), check=False, capture_output=True, text=True, timeout=5)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if completed.returncode != 0:
-        return None
-    version = completed.stdout.strip().lstrip("v")
-    major_text = version.split(".", 1)[0]
-    try:
-        major = int(major_text)
-    except ValueError:
-        return None
-    if major < MIN_SYSTEM_NODE_MAJOR:
-        return None
-    node_path = Path(node)
-    sibling_npm = node_path.parent / ("npm.cmd" if sys.platform == "win32" else "npm")
-    if not sibling_npm.exists() and shutil.which("npm") is None:
-        return None
-    return node_path
 
 
 def _ensure_managed_node(runtime_root: Path, *, node_version: str) -> Path:
@@ -166,10 +140,7 @@ def _npm_for_node(node: Path) -> Path:
     managed_npm = node.parent / ("npm.cmd" if sys.platform == "win32" else "npm")
     if managed_npm.exists():
         return managed_npm
-    npm = shutil.which("npm")
-    if npm:
-        return Path(npm)
-    raise BootstrapError("npm is required to install managed OpenCLI")
+    raise BootstrapError("managed Node npm is missing; reinstall the managed OpenCLI runtime")
 
 
 def _package_version(path: Path) -> str | None:

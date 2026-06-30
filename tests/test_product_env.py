@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND
 from seektalent.product_env import build_workbench_command_env, load_product_user_env
 
 
@@ -81,3 +82,16 @@ def test_build_workbench_command_env_uses_home_workspace_root_even_when_cwd_is_r
     env = build_workbench_command_env({"SEEKTALENT_WORKSPACE_ROOT": "/must-not-use"})
 
     assert env["SEEKTALENT_WORKSPACE_ROOT"] == str(home)
+
+
+def test_build_workbench_command_env_uses_managed_opencli_command(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    env = build_workbench_command_env({"SEEKTALENT_LIEPIN_OPENCLI_COMMAND": "opencli browser host-global"})
+
+    assert env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] == DEFAULT_LIEPIN_OPENCLI_COMMAND

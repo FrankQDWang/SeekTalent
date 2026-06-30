@@ -675,6 +675,65 @@ def test_workbench_command_restarts_daemon_when_extension_is_disconnected(
     assert launch_calls[0][0] == "seektalent-ui-api"
 
 
+def test_workbench_command_recovers_malformed_opencli_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_POLL_SECONDS", 0)
+    opencli_actions: list[str] = []
+    restart_calls: list[list[str]] = []
+    launch_calls: list[list[str]] = []
+    state_calls = 0
+
+    class Runtime:
+        node = tmp_path / "node"
+        opencli_main = tmp_path / "opencli-main.js"
+        node_bin_dir = tmp_path
+
+    class Completed:
+        def __init__(self, *, stdout: str = "", returncode: int = 0) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+    def fake_run(argv, **_kwargs):
+        nonlocal state_calls
+        argv_list = list(argv)
+        if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
+            action = argv_list[-1]
+            opencli_actions.append(action)
+            if action == "state":
+                state_calls += 1
+                if state_calls == 1:
+                    return Completed(
+                        stdout=json.dumps(
+                            {
+                                "ok": False,
+                                "action": "state",
+                                "safeReasonCode": "liepin_opencli_malformed_state",
+                            }
+                        )
+                    )
+            return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
+        if argv_list[-2:] == ["daemon", "restart"]:
+            restart_calls.append(argv_list)
+            return Completed()
+        launch_calls.append(argv_list)
+        return Completed()
+
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench"]) == 0
+
+    assert opencli_actions == ["status", "open_liepin_tab", "state", "status", "open_liepin_tab", "state"]
+    assert restart_calls
+    assert launch_calls[0][0] == "seektalent-ui-api"
+
+
 def test_workbench_command_reports_liepin_login_required(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

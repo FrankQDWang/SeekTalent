@@ -139,6 +139,7 @@ _WORKBENCH_OPENCLI_RECOVERABLE_REASONS = {
     "liepin_opencli_daemon_not_running",
     "liepin_opencli_daemon_stale",
     "liepin_opencli_extension_disconnected",
+    "liepin_opencli_malformed_state",
     "liepin_opencli_status_unavailable",
 }
 _WORKBENCH_OPENCLI_STATUS_ATTEMPTS = 15
@@ -1786,18 +1787,37 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
         )
         return False
 
-    status = _run_workbench_liepin_action("status", env=env)
-    if not _workbench_action_ok(status):
-        reason = _workbench_action_reason(status)
-        if reason in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
-            if not _restart_workbench_opencli_daemon(runtime, env=env):
-                _print_workbench_reason(reason, _workbench_reason_message(reason))
-                return False
-            status = _wait_for_workbench_opencli_status(env=env)
-            reason = _workbench_action_reason(status)
-        if not _workbench_action_ok(status):
+    first = _run_workbench_liepin_preflight_actions(env=env)
+    if _workbench_action_ok(first):
+        return True
+
+    reason = _workbench_action_reason(first)
+    if reason in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
+        if not _restart_workbench_opencli_daemon(runtime, env=env):
             _print_workbench_reason(reason, _workbench_reason_message(reason))
             return False
+        status = _wait_for_workbench_opencli_status(env=env)
+        if _workbench_action_ok(status):
+            second = _run_workbench_liepin_preflight_actions(env=env, skip_status=True)
+            if _workbench_action_ok(second):
+                return True
+            reason = _workbench_action_reason(second)
+        else:
+            reason = _workbench_action_reason(status)
+
+    _print_workbench_reason(reason, _workbench_reason_message(reason))
+    return False
+
+
+def _run_workbench_liepin_preflight_actions(
+    *,
+    env: Mapping[str, str],
+    skip_status: bool = False,
+) -> dict[str, object]:
+    if not skip_status:
+        status = _run_workbench_liepin_action("status", env=env)
+        if not _workbench_action_ok(status):
+            return status
 
     opened = _run_workbench_liepin_action(
         "open_liepin_tab",
@@ -1805,17 +1825,9 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
         env=env,
     )
     if not _workbench_action_ok(opened):
-        reason = _workbench_action_reason(opened)
-        _print_workbench_reason(reason, _workbench_reason_message(reason))
-        return False
+        return opened
 
-    state = _run_workbench_liepin_action("state", env=env)
-    if not _workbench_action_ok(state):
-        reason = _workbench_action_reason(state)
-        _print_workbench_reason(reason, _workbench_reason_message(reason))
-        return False
-
-    return True
+    return _run_workbench_liepin_action("state", env=env)
 
 
 def _run_workbench_liepin_action(
@@ -1902,6 +1914,7 @@ def _workbench_reason_from_text(text: str) -> str:
     for reason in (
         "liepin_opencli_login_required",
         "liepin_opencli_extension_disconnected",
+        "liepin_opencli_malformed_state",
         "liepin_opencli_daemon_stale",
         "liepin_opencli_daemon_not_running",
         "liepin_opencli_timeout",
@@ -1920,6 +1933,7 @@ def _workbench_reason_message(reason: str) -> str:
         "liepin_opencli_daemon_stale": "OpenCLI browser bridge daemon is stale.",
         "liepin_opencli_daemon_not_running": "OpenCLI browser bridge daemon is not running.",
         "liepin_opencli_bootstrap_failed": "Managed OpenCLI/Node bootstrap failed.",
+        "liepin_opencli_malformed_state": "OpenCLI browser bridge returned malformed Liepin state.",
         "liepin_opencli_timeout": "OpenCLI browser bridge did not respond before timeout.",
     }.get(reason, "OpenCLI/Liepin preflight failed.")
 

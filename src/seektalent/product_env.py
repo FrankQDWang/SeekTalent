@@ -4,6 +4,7 @@ import os
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 
+from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
 
 
@@ -35,6 +36,7 @@ def build_workbench_command_env(
     env = dict(os.environ if base_env is None else base_env)
     env["SEEKTALENT_WORKSPACE_ROOT"] = str(Path.home())
     load_product_user_env(env, env_file=env_file)
+    env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = DEFAULT_LIEPIN_OPENCLI_COMMAND
     ensure_workbench_internal_liepin_env(env)
     return env
 
