@@ -2066,12 +2066,25 @@ class LiepinSiteAdapter:
         except OpenCliBrowserError as exc:
             if exc.safe_reason_code != "liepin_opencli_tab_response_malformed":
                 raise
+        page_id = self._opened_tab_page_id_from_list(url=url, before_urls=before_urls)
+        if page_id is not None:
+            return page_id
+        try:
+            self._run_browser_command("bind", ())
+        except OpenCliBrowserError:
+            raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
+        page_id = self._opened_tab_page_id_from_list(url=url, before_urls=before_urls)
+        if page_id is None:
+            raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
+        return page_id
+
+    def _opened_tab_page_id_from_list(self, *, url: str, before_urls: Mapping[str, str]) -> str | None:
         after_tabs = self._list_tabs()
         candidates: list[tuple[int, str]] = []
         for tab in after_tabs:
             page_id = _tab_page_id(tab)
             tab_url = str(tab.get("url") or "")
-            if not _is_safe_page_id(page_id) or tab_url != url:
+            if not _is_safe_page_id(page_id) or not self._opened_tab_url_matches_requested_url(tab_url, url):
                 continue
             score = 0
             if page_id not in before_urls:
@@ -2080,8 +2093,15 @@ class LiepinSiteAdapter:
                 score += 10
             candidates.append((score, page_id))
         if not candidates:
-            raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
+            return None
         return max(candidates, key=lambda item: item[0])[1]
+
+    def _opened_tab_url_matches_requested_url(self, tab_url: str, requested_url: str) -> bool:
+        if _url_matches_start_or_detail_surface(tab_url, requested_url):
+            return True
+        if _is_liepin_detail_url(requested_url):
+            return False
+        return self._is_liepin_search_context_url(tab_url)
 
     def _reuse_liepin_search_page(self, *, page_id: str, url: str) -> None:
         try:

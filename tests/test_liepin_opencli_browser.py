@@ -679,6 +679,48 @@ def test_open_liepin_tab_recovers_page_id_from_tab_list_when_tab_new_output_is_u
     assert lease["page_id"] == "page-2"
 
 
+def test_open_liepin_tab_recovers_page_id_from_redirected_liepin_search_url(tmp_path: Path) -> None:
+    redirected_url = "https://h.liepin.com/search/getConditionItem?city=010#session"
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
+                "[]",
+                json.dumps([{"id": "page-2", "url": redirected_url, "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): "opened",
+        }
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(LIEPIN_SEARCH_URL)
+
+    assert result.ok is True
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-2"
+
+
+def test_open_liepin_tab_binds_new_window_before_recovering_opened_page_id(tmp_path: Path) -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
+                "[]",
+                "[]",
+                json.dumps([{"id": "page-2", "url": LIEPIN_SEARCH_URL, "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): "opened",
+            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
+        }
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(LIEPIN_SEARCH_URL)
+
+    assert result.ok is True
+    assert ("opencli", "browser", "seektalent-liepin", "bind") in commands.calls
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-2"
+
+
 def test_cleanup_idle_lease_releases_lease_without_closing_tabs(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/resume/showresumedetail?id=357"
     commands = FakeCommands(
