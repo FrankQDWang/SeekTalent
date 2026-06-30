@@ -139,7 +139,6 @@ _WORKBENCH_OPENCLI_RECOVERABLE_REASONS = {
     "liepin_opencli_daemon_not_running",
     "liepin_opencli_daemon_stale",
     "liepin_opencli_extension_disconnected",
-    "liepin_opencli_malformed_state",
     "liepin_opencli_status_unavailable",
 }
 _WORKBENCH_OPENCLI_STATUS_ATTEMPTS = 15
@@ -1800,16 +1799,11 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
                 action=_workbench_action_name(first),
             )
             return False
-        status = _wait_for_workbench_opencli_status(env=env)
-        if _workbench_action_ok(status):
-            second = _run_workbench_liepin_preflight_actions(env=env, skip_status=True)
-            if _workbench_action_ok(second):
-                return True
-            reason = _workbench_action_reason(second)
-            failing_action = _workbench_action_name(second)
-        else:
-            reason = _workbench_action_reason(status)
-            failing_action = _workbench_action_name(status)
+        second = _run_workbench_liepin_preflight_actions(env=env)
+        if _workbench_action_ok(second):
+            return True
+        reason = _workbench_action_reason(second)
+        failing_action = _workbench_action_name(second)
     else:
         failing_action = _workbench_action_name(first)
 
@@ -1820,20 +1814,10 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
 def _run_workbench_liepin_preflight_actions(
     *,
     env: Mapping[str, str],
-    skip_status: bool = False,
 ) -> dict[str, object]:
-    if not skip_status:
-        status = _run_workbench_liepin_action("status", env=env)
-        if not _workbench_action_ok(status):
-            return status
-
-    opened = _run_workbench_liepin_action(
-        "open_liepin_tab",
-        payload={"url": _WORKBENCH_PREFLIGHT_LIEPIN_URL},
-        env=env,
-    )
-    if not _workbench_action_ok(opened):
-        return opened
+    recovered = _run_workbench_liepin_action("recover_connection", env=env)
+    if not _workbench_action_ok(recovered):
+        return recovered
 
     return _run_workbench_liepin_action("state", env=env)
 
@@ -1860,16 +1844,16 @@ def _run_workbench_liepin_action(
         return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_status_unavailable"}
     output = (completed.stdout or "").strip()
     if not output:
-        reason = "liepin_opencli_status_unavailable"
+        reason = "liepin_opencli_helper_empty_output"
         if completed.returncode != 0 and completed.stderr:
             reason = _workbench_reason_from_text(completed.stderr)
         return {"ok": False, "action": action, "safeReasonCode": reason}
     try:
         loaded = json.loads(output)
     except json.JSONDecodeError:
-        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_status_unavailable"}
+        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_helper_invalid_output"}
     if not isinstance(loaded, dict):
-        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_status_unavailable"}
+        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_helper_invalid_output"}
     return loaded
 
 
@@ -1929,6 +1913,11 @@ def _workbench_reason_from_text(text: str) -> str:
     for reason in (
         "liepin_opencli_login_required",
         "liepin_opencli_extension_disconnected",
+        "liepin_opencli_config_invalid",
+        "liepin_opencli_helper_empty_output",
+        "liepin_opencli_helper_invalid_input",
+        "liepin_opencli_helper_invalid_output",
+        "liepin_opencli_helper_output_too_large",
         "liepin_opencli_malformed_state",
         "liepin_opencli_daemon_stale",
         "liepin_opencli_daemon_not_running",
@@ -1948,6 +1937,11 @@ def _workbench_reason_message(reason: str) -> str:
         "liepin_opencli_daemon_stale": "OpenCLI browser bridge daemon is stale.",
         "liepin_opencli_daemon_not_running": "OpenCLI browser bridge daemon is not running.",
         "liepin_opencli_bootstrap_failed": "Managed OpenCLI/Node bootstrap failed.",
+        "liepin_opencli_config_invalid": "SeekTalent OpenCLI configuration is invalid.",
+        "liepin_opencli_helper_empty_output": "OpenCLI browser helper returned no structured output.",
+        "liepin_opencli_helper_invalid_input": "OpenCLI browser helper received invalid input.",
+        "liepin_opencli_helper_invalid_output": "OpenCLI browser helper returned invalid JSON output.",
+        "liepin_opencli_helper_output_too_large": "OpenCLI browser helper output exceeded the safe transport limit.",
         "liepin_opencli_malformed_state": "OpenCLI browser bridge returned malformed Liepin state.",
         "liepin_opencli_timeout": "OpenCLI browser bridge did not respond before timeout.",
     }.get(reason, "OpenCLI/Liepin preflight failed.")

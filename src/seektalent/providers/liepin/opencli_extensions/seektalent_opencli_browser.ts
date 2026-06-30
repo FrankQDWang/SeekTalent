@@ -199,7 +199,7 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
       stdout += String(chunk);
       if (stdout.length > MAX_OUTPUT_CHARS) {
         child.kill("SIGKILL");
-        finish(safeJson({ ok: false, action, safeReasonCode: "liepin_opencli_malformed_state", counts: {} }));
+        finish(safeJson({ ok: false, action, safeReasonCode: "liepin_opencli_helper_output_too_large", counts: {} }));
       }
     });
     child.stderr.on("data", (chunk) => {
@@ -217,7 +217,7 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
         stderr.includes("Extension") && (stderr.includes("not connected") || stderr.includes("disconnected"))
           ? "liepin_opencli_extension_disconnected"
           : code === 0
-            ? "liepin_opencli_malformed_state"
+            ? "liepin_opencli_helper_empty_output"
             : "liepin_opencli_status_unavailable";
       finish(safeJson({ ok: false, action, safeReasonCode: reason, counts: {} }));
     });

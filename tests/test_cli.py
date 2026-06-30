@@ -563,7 +563,7 @@ def test_workbench_command_runs_opencli_preflight_before_launch(
     assert main(["workbench", "--port", "8123"]) == 0
 
     assert ensured == [True]
-    assert opencli_actions == ["status", "open_liepin_tab", "state"]
+    assert opencli_actions == ["recover_connection", "state"]
     assert launch_calls[0][0][0] == "seektalent-ui-api"
 
 
@@ -597,7 +597,7 @@ def test_workbench_command_reports_opencli_extension_disconnected(
                 stdout=json.dumps(
                     {
                         "ok": False,
-                        "action": "status",
+                        "action": "recover_connection",
                         "safeReasonCode": "liepin_opencli_extension_disconnected",
                     }
                 )
@@ -646,14 +646,14 @@ def test_workbench_command_restarts_daemon_when_extension_is_disconnected(
         argv_list = list(argv)
         if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
             action = argv_list[-1]
-            if action == "status":
+            if action == "recover_connection":
                 status_calls += 1
                 if status_calls == 1:
                     return Completed(
                         stdout=json.dumps(
                             {
                                 "ok": False,
-                                "action": "status",
+                                "action": "recover_connection",
                                 "safeReasonCode": "liepin_opencli_extension_disconnected",
                             }
                         )
@@ -675,7 +675,7 @@ def test_workbench_command_restarts_daemon_when_extension_is_disconnected(
     assert launch_calls[0][0] == "seektalent-ui-api"
 
 
-def test_workbench_command_recovers_malformed_opencli_state(
+def test_workbench_command_reports_malformed_opencli_state(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -683,7 +683,6 @@ def test_workbench_command_recovers_malformed_opencli_state(
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_POLL_SECONDS", 0)
     opencli_actions: list[str] = []
-    restart_calls: list[list[str]] = []
     launch_calls: list[list[str]] = []
     state_calls = 0
 
@@ -717,9 +716,6 @@ def test_workbench_command_recovers_malformed_opencli_state(
                         )
                     )
             return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
-        if argv_list[-2:] == ["daemon", "restart"]:
-            restart_calls.append(argv_list)
-            return Completed()
         launch_calls.append(argv_list)
         return Completed()
 
@@ -727,11 +723,10 @@ def test_workbench_command_recovers_malformed_opencli_state(
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
-    assert main(["workbench"]) == 0
+    assert main(["workbench"]) == 1
 
-    assert opencli_actions == ["status", "open_liepin_tab", "state", "status", "open_liepin_tab", "state"]
-    assert restart_calls
-    assert launch_calls[0][0] == "seektalent-ui-api"
+    assert opencli_actions == ["recover_connection", "state"]
+    assert launch_calls == []
 
 
 def test_workbench_command_reports_liepin_login_required(

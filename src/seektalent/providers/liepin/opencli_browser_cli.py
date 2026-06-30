@@ -27,13 +27,13 @@ def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
     except json.JSONDecodeError:
-        _print(OpenCliBrowserResult(ok=False, action=action or "unknown", safe_reason_code="liepin_opencli_malformed_state"))
+        _print(OpenCliBrowserResult(ok=False, action=action or "unknown", safe_reason_code="liepin_opencli_helper_invalid_input"))
         return 1
     if not isinstance(payload, dict):
-        _print(OpenCliBrowserResult(ok=False, action=action or "unknown", safe_reason_code="liepin_opencli_malformed_state"))
+        _print(OpenCliBrowserResult(ok=False, action=action or "unknown", safe_reason_code="liepin_opencli_helper_invalid_input"))
         return 1
-    runner = _runner_from_env()
     try:
+        runner = _runner_from_env()
         result = _run_action(runner, action, payload)
     except OpenCliBrowserError as exc:
         result = OpenCliBrowserResult(ok=False, action=action or "unknown", safe_reason_code=exc.safe_reason_code)
@@ -90,6 +90,8 @@ def _runner_from_env() -> LiepinSiteAdapter:
 def _run_action(runner: LiepinSiteAdapter, action: str, payload: dict[str, object]) -> OpenCliBrowserResult | dict[str, object]:
     if action == "status":
         return runner.status()
+    if action == "recover_connection":
+        return runner.recover_connection()
     if action == "open_liepin_tab":
         return runner.open_liepin_tab(str(payload.get("url") or ""))
     if action == "state":
@@ -196,9 +198,12 @@ def _optional_payload_int(payload: Mapping[str, object], *keys: str) -> int | No
 def _json_tuple(value: str | None, *, default: tuple[str, ...]) -> tuple[str, ...]:
     if not value:
         return default
-    loaded = json.loads(value)
+    try:
+        loaded = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise OpenCliBrowserError("liepin_opencli_config_invalid") from exc
     if not isinstance(loaded, list) or not all(isinstance(item, str) and item for item in loaded):
-        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        raise OpenCliBrowserError("liepin_opencli_config_invalid")
     return tuple(loaded)
 
 
