@@ -18,6 +18,7 @@ from seektalent.llm import (
     build_provider_request_policy,
     resolve_stage_model_config,
     resolve_structured_output_mode,
+    resolve_text_llm_api_key,
     resolve_text_llm_base_url,
 )
 from tests.settings_factory import make_settings
@@ -296,6 +297,66 @@ def test_workbench_conversation_stage_uses_bailian_native_strict_schema() -> Non
     assert policy.extra_body == {"enable_thinking": True, "reasoning_effort": "max"}
     assert resolve_structured_output_mode(stage) == "native_json_schema"
     assert isinstance(output_spec, NativeOutput)
+
+
+def test_domi_stage_resolves_transport_without_changing_model_defaults() -> None:
+    settings = make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt")
+
+    stage = resolve_stage_model_config(settings, stage="requirements")
+
+    assert stage.provider_label == "domi"
+    assert stage.model_id == "deepseek-v4-pro"
+    assert stage.base_url == "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1"
+    assert stage.api_key == "domi-test-jwt"
+    assert stage.domi_llm_channel == "seek_talent"
+    assert resolve_text_llm_api_key(settings) == "domi-test-jwt"
+
+
+def test_domi_provider_reuses_bailian_model_capabilities() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt"),
+        stage="workbench_conversation",
+    )
+    output_spec = build_output_spec(stage, _json_schema_capable_model(), dict)
+    policy = build_provider_request_policy(stage)
+
+    assert stage.provider_label == "domi"
+    assert stage.model_id == "deepseek-v4-flash"
+    assert stage.thinking_mode is True
+    assert stage.reasoning_effort == "max"
+    assert policy.extra_body == {"enable_thinking": True, "reasoning_effort": "max"}
+    assert resolve_structured_output_mode(stage) == "native_json_schema"
+    assert isinstance(output_spec, NativeOutput)
+
+
+def test_domi_openai_client_uses_base_url_jwt_and_channel_query() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(
+            text_llm_provider_label="domi",
+            domi_jwt="domi-test-jwt",
+            domi_llm_base_url="https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1/",
+            domi_llm_channel="seek_talent",
+        ),
+        stage="requirements",
+    )
+
+    model = build_model(stage)
+
+    assert isinstance(model, OpenAIChatModel)
+    assert str(model.client.base_url) == "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1/"
+    assert model.client.api_key == "domi-test-jwt"
+    assert model.client.default_query == {"channel": "seek_talent"}
+    assert model.client.max_retries == 2
+
+
+def test_domi_openai_client_missing_jwt_fails_with_domi_message() -> None:
+    stage = resolve_stage_model_config(
+        make_settings(text_llm_provider_label="domi"),
+        stage="requirements",
+    )
+
+    with pytest.raises(ValueError, match="SEEKTALENT_DOMI_JWT"):
+        build_model(stage)
 
 
 def test_runtime_mode_defaults_to_dev_paths() -> None:

@@ -87,6 +87,7 @@ class ResolvedTextModelConfig:
     reasoning_effort: ReasoningEffort
     openai_prompt_cache_enabled: bool
     openai_prompt_cache_retention: str | None
+    domi_llm_channel: str | None = None
 
 
 TEXT_LLM_CAPABILITIES = {
@@ -186,6 +187,8 @@ def _fresh_openai_provider(
 
 
 def resolve_text_llm_base_url(settings: AppSettings) -> str:
+    if settings.text_llm_provider_label == "domi":
+        return settings.domi_llm_base_url.rstrip("/")
     if settings.text_llm_base_url_override:
         if settings.text_llm_protocol_family == "openai_chat_completions_compatible":
             return _normalize_openai_base_url(settings.text_llm_base_url_override) or ""
@@ -202,6 +205,8 @@ def resolve_text_llm_base_url(settings: AppSettings) -> str:
 
 
 def resolve_text_llm_api_key(settings: AppSettings) -> str | None:
+    if settings.text_llm_provider_label == "domi":
+        return settings.domi_jwt
     return settings.text_llm_api_key
 
 
@@ -265,13 +270,17 @@ def resolve_structured_output_mode(config: ResolvedTextModelConfig) -> Structure
 def _resolve_text_llm_capability(config: ResolvedTextModelConfig) -> TextLLMCapability | None:
     return TEXT_LLM_CAPABILITIES.get(
         (
-            config.provider_label,
+            _capability_provider_label(config.provider_label),
             config.protocol_family,
             config.endpoint_kind,
             config.endpoint_region,
             config.model_id,
         )
     )
+
+
+def _capability_provider_label(provider_label: str) -> str:
+    return "bailian" if provider_label == "domi" else provider_label
 
 
 def validate_protocol_endpoint_region_model_matrix(config: ResolvedTextModelConfig) -> None:
@@ -315,6 +324,7 @@ def resolve_stage_model_config(settings: AppSettings, *, stage: str) -> Resolved
         endpoint_region=settings.text_llm_endpoint_region,
         base_url=resolve_text_llm_base_url(settings),
         api_key=resolve_text_llm_api_key(settings),
+        domi_llm_channel=settings.domi_llm_channel if settings.text_llm_provider_label == "domi" else None,
         model_id=model_id,
         structured_output_mode="prompted_json",
         thinking_mode=thinking_mode,
@@ -339,11 +349,45 @@ def build_provider_request_policy(config: ResolvedTextModelConfig) -> ProviderRe
     return ProviderRequestPolicy(extra_body=extra_body)  # ty:ignore[invalid-argument-type]
 
 
+def _build_domi_openai_model(
+    config: ResolvedTextModelConfig,
+    *,
+    provider_max_retries: int | None = None,
+) -> Model:
+    if not config.api_key:
+        raise ValueError("SEEKTALENT_DOMI_JWT is required for Domi LLM proxy configuration.")
+    if not config.domi_llm_channel:
+        raise ValueError("SEEKTALENT_DOMI_LLM_CHANNEL is required for Domi LLM proxy configuration.")
+    if provider_max_retries is not None:
+        client = AsyncOpenAI(
+            base_url=config.base_url,
+            api_key=config.api_key,
+            default_query={"channel": config.domi_llm_channel},
+            http_client=_http_client(),
+            max_retries=provider_max_retries,
+        )
+    else:
+        client = AsyncOpenAI(
+            base_url=config.base_url,
+            api_key=config.api_key,
+            default_query={"channel": config.domi_llm_channel},
+            http_client=_http_client(),
+        )
+    return OpenAIChatModel(
+        config.model_id,
+        provider=OpenAIProvider(openai_client=client),
+    )
+
+
 def _build_resolved_model(
     config: ResolvedTextModelConfig,
     *,
     provider_max_retries: int | None = None,
 ) -> Model:
+    if config.provider_label == "domi":
+        if config.protocol_family != "openai_chat_completions_compatible":
+            raise ValueError("Domi LLM proxy supports only openai_chat_completions_compatible protocol.")
+        return _build_domi_openai_model(config, provider_max_retries=provider_max_retries)
     if not config.api_key:
         raise ValueError(
             "SEEKTALENT_TEXT_LLM_API_KEY is required for canonical text LLM configuration."
