@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+from seektalent_runtime_control.recovery import RuntimeRecoveryService
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_runtime_control.worker import RuntimeExecutionWorker
 
@@ -32,7 +33,7 @@ class WorkbenchV2RuntimeQueueRunner:
         with self._lock:
             self._threads = [thread for thread in self._threads if thread.is_alive()]
             while len(self._threads) < self.worker_count:
-                self._start_thread(runtime_run_id=None)
+                self._start_thread(runtime_run_id=runtime_run_id)
 
     def _start_thread(self, *, runtime_run_id: str | None) -> None:
         thread = threading.Thread(
@@ -48,6 +49,7 @@ class WorkbenchV2RuntimeQueueRunner:
         asyncio.run(self._drain_queue(runtime_run_id=runtime_run_id))
 
     async def _drain_queue(self, *, runtime_run_id: str | None) -> None:
+        RuntimeRecoveryService(store=self.store).recover_start_timeouts(resume_recoverable=False)
         worker = RuntimeExecutionWorker(
             store=self.store,
             executor=self.executor,

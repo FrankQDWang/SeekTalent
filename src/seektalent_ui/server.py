@@ -249,9 +249,6 @@ async def _lifespan(app: FastAPI):
         runner.wake()
     if extraction_runner is not None:
         extraction_runner.start()
-    v2_runtime_runner = getattr(app.state, "workbench_v2_runtime_runner", None)
-    if v2_runtime_runner is not None:
-        v2_runtime_runner.wake()
     try:
         yield
     finally:

@@ -202,6 +202,26 @@ def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
     assert runtime_job["sourceKinds"] == source_kinds
 
 
+def test_liepin_provider_connection_binding_is_idempotent_for_same_connection(tmp_path) -> None:
+    with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
+        connection, _created = client.app.state.workbench_store.get_or_create_liepin_source_connection(user=user)
+
+        first_gate_ref = ensure_workbench_liepin_provider_connection(
+            settings=client.app.state.settings,
+            user=user,
+            connection=connection,
+        )
+        second_gate_ref = ensure_workbench_liepin_provider_connection(
+            settings=client.app.state.settings,
+            user=user,
+            connection=connection,
+        )
+
+        assert second_gate_ref == first_gate_ref
+
+
 def _assert_public_probe_surfaces_do_not_leak(client, session_id: str, *extra_forbidden: str) -> None:
     session_response = client.get(
         f"/api/workbench/sessions/{session_id}",

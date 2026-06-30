@@ -20,7 +20,7 @@ class RuntimeRecoveryService:
         self.store = store
         self.now = now or _now
 
-    def recover_start_timeouts(self) -> list[RuntimeRecoveryDecision]:
+    def recover_start_timeouts(self, *, resume_recoverable: bool = True) -> list[RuntimeRecoveryDecision]:
         now = self.now()
         decisions: list[RuntimeRecoveryDecision] = []
         for lease in self.store.expire_executor_leases(now=now):
@@ -100,7 +100,7 @@ class RuntimeRecoveryService:
                     )
                 )
                 continue
-            if checkpoint is not None:
+            if checkpoint is not None and resume_recoverable:
                 self.store.append_event(
                     _event(
                         runtime_run_id=run.runtime_run_id,
@@ -130,6 +130,14 @@ class RuntimeRecoveryService:
                 continue
 
             reason_code = _no_checkpoint_failure_reason(run.status)
+            payload: dict[str, object] = {"reasonCode": reason_code, "executorId": lease.executor_id}
+            summary = (
+                "executor lease expired without a recoverable checkpoint"
+                if checkpoint is None
+                else "executor lease expired; recoverable checkpoint was not resumed by recovery policy"
+            )
+            if checkpoint is not None:
+                payload["checkpointId"] = checkpoint.checkpoint_id
             self.store.append_event(
                 _event(
                     runtime_run_id=run.runtime_run_id,
@@ -141,8 +149,8 @@ class RuntimeRecoveryService:
                     status="failed",
                     summary="executor did not acknowledge start before lease timeout"
                     if reason_code == "runtime_executor_start_timeout"
-                    else "executor lease expired without a recoverable checkpoint",
-                    payload={"reasonCode": reason_code, "executorId": lease.executor_id},
+                    else summary,
+                    payload=payload,
                     created_at=now,
                 )
             )

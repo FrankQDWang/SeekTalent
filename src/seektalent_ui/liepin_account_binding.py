@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 
 from seektalent.config import AppSettings
 from seektalent.providers.liepin.compliance import ComplianceGate
@@ -15,6 +16,14 @@ def ensure_workbench_liepin_provider_connection(
     connection: WorkbenchSourceConnection,
 ) -> str:
     store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
+    existing_gate_ref = _existing_provider_connection_gate_ref(
+        settings=settings,
+        store=store,
+        user=user,
+        connection=connection,
+    )
+    if existing_gate_ref is not None:
+        return existing_gate_ref
     if connection.compliance_gate_ref:
         existing = store.get_connection(
             tenant_id=DEFAULT_TENANT_ID,
@@ -64,13 +73,24 @@ def ensure_workbench_liepin_provider_connection(
         gate=gate,
         purpose="search",
     )
-    store.create_connection(
-        tenant_id=DEFAULT_TENANT_ID,
-        workspace_id=user.workspace_id,
-        actor_id=user.user_id,
-        compliance_gate_ref=gate_ref,
-        connection_id=connection.connection_id,
-    )
+    try:
+        store.create_connection(
+            tenant_id=DEFAULT_TENANT_ID,
+            workspace_id=user.workspace_id,
+            actor_id=user.user_id,
+            compliance_gate_ref=gate_ref,
+            connection_id=connection.connection_id,
+        )
+    except sqlite3.IntegrityError:
+        existing_gate_ref = _existing_provider_connection_gate_ref(
+            settings=settings,
+            store=store,
+            user=user,
+            connection=connection,
+        )
+        if existing_gate_ref is None:
+            raise
+        return existing_gate_ref
     _restore_bound_liepin_provider_account(
         settings=settings,
         store=store,
@@ -79,6 +99,39 @@ def ensure_workbench_liepin_provider_connection(
         compliance_gate_ref=gate_ref,
     )
     return gate_ref
+
+
+def _existing_provider_connection_gate_ref(
+    *,
+    settings: AppSettings,
+    store: LiepinStore,
+    user: WorkbenchUser,
+    connection: WorkbenchSourceConnection,
+) -> str | None:
+    existing = store.get_connection(
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+        connection_id=connection.connection_id,
+    )
+    if existing is None:
+        return None
+    existing_gate = store.get_compliance_gate(
+        gate_ref=existing.compliance_gate_ref,
+        tenant_id=DEFAULT_TENANT_ID,
+        workspace_id=user.workspace_id,
+        actor_id=user.user_id,
+    )
+    if existing_gate is None:
+        return None
+    _restore_bound_liepin_provider_account(
+        settings=settings,
+        store=store,
+        user=user,
+        connection=connection,
+        compliance_gate_ref=existing.compliance_gate_ref,
+    )
+    return existing.compliance_gate_ref
 
 
 def _restore_bound_liepin_provider_account(

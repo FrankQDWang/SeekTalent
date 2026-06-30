@@ -138,6 +138,53 @@ def test_recovery_restores_latest_checkpoint_before_new_runtime_events(tmp_path:
     assert store.get_run("runtime_run_1").status == "resume_requested"
 
 
+def test_recovery_can_fail_recoverable_checkpoint_instead_of_resuming(tmp_path: Path) -> None:
+    from seektalent_runtime_control.models import RuntimeCheckpoint
+    from seektalent_runtime_control.recovery import RuntimeRecoveryService
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    _create_run(store, status="running")
+    store.acquire_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        acquired_at="2026-06-08T00:00:00.000000Z",
+        lease_expires_at="2026-06-08T00:00:05.000000Z",
+    )
+    store.write_checkpoint(
+        RuntimeCheckpoint(
+            checkpoint_id="rtcheckpoint_1",
+            runtime_run_id="runtime_run_1",
+            stage="round",
+            round_no=1,
+            safe_boundary="after_round_controller",
+            run_state={"round": 1},
+            source_plan={"sourceIds": ["cts"]},
+            pending_commands=[],
+            artifact_manifest_ref=None,
+            schema_version="runtime-control-checkpoint/v1",
+            created_at="2026-06-08T00:00:03.000000Z",
+        ),
+        executor_id="executor_1",
+    )
+
+    decisions = RuntimeRecoveryService(
+        store=store,
+        now=lambda: "2026-06-08T00:00:06.000000Z",
+    ).recover_start_timeouts(resume_recoverable=False)
+
+    assert [decision.reason_code for decision in decisions] == ["runtime_executor_crash_timeout"]
+    run = store.get_run("runtime_run_1")
+    assert run.status == "failed"
+    assert run.stop_reason_code == "runtime_executor_crash_timeout"
+    events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
+    assert [event.event_type for event in events] == [
+        "runtime_executor_lease_expired",
+        "runtime_executor_crashed",
+    ]
+
+
 def test_recovery_marks_run_failed_when_latest_checkpoint_is_corrupt(tmp_path: Path) -> None:
     from seektalent_runtime_control.recovery import RuntimeRecoveryService
     from seektalent_runtime_control.store import RuntimeControlStore
