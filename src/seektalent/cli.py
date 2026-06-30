@@ -1927,6 +1927,9 @@ def _workbench_reason_from_text(text: str) -> str:
         "liepin_opencli_helper_invalid_output",
         "liepin_opencli_helper_output_too_large",
         "liepin_opencli_malformed_state",
+        "liepin_opencli_lease_malformed",
+        "liepin_opencli_owned_marker_malformed",
+        "liepin_opencli_tab_response_malformed",
         "liepin_opencli_daemon_stale",
         "liepin_opencli_daemon_not_running",
         "liepin_opencli_timeout",
@@ -1951,6 +1954,9 @@ def _workbench_reason_message(reason: str) -> str:
         "liepin_opencli_helper_invalid_output": "OpenCLI browser helper returned invalid JSON output.",
         "liepin_opencli_helper_output_too_large": "OpenCLI browser helper output exceeded the safe transport limit.",
         "liepin_opencli_malformed_state": "OpenCLI browser bridge returned malformed Liepin state.",
+        "liepin_opencli_lease_malformed": "OpenCLI browser lease state was malformed; remove the stale SeekTalent OpenCLI lease files, then retry.",
+        "liepin_opencli_owned_marker_malformed": "OpenCLI browser owned-tab marker state was malformed; remove the stale SeekTalent OpenCLI lease files, then retry.",
+        "liepin_opencli_tab_response_malformed": "OpenCLI browser tab command returned an unexpected response. Restart OpenCLI/Chrome and retry.",
         "liepin_opencli_timeout": "OpenCLI browser bridge did not respond before timeout.",
     }.get(reason, "OpenCLI/Liepin preflight failed.")
 

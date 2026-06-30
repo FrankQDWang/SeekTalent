@@ -640,7 +640,7 @@ def test_open_liepin_tab_rejects_malformed_page_id(tmp_path: Path) -> None:
     with pytest.raises(OpenCliBrowserError) as error:
         _runner(commands, lease_dir=tmp_path).open_liepin_tab(LIEPIN_SEARCH_URL)
 
-    assert error.value.safe_reason_code == "liepin_opencli_malformed_state"
+    assert error.value.safe_reason_code == "liepin_opencli_tab_response_malformed"
 
 
 def test_cleanup_idle_lease_releases_lease_without_closing_tabs(tmp_path: Path) -> None:
@@ -987,7 +987,7 @@ def test_cleanup_orphaned_owned_tabs_never_closes_for_malformed_marker(tmp_path:
     with pytest.raises(OpenCliBrowserError) as error:
         runner.cleanup_orphaned_tabs(force=True)
 
-    assert error.value.safe_reason_code == "liepin_opencli_malformed_state"
+    assert error.value.safe_reason_code == "liepin_opencli_owned_marker_malformed"
     assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-owned-1") not in commands.calls
 
 
@@ -1007,6 +1007,23 @@ def test_open_liepin_tab_quarantines_malformed_owned_marker_and_writes_fresh_mar
     assert set(owned_pages) == {"page-2"}
     assert owned_pages["page-2"]["url"] == LIEPIN_SEARCH_URL
     assert list(tmp_path.glob("seektalent-liepin-owned-pages.json.malformed-*"))
+
+
+def test_open_liepin_tab_quarantines_malformed_lease_and_opens_new_tab(tmp_path: Path) -> None:
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-2"),
+        }
+    )
+    lease_path = tmp_path / "seektalent-liepin.json"
+    lease_path.write_text("{not-json", encoding="utf-8")
+
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(LIEPIN_SEARCH_URL)
+
+    assert result.ok is True
+    lease = json.loads(lease_path.read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-2"
+    assert list(tmp_path.glob("seektalent-liepin.json.malformed-*"))
 
 
 def test_cleanup_idle_lease_keeps_active_lease(tmp_path: Path) -> None:

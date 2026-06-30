@@ -185,7 +185,7 @@ class LiepinSiteAdapter:
 
     def open_liepin_tab(self, url: str) -> OpenCliBrowserResult:
         self._validate_start_url(url)
-        lease = self._read_lease()
+        lease = self._read_lease_for_reuse()
         if lease is not None:
             if str(lease.get("url") or "") == url:
                 page_id = self._verified_owned_lease_page_id(lease)
@@ -2214,14 +2214,23 @@ class LiepinSiteAdapter:
         except FileNotFoundError:
             return None
         except json.JSONDecodeError as exc:
-            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+            raise OpenCliBrowserError("liepin_opencli_lease_malformed") from exc
         if not isinstance(loaded, dict):
-            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            raise OpenCliBrowserError("liepin_opencli_lease_malformed")
         return loaded
+
+    def _read_lease_for_reuse(self) -> dict[str, object] | None:
+        try:
+            return self._read_lease()
+        except OpenCliBrowserError as exc:
+            if exc.safe_reason_code != "liepin_opencli_lease_malformed":
+                raise
+            self._quarantine_lease_file()
+            return None
 
     def _write_lease(self, *, page_id: str, url: str, owner_nonce: str | None = None) -> None:
         if not _is_safe_page_id(page_id):
-            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
         now = time.time()
         path = self._lease_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2256,25 +2265,35 @@ class LiepinSiteAdapter:
         except FileNotFoundError:
             return
 
+    def _quarantine_lease_file(self) -> None:
+        path = self._lease_path()
+        if not path.exists():
+            return
+        target = path.with_name(f"{path.name}.malformed-{int(time.time())}-{uuid.uuid4().hex[:8]}")
+        try:
+            path.replace(target)
+        except OSError:
+            path.unlink(missing_ok=True)
+
     def _read_owned_page_markers(self) -> dict[str, dict[str, object]]:
         try:
             loaded = json.loads(self._owned_pages_path().read_text(encoding="utf-8"))
         except FileNotFoundError:
             return {}
         except json.JSONDecodeError as exc:
-            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+            raise OpenCliBrowserError("liepin_opencli_owned_marker_malformed") from exc
         if not isinstance(loaded, dict):
-            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            raise OpenCliBrowserError("liepin_opencli_owned_marker_malformed")
         markers: dict[str, dict[str, object]] = {}
         for page_id, marker in loaded.items():
             if not _is_safe_page_id(str(page_id)) or not isinstance(marker, dict):
-                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+                raise OpenCliBrowserError("liepin_opencli_owned_marker_malformed")
             if marker.get("schema_version") != "seektalent.opencli_owned_page.v1":
-                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+                raise OpenCliBrowserError("liepin_opencli_owned_marker_malformed")
             if marker.get("session") != self._browser_config.session:
                 continue
             if marker.get("page_id") != page_id:
-                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+                raise OpenCliBrowserError("liepin_opencli_owned_marker_malformed")
             markers[str(page_id)] = dict(marker)
         return markers
 
@@ -2282,7 +2301,7 @@ class LiepinSiteAdapter:
         try:
             return self._read_owned_page_markers()
         except OpenCliBrowserError as exc:
-            if exc.safe_reason_code != "liepin_opencli_malformed_state":
+            if exc.safe_reason_code != "liepin_opencli_owned_marker_malformed":
                 raise
             self._quarantine_owned_page_marker_file()
             return {}
@@ -2345,8 +2364,8 @@ class LiepinSiteAdapter:
     def _lease_page_id(self, lease: Mapping[str, object]) -> str:
         page_id = str(lease.get("page_id") or "")
         if not _is_safe_page_id(page_id):
-            self._delete_lease()
-            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            self._quarantine_lease_file()
+            raise OpenCliBrowserError("liepin_opencli_lease_malformed")
         return page_id
 
     def _verified_owned_lease_page_id(self, lease: Mapping[str, object]) -> str | None:
