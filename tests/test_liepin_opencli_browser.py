@@ -721,6 +721,47 @@ def test_open_liepin_tab_binds_new_window_before_recovering_opened_page_id(tmp_p
     assert lease["page_id"] == "page-2"
 
 
+def test_open_liepin_tab_ignores_before_tab_list_status_unavailable(tmp_path: Path) -> None:
+    tab_list_error = subprocess.CalledProcessError(1, ["opencli"], stderr="status unavailable")
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                tab_list_error,
+                json.dumps([{"id": "page-2", "url": LIEPIN_SEARCH_URL, "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): json.dumps(
+                {"page": "page-2", "url": LIEPIN_SEARCH_URL}
+            ),
+        }
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(LIEPIN_SEARCH_URL)
+
+    assert result.ok is True
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-2"
+
+
+def test_open_liepin_tab_recovers_when_tab_new_reports_status_unavailable_but_window_opened(tmp_path: Path) -> None:
+    tab_new_error = subprocess.CalledProcessError(1, ["opencli"], stderr="status unavailable")
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
+                "[]",
+                json.dumps([{"id": "page-2", "url": LIEPIN_SEARCH_URL, "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): tab_new_error,
+        }
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(LIEPIN_SEARCH_URL)
+
+    assert result.ok is True
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-2"
+
+
 def test_cleanup_idle_lease_releases_lease_without_closing_tabs(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/resume/showresumedetail?id=357"
     commands = FakeCommands(

@@ -2038,15 +2038,18 @@ class LiepinSiteAdapter:
 
     def _open_opencli_managed_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str:
         self._validate_start_or_detail_url(url)
-        before_urls = _tab_urls_by_page_id(self._list_tabs())
+        before_urls = self._tab_urls_before_open()
         try:
             output = self._run_browser_command("tab", ("new", url))
         except OpenCliBrowserError as exc:
-            if exc.safe_reason_code != "liepin_opencli_window_policy_blocked":
+            if exc.safe_reason_code == "liepin_opencli_status_unavailable":
+                output = ""
+            elif exc.safe_reason_code != "liepin_opencli_window_policy_blocked":
                 raise
-            self._run_browser_command("unbind", ())
-            before_urls = _tab_urls_by_page_id(self._list_tabs())
-            output = self._run_browser_command("tab", ("new", url))
+            else:
+                self._run_browser_command("unbind", ())
+                before_urls = self._tab_urls_before_open()
+                output = self._run_browser_command("tab", ("new", url))
         page_id = self._parse_opened_tab_page_id(output=output, url=url, before_urls=before_urls)
         owner_nonce = uuid.uuid4().hex
         self._write_lease(page_id=page_id, url=url, owner_nonce=owner_nonce)
@@ -2059,6 +2062,12 @@ class LiepinSiteAdapter:
             owner_nonce=owner_nonce,
         )
         return page_id
+
+    def _tab_urls_before_open(self) -> dict[str, str]:
+        try:
+            return _tab_urls_by_page_id(self._list_tabs())
+        except OpenCliBrowserError:
+            return {}
 
     def _parse_opened_tab_page_id(self, *, output: str, url: str, before_urls: Mapping[str, str]) -> str:
         try:
@@ -2079,7 +2088,10 @@ class LiepinSiteAdapter:
         return page_id
 
     def _opened_tab_page_id_from_list(self, *, url: str, before_urls: Mapping[str, str]) -> str | None:
-        after_tabs = self._list_tabs()
+        try:
+            after_tabs = self._list_tabs()
+        except OpenCliBrowserError:
+            return None
         candidates: list[tuple[int, str]] = []
         for tab in after_tabs:
             page_id = _tab_page_id(tab)
