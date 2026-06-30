@@ -1819,6 +1819,14 @@ def _run_workbench_liepin_preflight_actions(
     if not _workbench_action_ok(recovered):
         return recovered
 
+    opened = _run_workbench_liepin_action(
+        "open_liepin_tab",
+        payload={"url": _WORKBENCH_PREFLIGHT_LIEPIN_URL},
+        env=env,
+    )
+    if not _workbench_action_ok(opened):
+        return opened
+
     return _run_workbench_liepin_action("state", env=env)
 
 

@@ -563,7 +563,7 @@ def test_workbench_command_runs_opencli_preflight_before_launch(
     assert main(["workbench", "--port", "8123"]) == 0
 
     assert ensured == [True]
-    assert opencli_actions == ["recover_connection", "state"]
+    assert opencli_actions == ["recover_connection", "open_liepin_tab", "state"]
     assert launch_calls[0][0][0] == "seektalent-ui-api"
 
 
@@ -725,7 +725,7 @@ def test_workbench_command_reports_malformed_opencli_state(
 
     assert main(["workbench"]) == 1
 
-    assert opencli_actions == ["recover_connection", "state"]
+    assert opencli_actions == ["recover_connection", "open_liepin_tab", "state"]
     assert launch_calls == []
 
 
