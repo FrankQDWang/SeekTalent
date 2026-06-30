@@ -61,6 +61,42 @@ def test_canonical_text_llm_defaults_use_dual_protocol_surface() -> None:
     assert settings.workbench_conversation_reasoning_effort == "max"
 
 
+def test_domi_provider_keeps_stage_model_defaults_and_adds_transport_defaults() -> None:
+    settings = make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt")
+
+    assert settings.text_llm_provider_label == "domi"
+    assert settings.text_llm_protocol_family == "openai_chat_completions_compatible"
+    assert settings.text_llm_endpoint_kind == "bailian_openai_chat_completions"
+    assert settings.requirements_model_id == "deepseek-v4-pro"
+    assert settings.controller_model_id == "deepseek-v4-pro"
+    assert settings.scoring_model_id == "deepseek-v4-flash"
+    assert settings.workbench_conversation_model_id == "deepseek-v4-flash"
+    assert settings.domi_jwt == "domi-test-jwt"
+    assert settings.domi_llm_base_url == "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1"
+    assert settings.domi_llm_channel == "seek_talent"
+    assert settings.text_llm.domi_jwt == "domi-test-jwt"
+    assert settings.text_llm.domi_llm_base_url == settings.domi_llm_base_url
+    assert settings.text_llm.domi_llm_channel == "seek_talent"
+
+
+def test_domi_provider_requires_openai_compatible_protocol() -> None:
+    with pytest.raises(ValidationError, match="domi"):
+        make_settings(
+            text_llm_provider_label="domi",
+            text_llm_protocol_family="anthropic_messages_compatible",
+            text_llm_endpoint_kind="bailian_anthropic_messages",
+            domi_jwt="domi-test-jwt",
+        )
+
+
+def test_empty_domi_base_url_and_channel_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="domi_llm_base_url"):
+        make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt", domi_llm_base_url="")
+
+    with pytest.raises(ValidationError, match="domi_llm_channel"):
+        make_settings(text_llm_provider_label="domi", domi_jwt="domi-test-jwt", domi_llm_channel="")
+
+
 def test_legacy_stage_key_in_dotenv_fails_with_migration_error(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text(

@@ -30,7 +30,7 @@ TextLLMProtocolFamily = Literal[
     "openai_chat_completions_compatible",
     "anthropic_messages_compatible",
 ]
-TextLLMProviderLabel = Literal["bailian"]
+TextLLMProviderLabel = Literal["bailian", "domi"]
 TextLLMEndpointKind = Literal[
     "bailian_openai_chat_completions",
     "bailian_anthropic_messages",
@@ -50,6 +50,8 @@ DEFAULT_RUNTIME_CONTROL_DB_PATH = ".seektalent/runtime_control.sqlite3"
 DEFAULT_CONVERSATION_AGENT_DB_PATH = ".seektalent/conversation_agent.sqlite3"
 DEFAULT_AGENT_MEMORY_DB_PATH = ".seektalent/agent_memory.sqlite3"
 DEFAULT_AGENT_MEMORY_WORKSPACE_PATH = ".seektalent/agent_memory_workspace"
+DEFAULT_DOMI_LLM_BASE_URL = "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1"
+DEFAULT_DOMI_LLM_CHANNEL = "seek_talent"
 DEFAULT_LIEPIN_OPENCLI_COMMAND = f"{shlex.quote(sys.executable)} -m seektalent.opencli_launcher"
 DEFAULT_LIEPIN_OPENCLI_SESSION = "seektalent-liepin"
 PROVIDER_ENV_VARS = {
@@ -239,6 +241,9 @@ class TextLLMSettings:
     endpoint_region: TextLLMEndpointRegion
     base_url_override: str | None
     api_key: str | None
+    domi_jwt: str | None
+    domi_llm_base_url: str
+    domi_llm_channel: str
     requirements_model_id: str
     controller_model_id: str
     scoring_model_id: str
@@ -501,6 +506,9 @@ class AppSettings(BaseSettings):
     text_llm_endpoint_region: TextLLMEndpointRegion = "beijing"
     text_llm_base_url_override: str | None = None
     text_llm_api_key: str | None = None
+    domi_jwt: str | None = None
+    domi_llm_base_url: str = DEFAULT_DOMI_LLM_BASE_URL
+    domi_llm_channel: str = DEFAULT_DOMI_LLM_CHANNEL
 
     requirements_model_id: str = "deepseek-v4-pro"
     controller_model_id: str = "deepseek-v4-pro"
@@ -595,6 +603,14 @@ class AppSettings(BaseSettings):
         if value == "":
             return None
         return value
+
+    @field_validator("domi_llm_base_url", "domi_llm_channel", mode="before")
+    @classmethod
+    def validate_non_empty_domi_strings(cls, value: object, info: ValidationInfo) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError(f"{info.field_name} must not be empty")
+        return normalized.rstrip("/") if info.field_name == "domi_llm_base_url" else normalized
 
     @field_validator("agent_monthly_cost_budget_cents", mode="before")
     @classmethod
@@ -781,6 +797,11 @@ class AppSettings(BaseSettings):
                 "text_llm_endpoint_kind must match text_llm_protocol_family "
                 f"({self.text_llm_protocol_family} -> {expected_endpoint_kind})"
             )
+        if (
+            self.text_llm_provider_label == "domi"
+            and self.text_llm_protocol_family != "openai_chat_completions_compatible"
+        ):
+            raise ValueError("domi text LLM provider requires openai_chat_completions_compatible protocol")
         return self
 
     @property
@@ -850,6 +871,9 @@ class AppSettings(BaseSettings):
             endpoint_region=self.text_llm_endpoint_region,
             base_url_override=self.text_llm_base_url_override,
             api_key=self.text_llm_api_key,
+            domi_jwt=self.domi_jwt,
+            domi_llm_base_url=self.domi_llm_base_url,
+            domi_llm_channel=self.domi_llm_channel,
             requirements_model_id=self.requirements_model_id,
             controller_model_id=self.controller_model_id,
             scoring_model_id=self.scoring_model_id,
