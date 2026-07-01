@@ -5,14 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 
 DOMI_PYTHON="${DOMI_PYTHON:-/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python}"
-DOMI_RUNTIME_ROOT="${SEEKTALENT_DOMI_RUNTIME_ROOT:-${HOME}/.seektalent/domi-runtime}"
-DOMI_VENV="${DOMI_RUNTIME_ROOT}/venv"
-DOMI_DIST_DIR="${DOMI_RUNTIME_ROOT}/dist"
+DOMI_RUNTIME_ROOT_RAW="${SEEKTALENT_DOMI_RUNTIME_ROOT:-${HOME}/.seektalent/domi-runtime}"
 DOMI_WORKBENCH_PORT="${SEEKTALENT_DOMI_SMOKE_PORT:-8011}"
 SEEKTALENT_DOMI_LLM_BASE_URL="${SEEKTALENT_DOMI_LLM_BASE_URL:-https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1}"
 SEEKTALENT_DOMI_LLM_CHANNEL="${SEEKTALENT_DOMI_LLM_CHANNEL:-seek_talent}"
 SEEKTALENT_DOMI_SMOKE_MODEL="${SEEKTALENT_DOMI_SMOKE_MODEL:-deepseek-v4-flash}"
-WORKBENCH_LOG="${DOMI_RUNTIME_ROOT}/workbench.log"
 
 fail() {
   local reason_code="$1"
@@ -28,6 +25,23 @@ fi
 if [[ ! -x "${DOMI_PYTHON}" ]]; then
   fail "domi_python_missing" "Domi Python runtime is not executable: ${DOMI_PYTHON}"
 fi
+
+DOMI_RUNTIME_ROOT="$("${DOMI_PYTHON}" - "${DOMI_RUNTIME_ROOT_RAW}" <<'PY'
+from pathlib import Path
+import sys
+
+print(Path(sys.argv[1]).expanduser().resolve())
+PY
+)"
+case "${DOMI_RUNTIME_ROOT}" in
+  /Applications/Domi.app|/Applications/Domi.app/*)
+    fail "domi_runtime_root_forbidden" "SEEKTALENT_DOMI_RUNTIME_ROOT must not point inside /Applications/Domi.app."
+    ;;
+esac
+
+DOMI_VENV="${DOMI_RUNTIME_ROOT}/venv"
+DOMI_DIST_DIR="${DOMI_RUNTIME_ROOT}/dist"
+WORKBENCH_LOG="${DOMI_RUNTIME_ROOT}/workbench.log"
 
 mkdir -p "${DOMI_RUNTIME_ROOT}" "${DOMI_DIST_DIR}"
 
@@ -122,14 +136,18 @@ except urllib.error.URLError as exc:
     raise SystemExit(1)
 PY
 
-echo "Restarting OpenCLI daemon via installed seektalent-opencli" >&2
-if ! "${SEEKTALENT_OPENCLI_BIN}" daemon restart > "${DOMI_RUNTIME_ROOT}/opencli-restart.txt" 2>&1; then
-  fail "domi_opencli_restart_failed" "OpenCLI daemon restart failed; see ${DOMI_RUNTIME_ROOT}/opencli-restart.txt"
-fi
-
 echo "Checking OpenCLI daemon status" >&2
 if ! "${SEEKTALENT_OPENCLI_BIN}" daemon status > "${DOMI_RUNTIME_ROOT}/opencli-status.txt" 2>&1; then
-  fail "domi_opencli_status_unavailable" "OpenCLI status check failed; see ${DOMI_RUNTIME_ROOT}/opencli-status.txt"
+  if [[ "${SEEKTALENT_DOMI_OPENCLI_RESTART:-0}" != "1" ]]; then
+    fail "domi_opencli_status_unavailable" "OpenCLI status check failed; see ${DOMI_RUNTIME_ROOT}/opencli-status.txt. Set SEEKTALENT_DOMI_OPENCLI_RESTART=1 to restart it during smoke."
+  fi
+  echo "Restarting OpenCLI daemon via installed seektalent-opencli" >&2
+  if ! "${SEEKTALENT_OPENCLI_BIN}" daemon restart > "${DOMI_RUNTIME_ROOT}/opencli-restart.txt" 2>&1; then
+    fail "domi_opencli_restart_failed" "OpenCLI daemon restart failed; see ${DOMI_RUNTIME_ROOT}/opencli-restart.txt"
+  fi
+  if ! "${SEEKTALENT_OPENCLI_BIN}" daemon status > "${DOMI_RUNTIME_ROOT}/opencli-status.txt" 2>&1; then
+    fail "domi_opencli_status_unavailable" "OpenCLI status check failed after restart; see ${DOMI_RUNTIME_ROOT}/opencli-status.txt"
+  fi
 fi
 if ! grep -q "Extension: connected" "${DOMI_RUNTIME_ROOT}/opencli-status.txt"; then
   fail "domi_opencli_extension_disconnected" "OpenCLI extension is not connected; see ${DOMI_RUNTIME_ROOT}/opencli-status.txt"
@@ -137,16 +155,40 @@ fi
 
 WORKBENCH_PID=""
 cleanup() {
-  if [[ -n "${WORKBENCH_PID}" ]] && kill -0 "${WORKBENCH_PID}" 2>/dev/null; then
-    kill "${WORKBENCH_PID}" 2>/dev/null || true
-    wait "${WORKBENCH_PID}" 2>/dev/null || true
+  if [[ -n "${WORKBENCH_PID}" ]] && kill -0 -- "-${WORKBENCH_PID}" 2>/dev/null; then
+    kill -TERM -- "-${WORKBENCH_PID}" 2>/dev/null || true
+    for _ in $(seq 1 10); do
+      if ! kill -0 -- "-${WORKBENCH_PID}" 2>/dev/null; then
+        return
+      fi
+      sleep 0.5
+    done
+    kill -KILL -- "-${WORKBENCH_PID}" 2>/dev/null || true
   fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 echo "Starting packaged Workbench with seektalent workbench --port ${DOMI_WORKBENCH_PORT}" >&2
-"${SEEKTALENT_BIN}" workbench --port "${DOMI_WORKBENCH_PORT}" --host 127.0.0.1 > "${WORKBENCH_LOG}" 2>&1 &
-WORKBENCH_PID="$!"
+WORKBENCH_PID="$("${VENV_PYTHON}" - "${SEEKTALENT_BIN}" "${DOMI_WORKBENCH_PORT}" "${WORKBENCH_LOG}" <<'PY'
+import subprocess
+import sys
+
+seektalent_bin = sys.argv[1]
+port = sys.argv[2]
+log_path = sys.argv[3]
+
+with open(log_path, "ab") as log:
+    process = subprocess.Popen(
+        [seektalent_bin, "workbench", "--port", port, "--host", "127.0.0.1"],
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+print(process.pid)
+PY
+)"
 
 for _ in $(seq 1 60); do
   if "${VENV_PYTHON}" - "${DOMI_WORKBENCH_PORT}" <<'PY'
@@ -161,7 +203,7 @@ PY
     echo "Domi runtime smoke passed. Workbench URL: http://127.0.0.1:${DOMI_WORKBENCH_PORT}/" >&2
     exit 0
   fi
-  if ! kill -0 "${WORKBENCH_PID}" 2>/dev/null; then
+  if ! kill -0 -- "-${WORKBENCH_PID}" 2>/dev/null; then
     fail "domi_workbench_exited" "Workbench exited before /openapi.json became ready; see ${WORKBENCH_LOG}"
   fi
   sleep 1

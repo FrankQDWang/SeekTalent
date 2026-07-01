@@ -28,6 +28,32 @@ def test_domi_runtime_smoke_script_has_expected_contract() -> None:
         assert expected in script
 
 
+def test_domi_runtime_smoke_script_has_process_cleanup_contract() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert "start_new_session=True" in script
+    assert 'kill -TERM -- "-${WORKBENCH_PID}"' in script
+    assert 'kill -KILL -- "-${WORKBENCH_PID}"' in script
+
+
+def test_domi_runtime_smoke_script_rejects_app_bundle_runtime_root() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'case "${DOMI_RUNTIME_ROOT}" in' in script
+    assert "/Applications/Domi.app" in script
+    assert "domi_runtime_root_forbidden" in script
+
+
+def test_domi_runtime_smoke_script_does_not_restart_opencli_by_default() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    status_index = script.index('"${SEEKTALENT_OPENCLI_BIN}" daemon status')
+    restart_index = script.index('"${SEEKTALENT_OPENCLI_BIN}" daemon restart')
+
+    assert "SEEKTALENT_DOMI_OPENCLI_RESTART" in script
+    assert status_index < restart_index
+
+
 def test_domi_runtime_smoke_script_passes_bash_syntax_check() -> None:
     result = subprocess.run(
         ["bash", "-n", str(SCRIPT)],
