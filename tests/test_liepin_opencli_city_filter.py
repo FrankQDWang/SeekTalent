@@ -48,6 +48,7 @@ def test_search_liepin_cards_uses_other_city_picker_for_expected_city(tmp_path: 
             ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 state_before,
+                state_before,
                 state_after_search,
                 state_city_picker,
                 state_city_search_results,
@@ -130,6 +131,7 @@ def test_search_liepin_cards_selects_hot_city_from_other_city_picker(tmp_path: P
             ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 state_before,
+                state_before,
                 state_after_search,
                 state_city_picker,
                 state_after_expected_city,
@@ -206,6 +208,7 @@ def test_search_liepin_cards_uses_visible_current_city_when_expected_city_missin
             ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
             ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
             ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
                 state_before,
                 state_after_search,
                 state_after_current_city,
