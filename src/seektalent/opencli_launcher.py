@@ -21,6 +21,14 @@ OPENCLI_VERSION = "1.8.0"
 NODE_VERSION = "v24.16.0"
 RUNTIME_ROOT = Path.home() / ".seektalent" / "opencli-runtime"
 NODE_DIST_BASE_URL = "https://nodejs.org/dist"
+PROVIDER_SECRET_ENV_VARS = frozenset(
+    {
+        "SEEKTALENT_TEXT_LLM_API_KEY",
+        "SEEKTALENT_DOMI_JWT",
+        "SEEKTALENT_DOMI_LLM_BASE_URL",
+        "SEEKTALENT_DOMI_LLM_CHANNEL",
+    }
+)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -30,8 +38,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BootstrapError as exc:
         print(f"SeekTalent OpenCLI bootstrap failed: {exc}", file=sys.stderr)
         return 127
-    env = os.environ.copy()
-    env["PATH"] = os.pathsep.join((str(runtime.node_bin_dir), env.get("PATH", "")))
+    env = _opencli_subprocess_env(node_bin_dir=runtime.node_bin_dir)
     completed = subprocess.run((str(runtime.node), str(runtime.opencli_main), *args), env=env, check=False)
     return completed.returncode
 
@@ -109,8 +116,7 @@ def _ensure_managed_opencli(runtime_root: Path, *, node: Path, opencli_version: 
         return main
     npm = _npm_for_node(node)
     install_dir.mkdir(parents=True, exist_ok=True)
-    env = os.environ.copy()
-    env["PATH"] = os.pathsep.join((str(node.parent), env.get("PATH", "")))
+    env = _opencli_subprocess_env(node_bin_dir=node.parent)
     completed = subprocess.run(
         (
             str(npm),
@@ -134,6 +140,14 @@ def _ensure_managed_opencli(runtime_root: Path, *, node: Path, opencli_version: 
     if not main.exists() or _package_version(package_json) != opencli_version:
         raise BootstrapError(f"OpenCLI {opencli_version} install is incomplete")
     return main
+
+
+def _opencli_subprocess_env(*, node_bin_dir: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    for key in PROVIDER_SECRET_ENV_VARS:
+        env.pop(key, None)
+    env["PATH"] = os.pathsep.join((str(node_bin_dir), env.get("PATH", "")))
+    return env
 
 
 def _npm_for_node(node: Path) -> Path:

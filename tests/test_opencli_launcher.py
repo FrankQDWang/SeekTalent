@@ -71,6 +71,43 @@ def test_opencli_install_requires_managed_npm(
         opencli_launcher._npm_for_node(node)
 
 
+def test_opencli_install_env_excludes_provider_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    node = _write_fake_node(tmp_path / "managed-bin", exit_code=0)
+    _write_fake_npm(node.parent)
+    captured_env: dict[str, str] = {}
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(_argv, **kwargs):
+        captured_env.update(kwargs["env"])
+        _write_managed_opencli(tmp_path / "runtime")
+        return Completed()
+
+    monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-secret-jwt")
+    monkeypatch.setenv("SEEKTALENT_DOMI_LLM_BASE_URL", "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1")
+    monkeypatch.setenv("SEEKTALENT_DOMI_LLM_CHANNEL", "seek_talent")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "text-secret-key")
+    monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
+
+    opencli_launcher._ensure_managed_opencli(
+        tmp_path / "runtime",
+        node=node,
+        opencli_version=opencli_launcher.OPENCLI_VERSION,
+    )
+
+    assert "SEEKTALENT_DOMI_JWT" not in captured_env
+    assert "SEEKTALENT_DOMI_LLM_BASE_URL" not in captured_env
+    assert "SEEKTALENT_DOMI_LLM_CHANNEL" not in captured_env
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" not in captured_env
+    assert str(node.parent) in captured_env["PATH"]
+
+
 def _write_managed_opencli(root: Path) -> Path:
     package_dir = root / "opencli" / opencli_launcher.OPENCLI_VERSION / "node_modules" / "@jackwener" / "opencli"
     main = package_dir / "dist" / "src" / "main.js"
