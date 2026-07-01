@@ -18,6 +18,14 @@ PRODUCT_USER_ENV_VARS = frozenset(
     }
 )
 
+DOMI_LLM_ENV_VARS = frozenset(
+    {
+        "SEEKTALENT_DOMI_JWT",
+        "SEEKTALENT_DOMI_LLM_BASE_URL",
+        "SEEKTALENT_DOMI_LLM_CHANNEL",
+    }
+)
+
 _PASSTHROUGH_ENV_VARS = frozenset(
     {
         "HOME",
@@ -61,9 +69,19 @@ def build_workbench_command_env(
     env["SEEKTALENT_LIEPIN_WORKER_MODE"] = "opencli"
     env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] = "opencli"
     load_product_user_env(env, env_file=env_file)
+    _prune_unused_llm_credentials(env)
     env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = DEFAULT_LIEPIN_OPENCLI_COMMAND
     ensure_workbench_internal_liepin_env(env)
     return env
+
+
+def _prune_unused_llm_credentials(env: MutableMapping[str, str]) -> None:
+    provider_label = str(env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL") or "bailian").strip().lower() or "bailian"
+    if provider_label == "domi":
+        env.pop("SEEKTALENT_TEXT_LLM_API_KEY", None)
+        return
+    for key in DOMI_LLM_ENV_VARS:
+        env.pop(key, None)
 
 
 def _read_product_env_file(path: Path) -> dict[str, str]:

@@ -115,6 +115,9 @@ def test_build_workbench_command_env_ignores_stale_seektalent_runtime_env(
             "SEEKTALENT_LIEPIN_WORKER_MODE": "disabled",
             "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "disabled",
             "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": "apps/web-svelte/node_modules/.bin/opencli",
+            "SEEKTALENT_DOMI_JWT": "must-not-leak",
+            "SEEKTALENT_DOMI_LLM_BASE_URL": "https://must-not-leak.example/v1",
+            "SEEKTALENT_DOMI_LLM_CHANNEL": "must-not-leak",
             "SEEKTALENT_CTS_TENANT_KEY": "must-not-leak",
         }
     )
@@ -125,6 +128,9 @@ def test_build_workbench_command_env_ignores_stale_seektalent_runtime_env(
     assert env["SEEKTALENT_LIEPIN_WORKER_MODE"] == "opencli"
     assert env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] == "opencli"
     assert env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] == DEFAULT_LIEPIN_OPENCLI_COMMAND
+    assert "SEEKTALENT_DOMI_JWT" not in env
+    assert "SEEKTALENT_DOMI_LLM_BASE_URL" not in env
+    assert "SEEKTALENT_DOMI_LLM_CHANNEL" not in env
     assert "SEEKTALENT_CTS_TENANT_KEY" not in env
 
 
@@ -155,4 +161,5 @@ def test_build_workbench_command_env_passes_minimal_domi_llm_keys(
     assert env["SEEKTALENT_DOMI_LLM_CHANNEL"] == "seek_talent"
     assert env["SEEKTALENT_RUNTIME_MODE"] == "prod"
     assert env["SEEKTALENT_PROVIDER_NAME"] == "liepin"
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" not in env
     assert "SEEKTALENT_CTS_TENANT_KEY" not in env
