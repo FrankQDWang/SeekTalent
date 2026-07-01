@@ -57,9 +57,12 @@ def test_domi_runtime_smoke_script_does_not_restart_opencli_by_default() -> None
 def test_domi_runtime_smoke_script_isolates_stale_ambient_env() -> None:
     script = SCRIPT.read_text(encoding="utf-8")
 
+    assert "SETUP_ENV=(" in script
     assert "DOMI_ENV=(" in script
     assert "OPENCLI_ENV=(" in script
     assert "SEEKTALENT_PROVIDER_NAME=liepin" in script
+    assert 'env -i "${SETUP_ENV[@]}" "${VENV_PYTHON}" -m pip install' in script
+    assert 'env -i "${SETUP_ENV[@]}" "${VENV_PYTHON}" -m build' in script
     assert 'env -i "${DOMI_ENV[@]}" "${SEEKTALENT_BIN}" doctor' in script
     assert 'env -i "${DOMI_ENV[@]}" "${VENV_PYTHON}" -' in script
     assert 'env -i "${OPENCLI_ENV[@]}" "${SEEKTALENT_OPENCLI_BIN}" daemon status' in script

@@ -18,10 +18,6 @@ fail() {
   exit 1
 }
 
-if [[ -z "${SEEKTALENT_DOMI_JWT:-}" ]]; then
-  fail "seektalent_domi_jwt_missing" "SEEKTALENT_DOMI_JWT is required for Domi runtime smoke."
-fi
-
 if [[ ! -x "${DOMI_PYTHON}" ]]; then
   fail "domi_python_missing" "Domi Python runtime is not executable: ${DOMI_PYTHON}"
 fi
@@ -45,9 +41,21 @@ WORKBENCH_LOG="${DOMI_RUNTIME_ROOT}/workbench.log"
 
 mkdir -p "${DOMI_RUNTIME_ROOT}" "${DOMI_DIST_DIR}"
 
+SETUP_ENV=(
+  "HOME=${HOME}"
+  "PATH=${PATH:-/usr/bin:/bin}"
+  "TMPDIR=${TMPDIR:-/tmp}"
+)
+if [[ -n "${LANG:-}" ]]; then
+  SETUP_ENV+=("LANG=${LANG}")
+fi
+if [[ -n "${LC_ALL:-}" ]]; then
+  SETUP_ENV+=("LC_ALL=${LC_ALL}")
+fi
+
 if [[ ! -x "${DOMI_VENV}/bin/python" ]]; then
   echo "Creating Domi runtime venv under ${DOMI_RUNTIME_ROOT}" >&2
-  "${DOMI_PYTHON}" -m venv "${DOMI_VENV}"
+  env -i "${SETUP_ENV[@]}" "${DOMI_PYTHON}" -m venv "${DOMI_VENV}"
 else
   echo "Reusing Domi runtime venv under ${DOMI_RUNTIME_ROOT}" >&2
 fi
@@ -57,20 +65,24 @@ SEEKTALENT_BIN="${DOMI_VENV}/bin/seektalent"
 SEEKTALENT_OPENCLI_BIN="${DOMI_VENV}/bin/seektalent-opencli"
 
 echo "Building and installing SeekTalent wheel with Domi runtime Python" >&2
-"${VENV_PYTHON}" -m pip install --upgrade pip build
+env -i "${SETUP_ENV[@]}" "${VENV_PYTHON}" -m pip install --upgrade pip build
 rm -f "${DOMI_DIST_DIR}"/seektalent-*.whl
-"${VENV_PYTHON}" -m build --wheel --outdir "${DOMI_DIST_DIR}" .
+env -i "${SETUP_ENV[@]}" "${VENV_PYTHON}" -m build --wheel --outdir "${DOMI_DIST_DIR}" .
 WHEEL_PATH="$(find "${DOMI_DIST_DIR}" -maxdepth 1 -name 'seektalent-*.whl' -print -quit)"
 if [[ -z "${WHEEL_PATH}" ]]; then
   fail "domi_wheel_missing" "SeekTalent wheel was not produced in ${DOMI_DIST_DIR}."
 fi
-"${VENV_PYTHON}" -m pip install --force-reinstall "${WHEEL_PATH}"
+env -i "${SETUP_ENV[@]}" "${VENV_PYTHON}" -m pip install --force-reinstall "${WHEEL_PATH}"
 
 if [[ ! -x "${SEEKTALENT_BIN}" ]]; then
   fail "domi_seektalent_bin_missing" "Installed seektalent executable is missing: ${SEEKTALENT_BIN}"
 fi
 if [[ ! -x "${SEEKTALENT_OPENCLI_BIN}" ]]; then
   fail "domi_seektalent_opencli_bin_missing" "Installed seektalent-opencli executable is missing: ${SEEKTALENT_OPENCLI_BIN}"
+fi
+
+if [[ -z "${SEEKTALENT_DOMI_JWT:-}" ]]; then
+  fail "seektalent_domi_jwt_missing" "SEEKTALENT_DOMI_JWT is required for Domi runtime smoke."
 fi
 
 SMOKE_COMMON_ENV=(

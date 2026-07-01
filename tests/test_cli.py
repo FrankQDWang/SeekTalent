@@ -557,6 +557,7 @@ def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
     monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
     monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
     opencli_actions: list[str] = []
+    opencli_envs: list[dict[str, str] | None] = []
     launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
 
     class Runtime:
@@ -575,6 +576,7 @@ def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
         if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
             action = argv_list[-1]
             opencli_actions.append(action)
+            opencli_envs.append(kwargs.get("env"))
             return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
         launch_calls.append((argv_list, kwargs.get("env")))
         return Completed()
@@ -586,6 +588,13 @@ def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
     assert main(["workbench", "--port", "8123"]) == 0
 
     assert opencli_actions == ["recover_connection", "open_liepin_tab", "state"]
+    assert opencli_envs
+    assert all(env is not None for env in opencli_envs)
+    for env in opencli_envs:
+        assert env is not None
+        assert "SEEKTALENT_DOMI_JWT" not in env
+        assert "SEEKTALENT_DOMI_LLM_BASE_URL" not in env
+        assert "SEEKTALENT_DOMI_LLM_CHANNEL" not in env
     assert launch_calls[0][0][0] == "seektalent-ui-api"
     assert launch_calls[0][1]["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
     assert launch_calls[0][1]["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"

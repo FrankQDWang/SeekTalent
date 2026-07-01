@@ -1796,20 +1796,21 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
         )
         return False
 
-    first = _run_workbench_liepin_preflight_actions(env=env)
+    opencli_env = _workbench_opencli_env(env)
+    first = _run_workbench_liepin_preflight_actions(env=opencli_env)
     if _workbench_action_ok(first):
         return True
 
     reason = _workbench_action_reason(first)
     if reason in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
-        if not _restart_workbench_opencli_daemon(runtime, env=env):
+        if not _restart_workbench_opencli_daemon(runtime, env=opencli_env):
             _print_workbench_reason(
                 reason,
                 _workbench_reason_message(reason),
                 action=_workbench_action_name(first),
             )
             return False
-        second = _run_workbench_liepin_preflight_actions(env=env)
+        second = _run_workbench_liepin_preflight_actions(env=opencli_env)
         if _workbench_action_ok(second):
             return True
         reason = _workbench_action_reason(second)
@@ -1819,6 +1820,17 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
 
     _print_workbench_reason(reason, _workbench_reason_message(reason), action=failing_action)
     return False
+
+
+def _workbench_opencli_env(env: Mapping[str, str]) -> dict[str, str]:
+    preflight_env = dict(env)
+    for key in (
+        "SEEKTALENT_DOMI_JWT",
+        "SEEKTALENT_DOMI_LLM_BASE_URL",
+        "SEEKTALENT_DOMI_LLM_CHANNEL",
+    ):
+        preflight_env.pop(key, None)
+    return preflight_env
 
 
 def _run_workbench_liepin_preflight_actions(
