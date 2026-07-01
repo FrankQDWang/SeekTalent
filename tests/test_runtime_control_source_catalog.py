@@ -17,6 +17,11 @@ def test_default_runtime_source_policy_uses_liepin_with_explicit_cts_override(tm
     assert resolver.resolve_source_ids(["liepin", "cts"]) == ("liepin", "cts")
 
 
+def test_settings_factory_keeps_liepin_provider_default_for_mock_cts_fixture() -> None:
+    assert make_settings(mock_cts=True).provider_name == "liepin"
+    assert make_settings(mock_cts=True, provider_name="cts").provider_name == "cts"
+
+
 def test_runtime_source_policy_rejects_explicit_empty_source_ids(tmp_path) -> None:
     resolver = RuntimeSourcePolicyResolver(build_default_source_registry(make_settings(workspace_root=str(tmp_path))))
 

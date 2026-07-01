@@ -13,7 +13,7 @@ class _Provider:
 
 
 def test_workflow_runtime_exposes_explicit_runtime_services_bundle(tmp_path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
 
     runtime = WorkflowRuntime(settings)
 
@@ -27,7 +27,7 @@ def test_workflow_runtime_exposes_explicit_runtime_services_bundle(tmp_path) -> 
 
 
 def test_retrieval_service_assignment_keeps_services_bundle_consistent(tmp_path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     runtime = WorkflowRuntime(settings)
     replacement = RetrievalService(provider=_Provider())
 
@@ -38,7 +38,7 @@ def test_retrieval_service_assignment_keeps_services_bundle_consistent(tmp_path)
 
 
 def test_retrieval_service_assignment_preserves_legacy_providerless_fakes(tmp_path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     runtime = WorkflowRuntime(settings)
     original_provider = runtime.provider
     fake_retrieval_service = cast(Any, object())

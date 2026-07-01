@@ -113,7 +113,7 @@ def _settings(tmp_path: Path) -> AppSettings:
         corpus_path=tmp_path / "corpus",
         flywheel_path=tmp_path / "flywheel.sqlite3",
         workbench_db_path=tmp_path / "workbench.sqlite3",
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         text_llm_provider="deepseek",
         provider_api_key="test-key",
     )

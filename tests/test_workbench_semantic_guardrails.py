@@ -21,7 +21,7 @@ def _user(store: WorkbenchStore) -> WorkbenchUser:
 
 
 def _client(tmp_path: Path) -> TestClient:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     return TestClient(
         create_app(settings=settings),
         base_url="http://localhost",

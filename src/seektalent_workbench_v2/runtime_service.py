@@ -677,7 +677,7 @@ def _candidate_match(
         match_payload,
         "summary",
     ) or _clean_text(identity.summary)
-    payload = {
+    payload: dict[str, object] = {
         "summary": summary,
         "strengths": _list_texts_from_mapping(match_payload, "strengths"),
         "weaknesses": _list_texts_from_mapping(match_payload, "weaknesses"),
@@ -807,7 +807,7 @@ def _payload_value_present(value: object) -> bool:
 
 def _candidate_job_intention(evidence: Sequence[RuntimeControlCandidateEvidence]) -> dict[str, object] | None:
     intention = _mapping_value(_candidate_wts_detail(evidence).get("jobIntention"))
-    payload = {
+    payload: dict[str, object] = {
         key: text
         for key in ("expectedRole", "expectedIndustry", "expectedCity", "expectedSalary")
         if (text := _text_from_mapping(intention, key)) is not None
@@ -818,7 +818,7 @@ def _candidate_job_intention(evidence: Sequence[RuntimeControlCandidateEvidence]
 def _candidate_timeline(evidence: Sequence[RuntimeControlCandidateEvidence], key: str) -> list[dict[str, object]]:
     entries: list[dict[str, object]] = []
     for item in _mapping_sequence(_candidate_wts_detail(evidence).get(key)):
-        entry = {
+        entry: dict[str, object | None] = {
             "dateRange": _text_from_mapping(item, "dateRange") or _text_from_mapping(item, "duration"),
             "title": _text_from_mapping(item, "title"),
             "company": _text_from_mapping(item, "company"),
@@ -829,9 +829,9 @@ def _candidate_timeline(evidence: Sequence[RuntimeControlCandidateEvidence], key
             "role": _text_from_mapping(item, "role"),
             "description": _text_from_mapping(item, "description") or _text_from_mapping(item, "summary"),
         }
-        entry = {field: text for field, text in entry.items() if text is not None}
-        if entry:
-            entries.append(entry)
+        clean_entry: dict[str, object] = {field: text for field, text in entry.items() if text is not None}
+        if clean_entry:
+            entries.append(clean_entry)
     return entries
 
 

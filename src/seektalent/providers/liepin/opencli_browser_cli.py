@@ -14,6 +14,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
+    OpenCliWindowMode,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
     LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
@@ -219,12 +220,14 @@ def _env_bool(value: str | None, *, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _env_window_mode(value: str | None) -> str:
+def _env_window_mode(value: str | None) -> OpenCliWindowMode:
     if value is None or value == "":
         return "background"
     normalized = value.strip().lower()
-    if normalized in {"foreground", "background"}:
-        return normalized
+    if normalized == "foreground":
+        return "foreground"
+    if normalized == "background":
+        return "background"
     raise SystemExit("SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE must be foreground or background")
 
 

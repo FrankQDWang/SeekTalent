@@ -36,7 +36,7 @@ def test_runtime_composition_contract_is_source_agnostic() -> None:
 
 def test_source_adapter_composition_builds_explicit_runtime_dependencies() -> None:
     composition_module = importlib.import_module("seektalent.source_adapters.runtime_composition")
-    settings = make_settings(mock_cts=True)
+    settings = make_settings(mock_cts=True, provider_name="cts")
 
     composition = composition_module.build_runtime_composition(settings)
 

@@ -70,7 +70,7 @@ def _user_and_session(tmp_path: Path, *, notes: str = "Prefer retrieval experien
 
 
 def _settings(tmp_path: Path):
-    return make_settings(workspace_root=str(tmp_path), mock_cts=True, text_llm_api_key="test-key")
+    return make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts", text_llm_api_key="test-key")
 
 
 def test_context_keeps_latest_15_previous_notes(tmp_path: Path) -> None:

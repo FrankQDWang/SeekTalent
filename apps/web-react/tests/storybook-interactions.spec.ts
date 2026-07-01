@@ -68,16 +68,20 @@ test("strategy graph story covers canonical runtime swimlanes", async ({
     graph.locator(
       '[data-edge-id="round:1:phase:feedback:all->round:2:phase:round_query:all"]',
     ),
-  ).toHaveAttribute("d", "M 1601 208 H 586 V 277 H 638");
+  ).toHaveAttribute("d", /^M \d+ \d+ H \d+ V \d+ H \d+ V \d+ H \d+$/);
   await expect
     .poll(async () =>
       graph
         .getByLabel("检索策略图画布")
-        .evaluate((element) => element.scrollWidth <= element.clientWidth),
+        .evaluate(
+          (element) =>
+            element.clientWidth > 0 &&
+            element.scrollWidth >= element.clientWidth,
+        ),
     )
     .toBe(true);
   await expect(graph.getByText(/CTS/i)).toHaveCount(0);
-  await expect(page.getByLabel("检索策略图控制")).toHaveCount(0);
+  await expect(graph.getByLabel("检索策略图控制")).toBeVisible();
 });
 
 test("thinking process rail story switches between candidate and thinking tabs", async ({

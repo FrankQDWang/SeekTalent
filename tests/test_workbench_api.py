@@ -296,7 +296,7 @@ def _client(
 ) -> TestClient:
     settings = make_settings(
         workspace_root=str(tmp_path),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         **(settings_overrides or {}),
     )
     return TestClient(

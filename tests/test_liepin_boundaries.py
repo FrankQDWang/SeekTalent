@@ -227,7 +227,7 @@ def test_ui_api_translates_store_and_worker_dtos_through_external_models_only(tm
         liepin_session_store_key_id="unit-key-id",
         liepin_stream_token_secret="unit-stream-secret",
         workspace_root=str(tmp_path),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     app = create_app(settings=settings)
     client = TestClient(app)
@@ -284,7 +284,7 @@ def test_liepin_api_is_fastapi_uvicorn_and_not_legacy_stdlib_routes(tmp_path):
         liepin_session_store_key_id="unit-key-id",
         liepin_stream_token_secret="unit-stream-secret",
         workspace_root=str(tmp_path),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     app = create_app(settings=settings)
 
@@ -330,7 +330,7 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
         liepin_session_store_key_id="unit-key-id",
         liepin_stream_token_secret="unit-stream-secret",
         workspace_root=str(tmp_path),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     client = TestClient(create_app(settings=settings))
     router_source = inspect.getsource(create_liepin_router)

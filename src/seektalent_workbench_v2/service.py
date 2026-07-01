@@ -5,7 +5,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 from uuid import uuid4
 
 from anyio import to_thread
@@ -1938,7 +1938,7 @@ def _runtime_result_fact_values(value: object) -> list[str]:
     for fact in value:
         if not isinstance(fact, Mapping):
             continue
-        fact_value = fact.get("value")
+        fact_value = cast(Mapping[str, object], fact).get("value")
         if not isinstance(fact_value, str):
             continue
         stripped = fact_value.strip().rstrip("。")

@@ -153,7 +153,7 @@ class DualQueryCTS:
 def _runtime(tmp_path: Path, retrieval_service) -> WorkflowRuntime:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         search_max_pages_per_round=3,
         search_max_attempts_per_round=3,
         search_no_progress_limit=2,

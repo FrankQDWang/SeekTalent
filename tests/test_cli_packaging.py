@@ -110,7 +110,7 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
             "from seektalent.config import AppSettings\n"
             "from seektalent_ui.server import create_app\n"
             "settings = AppSettings(_env_file=None, runtime_mode='prod', workspace_root=str(Path.cwd()), "
-            "mock_cts=True, text_llm_api_key='test-key', cts_tenant_key='cts-key', cts_tenant_secret='cts-secret', "
+            "mock_cts=True, provider_name='cts', text_llm_api_key='test-key', cts_tenant_key='cts-key', cts_tenant_secret='cts-secret', "
             "liepin_api_token='unit-api-token', liepin_account_binding_secret='unit-account-secret', "
             "liepin_stream_token_secret='unit-stream-secret')\n"
             "response = TestClient(create_app(settings=settings, serve_frontend=True)).get('/')\n"

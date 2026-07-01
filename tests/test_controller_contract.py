@@ -426,7 +426,7 @@ def test_controller_decision_rejects_unknown_filter_fields() -> None:
 
 
 def test_runtime_requires_response_to_reflection_after_previous_round() -> None:
-    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True)
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state_with_previous_reflection()
     decision = SearchControllerDecision(
@@ -442,7 +442,7 @@ def test_runtime_requires_response_to_reflection_after_previous_round() -> None:
 
 
 def test_runtime_accepts_reflection_backed_inactive_term_in_controller_sanitizer() -> None:
-    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True)
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state_with_previous_reflection()
     run_state.retrieval_state.query_term_pool = [
@@ -1019,7 +1019,7 @@ def test_controller_aggregates_provider_usage_across_repair_and_full_retry(monke
 
 
 def test_runtime_sanitizes_premature_max_round_claims_in_stop_decision() -> None:
-    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, max_rounds=5)
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts", max_rounds=5)
     runtime = WorkflowRuntime(settings)
     run_state = _run_state_with_previous_reflection()
     decision = StopControllerDecision(
@@ -1040,7 +1040,7 @@ def test_runtime_sanitizes_premature_max_round_claims_in_stop_decision() -> None
 
 
 def test_runtime_preserves_max_round_claims_on_final_allowed_round() -> None:
-    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, max_rounds=5)
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts", max_rounds=5)
     runtime = WorkflowRuntime(settings)
     run_state = _run_state_with_previous_reflection()
     decision = StopControllerDecision(

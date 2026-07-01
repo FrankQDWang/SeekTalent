@@ -328,6 +328,26 @@ def test_agents_sdk_registers_workbench_action_tools_without_network() -> None:
         assert tool.params_json_schema["additionalProperties"] is False
 
 
+def test_agents_sdk_builds_domi_workbench_agent_with_channel_query_without_network() -> None:
+    config = resolve_stage_model_config(
+        make_settings(
+            text_llm_provider_label="domi",
+            domi_jwt="domi-test-jwt",
+            domi_llm_base_url="https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1/",
+            domi_llm_channel="seek_talent",
+        ),
+        stage="workbench_conversation",
+    )
+
+    agent = _build_agent(config)
+    client = agent.model._client
+
+    assert str(client.base_url) == "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1/"
+    assert client.api_key == "domi-test-jwt"
+    assert client.default_query == {"channel": "seek_talent"}
+    assert agent.model_settings.extra_body == {"enable_thinking": True, "reasoning_effort": "max"}
+
+
 def test_run_turn_retries_once_after_agents_sdk_model_behavior_error() -> None:
     runner = SequencedRunner(
         ModelBehaviorError("invalid structured output"),

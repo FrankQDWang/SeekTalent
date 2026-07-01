@@ -54,7 +54,7 @@ def test_cts_candidate_mapper_isolates_mutable_fields() -> None:
 
 
 def test_cts_provider_adapter_searches_summary_results() -> None:
-    provider = CTSProviderAdapter(make_settings(mock_cts=True))
+    provider = CTSProviderAdapter(make_settings(mock_cts=True, provider_name="cts"))
     request = SearchRequest(
         query_terms=["python"],
         query_role="primary",
@@ -85,7 +85,7 @@ def test_cts_provider_adapter_searches_summary_results() -> None:
 
 
 def test_cts_provider_adapter_rejects_detail_fetch_mode() -> None:
-    provider = CTSProviderAdapter(make_settings(mock_cts=True))
+    provider = CTSProviderAdapter(make_settings(mock_cts=True, provider_name="cts"))
     request = SearchRequest(
         query_terms=["python"],
         query_role="primary",
@@ -110,7 +110,7 @@ def test_cts_provider_adapter_translates_business_errors_to_provider_errors() ->
                 message="CTS search returned business error code=10001 status='error'.",
             )
 
-    provider = CTSProviderAdapter(make_settings(mock_cts=True), client=FailingCTSClient())
+    provider = CTSProviderAdapter(make_settings(mock_cts=True, provider_name="cts"), client=FailingCTSClient())
     request = SearchRequest(
         query_terms=["python"],
         query_role="primary",
@@ -155,7 +155,7 @@ def test_cts_provider_adapter_does_not_forward_runtime_constraints_as_native_fil
                 adapter_notes=["fake search"],
             )
 
-    provider = CTSProviderAdapter(make_settings(mock_cts=True), client=FakeCTSClient())
+    provider = CTSProviderAdapter(make_settings(mock_cts=True, provider_name="cts"), client=FakeCTSClient())
     request = SearchRequest(
         query_terms=["python"],
         query_role="expansion",

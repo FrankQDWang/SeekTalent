@@ -71,7 +71,7 @@ def test_run_match_defaults_to_prod_core_contract(monkeypatch, tmp_path: Path) -
 
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
 
-    settings = make_settings(mock_cts=True, max_rounds=6, search_max_pages_per_round=3)
+    settings = make_settings(mock_cts=True, provider_name="cts", max_rounds=6, search_max_pages_per_round=3)
 
     result = run_match(
         job_title="Python Engineer",
@@ -111,7 +111,7 @@ def test_run_match_async_defaults_to_prod_core_contract(monkeypatch, tmp_path: P
             job_title="Python Engineer",
             jd="JD",
             notes="Notes",
-            settings=make_settings(mock_cts=True, max_rounds=4, search_max_pages_per_round=2),
+            settings=make_settings(mock_cts=True, provider_name="cts", max_rounds=4, search_max_pages_per_round=2),
             env_file=None,
             source_selection=SourceSelectionV1(required=("cts",)),
         )
@@ -191,7 +191,7 @@ def test_run_match_debug_keeps_legacy_artifact_contract(monkeypatch, tmp_path: P
     result = run_match_debug(
         job_title="Python Engineer",
         jd="JD",
-        settings=make_settings(mock_cts=True),
+        settings=make_settings(mock_cts=True, provider_name="cts"),
         env_file=None,
     )
 

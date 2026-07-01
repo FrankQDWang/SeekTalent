@@ -73,6 +73,14 @@ def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
     return build_source_enabled_runtime(*args, **kwargs)
 
 
+def _liepin_fixture_settings(**overrides: object):
+    return make_settings(
+        liepin_worker_mode="fake_fixture",
+        liepin_allow_fake_fixture_worker=True,
+        **overrides,
+    )
+
+
 def _cts_source_plan(runtime: WorkflowRuntime, tracer: RunTracer):
     return build_runtime_source_plan(
         source_kinds=["cts"],
@@ -144,7 +152,7 @@ def test_outputs_doc_mentions_llm_prf_artifacts() -> None:
 
 def test_run_tracer_creates_partitioned_run_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _freeze_artifact_clock(monkeypatch)
-    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True, provider_name="cts")
     tracer = RunTracer(settings.artifacts_path)
     try:
         assert "artifacts" in str(tracer.run_dir)
@@ -157,7 +165,7 @@ def test_run_tracer_creates_partitioned_run_root(tmp_path: Path, monkeypatch: py
 
 def test_run_tracer_manifest_is_marked_completed_on_close(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _freeze_artifact_clock(monkeypatch)
-    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True, provider_name="cts")
     tracer = RunTracer(settings.artifacts_path)
 
     tracer.close(status="completed")
@@ -169,7 +177,7 @@ def test_run_tracer_manifest_is_marked_completed_on_close(tmp_path: Path, monkey
 
 def test_run_tracer_partition_index_upserts_artifact_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _freeze_artifact_clock(monkeypatch)
-    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True, provider_name="cts")
     tracer = RunTracer(settings.artifacts_path)
     tracer.write_text("output.run_summary", "done")
 
@@ -193,7 +201,7 @@ def test_run_tracer_partition_index_upserts_artifact_metadata(tmp_path: Path, mo
 
 def test_run_tracer_fallback_writes_are_recorded_in_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _freeze_artifact_clock(monkeypatch)
-    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True, provider_name="cts")
     tracer = RunTracer(settings.artifacts_path)
     try:
         path = tracer.write_json("run_config.json", {"mock": True})
@@ -212,7 +220,7 @@ def test_run_tracer_fallback_writes_are_recorded_in_manifest(tmp_path: Path, mon
 
 def test_run_tracer_runtime_failure_marks_run_manifest_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _freeze_artifact_clock(monkeypatch)
-    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    settings = make_settings(artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True, provider_name="cts")
     runtime = _workflow_runtime(settings)
 
     monkeypatch.setattr(runtime, "_write_run_preamble", lambda **kwargs: None)
@@ -237,7 +245,7 @@ def test_corpus_finalization_failure_does_not_mask_existing_runtime_failure(
     settings = make_settings(
         artifacts_dir=str(tmp_path / "artifacts"),
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     runtime = _workflow_runtime(settings)
     monkeypatch.setattr(
@@ -277,7 +285,7 @@ def test_real_scorer_success_path_writes_scoring_calls_to_migrated_round_layout(
         runs_dir=str(tmp_path / "runs"),
         artifacts_dir=str(tmp_path / "artifacts"),
         llm_cache_dir=str(tmp_path / "cache"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     scorer = ResumeScorer(
         settings,
@@ -449,7 +457,7 @@ def _build_audit_fixture(
 
 
 def test_runtime_diagnostics_direct_helpers_match_legacy_outputs() -> None:
-    runtime = _workflow_runtime(make_settings())
+    runtime = _workflow_runtime(_liepin_fixture_settings())
     run_state = _build_run_state_fixture()
     round_state = run_state.round_history[0]
     controller_context = build_controller_context(
@@ -488,7 +496,7 @@ def test_runtime_diagnostics_direct_helpers_match_legacy_outputs() -> None:
 
 
 def test_runtime_diagnostics_builder_matches_legacy_search_diagnostics() -> None:
-    runtime = _workflow_runtime(make_settings(mock_cts=True, min_rounds=1, max_rounds=1))
+    runtime = _workflow_runtime(make_settings(mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=1))
     artifacts, run_state, final_result, terminal_controller_round = _build_audit_fixture(runtime)
     round_state = run_state.round_history[0]
 
@@ -536,7 +544,7 @@ def test_runtime_diagnostics_builder_matches_legacy_search_diagnostics() -> None
 
 
 def test_run_config_excludes_company_discovery_settings(tmp_path: Path) -> None:
-    settings = make_settings(
+    settings = _liepin_fixture_settings(
         runs_dir=str(tmp_path / "runs"),
         bocha_api_key="bocha-secret",
         candidate_feedback_enabled=True,
@@ -565,7 +573,7 @@ def test_run_config_excludes_company_discovery_settings(tmp_path: Path) -> None:
 
 
 def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None:
-    settings = make_settings(
+    settings = _liepin_fixture_settings(
         runs_dir=str(tmp_path / "runs"),
         requirements_enable_thinking=False,
         controller_enable_thinking=False,
@@ -594,7 +602,7 @@ def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None
 
 
 def test_run_config_records_llm_prf_mainline_settings(tmp_path: Path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"))
+    settings = _liepin_fixture_settings(runs_dir=str(tmp_path / "runs"))
     runtime = _workflow_runtime(settings)
 
     run_config = runtime._build_public_run_config()
@@ -710,7 +718,7 @@ def test_provider_usage_from_result_returns_none_without_usage_method() -> None:
 def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     runtime = _workflow_runtime(settings)
 
@@ -768,7 +776,7 @@ def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(t
 
 
 def test_llm_schema_pressure_includes_cache_repair_and_full_retry() -> None:
-    runtime = _workflow_runtime(make_settings(runs_dir="/tmp/seek-runs"))
+    runtime = _workflow_runtime(_liepin_fixture_settings(runs_dir="/tmp/seek-runs"))
 
     pressure_item = runtime._llm_schema_pressure_item(
         {
@@ -903,7 +911,7 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
         captured_extra_specs = extra_stage_names
 
     monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
-    settings = make_settings(
+    settings = _liepin_fixture_settings(
         candidate_feedback_enabled=True,
         candidate_feedback_model_id="qwen-feedback",
     )
@@ -923,7 +931,7 @@ def test_runtime_preflight_defers_llm_prf_stage_until_prf_is_eligible(monkeypatc
         captured_extra_specs = extra_stage_names
 
     monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
-    runtime = _workflow_runtime(make_settings(candidate_feedback_enabled=False))
+    runtime = _workflow_runtime(_liepin_fixture_settings(candidate_feedback_enabled=False))
 
     runtime._require_live_llm_config()
 
@@ -1504,7 +1512,7 @@ def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resu
 def test_execute_search_tool_refills_after_batch_dedup(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         search_max_pages_per_round=3,
         search_max_attempts_per_round=3,
         search_no_progress_limit=2,
@@ -1548,7 +1556,7 @@ def test_execute_search_tool_refills_after_batch_dedup(tmp_path: Path) -> None:
 
 
 def test_workflow_runtime_execute_search_tool_delegates_to_retrieval_runtime(tmp_path: Path) -> None:
-    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
     tracer = RunTracer(tmp_path / "trace-runs")
     query = CTSQuery(
         query_terms=["python", "retrieval"],
@@ -1620,7 +1628,7 @@ def test_workflow_runtime_execute_search_tool_delegates_to_retrieval_runtime(tmp
 def test_round_search_flushes_provider_returns_before_query_outcome_scoring_failure(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         search_max_pages_per_round=1,
         search_max_attempts_per_round=1,
     )
@@ -1728,7 +1736,7 @@ def test_provider_request_identity_hashes_shared_provider_request_id_with_payloa
 
 
 def test_query_resume_hits_are_enriched_after_scoring(tmp_path: Path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
     runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
     tracer = RunTracer(tmp_path / "trace")
@@ -1775,7 +1783,7 @@ def test_corpus_records_provider_returns_when_eval_disabled(
         artifacts_dir=str(tmp_path / "artifacts"),
         runs_dir=str(tmp_path / "runs"),
         corpus_db_path=str(tmp_path / ".seektalent" / "corpus.sqlite3"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         enable_eval=False,
         min_rounds=1,
         max_rounds=1,
@@ -1809,7 +1817,7 @@ def test_runtime_populates_flywheel_run_query_and_hit_rows(
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,
@@ -1870,7 +1878,7 @@ def test_runtime_does_not_create_flywheel_outputs_in_prod(
         artifacts_dir=str(tmp_path / "artifacts"),
         runs_dir=str(tmp_path / "runs"),
         runtime_mode="prod",
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,
@@ -1887,7 +1895,7 @@ def test_runtime_does_not_create_flywheel_outputs_in_prod(
 
 
 def test_replay_snapshot_contains_provider_snapshot_and_versions(tmp_path: Path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, min_rounds=1, max_rounds=2)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
     runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SearchTwiceController(), resume_scorer=StubScorer())
     tracer = RunTracer(tmp_path / "trace")
@@ -1922,7 +1930,7 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=True,
@@ -2242,7 +2250,7 @@ def test_runtime_delegates_post_finalize_shell(tmp_path: Path, monkeypatch) -> N
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=True,
@@ -2297,7 +2305,7 @@ def test_runtime_emits_tui_progress_events(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,
@@ -2345,7 +2353,7 @@ def test_runtime_round_payload_includes_resume_quality_comment(tmp_path: Path, m
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,
@@ -2386,7 +2394,7 @@ def test_runtime_tui_summary_artifacts_exclude_company_discovery_prompts(tmp_pat
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,
@@ -2426,7 +2434,7 @@ def test_runtime_resume_quality_comment_failure_does_not_block_reflection(tmp_pa
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,
@@ -2462,7 +2470,7 @@ def test_runtime_writes_repair_call_artifacts(tmp_path: Path, monkeypatch) -> No
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,
@@ -2494,7 +2502,7 @@ def test_runtime_audit_records_terminal_controller_round(tmp_path: Path, monkeyp
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=2,
         enable_eval=True,
@@ -2537,7 +2545,7 @@ def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_pa
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=2,
         max_rounds=2,
         enable_eval=False,
@@ -2588,7 +2596,7 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,
@@ -2675,7 +2683,7 @@ def test_runtime_skips_eval_artifacts_when_eval_is_disabled(tmp_path: Path, monk
 def test_requirements_failure_snapshot_records_provider_usage(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     provider_usage = _provider_usage_snapshot()
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), artifacts_dir=str(tmp_path / "artifacts"), mock_cts=True, provider_name="cts")
     runtime = _workflow_runtime(settings)
 
     class FailingRequirementExtractor:
@@ -2706,7 +2714,7 @@ def test_controller_failure_snapshot_records_provider_usage(tmp_path: Path, monk
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         artifacts_dir=str(tmp_path / "artifacts"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
     )
@@ -2743,7 +2751,7 @@ def test_controller_timeout_snapshot_records_failed_call(tmp_path: Path, monkeyp
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         artifacts_dir=str(tmp_path / "artifacts"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         controller_timeout_seconds=0.01,
@@ -2778,7 +2786,7 @@ def test_reflection_failure_snapshot_records_provider_usage(tmp_path: Path, monk
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         artifacts_dir=str(tmp_path / "artifacts"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
     )
@@ -2815,7 +2823,7 @@ def test_runtime_fails_fast_when_provider_credentials_are_missing(tmp_path: Path
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         artifacts_dir=str(tmp_path / "artifacts"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
     )
@@ -2844,7 +2852,7 @@ def test_runtime_aborts_when_scoring_has_a_final_failure(tmp_path: Path, monkeyp
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         artifacts_dir=str(tmp_path / "artifacts"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
     )

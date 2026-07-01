@@ -673,7 +673,7 @@ export function optimisticRequirementActionEvents({
   if (payload.action !== "confirm" && payload.action !== "add_other") {
     return [];
   }
-  const text = String(payload.text ?? "").trim();
+  const text = typeof payload.text === "string" ? payload.text.trim() : "";
   if (text.length === 0) {
     return [];
   }

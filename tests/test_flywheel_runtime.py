@@ -229,7 +229,7 @@ def test_runtime_registers_prf_artifact_refs_before_rejected_term_events(tmp_pat
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         flywheel_path=str(tmp_path / "flywheel.sqlite3"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     runtime = WorkflowRuntime(settings)
     tracer = RunTracer(settings.runs_path)

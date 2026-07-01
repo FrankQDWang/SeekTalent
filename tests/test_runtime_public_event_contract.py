@@ -29,7 +29,7 @@ def _workflow_runtime(*args, **kwargs) -> WorkflowRuntime:
 def test_cts_only_rounds_emit_canonical_runtime_public_events(tmp_path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
     )
@@ -84,6 +84,8 @@ def test_runtime_feedback_public_event_includes_liepin_executed_queries(tmp_path
 
 
 def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_unavailable() -> None:
+    from seektalent.source_adapters import public_source_reason_code
+
     event = make_runtime_public_event(
         runtime_run_id="run-1",
         stage="source_result",
@@ -91,13 +93,15 @@ def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_una
         round_no=1,
         source_kind="liepin",
         status="blocked",
-        safe_reason_code="liepin_opencli_stale_ref",
+        safe_reason_code=public_source_reason_code("liepin_opencli_stale_ref"),
     )
 
     assert event["safeReasonCode"] == "source_browser_backend_unavailable"
 
 
 def test_source_result_public_event_maps_liepin_extension_disconnected() -> None:
+    from seektalent.source_adapters import public_source_reason_code
+
     event = make_runtime_public_event(
         runtime_run_id="run-1",
         stage="source_result",
@@ -105,7 +109,9 @@ def test_source_result_public_event_maps_liepin_extension_disconnected() -> None
         round_no=1,
         source_kind="liepin",
         status="blocked",
-        safe_reason_code="liepin_opencli_extension_disconnected",
+        safe_reason_code=public_source_reason_code(
+            "liepin_opencli_extension_disconnected"
+        ),
     )
 
     assert event["safeReasonCode"] == "source_browser_extension_disconnected"
@@ -115,7 +121,7 @@ def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pyt
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,

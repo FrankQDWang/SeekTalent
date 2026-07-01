@@ -27,7 +27,7 @@ def _client(tmp_path: Path) -> TestClient:
         liepin_api_token="unit-api-token",
         liepin_connector_db_path=str(tmp_path / "liepin.sqlite3"),
         workspace_root=str(tmp_path),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     return TestClient(create_app(settings=settings))
 
@@ -45,7 +45,7 @@ def test_legacy_runs_routes_are_removed_from_liepin_scoped_api(tmp_path: Path) -
 
 @pytest.mark.parametrize("overrides", [{"runtime_mode": "prod"}, {"liepin_live_enabled": True}])
 def test_liepin_api_rejects_default_control_plane_secrets(tmp_path: Path, overrides: dict[str, object]) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, **overrides)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts", **overrides)
 
     with pytest.raises(ValueError, match="Liepin control-plane secrets"):
         create_app(settings=settings)

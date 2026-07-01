@@ -209,7 +209,7 @@ def test_dev_mode_status_uses_configured_opencli_env(monkeypatch: pytest.MonkeyP
 
 
 def test_dev_server_startup_does_not_bootstrap_project_browser_config(tmp_path: Path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
 
     create_app(settings=settings)
 
@@ -217,7 +217,7 @@ def test_dev_server_startup_does_not_bootstrap_project_browser_config(tmp_path: 
 
 
 def test_dev_server_startup_keeps_disabled_liepin_mode_explicit(tmp_path: Path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, liepin_worker_mode="disabled")
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts", liepin_worker_mode="disabled")
 
     app = create_app(settings=settings)
 

@@ -29,9 +29,8 @@ export function TranscriptV2({
     () => [...events].sort((left, right) => left.step - right.step),
     [events],
   );
-  const requirementFormRenderState = requirementFormRenderStateFor(
-    orderedEvents,
-  );
+  const requirementFormRenderState =
+    requirementFormRenderStateFor(orderedEvents);
   const latestAutoScrollEventId =
     latestAutoScrollEvent(orderedEvents)?.eventId ?? null;
 
@@ -80,9 +79,7 @@ export function TranscriptV2({
           requirementFormRenderState={requirementFormRenderState}
           key={event.eventId}
           onRequirementAction={onRequirementAction}
-          onRequirementSupplementTextChange={
-            onRequirementSupplementTextChange
-          }
+          onRequirementSupplementTextChange={onRequirementSupplementTextChange}
           requirementActionPending={requirementActionPending}
           requirementSupplementText={requirementSupplementText}
         />

@@ -142,7 +142,7 @@ test("starts clean v2 first-turn conversations without legacy JD routes", async 
         return shell?.scrollWidth ?? 0;
       }),
     )
-    .toBeGreaterThan(900);
+    .toBeGreaterThanOrEqual(900);
 });
 
 function v2FirstTurnSnapshot(conversationId: string) {

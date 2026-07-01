@@ -45,16 +45,19 @@ test.beforeEach(async ({ page }) => {
     window.EventSource = FakeEventSource as unknown as typeof EventSource;
   });
 
-  await page.route("**/api/agent/workbench/conversations", async (route) => {
-    await route.fulfill({
-      contentType: "application/json",
-      json: {
-        conversations: [conversationSnapshot.conversation],
-      },
-    });
-  });
   await page.route(
-    "**/api/agent/workbench/conversations/agent_conv_1",
+    (url) => url.pathname === "/api/agent/workbench/conversations",
+    async (route) => {
+      await route.fulfill({
+        contentType: "application/json",
+        json: {
+          conversations: [conversationSnapshot.conversation],
+        },
+      });
+    },
+  );
+  await page.route(
+    (url) => url.pathname === "/api/agent/workbench/conversations/agent_conv_1",
     async (route) => {
       await route.fulfill({
         contentType: "application/json",
@@ -63,7 +66,20 @@ test.beforeEach(async ({ page }) => {
     },
   );
   await page.route(
-    "**/api/agent/workbench/conversations/agent_conv_1/candidates/candidate_001/detail",
+    (url) =>
+      url.pathname ===
+      "/api/agent/workbench/conversations/agent_conv_1/candidates/candidate_001/detail",
+    async (route) => {
+      await route.fulfill({
+        contentType: "application/json",
+        json: candidateDetailSnapshot,
+      });
+    },
+  );
+  await page.route(
+    (url) =>
+      url.pathname ===
+      "/api/agent/workbench/v2/conversations/agent_conv_1/candidates/candidate_001/detail",
     async (route) => {
       await route.fulfill({
         contentType: "application/json",
@@ -730,13 +746,13 @@ const candidateDetailSnapshot = {
   headline: "平台工程负责人 / 上海 / Python + RAG",
   matchScore: 92,
   reasonCode: null,
-  sections: [
+  sections: [],
+  workExperience: [
     {
-      title: "工作经历",
-      items: [
-        "某 AI Infra 公司平台工程负责人，负责工具调用平台和权限边界。",
-        "主导 RAG 检索链路重构，覆盖召回、排序、评测和灰度发布。",
-      ],
+      company: "某 AI Infra 公司",
+      dateRange: "2022.01-至今",
+      description: "最近一段经历覆盖 Agent 工具调用平台。",
+      title: "平台工程负责人",
     },
   ],
   sourceKinds: ["liepin"],

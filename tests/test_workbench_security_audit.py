@@ -12,7 +12,7 @@ from tests.settings_factory import make_settings
 
 
 def _app(tmp_path: Path, **settings_overrides):
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, **settings_overrides)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts", **settings_overrides)
     return create_app(settings=settings)
 
 

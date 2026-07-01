@@ -459,7 +459,7 @@ def test_runtime_does_not_eagerly_load_candidate_feedback_prompt(monkeypatch: py
 
     monkeypatch.setattr("seektalent.runtime.orchestrator.PromptRegistry.load_many", fake_load_many)
 
-    WorkflowRuntime(make_settings(mock_cts=True))
+    WorkflowRuntime(make_settings(mock_cts=True, provider_name="cts"))
 
     assert "candidate_feedback" not in captured["names"]
 

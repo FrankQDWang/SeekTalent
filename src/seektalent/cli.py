@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import subprocess
@@ -1786,10 +1787,11 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
         return False
 
     try:
-        from seektalent.opencli_launcher import BootstrapError, ensure_opencli_runtime
-
-        runtime = ensure_opencli_runtime()
-    except BootstrapError as exc:
+        launcher = importlib.import_module("seektalent.opencli_launcher")
+        runtime = launcher.ensure_opencli_runtime()
+    except Exception as exc:
+        if exc.__class__.__name__ != "BootstrapError":
+            raise
         _print_workbench_reason(
             "liepin_opencli_bootstrap_failed",
             f"Managed OpenCLI/Node bootstrap failed: {exc}",
@@ -1910,7 +1912,11 @@ def _restart_workbench_opencli_daemon(runtime: object, *, env: Mapping[str, str]
 
 
 def _wait_for_workbench_opencli_status(*, env: Mapping[str, str]) -> dict[str, object]:
-    last = {"ok": False, "action": "status", "safeReasonCode": "liepin_opencli_status_unavailable"}
+    last: dict[str, object] = {
+        "ok": False,
+        "action": "status",
+        "safeReasonCode": "liepin_opencli_status_unavailable",
+    }
     for _attempt in range(_WORKBENCH_OPENCLI_STATUS_ATTEMPTS):
         last = _run_workbench_liepin_action("status", env=env)
         if _workbench_action_ok(last):

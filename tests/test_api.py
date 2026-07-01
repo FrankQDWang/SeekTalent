@@ -85,7 +85,7 @@ def test_run_match_returns_stable_result(monkeypatch, tmp_path: Path) -> None:
         job_title="Python Engineer",
         jd="JD",
         notes="Notes",
-        settings=make_settings(mock_cts=True),
+        settings=make_settings(mock_cts=True, provider_name="cts"),
         env_file="custom.env",
     )
 
@@ -129,7 +129,7 @@ def test_run_match_passes_progress_callback(monkeypatch, tmp_path: Path) -> None
     run_match_debug(
         job_title="Python Engineer",
         jd="JD",
-        settings=make_settings(mock_cts=True),
+        settings=make_settings(mock_cts=True, provider_name="cts"),
         env_file=None,
         progress_callback=callback,
     )
@@ -157,7 +157,7 @@ def test_run_match_passes_eval_options_to_runtime(monkeypatch, tmp_path: Path) -
     run_match_debug(
         job_title="Role",
         jd="JD",
-        settings=make_settings(mock_cts=True),
+        settings=make_settings(mock_cts=True, provider_name="cts"),
         env_file=None,
         judge_limiter=limiter,
         eval_remote_logging=False,
@@ -186,7 +186,7 @@ def test_run_match_uses_explicit_workspace_root_for_artifacts_dir(monkeypatch, t
     run_match_debug(
         job_title="Python Engineer",
         jd="JD",
-        settings=make_settings(runs_dir="runs", mock_cts=True),
+        settings=make_settings(runs_dir="runs", mock_cts=True, provider_name="cts"),
         env_file=None,
         workspace_root=tmp_path,
     )
@@ -242,7 +242,7 @@ def test_run_match_defaults_notes_to_empty_string(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
-    result = run_match_debug(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True), env_file=None)
+    result = run_match_debug(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True, provider_name="cts"), env_file=None)
 
     assert isinstance(result, MatchRunResult)
     assert captured == {"job_title": "Python Engineer", "jd": "JD", "notes": ""}
@@ -274,7 +274,7 @@ def test_run_match_async_returns_stable_result(monkeypatch, tmp_path: Path) -> N
             job_title="Python Engineer",
             jd="JD",
             notes="Notes",
-            settings=make_settings(mock_cts=True),
+            settings=make_settings(mock_cts=True, provider_name="cts"),
             env_file=None,
         )
     )
@@ -310,7 +310,7 @@ def test_run_match_async_passes_progress_callback(monkeypatch, tmp_path: Path) -
         run_match_debug_async(
             job_title="Python Engineer",
             jd="JD",
-            settings=make_settings(mock_cts=True),
+            settings=make_settings(mock_cts=True, provider_name="cts"),
             env_file=None,
             progress_callback=events.append,
         )
@@ -339,7 +339,7 @@ def test_run_match_async_uses_explicit_workspace_root(monkeypatch, tmp_path: Pat
         run_match_debug_async(
             job_title="Python Engineer",
             jd="JD",
-            settings=make_settings(runs_dir="runs", mock_cts=True),
+            settings=make_settings(runs_dir="runs", mock_cts=True, provider_name="cts"),
             env_file=None,
             workspace_root=tmp_path,
         )
@@ -374,7 +374,7 @@ def test_run_match_async_defaults_notes_to_empty_string(monkeypatch, tmp_path: P
         run_match_debug_async(
             job_title="Python Engineer",
             jd="JD",
-            settings=make_settings(mock_cts=True),
+            settings=make_settings(mock_cts=True, provider_name="cts"),
             env_file=None,
         )
     )
@@ -404,12 +404,12 @@ def test_run_match_allows_missing_evaluation_result(monkeypatch, tmp_path: Path)
     monkeypatch.setattr("seektalent.api.build_source_enabled_runtime", FakeRuntime)
     monkeypatch.setattr("seektalent.api.load_process_env", lambda env_file: None)
 
-    result = run_match_debug(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True), env_file=None)
+    result = run_match_debug(job_title="Python Engineer", jd="JD", settings=make_settings(mock_cts=True, provider_name="cts"), env_file=None)
 
     assert result.evaluation_result is None
 
 
 def test_top_level_exports_are_available() -> None:
-    settings = make_settings(mock_cts=True)
+    settings = make_settings(mock_cts=True, provider_name="cts")
     assert isinstance(settings, AppSettings)
     assert settings.mock_cts is True

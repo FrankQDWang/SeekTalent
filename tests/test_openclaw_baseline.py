@@ -65,7 +65,7 @@ class FakeResponsesClient:
 def test_search_candidates_enforces_round_budget(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         search_max_pages_per_round=1,
         search_max_attempts_per_round=1,
     )
@@ -82,7 +82,7 @@ def test_search_candidates_enforces_round_budget(tmp_path: Path) -> None:
 
 
 def test_search_candidates_tracks_total_cts_calls_across_rounds(tmp_path: Path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts")
     tracer = RunTracer(settings.runs_path)
     tool = SearchCandidatesTool(settings=settings, tracer=tracer)
     tool.start_round(1)
@@ -97,7 +97,7 @@ def test_search_candidates_tracks_total_cts_calls_across_rounds(tmp_path: Path) 
 
 
 def test_run_openclaw_baseline_freezes_first_cts_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts")
     evaluation = _evaluation()
 
     async def _fake_evaluate(**kwargs):  # noqa: ANN003
@@ -189,7 +189,7 @@ def test_run_openclaw_baseline_freezes_first_cts_result(tmp_path: Path, monkeypa
 
 
 def test_run_openclaw_baseline_counts_cts_calls_as_rounds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts")
     evaluation = _evaluation()
 
     async def _fake_evaluate(**kwargs):  # noqa: ANN003
@@ -266,7 +266,7 @@ def test_run_openclaw_baseline_uses_artifacts_root_for_tracer(
     settings = make_settings(
         runs_dir=str(tmp_path / "legacy-runs"),
         artifacts_dir=str(tmp_path / "artifacts"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     evaluation = _evaluation()
 
@@ -326,7 +326,7 @@ def test_run_openclaw_baseline_uses_artifacts_root_for_tracer(
 
 
 def test_run_openclaw_baseline_caps_rounds_at_ten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True)
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts")
     evaluation = _evaluation()
 
     async def _fake_evaluate(**kwargs):  # noqa: ANN003

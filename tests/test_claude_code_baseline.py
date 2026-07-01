@@ -87,7 +87,7 @@ def test_write_router_config_uses_isolated_home_and_env_reference(tmp_path: Path
 
 
 def test_cts_mcp_enforces_ten_accepted_calls(tmp_path: Path) -> None:
-    settings = make_settings(mock_cts=True)
+    settings = make_settings(mock_cts=True, provider_name="cts")
     session = CTSToolSession(settings=settings, run_dir=tmp_path)
 
     for _ in range(CLAUDE_CODE_MAX_ROUNDS):
@@ -104,7 +104,7 @@ def test_cts_mcp_enforces_ten_accepted_calls(tmp_path: Path) -> None:
 
 
 def test_cts_mcp_freezes_first_successful_search(tmp_path: Path) -> None:
-    settings = make_settings(mock_cts=True)
+    settings = make_settings(mock_cts=True, provider_name="cts")
     session = CTSToolSession(settings=settings, run_dir=tmp_path)
 
     first = asyncio.run(session.search_candidates({"query_terms": ["python"], "page": 1, "page_size": 2}))
@@ -122,7 +122,7 @@ def test_run_claude_code_baseline_uses_isolated_home_and_counts_cts_calls(
 ) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         controller_model_id="deepseek-v4-pro",
     )
     env_file = _env_file(tmp_path)
@@ -189,7 +189,7 @@ def test_run_claude_code_baseline_fails_unseen_final_ids_with_zero_score(
 ) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
         controller_model_id="deepseek-v4-pro",
         wandb_project="seektalent",
     )

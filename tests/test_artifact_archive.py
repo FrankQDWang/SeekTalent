@@ -67,9 +67,9 @@ def test_archive_migration_fails_on_destination_collision(tmp_path: Path) -> Non
 
 def test_runtime_rejects_legacy_runs_root_as_active_output_decommissioned(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="decommissioned"):
-        make_settings(artifacts_dir=str(tmp_path / "runs"), mock_cts=True).artifacts_path
+        make_settings(artifacts_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts").artifacts_path
 
 
 def test_runtime_rejects_nested_legacy_runs_root_as_active_output_decommissioned(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="decommissioned"):
-        make_settings(artifacts_dir=str(tmp_path / "runs" / "subtree"), mock_cts=True).artifacts_path
+        make_settings(artifacts_dir=str(tmp_path / "runs" / "subtree"), mock_cts=True, provider_name="cts").artifacts_path

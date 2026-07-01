@@ -907,15 +907,17 @@ def _redact_known_secret(message: str, secret: str | None) -> str:
 
 def _redact_known_text_llm_secrets(message: str, settings: AppSettings) -> str:
     redacted = message
-    secrets = {
-        secret
-        for secret in (
-            settings.text_llm_api_key,
-            settings.domi_jwt,
-        )
-        if secret
-    }
-    for secret in sorted(secrets, key=len, reverse=True):
+    raw_secrets: tuple[str | None, ...] = (
+        settings.text_llm_api_key,
+        settings.domi_jwt,
+    )
+    secrets: set[str] = set()
+    for secret in raw_secrets:
+        if isinstance(secret, str) and secret:
+            secrets.add(secret)
+    ordered_secrets = list(secrets)
+    ordered_secrets.sort(key=lambda secret: len(secret), reverse=True)
+    for secret in ordered_secrets:
         redacted = _redact_known_secret(redacted, secret)
     return redacted
 

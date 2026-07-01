@@ -9,7 +9,7 @@ from tests.settings_factory import make_settings
 
 
 def _client(tmp_path, *, allowed_hosts: set[str]) -> TestClient:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     guard = build_network_guard(
         bind_host="0.0.0.0",
         port=8011,
@@ -74,7 +74,7 @@ def test_host_guard_rejects_unknown_hosts_for_packaged_frontend_routes(tmp_path,
     (frontend_root / "_app" / "immutable").mkdir(parents=True)
     (frontend_root / "200.html").write_text("<html>SeekTalent Workbench</html>", encoding="utf-8")
     monkeypatch.setattr("seektalent_ui.static_frontend.package_frontend_dir", lambda: frontend_root)
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     guard = build_network_guard(
         bind_host="0.0.0.0",
         port=8011,
@@ -97,7 +97,7 @@ def test_host_guard_rejects_unknown_hosts_for_packaged_frontend_routes(tmp_path,
 
 
 def test_http_lan_local_actor_can_use_workbench_when_host_allowed(tmp_path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     guard = build_network_guard(bind_host="0.0.0.0", port=8011, lan_enabled=True, allowed_hosts={"recruiting.internal"})
     app = create_app(settings=settings, network_guard=guard)
     remote_client = TestClient(
@@ -117,7 +117,7 @@ def test_http_lan_local_actor_can_use_workbench_when_host_allowed(tmp_path) -> N
 
 
 def test_origin_guard_rejects_unconfigured_origin_for_cookie_mutation(tmp_path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     guard = build_network_guard(bind_host="0.0.0.0", port=8011, lan_enabled=True, allowed_hosts={"recruiting.internal"})
     app = create_app(settings=settings, network_guard=guard)
     remote_client = TestClient(
@@ -137,7 +137,7 @@ def test_origin_guard_rejects_unconfigured_origin_for_cookie_mutation(tmp_path) 
 
 
 def test_loopback_guard_allows_default_vite_dev_origin(tmp_path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     guard = build_network_guard(bind_host="127.0.0.1", port=8011, lan_enabled=False)
     client = TestClient(
         create_app(settings=settings, network_guard=guard),
@@ -157,7 +157,7 @@ def test_loopback_guard_allows_default_vite_dev_origin(tmp_path) -> None:
 
 
 def test_allowed_origin_gets_credentialed_cors_headers(tmp_path) -> None:
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     guard = build_network_guard(
         bind_host="0.0.0.0",
         port=8011,
@@ -193,7 +193,7 @@ def test_workbench_cors_preflight_allows_write_methods_for_workbench_updates(tmp
         allowed_hosts={"recruiting.internal"},
         allowed_origins={"http://ui.internal"},
     )
-    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True)
+    settings = make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts")
     client = TestClient(
         create_app(settings=settings, network_guard=guard),
         base_url="http://recruiting.internal",

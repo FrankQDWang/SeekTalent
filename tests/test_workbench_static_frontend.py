@@ -43,7 +43,7 @@ def test_create_app_serves_packaged_frontend_shell(tmp_path: Path, monkeypatch) 
     (frontend_root / "secret.txt").write_text("do not serve through catch-all", encoding="utf-8")
     monkeypatch.setattr("seektalent_ui.static_frontend.package_frontend_dir", lambda: frontend_root)
 
-    app = create_app(settings=make_settings(workspace_root=str(tmp_path), mock_cts=True), serve_frontend=True)
+    app = create_app(settings=make_settings(workspace_root=str(tmp_path), mock_cts=True, provider_name="cts"), serve_frontend=True)
     client = TestClient(app)
 
     shell = client.get("/")

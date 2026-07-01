@@ -98,13 +98,13 @@ def _candidate(resume_id: str, source: str) -> ResumeCandidate:
 
 
 def test_liepin_filter_partial_reason_is_public_safe() -> None:
-    from seektalent.runtime.public_events import public_source_reason_code
+    from seektalent.source_adapters import public_source_reason_code
 
     assert public_source_reason_code("source_location_filter_partial") == "source_filter_partial"
     assert public_source_reason_code("source_filter_applied") == "source_filter_applied"
     assert public_source_reason_code("source_filter_unavailable") == "source_filter_unavailable"
     assert public_source_reason_code("source_browser_backend_unavailable") == "source_browser_backend_unavailable"
-    assert public_source_reason_code("liepin_opencli_filter_unapplied") is None
+    assert public_source_reason_code("liepin_opencli_filter_unapplied") == "source_filter_unavailable"
 
 
 def test_public_runtime_filter_payload_does_not_expose_browser_terms() -> None:
@@ -552,7 +552,7 @@ def test_execute_logical_dispatch_search_uses_frozen_requested_counts(tmp_path) 
         return []
 
     runtime = RetrievalRuntime(
-        settings=make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True),
+        settings=make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"),
         retrieval_service=FakeRetrievalService(),
     )
     retrieval_plan = RoundRetrievalPlan(
@@ -603,7 +603,7 @@ def test_execute_logical_dispatch_search_uses_frozen_requested_counts(tmp_path) 
 def test_round_search_result_from_source_dispatch_preserves_retrieval_metadata_without_source_branch(
     tmp_path,
 ) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
     tracer = RunTracer(tmp_path / "trace-source-dispatch-result")
     candidate = _candidate("fixture-1", "fixture_source")
     cts_query = CTSQuery(
@@ -713,7 +713,7 @@ def test_round_search_result_from_source_dispatch_preserves_retrieval_metadata_w
 
 
 def test_source_round_is_not_ready_when_selected_source_blocks_even_if_another_returns_candidates(tmp_path) -> None:
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
     candidate = _candidate("cts-1", "cts")
     dispatch_result = SourceRoundDispatchResult(
         source_results=(
@@ -1004,7 +1004,7 @@ def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> Non
             del kwargs
             raise httpx.ReadTimeout("CTS provider timed out")
 
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
     runtime.retrieval_runtime = TimeoutRetrievalRuntime()  # type: ignore[assignment]
     tracer = RunTracer(tmp_path / "trace-cts-timeout")
     request = SourceRoundDispatchRequest(
@@ -1069,7 +1069,7 @@ def test_cts_adapter_converts_business_error_to_failed_source_result(tmp_path) -
                 message="CTS search returned business error code=10001 status='error'.",
             )
 
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
     runtime.retrieval_runtime = BusinessErrorRetrievalRuntime()  # type: ignore[assignment]
     tracer = RunTracer(tmp_path / "trace-cts-business-error")
     request = SourceRoundDispatchRequest(
@@ -1121,7 +1121,7 @@ def test_liepin_backend_blocked_stays_blocked_when_cts_is_also_selected(monkeypa
         )
 
     monkeypatch.setattr("seektalent.source_adapters.run_liepin_logical_query_bundle", blocked_liepin_bundle)
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
     tracer = RunTracer(tmp_path / "trace-liepin-dual")
     request = SourceRoundDispatchRequest(
         runtime_run_id="run-1",
@@ -1172,7 +1172,7 @@ def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_sourc
         )
 
     monkeypatch.setattr("seektalent.source_adapters.run_liepin_logical_query_bundle", blocked_liepin_bundle)
-    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True))
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
     tracer = RunTracer(tmp_path / "trace-liepin-single")
     dispatches = (_dispatch("exploit", 7),)
     request = SourceRoundDispatchRequest(
@@ -1286,7 +1286,7 @@ def test_liepin_source_adapter_records_provider_snapshots_to_corpus(monkeypatch,
         runs_dir=str(tmp_path / "runs"),
         artifacts_path=str(tmp_path / "artifacts"),
         corpus_path=str(tmp_path / "corpus.sqlite3"),
-        mock_cts=True,
+        mock_cts=True, provider_name="cts",
     )
     runtime = WorkflowRuntime(settings)
     tracer = RunTracer(tmp_path / "trace-liepin-corpus")
