@@ -148,6 +148,33 @@ Build packaged Workbench assets before building release distributions:
 python scripts/build_packaged_workbench.py
 ```
 
+## Domi Runtime Smoke
+
+Use this smoke only for validating the packaged Workbench shape inside the Domi-provided runtime on a local Mac with Domi installed.
+
+Required input:
+
+```bash
+export SEEKTALENT_DOMI_JWT="<domi jwt>"
+```
+
+Run:
+
+```bash
+scripts/smoke-domi-runtime.sh
+```
+
+Defaults:
+
+- Domi Python: `/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python`
+- isolated install root: `~/.seektalent/domi-runtime`
+- Domi LLM proxy: `https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1`
+- Domi channel: `seek_talent`
+
+The smoke builds the current repository wheel, installs it into the isolated Domi runtime venv, runs `seektalent doctor`, sends a Domi LLM proxy hello request, checks OpenCLI daemon status, and starts the packaged Workbench long enough to verify `/openapi.json`.
+
+It does not read Domi Electron storage by default and does not run a complete live Liepin recruiting workflow.
+
 ## Mock CTS for development
 
 `mock CTS` is a development-only path for local testing, regression checks, and prompt/runtime work.
