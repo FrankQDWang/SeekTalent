@@ -595,6 +595,43 @@ def test_open_liepin_tab_reuses_canonical_search_marker_without_lease(tmp_path: 
     assert lease["page_id"] == "page-search-old"
 
 
+def test_open_liepin_tab_skips_stale_canonical_marker_when_reset_fails(tmp_path: Path) -> None:
+    liepin_url = "https://h.liepin.com/search/getConditionItem#session"
+    reset_error = subprocess.CalledProcessError(1, ["opencli"], stderr="status unavailable")
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-stale"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): liepin_url,
+            ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-search-stale", liepin_url): reset_error,
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): json.dumps(
+                [{"page": "page-search-live", "url": liepin_url, "active": False}]
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-live"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-search-live", liepin_url): "{}",
+        }
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+    runner._write_owned_page_marker(
+        page_id="page-search-stale",
+        url=liepin_url,
+        runtime_run_id="run-opencli-test",
+        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
+        owner_nonce="nonce-stale",
+        opened_at=9_999_999_900.0,
+    )
+
+    result = runner.open_liepin_tab(liepin_url)
+
+    assert result.ok is True
+    assert result.counts == {"reused": 1}
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) not in commands.calls
+    lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
+    assert lease["page_id"] == "page-search-live"
+    owned_pages = json.loads((tmp_path / "seektalent-liepin-owned-pages.json").read_text(encoding="utf-8"))
+    assert "page-search-stale" not in owned_pages
+    assert "page-search-live" in owned_pages
+
+
 def test_open_liepin_tab_selects_existing_search_tab_when_current_active_tab_is_workbench(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/search/getConditionItem#session"
     workbench_url = "http://127.0.0.1:8123/sessions/session_bd4363d1c367424d"
@@ -703,7 +740,6 @@ def test_open_liepin_tab_binds_new_window_before_recovering_opened_page_id(tmp_p
     commands = FakeCommands(
         outputs={
             ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
-                "[]",
                 "[]",
                 "[]",
                 json.dumps([{"id": "page-2", "url": LIEPIN_SEARCH_URL, "active": True}]),

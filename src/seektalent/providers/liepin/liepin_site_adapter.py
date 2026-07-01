@@ -109,6 +109,12 @@ _RECOVERABLE_CONNECTION_REASONS = {
     "liepin_opencli_status_unavailable",
 }
 
+_RECOVERABLE_TAB_REUSE_REASONS = {
+    "liepin_opencli_status_unavailable",
+    "liepin_opencli_window_policy_blocked",
+    "liepin_opencli_stale_ref",
+}
+
 
 class LiepinSiteAdapter:
     def __init__(
@@ -190,34 +196,40 @@ class LiepinSiteAdapter:
             if str(lease.get("url") or "") == url:
                 page_id = self._verified_owned_lease_page_id(lease)
                 if page_id is not None:
-                    self._reuse_liepin_search_page(page_id=page_id, url=url)
-                    self._touch_lease()
-                    return OpenCliBrowserResult(
-                        ok=True,
-                        action="open_liepin_tab",
-                        counts={"reused": 1},
-                    )
+                    if self._reuse_liepin_search_page(page_id=page_id, url=url):
+                        self._touch_lease()
+                        return OpenCliBrowserResult(
+                            ok=True,
+                            action="open_liepin_tab",
+                            counts={"reused": 1},
+                        )
+                    self._forget_owned_page_marker(page_id)
+                    self._delete_lease()
                 self._delete_lease()
             else:
                 self._delete_lease()
         page_id = self._select_canonical_liepin_search_page(expected_url=url)
         if page_id is not None:
-            self._reset_liepin_search_tab(page_id=page_id, url=url)
-            return OpenCliBrowserResult(
-                ok=True,
-                action="open_liepin_tab",
-                counts={"reused": 1},
-            )
-        page_id = self._select_existing_liepin_search_tab(expected_url=url)
+            if self._try_reset_liepin_search_tab(page_id=page_id, url=url):
+                return OpenCliBrowserResult(
+                    ok=True,
+                    action="open_liepin_tab",
+                    counts={"reused": 1},
+                )
+            self._forget_owned_page_marker(page_id)
+            self._delete_lease()
+        page_id, before_urls = self._select_existing_liepin_search_tab(expected_url=url)
         if page_id is not None:
             self._select_and_mark_owned_liepin_tab(page_id=page_id, url=url)
-            self._reset_liepin_search_tab(page_id=page_id, url=url)
-            return OpenCliBrowserResult(
-                ok=True,
-                action="open_liepin_tab",
-                counts={"reused": 1},
-            )
-        page_id = self._open_new_liepin_tab(url=url)
+            if self._try_reset_liepin_search_tab(page_id=page_id, url=url):
+                return OpenCliBrowserResult(
+                    ok=True,
+                    action="open_liepin_tab",
+                    counts={"reused": 1},
+                )
+            self._forget_owned_page_marker(page_id)
+            self._delete_lease()
+        page_id = self._open_new_liepin_tab(url=url, before_urls=before_urls)
         counts = {"opened": 1}
         if page_id is None:
             counts["unleased"] = 1
@@ -2007,11 +2019,12 @@ class LiepinSiteAdapter:
         self._forget_owned_page_marker(page_id)
         return None
 
-    def _select_existing_liepin_search_tab(self, *, expected_url: str) -> str | None:
+    def _select_existing_liepin_search_tab(self, *, expected_url: str) -> tuple[str | None, dict[str, str]]:
         try:
             tabs = self._list_tabs()
         except OpenCliBrowserError:
-            return None
+            return None, {}
+        before_urls = _tab_urls_by_page_id(tabs)
         candidates: list[tuple[int, str]] = []
         for tab in tabs:
             page_id = _tab_page_id(tab)
@@ -2025,23 +2038,36 @@ class LiepinSiteAdapter:
             score = 1
             candidates.append((score, page_id))
         if not candidates:
-            return None
+            return None, before_urls
         _, page_id = max(candidates, key=lambda item: item[0])
         for tab in tabs:
             if _tab_page_id(tab) == page_id and tab.get("active") is True:
-                return page_id
+                return page_id, before_urls
         try:
             self._run_browser_command("tab", ("select", page_id))
         except OpenCliBrowserError:
-            return None
-        return page_id
+            return None, before_urls
+        return page_id, before_urls
 
-    def _open_new_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str | None:
-        return self._open_opencli_managed_liepin_tab(url=url, source_run_id=source_run_id)
+    def _open_new_liepin_tab(
+        self,
+        *,
+        url: str,
+        source_run_id: str | None = None,
+        before_urls: Mapping[str, str] | None = None,
+    ) -> str | None:
+        return self._open_opencli_managed_liepin_tab(url=url, source_run_id=source_run_id, before_urls=before_urls)
 
-    def _open_opencli_managed_liepin_tab(self, *, url: str, source_run_id: str | None = None) -> str | None:
+    def _open_opencli_managed_liepin_tab(
+        self,
+        *,
+        url: str,
+        source_run_id: str | None = None,
+        before_urls: Mapping[str, str] | None = None,
+    ) -> str | None:
         self._validate_start_or_detail_url(url)
-        before_urls = self._tab_urls_before_open()
+        if before_urls is None:
+            before_urls = self._tab_urls_before_open()
         try:
             output = self._run_browser_command("tab", ("new", url))
         except OpenCliBrowserError as exc:
@@ -2051,7 +2077,6 @@ class LiepinSiteAdapter:
                 raise
             else:
                 self._run_browser_command("unbind", ())
-                before_urls = self._tab_urls_before_open()
                 output = self._run_browser_command("tab", ("new", url))
         page_id = self._parse_opened_tab_page_id(output=output, url=url, before_urls=before_urls)
         if page_id is None:
@@ -2129,17 +2154,21 @@ class LiepinSiteAdapter:
             return False
         return self._opened_tab_url_matches_requested_url(current_url, requested_url)
 
-    def _reuse_liepin_search_page(self, *, page_id: str, url: str) -> None:
+    def _reuse_liepin_search_page(self, *, page_id: str, url: str) -> bool:
         try:
             self._run_browser_command("tab", ("select", page_id))
-            self._reset_liepin_search_tab(page_id=page_id, url=url)
-            return
+            return self._try_reset_liepin_search_tab(page_id=page_id, url=url)
         except OpenCliBrowserError as exc:
-            if exc.safe_reason_code != "liepin_opencli_window_policy_blocked":
+            if exc.safe_reason_code == "liepin_opencli_window_policy_blocked":
+                self._forget_owned_page_marker(page_id)
+                self._delete_lease()
+                self._open_opencli_managed_liepin_tab(url=url, before_urls={})
+                return True
+            if exc.safe_reason_code not in _RECOVERABLE_TAB_REUSE_REASONS:
                 raise
         self._forget_owned_page_marker(page_id)
         self._delete_lease()
-        self._open_opencli_managed_liepin_tab(url=url)
+        return False
 
     def _reset_liepin_search_tab(self, *, page_id: str, url: str) -> None:
         if not _is_safe_page_id(page_id):
@@ -2147,6 +2176,15 @@ class LiepinSiteAdapter:
         self._validate_start_url(url)
         self._run_browser_command("open", ("--tab", page_id, url))
         self._touch_lease()
+
+    def _try_reset_liepin_search_tab(self, *, page_id: str, url: str) -> bool:
+        try:
+            self._reset_liepin_search_tab(page_id=page_id, url=url)
+        except OpenCliBrowserError as exc:
+            if exc.safe_reason_code not in _RECOVERABLE_TAB_REUSE_REASONS:
+                raise
+            return False
+        return True
 
     def _owned_liepin_search_page_ids(self) -> tuple[str, ...]:
         page_ids: list[str] = []
