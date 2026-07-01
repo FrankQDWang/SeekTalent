@@ -126,3 +126,33 @@ def test_build_workbench_command_env_ignores_stale_seektalent_runtime_env(
     assert env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] == "opencli"
     assert env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] == DEFAULT_LIEPIN_OPENCLI_COMMAND
     assert "SEEKTALENT_CTS_TENANT_KEY" not in env
+
+
+def test_build_workbench_command_env_passes_minimal_domi_llm_keys(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    env = build_workbench_command_env(
+        {
+            "HOME": str(home),
+            "PATH": "/usr/bin",
+            "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL": "domi",
+            "SEEKTALENT_DOMI_JWT": "domi-test-jwt",
+            "SEEKTALENT_DOMI_LLM_BASE_URL": "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1",
+            "SEEKTALENT_DOMI_LLM_CHANNEL": "seek_talent",
+            "SEEKTALENT_TEXT_LLM_API_KEY": "must-not-be-required",
+            "SEEKTALENT_CTS_TENANT_KEY": "must-not-leak",
+        }
+    )
+
+    assert env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
+    assert env["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"
+    assert env["SEEKTALENT_DOMI_LLM_BASE_URL"] == "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1"
+    assert env["SEEKTALENT_DOMI_LLM_CHANNEL"] == "seek_talent"
+    assert env["SEEKTALENT_RUNTIME_MODE"] == "prod"
+    assert env["SEEKTALENT_PROVIDER_NAME"] == "liepin"
+    assert "SEEKTALENT_CTS_TENANT_KEY" not in env

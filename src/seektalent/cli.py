@@ -51,9 +51,9 @@ from seektalent.version import __version__
 if TYPE_CHECKING:
     from seektalent.api import MatchRunResult
 
-PROVIDER_ENV_VAR_BY_PROTOCOL_FAMILY = {
-    "openai_chat_completions_compatible": "SEEKTALENT_TEXT_LLM_API_KEY",
-    "anthropic_messages_compatible": "SEEKTALENT_TEXT_LLM_API_KEY",
+PROVIDER_ENV_VAR_BY_PROVIDER_LABEL = {
+    "bailian": "SEEKTALENT_TEXT_LLM_API_KEY",
+    "domi": "SEEKTALENT_DOMI_JWT",
 }
 OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_CTS_BASE_URL",
@@ -432,9 +432,11 @@ def _emit_error(exc: Exception, *, json_output: bool) -> None:
 
 
 def _required_provider_env_vars(settings: AppSettings) -> list[str]:
+    if settings.text_llm_provider_label == "domi":
+        return [] if settings.domi_jwt else ["SEEKTALENT_DOMI_JWT"]
     if settings.text_llm_api_key:
         return []
-    env_var = PROVIDER_ENV_VAR_BY_PROTOCOL_FAMILY.get(settings.text_llm_protocol_family)
+    env_var = PROVIDER_ENV_VAR_BY_PROVIDER_LABEL.get(settings.text_llm_provider_label)
     if env_var is None:
         return []
     return [env_var]
@@ -1768,7 +1770,15 @@ def _doctor_command(args: argparse.Namespace) -> int:
 
 
 def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
-    if not str(env.get("SEEKTALENT_TEXT_LLM_API_KEY") or "").strip():
+    provider_label = str(env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL") or "bailian").strip().lower() or "bailian"
+    if provider_label == "domi":
+        if not str(env.get("SEEKTALENT_DOMI_JWT") or "").strip():
+            _print_workbench_reason(
+                "seektalent_domi_jwt_missing",
+                "SEEKTALENT_DOMI_JWT is required for Domi LLM proxy mode.",
+            )
+            return False
+    elif not str(env.get("SEEKTALENT_TEXT_LLM_API_KEY") or "").strip():
         _print_workbench_reason(
             "seektalent_text_llm_api_key_missing",
             "SEEKTALENT_TEXT_LLM_API_KEY is required. Set it in the shell or ~/.seektalent/.env.",

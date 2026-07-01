@@ -11,6 +11,10 @@ from seektalent.workbench_internal_secrets import ensure_workbench_internal_liep
 PRODUCT_USER_ENV_VARS = frozenset(
     {
         "SEEKTALENT_TEXT_LLM_API_KEY",
+        "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL",
+        "SEEKTALENT_DOMI_JWT",
+        "SEEKTALENT_DOMI_LLM_BASE_URL",
+        "SEEKTALENT_DOMI_LLM_CHANNEL",
     }
 )
 

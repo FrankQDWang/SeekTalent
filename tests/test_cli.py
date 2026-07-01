@@ -521,6 +521,76 @@ def test_workbench_command_requires_text_llm_key_before_launch(
     assert calls == []
 
 
+def test_workbench_command_requires_domi_jwt_for_domi_provider(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls = []
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL", "domi")
+    monkeypatch.delenv("SEEKTALENT_DOMI_JWT", raising=False)
+    monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
+
+    def fake_run(argv, **_kwargs):
+        calls.append(argv)
+        raise AssertionError("workbench server should not launch without SEEKTALENT_DOMI_JWT")
+
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench", "--port", "8123"]) == 1
+
+    captured = capsys.readouterr()
+    assert "reason_code=seektalent_domi_jwt_missing" in captured.err
+    assert "SEEKTALENT_DOMI_JWT" in captured.err
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" not in captured.err
+    assert calls == []
+
+
+def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL", "domi")
+    monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
+    monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
+    opencli_actions: list[str] = []
+    launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
+
+    class Runtime:
+        node = tmp_path / "node"
+        opencli_main = tmp_path / "opencli-main.js"
+        node_bin_dir = tmp_path
+
+    class Completed:
+        def __init__(self, *, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(argv, **kwargs):
+        argv_list = list(argv)
+        if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
+            action = argv_list[-1]
+            opencli_actions.append(action)
+            return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
+        launch_calls.append((argv_list, kwargs.get("env")))
+        return Completed()
+
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench", "--port", "8123"]) == 0
+
+    assert opencli_actions == ["recover_connection", "open_liepin_tab", "state"]
+    assert launch_calls[0][0][0] == "seektalent-ui-api"
+    assert launch_calls[0][1]["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
+    assert launch_calls[0][1]["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"
+
+
 def test_workbench_command_runs_opencli_preflight_before_launch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1031,6 +1101,33 @@ def test_doctor_json_success(tmp_path: Path, capsys: pytest.CaptureFixture[str])
         "remote_eval_logging",
         "local_data_roots",
     }
+
+
+def test_doctor_json_success_for_domi_provider_without_text_llm_api_key(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi",
+                "SEEKTALENT_DOMI_JWT=domi-test-jwt",
+                "SEEKTALENT_DOMI_LLM_BASE_URL=https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1",
+                "SEEKTALENT_DOMI_LLM_CHANNEL=seek_talent",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert main(["doctor", "--env-file", str(env_file), "--output-dir", str(tmp_path / "runs"), "--json"]) == 0
+
+    output = capsys.readouterr().out
+    assert "domi-test-jwt" not in output
+    payload = json.loads(output)
+    provider_check = next(item for item in payload["checks"] if item["name"] == "provider_credentials")
+    assert provider_check["ok"] is True
 
 
 def test_doctor_json_does_not_leak_provider_secrets(
