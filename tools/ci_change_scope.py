@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Iterable
 
 
-FULL_RUN_EVENTS = {"push", "merge_group", "schedule", "workflow_dispatch"}
+FULL_RUN_EVENTS = {"merge_group", "schedule", "workflow_dispatch"}
 
 PYTHON_PREFIXES = (
     ".github/workflows/",
@@ -65,6 +65,25 @@ def classify_paths(paths: Iterable[str], *, event_name: str) -> ChangeScope:
 
     if event_name in FULL_RUN_EVENTS:
         return ChangeScope(python_quality=True, workbench_contract=True, reason=f"{event_name}:full-run")
+    if event_name == "push":
+        workbench_contract = any(
+            _matches(path, prefixes=WORKBENCH_PREFIXES, files=WORKBENCH_FILES)
+            for path in normalized_paths
+        )
+        if not normalized_paths:
+            return ChangeScope(
+                python_quality=True,
+                workbench_contract=False,
+                reason="push:python-quality,no-paths",
+            )
+        reason = "push:python-quality,paths:" + ",".join(normalized_paths[:20])
+        if len(normalized_paths) > 20:
+            reason += f",+{len(normalized_paths) - 20}-more"
+        return ChangeScope(
+            python_quality=True,
+            workbench_contract=workbench_contract,
+            reason=reason,
+        )
     if not normalized_paths:
         return ChangeScope(python_quality=True, workbench_contract=True, reason="no-paths:full-run")
 

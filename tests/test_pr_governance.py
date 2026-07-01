@@ -1634,7 +1634,7 @@ def test_ci_workflows_resolve_merge_group_base_before_pull_request_base() -> Non
 
         assert (
             'for candidate in "$MERGE_GROUP_BASE_SHA" "$PULL_REQUEST_BASE_SHA" '
-            '"origin/${GITHUB_BASE_REF:-main}" "origin/main"; do'
+            '"$PUSH_BEFORE_SHA" "origin/${GITHUB_BASE_REF:-main}" "origin/main"; do'
         ) in workflow
 
 

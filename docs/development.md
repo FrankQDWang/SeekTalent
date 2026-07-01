@@ -82,15 +82,16 @@ Passing paths or test ids to `scripts/test-fast.sh` does this automatically.
 
 ## CI Workflow Shape
 
-Pull requests and `main` pushes publish the same protected status-check names:
+Direct `main` pushes use a trimmed fast-iteration CI shape:
 
 - `quality-python`
 - `workbench-contract`
-- `pr-governance`
 
-`quality-python` is an aggregate required check over separate Python architecture, Ruff, ty, pytest, and Workbench schema jobs. `workbench-contract` runs the React/BFF contract only when Workbench-relevant paths changed on a PR, while `main` and merge queue events run it conservatively. `pr-governance` runs only for PR and merge queue contexts because its checks are based on PR diffs and labels.
+`quality-python` is an aggregate check over architecture import checks, Ruff, ty, pytest, Workbench schema validation, and push-time privacy/agent-safety quick diff scans. It intentionally does not run the Tach baseline as a default hard gate; use `uv run python tools/check_tach_baseline.py` for architecture drift checks when working on source boundaries or red-zone architecture.
 
-CodeQL runs in its own workflow for Python and JavaScript/TypeScript and should be configured as a required branch-protection check in GitHub settings.
+`workbench-contract` runs only when Workbench-relevant paths changed, including on direct `main` pushes. Do not force a full Workbench contract run only because the event is `push`.
+
+`pr-governance` is advisory/manual for the direct-main workflow. Use it when you want PR-shape feedback, file-count/layer-spread review, or red-zone manifest validation; do not treat it as a required direct-push gate. CodeQL runs in its own workflow for Python and JavaScript/TypeScript and should remain non-blocking for fast direct-main iteration or run on its scheduled cadence.
 
 ## Test Typing
 

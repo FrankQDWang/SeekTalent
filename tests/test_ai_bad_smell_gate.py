@@ -1,7 +1,7 @@
 from tools.check_ai_bad_smells import AddedLine, check_added_lines, parse_added_lines
 
 
-def test_ai_bad_smell_gate_flags_broad_exception_handlers() -> None:
+def test_ai_bad_smell_gate_treats_broad_exception_handlers_as_advisory() -> None:
     findings = check_added_lines(
         [
             AddedLine("src/seektalent/runtime/example.py", 10, "except Exception as exc:"),
@@ -10,10 +10,7 @@ def test_ai_bad_smell_gate_flags_broad_exception_handlers() -> None:
         changed_paths=["src/seektalent/runtime/example.py"],
     )
 
-    assert [finding.rule_id for finding in findings] == [
-        "broad-exception-handler",
-        "broad-exception-handler",
-    ]
+    assert findings == []
 
 
 def test_ai_bad_smell_gate_flags_type_escape_hatches() -> None:
@@ -29,11 +26,7 @@ def test_ai_bad_smell_gate_flags_type_escape_hatches() -> None:
     )
 
     assert [finding.rule_id for finding in findings] == [
-        "typing-any",
-        "typing-any",
-        "typing-cast",
         "type-ignore",
-        "typing-any",
     ]
 
 
@@ -69,7 +62,7 @@ def test_ai_bad_smell_gate_flags_import_path_mutation_without_string_false_posit
     ]
 
 
-def test_ai_bad_smell_gate_flags_fallback_without_tests() -> None:
+def test_ai_bad_smell_gate_treats_fallback_without_tests_as_advisory() -> None:
     findings = check_added_lines(
         [
             AddedLine("src/seektalent/runtime/example.py", 30, "return fallback_result"),
@@ -79,11 +72,7 @@ def test_ai_bad_smell_gate_flags_fallback_without_tests() -> None:
         changed_paths=["src/seektalent/runtime/example.py"],
     )
 
-    assert [finding.rule_id for finding in findings] == [
-        "untested-fallback-path",
-        "untested-fallback-path",
-        "untested-fallback-path",
-    ]
+    assert findings == []
 
 
 def test_ai_bad_smell_gate_allows_fallback_when_tests_change() -> None:

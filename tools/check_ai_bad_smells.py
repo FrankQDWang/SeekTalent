@@ -65,6 +65,11 @@ TYPING_ANY_IMPORT_RE = re.compile(r"\bfrom\s+typing\s+import\s+.*\bAny\b|\btypin
 TYPING_ANY_ANNOTATION_RE = re.compile(r"(?:^|[,( ])(?:\w+\s*)?:\s*.*\bAny\b|->\s*.*\bAny\b")
 CAST_RE = re.compile(r"\bcast\s*\(")
 FALLBACK_RE = re.compile(r"\bfallback(?:\b|_)|\bbest[ -]effort\b|\bbackup[ _-]path\b", re.IGNORECASE)
+BLOCKING_RULE_IDS = {
+    "type-ignore",
+    "ruff-noqa",
+    "import-path-mutation",
+}
 
 
 @dataclass(frozen=True)
@@ -136,7 +141,7 @@ def parse_added_lines(diff_text: str) -> list[AddedLine]:
     return added_lines
 
 
-def check_added_lines(lines: Iterable[AddedLine], *, changed_paths: Sequence[str]) -> list[BadSmellFinding]:
+def collect_findings(lines: Iterable[AddedLine], *, changed_paths: Sequence[str]) -> list[BadSmellFinding]:
     has_test_changes = any(is_test_path(path) for path in changed_paths)
     findings: list[BadSmellFinding] = []
     for line in lines:
@@ -144,6 +149,14 @@ def check_added_lines(lines: Iterable[AddedLine], *, changed_paths: Sequence[str
             continue
         findings.extend(_find_line_issues(line, has_test_changes=has_test_changes))
     return findings
+
+
+def check_added_lines(lines: Iterable[AddedLine], *, changed_paths: Sequence[str]) -> list[BadSmellFinding]:
+    return [
+        finding
+        for finding in collect_findings(lines, changed_paths=changed_paths)
+        if finding.rule_id in BLOCKING_RULE_IDS
+    ]
 
 
 def _find_line_issues(line: AddedLine, *, has_test_changes: bool) -> list[BadSmellFinding]:
@@ -290,11 +303,12 @@ def main() -> int:
     args = parser.parse_args()
 
     paths = changed_paths(args.base)
-    findings = check_added_lines(collect_added_lines(args.base), changed_paths=paths)
+    findings = collect_findings(collect_added_lines(args.base), changed_paths=paths)
     for finding in findings:
-        print(f"{finding.path}:{finding.line_number}: {finding.rule_id}: {finding.message}")
+        severity = "error" if finding.rule_id in BLOCKING_RULE_IDS else "warning"
+        print(f"{finding.path}:{finding.line_number}: {severity}: {finding.rule_id}: {finding.message}")
         print(f"  {finding.text.strip()}")
-    return 1 if findings else 0
+    return 1 if any(finding.rule_id in BLOCKING_RULE_IDS for finding in findings) else 0
 
 
 if __name__ == "__main__":

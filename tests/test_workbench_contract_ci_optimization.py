@@ -29,6 +29,15 @@ def test_workbench_contract_ci_does_not_use_slow_pnpm_cache_post_step():
     assert "corepack enable && corepack prepare pnpm@11.6.0 --activate" in workflow
 
 
+def test_python_quality_uses_slim_direct_main_gate():
+    workflow = (ROOT / ".github/workflows/python-quality.yml").read_text(encoding="utf-8")
+
+    assert "tools/check_arch_imports.py" in workflow
+    assert "tools/check_tach_baseline.py" not in workflow
+    assert "tools/check_privacy_gate.py --base" in workflow
+    assert "tools/check_agent_safety_gate.py --base" in workflow
+
+
 def test_verify_workbench_supports_python_preflight_skip_mode():
     script = (ROOT / "scripts" / "verify-dev-workbench.sh").read_text(encoding="utf-8")
 

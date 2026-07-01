@@ -1,6 +1,6 @@
 # GitHub Ruleset Checklist
 
-This file records the repository settings that must be enabled after the governance gate lands. The files in this branch define ownership and CI checks; GitHub settings make those checks enforceable.
+This file records the repository settings to use only when re-enabling a protected PR path. The current fast direct-main workflow keeps governance advisory instead of required.
 
 Apply this to the default branch, currently `main`.
 
@@ -16,15 +16,14 @@ Apply this to the default branch, currently `main`.
 
 ## Required Status Checks
 
-Require these checks before merging:
+For the fast direct-main workflow, keep only these checks as required if a ruleset is enabled:
 
 - `quality-python`
 - `workbench-contract`
-- `pr-governance`
-- `Analyze (python)`
-- `Analyze (javascript-typescript)`
 
-The Python Quality and Workbench Contract workflows include `pull_request`, `push`, and `merge_group` triggers so the same required checks can report for direct PR validation, default-branch validation, and merge queue validation. The Governance workflow includes `pull_request` and `merge_group` triggers because its checks rely on PR diff and label context.
+The Python Quality and Workbench Contract workflows include `pull_request`, `push`, and `merge_group` triggers. `quality-python` runs a trimmed hard gate on direct `main` pushes, including privacy and agent-safety quick diff scans. `workbench-contract` runs on direct `main` pushes only when Workbench-relevant paths changed.
+
+Do not require `pr-governance` for direct-main iteration. It remains available for manual or PR-shape review. Do not require CodeQL for fast direct-main iteration; keep it non-blocking or scheduled unless repository policy changes.
 
 If the existing `main` protection still requires the legacy `test` status, remove that requirement after this governance branch lands. `quality-python` is now the stable Python aggregate check.
 

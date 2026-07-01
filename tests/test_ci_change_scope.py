@@ -89,8 +89,15 @@ def test_pull_request_workflow_change_runs_python_quality() -> None:
     assert not scope.workbench_contract
 
 
-def test_main_push_runs_all_expensive_checks_even_for_docs() -> None:
+def test_main_push_runs_python_quality_but_skips_workbench_for_docs() -> None:
     scope = classify_paths(["docs/development.md"], event_name="push")
+
+    assert scope.python_quality
+    assert not scope.workbench_contract
+
+
+def test_main_push_workbench_change_runs_workbench_contract() -> None:
+    scope = classify_paths(["apps/web-react/src/components/workbench/TranscriptV2.tsx"], event_name="push")
 
     assert scope.python_quality
     assert scope.workbench_contract
