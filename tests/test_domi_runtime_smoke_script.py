@@ -54,6 +54,19 @@ def test_domi_runtime_smoke_script_does_not_restart_opencli_by_default() -> None
     assert status_index < restart_index
 
 
+def test_domi_runtime_smoke_script_isolates_stale_ambient_env() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert "DOMI_ENV=(" in script
+    assert "OPENCLI_ENV=(" in script
+    assert "SEEKTALENT_PROVIDER_NAME=liepin" in script
+    assert 'env -i "${DOMI_ENV[@]}" "${SEEKTALENT_BIN}" doctor' in script
+    assert 'env -i "${DOMI_ENV[@]}" "${VENV_PYTHON}" -' in script
+    assert 'env -i "${OPENCLI_ENV[@]}" "${SEEKTALENT_OPENCLI_BIN}" daemon status' in script
+    assert 'env -i "${OPENCLI_ENV[@]}" "${SEEKTALENT_OPENCLI_BIN}" daemon restart' in script
+    assert "export SEEKTALENT_DOMI_JWT" not in script
+
+
 def test_domi_runtime_smoke_script_passes_bash_syntax_check() -> None:
     result = subprocess.run(
         ["bash", "-n", str(SCRIPT)],

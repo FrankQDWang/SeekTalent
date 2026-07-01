@@ -335,7 +335,7 @@ def build_llm_prf_failure_call_artifact(
     )
     artifact["structured_output"] = None
     artifact["failure_kind"] = failure_kind
-    artifact["error_message"] = _redact_known_secret(error_message, settings.text_llm_api_key)
+    artifact["error_message"] = _redact_known_text_llm_secrets(error_message, settings)
     artifact["provider_usage"] = _provider_usage_payload(provider_usage)
     return artifact
 
@@ -903,6 +903,21 @@ def _redact_known_secret(message: str, secret: str | None) -> str:
     if not secret:
         return message
     return message.replace(secret, "[redacted]")
+
+
+def _redact_known_text_llm_secrets(message: str, settings: AppSettings) -> str:
+    redacted = message
+    secrets = {
+        secret
+        for secret in (
+            settings.text_llm_api_key,
+            settings.domi_jwt,
+        )
+        if secret
+    }
+    for secret in sorted(secrets, key=len, reverse=True):
+        redacted = _redact_known_secret(redacted, secret)
+    return redacted
 
 
 def _ground_surface(*, candidate: LLMPRFCandidate, source: LLMPRFSourceText) -> LLMPRFGroundingRecord:

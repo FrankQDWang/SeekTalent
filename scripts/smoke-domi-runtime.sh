@@ -73,18 +73,43 @@ if [[ ! -x "${SEEKTALENT_OPENCLI_BIN}" ]]; then
   fail "domi_seektalent_opencli_bin_missing" "Installed seektalent-opencli executable is missing: ${SEEKTALENT_OPENCLI_BIN}"
 fi
 
-export SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi
-export SEEKTALENT_DOMI_JWT
-export SEEKTALENT_DOMI_LLM_BASE_URL
-export SEEKTALENT_DOMI_LLM_CHANNEL
-export SEEKTALENT_DOMI_SMOKE_MODEL
-export SEEKTALENT_RUNTIME_MODE=prod
+SMOKE_COMMON_ENV=(
+  "HOME=${HOME}"
+  "PATH=${PATH:-/usr/bin:/bin}"
+  "TMPDIR=${TMPDIR:-/tmp}"
+)
+if [[ -n "${LANG:-}" ]]; then
+  SMOKE_COMMON_ENV+=("LANG=${LANG}")
+fi
+if [[ -n "${LC_ALL:-}" ]]; then
+  SMOKE_COMMON_ENV+=("LC_ALL=${LC_ALL}")
+fi
+if [[ -n "${SHELL:-}" ]]; then
+  SMOKE_COMMON_ENV+=("SHELL=${SHELL}")
+fi
+if [[ -n "${USER:-}" ]]; then
+  SMOKE_COMMON_ENV+=("USER=${USER}")
+fi
+
+DOMI_ENV=(
+  "${SMOKE_COMMON_ENV[@]}"
+  "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi"
+  "SEEKTALENT_DOMI_JWT=${SEEKTALENT_DOMI_JWT}"
+  "SEEKTALENT_DOMI_LLM_BASE_URL=${SEEKTALENT_DOMI_LLM_BASE_URL}"
+  "SEEKTALENT_DOMI_LLM_CHANNEL=${SEEKTALENT_DOMI_LLM_CHANNEL}"
+  "SEEKTALENT_DOMI_SMOKE_MODEL=${SEEKTALENT_DOMI_SMOKE_MODEL}"
+  "SEEKTALENT_RUNTIME_MODE=prod"
+  "SEEKTALENT_PROVIDER_NAME=liepin"
+  "SEEKTALENT_LIEPIN_WORKER_MODE=opencli"
+  "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli"
+)
+OPENCLI_ENV=("${SMOKE_COMMON_ENV[@]}")
 
 echo "Running seektalent doctor in Domi provider mode" >&2
-"${SEEKTALENT_BIN}" doctor --env-file /dev/null --json > "${DOMI_RUNTIME_ROOT}/doctor.json"
+env -i "${DOMI_ENV[@]}" "${SEEKTALENT_BIN}" doctor --env-file /dev/null --json > "${DOMI_RUNTIME_ROOT}/doctor.json"
 
 echo "Running Domi LLM proxy hello" >&2
-"${VENV_PYTHON}" - <<'PY'
+env -i "${DOMI_ENV[@]}" "${VENV_PYTHON}" - <<'PY'
 import json
 import os
 import sys
@@ -137,15 +162,15 @@ except urllib.error.URLError as exc:
 PY
 
 echo "Checking OpenCLI daemon status" >&2
-if ! "${SEEKTALENT_OPENCLI_BIN}" daemon status > "${DOMI_RUNTIME_ROOT}/opencli-status.txt" 2>&1; then
+if ! env -i "${OPENCLI_ENV[@]}" "${SEEKTALENT_OPENCLI_BIN}" daemon status > "${DOMI_RUNTIME_ROOT}/opencli-status.txt" 2>&1; then
   if [[ "${SEEKTALENT_DOMI_OPENCLI_RESTART:-0}" != "1" ]]; then
     fail "domi_opencli_status_unavailable" "OpenCLI status check failed; see ${DOMI_RUNTIME_ROOT}/opencli-status.txt. Set SEEKTALENT_DOMI_OPENCLI_RESTART=1 to restart it during smoke."
   fi
   echo "Restarting OpenCLI daemon via installed seektalent-opencli" >&2
-  if ! "${SEEKTALENT_OPENCLI_BIN}" daemon restart > "${DOMI_RUNTIME_ROOT}/opencli-restart.txt" 2>&1; then
+  if ! env -i "${OPENCLI_ENV[@]}" "${SEEKTALENT_OPENCLI_BIN}" daemon restart > "${DOMI_RUNTIME_ROOT}/opencli-restart.txt" 2>&1; then
     fail "domi_opencli_restart_failed" "OpenCLI daemon restart failed; see ${DOMI_RUNTIME_ROOT}/opencli-restart.txt"
   fi
-  if ! "${SEEKTALENT_OPENCLI_BIN}" daemon status > "${DOMI_RUNTIME_ROOT}/opencli-status.txt" 2>&1; then
+  if ! env -i "${OPENCLI_ENV[@]}" "${SEEKTALENT_OPENCLI_BIN}" daemon status > "${DOMI_RUNTIME_ROOT}/opencli-status.txt" 2>&1; then
     fail "domi_opencli_status_unavailable" "OpenCLI status check failed after restart; see ${DOMI_RUNTIME_ROOT}/opencli-status.txt"
   fi
 fi
@@ -171,7 +196,7 @@ trap 'cleanup; exit 130' INT
 trap 'cleanup; exit 143' TERM
 
 echo "Starting packaged Workbench with seektalent workbench --port ${DOMI_WORKBENCH_PORT}" >&2
-WORKBENCH_PID="$("${VENV_PYTHON}" - "${SEEKTALENT_BIN}" "${DOMI_WORKBENCH_PORT}" "${WORKBENCH_LOG}" <<'PY'
+WORKBENCH_PID="$(env -i "${DOMI_ENV[@]}" "${VENV_PYTHON}" - "${SEEKTALENT_BIN}" "${DOMI_WORKBENCH_PORT}" "${WORKBENCH_LOG}" <<'PY'
 import subprocess
 import sys
 
@@ -191,7 +216,7 @@ PY
 )"
 
 for _ in $(seq 1 60); do
-  if "${VENV_PYTHON}" - "${DOMI_WORKBENCH_PORT}" <<'PY'
+  if env -i "${SMOKE_COMMON_ENV[@]}" "${VENV_PYTHON}" - "${DOMI_WORKBENCH_PORT}" <<'PY'
 import sys
 import urllib.request
 

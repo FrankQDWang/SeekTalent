@@ -1218,6 +1218,24 @@ def test_llm_prf_failure_call_artifact_redacts_api_key_and_records_expected_fiel
     assert "unit-test-key" not in str(artifact)
 
 
+def test_llm_prf_failure_call_artifact_redacts_domi_jwt() -> None:
+    payload = _payload_for_extractor()
+
+    artifact = llm_prf.build_llm_prf_failure_call_artifact(
+        settings=AppSettings(text_llm_provider_label="domi", domi_jwt="domi-secret-jwt"),
+        payload=payload,
+        user_prompt_text=llm_prf.render_llm_prf_prompt(payload),
+        started_at="2026-05-04T00:00:00+00:00",
+        latency_ms=17,
+        round_no=3,
+        failure_kind="provider_error",
+        error_message="provider rejected token domi-secret-jwt",
+    )
+
+    assert artifact["error_message"] == "provider rejected token [redacted]"
+    assert "domi-secret-jwt" not in str(artifact)
+
+
 def test_advisory_platform_label_without_known_company_is_still_ambiguous_for_tencent_cloud() -> None:
     payload = build_llm_prf_input(
         seed_resumes=[

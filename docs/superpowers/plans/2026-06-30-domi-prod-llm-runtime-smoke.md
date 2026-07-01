@@ -715,7 +715,11 @@ Expected: fail because the script file does not exist.
 
 - [ ] **Step 3: Create the smoke script**
 
-Create `scripts/smoke-domi-runtime.sh` with this content:
+Create `scripts/smoke-domi-runtime.sh`.
+
+Implementation note after review: the checked-in `scripts/smoke-domi-runtime.sh` is the source of truth. The original draft below is retained only as historical planning context and must not be copied forward. Any future edits must preserve the final script's hardening behavior: Domi JWT redaction, explicit minimal subprocess environments, no default OpenCLI restart, `/Applications/Domi.app` runtime-root rejection, and process-group cleanup for the packaged Workbench.
+
+Original draft:
 
 ```bash
 #!/usr/bin/env bash
