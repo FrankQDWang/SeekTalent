@@ -52,12 +52,16 @@ def _has_liepin_shape(raw: dict[str, object]) -> bool:
     }
     liepin_structured_keys = {
         "activeStatus",
+        "candidateName",
         "currentCompany",
         "currentTitle",
-        "educationList",
         "jobIntention",
         "jobStatus",
         "projectExperienceList",
-        "workExperienceList",
+        "safeCardSummary",
+        "safe_card_summary",
+        "skillTags",
+        "sourceUrl",
+        "workYears",
     }
     return bool(set(raw) & (liepin_text_aliases | liepin_structured_keys))

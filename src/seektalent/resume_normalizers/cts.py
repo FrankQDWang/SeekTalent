@@ -21,24 +21,12 @@ def _first_text(*values: Any) -> str:
     return ""
 
 
-def _safe_card_summary(raw: dict[str, Any]) -> dict[str, Any]:
-    value = raw.get("safe_card_summary")
-    return value if isinstance(value, dict) else {}
-
-
 def _source_provider(raw: dict[str, Any]) -> str | None:
     for key in ("provider", "source", "source_provider"):
         value = raw.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip().casefold()
     return None
-
-
-def _safe_card_string_list(summary: dict[str, Any], key: str) -> list[str]:
-    value = summary.get(key)
-    if not isinstance(value, list | tuple):
-        return []
-    return [item for item in value if isinstance(item, str) and item.strip()]
 
 
 def _normalize_strings(values: list[Any]) -> list[str]:
@@ -97,17 +85,6 @@ def _extract_recent_experiences(
         normalization_notes.append("Built recent_experiences from flattened work experience summaries.")
         return experiences
 
-    safe_card = _safe_card_summary(candidate.raw)
-    if safe_card:
-        experience = NormalizedExperience(
-            title=_first_text(safe_card.get("current_or_recent_title"), safe_card.get("display_title")),
-            company=_first_text(safe_card.get("current_or_recent_company")),
-            duration=f"{safe_card.get('work_years')}y" if isinstance(safe_card.get("work_years"), int) else "",
-            summary=_first_text(safe_card.get("recent_experience_text"), safe_card.get("normalized_card_text")),
-        )
-        if experience.title or experience.company or experience.summary:
-            normalization_notes.append("Built recent_experiences from Liepin safe card summary.")
-            return [experience]
     return []
 
 
@@ -117,18 +94,13 @@ def _extract_skills(
     normalization_notes: list[str],
 ) -> list[str]:
     explicit = []
-    for key in ("skills", "skillTags", "tags", "keywords"):
+    for key in ("skills", "tags", "keywords"):
         value = candidate.raw.get(key)
         if isinstance(value, list):
             explicit.extend(value)
     skills = _normalize_strings(explicit)
     if skills:
         return skills[:12]
-
-    safe_card_skills = _normalize_strings(_safe_card_string_list(_safe_card_summary(candidate.raw), "skill_tags"))
-    if safe_card_skills:
-        normalization_notes.append("Filled skills from Liepin safe card summary.")
-        return safe_card_skills[:12]
 
     derived = [
         item
@@ -190,19 +162,6 @@ def _extract_education_summary(
                 )
             )
         return " ; ".join(_normalize_strings(summary))
-    safe_card = _safe_card_summary(candidate.raw)
-    safe_card_summary = " ".join(
-        part
-        for part in [
-            *(_safe_card_string_list(safe_card, "school_names")[:2]),
-            *(_safe_card_string_list(safe_card, "major_names")[:2]),
-            _first_text(safe_card.get("education_level")),
-        ]
-        if part
-    )
-    if safe_card_summary:
-        normalization_notes.append("Filled education_summary from Liepin safe card summary.")
-        return safe_card_summary
     return ""
 
 
@@ -212,7 +171,6 @@ def _build_excerpt(
     *,
     normalization_notes: list[str],
 ) -> str:
-    safe_card = _safe_card_summary(candidate.raw)
     structured_profile_text = " ".join(
         part
         for part in [
@@ -229,7 +187,6 @@ def _build_excerpt(
     )
     chunks = [
         structured_profile_text,
-        _first_text(safe_card.get("normalized_card_text"), safe_card.get("recent_experience_text")),
         " ".join(candidate.work_summaries),
         " ".join(candidate.project_names[:4]),
         recent_experience_text,
@@ -295,7 +252,6 @@ def _completeness_score(
 
 def normalize_cts_resume(candidate: ResumeCandidate) -> NormalizedResume:
     raw = candidate.raw
-    safe_card = _safe_card_summary(raw)
     normalization_notes: list[str] = []
     if candidate.used_fallback_id:
         normalization_notes.append(
@@ -307,31 +263,23 @@ def normalize_cts_resume(candidate: ResumeCandidate) -> NormalizedResume:
         raw.get("current_title"),
         raw.get("currentTitle"),
         raw.get("title"),
-        safe_card.get("current_or_recent_title"),
-        safe_card.get("display_title"),
         candidate.expected_job_category,
     )
     current_company = _first_text(
         raw.get("current_company"),
         raw.get("currentCompany"),
         raw.get("company"),
-        safe_card.get("current_or_recent_company"),
     )
     recent_experiences = _extract_recent_experiences(candidate, normalization_notes=normalization_notes)
     if not current_company and recent_experiences:
         current_company = _first_text(recent_experiences[0].company)
         if current_company:
             normalization_notes.append("Filled current_company from the first recent experience.")
-    headline = _first_text(raw.get("headline"), safe_card.get("display_title"))
+    headline = _first_text(raw.get("headline"))
     if not headline and current_title:
         headline = current_title
         normalization_notes.append("Filled headline from current_title.")
-    safe_card_work_years = safe_card.get("work_years")
-    years_of_experience = candidate.work_year or (
-        safe_card_work_years
-        if isinstance(safe_card_work_years, int) and not isinstance(safe_card_work_years, bool)
-        else None
-    )
+    years_of_experience = candidate.work_year
     raw_locations = raw.get("locations")
     extra_locations = (
         [item if isinstance(item, str) else None for item in raw_locations] if isinstance(raw_locations, list) else []
@@ -343,8 +291,6 @@ def normalize_cts_resume(candidate: ResumeCandidate) -> NormalizedResume:
             *extra_locations,
             raw.get("nowLocation"),
             raw.get("expectedLocation"),
-            safe_card.get("city"),
-            safe_card.get("expected_city"),
         ]
     )[:4]
     education_summary = _extract_education_summary(candidate, normalization_notes=normalization_notes)

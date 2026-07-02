@@ -284,6 +284,88 @@ def test_old_liepin_fixture_without_provider_must_be_migrated() -> None:
         normalize_resume(candidate)
 
 
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [
+        ("candidateName", "吴**"),
+        ("workYears", 10),
+        ("sourceUrl", "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc"),
+        ("skillTags", ["用户研究"]),
+        ("safeCardSummary", {"display_title": "资深体验设计工程师"}),
+        ("safe_card_summary", {"display_title": "资深体验设计工程师"}),
+    ],
+)
+def test_unknown_source_with_liepin_structured_aliases_rejects_instead_of_cts_fallback(
+    key: str, value: object
+) -> None:
+    candidate = ResumeCandidate(
+        resume_id=f"unknown-liepin-{key}",
+        dedup_key=f"unknown-liepin-{key}",
+        search_text="用户体验设计",
+        raw={key: value},
+    )
+
+    with pytest.raises(ValueError, match="Unsupported or unmigrated Liepin-shaped resume payload"):
+        normalize_resume(candidate)
+
+
+def test_unknown_source_with_generic_cts_timeline_lists_uses_cts_fallback() -> None:
+    candidate = ResumeCandidate(
+        resume_id="generic-cts-timeline-1",
+        dedup_key="generic-cts-timeline-1",
+        search_text="Python backend engineer",
+        raw={
+            "workExperienceList": [
+                {"company": "Example Co", "title": "Python Engineer", "summary": "Built retrieval workflows."}
+            ],
+            "educationList": [{"school": "Fudan University", "degree": "Bachelor", "speciality": "CS"}],
+            "skills": ["Python", "Retrieval"],
+        },
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.source_provider is None
+    assert normalized.recent_experiences[0].company == "Example Co"
+    assert normalized.education_summary == "Fudan University CS Bachelor"
+
+
+def test_cts_normalizer_ignores_liepin_safe_card_summary() -> None:
+    candidate = ResumeCandidate(
+        resume_id="cts-safe-card-ignored-1",
+        dedup_key="cts-safe-card-ignored-1",
+        search_text="Python backend engineer",
+        raw={
+            "provider": "cts",
+            "skillTags": ["should-not-fill-skill"],
+            "safe_card_summary": {
+                "display_title": "should-not-fill-title",
+                "current_or_recent_company": "should-not-fill-company",
+                "work_years": 8,
+                "city": "上海",
+                "education_level": "硕士",
+                "skill_tags": ["should-not-fill-skill"],
+                "recent_experience_text": "should-not-fill-experience",
+                "normalized_card_text": "should-not-fill-excerpt",
+            },
+        },
+    )
+
+    normalized = normalize_resume(candidate)
+    serialized = json.dumps(normalized.model_dump(mode="json"), ensure_ascii=False)
+
+    assert normalized.source_provider == "cts"
+    assert normalized.current_title == ""
+    assert normalized.current_company == ""
+    assert normalized.years_of_experience is None
+    assert normalized.locations == []
+    assert normalized.education_summary == ""
+    assert normalized.skills == []
+    assert normalized.recent_experiences == []
+    assert "should-not-fill" not in serialized
+    assert not any("Liepin safe card" in note or "safe card summary" in note for note in normalized.normalization_notes)
+
+
 def test_structured_resume_evidence_derives_scoring_evidence_without_protected_fields() -> None:
     evidence = StructuredResumeEvidence(
         identity={"candidateName": "吴**", "age": 32, "gender": "男"},
