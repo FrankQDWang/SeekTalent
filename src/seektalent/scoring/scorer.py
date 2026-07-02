@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from time import perf_counter
 from typing import cast
@@ -16,7 +17,6 @@ from seektalent.models import (
     ScoringConfidence,
     ScoringFailure,
     ScoringContext,
-    ScoringPolicy,
     unique_strings,
 )
 from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS, PROTECTED_ATTRIBUTE_SCORING_TEXT
@@ -43,26 +43,17 @@ def _prompt_safe_constraints(payload: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in payload.items() if key not in PROTECTED_ATTRIBUTE_FIELDS}
 
 
-def _known_protected_terms(policy: ScoringPolicy) -> tuple[str, ...]:
-    terms: list[str] = [school for school in policy.hard_constraints.school_names if school]
-    gender_requirement = policy.hard_constraints.gender_requirement
-    if gender_requirement is not None:
-        for value in [gender_requirement.raw_text, gender_requirement.canonical_gender]:
-            if isinstance(value, str) and value:
-                terms.append(value)
-    age_requirement = policy.hard_constraints.age_requirement
-    if age_requirement is not None and age_requirement.raw_text:
-        terms.append(age_requirement.raw_text)
-    return tuple(sorted(set(terms), key=lambda item: len(item), reverse=True))
+def _structured_scoring_evidence_payload(resume: NormalizedResume) -> dict[str, object]:
+    return resume.structured_evidence.to_scoring_evidence().model_dump(mode="json", exclude_defaults=True)
 
 
-def _redact_known_protected_terms(value: str | None, *, policy: ScoringPolicy) -> str:
-    if not value:
-        return "(none)"
-    redacted = value
-    for term in _known_protected_terms(policy):
-        redacted = redacted.replace(term, "[redacted_protected_attribute]")
-    return redacted
+def _structured_scoring_evidence_json(resume: NormalizedResume) -> str:
+    payload = _structured_scoring_evidence_payload(resume)
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ": "))
+
+
+def _scoring_cache_resume_payload(resume: NormalizedResume) -> dict[str, object]:
+    return resume.model_dump(mode="json", exclude={"raw_text_excerpt"})
 
 
 def render_scoring_prompt(context: ScoringContext) -> str:
@@ -113,10 +104,10 @@ def render_scoring_prompt(context: ScoringContext) -> str:
             "RESUME CARD\n" + render_untrusted_text_block("RESUME_CARD_TEXT", resume_card_text),
             "RECENT EXPERIENCE\n"
             + render_untrusted_text_block("RECENT_EXPERIENCE", "\n".join(experiences) if experiences else "- (none)"),
-            "RAW EXCERPT\n"
+            "STRUCTURED RESUME EVIDENCE\n"
             + render_untrusted_text_block(
-                "RESUME_RAW_EXCERPT",
-                _redact_known_protected_terms(resume.raw_text_excerpt, policy=policy),
+                "STRUCTURED_RESUME_EVIDENCE",
+                _structured_scoring_evidence_json(resume),
             ),
             json_block("EXACT DATA", exact_data),
         ]
@@ -141,7 +132,7 @@ def scoring_cache_key(
             prompt.sha256,
             json_sha256(context.scoring_policy.model_dump(mode="json")),
             context.requirement_sheet_sha256,
-            json_sha256(context.normalized_resume.model_dump(mode="json")),
+            json_sha256(_scoring_cache_resume_payload(context.normalized_resume)),
             text_sha256(user_prompt),
         ]
     )

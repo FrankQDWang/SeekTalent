@@ -13,6 +13,7 @@ from seektalent.models import (
 )
 from seektalent.normalization import normalize_resume
 from seektalent.runtime.candidate_intake import build_canonical_scoring_intake, select_identity_top_candidates
+from seektalent.runtime.normalized_artifacts import normalized_resume_artifact_payload
 from seektalent.runtime.runtime_diagnostics import slim_top_pool_snapshot
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.tracing import RunTracer, json_char_count, json_sha256
@@ -140,7 +141,7 @@ def normalize_scoring_pool(
         normalized_store[normalized.resume_id] = normalized
         tracer.write_json(
             f"resumes/{normalized.resume_id}.json",
-            normalized.model_dump(mode="json"),
+            normalized_resume_artifact_payload(normalized),
         )
         normalized_pool.append(normalized)
     return normalized_pool
@@ -189,7 +190,7 @@ def build_pool_decisions(
 
 
 def scoring_input_ref(resume: NormalizedResume) -> dict[str, object]:
-    payload = resume.model_dump(mode="json")
+    payload = normalized_resume_artifact_payload(resume)
     return {
         "resume_id": resume.resume_id,
         "source_round": resume.source_round,

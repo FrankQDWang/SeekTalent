@@ -12,6 +12,7 @@ from seektalent.models import (
     StructuredScoringRole,
 )
 from seektalent.normalization import normalize_resume
+from seektalent.runtime.normalized_artifacts import normalized_resume_artifact_payload
 
 
 def _candidate_with_raw(resume_id: str, raw: dict[str, object]) -> ResumeCandidate:
@@ -246,6 +247,53 @@ def test_liepin_normalization_uses_structured_evidence_without_whole_page_text()
     assert normalized.raw_text_excerpt
     assert "fullText" not in normalized.raw_text_excerpt
     assert normalized.completeness_score == 100
+
+
+def test_liepin_normalized_artifact_excludes_legacy_raw_text_excerpt() -> None:
+    normalized = normalize_resume(
+        ResumeCandidate(
+            resume_id="liepin-detail-artifact-1",
+            dedup_key="liepin-detail-artifact-1",
+            search_text="用户体验设计 用户研究 交互设计",
+            raw={
+                "provider": "liepin",
+                "currentTitle": "资深体验设计工程师",
+                "currentCompany": "平安集团",
+                "workExperienceList": [
+                    {"company": "平安好医", "title": "用户体验设计专家", "summary": "负责 B 端和 C 端体验设计。"}
+                ],
+                "projectExperienceList": [{"name": "增长项目", "summary": "通过用户研究优化转化。"}],
+                "skills": ["用户研究", "交互设计"],
+            },
+        )
+    )
+
+    payload = normalized_resume_artifact_payload(normalized)
+
+    assert normalized.raw_text_excerpt
+    assert "raw_text_excerpt" not in payload
+    assert payload["structured_evidence"]
+
+
+def test_cts_normalized_artifact_keeps_cts_raw_text_excerpt() -> None:
+    normalized = normalize_resume(
+        ResumeCandidate(
+            resume_id="cts-artifact-1",
+            dedup_key="cts-artifact-1",
+            search_text="Python backend engineer",
+            raw={
+                "provider": "cts",
+                "currentTitle": "Python Engineer",
+                "workExperienceList": [
+                    {"company": "Example Co", "title": "Python Engineer", "summary": "Built retrieval workflows."}
+                ],
+            },
+        )
+    )
+
+    payload = normalized_resume_artifact_payload(normalized)
+
+    assert payload["raw_text_excerpt"]
 
 
 def test_liepin_normalization_rejects_whole_page_text_keys() -> None:

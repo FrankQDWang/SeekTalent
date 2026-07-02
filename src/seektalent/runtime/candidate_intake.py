@@ -15,6 +15,7 @@ from seektalent.models import (
     scored_candidate_sort_key,
 )
 from seektalent.normalization import normalize_resume
+from seektalent.runtime.normalized_artifacts import normalized_resume_artifact_payload
 from seektalent.tracing import RunTracer
 
 
@@ -44,7 +45,7 @@ def normalize_runtime_candidates(
         if tracer is not None:
             tracer.write_json(
                 f"resumes/{normalized.resume_id}.json",
-                normalized.model_dump(mode="json"),
+                normalized_resume_artifact_payload(normalized),
             )
     return normalized_updates
 

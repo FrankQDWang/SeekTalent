@@ -35,6 +35,8 @@ from seektalent.models import (
     SearchObservationView,
     SentQueryRecord,
     StopGuidance,
+    StructuredResumeEvidence,
+    StructuredResumeTimelineItem,
     TopPoolEntryView,
 )
 from seektalent.prompt_safety import assert_prompt_snapshot_safe, prompt_template_version
@@ -536,7 +538,9 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert 'UNTRUSTED DATA "SCORING_POLICY_TEXT"' in prompt
     assert 'UNTRUSTED DATA "RESUME_CARD_TEXT"' in prompt
     assert 'UNTRUSTED DATA "RECENT_EXPERIENCE"' in prompt
-    assert 'UNTRUSTED DATA "RESUME_RAW_EXCERPT"' in prompt
+    assert 'UNTRUSTED DATA "STRUCTURED_RESUME_EVIDENCE"' in prompt
+    assert "RAW EXCERPT" not in prompt
+    assert "RESUME_RAW_EXCERPT" not in prompt
     assert "SCORING POLICY" in prompt
     assert "RESUME CARD" in prompt
     assert "RECENT EXPERIENCE" in prompt
@@ -556,7 +560,7 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert "gender_requirement" in prompt
     assert "school_names" in prompt
     assert "are excluded from LLM scoring" in prompt
-    assert "Python retrieval trace" in prompt
+    assert "Python retrieval trace" not in prompt
     assert '"resume_id": "resume-1"' in prompt
     assert "SCORING_CONTEXT" not in prompt
     assert_prompt_snapshot_safe(prompt)
@@ -600,6 +604,26 @@ def test_scoring_prompt_accepts_liepin_without_full_text() -> None:
                         summary="提供B端及C端体验设计方案。",
                     )
                 ],
+                structured_evidence=StructuredResumeEvidence(
+                    current_role={"title": "资深体验设计工程师", "company": "平安集团", "workYears": 10},
+                    job_intention={"expectedRole": "体验设计专家", "expectedCity": "上海"},
+                    work_experience=[
+                        StructuredResumeTimelineItem(
+                            company="平安好医",
+                            title="用户体验设计专家",
+                            duration="2019.06-至今",
+                            summary="提供B端及C端体验设计方案。",
+                        )
+                    ],
+                    project_experience=[
+                        StructuredResumeTimelineItem(
+                            name="增长项目",
+                            duration="2021-2023",
+                            summary="通过用户研究优化转化。",
+                        )
+                    ],
+                    skills=["用户研究", "交互设计"],
+                ),
                 raw_text_excerpt="平安好医 用户体验设计专家 提供B端及C端体验设计方案。",
                 completeness_score=92,
                 source_round=1,
@@ -609,7 +633,12 @@ def test_scoring_prompt_accepts_liepin_without_full_text() -> None:
         )
     )
 
+    assert "STRUCTURED_RESUME_EVIDENCE" in prompt
     assert "平安好医" in prompt
+    assert "增长项目" in prompt
+    assert "expected_role" in prompt
+    assert "RAW EXCERPT" not in prompt
+    assert "RESUME_RAW_EXCERPT" not in prompt
     assert "fullText" not in prompt
     assert_prompt_snapshot_safe(prompt)
 
