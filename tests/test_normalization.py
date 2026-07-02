@@ -394,12 +394,26 @@ def test_unknown_source_with_non_liepin_source_url_uses_cts_fallback() -> None:
         resume_id="unknown-generic-source-url-1",
         dedup_key="unknown-generic-source-url-1",
         search_text="Python backend engineer",
-        raw={"sourceUrl": "https://example.test/resume/123"},
+        raw={"sourceUrl": "https://notliepin.com/resume/123"},
     )
 
     normalized = normalize_resume(candidate)
 
     assert normalized.source_provider is None
+
+
+def test_unregistered_non_liepin_source_uses_cts_fallback() -> None:
+    candidate = ResumeCandidate(
+        resume_id="fixture-source-1",
+        dedup_key="fixture-source-1",
+        search_text="Python data platform engineer",
+        raw={"source": "fixture_source", "currentTitle": "Data Platform Engineer"},
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.source_provider == "fixture_source"
+    assert normalized.current_title == "Data Platform Engineer"
 
 
 def test_unknown_source_with_generic_cts_timeline_lists_uses_cts_fallback() -> None:

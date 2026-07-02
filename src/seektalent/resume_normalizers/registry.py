@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 from seektalent.models import NormalizedResume, ResumeCandidate
 from seektalent.resume_normalizers.cts import normalize_cts_resume
@@ -44,9 +45,11 @@ def normalizer_key_for_candidate(candidate: ResumeCandidate) -> str:
     provider = candidate.raw.get("provider") or candidate.raw.get("source") or candidate.raw.get("source_provider")
     if isinstance(provider, str) and provider.strip():
         key = provider.strip().casefold()
-        if key not in NORMALIZERS and _has_liepin_shape(candidate.raw):
+        if key in NORMALIZERS:
+            return key
+        if _has_liepin_shape(candidate.raw):
             raise ValueError("Unsupported or unmigrated Liepin-shaped resume payload")
-        return key
+        return "cts"
     if _has_liepin_shape(candidate.raw):
         raise ValueError("Unsupported or unmigrated Liepin-shaped resume payload")
     return "cts"
@@ -76,4 +79,12 @@ def _has_liepin_shape(raw: dict[str, object]) -> bool:
 
 
 def _is_liepin_url(value: object) -> bool:
-    return isinstance(value, str) and "liepin.com" in value.casefold()
+    if not isinstance(value, str) or not value.strip():
+        return False
+    url = value.strip()
+    parsed = urlsplit(url if "://" in url else f"https://{url}")
+    host = parsed.hostname
+    if host is None:
+        return False
+    host = host.casefold().rstrip(".")
+    return host == "liepin.com" or host.endswith(".liepin.com")
