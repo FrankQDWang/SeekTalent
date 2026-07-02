@@ -718,6 +718,128 @@ class NormalizedExperience(BaseModel):
     summary: str = ""
 
 
+class StructuredResumeTimelineItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    company: str = ""
+    title: str = ""
+    name: str = ""
+    school: str = ""
+    major: str = ""
+    degree: str = ""
+    duration: str = ""
+    summary: str = ""
+
+
+class StructuredScoringRole(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = ""
+    company: str = ""
+    work_years: int | None = None
+
+
+class StructuredScoringJobIntention(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_role: str = ""
+    expected_industry: str = ""
+    expected_city: str = ""
+    expected_salary: str = ""
+
+
+class StructuredScoringWorkItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    company: str = ""
+    title: str = ""
+    duration: str = ""
+    summary: str = ""
+
+
+class StructuredScoringProjectItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_name: str = ""
+    duration: str = ""
+    summary: str = ""
+
+
+class StructuredScoringEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    current_role: StructuredScoringRole = Field(default_factory=StructuredScoringRole)
+    job_intention: StructuredScoringJobIntention = Field(default_factory=StructuredScoringJobIntention)
+    work_experience: list[StructuredScoringWorkItem] = Field(default_factory=list)
+    project_experience: list[StructuredScoringProjectItem] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+
+
+class StructuredResumeEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    identity: dict[str, str | int] = Field(default_factory=dict)
+    current_role: dict[str, str | int] = Field(default_factory=dict)
+    status: dict[str, str | int] = Field(default_factory=dict)
+    job_intention: dict[str, str | int] = Field(default_factory=dict)
+    work_experience: list[StructuredResumeTimelineItem] = Field(default_factory=list)
+    project_experience: list[StructuredResumeTimelineItem] = Field(default_factory=list)
+    education_experience: list[StructuredResumeTimelineItem] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    source_metadata: dict[str, str | int] = Field(default_factory=dict)
+
+    def to_scoring_evidence(self) -> StructuredScoringEvidence:
+        return StructuredScoringEvidence(
+            current_role=StructuredScoringRole(
+                title=_text_value(self.current_role.get("title")),
+                company=_text_value(self.current_role.get("company")),
+                work_years=_int_value(self.current_role.get("workYears") or self.current_role.get("work_years")),
+            ),
+            job_intention=StructuredScoringJobIntention(
+                expected_role=_text_value(
+                    self.job_intention.get("expectedRole") or self.job_intention.get("expected_role")
+                ),
+                expected_industry=_text_value(
+                    self.job_intention.get("expectedIndustry") or self.job_intention.get("expected_industry")
+                ),
+                expected_city=_text_value(
+                    self.job_intention.get("expectedCity") or self.job_intention.get("expected_city")
+                ),
+                expected_salary=_text_value(
+                    self.job_intention.get("expectedSalary") or self.job_intention.get("expected_salary")
+                ),
+            ),
+            work_experience=[_work_item_for_scoring(item) for item in self.work_experience],
+            project_experience=[_project_item_for_scoring(item) for item in self.project_experience],
+            skills=self.skills[:24],
+        )
+
+
+def _text_value(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def _int_value(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _work_item_for_scoring(item: StructuredResumeTimelineItem) -> StructuredScoringWorkItem:
+    return StructuredScoringWorkItem(
+        company=item.company,
+        title=item.title,
+        duration=item.duration,
+        summary=item.summary,
+    )
+
+
+def _project_item_for_scoring(item: StructuredResumeTimelineItem) -> StructuredScoringProjectItem:
+    return StructuredScoringProjectItem(
+        project_name=item.name,
+        duration=item.duration,
+        summary=item.summary,
+    )
+
+
 class NormalizedResume(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -736,6 +858,7 @@ class NormalizedResume(BaseModel):
     industry_tags: list[str] = Field(default_factory=list)
     language_tags: list[str] = Field(default_factory=list)
     recent_experiences: list[NormalizedExperience] = Field(default_factory=list)
+    structured_evidence: StructuredResumeEvidence = Field(default_factory=StructuredResumeEvidence)
     key_achievements: list[str] = Field(default_factory=list)
     raw_text_excerpt: str = ""
     completeness_score: int = Field(ge=0, le=100)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from seektalent.models import ResumeCandidate
+import json
+
+from seektalent.models import ResumeCandidate, StructuredResumeEvidence, StructuredResumeTimelineItem
 from seektalent.normalization import normalize_resume
 
 
@@ -149,3 +151,38 @@ def test_liepin_detail_without_full_text_still_produces_legacy_excerpt() -> None
     assert normalized.raw_text_excerpt
     assert "平安好医" in normalized.raw_text_excerpt
     assert "fullText" not in normalized.raw_text_excerpt
+
+
+def test_structured_resume_evidence_derives_scoring_evidence_without_protected_fields() -> None:
+    evidence = StructuredResumeEvidence(
+        identity={"candidateName": "吴**", "age": 32, "gender": "男"},
+        current_role={"title": "资深体验设计工程师", "company": "平安集团", "workYears": 10},
+        job_intention={"expectedRole": "体验设计", "expectedCity": "上海", "expectedSalary": "20-24k"},
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                title="用户体验设计专家",
+                duration="2019.06-至今",
+                summary="负责 B 端和 C 端体验设计。",
+            )
+        ],
+        project_experience=[StructuredResumeTimelineItem(name="增长项目", summary="通过用户研究优化转化。")],
+        education_experience=[StructuredResumeTimelineItem(school="华东师范大学", degree="硕士", major="设计学")],
+        skills=["用户研究", "交互设计"],
+        source_metadata={"sourceUrl": "https://h.liepin.com/resume/showresumedetail/abc"},
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "平安好医" in serialized
+    assert "增长项目" in serialized
+    assert "用户研究" in serialized
+    assert "吴**" not in serialized
+    assert '"name":' not in serialized
+    assert "age" not in serialized
+    assert "gender" not in serialized
+    assert "sourceUrl" not in serialized
+    assert "华东师范大学" not in serialized
+    assert "硕士" not in serialized
+    assert "设计学" not in serialized
