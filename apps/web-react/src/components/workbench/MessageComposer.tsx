@@ -36,12 +36,12 @@ export function MessageComposer({
     }
     const initialHeight = initialTextareaHeightRef.current;
     const maxHeight = initialHeight * 3;
-    textarea.style.height = `${initialHeight}px`;
+    textarea.style.height = `${String(initialHeight)}px`;
     const nextHeight = Math.min(
       Math.max(textarea.scrollHeight, initialHeight),
       maxHeight,
     );
-    textarea.style.height = `${nextHeight}px`;
+    textarea.style.height = `${String(nextHeight)}px`;
     textarea.style.overflowY =
       textarea.scrollHeight > maxHeight ? "auto" : "hidden";
   }, []);
@@ -112,7 +112,10 @@ export function MessageComposer({
           resizeTextarea(event.currentTarget);
         }}
         onKeyDown={(event) => {
-          if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+          const isComposing =
+            (event.nativeEvent as { isComposing?: boolean }).isComposing ===
+            true;
+          if (event.key !== "Enter" || event.shiftKey || isComposing) {
             return;
           }
           event.preventDefault();

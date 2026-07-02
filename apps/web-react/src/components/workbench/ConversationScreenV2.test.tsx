@@ -99,7 +99,12 @@ describe("ConversationScreenV2", () => {
       payload: requirementPayload(),
     });
     const revisedPayload = requirementPayload();
-    revisedPayload.draft.sections[0].items[0].selected = false;
+    const revisedFirstSection = revisedPayload.draft.sections[0];
+    const revisedFirstItem = revisedFirstSection?.items[0];
+    if (revisedFirstItem === undefined) {
+      throw new Error("Requirement fixture is missing its first item");
+    }
+    revisedFirstItem.selected = false;
     const revisedRequirementEvent = transcriptEvent({
       eventId: "event_requirement_2",
       step: 2,
@@ -121,9 +126,7 @@ describe("ConversationScreenV2", () => {
       screen.getByLabelText("补充其他要求"),
       "需要熟悉 AI 编程工具",
     );
-    await user.click(
-      screen.getByRole("checkbox", { name: /Python 后端经验/ }),
-    );
+    await user.click(screen.getByRole("checkbox", { name: /Python 后端经验/ }));
 
     rerender(
       <ConversationScreenV2

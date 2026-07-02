@@ -10,6 +10,7 @@ DOMI_WORKBENCH_PORT="${SEEKTALENT_DOMI_SMOKE_PORT:-8011}"
 SEEKTALENT_DOMI_LLM_BASE_URL="${SEEKTALENT_DOMI_LLM_BASE_URL:-https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1}"
 SEEKTALENT_DOMI_LLM_CHANNEL="${SEEKTALENT_DOMI_LLM_CHANNEL:-seek_talent}"
 SEEKTALENT_DOMI_SMOKE_MODEL="${SEEKTALENT_DOMI_SMOKE_MODEL:-deepseek-v4-flash}"
+HOST_PYTHON="${SEEKTALENT_HOST_PYTHON:-${PYTHON:-python3}}"
 
 fail() {
   local reason_code="$1"
@@ -38,6 +39,7 @@ esac
 DOMI_VENV="${DOMI_RUNTIME_ROOT}/venv"
 DOMI_DIST_DIR="${DOMI_RUNTIME_ROOT}/dist"
 WORKBENCH_LOG="${DOMI_RUNTIME_ROOT}/workbench.log"
+PACKAGED_FRONTEND_DIR="${ROOT}/src/seektalent_ui/static/workbench"
 
 mkdir -p "${DOMI_RUNTIME_ROOT}" "${DOMI_DIST_DIR}"
 
@@ -51,6 +53,15 @@ if [[ -n "${LANG:-}" ]]; then
 fi
 if [[ -n "${LC_ALL:-}" ]]; then
   SETUP_ENV+=("LC_ALL=${LC_ALL}")
+fi
+
+echo "Building packaged Workbench frontend with host Python" >&2
+env -i "${SETUP_ENV[@]}" "${HOST_PYTHON}" scripts/build_packaged_workbench.py
+if [[ ! -f "${PACKAGED_FRONTEND_DIR}/200.html" || ! -d "${PACKAGED_FRONTEND_DIR}/_app" ]]; then
+  fail "domi_packaged_frontend_missing" "Packaged Workbench frontend is missing under ${PACKAGED_FRONTEND_DIR}."
+fi
+if [[ -z "$(find "${PACKAGED_FRONTEND_DIR}/_app" -type f -print -quit)" ]]; then
+  fail "domi_packaged_frontend_missing" "Packaged Workbench frontend has no static assets under ${PACKAGED_FRONTEND_DIR}/_app."
 fi
 
 if [[ ! -x "${DOMI_VENV}/bin/python" ]]; then
@@ -111,6 +122,7 @@ DOMI_ENV=(
   "SEEKTALENT_DOMI_LLM_CHANNEL=${SEEKTALENT_DOMI_LLM_CHANNEL}"
   "SEEKTALENT_DOMI_SMOKE_MODEL=${SEEKTALENT_DOMI_SMOKE_MODEL}"
   "SEEKTALENT_RUNTIME_MODE=prod"
+  "SEEKTALENT_WORKSPACE_ROOT=${HOME}"
   "SEEKTALENT_PROVIDER_NAME=liepin"
   "SEEKTALENT_LIEPIN_WORKER_MODE=opencli"
   "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli"
@@ -118,7 +130,7 @@ DOMI_ENV=(
 OPENCLI_ENV=("${SMOKE_COMMON_ENV[@]}")
 
 echo "Running seektalent doctor in Domi provider mode" >&2
-env -i "${DOMI_ENV[@]}" "${SEEKTALENT_BIN}" doctor --env-file /dev/null --json > "${DOMI_RUNTIME_ROOT}/doctor.json"
+(cd "${HOME}" && env -i "${DOMI_ENV[@]}" "${SEEKTALENT_BIN}" doctor --env-file /dev/null --json > "${DOMI_RUNTIME_ROOT}/doctor.json")
 
 echo "Running Domi LLM proxy hello" >&2
 env -i "${DOMI_ENV[@]}" "${VENV_PYTHON}" - <<'PY'
@@ -209,6 +221,7 @@ trap 'cleanup; exit 143' TERM
 
 echo "Starting packaged Workbench with seektalent workbench --port ${DOMI_WORKBENCH_PORT}" >&2
 WORKBENCH_PID="$(env -i "${DOMI_ENV[@]}" "${VENV_PYTHON}" - "${SEEKTALENT_BIN}" "${DOMI_WORKBENCH_PORT}" "${WORKBENCH_LOG}" <<'PY'
+import os
 import subprocess
 import sys
 
@@ -221,6 +234,7 @@ with open(log_path, "ab") as log:
         [seektalent_bin, "workbench", "--port", port, "--host", "127.0.0.1"],
         stdout=log,
         stderr=subprocess.STDOUT,
+        cwd=os.path.expanduser("~"),
         start_new_session=True,
     )
 print(process.pid)
@@ -233,8 +247,11 @@ import sys
 import urllib.request
 
 port = sys.argv[1]
-with urllib.request.urlopen(f"http://127.0.0.1:{port}/openapi.json", timeout=1) as response:
-    response.read(1)
+try:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/openapi.json", timeout=1) as response:
+        response.read(1)
+except Exception:
+    raise SystemExit(1)
 PY
   then
     echo "Domi runtime smoke passed. Workbench URL: http://127.0.0.1:${DOMI_WORKBENCH_PORT}/" >&2

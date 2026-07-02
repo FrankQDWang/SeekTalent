@@ -15,14 +15,21 @@ PACKAGE_FRONTEND_DIR = ROOT / "src" / "seektalent_ui" / "static" / "workbench"
 
 def main(argv: list[str] | None = None) -> int:
     _parser().parse_args(argv)
-    if shutil.which("pnpm") is None:
-        raise SystemExit("pnpm is required to build the packaged Workbench frontend.")
-    subprocess.run(["pnpm", "install", "--frozen-lockfile"], cwd=WEB_DIR, check=True)
-    subprocess.run(["pnpm", "exec", "vite", "build"], cwd=WEB_DIR, check=True)
+    pnpm = _pnpm_command()
+    subprocess.run([*pnpm, "install", "--frozen-lockfile"], cwd=WEB_DIR, check=True)
+    subprocess.run([*pnpm, "exec", "vite", "build"], cwd=WEB_DIR, check=True)
     _copy_frontend()
     _validate_frontend()
     print(f"Packaged Workbench frontend written to {PACKAGE_FRONTEND_DIR}")
     return 0
+
+
+def _pnpm_command() -> list[str]:
+    if shutil.which("corepack") is not None:
+        return ["corepack", "pnpm"]
+    if shutil.which("pnpm") is not None:
+        return ["pnpm"]
+    raise SystemExit("pnpm is required to build the packaged Workbench frontend.")
 
 
 def _parser() -> ArgumentParser:

@@ -73,6 +73,14 @@ def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
     return build_source_enabled_runtime(*args, **kwargs)
 
 
+def _liepin_fixture_settings(**overrides: object):
+    return make_settings(
+        liepin_worker_mode="fake_fixture",
+        liepin_allow_fake_fixture_worker=True,
+        **overrides,
+    )
+
+
 def _cts_source_plan(runtime: WorkflowRuntime, tracer: RunTracer):
     return build_runtime_source_plan(
         source_kinds=["cts"],
@@ -449,7 +457,7 @@ def _build_audit_fixture(
 
 
 def test_runtime_diagnostics_direct_helpers_match_legacy_outputs() -> None:
-    runtime = _workflow_runtime(make_settings())
+    runtime = _workflow_runtime(_liepin_fixture_settings())
     run_state = _build_run_state_fixture()
     round_state = run_state.round_history[0]
     controller_context = build_controller_context(
@@ -536,7 +544,7 @@ def test_runtime_diagnostics_builder_matches_legacy_search_diagnostics() -> None
 
 
 def test_run_config_excludes_company_discovery_settings(tmp_path: Path) -> None:
-    settings = make_settings(
+    settings = _liepin_fixture_settings(
         runs_dir=str(tmp_path / "runs"),
         bocha_api_key="bocha-secret",
         candidate_feedback_enabled=True,
@@ -565,7 +573,7 @@ def test_run_config_excludes_company_discovery_settings(tmp_path: Path) -> None:
 
 
 def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None:
-    settings = make_settings(
+    settings = _liepin_fixture_settings(
         runs_dir=str(tmp_path / "runs"),
         requirements_enable_thinking=False,
         controller_enable_thinking=False,
@@ -594,7 +602,7 @@ def test_run_config_records_latency_engineering_settings(tmp_path: Path) -> None
 
 
 def test_run_config_records_llm_prf_mainline_settings(tmp_path: Path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"))
+    settings = _liepin_fixture_settings(runs_dir=str(tmp_path / "runs"))
     runtime = _workflow_runtime(settings)
 
     run_config = runtime._build_public_run_config()
@@ -768,7 +776,7 @@ def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(t
 
 
 def test_llm_schema_pressure_includes_cache_repair_and_full_retry() -> None:
-    runtime = _workflow_runtime(make_settings(runs_dir="/tmp/seek-runs"))
+    runtime = _workflow_runtime(_liepin_fixture_settings(runs_dir="/tmp/seek-runs"))
 
     pressure_item = runtime._llm_schema_pressure_item(
         {
@@ -903,7 +911,7 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
         captured_extra_specs = extra_stage_names
 
     monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
-    settings = make_settings(
+    settings = _liepin_fixture_settings(
         candidate_feedback_enabled=True,
         candidate_feedback_model_id="qwen-feedback",
     )
@@ -923,7 +931,7 @@ def test_runtime_preflight_defers_llm_prf_stage_until_prf_is_eligible(monkeypatc
         captured_extra_specs = extra_stage_names
 
     monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
-    runtime = _workflow_runtime(make_settings(candidate_feedback_enabled=False))
+    runtime = _workflow_runtime(_liepin_fixture_settings(candidate_feedback_enabled=False))
 
     runtime._require_live_llm_config()
 

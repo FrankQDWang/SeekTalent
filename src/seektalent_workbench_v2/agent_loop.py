@@ -398,19 +398,30 @@ def _truncate_text(value: str, max_chars: int) -> str:
 
 def _validate_strict_openai_config(config: ResolvedTextModelConfig) -> None:
     if config.protocol_family != "openai_chat_completions_compatible":
-        raise ValueError("Workbench v2 agent requires OpenAI-compatible Bailian chat completions.")
-    if config.provider_label != "bailian" or config.endpoint_kind != "bailian_openai_chat_completions":
-        raise ValueError("Workbench v2 agent requires the Bailian OpenAI-compatible endpoint.")
+        raise ValueError("Workbench v2 agent requires OpenAI-compatible chat completions.")
+    if config.provider_label not in {"bailian", "domi"} or config.endpoint_kind != "bailian_openai_chat_completions":
+        raise ValueError("Workbench v2 agent requires the Bailian-compatible OpenAI chat completions endpoint.")
     if resolve_structured_output_mode(config) != "native_json_schema":
         raise ValueError("Workbench v2 agent requires native JSON Schema structured output.")
     if not config.api_key:
+        if config.provider_label == "domi":
+            raise ValueError("SEEKTALENT_DOMI_JWT is required for Workbench v2 agent turns.")
         raise ValueError("SEEKTALENT_TEXT_LLM_API_KEY is required for Workbench v2 agent turns.")
+    if config.provider_label == "domi" and not config.domi_llm_channel:
+        raise ValueError("SEEKTALENT_DOMI_LLM_CHANNEL is required for Workbench v2 agent turns.")
 
 
 def _build_openai_chat_model(config: ResolvedTextModelConfig) -> OpenAIChatCompletionsModel:
+    client = AsyncOpenAI(base_url=config.base_url, api_key=config.api_key)
+    if config.provider_label == "domi":
+        client = AsyncOpenAI(
+            base_url=config.base_url,
+            api_key=config.api_key,
+            default_query={"channel": config.domi_llm_channel or ""},
+        )
     return OpenAIChatCompletionsModel(
         model=config.model_id,
-        openai_client=AsyncOpenAI(base_url=config.base_url, api_key=config.api_key),
+        openai_client=client,
     )
 
 

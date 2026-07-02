@@ -25,7 +25,7 @@ FORBIDDEN_WORKBENCH_PATTERNS = [
 ]
 
 PACKAGED_FRONTEND_REQUIRED_PATTERNS = [
-    "/api/agent/workbench/conversations/from-jd",
+    "/api/agent/workbench/v2/conversations",
 ]
 PACKAGED_FRONTEND_FORBIDDEN_PATTERNS = [
     "submitJd",

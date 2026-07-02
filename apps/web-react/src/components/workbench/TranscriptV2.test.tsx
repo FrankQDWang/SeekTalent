@@ -189,7 +189,7 @@ describe("TranscriptV2", () => {
       child.classList.contains("requirement-form-event"),
     );
     const statusIndex = children.findIndex((child) =>
-      child.textContent?.includes("已记录修改"),
+      child.textContent.includes("已记录修改"),
     );
 
     expect(requirementIndex).toBeGreaterThan(-1);

@@ -4642,12 +4642,20 @@ export interface components {
       headline?: string | null;
       /** Company */
       company?: string | null;
+      /** Currenttitle */
+      currentTitle?: string | null;
+      /** Currentcompany */
+      currentCompany?: string | null;
       /** Location */
       location?: string | null;
+      /** City */
+      city?: string | null;
       /** Education */
       education?: string | null;
       /** Experienceyears */
       experienceYears?: number | null;
+      /** Workyears */
+      workYears?: number | null;
       /** Age */
       age?: number | null;
       /** Gender */
@@ -4658,6 +4666,8 @@ export interface components {
       jobStatus?: string | null;
       /** Sourcekinds */
       sourceKinds?: ("cts" | "liepin")[];
+      /** Sourcelabel */
+      sourceLabel?: string | null;
       /** Matchscore */
       matchScore?: number | null;
       match?: components["schemas"]["WorkbenchV2CandidateMatchView"] | null;
@@ -4740,12 +4750,20 @@ export interface components {
       headline?: string | null;
       /** Company */
       company?: string | null;
+      /** Currenttitle */
+      currentTitle?: string | null;
+      /** Currentcompany */
+      currentCompany?: string | null;
       /** Location */
       location?: string | null;
+      /** City */
+      city?: string | null;
       /** Education */
       education?: string | null;
       /** Experienceyears */
       experienceYears?: number | null;
+      /** Workyears */
+      workYears?: number | null;
       /** Age */
       age?: number | null;
       /** Gender */

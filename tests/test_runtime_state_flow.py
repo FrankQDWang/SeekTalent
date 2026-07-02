@@ -69,6 +69,14 @@ def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
     return build_source_enabled_runtime(*args, **kwargs)
 
 
+def _liepin_fixture_settings(**overrides: object):
+    return make_settings(
+        liepin_worker_mode="fake_fixture",
+        liepin_allow_fake_fixture_worker=True,
+        **overrides,
+    )
+
+
 def _cts_source_plan(runtime: WorkflowRuntime, tracer: RunTracer):
     return build_runtime_source_plan(
         source_kinds=["cts"],
@@ -1778,7 +1786,7 @@ def _round_review_fixture() -> dict[str, object]:
 
 
 def test_runtime_reports_round_review_matches_legacy_renderer() -> None:
-    runtime = _workflow_runtime(make_settings())
+    runtime = _workflow_runtime(_liepin_fixture_settings())
     payload = _round_review_fixture()
 
     direct = render_round_review_direct(**payload)

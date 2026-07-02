@@ -60,6 +60,7 @@ def test_domi_runtime_smoke_script_isolates_stale_ambient_env() -> None:
     assert "SETUP_ENV=(" in script
     assert "DOMI_ENV=(" in script
     assert "OPENCLI_ENV=(" in script
+    assert "SEEKTALENT_WORKSPACE_ROOT=${HOME}" in script
     assert "SEEKTALENT_PROVIDER_NAME=liepin" in script
     assert 'env -i "${SETUP_ENV[@]}" "${VENV_PYTHON}" -m pip install' in script
     assert 'env -i "${SETUP_ENV[@]}" "${VENV_PYTHON}" -m build' in script
@@ -68,6 +69,32 @@ def test_domi_runtime_smoke_script_isolates_stale_ambient_env() -> None:
     assert 'env -i "${OPENCLI_ENV[@]}" "${SEEKTALENT_OPENCLI_BIN}" daemon status' in script
     assert 'env -i "${OPENCLI_ENV[@]}" "${SEEKTALENT_OPENCLI_BIN}" daemon restart' in script
     assert "export SEEKTALENT_DOMI_JWT" not in script
+
+
+def test_domi_runtime_smoke_script_rebuilds_packaged_frontend_before_wheel() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    frontend_build_index = script.index("scripts/build_packaged_workbench.py")
+    wheel_build_index = script.index('"${VENV_PYTHON}" -m build --wheel')
+
+    assert frontend_build_index < wheel_build_index
+    assert "domi_packaged_frontend_missing" in script
+
+
+def test_domi_runtime_smoke_script_runs_installed_checks_outside_repo() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'cd "${HOME}" && env -i "${DOMI_ENV[@]}" "${SEEKTALENT_BIN}" doctor' in script
+    assert 'cwd=os.path.expanduser("~")' in script
+
+
+def test_domi_runtime_smoke_script_suppresses_readiness_probe_tracebacks() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+
+    readiness_probe = script[script.index('with urllib.request.urlopen(f"http://127.0.0.1:{port}/openapi.json"') :]
+
+    assert "except Exception:" in readiness_probe
+    assert "raise SystemExit(1)" in readiness_probe
 
 
 def test_domi_runtime_smoke_script_passes_bash_syntax_check() -> None:

@@ -171,9 +171,17 @@ Defaults:
 - Domi LLM proxy: `https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1`
 - Domi channel: `seek_talent`
 
-The smoke builds the current repository wheel, installs it into the isolated Domi runtime venv, runs `seektalent doctor`, sends a Domi LLM proxy hello request, checks OpenCLI daemon status, and starts the packaged Workbench long enough to verify `/openapi.json`.
+The smoke rebuilds the packaged Workbench frontend, builds the current repository wheel, installs it into the isolated Domi runtime venv, runs `seektalent doctor`, sends a Domi LLM proxy hello request, checks OpenCLI daemon status, and starts the packaged Workbench long enough to verify `/openapi.json`.
 
 It does not read Domi Electron storage by default and does not run a complete live Liepin recruiting workflow.
+
+For a foreground Workbench session that stays running until Ctrl+C, use:
+
+```bash
+scripts/start-domi-workbench.sh
+```
+
+The start script runs the same install/smoke setup first, then `exec`s the installed Domi-runtime `seektalent workbench` process in the foreground.
 
 ## Mock CTS for development
 
