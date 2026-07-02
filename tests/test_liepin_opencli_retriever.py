@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from seektalent.providers.liepin.detail_payload_text import STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS
 from seektalent.providers.liepin.opencli_retriever import (
     LiepinOpenCliResumeRequest,
     LiepinOpenCliResumeRetriever,
@@ -102,7 +103,7 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
     assert runner.captured_ranks == [1, 2]
     assert len(response.resumes) == 2
     assert response.raw_candidate_count == 10
-    assert response.resumes[0].normalized_text == "数据平台 Python resume 1"
+    assert "数据平台 Python resume 1" in response.resumes[0].normalized_text
     assert response.resumes[0].payload["sourceUrl"] == (
         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-1"
     )
@@ -162,6 +163,58 @@ def test_opencli_retriever_structured_detail_fallback_deduplicates_and_caps_text
     text = response.resumes[0].normalized_text
     assert text.count(duplicate_summary) == 1
     assert len(text) <= 4000
+
+
+def test_opencli_retriever_ignores_envelope_normalized_text_for_details(tmp_path: Path) -> None:
+    runner = FakeOpenCliRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+    runner_envelope = runner.search_liepin_resumes(
+        source_run_id="run-1",
+        query="数据开发 Python",
+        target_resumes=1,
+        max_pages=1,
+        max_cards=2,
+    )
+    sentinel = "PAGE_CHROME_SHOULD_NOT_PERSIST"
+    runner_envelope["resumes"][0]["normalized_text"] = f"{sentinel} " * 2000
+    runner_envelope["resumes"][0]["detail_payload"] = {
+        "currentTitle": "数据开发专家",
+        "currentCompany": "平安好医",
+        "workExperienceList": [
+            {
+                "company": "平安好医",
+                "title": "数据开发专家",
+                "summary": "结构化经历保留",
+            }
+        ],
+        "skills": ["Python"],
+    }
+
+    class EnvelopeRunner(FakeOpenCliRunner):
+        def search_liepin_resumes(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return runner_envelope
+
+    retriever = LiepinOpenCliResumeRetriever(
+        runner=EnvelopeRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+    )
+
+    response = retriever.search_resumes(
+        LiepinOpenCliResumeRequest(
+            source_run_id="run-1",
+            keyword_query="数据开发 Python",
+            query_terms=("数据开发", "Python"),
+            target_resumes=1,
+            max_cards=2,
+            max_pages=1,
+            requirement_sheet={"job_title": "数据开发专家"},
+        )
+    )
+
+    text = response.resumes[0].normalized_text
+    assert "平安好医" in text
+    assert "结构化经历保留" in text
+    assert sentinel not in text
+    assert len(text) <= STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS
 
 
 def test_opencli_retriever_preserves_workflow_steps_in_request_payload(tmp_path: Path) -> None:

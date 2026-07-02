@@ -4,7 +4,10 @@ import pytest
 from pydantic import ValidationError
 
 from seektalent.providers.liepin import mapper as liepin_mapper
-from seektalent.providers.liepin.detail_payload_text import PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
+from seektalent.providers.liepin.detail_payload_text import (
+    PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+    STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS,
+)
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
 from seektalent.providers.liepin.worker_contracts import (
     LiepinSafeCardSummary,
@@ -282,6 +285,19 @@ def test_detail_mapping_sanitizes_provider_snapshot_payload() -> None:
     assert not (set(mapped.provider_snapshot.raw_payload) & set(WHOLE_PAGE_TEXT_ALIASES))
     assert mapped.candidate.raw["workExperienceList"][0]["summary"] == "structured work summary stays"
     assert mapped.provider_snapshot.raw_payload["workExperienceList"][0]["summary"] == "structured work summary stays"
+
+
+def test_detail_mapping_derives_normalized_text_from_structured_payload() -> None:
+    sentinel = "PAGE_CHROME_SHOULD_NOT_PERSIST"
+    detail = _worker_detail().model_copy(update={"normalized_text": f"{sentinel} " * 2000})
+
+    mapped = map_liepin_worker_detail(detail, raw_payload_artifact_ref="worker://details/candidate-1.json")
+
+    for text in (mapped.candidate.search_text, mapped.provider_snapshot.normalized_text):
+        assert "平安好医" in text
+        assert "用户体验设计专家" in text
+        assert sentinel not in text
+        assert len(text) <= STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS
 
 
 def test_card_mapping_returns_provider_snapshot_with_raw_payload_and_privacy_metadata() -> None:

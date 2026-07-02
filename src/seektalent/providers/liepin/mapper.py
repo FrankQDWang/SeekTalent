@@ -5,7 +5,11 @@ import re
 
 from seektalent.core.retrieval.provider_contract import ProviderPayloadKind, ProviderSnapshot
 from seektalent.models import ResumeCandidate
-from seektalent.providers.liepin.detail_payload_text import PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
+from seektalent.providers.liepin.detail_payload_text import (
+    PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+    capped_liepin_detail_text,
+    structured_liepin_detail_text,
+)
 from seektalent.providers.liepin.models import LiepinScoreEvidenceSource
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
 from seektalent.storage.json import sha256_json
@@ -68,19 +72,20 @@ def _map_candidate(
     )
     provider_subject_id = worker_candidate.provider_subject_id
     resume_id = provider_subject_id or worker_candidate.synthetic_candidate_fingerprint
+    normalized_text = _mapped_normalized_text(worker_candidate, provider_payload)
     candidate = ResumeCandidate(
         resume_id=resume_id,
         source_resume_id=provider_subject_id,
         snapshot_sha256=snapshot_hash,
         dedup_key=worker_candidate.synthetic_candidate_fingerprint,
-        search_text=worker_candidate.normalized_text,
+        search_text=normalized_text,
         raw=raw,
     )
     snapshot = ProviderSnapshot(
         provider_name="liepin",
         payload_kind=payload_kind,
         raw_payload=provider_payload,
-        normalized_text=worker_candidate.normalized_text,
+        normalized_text=normalized_text,
         provider_subject_id=provider_subject_id,
         provider_listing_id=worker_candidate.provider_listing_id,
         synthetic_candidate_fingerprint=worker_candidate.synthetic_candidate_fingerprint,
@@ -124,6 +129,15 @@ def map_liepin_worker_detail(
 
 def _sanitize_liepin_provider_payload(payload: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in payload.items() if key not in PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS}
+
+
+def _mapped_normalized_text(worker_candidate: LiepinWorkerCandidate, provider_payload: dict[str, object]) -> str:
+    if isinstance(worker_candidate, LiepinWorkerCandidateDetail):
+        structured_text = structured_liepin_detail_text(provider_payload)
+        if structured_text:
+            return structured_text
+        return capped_liepin_detail_text(worker_candidate.normalized_text)
+    return worker_candidate.normalized_text
 
 
 def _copy_safe_card_payload_metadata(raw: dict[str, object], payload: dict[str, object]) -> None:
