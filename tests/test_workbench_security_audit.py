@@ -173,6 +173,9 @@ def test_workbench_public_event_and_audit_schemas_are_closed(tmp_path: Path) -> 
     assert response.status_code == 200
     schemas = response.json()["components"]["schemas"]
     assert schemas["WorkbenchEventPayloadResponse"]["additionalProperties"] is False
+    activity_properties = schemas["AgentWorkbenchActivityPayloadResponse"]["properties"]
+    assert "reflectionSummary" in activity_properties
+    assert "reflectionRationale" not in activity_properties
 
 
 def test_agent_workbench_openapi_documents_problem_details_and_source_kind_enum(tmp_path: Path) -> None:

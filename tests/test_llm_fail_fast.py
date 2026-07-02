@@ -343,7 +343,6 @@ def test_reflection_repair_prompt_uses_source_user_prompt(monkeypatch: pytest.Mo
         filter_advice=ReflectionFilterAdviceDraft(),
         suggest_stop=True,
         suggested_stop_reason="Search is saturated.",
-        reflection_rationale="Enough signal.",
     )
 
     async def fake_repair_with_model(settings, **kwargs):  # noqa: ANN001, ANN003

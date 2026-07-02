@@ -141,24 +141,28 @@ def test_reflection_prompt_requires_untried_term_stop_discipline() -> None:
     assert "Do not dismiss unused concrete terms as unlikely without first trying them" in prompt
 
 
-def test_reflection_rationale_has_generous_length_limit() -> None:
+def test_reflection_advice_draft_rejects_removed_rationale_field() -> None:
     with pytest.raises(ValidationError):
-        ReflectionAdviceDraft(
-            keyword_advice=ReflectionKeywordAdviceDraft(),
-            filter_advice=ReflectionFilterAdviceDraft(),
-            suggest_stop=False,
-            reflection_rationale="a" * 2001,
+        ReflectionAdviceDraft.model_validate(
+            {
+                "keyword_advice": {},
+                "filter_advice": {},
+                "suggest_stop": False,
+                "reflection_rationale": "TUI-only rationale.",
+            }
         )
 
 
-def test_reflection_advice_rationale_has_generous_length_limit() -> None:
+def test_reflection_advice_rejects_removed_rationale_field() -> None:
     with pytest.raises(ValidationError):
-        ReflectionAdvice(
-            keyword_advice=ReflectionKeywordAdvice(),
-            filter_advice=ReflectionFilterAdvice(),
-            reflection_rationale="a" * 2001,
-            suggest_stop=False,
-            reflection_summary="Continue.",
+        ReflectionAdvice.model_validate(
+            {
+                "keyword_advice": {},
+                "filter_advice": {},
+                "suggest_stop": False,
+                "reflection_summary": "Continue.",
+                "reflection_rationale": "TUI-only rationale.",
+            }
         )
 
 
@@ -167,7 +171,6 @@ def test_reflection_advice_draft_stop_field_validation_is_deferred_for_repair() 
         keyword_advice=ReflectionKeywordAdviceDraft(),
         filter_advice=ReflectionFilterAdviceDraft(),
         suggest_stop=True,
-        reflection_rationale="Top pool is good enough to stop.",
     )
 
     assert validate_reflection_draft(draft) == "suggested_stop_reason is required when suggest_stop is true"
@@ -179,7 +182,6 @@ def test_repair_reflection_stop_fields_nulls_reason_when_continue() -> None:
         filter_advice=ReflectionFilterAdviceDraft(),
         suggest_stop=False,
         suggested_stop_reason="Keep searching.",
-        reflection_rationale="Need more evidence.",
     )
 
     repaired = repair_reflection_stop_fields(draft)
@@ -194,7 +196,6 @@ def test_repair_reflection_stop_fields_keeps_missing_stop_reason_for_model_repai
         keyword_advice=ReflectionKeywordAdviceDraft(),
         filter_advice=ReflectionFilterAdviceDraft(),
         suggest_stop=True,
-        reflection_rationale="Top pool is stable.",
     )
 
     repaired = repair_reflection_stop_fields(draft)
@@ -203,23 +204,32 @@ def test_repair_reflection_stop_fields_keeps_missing_stop_reason_for_model_repai
     assert repaired.suggested_stop_reason is None
 
 
-def test_materialized_reflection_uses_stable_rationale_for_trace() -> None:
-    context = _context(round_no=2, unique_new_count=10)
+def test_materialized_reflection_does_not_emit_rationale_field() -> None:
+    context = _context(
+        round_no=2,
+        unique_new_count=10,
+        query_term_pool=[
+            QueryTermCandidate(
+                term="LangChain",
+                source="jd",
+                category="tooling",
+                priority=2,
+                evidence="JD body",
+                first_added_round=0,
+            )
+        ],
+    )
     advice = materialize_reflection_advice(
         context=cast(Any, context),
         draft=ReflectionAdviceDraft(
             keyword_advice=ReflectionKeywordAdviceDraft(suggested_activate_terms=["LangChain"]),
             filter_advice=ReflectionFilterAdviceDraft(),
             suggest_stop=False,
-            reflection_rationale=(
-                "Round 1 produced several plausible AI Agent candidates, but coverage is still narrow. "
-                "Trying LangChain next should test the highest-signal unused framework term."
-            ),
         ),
     )
 
-    assert advice.reflection_rationale == "reflection_continue"
-    assert "LangChain next" not in advice.reflection_rationale
+    assert "reflection_rationale" not in advice.model_dump(mode="json")
+    assert "LangChain" in advice.reflection_summary
 
 
 def test_materialized_reflection_does_not_preserve_llm_free_text_in_public_fields() -> None:
@@ -231,13 +241,9 @@ def test_materialized_reflection_does_not_preserve_llm_free_text_in_public_field
             filter_advice=ReflectionFilterAdviceDraft(),
             suggest_stop=True,
             suggested_stop_reason="Stop because Alice Zhang already matches and token=secret-123.",
-            reflection_rationale=(
-                "Alice Zhang alice@example.com +1 415 555 0134 resume says shipped payroll systems."
-            ),
         ),
     )
 
-    assert advice.reflection_rationale == "reflection_stop"
     assert advice.suggested_stop_reason == "reflection_stop"
     event = make_runtime_public_event(
         runtime_run_id="run-1",
@@ -247,7 +253,6 @@ def test_materialized_reflection_does_not_preserve_llm_free_text_in_public_field
         counts={"feedbackCandidateCount": 10},
         details={
             "reflectionSummary": advice.reflection_summary,
-            "reflectionRationale": advice.reflection_rationale,
             "suggestedStopReason": advice.suggested_stop_reason,
         },
     )
@@ -288,7 +293,6 @@ def test_materialized_reflection_prose_mentions_only_structured_activate_terms()
             ),
             filter_advice=ReflectionFilterAdviceDraft(suggested_drop_filter_fields=["position"]),
             suggest_stop=False,
-            reflection_rationale="The search returned no new candidates, so adjust terms and remove stale filters.",
         ),
     )
 
@@ -305,7 +309,6 @@ def test_materialized_reflection_prose_does_not_invent_terms() -> None:
             keyword_advice=ReflectionKeywordAdviceDraft(),
             filter_advice=ReflectionFilterAdviceDraft(),
             suggest_stop=False,
-            reflection_rationale="One new candidate is not enough evidence to change the plan.",
         ),
     )
 
@@ -364,7 +367,6 @@ def test_materialized_reflection_drops_non_admitted_keyword_advice() -> None:
             ),
             filter_advice=ReflectionFilterAdviceDraft(),
             suggest_stop=False,
-            reflection_rationale="The previous round found no new candidates, so try unused terms.",
         ),
     )
 
@@ -408,7 +410,6 @@ def test_materialized_reflection_forces_continue_when_untried_admitted_terms_rem
             filter_advice=ReflectionFilterAdviceDraft(),
             suggest_stop=True,
             suggested_stop_reason="Search is saturated.",
-            reflection_rationale="The pool is not yet strong enough and one admitted term remains untried.",
         ),
     )
 
@@ -461,7 +462,6 @@ def test_materialized_reflection_uses_runtime_term_pool_for_stop_suppression() -
             filter_advice=ReflectionFilterAdviceDraft(),
             suggest_stop=True,
             suggested_stop_reason="Search is saturated.",
-            reflection_rationale="The pool is not yet strong enough and one runtime term remains untried.",
         ),
     )
 
@@ -506,7 +506,6 @@ def test_materialized_reflection_allows_stop_when_top_pool_is_strong() -> None:
             filter_advice=ReflectionFilterAdviceDraft(),
             suggest_stop=True,
             suggested_stop_reason="Search is saturated.",
-            reflection_rationale="The top pool is strong enough and the remaining term is unlikely to change the result.",
         ),
     )
 
@@ -531,7 +530,6 @@ def test_reflection_critic_repairs_stop_reason_with_model(monkeypatch: pytest.Mo
         keyword_advice=ReflectionKeywordAdviceDraft(),
         filter_advice=ReflectionFilterAdviceDraft(),
         suggest_stop=True,
-        reflection_rationale="Top pool is stable.",
     )
     repaired = invalid.model_copy(update={"suggested_stop_reason": "Search is saturated."})
     seen_prompt_names: dict[str, str] = {}
@@ -576,7 +574,6 @@ def test_reflection_critic_deterministic_cleanup_does_not_count_as_model_repair(
         filter_advice=ReflectionFilterAdviceDraft(),
         suggest_stop=False,
         suggested_stop_reason="Continue searching.",
-        reflection_rationale="Need more evidence.",
     )
 
     async def fake_reflect_live(*, context, prompt_cache_key=None, source_user_prompt=None):  # noqa: ANN001
@@ -613,7 +610,6 @@ def test_reflection_critic_full_retry_after_failed_repair(monkeypatch: pytest.Mo
         keyword_advice=ReflectionKeywordAdviceDraft(),
         filter_advice=ReflectionFilterAdviceDraft(),
         suggest_stop=True,
-        reflection_rationale="Top pool is stable.",
     )
     valid = invalid.model_copy(update={"suggested_stop_reason": "Search is saturated."})
     calls = {"count": 0}
@@ -662,7 +658,6 @@ def test_reflection_critic_aggregates_provider_usage_across_model_repair(
         keyword_advice=ReflectionKeywordAdviceDraft(),
         filter_advice=ReflectionFilterAdviceDraft(),
         suggest_stop=True,
-        reflection_rationale="Top pool is stable.",
     )
     repaired = invalid.model_copy(update={"suggested_stop_reason": "Search is saturated."})
     live_usage = _provider_usage(

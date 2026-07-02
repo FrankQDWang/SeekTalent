@@ -295,7 +295,7 @@ def test_round_completed_progress_is_business_summary_first() -> None:
                 "r2 · 84 分 · 算法工程师 | 杭州 | 4y · 有召回和排序经验",
             ],
             "reflection_summary": "本轮关键词有效，下一轮保留 python，增加搜索架构方向。",
-            "reflection_rationale": "新增候选人覆盖了核心 Python 能力，但推荐系统证据仍不足，下一轮需要补搜索架构方向。",
+            "reflection_rationale": "旧 TUI 字段不应展示。",
         },
     )
 
@@ -312,7 +312,7 @@ def test_round_completed_progress_is_business_summary_first() -> None:
     assert "代表候选人" in rendered
     assert "r1 · 92 分" in rendered
     assert "本轮反思：本轮关键词有效" in rendered
-    assert "反思理由：新增候选人覆盖了核心 Python 能力" in rendered
+    assert "反思理由" not in rendered
 
 
 def test_search_progress_shows_dual_query_routes() -> None:

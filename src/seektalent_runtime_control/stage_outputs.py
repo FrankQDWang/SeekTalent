@@ -42,7 +42,6 @@ _PUBLIC_DETAIL_TEXT_KEYS = {
     "keywordQuery",
     "resumeQualityComment",
     "reflectionSummary",
-    "reflectionRationale",
     "suggestedStopReason",
     "finalizationReasonCode",
 }

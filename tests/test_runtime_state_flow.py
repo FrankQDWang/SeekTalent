@@ -1778,7 +1778,6 @@ def _round_review_fixture() -> dict[str, object]:
         ],
         "reflection": ReflectionAdvice(
             reflection_summary="Continue with one extra tracing term.",
-            reflection_rationale="The pool still lacks enough retrieval-specialist resumes.",
             suggest_stop=False,
         ),
         "next_step": "continue to controller round 3",
@@ -1840,7 +1839,6 @@ def test_runtime_reports_round_review_matches_legacy_renderer() -> None:
         "## Reflection\n"
         "\n"
         "- Reflection summary: Continue with one extra tracing term.\n"
-        "- Reflection rationale: The pool still lacks enough retrieval-specialist resumes.\n"
         "- Reflection decision: `continue`\n"
         "\n"
         "- Next step: `continue to controller round 3`\n"

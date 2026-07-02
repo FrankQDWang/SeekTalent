@@ -86,6 +86,17 @@ def test_frontend_schema_does_not_accept_fresh_workflow_start_inputs() -> None:
     assert "sourceIds" not in start_schema
 
 
+def test_frontend_schema_does_not_expose_reflection_rationale() -> None:
+    schema_text = Path("apps/web-react/src/lib/api/schema.d.ts").read_text(encoding="utf-8")
+    activity_schema = schema_text.split("/** AgentWorkbenchActivityPayloadResponse */", maxsplit=1)[1].split(
+        "};",
+        maxsplit=1,
+    )[0]
+
+    assert "reflectionSummary" in activity_schema
+    assert "reflectionRationale" not in activity_schema
+
+
 def test_packaged_workbench_bundle_uses_operation_events() -> None:
     bundle_text = "\n".join(
         path.read_text(encoding="utf-8")

@@ -3102,7 +3102,7 @@ def test_runtime_graph_feedback_node_preserves_public_reflection_details(tmp_pat
         counts={"feedbackCandidateCount": 5},
         details={
             "reflectionSummary": "下一轮强化 Flink 关键词。",
-            "reflectionRationale": "当前 Top Pool 缺少实时链路建设经验。",
+            "reflectionRationale": "旧 UI 字段不应展示。",
             "suggestedActivateTerms": ["Flink"],
             "suggestedDropTerms": ["BI 报表"],
         },
@@ -3114,7 +3114,7 @@ def test_runtime_graph_feedback_node_preserves_public_reflection_details(tmp_pat
     node_by_id = {node["nodeId"]: node for node in response.json()["nodes"]}
     sections = {section["heading"]: section for section in node_by_id["round-1-feedback"]["detailSections"]}
     assert sections["反思总结"]["text"] == "下一轮强化 Flink 关键词。"
-    assert sections["反思理由"]["text"] == "当前 Top Pool 缺少实时链路建设经验。"
+    assert "反思理由" not in sections
     assert sections["关键词建议"]["values"] == ["启用：Flink", "丢弃：BI 报表"]
 
 

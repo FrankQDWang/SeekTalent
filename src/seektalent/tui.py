@@ -341,9 +341,6 @@ def _render_round_completed(event: ProgressEvent, payload: dict[str, Any]) -> li
     reflection_summary = str(payload.get("reflection_summary") or "").strip()
     if reflection_summary:
         lines.append(f"本轮反思：{escape(reflection_summary)}")
-    reflection_rationale = str(payload.get("reflection_rationale") or "").strip()
-    if reflection_rationale and reflection_rationale not in {"reflection_continue", "reflection_stop"}:
-        lines.append(f"反思理由：{escape(reflection_rationale)}")
     return lines
 
 

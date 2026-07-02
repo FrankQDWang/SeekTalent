@@ -209,8 +209,7 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
             render_template_version_block("reflection"),
             (
                 "TASK\n"
-                "Review this retrieval round and return structured keyword/filter advice, "
-                "a reflection_rationale explanation, and stop advice.\n"
+                "Review this retrieval round and return structured keyword/filter advice and stop advice.\n"
                 "All natural-language output fields must be written in Simplified Chinese."
             ),
             "REQUIREMENTS\n" + render_untrusted_text_block("REQUIREMENT_SHEET", requirements_text),
@@ -279,8 +278,7 @@ def materialize_reflection_advice(*, context: ReflectionContext, draft: Reflecti
     untried_terms = _untried_admitted_terms(context)
     suppress_reflection_stop_advice = draft.suggest_stop and untried_terms and not _top_pool_is_strong(context)
     suggest_stop = draft.suggest_stop and not suppress_reflection_stop_advice
-    public_reason = _public_reflection_reason(suggest_stop=suggest_stop)
-    suggested_stop_reason = public_reason if suggest_stop else None
+    suggested_stop_reason = _public_reflection_reason(suggest_stop=suggest_stop) if suggest_stop else None
     new_count = context.search_observation.unique_new_count
     summary_parts = [f"第 {context.round_no} 轮新增 {new_count} 份候选简历。"]
     summary_parts.append(f"关键词建议：{keyword_summary}")
@@ -298,7 +296,6 @@ def materialize_reflection_advice(*, context: ReflectionContext, draft: Reflecti
             suggested_drop_filter_fields=_drop_disabled_filter_fields(draft.filter_advice.suggested_drop_filter_fields),
             suggested_add_filter_fields=_drop_disabled_filter_fields(draft.filter_advice.suggested_add_filter_fields),
         ),
-        reflection_rationale=public_reason,
         suggest_stop=suggest_stop,
         suggested_stop_reason=suggested_stop_reason,
         reflection_summary="".join(summary_parts),

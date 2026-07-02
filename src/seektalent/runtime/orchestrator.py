@@ -2346,7 +2346,6 @@ class WorkflowRuntime:
                         "executedQueries": _query_package_summaries(executed_query_packages),
                         "resumeQualityComment": resume_quality_comment,
                         "reflectionSummary": reflection_advice.reflection_summary,
-                        "reflectionRationale": reflection_advice.reflection_rationale,
                         "suggestStop": reflection_advice.suggest_stop,
                         "suggestedStopReason": reflection_advice.suggested_stop_reason,
                         "suggestedActivateTerms": reflection_advice.keyword_advice.suggested_activate_terms,
@@ -2473,7 +2472,6 @@ class WorkflowRuntime:
             "resume_quality_comment": resume_quality_comment,
             "resume_quality_comment_error": resume_quality_comment_error,
             "reflection_summary": reflection.reflection_summary if reflection is not None else "",
-            "reflection_rationale": reflection.reflection_rationale if reflection is not None else "",
         }
 
     def _write_query_resume_hits(
@@ -3009,7 +3007,6 @@ class WorkflowRuntime:
         if not self.settings.enable_reflection:
             advice = ReflectionAdvice(
                 reflection_summary="Reflection disabled.",
-                reflection_rationale="Reflection is disabled for this run.",
             )
             return advice
         try:
@@ -3459,11 +3456,9 @@ class WorkflowRuntime:
             return f"action=source_search; query_terms={len(output.get('proposed_query_terms') or [])}"
         if stage == "reflection":
             summary = str(output.get("reflection_summary", ""))
-            rationale = str(output.get("reflection_rationale", ""))
             return (
                 f"suggest_stop={output.get('suggest_stop')}; "
-                f"{self._preview_text(summary, limit=100)}; "
-                f"{self._preview_text(rationale, limit=140)}"
+                f"{self._preview_text(summary, limit=140)}"
             )
         if stage == "finalize":
             return f"candidates={len(output.get('candidates') or [])}; {self._preview_text(str(output.get('summary', '')), limit=140)}"

@@ -58,7 +58,6 @@ class AgentWorkbenchRoundSummaryProjection:
     top_pool_count: int | None = None
     resume_quality_comment: str | None = None
     reflection_summary: str | None = None
-    reflection_rationale: str | None = None
     suggested_activate_terms: tuple[str, ...] = ()
     suggested_keep_terms: tuple[str, ...] = ()
     suggested_deprioritize_terms: tuple[str, ...] = ()
@@ -95,7 +94,6 @@ class _RoundFacts:
     top_pool_count: int | None = None
     resume_quality_comment: str | None = None
     reflection_summary: str | None = None
-    reflection_rationale: str | None = None
     suggested_activate_terms: tuple[str, ...] = ()
     suggested_keep_terms: tuple[str, ...] = ()
     suggested_deprioritize_terms: tuple[str, ...] = ()
@@ -121,7 +119,6 @@ class _RoundFacts:
             top_pool_count=self.top_pool_count,
             resume_quality_comment=self.resume_quality_comment,
             reflection_summary=self.reflection_summary,
-            reflection_rationale=self.reflection_rationale,
             suggested_activate_terms=self.suggested_activate_terms,
             suggested_keep_terms=self.suggested_keep_terms,
             suggested_deprioritize_terms=self.suggested_deprioritize_terms,
@@ -231,7 +228,6 @@ def _apply_round_output(summary: _RoundFacts, *, output: RuntimeStageOutput, pay
             summary.executed_queries = executed
         summary.resume_quality_comment = _replace_text(summary.resume_quality_comment, details.get("resumeQualityComment"))
         summary.reflection_summary = _replace_text(summary.reflection_summary, details.get("reflectionSummary"))
-        summary.reflection_rationale = _replace_text(summary.reflection_rationale, details.get("reflectionRationale"))
         summary.suggested_activate_terms = _string_tuple(details.get("suggestedActivateTerms"))
         summary.suggested_keep_terms = _string_tuple(details.get("suggestedKeepTerms"))
         summary.suggested_deprioritize_terms = _string_tuple(details.get("suggestedDeprioritizeTerms"))

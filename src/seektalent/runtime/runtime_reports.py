@@ -192,7 +192,6 @@ def render_round_review(
                 "## Reflection",
                 "",
                 f"- Reflection summary: {reflection.reflection_summary}",
-                f"- Reflection rationale: {reflection.reflection_rationale or 'None'}",
                 f"- Reflection decision: `{'stop' if reflection.suggest_stop else 'continue'}`",
             ]
         )

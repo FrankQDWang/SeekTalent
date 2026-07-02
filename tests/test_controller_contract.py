@@ -609,7 +609,6 @@ def test_controller_accepts_inactive_term_when_previous_reflection_advised_it() 
         previous_reflection=ReflectionSummaryView(
             decision="continue",
             reflection_summary="Activate retrieval.",
-            reflection_rationale="The previous round had shortage.",
         )
     )
     context.query_term_pool = [

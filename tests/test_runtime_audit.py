@@ -745,7 +745,6 @@ def test_runtime_snapshot_builder_accepts_reflection_cache_and_repair_metadata(t
         structured_output=ReflectionAdvice(
             keyword_advice=ReflectionKeywordAdvice(),
             filter_advice=ReflectionFilterAdvice(),
-            reflection_rationale="Continue search.",
             suggest_stop=False,
             suggested_stop_reason=None,
             reflection_summary="Continue.",

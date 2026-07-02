@@ -598,7 +598,6 @@ def _feedback_sections(
                 ],
             ),
             section_from_text("反思总结", _detail_text(details, "reflectionSummary")),
-            section_from_text("反思理由", _detail_text(details, "reflectionRationale")),
             section_from_list("关键词建议", keyword_advice) if keyword_advice else None,
             section_from_list("筛选字段建议", filter_advice) if filter_advice else None,
         ]

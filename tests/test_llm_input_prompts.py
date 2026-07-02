@@ -433,7 +433,7 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     assert 'UNTRUSTED DATA "DROPPED_CANDIDATES"' in prompt
     assert 'UNTRUSTED DATA "SCORING_FAILURES"' in prompt
     assert 'UNTRUSTED DATA "UNTRIED_ADMITTED_TERMS"' in prompt
-    assert "reflection_rationale" in prompt
+    assert "reflection_rationale" not in prompt
     assert "ROUND RESULT" in prompt
     assert "CURRENT QUERY" in prompt
     assert "REQUIREMENTS" in prompt
@@ -462,13 +462,13 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     assert_prompt_snapshot_safe(prompt)
 
 
-def test_reflection_prompt_mentions_rationale_schema_budget() -> None:
+def test_reflection_prompt_excludes_rationale_schema_field() -> None:
     prompt = Path("src/seektalent/prompts/reflection.md").read_text(encoding="utf-8")
 
     assert "Treat `primary_role_anchor` as the fixed title direction." in prompt
     assert "You may suggest keeping or reusing `secondary_title_anchor`" in prompt
-    assert "reflection_rationale should be a concise audit summary within schema budget" in prompt
-    assert "not a step-by-step reasoning transcript" in prompt
+    assert "reflection_rationale" not in prompt
+    assert "Do not include free-text rationale" in prompt
 
 
 def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> None:

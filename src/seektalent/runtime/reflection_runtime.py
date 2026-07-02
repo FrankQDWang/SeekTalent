@@ -251,12 +251,11 @@ async def run_reflection_stage(
     emit_progress(
         progress_callback,
         "reflection_completed",
-        reflection_advice.reflection_rationale or reflection_advice.reflection_summary,
+        reflection_advice.reflection_summary,
         round_no=round_no,
         payload={
             "stage": "reflection",
             "reflection_summary": reflection_advice.reflection_summary,
-            "reflection_rationale": reflection_advice.reflection_rationale,
             "suggest_stop": reflection_advice.suggest_stop,
             "suggested_stop_reason": reflection_advice.suggested_stop_reason,
         },

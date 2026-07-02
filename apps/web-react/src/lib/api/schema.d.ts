@@ -1579,8 +1579,6 @@ export interface components {
       resumeQualityComment?: string | null;
       /** Reflectionsummary */
       reflectionSummary?: string | null;
-      /** Reflectionrationale */
-      reflectionRationale?: string | null;
       /** Suggestedactivateterms */
       suggestedActivateTerms?: string[];
       /** Suggestedkeepterms */

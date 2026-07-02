@@ -834,7 +834,6 @@ def test_round_reducer_combines_public_stage_outputs_without_raw_fallback() -> N
                         ],
                         "resumeQualityComment": "本轮候选人偏平台工程。",
                         "reflectionSummary": "继续保留 agent 平台关键词。",
-                        "reflectionRationale": "候选人匹配度稳定。",
                         "suggestedAddFilterFields": ["location"],
                     }
                 },
@@ -3754,7 +3753,6 @@ def _thread_view(
                     "newly_scored_count": 10,
                     "resume_quality_comment": "初次搜索拿到10位新候选人，覆盖面较好，但人群混杂。",
                     "reflection_summary": "下一轮保留 AI agent、LLM，并加入 LangChain、AutoGen、RAG。",
-                    "reflection_rationale": "候选人质量接近岗位要求，但需要提升相关度。",
                     "suggestedActivateTerms": ["LangChain", "AutoGen", "RAG"],
                     "suggestedKeepTerms": ["AI agent", "LLM"],
                     "suggestedDeprioritizeTerms": ["frontend"],

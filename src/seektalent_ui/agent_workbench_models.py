@@ -167,7 +167,6 @@ class AgentWorkbenchActivityPayloadResponse(BaseModel):
     topPoolCount: int | None = None
     resumeQualityComment: str | None = None
     reflectionSummary: str | None = None
-    reflectionRationale: str | None = None
     suggestedActivateTerms: list[str] = Field(default_factory=list)
     suggestedKeepTerms: list[str] = Field(default_factory=list)
     suggestedDeprioritizeTerms: list[str] = Field(default_factory=list)

@@ -485,7 +485,7 @@ def _observation_text_from_payload(payload: dict[str, object]) -> str | None:
 
 def _reflection_text_from_payload(payload: dict[str, object]) -> str | None:
     details = _runtime_details(payload)
-    return _string_or_none(details.get("reflectionSummary")) or _string_or_none(details.get("reflectionRationale"))
+    return _string_or_none(details.get("reflectionSummary"))
 
 
 def _is_final_event(event: WorkbenchV2TranscriptEvent, event_type: str | None) -> bool:

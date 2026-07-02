@@ -237,7 +237,7 @@ def test_build_runtime_graph_feedback_node_renders_reflection_details() -> None:
                 counts={"feedbackCandidateCount": 5},
                 details={
                     "reflectionSummary": "本轮缺少实时数仓经验，下一轮扩大 Flink 关键词。",
-                    "reflectionRationale": "Top Pool 里多数候选人偏 BI，和岗位要求的数据工程主线不一致。",
+                    "reflectionRationale": "旧 UI 字段不应展示。",
                     "suggestStop": False,
                     "suggestedKeepTerms": ["数据开发"],
                     "suggestedActivateTerms": ["Flink"],
@@ -254,7 +254,7 @@ def test_build_runtime_graph_feedback_node_renders_reflection_details() -> None:
     node = {item.nodeId: item for item in graph.nodes}["round-1-feedback"]
     section_by_heading = {section.heading: section for section in node.detailSections}
     assert section_by_heading["反思总结"].text == "本轮缺少实时数仓经验，下一轮扩大 Flink 关键词。"
-    assert section_by_heading["反思理由"].text == "Top Pool 里多数候选人偏 BI，和岗位要求的数据工程主线不一致。"
+    assert "反思理由" not in section_by_heading
     assert section_by_heading["关键词建议"].values == [
         "保留：数据开发",
         "启用：Flink",

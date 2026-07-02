@@ -315,7 +315,6 @@ def _activity_payload(activity: TranscriptActivityItem) -> AgentWorkbenchActivit
         newlyScoredCount=_int_or_none(payload.get("newly_scored_count")) or _int_or_none(payload.get("newlyScoredCount")),
         resumeQualityComment=_str_or_none(payload.get("resume_quality_comment")) or _str_or_none(payload.get("resumeQualityComment")),
         reflectionSummary=_str_or_none(payload.get("reflection_summary")) or _str_or_none(payload.get("reflectionSummary")),
-        reflectionRationale=_str_or_none(payload.get("reflection_rationale")) or _str_or_none(payload.get("reflectionRationale")),
         suggestedActivateTerms=_string_list(payload.get("suggested_activate_terms"))
         or _string_list(payload.get("suggestedActivateTerms")),
         suggestedKeepTerms=_string_list(payload.get("suggested_keep_terms")) or _string_list(payload.get("suggestedKeepTerms")),
@@ -640,7 +639,6 @@ def _runtime_round_payload(summary: object) -> AgentWorkbenchActivityPayloadResp
         topPoolCount=_int_or_none(_attr(summary, "top_pool_count")),
         resumeQualityComment=_str_or_none(_attr(summary, "resume_quality_comment")),
         reflectionSummary=_str_or_none(_attr(summary, "reflection_summary")),
-        reflectionRationale=_str_or_none(_attr(summary, "reflection_rationale")),
         suggestedActivateTerms=[
             item for item in _sequence_or_empty(_attr(summary, "suggested_activate_terms")) if isinstance(item, str)
         ],
@@ -697,10 +695,7 @@ def _observation_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
 
 
 def _reflection_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
-    rationale = payload.reflectionRationale
-    if rationale in {"reflection_continue", "reflection_stop"}:
-        rationale = None
-    parts = [item for item in [payload.reflectionSummary, rationale] if item]
+    parts = [item for item in [payload.reflectionSummary] if item]
     parts.extend(_filter_suggestion_lines(payload))
     return " ".join(parts) if parts else "No reflection has been projected yet."
 
@@ -739,7 +734,6 @@ def _activity_payload_from_mapping(
         newlyScoredCount=_int_or_none(payload.get("newly_scored_count")) or _int_or_none(payload.get("newlyScoredCount")),
         resumeQualityComment=_str_or_none(payload.get("resume_quality_comment")) or _str_or_none(payload.get("resumeQualityComment")),
         reflectionSummary=_str_or_none(payload.get("reflection_summary")) or _str_or_none(payload.get("reflectionSummary")),
-        reflectionRationale=_str_or_none(payload.get("reflection_rationale")) or _str_or_none(payload.get("reflectionRationale")),
         suggestedActivateTerms=_string_list(payload.get("suggested_activate_terms"))
         or _string_list(payload.get("suggestedActivateTerms")),
         suggestedKeepTerms=_string_list(payload.get("suggested_keep_terms")) or _string_list(payload.get("suggestedKeepTerms")),
