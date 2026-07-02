@@ -86,7 +86,6 @@ def render_scoring_prompt(context: ScoringContext) -> str:
         f"- Rationale: {policy.scoring_rationale}"
     )
     resume_card_text = (
-        f"- Name: {resume.candidate_name or '(unknown)'}\n"
         f"- Title: {resume.current_title or resume.headline or '(unknown)'}\n"
         f"- Company: {resume.current_company or '(unknown)'}\n"
         f"- Experience: {resume.years_of_experience if resume.years_of_experience is not None else '(unknown)'} years\n"

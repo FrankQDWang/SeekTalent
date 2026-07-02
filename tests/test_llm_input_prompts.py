@@ -560,6 +560,7 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert "gender_requirement" in prompt
     assert "school_names" in prompt
     assert "are excluded from LLM scoring" in prompt
+    assert "Alice" not in prompt
     assert "Python retrieval trace" not in prompt
     assert '"resume_id": "resume-1"' in prompt
     assert "SCORING_CONTEXT" not in prompt
