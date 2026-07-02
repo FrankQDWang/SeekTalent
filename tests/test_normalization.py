@@ -260,6 +260,48 @@ def test_liepin_normalization_rejects_whole_page_text_keys() -> None:
         normalize_resume(candidate)
 
 
+@pytest.mark.parametrize("key", ["summary", "profile"])
+def test_liepin_normalization_rejects_generic_whole_page_text_keys(key: str) -> None:
+    candidate = ResumeCandidate(
+        resume_id=f"liepin-bad-{key}-1",
+        dedup_key=f"liepin-bad-{key}-1",
+        search_text="用户体验设计",
+        raw={"provider": "liepin", key: "whole page text"},
+    )
+
+    with pytest.raises(ValueError, match="whole-page text"):
+        normalize_resume(candidate)
+
+
+def test_liepin_normalization_accepts_camel_case_safe_card_summary() -> None:
+    candidate = ResumeCandidate(
+        resume_id="liepin-camel-safe-card-1",
+        dedup_key="liepin-camel-safe-card-1",
+        search_text="数据开发 数据治理 Python",
+        raw={
+            "provider": "liepin",
+            "safeCardSummary": {
+                "display_title": "高级数据开发工程师",
+                "current_or_recent_company": "业务线科技公司",
+                "current_or_recent_title": "数据开发工程师",
+                "work_years": 8,
+                "city": "上海",
+                "skill_tags": ["Python", "Hive"],
+                "recent_experience_text": "负责数据仓库和数据治理平台建设。",
+            },
+        },
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.current_title == "数据开发工程师"
+    assert normalized.current_company == "业务线科技公司"
+    assert normalized.years_of_experience == 8
+    assert "上海" in normalized.locations
+    assert "Python" in normalized.skills
+    assert normalized.recent_experiences[0].summary == "负责数据仓库和数据治理平台建设。"
+
+
 def test_unknown_source_with_liepin_text_alias_rejects_instead_of_cts_fallback() -> None:
     candidate = ResumeCandidate(
         resume_id="unknown-liepin-bad-text-1",
@@ -270,6 +312,20 @@ def test_unknown_source_with_liepin_text_alias_rejects_instead_of_cts_fallback()
 
     with pytest.raises(ValueError, match="Unsupported or unmigrated Liepin-shaped resume payload"):
         normalize_resume(candidate)
+
+
+@pytest.mark.parametrize("raw", [{"summary": "ordinary summary"}, {"profile": "ordinary profile"}, {"summary": "s", "profile": "p"}])
+def test_unknown_source_with_generic_summary_or_profile_uses_cts_fallback(raw: dict[str, object]) -> None:
+    candidate = ResumeCandidate(
+        resume_id="unknown-generic-summary-profile-1",
+        dedup_key="unknown-generic-summary-profile-1",
+        search_text="Python backend engineer",
+        raw=raw,
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.source_provider is None
 
 
 def test_old_liepin_fixture_without_provider_must_be_migrated() -> None:

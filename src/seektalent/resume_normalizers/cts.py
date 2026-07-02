@@ -171,14 +171,14 @@ def _build_excerpt(
     *,
     normalization_notes: list[str],
 ) -> str:
+    raw_skills = candidate.raw.get("skills")
+    skill_values: list[Any] = raw_skills if isinstance(raw_skills, list) else []
     structured_profile_text = " ".join(
         part
         for part in [
             _first_text(candidate.raw.get("currentTitle"), candidate.raw.get("current_title")),
             _first_text(candidate.raw.get("currentCompany"), candidate.raw.get("current_company")),
-            " ".join(
-                _normalize_strings(candidate.raw.get("skills") if isinstance(candidate.raw.get("skills"), list) else [])
-            ),
+            " ".join(_normalize_strings(skill_values)),
         ]
         if part
     )

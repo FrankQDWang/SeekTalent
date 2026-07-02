@@ -47,8 +47,6 @@ def _has_liepin_shape(raw: dict[str, object]) -> bool:
         "resume_free_text",
         "detailBody",
         "detail_body",
-        "profile",
-        "summary",
     }
     liepin_structured_keys = {
         "activeStatus",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import cast
 
+from seektalent.locations import normalize_locations
 from seektalent.models import (
     NormalizedExperience,
     NormalizedResume,
@@ -11,7 +13,6 @@ from seektalent.models import (
     stable_fallback_resume_id,
     unique_strings,
 )
-from seektalent.resume_normalizers.cts import normalize_locations
 
 PROHIBITED_LIEPIN_TEXT_KEYS = frozenset(
     {
@@ -40,7 +41,7 @@ def normalize_liepin_resume(candidate: ResumeCandidate) -> NormalizedResume:
     if prohibited:
         raise ValueError(f"Liepin raw payload must not include whole-page text fields: {', '.join(prohibited)}")
 
-    safe_card = _mapping(raw.get("safe_card_summary"))
+    safe_card = _mapping(raw.get("safe_card_summary") or raw.get("safeCardSummary"))
     candidate_name = _first_text(raw.get("candidate_name"), raw.get("candidateName"))
     current_title = _first_text(
         raw.get("currentTitle"),
@@ -59,16 +60,15 @@ def normalize_liepin_resume(candidate: ResumeCandidate) -> NormalizedResume:
     if work_years is None:
         work_years = candidate.work_year
 
-    locations = normalize_locations(
-        [
-            raw.get("city"),
-            candidate.now_location,
-            candidate.expected_location,
-            safe_card.get("city"),
-            safe_card.get("expected_city"),
-            *_string_list(raw.get("locations")),
-        ]
-    )[:4]
+    location_values: list[str | None] = [
+        _text(raw.get("city")),
+        candidate.now_location,
+        candidate.expected_location,
+        _text(safe_card.get("city")),
+        _text(safe_card.get("expected_city")),
+        *_string_list(raw.get("locations")),
+    ]
+    locations = normalize_locations(location_values)[:4]
     work_items = _timeline_items(raw.get("workExperienceList"))
     if not work_items:
         work_items = _safe_card_work_items(safe_card)
@@ -243,12 +243,13 @@ def _education_summary(
 def _job_intention(value: object) -> dict[str, str | int]:
     if not isinstance(value, Mapping):
         return {}
+    value_mapping = cast(Mapping[str, object], value)
     return _compact(
         {
-            "expectedRole": _first_text(value.get("expectedRole"), value.get("expectedTitle")),
-            "expectedIndustry": _text(value.get("expectedIndustry")),
-            "expectedCity": _first_text(value.get("expectedCity"), value.get("expectedLocation")),
-            "expectedSalary": _text(value.get("expectedSalary")),
+            "expectedRole": _first_text(value_mapping.get("expectedRole"), value_mapping.get("expectedTitle")),
+            "expectedIndustry": _text(value_mapping.get("expectedIndustry")),
+            "expectedCity": _first_text(value_mapping.get("expectedCity"), value_mapping.get("expectedLocation")),
+            "expectedSalary": _text(value_mapping.get("expectedSalary")),
         }
     )
 
@@ -291,7 +292,7 @@ def _compact(value: Mapping[str, object | None]) -> dict[str, str | int]:
 
 
 def _mapping(value: object) -> Mapping[str, object]:
-    return value if isinstance(value, Mapping) else {}
+    return cast(Mapping[str, object], value) if isinstance(value, Mapping) else {}
 
 
 def _first_text(*values: object) -> str:
