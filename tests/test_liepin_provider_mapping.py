@@ -300,6 +300,23 @@ def test_detail_mapping_derives_normalized_text_from_structured_payload() -> Non
         assert len(text) <= STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS
 
 
+def test_detail_mapping_does_not_fallback_to_worker_normalized_text_when_structured_text_empty() -> None:
+    sentinel = "DETAIL_NORMALIZED_TEXT_SHOULD_NOT_PERSIST"
+    detail = _worker_detail().model_copy(
+        update={
+            "payload": {"candidateId": "candidate-1", "listingId": "listing-1"},
+            "normalized_text": sentinel,
+        }
+    )
+
+    mapped = map_liepin_worker_detail(detail, raw_payload_artifact_ref="worker://details/candidate-1.json")
+
+    assert mapped.candidate.search_text == ""
+    assert mapped.provider_snapshot.normalized_text == ""
+    assert sentinel not in mapped.candidate.search_text
+    assert sentinel not in mapped.provider_snapshot.normalized_text
+
+
 def test_card_mapping_returns_provider_snapshot_with_raw_payload_and_privacy_metadata() -> None:
     card = _worker_card()
     mapped = map_liepin_worker_card(card, raw_payload_artifact_ref="worker://cards/candidate-1.json")

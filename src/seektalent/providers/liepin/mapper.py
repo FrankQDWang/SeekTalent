@@ -7,7 +7,6 @@ from seektalent.core.retrieval.provider_contract import ProviderPayloadKind, Pro
 from seektalent.models import ResumeCandidate
 from seektalent.providers.liepin.detail_payload_text import (
     PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
-    capped_liepin_detail_text,
     structured_liepin_detail_text,
 )
 from seektalent.providers.liepin.models import LiepinScoreEvidenceSource
@@ -133,10 +132,7 @@ def _sanitize_liepin_provider_payload(payload: dict[str, object]) -> dict[str, o
 
 def _mapped_normalized_text(worker_candidate: LiepinWorkerCandidate, provider_payload: dict[str, object]) -> str:
     if isinstance(worker_candidate, LiepinWorkerCandidateDetail):
-        structured_text = structured_liepin_detail_text(provider_payload)
-        if structured_text:
-            return structured_text
-        return capped_liepin_detail_text(worker_candidate.normalized_text)
+        return structured_liepin_detail_text(provider_payload)
     return worker_candidate.normalized_text
 
 
