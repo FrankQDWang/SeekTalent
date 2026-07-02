@@ -161,6 +161,129 @@ def test_liepin_detail_without_full_text_still_produces_legacy_excerpt() -> None
     assert "fullText" not in normalized.raw_text_excerpt
 
 
+def test_normalization_dispatches_liepin_to_liepin_normalizer(monkeypatch) -> None:
+    from seektalent.resume_normalizers import registry
+
+    called: list[str] = []
+
+    def fake_liepin(candidate: ResumeCandidate):
+        called.append(candidate.resume_id)
+        return registry._legacy_normalize_resume(candidate).model_copy(update={"source_provider": "liepin"})
+
+    monkeypatch.setitem(registry.NORMALIZERS, "liepin", fake_liepin)
+
+    normalized = normalize_resume(
+        ResumeCandidate(
+            resume_id="liepin-dispatch-1",
+            dedup_key="liepin-dispatch-1",
+            search_text="用户体验设计",
+            raw={"provider": "liepin", "currentTitle": "AI Agent Engineer"},
+        )
+    )
+
+    assert called == ["liepin-dispatch-1"]
+    assert normalized.source_provider == "liepin"
+
+
+def test_normalization_dispatches_cts_to_cts_normalizer(monkeypatch) -> None:
+    from seektalent.resume_normalizers import registry
+
+    called: list[str] = []
+
+    def fake_cts(candidate: ResumeCandidate):
+        called.append(candidate.resume_id)
+        return registry._legacy_normalize_resume(candidate).model_copy(update={"source_provider": "cts"})
+
+    monkeypatch.setitem(registry.NORMALIZERS, "cts", fake_cts)
+
+    normalized = normalize_resume(
+        ResumeCandidate(
+            resume_id="cts-dispatch-1",
+            dedup_key="cts-dispatch-1",
+            search_text="AI Infra Engineer",
+            raw={"provider": "cts", "current_title": "AI Infra Engineer"},
+        )
+    )
+
+    assert called == ["cts-dispatch-1"]
+    assert normalized.source_provider == "cts"
+
+
+def test_liepin_normalization_uses_structured_evidence_without_whole_page_text() -> None:
+    candidate = ResumeCandidate(
+        resume_id="liepin-detail-structured-1",
+        dedup_key="liepin-detail-structured-1",
+        search_text="用户体验设计 用户研究 交互设计",
+        raw={
+            "provider": "liepin",
+            "candidate_name": "吴**",
+            "activeStatus": "近30天内活跃",
+            "jobStatus": "在职，看看新机会",
+            "age": 32,
+            "gender": "男",
+            "city": "上海",
+            "education": "本科",
+            "workYears": 10,
+            "currentTitle": "资深体验设计工程师",
+            "currentCompany": "平安集团",
+            "jobIntention": {"expectedSalary": "20-24k*14薪", "expectedCity": "上海"},
+            "workExperienceList": [
+                {"company": "平安好医", "title": "用户体验设计专家", "summary": "负责 B 端和 C 端体验设计。"}
+            ],
+            "projectExperienceList": [{"name": "增长项目", "summary": "通过用户研究优化转化。"}],
+            "educationList": [{"school": "华东师范大学", "degree": "硕士", "major": "设计学"}],
+            "skills": ["用户研究", "交互设计"],
+        },
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.source_provider == "liepin"
+    assert normalized.structured_evidence.current_role["title"] == "资深体验设计工程师"
+    assert normalized.structured_evidence.work_experience[0].company == "平安好医"
+    assert normalized.structured_evidence.project_experience[0].name == "增长项目"
+    assert normalized.structured_evidence.education_experience[0].school == "华东师范大学"
+    assert normalized.raw_text_excerpt
+    assert "fullText" not in normalized.raw_text_excerpt
+    assert normalized.completeness_score == 100
+
+
+def test_liepin_normalization_rejects_whole_page_text_keys() -> None:
+    candidate = ResumeCandidate(
+        resume_id="liepin-bad-text-1",
+        dedup_key="liepin-bad-text-1",
+        search_text="用户体验设计",
+        raw={"provider": "liepin", "fullText": "whole page text"},
+    )
+
+    with pytest.raises(ValueError, match="whole-page text"):
+        normalize_resume(candidate)
+
+
+def test_unknown_source_with_liepin_text_alias_rejects_instead_of_cts_fallback() -> None:
+    candidate = ResumeCandidate(
+        resume_id="unknown-liepin-bad-text-1",
+        dedup_key="unknown-liepin-bad-text-1",
+        search_text="用户体验设计",
+        raw={"fullText": "old Liepin whole page text"},
+    )
+
+    with pytest.raises(ValueError, match="Unsupported or unmigrated Liepin-shaped resume payload"):
+        normalize_resume(candidate)
+
+
+def test_old_liepin_fixture_without_provider_must_be_migrated() -> None:
+    candidate = ResumeCandidate(
+        resume_id="old-liepin-fixture-1",
+        dedup_key="old-liepin-fixture-1",
+        search_text="用户体验设计",
+        raw={"currentTitle": "资深体验设计工程师", "workExperienceList": [{"company": "平安好医"}]},
+    )
+
+    with pytest.raises(ValueError, match="Unsupported or unmigrated Liepin-shaped resume payload"):
+        normalize_resume(candidate)
+
+
 def test_structured_resume_evidence_derives_scoring_evidence_without_protected_fields() -> None:
     evidence = StructuredResumeEvidence(
         identity={"candidateName": "吴**", "age": 32, "gender": "男"},
