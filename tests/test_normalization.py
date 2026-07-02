@@ -232,3 +232,29 @@ def test_structured_resume_evidence_scrubs_protected_values_from_summaries_only(
     assert "华东师范大学" not in serialized
     assert "硕士" not in serialized
     assert "设计学" not in serialized
+
+
+def test_structured_resume_evidence_scrubs_age_and_gender_values_from_summaries() -> None:
+    evidence = StructuredResumeEvidence(
+        identity={"age": 32, "gender": "男"},
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                summary="候选人32岁，男，负责 B 端体验设计。",
+            )
+        ],
+        project_experience=[
+            StructuredResumeTimelineItem(
+                name="增长项目",
+                summary="项目记录32和男，通过用户研究优化转化。",
+            )
+        ],
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "负责 B 端体验设计" in serialized
+    assert "通过用户研究优化转化" in serialized
+    assert "32" not in serialized
+    assert "男" not in serialized

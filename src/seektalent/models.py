@@ -833,11 +833,35 @@ def _int_value(value: object) -> int | None:
 
 def _protected_summary_replacements(evidence: StructuredResumeEvidence) -> tuple[str, ...]:
     values: list[str] = []
-    values.extend(_protected_text_values(evidence.identity.values()))
+    values.extend(_protected_identity_values(evidence.identity))
     values.extend(_protected_text_values(evidence.source_metadata.values()))
     for item in evidence.education_experience:
         values.extend(_protected_text_values((item.school, item.degree, item.major)))
     return tuple(sorted(unique_strings(values), key=len, reverse=True))
+
+
+def _protected_identity_values(identity: dict[str, str | int]) -> list[str]:
+    protected: list[str] = []
+    for key, value in identity.items():
+        normalized_key = "".join(char for char in key if char.isalnum()).casefold()
+        if "name" in normalized_key:
+            protected.extend(_identity_value_text(value))
+        elif normalized_key in {"age", "candidateage"}:
+            protected.extend(_identity_value_text(value))
+        elif normalized_key in {"gender", "candidategender", "sex", "candidatesex"}:
+            protected.extend(_identity_value_text(value))
+    return protected
+
+
+def _identity_value_text(value: object) -> list[str]:
+    if isinstance(value, bool):
+        return []
+    if isinstance(value, int):
+        return [str(value)]
+    if isinstance(value, str):
+        clean = value.strip()
+        return [clean] if clean else []
+    return []
 
 
 def _protected_text_values(values: Iterable[object]) -> list[str]:
