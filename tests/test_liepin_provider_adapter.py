@@ -885,7 +885,24 @@ def _detail(candidate_id: str) -> LiepinWorkerCandidateDetail:
         payload={
             "candidateId": candidate_id,
             "listingId": f"listing-{candidate_id}",
-            "resumeText": f"Private detail payload for {candidate_id}",
+            "currentTitle": "Python Engineer",
+            "currentCompany": "Structured Detail Co",
+            "workExperienceList": [
+                {
+                    "company": "Structured Detail Co",
+                    "title": "Python Engineer",
+                    "summary": f"Built backend systems for {candidate_id}",
+                }
+            ],
+            "projectExperienceList": [
+                {
+                    "name": "Search Platform",
+                    "role": "Backend Engineer",
+                    "summary": "Delivered ranking and retrieval services",
+                }
+            ],
+            "educationList": [{"school": "Structured University", "degree": "Bachelor"}],
+            "skills": ["Python", "FastAPI"],
         },
         normalized_text=f"{candidate_id} Python Engineer detail",
         provider_subject_id=candidate_id,

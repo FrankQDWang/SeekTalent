@@ -465,8 +465,20 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
         payload={
             "candidateId": "candidate-1",
             "listingId": "listing-1",
-            "detailBody": "<html>Private detail</html>",
-            "resumeText": "Private detail text",
+            "currentTitle": "Python backend engineer",
+            "currentCompany": "Structured Verified Co",
+            "workExperienceList": [
+                {
+                    "company": "Structured Verified Co",
+                    "title": "Python backend engineer",
+                    "summary": "Built verified detail workflows",
+                }
+            ],
+            "projectExperienceList": [
+                {"name": "Verified Loop", "role": "Backend engineer", "summary": "Improved detail replay"}
+            ],
+            "educationList": [{"school": "Verified University", "degree": "Bachelor"}],
+            "skills": ["Python", "SQLite"],
         },
         normalized_text="Python backend engineer detail",
         provider_subject_id="candidate-1",

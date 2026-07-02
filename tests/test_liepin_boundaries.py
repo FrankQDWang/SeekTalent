@@ -64,6 +64,14 @@ _ALLOWED_LIEPIN_RESUME_RAW_KEYS = {
     "raw_payload_artifact_ref",
     "score_evidence_source",
 }
+_ALLOWED_LIEPIN_DETAIL_RESUME_RAW_KEYS = _ALLOWED_LIEPIN_RESUME_RAW_KEYS | {
+    "currentTitle",
+    "currentCompany",
+    "workExperienceList",
+    "projectExperienceList",
+    "educationList",
+    "skills",
+}
 
 
 def test_production_python_does_not_import_opencli():
@@ -458,13 +466,15 @@ def test_liepin_mapper_keeps_provider_payload_out_of_resume_candidate_raw():
 
     assert card_mapping.provider_snapshot.raw_payload == card.payload
     assert detail_mapping.provider_snapshot.raw_payload == detail.payload
+    assert set(card_mapping.candidate.raw) == _ALLOWED_LIEPIN_RESUME_RAW_KEYS
+    assert set(detail_mapping.candidate.raw) == _ALLOWED_LIEPIN_DETAIL_RESUME_RAW_KEYS
     for mapped in (card_mapping, detail_mapping):
-        assert set(mapped.candidate.raw) == _ALLOWED_LIEPIN_RESUME_RAW_KEYS
         serialized_raw = str(mapped.candidate.raw)
         assert "13800000000" not in serialized_raw
         assert "one@example.com" not in serialized_raw
-        assert "Private card resume summary" not in serialized_raw
+        assert "Private card note" not in serialized_raw
         assert "Liepin private detail body" not in serialized_raw
+        assert "Detailed private resume note" not in serialized_raw
         assert "Bearer secret" not in serialized_raw
         assert "storageState" not in serialized_raw
         assert "cookies" not in serialized_raw
@@ -570,7 +580,7 @@ def _worker_card() -> LiepinWorkerCandidateCard:
             "listingId": "listing-1",
             "name": "Candidate One",
             "headline": "Python backend engineer",
-            "resumeText": "Private card resume summary with 13800000000 and one@example.com",
+            "privateCardNote": "Private card note with 13800000000 and one@example.com",
             "phone": "13800000000",
             "email": "one@example.com",
             "cookies": "session=secret",
@@ -596,8 +606,22 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
         payload={
             "candidateId": "candidate-1",
             "listingId": "listing-1",
-            "detailBody": "<html>Liepin private detail body</html>",
-            "resumeText": "Detailed private resume text with one@example.com",
+            "currentTitle": "Python backend engineer",
+            "currentCompany": "Structured Boundary Co",
+            "workExperienceList": [
+                {
+                    "company": "Structured Boundary Co",
+                    "title": "Python backend engineer",
+                    "summary": "Built structured backend systems",
+                }
+            ],
+            "projectExperienceList": [
+                {"name": "Boundary Platform", "role": "Backend engineer", "summary": "Improved retrieval quality"}
+            ],
+            "educationList": [{"school": "Boundary University", "degree": "Bachelor"}],
+            "skills": ["Python", "SQL"],
+            "privateDetailHtml": "<html>Liepin private detail body</html>",
+            "privateDetailNote": "Detailed private resume note with one@example.com",
             "phone": "13800000000",
             "email": "one@example.com",
             "auth_headers": {"authorization": "Bearer secret"},

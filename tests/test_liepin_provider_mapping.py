@@ -75,7 +75,7 @@ def _worker_card() -> LiepinWorkerCandidateCard:
             "listingId": "listing-1",
             "name": "Candidate One",
             "headline": "Python backend engineer",
-            "resumeText": "Private card resume summary with 13800000000 and one@example.com",
+            "privateCardNote": "Private card note with 13800000000 and one@example.com",
             "phone": "13800000000",
             "email": "one@example.com",
             "cookies": "session=secret",
@@ -148,7 +148,7 @@ def test_card_mapping_keeps_raw_payload_out_of_resume_candidate_raw() -> None:
     assert not (set(mapped.candidate.raw) & FORBIDDEN_RAW_KEYS)
     assert "13800000000" not in str(mapped.candidate.raw)
     assert "one@example.com" not in str(mapped.candidate.raw)
-    assert "Private card resume summary" not in str(mapped.candidate.raw)
+    assert "Private card note" not in str(mapped.candidate.raw)
     assert mapped.candidate.raw["raw_payload_artifact_ref"] == "worker://cards/candidate-1.json"
 
 

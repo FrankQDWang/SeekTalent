@@ -20,7 +20,7 @@ def _worker_card() -> LiepinWorkerCandidateCard:
         payload={
             "candidateId": "candidate-1",
             "listingId": "listing-1",
-            "resumeText": "Private card raw payload",
+            "privateCardNote": "Private card raw payload",
             "phone": "13800000000",
             "email": "candidate@example.com",
         },
@@ -43,8 +43,22 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
         payload={
             "candidateId": "candidate-1",
             "listingId": "listing-1",
-            "detailBody": "<html>Private Liepin detail body</html>",
-            "resumeText": "Private detail raw payload",
+            "currentTitle": "Python backend engineer",
+            "currentCompany": "Structured Corpus Co",
+            "workExperienceList": [
+                {
+                    "company": "Structured Corpus Co",
+                    "title": "Python backend engineer",
+                    "summary": "Built corpus ingestion services",
+                }
+            ],
+            "projectExperienceList": [
+                {"name": "Corpus Pipeline", "role": "Backend engineer", "summary": "Improved artifact export"}
+            ],
+            "educationList": [{"school": "Corpus University", "degree": "Bachelor"}],
+            "skills": ["Python", "SQLite"],
+            "privateDetailHtml": "<html>Private Liepin detail body</html>",
+            "privateDetailNote": "Private detail raw payload",
             "phone": "13800000000",
             "email": "candidate@example.com",
         },
