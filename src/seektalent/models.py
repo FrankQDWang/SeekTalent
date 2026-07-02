@@ -789,11 +789,12 @@ class StructuredResumeEvidence(BaseModel):
     source_metadata: dict[str, str | int] = Field(default_factory=dict)
 
     def to_scoring_evidence(self) -> StructuredScoringEvidence:
+        protected_summary_values = _protected_summary_replacements(self)
         return StructuredScoringEvidence(
             current_role=StructuredScoringRole(
                 title=_text_value(self.current_role.get("title")),
                 company=_text_value(self.current_role.get("company")),
-                work_years=_int_value(self.current_role.get("workYears") or self.current_role.get("work_years")),
+                work_years=_int_value(_first_present_value(self.current_role, "workYears", "work_years")),
             ),
             job_intention=StructuredScoringJobIntention(
                 expected_role=_text_value(
@@ -809,10 +810,17 @@ class StructuredResumeEvidence(BaseModel):
                     self.job_intention.get("expectedSalary") or self.job_intention.get("expected_salary")
                 ),
             ),
-            work_experience=[_work_item_for_scoring(item) for item in self.work_experience],
-            project_experience=[_project_item_for_scoring(item) for item in self.project_experience],
+            work_experience=[_work_item_for_scoring(item, protected_summary_values) for item in self.work_experience],
+            project_experience=[_project_item_for_scoring(item, protected_summary_values) for item in self.project_experience],
             skills=self.skills[:24],
         )
+
+
+def _first_present_value(values: dict[str, str | int], *keys: str) -> object:
+    for key in keys:
+        if key in values:
+            return values[key]
+    return None
 
 
 def _text_value(value: object) -> str:
@@ -823,20 +831,54 @@ def _int_value(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _work_item_for_scoring(item: StructuredResumeTimelineItem) -> StructuredScoringWorkItem:
+def _protected_summary_replacements(evidence: StructuredResumeEvidence) -> tuple[str, ...]:
+    values: list[str] = []
+    values.extend(_protected_text_values(evidence.identity.values()))
+    values.extend(_protected_text_values(evidence.source_metadata.values()))
+    for item in evidence.education_experience:
+        values.extend(_protected_text_values((item.school, item.degree, item.major)))
+    return tuple(sorted(unique_strings(values), key=len, reverse=True))
+
+
+def _protected_text_values(values: Iterable[object]) -> list[str]:
+    protected: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        clean = value.strip()
+        if len(clean) < 2:
+            continue
+        if clean.isdigit() and len(clean) < 4:
+            continue
+        protected.append(clean)
+    return protected
+
+
+def _scrub_scoring_summary(summary: str, protected_values: tuple[str, ...]) -> str:
+    scrubbed = summary
+    for value in protected_values:
+        scrubbed = scrubbed.replace(value, "[protected]")
+    return scrubbed
+
+
+def _work_item_for_scoring(
+    item: StructuredResumeTimelineItem, protected_values: tuple[str, ...]
+) -> StructuredScoringWorkItem:
     return StructuredScoringWorkItem(
         company=item.company,
         title=item.title,
         duration=item.duration,
-        summary=item.summary,
+        summary=_scrub_scoring_summary(item.summary, protected_values),
     )
 
 
-def _project_item_for_scoring(item: StructuredResumeTimelineItem) -> StructuredScoringProjectItem:
+def _project_item_for_scoring(
+    item: StructuredResumeTimelineItem, protected_values: tuple[str, ...]
+) -> StructuredScoringProjectItem:
     return StructuredScoringProjectItem(
         project_name=item.name,
         duration=item.duration,
-        summary=item.summary,
+        summary=_scrub_scoring_summary(item.summary, protected_values),
     )
 
 

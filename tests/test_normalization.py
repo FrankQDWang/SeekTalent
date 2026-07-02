@@ -186,3 +186,49 @@ def test_structured_resume_evidence_derives_scoring_evidence_without_protected_f
     assert "华东师范大学" not in serialized
     assert "硕士" not in serialized
     assert "设计学" not in serialized
+
+
+def test_structured_resume_evidence_preserves_zero_work_years() -> None:
+    evidence = StructuredResumeEvidence(current_role={"title": "应届体验设计师", "workYears": 0})
+
+    scoring = evidence.to_scoring_evidence()
+
+    assert scoring.current_role.work_years == 0
+
+
+def test_structured_resume_evidence_scrubs_protected_values_from_summaries_only() -> None:
+    evidence = StructuredResumeEvidence(
+        identity={"candidateName": "吴**", "age": 32, "gender": "男"},
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                title="用户体验设计专家",
+                summary=(
+                    "吴**在平安好医负责 B 端和 C 端体验设计，"
+                    "教育经历为华东师范大学硕士设计学。"
+                    "详情见 https://h.liepin.com/resume/showresumedetail/abc。"
+                ),
+            )
+        ],
+        project_experience=[
+            StructuredResumeTimelineItem(
+                name="增长项目",
+                summary="增长项目中吴**通过用户研究优化转化，参考华东师范大学经历。",
+            )
+        ],
+        education_experience=[StructuredResumeTimelineItem(school="华东师范大学", degree="硕士", major="设计学")],
+        source_metadata={"sourceUrl": "https://h.liepin.com/resume/showresumedetail/abc"},
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "平安好医" in serialized
+    assert "增长项目" in serialized
+    assert "负责 B 端和 C 端体验设计" in serialized
+    assert "通过用户研究优化转化" in serialized
+    assert "吴**" not in serialized
+    assert "https://h.liepin.com/resume/showresumedetail/abc" not in serialized
+    assert "华东师范大学" not in serialized
+    assert "硕士" not in serialized
+    assert "设计学" not in serialized
