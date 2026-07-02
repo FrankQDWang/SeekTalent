@@ -21,6 +21,7 @@ from seektalent.flywheel.store import FlywheelStore
 from seektalent.models import RequirementSheet
 from seektalent.progress import ProgressEvent
 from seektalent.runtime.public_events import make_runtime_public_event
+from seektalent.providers.liepin.detail_payload_text import PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
 from seektalent.providers.liepin.worker_contracts import LoginHandoff
 from seektalent.providers.liepin.worker_contracts import LoginRelayCompleteResult
 from seektalent.providers.liepin.worker_contracts import LoginRelayInputResult
@@ -1886,11 +1887,20 @@ def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: P
         "candidate_name": "李四",
         "currentTitle": "数据开发专家",
         "currentCompany": "数据平台公司",
-        "fullText": "负责实时数仓、Flink CDC 与数据质量体系建设。",
+        "workExperienceList": [
+            {
+                "company": "平安好医",
+                "title": "数据开发专家",
+                "summary": "structured work summary stays",
+                "description": "structured work description stays",
+            }
+        ],
         "sourceUrl": source_url,
         "providerCandidateKeyHash": provider_candidate_key_hash,
         "page_url_hash": "private-url-hash",
     }
+    for alias in PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS:
+        raw_payload[alias] = f"whole-page alias must disappear: {alias}"
     artifact_root = tmp_path / "liepin_raw_payloads"
     artifact_root.mkdir()
     raw_payload_path = artifact_root / "liepin-1.json"
@@ -2017,7 +2027,16 @@ def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: P
     serialized = json.dumps(payload["originalResume"], ensure_ascii=False)
     assert "李四" in serialized
     assert "数据开发专家" in serialized
-    assert "实时数仓" in serialized
+    assert "structured work summary stays" in serialized
+    assert "whole-page alias must disappear" not in serialized
+    top_level_keys = {
+        field["key"]
+        for section in payload["originalResume"]["sections"]
+        if section["title"] in {"基本信息", "简历文本", "其他信息"}
+        for item in section["items"]
+        for field in item["fields"]
+    }
+    assert not (top_level_keys & PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS)
     assert "providerCandidateKeyHash" not in serialized
     assert "private-url-hash" not in serialized
     assert all(

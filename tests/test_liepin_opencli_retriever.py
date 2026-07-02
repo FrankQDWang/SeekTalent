@@ -113,6 +113,57 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
     )
 
 
+def test_opencli_retriever_structured_detail_fallback_deduplicates_and_caps_text(tmp_path: Path) -> None:
+    runner = FakeOpenCliRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+    runner_envelope = runner.search_liepin_resumes(
+        source_run_id="run-1",
+        query="数据开发 Python",
+        target_resumes=1,
+        max_pages=1,
+        max_cards=2,
+    )
+    duplicate_summary = "同一段结构化经历"
+    runner_envelope["resumes"][0].pop("normalized_text")
+    runner_envelope["resumes"][0]["detail_payload"] = {
+        "currentTitle": "数据开发专家",
+        "currentCompany": "平安好医",
+        "workExperienceList": [
+            {
+                "company": "平安好医",
+                "title": "数据开发专家",
+                "summary": duplicate_summary,
+                "description": duplicate_summary,
+            }
+        ],
+        "skills": ["Python" * 900],
+    }
+
+    class EnvelopeRunner(FakeOpenCliRunner):
+        def search_liepin_resumes(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return runner_envelope
+
+    retriever = LiepinOpenCliResumeRetriever(
+        runner=EnvelopeRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+    )
+
+    response = retriever.search_resumes(
+        LiepinOpenCliResumeRequest(
+            source_run_id="run-1",
+            keyword_query="数据开发 Python",
+            query_terms=("数据开发", "Python"),
+            target_resumes=1,
+            max_cards=2,
+            max_pages=1,
+            requirement_sheet={"job_title": "数据开发专家"},
+        )
+    )
+
+    text = response.resumes[0].normalized_text
+    assert text.count(duplicate_summary) == 1
+    assert len(text) <= 4000
+
+
 def test_opencli_retriever_preserves_workflow_steps_in_request_payload(tmp_path: Path) -> None:
     runner = FakeOpenCliRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
     runner_envelope = runner.search_liepin_resumes(

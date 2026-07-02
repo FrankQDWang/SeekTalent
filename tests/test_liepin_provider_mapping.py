@@ -4,6 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from seektalent.providers.liepin import mapper as liepin_mapper
+from seektalent.providers.liepin.detail_payload_text import PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
 from seektalent.providers.liepin.worker_contracts import (
     LiepinSafeCardSummary,
@@ -28,21 +29,7 @@ ALLOWED_RAW_KEYS = {
     "score_evidence_source",
 }
 
-WHOLE_PAGE_TEXT_ALIASES = (
-    "fullText",
-    "full_text",
-    "rawText",
-    "raw_text",
-    "page_text",
-    "pageText",
-    "resumeText",
-    "resume_text",
-    "resume_free_text",
-    "detailBody",
-    "detail_body",
-    "profile",
-    "summary",
-)
+WHOLE_PAGE_TEXT_ALIASES = tuple(sorted(PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS))
 
 ALLOWED_DETAIL_RAW_KEYS = ALLOWED_RAW_KEYS | {
     "candidate_name",

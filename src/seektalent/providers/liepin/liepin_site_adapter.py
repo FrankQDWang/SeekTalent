@@ -24,6 +24,7 @@ from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
 )
+from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
 from seektalent.providers.liepin.opencli_filter_planning import (
     LIEPIN_FILTER_SECTION_LABELS,
     RETRYABLE_NATIVE_FILTER_REASONS,
@@ -113,53 +114,6 @@ _RECOVERABLE_TAB_REUSE_REASONS = {
     "liepin_opencli_window_policy_blocked",
     "liepin_opencli_stale_ref",
 }
-
-
-def _structured_detail_text(payload: Mapping[str, object]) -> str:
-    parts: list[str] = []
-
-    def add(value: object) -> None:
-        if isinstance(value, str) and value.strip():
-            parts.append(value.strip())
-        elif isinstance(value, int) and not isinstance(value, bool):
-            parts.append(str(value))
-
-    for key in (
-        "candidate_name",
-        "candidateName",
-        "activeStatus",
-        "jobStatus",
-        "gender",
-        "age",
-        "city",
-        "education",
-        "workYears",
-        "currentTitle",
-        "currentCompany",
-    ):
-        add(payload.get(key))
-    job_intention = payload.get("jobIntention")
-    if isinstance(job_intention, Mapping):
-        for key in ("expectedRole", "expectedSalary", "expectedCity", "expectedIndustry"):
-            add(job_intention.get(key))
-    for list_key, item_keys in (
-        ("workExperienceList", ("company", "title", "duration", "dateRange", "summary", "description")),
-        ("projectExperienceList", ("name", "role", "company", "duration", "dateRange", "summary", "description")),
-        ("educationList", ("school", "major", "degree", "duration", "dateRange", "summary")),
-    ):
-        value = payload.get(list_key)
-        if not isinstance(value, list):
-            continue
-        for item in value[:8]:
-            if not isinstance(item, Mapping):
-                continue
-            for key in item_keys:
-                add(item.get(key))
-    skills = payload.get("skills")
-    if isinstance(skills, list):
-        for skill in skills[:20]:
-            add(skill)
-    return " ".join(parts)
 
 
 class LiepinSiteAdapter:
@@ -639,7 +593,7 @@ class LiepinSiteAdapter:
                 "protected_snapshot_ref": raw_snapshot_ref,
                 "normalized_snapshot_ref": normalized_snapshot_ref,
                 "detail_payload": detail_payload,
-                "normalized_text": _structured_detail_text(payload),
+                "normalized_text": structured_liepin_detail_text(payload),
             }
             resumes = [item for item in self._read_collected_resumes(safe_run_id) if item.get("provider_rank") != rank]
             resumes.append(resume)

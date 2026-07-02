@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from seektalent.artifacts import safe_artifact_path
 from seektalent.config import AppSettings
 from seektalent.corpus.store import CorpusStore
+from seektalent.providers.liepin.detail_payload_text import PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
 from seektalent_ui.models import (
     WorkbenchGraphCandidateResumeSnapshotResponse,
     WorkbenchResumeSnapshotSourceCompleteness,
@@ -312,11 +313,11 @@ def _cts_original_sections(payload: dict[str, object]) -> list[WorkbenchOriginal
 
 def _liepin_original_sections(payload: dict[str, object]) -> list[WorkbenchOriginalResumeSectionResponse | None]:
     return [
-        _field_section("基本信息", payload, _LIEPIN_BASIC_FIELD_KEYS),
+        _field_section("基本信息", payload, _LIEPIN_BASIC_FIELD_KEYS, denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS),
         _list_section("工作经历", payload.get("workExperienceList")),
         _list_section("教育经历", payload.get("educationList")),
-        _field_section("简历文本", payload, _LIEPIN_TEXT_FIELD_KEYS),
-        _other_section(payload),
+        _field_section("简历文本", payload, _LIEPIN_TEXT_FIELD_KEYS, denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS),
+        _other_section(payload, denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS),
     ]
 
 
@@ -367,8 +368,10 @@ def _field_section(
     title: str,
     payload: dict[str, object],
     keys: tuple[str, ...],
+    *,
+    denied_keys: frozenset[str] = frozenset(),
 ) -> WorkbenchOriginalResumeSectionResponse | None:
-    fields = [_field_response(key, payload.get(key)) for key in keys if key in payload]
+    fields = [_field_response(key, payload.get(key)) for key in keys if key in payload and key not in denied_keys]
     visible_fields = [field for field in fields if field is not None]
     if not visible_fields:
         return None
@@ -399,8 +402,16 @@ def _list_section(title: str, value: object) -> WorkbenchOriginalResumeSectionRe
     return WorkbenchOriginalResumeSectionResponse(title=title, items=items) if items else None
 
 
-def _other_section(payload: dict[str, object]) -> WorkbenchOriginalResumeSectionResponse | None:
-    fields = [_field_response(key, value) for key, value in payload.items() if key not in _STRUCTURED_SECTION_KEYS]
+def _other_section(
+    payload: dict[str, object],
+    *,
+    denied_keys: frozenset[str] = frozenset(),
+) -> WorkbenchOriginalResumeSectionResponse | None:
+    fields = [
+        _field_response(key, value)
+        for key, value in payload.items()
+        if key not in _STRUCTURED_SECTION_KEYS and key not in denied_keys
+    ]
     visible_fields = [field for field in fields if field is not None]
     if not visible_fields:
         return None

@@ -5,6 +5,7 @@ import re
 
 from seektalent.core.retrieval.provider_contract import ProviderPayloadKind, ProviderSnapshot
 from seektalent.models import ResumeCandidate
+from seektalent.providers.liepin.detail_payload_text import PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
 from seektalent.providers.liepin.models import LiepinScoreEvidenceSource
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
 from seektalent.storage.json import sha256_json
@@ -17,24 +18,6 @@ class LiepinMappedCandidate:
 
 
 LiepinWorkerCandidate = LiepinWorkerCandidateCard | LiepinWorkerCandidateDetail
-
-PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS = frozenset(
-    {
-        "fullText",
-        "full_text",
-        "rawText",
-        "raw_text",
-        "page_text",
-        "pageText",
-        "resumeText",
-        "resume_text",
-        "resume_free_text",
-        "detailBody",
-        "detail_body",
-        "profile",
-        "summary",
-    }
-)
 
 
 def _safe_raw(

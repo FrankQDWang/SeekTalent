@@ -2234,6 +2234,7 @@ def test_agent_driven_detail_tools_capture_and_finalize_resume_envelope(tmp_path
     assert finalized["detail_pages_opened"] == 1
     assert finalized["cards_excluded"] == []
     assert finalized["resumes"][0]["detail_payload"]["workExperienceList"][0]["summary"].startswith("王** 40岁")
+    assert finalized["resumes"][0]["normalized_text"].count(detail_state) == 1
     assert ("opencli", "browser", "seektalent-liepin", "click", "70") in commands.calls
     trace_ref = str(finalized["action_trace_ref"]).removeprefix("artifact://protected/")
     trace = json.loads((tmp_path / "protected" / trace_ref).read_text())

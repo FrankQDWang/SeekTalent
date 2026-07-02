@@ -8,6 +8,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import model_validator
 from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.providers.liepin.detail_payload_text import PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
 from seektalent.providers.liepin.models import LiepinAccessScope
 from seektalent.providers.liepin.models import LiepinExtractionSource
 from seektalent.providers.liepin.models import LiepinIdentityConfidence
@@ -22,25 +23,6 @@ DetailOpenStatus = Literal[
     "failed_after_possible_consumption",
     "unknown",
 ]
-
-PROHIBITED_LIEPIN_DETAIL_TEXT_KEYS = frozenset(
-    {
-        "fullText",
-        "full_text",
-        "rawText",
-        "raw_text",
-        "page_text",
-        "pageText",
-        "resumeText",
-        "resume_text",
-        "resume_free_text",
-        "detailBody",
-        "detail_body",
-        "profile",
-        "summary",
-    }
-)
-
 
 class LiepinWorkerModeError(RuntimeError):
     def __init__(
@@ -205,7 +187,7 @@ class LiepinWorkerCandidateDetail(BaseModel):
 
     @model_validator(mode="after")
     def reject_whole_page_text_payload_aliases(self) -> LiepinWorkerCandidateDetail:
-        prohibited = set(self.payload) & PROHIBITED_LIEPIN_DETAIL_TEXT_KEYS
+        prohibited = set(self.payload) & PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
         if prohibited:
             keys = ", ".join(sorted(prohibited))
             raise ValueError(f"Liepin detail payload includes prohibited whole-page text field(s): {keys}")
