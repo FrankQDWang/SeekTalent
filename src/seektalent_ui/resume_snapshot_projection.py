@@ -135,10 +135,10 @@ def _project_doc(
             )
             for item in _dict_items(sections.get("projects"))[:20]
         ],
-        skills=[skill for skill in (_safe_text(value, 80) for value in _json_list(doc.get("skills_json"))) if skill][:50],
-        sourceEvidence=[
-            WorkbenchResumeSnapshotSourceEvidenceResponse(label="summary", text=summary)
-        ]
+        skills=[skill for skill in (_safe_text(value, 80) for value in _json_list(doc.get("skills_json"))) if skill][
+            :50
+        ],
+        sourceEvidence=[WorkbenchResumeSnapshotSourceEvidenceResponse(label="summary", text=summary)]
         if summary
         else [],
     )
@@ -175,7 +175,7 @@ _LIEPIN_BASIC_FIELD_KEYS = (
     "company",
     "location",
 )
-_LIEPIN_TEXT_FIELD_KEYS = ("summary", "fullText", "rawText", "page_text")
+_LIEPIN_TEXT_FIELD_KEYS: tuple[str, ...] = ()
 _STRUCTURED_SECTION_KEYS = set(
     _BASIC_FIELD_KEYS
     + _EXPECTATION_FIELD_KEYS
@@ -208,9 +208,6 @@ _FIELD_LABELS = {
     "startTime": "开始时间",
     "endTime": "结束时间",
     "summary": "经历描述",
-    "fullText": "简历全文",
-    "rawText": "原始文本",
-    "page_text": "页面文本",
     "school": "学校",
     "degree": "学历",
     "major": "专业",
@@ -390,7 +387,11 @@ def _list_section(title: str, value: object) -> WorkbenchOriginalResumeSectionRe
             fields = [_field_response(str(key), field_value) for key, field_value in item.items()]
             visible_fields = [field for field in fields if field is not None]
             if visible_fields:
-                items.append(WorkbenchOriginalResumeItemResponse(title=_item_title(title, visible_fields, index), fields=visible_fields))
+                items.append(
+                    WorkbenchOriginalResumeItemResponse(
+                        title=_item_title(title, visible_fields, index), fields=visible_fields
+                    )
+                )
             continue
         field = _field_response(f"{title}.{index}", item)
         if field is not None:
@@ -399,11 +400,7 @@ def _list_section(title: str, value: object) -> WorkbenchOriginalResumeSectionRe
 
 
 def _other_section(payload: dict[str, object]) -> WorkbenchOriginalResumeSectionResponse | None:
-    fields = [
-        _field_response(key, value)
-        for key, value in payload.items()
-        if key not in _STRUCTURED_SECTION_KEYS
-    ]
+    fields = [_field_response(key, value) for key, value in payload.items() if key not in _STRUCTURED_SECTION_KEYS]
     visible_fields = [field for field in fields if field is not None]
     if not visible_fields:
         return None
@@ -469,9 +466,14 @@ def _is_provider_metadata_key(compact_key: str) -> bool:
 def _item_title(title: str, fields: list[WorkbenchOriginalResumeFieldResponse], index: int) -> str:
     by_key = {field.key: field.value for field in fields}
     if title == "工作经历":
-        return " · ".join(value for value in [by_key.get("title"), by_key.get("company")] if value) or f"工作经历 {index}"
+        return (
+            " · ".join(value for value in [by_key.get("title"), by_key.get("company")] if value) or f"工作经历 {index}"
+        )
     if title == "教育经历":
-        return " · ".join(value for value in [by_key.get("school"), by_key.get("degree"), by_key.get("major")] if value) or f"教育经历 {index}"
+        return (
+            " · ".join(value for value in [by_key.get("school"), by_key.get("degree"), by_key.get("major")] if value)
+            or f"教育经历 {index}"
+        )
     return f"{title} {index}"
 
 

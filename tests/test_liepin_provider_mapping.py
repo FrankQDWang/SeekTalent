@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from seektalent.providers.liepin import mapper as liepin_mapper
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
 from seektalent.providers.liepin.worker_contracts import (
     LiepinSafeCardSummary,
@@ -27,9 +28,24 @@ ALLOWED_RAW_KEYS = {
     "score_evidence_source",
 }
 
+WHOLE_PAGE_TEXT_ALIASES = (
+    "fullText",
+    "full_text",
+    "rawText",
+    "raw_text",
+    "page_text",
+    "pageText",
+    "resumeText",
+    "resume_text",
+    "resume_free_text",
+    "detailBody",
+    "detail_body",
+    "profile",
+    "summary",
+)
+
 ALLOWED_DETAIL_RAW_KEYS = ALLOWED_RAW_KEYS | {
     "candidate_name",
-    "fullText",
     "activeStatus",
     "jobStatus",
     "gender",
@@ -96,7 +112,6 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
             "candidateId": "candidate-1",
             "listingId": "listing-1",
             "candidate_name": "吴**",
-            "fullText": "吴** 32岁 上海 本科 工作10年",
             "activeStatus": "近30天内活跃",
             "jobStatus": "在职，看看新机会",
             "gender": "男",
@@ -107,13 +122,17 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
             "currentTitle": "资深体验设计工程师",
             "currentCompany": "平安集团",
             "jobIntention": {"expectedSalary": "20-24k*14薪"},
-            "workExperienceList": [{"company": "平安好医", "title": "用户体验设计专家"}],
-            "projectExperienceList": [{"name": "助力C端业务增长"}],
+            "workExperienceList": [
+                {
+                    "company": "平安好医",
+                    "title": "用户体验设计专家",
+                    "summary": "structured work summary stays",
+                }
+            ],
+            "projectExperienceList": [{"name": "助力C端业务增长", "summary": "structured project summary stays"}],
             "educationList": [{"school": "华东师范大学", "degree": "硕士"}],
             "skills": ["用户研究", "交互设计"],
             "sourceUrl": "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc",
-            "detailBody": "<html>Liepin private detail body</html>",
-            "resumeText": "Detailed private resume text with one@example.com",
             "phone": "13800000000",
             "email": "one@example.com",
             "auth_headers": {"authorization": "Bearer secret"},
@@ -233,20 +252,56 @@ def test_detail_mapping_keeps_raw_payload_and_detail_body_out_of_resume_candidat
     assert mapped.candidate.raw["candidate_name"] == "吴**"
     assert mapped.candidate.raw["activeStatus"] == "近30天内活跃"
     assert mapped.candidate.raw["jobIntention"] == {"expectedSalary": "20-24k*14薪"}
-    assert mapped.candidate.raw["projectExperienceList"] == [{"name": "助力C端业务增长"}]
+    assert mapped.candidate.raw["projectExperienceList"] == [
+        {"name": "助力C端业务增长", "summary": "structured project summary stays"}
+    ]
     assert mapped.candidate.raw["sourceUrl"].startswith("https://h.liepin.com/resume/showresumedetail/")
     assert not (set(mapped.candidate.raw) & FORBIDDEN_RAW_KEYS)
+    assert not (set(mapped.candidate.raw) & set(WHOLE_PAGE_TEXT_ALIASES))
     assert "Liepin private detail body" not in str(mapped.candidate.raw)
     assert "Detailed private resume text" not in str(mapped.candidate.raw)
     assert "one@example.com" not in str(mapped.candidate.raw)
     assert mapped.candidate.raw["raw_payload_artifact_ref"] == "worker://details/candidate-1.json"
 
 
+@pytest.mark.parametrize("alias", WHOLE_PAGE_TEXT_ALIASES)
+def test_worker_detail_rejects_whole_page_text_payload_aliases(alias: str) -> None:
+    payload = _worker_detail().model_dump(mode="json")
+    assert isinstance(payload["payload"], dict)
+    payload["payload"][alias] = "whole page text must not cross the worker detail boundary"
+
+    with pytest.raises(ValidationError):
+        LiepinWorkerCandidateDetail.model_validate(payload)
+
+
+def test_detail_mapping_sanitizes_provider_snapshot_payload() -> None:
+    raw = _worker_detail().model_dump(mode="python")
+    detail_payload = raw["payload"]
+    assert isinstance(detail_payload, dict)
+    for alias in WHOLE_PAGE_TEXT_ALIASES:
+        detail_payload[alias] = "whole page text must be dropped"
+    detail_payload["workExperienceList"] = [
+        {
+            "company": "平安好医",
+            "title": "用户体验设计专家",
+            "summary": "structured work summary stays",
+        }
+    ]
+    detail = LiepinWorkerCandidateDetail.model_construct(**raw)
+
+    mapped = map_liepin_worker_detail(detail, raw_payload_artifact_ref="worker://details/candidate-1.json")
+
+    assert not (set(mapped.candidate.raw) & set(WHOLE_PAGE_TEXT_ALIASES))
+    assert not (set(mapped.provider_snapshot.raw_payload) & set(WHOLE_PAGE_TEXT_ALIASES))
+    assert mapped.candidate.raw["workExperienceList"][0]["summary"] == "structured work summary stays"
+    assert mapped.provider_snapshot.raw_payload["workExperienceList"][0]["summary"] == "structured work summary stays"
+
+
 def test_card_mapping_returns_provider_snapshot_with_raw_payload_and_privacy_metadata() -> None:
     card = _worker_card()
     mapped = map_liepin_worker_card(card, raw_payload_artifact_ref="worker://cards/candidate-1.json")
 
-    assert mapped.provider_snapshot.raw_payload == card.payload
+    assert mapped.provider_snapshot.raw_payload == liepin_mapper._sanitize_liepin_provider_payload(card.payload)
     assert mapped.provider_snapshot.pii_classification == "direct_contact_possible"
     assert mapped.provider_snapshot.retention_policy == "provider_snapshot_30d"
     assert mapped.provider_snapshot.access_scope == "local_run_only"
@@ -259,7 +314,7 @@ def test_detail_mapping_returns_provider_snapshot_with_raw_payload_and_privacy_m
     detail = _worker_detail()
     mapped = map_liepin_worker_detail(detail, raw_payload_artifact_ref="worker://details/candidate-1.json")
 
-    assert mapped.provider_snapshot.raw_payload == detail.payload
+    assert mapped.provider_snapshot.raw_payload == liepin_mapper._sanitize_liepin_provider_payload(detail.payload)
     assert mapped.provider_snapshot.pii_classification == "direct_contact_present"
     assert mapped.provider_snapshot.retention_policy == "provider_snapshot_7d"
     assert mapped.provider_snapshot.access_scope == "local_run_only"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -208,6 +209,16 @@ def test_candidate_truth_projects_wts_fields_from_structured_liepin_detail_paylo
     assert wts["projectExperience"][0]["name"] == "助力C端业务增长"
     assert wts["educationExperience"][0]["school"] == "华东师范大学"
     assert "交互设计" in wts["skills"]
+    serialized_truth = json.dumps(
+        {
+            "identities": [item.model_dump(mode="json") for item in truth.identities],
+            "evidence": [item.model_dump(mode="json") for item in truth.evidence],
+        },
+        ensure_ascii=False,
+    )
+    assert "平安好医" in serialized_truth
+    assert "fullText" not in serialized_truth
+    assert "page_text" not in serialized_truth
 
 
 def test_candidate_truth_ignores_full_text_and_normalized_for_wts_detail_fields() -> None:
@@ -218,9 +229,7 @@ def test_candidate_truth_ignores_full_text_and_normalized_for_wts_detail_fields(
     assert isinstance(candidate_store, dict)
     resume = candidate_store["resume_1"]
     assert isinstance(resume, dict)
-    resume["raw"] = {
-        "fullText": "provider page shell and resume prose are not a WTS detail field source"
-    }
+    resume["raw"] = {"fullText": "provider page shell and resume prose are not a WTS detail field source"}
     run_state["normalized_store"] = {
         "resume_1": {
             "candidate_name": "Normalized Name",

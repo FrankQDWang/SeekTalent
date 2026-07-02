@@ -179,8 +179,14 @@ def test_requirements_prompt_describes_one_or_two_title_anchors() -> None:
     prompt = Path("src/seektalent/prompts/requirements.md").read_text(encoding="utf-8")
 
     assert "Set `title_anchor_terms` to one or two stable searchable anchors extracted from `job_title`." in prompt
-    assert "Add a second anchor only when the title clearly supports a nearby alternate title that is also likely to appear on resumes." in prompt
-    assert "Set `title_anchor_rationale` to a short explanation of why those anchors best capture the searchable job title." in prompt
+    assert (
+        "Add a second anchor only when the title clearly supports a nearby alternate title that is also likely to appear on resumes."
+        in prompt
+    )
+    assert (
+        "Set `title_anchor_rationale` to a short explanation of why those anchors best capture the searchable job title."
+        in prompt
+    )
     assert "Do not invent fake title anchors from JD-only terms, seniority words, org labels, or soft skills." in prompt
 
 
@@ -245,9 +251,7 @@ def test_controller_prompt_contains_decision_brief_and_exact_data() -> None:
                 suggested_activate_terms=["retrieval"],
                 suggested_drop_terms=["internal roadmap"],
             ),
-            latest_reflection_filter_advice=ReflectionFilterAdvice(
-                suggested_drop_filter_fields=["position"]
-            ),
+            latest_reflection_filter_advice=ReflectionFilterAdvice(suggested_drop_filter_fields=["position"]),
             shortage_history=[8],
         )
     )
@@ -292,10 +296,16 @@ def test_controller_prompt_contains_decision_brief_and_exact_data() -> None:
 def test_controller_prompt_prefers_title_title_round_one_pairing() -> None:
     prompt = Path("src/seektalent/prompts/controller.md").read_text(encoding="utf-8")
 
-    assert "Round 1 must return exactly 2 query terms unless anchor-only rescue is the only viable admitted option." in prompt
+    assert (
+        "Round 1 must return exactly 2 query terms unless anchor-only rescue is the only viable admitted option."
+        in prompt
+    )
     assert "Round 1 should prefer `primary_role_anchor + secondary_title_anchor`." in prompt
     assert "Otherwise, round 1 should use `primary_role_anchor + strongest_domain_term`." in prompt
-    assert "Round 2 and later must return exactly 1 `primary_role_anchor` plus 1~2 active admitted support terms." in prompt
+    assert (
+        "Round 2 and later must return exactly 1 `primary_role_anchor` plus 1~2 active admitted support terms."
+        in prompt
+    )
 
 
 def test_controller_prompt_says_few_shot_terms_are_not_reusable() -> None:
@@ -554,6 +564,53 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert '"run_dir"' not in prompt
     assert "/tmp/run-1" not in prompt
     assert "FINALIZATION_CONTEXT" not in prompt
+    assert_prompt_snapshot_safe(prompt)
+
+
+def test_scoring_prompt_accepts_liepin_without_full_text() -> None:
+    prompt = render_scoring_prompt(
+        ScoringContext(
+            round_no=1,
+            scoring_policy=ScoringPolicy(
+                job_title="Senior Experience Designer",
+                role_summary="Evaluate structured Liepin detail resumes.",
+                must_have_capabilities=["用户体验设计"],
+                preferred_capabilities=["用户研究"],
+                exclusion_signals=[],
+                hard_constraints=HardConstraintSlots(),
+                preferences=PreferenceSlots(),
+                scoring_rationale="Score structured experience evidence.",
+            ),
+            normalized_resume=NormalizedResume(
+                resume_id="liepin-detail-structured-1",
+                dedup_key="liepin-detail-structured-1",
+                source_provider="liepin",
+                candidate_name="潘**",
+                current_title="资深体验设计工程师",
+                current_company="平安集团",
+                years_of_experience=10,
+                locations=["上海市"],
+                education_summary="华东师范大学 工业设计 硕士",
+                skills=["用户研究", "交互设计"],
+                recent_experiences=[
+                    NormalizedExperience(
+                        title="用户体验设计专家",
+                        company="平安好医",
+                        duration="2019.06-至今",
+                        summary="提供B端及C端体验设计方案。",
+                    )
+                ],
+                raw_text_excerpt="平安好医 用户体验设计专家 提供B端及C端体验设计方案。",
+                completeness_score=92,
+                source_round=1,
+                score_evidence_source="detail_enriched",
+            ),
+            requirement_sheet_sha256="requirement-sheet-hash",
+        )
+    )
+
+    assert "平安好医" in prompt
+    assert "fullText" not in prompt
     assert_prompt_snapshot_safe(prompt)
 
 

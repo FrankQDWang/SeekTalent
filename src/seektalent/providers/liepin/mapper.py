@@ -18,10 +18,29 @@ class LiepinMappedCandidate:
 
 LiepinWorkerCandidate = LiepinWorkerCandidateCard | LiepinWorkerCandidateDetail
 
+PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS = frozenset(
+    {
+        "fullText",
+        "full_text",
+        "rawText",
+        "raw_text",
+        "page_text",
+        "pageText",
+        "resumeText",
+        "resume_text",
+        "resume_free_text",
+        "detailBody",
+        "detail_body",
+        "profile",
+        "summary",
+    }
+)
+
 
 def _safe_raw(
     worker_candidate: LiepinWorkerCandidate,
     *,
+    provider_payload: dict[str, object],
     raw_payload_artifact_ref: str | None,
     score_evidence_source: LiepinScoreEvidenceSource,
 ) -> dict[str, object]:
@@ -43,9 +62,9 @@ def _safe_raw(
     if isinstance(worker_candidate, LiepinWorkerCandidateCard) and worker_candidate.safe_card_summary is not None:
         raw["safe_card_summary"] = worker_candidate.safe_card_summary.model_dump(mode="json")
     if isinstance(worker_candidate, LiepinWorkerCandidateCard):
-        _copy_safe_card_payload_metadata(raw, worker_candidate.payload)
+        _copy_safe_card_payload_metadata(raw, provider_payload)
     if isinstance(worker_candidate, LiepinWorkerCandidateDetail):
-        _copy_safe_detail_payload_fields(raw, worker_candidate.payload)
+        _copy_safe_detail_payload_fields(raw, provider_payload)
     return raw
 
 
@@ -56,9 +75,11 @@ def _map_candidate(
     score_evidence_source: LiepinScoreEvidenceSource,
     raw_payload_artifact_ref: str | None,
 ) -> LiepinMappedCandidate:
-    snapshot_hash = sha256_json(worker_candidate.payload)
+    provider_payload = _sanitize_liepin_provider_payload(worker_candidate.payload)
+    snapshot_hash = sha256_json(provider_payload)
     raw = _safe_raw(
         worker_candidate,
+        provider_payload=provider_payload,
         raw_payload_artifact_ref=raw_payload_artifact_ref,
         score_evidence_source=score_evidence_source,
     )
@@ -75,7 +96,7 @@ def _map_candidate(
     snapshot = ProviderSnapshot(
         provider_name="liepin",
         payload_kind=payload_kind,
-        raw_payload=worker_candidate.payload,
+        raw_payload=provider_payload,
         normalized_text=worker_candidate.normalized_text,
         provider_subject_id=provider_subject_id,
         provider_listing_id=worker_candidate.provider_listing_id,
@@ -118,6 +139,10 @@ def map_liepin_worker_detail(
     )
 
 
+def _sanitize_liepin_provider_payload(payload: dict[str, object]) -> dict[str, object]:
+    return {key: value for key, value in payload.items() if key not in PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS}
+
+
 def _copy_safe_card_payload_metadata(raw: dict[str, object], payload: dict[str, object]) -> None:
     provider_hash = _safe_identifier(payload.get("providerCandidateKeyHash"))
     if provider_hash is not None:
@@ -125,7 +150,9 @@ def _copy_safe_card_payload_metadata(raw: dict[str, object], payload: dict[str, 
     safe_summary_ref = _safe_artifact_ref(payload.get("safeSummaryRef"), expected_prefix="artifact://public-summary/")
     if safe_summary_ref is not None:
         raw["safe_summary_ref"] = safe_summary_ref
-    protected_snapshot_ref = _safe_artifact_ref(payload.get("protectedSnapshotRef"), expected_prefix="artifact://protected/")
+    protected_snapshot_ref = _safe_artifact_ref(
+        payload.get("protectedSnapshotRef"), expected_prefix="artifact://protected/"
+    )
     if protected_snapshot_ref is not None:
         raw["provider_snapshot_ref"] = protected_snapshot_ref
     action_trace_ref = _safe_artifact_ref(payload.get("actionTraceRef"), expected_prefix="artifact://protected/")
@@ -137,8 +164,6 @@ def _copy_safe_detail_payload_fields(raw: dict[str, object], payload: dict[str, 
     for key in (
         "candidate_name",
         "candidateName",
-        "fullText",
-        "rawText",
         "activeStatus",
         "jobStatus",
         "gender",
@@ -146,8 +171,6 @@ def _copy_safe_detail_payload_fields(raw: dict[str, object], payload: dict[str, 
         "city",
         "education",
         "workYears",
-        "profile",
-        "summary",
         "currentTitle",
         "currentCompany",
         "jobIntention",
@@ -166,7 +189,9 @@ def _copy_safe_detail_payload_fields(raw: dict[str, object], payload: dict[str, 
     provider_hash = _safe_identifier(payload.get("providerCandidateKeyHash"))
     if provider_hash is not None:
         raw["provider_candidate_key_hash"] = provider_hash
-    protected_snapshot_ref = _safe_artifact_ref(payload.get("protectedSnapshotRef"), expected_prefix="artifact://protected/")
+    protected_snapshot_ref = _safe_artifact_ref(
+        payload.get("protectedSnapshotRef"), expected_prefix="artifact://protected/"
+    )
     if protected_snapshot_ref is not None:
         raw["provider_snapshot_ref"] = protected_snapshot_ref
     action_trace_ref = _safe_artifact_ref(payload.get("actionTraceRef"), expected_prefix="artifact://protected/")

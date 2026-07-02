@@ -48,11 +48,16 @@ class FakeOpenCliRunner:
                     f"artifact://protected/liepin-opencli/normalized/{source_run_id}/{index}.json"
                 ),
                 "detail_payload": {
-                    "fullText": f"数据平台 Python resume {index}",
                     "sourceUrl": f"https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-{index}",
                     "currentTitle": "数据开发专家",
                     "currentCompany": "Example",
-                    "workExperienceList": [],
+                    "workExperienceList": [
+                        {
+                            "company": "Example",
+                            "title": "数据开发专家",
+                            "summary": f"数据平台 Python resume {index}",
+                        }
+                    ],
                     "educationList": [],
                     "skills": ["Python"],
                     "locations": ["杭州"],
@@ -101,8 +106,10 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
     assert response.resumes[0].payload["sourceUrl"] == (
         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-1"
     )
-    assert response.resumes[0].payload["normalizedSnapshotRef"].startswith(
-        "artifact://protected/liepin-opencli/normalized/"
+    assert (
+        response.resumes[0]
+        .payload["normalizedSnapshotRef"]
+        .startswith("artifact://protected/liepin-opencli/normalized/")
     )
 
 

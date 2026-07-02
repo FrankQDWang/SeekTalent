@@ -126,6 +126,53 @@ def _response_from_opencli_envelope(envelope: Mapping[str, object]) -> LiepinRes
     )
 
 
+def _structured_detail_text(payload: Mapping[str, object]) -> str:
+    parts: list[str] = []
+
+    def add(value: object) -> None:
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+        elif isinstance(value, int) and not isinstance(value, bool):
+            parts.append(str(value))
+
+    for key in (
+        "candidate_name",
+        "candidateName",
+        "activeStatus",
+        "jobStatus",
+        "gender",
+        "age",
+        "city",
+        "education",
+        "workYears",
+        "currentTitle",
+        "currentCompany",
+    ):
+        add(payload.get(key))
+    job_intention = payload.get("jobIntention")
+    if isinstance(job_intention, Mapping):
+        for key in ("expectedRole", "expectedSalary", "expectedCity", "expectedIndustry"):
+            add(job_intention.get(key))
+    for list_key, item_keys in (
+        ("workExperienceList", ("company", "title", "duration", "dateRange", "summary", "description")),
+        ("projectExperienceList", ("name", "role", "company", "duration", "dateRange", "summary", "description")),
+        ("educationList", ("school", "major", "degree", "duration", "dateRange", "summary")),
+    ):
+        value = payload.get(list_key)
+        if not isinstance(value, list):
+            continue
+        for item in value[:8]:
+            if not isinstance(item, Mapping):
+                continue
+            for key in item_keys:
+                add(item.get(key))
+    skills = payload.get("skills")
+    if isinstance(skills, list):
+        for skill in skills[:20]:
+            add(skill)
+    return " ".join(parts)
+
+
 def _detail_from_resume_payload(
     resume: Mapping[str, object],
     *,
@@ -139,7 +186,7 @@ def _detail_from_resume_payload(
     payload["protectedSnapshotRef"] = resume.get("protected_snapshot_ref")
     payload["normalizedSnapshotRef"] = resume.get("normalized_snapshot_ref")
     payload["actionTraceRef"] = resume.get("action_trace_ref") or action_trace_ref
-    normalized_text = str(resume.get("normalized_text") or payload.get("fullText") or "")
+    normalized_text = str(resume.get("normalized_text") or _structured_detail_text(payload))
     fingerprint = hashlib.sha256(f"liepin-opencli:{provider_candidate_hash}".encode("utf-8")).hexdigest()
     return LiepinWorkerCandidateDetail(
         payload=payload,

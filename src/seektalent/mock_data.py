@@ -21,7 +21,6 @@ def _candidate(
     languages: list[str] | None = None,
     failure_mode: str = "none",
     headline: str | None = None,
-    full_text: str | None = None,
 ) -> ResumeCandidate:
     canonical_location = normalize_location(location)
     work_experience_summaries = [
@@ -36,16 +35,6 @@ def _candidate(
         "languageTags": languages or [],
         "workExperienceList": experiences,
         "educationList": education,
-        "fullText": full_text
-        or " ".join(
-            [
-                title,
-                current_company,
-                *projects,
-                *(item.get("summary", "") for item in experiences),
-                *work_summaries,
-            ]
-        ),
         "mock_score_failure_mode": failure_mode,
     }
     if stable_id:
@@ -100,11 +89,6 @@ def _candidate(
 
 
 def load_mock_resume_corpus() -> list[ResumeCandidate]:
-    long_trace_text = (
-        "Implemented trace-first agent workflow instrumentation across search, scoring, and reflection loops. "
-        "Documented prompt hashes, normalization warnings, and event schemas for recruiter review. "
-        "Delivered deterministic CLI workflows with controlled concurrency and audit-friendly JSONL artifacts. "
-    ) * 8
     corpus = [
         _candidate(
             "mock-r001",
@@ -279,7 +263,6 @@ def load_mock_resume_corpus() -> list[ResumeCandidate]:
             ],
             work_summaries=["trace", "logging", "reflection", "prompt hash", "observability", "python"],
             skills=["trace", "logging", "observability", "python"],
-            full_text=long_trace_text,
         ),
         _candidate(
             "mock-r007",

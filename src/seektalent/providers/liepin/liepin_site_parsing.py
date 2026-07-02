@@ -77,6 +77,7 @@ ALLOWED_CLICK_TARGET_FRAGMENTS = frozenset(
     }
 )
 
+
 @dataclass(frozen=True)
 class _LiepinDetailTarget:
     rank: int
@@ -421,7 +422,6 @@ def _detail_provider_key_material(*, safe_run_id: str, rank: int, payload: Mappi
     return f"liepin-opencli-detail:{safe_run_id}:{rank}:{digest}"
 
 
-
 def _safe_card_summary_from_block(block: str) -> dict[str, object]:
     normalized_block = _bounded_public_text(block, max_chars=900)
     company, title = _company_title_from_block(block)
@@ -494,7 +494,6 @@ def _city_from_block(block: str) -> str | None:
     return None
 
 
-
 def _school_names_from_block(block: str) -> list[str]:
     schools: list[str] = []
     for match in re.finditer(r"([\u4e00-\u9fa5]{2,24}(?:大学|学院))", block):
@@ -512,7 +511,6 @@ def _skill_tags_from_block(block: str) -> list[str]:
         if token not in tags:
             tags.append(token)
     return tags[:12]
-
 
 
 def _has_masked_name(block: str) -> bool:
@@ -760,11 +758,11 @@ def _liepin_detail_resume_payload_probe_script() -> str:
     workExperienceList: timelineItems("#resume-detail-work-info", ".rd-work-item-cont", "work"),
     projectExperienceList: timelineItems("#resume-detail-project-info", ".rd-project-item-cont, .rd-info-tpl-item", "project"),
     educationList: timelineItems("#resume-detail-edu-info", ".resume-edu-info-item-wrap", "education"),
-    skills,
-    fullText: bounded(text(document.querySelector("#resume-detail-single")), 20000)
+    skills
   });
 })()
 """
+
 
 def _url_matches_start_surface(url: str, start_url: str) -> bool:
     parsed = urlparse(url)
@@ -835,6 +833,7 @@ def _tab_urls_by_page_id(tabs: Sequence[Mapping[str, object]]) -> dict[str, str]
         if _is_safe_page_id(page_id):
             urls[page_id] = str(tab.get("url") or "")
     return urls
+
 
 def _is_safe_page_id(value: str) -> bool:
     return bool(_SAFE_PAGE_ID_PATTERN.fullmatch(value))

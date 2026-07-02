@@ -83,7 +83,7 @@ def test_liepin_safe_card_summary_feeds_normalized_resume() -> None:
     assert normalized.completeness_score >= 60
 
 
-def test_liepin_detail_candidate_reuses_shared_full_resume_normalization() -> None:
+def test_liepin_detail_candidate_reuses_shared_structured_resume_normalization() -> None:
     candidate = ResumeCandidate(
         resume_id="liepin-detail-1",
         dedup_key="dedup-liepin-detail-1",
@@ -94,7 +94,6 @@ def test_liepin_detail_candidate_reuses_shared_full_resume_normalization() -> No
             "candidate_name": "张三",
             "currentTitle": "数据开发专家",
             "currentCompany": "Example Data",
-            "fullText": "负责数据仓库、数据治理、ETL、Python、Hive、Spark 与大规模数据平台建设。",
             "workExperienceList": [
                 {
                     "company": "Example Data",
@@ -120,3 +119,33 @@ def test_liepin_detail_candidate_reuses_shared_full_resume_normalization() -> No
     assert "大规模数据平台" in normalized.raw_text_excerpt
     assert normalized.score_evidence_source == "detail_enriched"
     assert normalized.completeness_score >= 80
+
+
+def test_liepin_detail_without_full_text_still_produces_legacy_excerpt() -> None:
+    candidate = ResumeCandidate(
+        resume_id="liepin-detail-structured-1",
+        dedup_key="dedup-liepin-detail-structured-1",
+        search_text="用户体验设计专家 平安好医 用户研究 交互设计",
+        raw={
+            "provider": "liepin",
+            "score_evidence_source": "detail_enriched",
+            "candidate_name": "潘**",
+            "currentTitle": "资深体验设计工程师",
+            "currentCompany": "平安集团",
+            "workExperienceList": [
+                {
+                    "company": "平安好医",
+                    "title": "用户体验设计专家",
+                    "duration": "2019.06-至今",
+                    "summary": "提供B端及C端体验设计方案。",
+                }
+            ],
+            "skills": ["用户研究", "交互设计"],
+        },
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.raw_text_excerpt
+    assert "平安好医" in normalized.raw_text_excerpt
+    assert "fullText" not in normalized.raw_text_excerpt

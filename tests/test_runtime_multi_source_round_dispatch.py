@@ -122,7 +122,16 @@ def test_public_runtime_filter_payload_does_not_expose_browser_terms() -> None:
     )
     encoded = json.dumps(event, ensure_ascii=False, sort_keys=True)
 
-    forbidden = ("OpenCLI", "DokoBot", "mcp", "pi_agent", "cookie", "authorization", "raw_provider_payload", "raw_resume")
+    forbidden = (
+        "OpenCLI",
+        "DokoBot",
+        "mcp",
+        "pi_agent",
+        "cookie",
+        "authorization",
+        "raw_provider_payload",
+        "raw_resume",
+    )
     assert all(term.lower() not in encoded.lower() for term in forbidden)
 
 
@@ -410,11 +419,14 @@ def test_round_unique_identities_counts_only_new_identity_membership() -> None:
         raw_candidate_count=3,
     )
 
-    assert _round_unique_identity_count(
-        dispatch_result=dispatch_result,
-        run_state=run_state,
-        pre_round_seen_resume_ids=frozenset({"old-resume"}),
-    ) == 1
+    assert (
+        _round_unique_identity_count(
+            dispatch_result=dispatch_result,
+            run_state=run_state,
+            pre_round_seen_resume_ids=frozenset({"old-resume"}),
+        )
+        == 1
+    )
 
 
 def test_multisource_uses_existing_70_30_query_allocation() -> None:
@@ -740,10 +752,13 @@ def test_source_round_is_not_ready_when_selected_source_blocks_even_if_another_r
         finalization_scope="available_sources_only",
     )
 
-    assert runtime._source_round_not_ready_reason(
-        coverage_summary=coverage,
-        dispatch_result=dispatch_result,
-    ) == "liepin_opencli_filter_unapplied"
+    assert (
+        runtime._source_round_not_ready_reason(
+            coverage_summary=coverage,
+            dispatch_result=dispatch_result,
+        )
+        == "liepin_opencli_filter_unapplied"
+    )
 
 
 def test_dispatch_sends_same_query_bundle_to_cts_and_liepin() -> None:
@@ -1223,7 +1238,8 @@ def test_liepin_source_adapter_records_provider_snapshots_to_corpus(monkeypatch,
     raw_payload = {
         "providerCandidateKeyHash": "liepin-provider-key-hash",
         "candidate_name": "李四",
-        "fullText": "负责数据平台建设。",
+        "currentTitle": "数据平台工程师",
+        "workExperienceList": [{"company": "Example Data", "title": "数据平台工程师", "summary": "负责数据平台建设。"}],
     }
     snapshot_sha256 = sha256_json(raw_payload)
     candidate = ResumeCandidate(
@@ -1286,7 +1302,8 @@ def test_liepin_source_adapter_records_provider_snapshots_to_corpus(monkeypatch,
         runs_dir=str(tmp_path / "runs"),
         artifacts_path=str(tmp_path / "artifacts"),
         corpus_path=str(tmp_path / "corpus.sqlite3"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
     )
     runtime = WorkflowRuntime(settings)
     tracer = RunTracer(tmp_path / "trace-liepin-corpus")

@@ -137,7 +137,9 @@ def _extract_skills(
     ]
     skills = _normalize_strings(derived)
     if skills:
-        normalization_notes.append("Derived skills from short work summary tokens because explicit skill fields were absent.")
+        normalization_notes.append(
+            "Derived skills from short work summary tokens because explicit skill fields were absent."
+        )
     return skills[:12]
 
 
@@ -210,19 +212,27 @@ def _build_excerpt(
     *,
     normalization_notes: list[str],
 ) -> str:
-    raw_text = _first_text(
-        candidate.raw.get("fullText"),
-        candidate.raw.get("rawText"),
-        candidate.raw.get("profile"),
-        candidate.raw.get("summary"),
-    )
     safe_card = _safe_card_summary(candidate.raw)
+    structured_profile_text = " ".join(
+        part
+        for part in [
+            _first_text(candidate.raw.get("currentTitle"), candidate.raw.get("current_title")),
+            _first_text(candidate.raw.get("currentCompany"), candidate.raw.get("current_company")),
+            " ".join(
+                _normalize_strings(candidate.raw.get("skills") if isinstance(candidate.raw.get("skills"), list) else [])
+            ),
+        ]
+        if part
+    )
+    recent_experience_text = " ".join(
+        " ".join(part for part in [item.company, item.title, item.summary] if part) for item in recent_experiences
+    )
     chunks = [
-        raw_text,
+        structured_profile_text,
         _first_text(safe_card.get("normalized_card_text"), safe_card.get("recent_experience_text")),
         " ".join(candidate.work_summaries),
         " ".join(candidate.project_names[:4]),
-        " ".join(item.summary for item in recent_experiences if item.summary),
+        recent_experience_text,
         " ".join(candidate.education_summaries[:2]),
     ]
     excerpt = " ".join(chunk.strip() for chunk in chunks if isinstance(chunk, str) and chunk.strip())
@@ -288,7 +298,9 @@ def normalize_resume(candidate: ResumeCandidate) -> NormalizedResume:
     safe_card = _safe_card_summary(raw)
     normalization_notes: list[str] = []
     if candidate.used_fallback_id:
-        normalization_notes.append("CTS did not expose a stable resume id; a deterministic fallback fingerprint was used.")
+        normalization_notes.append(
+            "CTS did not expose a stable resume id; a deterministic fallback fingerprint was used."
+        )
 
     candidate_name = _extract_name(raw)
     current_title = _first_text(
@@ -316,10 +328,14 @@ def normalize_resume(candidate: ResumeCandidate) -> NormalizedResume:
         normalization_notes.append("Filled headline from current_title.")
     safe_card_work_years = safe_card.get("work_years")
     years_of_experience = candidate.work_year or (
-        safe_card_work_years if isinstance(safe_card_work_years, int) and not isinstance(safe_card_work_years, bool) else None
+        safe_card_work_years
+        if isinstance(safe_card_work_years, int) and not isinstance(safe_card_work_years, bool)
+        else None
     )
     raw_locations = raw.get("locations")
-    extra_locations = [item if isinstance(item, str) else None for item in raw_locations] if isinstance(raw_locations, list) else []
+    extra_locations = (
+        [item if isinstance(item, str) else None for item in raw_locations] if isinstance(raw_locations, list) else []
+    )
     locations = normalize_locations(
         [
             candidate.now_location,
