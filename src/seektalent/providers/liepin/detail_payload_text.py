@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import cast
 
 
 PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS = frozenset(
@@ -46,21 +47,22 @@ def find_liepin_whole_page_text_alias_paths(payload: Mapping[str, object]) -> tu
 
 
 def sanitize_liepin_provider_payload(payload: Mapping[str, object]) -> dict[str, object]:
-    sanitized = _sanitize_payload_value(payload, ())
-    if isinstance(sanitized, dict):
-        return sanitized
-    return {}
+    return _sanitize_payload_mapping(payload, ())
+
+
+def _sanitize_payload_mapping(value: Mapping[str, object], path: tuple[str, ...]) -> dict[str, object]:
+    sanitized: dict[str, object] = {}
+    for key, item in value.items():
+        key_text = str(key)
+        if _is_prohibited_payload_key(key_text, parent_path=path):
+            continue
+        sanitized[key_text] = _sanitize_payload_value(item, (*path, key_text))
+    return sanitized
 
 
 def _sanitize_payload_value(value: object, path: tuple[str, ...]) -> object:
     if isinstance(value, Mapping):
-        sanitized: dict[str, object] = {}
-        for key, item in value.items():
-            key_text = str(key)
-            if _is_prohibited_payload_key(key_text, parent_path=path):
-                continue
-            sanitized[key_text] = _sanitize_payload_value(item, (*path, key_text))
-        return sanitized
+        return _sanitize_payload_mapping(cast("Mapping[str, object]", value), path)
     if isinstance(value, list):
         return [_sanitize_payload_value(item, (*path, f"[{index}]")) for index, item in enumerate(value)]
     return value
@@ -128,6 +130,7 @@ def structured_liepin_detail_text(
         add(payload.get(key))
     job_intention = payload.get("jobIntention")
     if isinstance(job_intention, Mapping):
+        job_intention = cast("Mapping[str, object]", job_intention)
         for key in ("expectedRole", "expectedSalary", "expectedCity", "expectedIndustry"):
             add(job_intention.get(key))
     for list_key, item_keys in (
