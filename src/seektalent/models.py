@@ -859,8 +859,19 @@ def _protected_identity_values(identity: dict[str, StructuredEvidenceValue]) -> 
         elif normalized_key in {"age", "candidateage"}:
             protected.extend(("age", text) for text in _identity_value_text(value))
         elif normalized_key in {"gender", "candidategender", "sex", "candidatesex"}:
-            protected.extend(("gender", text) for text in _identity_value_text(value))
+            protected.extend(("gender", text) for text in _gender_value_text(value))
     return protected
+
+
+def _gender_value_text(value: object) -> list[str]:
+    values: list[str] = []
+    for text in _identity_value_text(value):
+        values.append(text)
+        if text == "男":
+            values.append("男性")
+        elif text == "女":
+            values.append("女性")
+    return values
 
 
 def _protected_education_values(item: StructuredResumeTimelineItem) -> list[ProtectedSummaryReplacement]:
