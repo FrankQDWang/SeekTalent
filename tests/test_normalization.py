@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+from pydantic import ValidationError
+
 from seektalent.models import ResumeCandidate, StructuredResumeEvidence, StructuredResumeTimelineItem
 from seektalent.normalization import normalize_resume
 
@@ -283,3 +286,33 @@ def test_structured_resume_evidence_keeps_age_and_gender_substrings_in_allowed_w
     assert "2023年" in serialized
     assert "23%" in serialized
     assert "男装业务" in serialized
+
+
+def test_structured_resume_evidence_scrubs_gender_after_chinese_linking_particle() -> None:
+    evidence = StructuredResumeEvidence(
+        identity={"gender": "男"},
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                summary="候选人为男，负责体验设计。",
+            )
+        ],
+        project_experience=[
+            StructuredResumeTimelineItem(
+                name="增长项目",
+                summary="男装业务通过用户研究优化转化。",
+            )
+        ],
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "负责体验设计" in serialized
+    assert "男装业务" in serialized
+    assert "候选人为男" not in serialized
+
+
+def test_structured_resume_evidence_rejects_boolean_work_years() -> None:
+    with pytest.raises(ValidationError):
+        StructuredResumeEvidence(current_role={"workYears": False})

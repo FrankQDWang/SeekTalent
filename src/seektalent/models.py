@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from hashlib import sha1
 from typing import Annotated, Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
 FitBucket = Literal["fit", "not_fit"]
 DecisionType = Literal["continue", "stop"]
@@ -38,6 +38,7 @@ QueryRole = Literal["exploit", "explore"]
 LaneType = Literal["exploit", "generic_explore", "prf_probe"]
 ProtectedSummaryReplacementKind = Literal["substring", "age", "gender"]
 ProtectedSummaryReplacement = tuple[ProtectedSummaryReplacementKind, str]
+StructuredEvidenceValue = StrictStr | StrictInt
 TopPoolStrength = Literal["empty", "weak", "usable", "strong"]
 StopQualityGateStatus = Literal[
     "pass",
@@ -780,15 +781,15 @@ class StructuredScoringEvidence(BaseModel):
 class StructuredResumeEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    identity: dict[str, str | int] = Field(default_factory=dict)
-    current_role: dict[str, str | int] = Field(default_factory=dict)
-    status: dict[str, str | int] = Field(default_factory=dict)
-    job_intention: dict[str, str | int] = Field(default_factory=dict)
+    identity: dict[str, StructuredEvidenceValue] = Field(default_factory=dict)
+    current_role: dict[str, StructuredEvidenceValue] = Field(default_factory=dict)
+    status: dict[str, StructuredEvidenceValue] = Field(default_factory=dict)
+    job_intention: dict[str, StructuredEvidenceValue] = Field(default_factory=dict)
     work_experience: list[StructuredResumeTimelineItem] = Field(default_factory=list)
     project_experience: list[StructuredResumeTimelineItem] = Field(default_factory=list)
     education_experience: list[StructuredResumeTimelineItem] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
-    source_metadata: dict[str, str | int] = Field(default_factory=dict)
+    source_metadata: dict[str, StructuredEvidenceValue] = Field(default_factory=dict)
 
     def to_scoring_evidence(self) -> StructuredScoringEvidence:
         protected_summary_values = _protected_summary_replacements(self)
@@ -818,7 +819,7 @@ class StructuredResumeEvidence(BaseModel):
         )
 
 
-def _first_present_value(values: dict[str, str | int], *keys: str) -> object:
+def _first_present_value(values: dict[str, StructuredEvidenceValue], *keys: str) -> object:
     for key in keys:
         if key in values:
             return values[key]
@@ -849,7 +850,7 @@ def _protected_summary_replacements(evidence: StructuredResumeEvidence) -> tuple
     return tuple(sorted(unique, key=lambda replacement: len(replacement[1]), reverse=True))
 
 
-def _protected_identity_values(identity: dict[str, str | int]) -> list[ProtectedSummaryReplacement]:
+def _protected_identity_values(identity: dict[str, StructuredEvidenceValue]) -> list[ProtectedSummaryReplacement]:
     protected: list[ProtectedSummaryReplacement] = []
     for key, value in identity.items():
         normalized_key = "".join(char for char in key if char.isalnum()).casefold()
@@ -906,7 +907,7 @@ def _scrub_age_value(summary: str, value: str) -> str:
 
 def _scrub_gender_value(summary: str, value: str) -> str:
     escaped = re.escape(value)
-    pattern = rf"(?:(?<=^)|(?<=[\s,，.。;；:：、()（）和])){escaped}(?=$|[\s,，.。;；:：、()（）])"
+    pattern = rf"(?:(?<=^)|(?<=[\s,，.。;；:：、()（）和为是])){escaped}(?=$|[\s,，.。;；:：、()（）])"
     return re.sub(pattern, "[protected]", summary)
 
 
