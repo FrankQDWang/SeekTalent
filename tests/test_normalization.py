@@ -5,7 +5,12 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from seektalent.models import ResumeCandidate, StructuredResumeEvidence, StructuredResumeTimelineItem
+from seektalent.models import (
+    ResumeCandidate,
+    StructuredResumeEvidence,
+    StructuredResumeTimelineItem,
+    StructuredScoringRole,
+)
 from seektalent.normalization import normalize_resume
 
 
@@ -316,3 +321,25 @@ def test_structured_resume_evidence_scrubs_gender_after_chinese_linking_particle
 def test_structured_resume_evidence_rejects_boolean_work_years() -> None:
     with pytest.raises(ValidationError):
         StructuredResumeEvidence(current_role={"workYears": False})
+
+
+def test_structured_resume_evidence_preserves_generic_major_word_in_allowed_summary() -> None:
+    evidence = StructuredResumeEvidence(
+        education_experience=[StructuredResumeTimelineItem(major="设计")],
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                summary="负责 B 端和 C 端体验设计。",
+            )
+        ],
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "体验设计" in serialized
+
+
+def test_structured_scoring_role_rejects_boolean_work_years() -> None:
+    with pytest.raises(ValidationError):
+        StructuredScoringRole(work_years=False)

@@ -739,7 +739,7 @@ class StructuredScoringRole(BaseModel):
 
     title: str = ""
     company: str = ""
-    work_years: int | None = None
+    work_years: StrictInt | None = None
 
 
 class StructuredScoringJobIntention(BaseModel):
@@ -839,7 +839,7 @@ def _protected_summary_replacements(evidence: StructuredResumeEvidence) -> tuple
     replacements.extend(_protected_identity_values(evidence.identity))
     replacements.extend(("substring", value) for value in _protected_text_values(evidence.source_metadata.values()))
     for item in evidence.education_experience:
-        replacements.extend(("substring", value) for value in _protected_text_values((item.school, item.degree, item.major)))
+        replacements.extend(_protected_education_values(item))
     seen: set[ProtectedSummaryReplacement] = set()
     unique: list[ProtectedSummaryReplacement] = []
     for replacement in replacements:
@@ -861,6 +861,40 @@ def _protected_identity_values(identity: dict[str, StructuredEvidenceValue]) -> 
         elif normalized_key in {"gender", "candidategender", "sex", "candidatesex"}:
             protected.extend(("gender", text) for text in _identity_value_text(value))
     return protected
+
+
+def _protected_education_values(item: StructuredResumeTimelineItem) -> list[ProtectedSummaryReplacement]:
+    replacements: list[ProtectedSummaryReplacement] = []
+    replacements.extend(("substring", value) for value in _protected_text_values((item.school,)))
+    replacements.extend(("substring", value) for value in _specific_education_values((item.degree, item.major)))
+    replacements.extend(("substring", value) for value in _education_phrase_values(item))
+    return replacements
+
+
+def _specific_education_values(values: Iterable[object]) -> list[str]:
+    protected: list[str] = []
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        clean = value.strip()
+        if len(clean) >= 3:
+            protected.append(clean)
+    return protected
+
+
+def _education_phrase_values(item: StructuredResumeTimelineItem) -> list[str]:
+    field_orders = (
+        (item.school, item.degree, item.major),
+        (item.school, item.major, item.degree),
+    )
+    phrases: list[str] = []
+    for fields in field_orders:
+        parts = [part.strip() for part in fields if part.strip()]
+        if len(parts) < 2:
+            continue
+        phrases.append("".join(parts))
+        phrases.append(" ".join(parts))
+    return [phrase for phrase in phrases if len(phrase) >= 3]
 
 
 def _identity_value_text(value: object) -> list[str]:
