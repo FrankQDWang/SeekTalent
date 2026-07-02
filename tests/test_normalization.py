@@ -35,11 +35,19 @@ def test_normalized_resume_preserves_cts_provider_from_raw() -> None:
                 "source": "cts",
                 "candidate_name": "Alice Chen",
                 "current_title": "AI Infra Engineer",
+                "currentCompany": "Example AI",
+                "workExperienceList": [{"company": "Example AI", "title": "AI Infra Engineer", "summary": "Built agent runtime."}],
+                "skills": ["Python", "Agents"],
             },
         )
     )
 
     assert normalized.source_provider == "cts"
+    scoring = normalized.structured_evidence.to_scoring_evidence()
+    assert scoring.current_role.title == "AI Infra Engineer"
+    assert scoring.current_role.company == "Example AI"
+    assert scoring.work_experience[0].summary == "Built agent runtime."
+    assert scoring.skills == ["Python", "Agents"]
 
 
 def test_normalized_resume_preserves_liepin_provider_from_raw() -> None:

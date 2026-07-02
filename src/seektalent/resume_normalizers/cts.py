@@ -7,6 +7,9 @@ from seektalent.models import (
     NormalizedExperience,
     NormalizedResume,
     ResumeCandidate,
+    StructuredEvidenceValue,
+    StructuredResumeEvidence,
+    StructuredResumeTimelineItem,
     stable_fallback_resume_id,
     unique_strings,
 )
@@ -217,6 +220,57 @@ def _build_key_achievements(
     return trimmed
 
 
+def _compact_evidence_values(values: dict[str, Any]) -> dict[str, StructuredEvidenceValue]:
+    compact: dict[str, StructuredEvidenceValue] = {}
+    for key, value in values.items():
+        if isinstance(value, str) and value.strip():
+            compact[key] = value.strip()
+        elif isinstance(value, int) and not isinstance(value, bool):
+            compact[key] = value
+    return compact
+
+
+def _build_structured_evidence(
+    candidate: ResumeCandidate,
+    *,
+    candidate_name: str,
+    current_title: str,
+    current_company: str,
+    years_of_experience: int | None,
+    recent_experiences: list[NormalizedExperience],
+    skills: list[str],
+) -> StructuredResumeEvidence:
+    return StructuredResumeEvidence(
+        identity=_compact_evidence_values({"candidateName": candidate_name}),
+        current_role=_compact_evidence_values(
+            {
+                "title": current_title,
+                "company": current_company,
+                "workYears": years_of_experience,
+            }
+        ),
+        job_intention=_compact_evidence_values(
+            {
+                "expectedRole": candidate.expected_job_category,
+                "expectedCity": candidate.expected_location,
+                "expectedIndustry": candidate.expected_industry,
+                "expectedSalary": candidate.expected_salary,
+            }
+        ),
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company=item.company,
+                title=item.title,
+                duration=item.duration,
+                summary=item.summary,
+            )
+            for item in recent_experiences
+        ],
+        project_experience=[StructuredResumeTimelineItem(name=name) for name in candidate.project_names[:4] if name],
+        skills=skills,
+    )
+
+
 def _completeness_score(
     *,
     candidate_name: str,
@@ -307,6 +361,15 @@ def normalize_cts_resume(candidate: ResumeCandidate) -> NormalizedResume:
         recent_experiences,
         normalization_notes=normalization_notes,
     )
+    structured_evidence = _build_structured_evidence(
+        candidate,
+        candidate_name=candidate_name,
+        current_title=current_title,
+        current_company=current_company,
+        years_of_experience=years_of_experience,
+        recent_experiences=recent_experiences,
+        skills=skills,
+    )
     completeness_score, missing_fields = _completeness_score(
         candidate_name=candidate_name,
         current_title=current_title,
@@ -352,6 +415,7 @@ def normalize_cts_resume(candidate: ResumeCandidate) -> NormalizedResume:
         industry_tags=industry_tags,
         language_tags=language_tags,
         recent_experiences=recent_experiences,
+        structured_evidence=structured_evidence,
         key_achievements=key_achievements,
         raw_text_excerpt=raw_text_excerpt,
         completeness_score=completeness_score,

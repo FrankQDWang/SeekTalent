@@ -537,13 +537,12 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert prompt_template_version("scoring") in prompt
     assert 'UNTRUSTED DATA "SCORING_POLICY_TEXT"' in prompt
     assert 'UNTRUSTED DATA "RESUME_CARD_TEXT"' in prompt
-    assert 'UNTRUSTED DATA "RECENT_EXPERIENCE"' in prompt
     assert 'UNTRUSTED DATA "STRUCTURED_RESUME_EVIDENCE"' in prompt
+    assert "RECENT EXPERIENCE" not in prompt
     assert "RAW EXCERPT" not in prompt
     assert "RESUME_RAW_EXCERPT" not in prompt
     assert "SCORING POLICY" in prompt
     assert "RESUME CARD" in prompt
-    assert "RECENT EXPERIENCE" in prompt
     assert "EXACT DATA" in prompt
     assert "Senior Python Engineer" in prompt
     assert "Hard constraints" in prompt
@@ -602,10 +601,11 @@ def test_scoring_prompt_accepts_liepin_without_full_text() -> None:
                         title="用户体验设计专家",
                         company="平安好医",
                         duration="2019.06-至今",
-                        summary="提供B端及C端体验设计方案。",
+                        summary="潘** 提供B端及C端体验设计方案。",
                     )
                 ],
                 structured_evidence=StructuredResumeEvidence(
+                    identity={"candidateName": "潘**"},
                     current_role={"title": "资深体验设计工程师", "company": "平安集团", "workYears": 10},
                     job_intention={"expectedRole": "体验设计专家", "expectedCity": "上海"},
                     work_experience=[
@@ -613,19 +613,19 @@ def test_scoring_prompt_accepts_liepin_without_full_text() -> None:
                             company="平安好医",
                             title="用户体验设计专家",
                             duration="2019.06-至今",
-                            summary="提供B端及C端体验设计方案。",
+                            summary="潘** 提供B端及C端体验设计方案。",
                         )
                     ],
                     project_experience=[
                         StructuredResumeTimelineItem(
                             name="增长项目",
                             duration="2021-2023",
-                            summary="通过用户研究优化转化。",
+                            summary="潘** 通过用户研究优化转化。",
                         )
                     ],
                     skills=["用户研究", "交互设计"],
                 ),
-                raw_text_excerpt="平安好医 用户体验设计专家 提供B端及C端体验设计方案。",
+                raw_text_excerpt="潘** 平安好医 用户体验设计专家 提供B端及C端体验设计方案。",
                 completeness_score=92,
                 source_round=1,
                 score_evidence_source="detail_enriched",
@@ -637,6 +637,7 @@ def test_scoring_prompt_accepts_liepin_without_full_text() -> None:
     assert "STRUCTURED_RESUME_EVIDENCE" in prompt
     assert "平安好医" in prompt
     assert "增长项目" in prompt
+    assert "潘**" not in prompt
     assert "expected_role" in prompt
     assert "RAW EXCERPT" not in prompt
     assert "RESUME_RAW_EXCERPT" not in prompt

@@ -53,16 +53,22 @@ def _structured_scoring_evidence_json(resume: NormalizedResume) -> str:
 
 
 def _scoring_cache_resume_payload(resume: NormalizedResume) -> dict[str, object]:
-    return resume.model_dump(mode="json", exclude={"raw_text_excerpt"})
+    return {
+        "resume_id": resume.resume_id,
+        "source_round": resume.source_round,
+        "title": resume.current_title or resume.headline,
+        "company": resume.current_company,
+        "years_of_experience": resume.years_of_experience,
+        "locations": resume.locations,
+        "skills": resume.skills,
+        "completeness_score": resume.completeness_score,
+        "structured_scoring_evidence": _structured_scoring_evidence_payload(resume),
+    }
 
 
 def render_scoring_prompt(context: ScoringContext) -> str:
     policy = context.scoring_policy
     resume = context.normalized_resume
-    experiences = [
-        f"- {item.title or '(role)'} at {item.company or '(company)'} {item.duration or ''}: {item.summary}"
-        for item in resume.recent_experiences[:3]
-    ]
     exact_data = {
         "round_no": context.round_no,
         "resume_id": resume.resume_id,
@@ -92,7 +98,6 @@ def render_scoring_prompt(context: ScoringContext) -> str:
         f"- Locations: {', '.join(resume.locations) or '(none)'}\n"
         "- Education: (excluded from LLM scoring; protected attributes are handled by deterministic runtime policy)\n"
         f"- Skills:\n{_lines(resume.skills, limit=16)}\n"
-        f"- Achievements:\n{_lines(resume.key_achievements, limit=5)}\n"
         f"- Completeness: {resume.completeness_score}"
     )
     return "\n\n".join(
@@ -101,8 +106,6 @@ def render_scoring_prompt(context: ScoringContext) -> str:
             "TASK\nScore this one resume against the role. Return one ScoredCandidateDraft.",
             "SCORING POLICY\n" + render_untrusted_text_block("SCORING_POLICY_TEXT", scoring_policy_text),
             "RESUME CARD\n" + render_untrusted_text_block("RESUME_CARD_TEXT", resume_card_text),
-            "RECENT EXPERIENCE\n"
-            + render_untrusted_text_block("RECENT_EXPERIENCE", "\n".join(experiences) if experiences else "- (none)"),
             "STRUCTURED RESUME EVIDENCE\n"
             + render_untrusted_text_block(
                 "STRUCTURED_RESUME_EVIDENCE",
