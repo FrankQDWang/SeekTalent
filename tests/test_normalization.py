@@ -258,3 +258,28 @@ def test_structured_resume_evidence_scrubs_age_and_gender_values_from_summaries(
     assert "通过用户研究优化转化" in serialized
     assert "32" not in serialized
     assert "男" not in serialized
+
+
+def test_structured_resume_evidence_keeps_age_and_gender_substrings_in_allowed_words() -> None:
+    evidence = StructuredResumeEvidence(
+        identity={"age": 23, "gender": "男"},
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                summary="2023年负责男装业务增长，转化率提升23%。",
+            )
+        ],
+        project_experience=[
+            StructuredResumeTimelineItem(
+                name="增长项目",
+                summary="男装业务在2023年通过用户研究优化转化23%。",
+            )
+        ],
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "2023年" in serialized
+    assert "23%" in serialized
+    assert "男装业务" in serialized

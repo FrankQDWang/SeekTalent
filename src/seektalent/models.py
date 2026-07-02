@@ -36,6 +36,8 @@ QueryRetrievalRole = Literal[
 Queryability = Literal["admitted", "score_only", "filter_only", "blocked"]
 QueryRole = Literal["exploit", "explore"]
 LaneType = Literal["exploit", "generic_explore", "prf_probe"]
+ProtectedSummaryReplacementKind = Literal["substring", "age", "gender"]
+ProtectedSummaryReplacement = tuple[ProtectedSummaryReplacementKind, str]
 TopPoolStrength = Literal["empty", "weak", "usable", "strong"]
 StopQualityGateStatus = Literal[
     "pass",
@@ -831,25 +833,32 @@ def _int_value(value: object) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _protected_summary_replacements(evidence: StructuredResumeEvidence) -> tuple[str, ...]:
-    values: list[str] = []
-    values.extend(_protected_identity_values(evidence.identity))
-    values.extend(_protected_text_values(evidence.source_metadata.values()))
+def _protected_summary_replacements(evidence: StructuredResumeEvidence) -> tuple[ProtectedSummaryReplacement, ...]:
+    replacements: list[ProtectedSummaryReplacement] = []
+    replacements.extend(_protected_identity_values(evidence.identity))
+    replacements.extend(("substring", value) for value in _protected_text_values(evidence.source_metadata.values()))
     for item in evidence.education_experience:
-        values.extend(_protected_text_values((item.school, item.degree, item.major)))
-    return tuple(sorted(unique_strings(values), key=len, reverse=True))
+        replacements.extend(("substring", value) for value in _protected_text_values((item.school, item.degree, item.major)))
+    seen: set[ProtectedSummaryReplacement] = set()
+    unique: list[ProtectedSummaryReplacement] = []
+    for replacement in replacements:
+        if replacement in seen:
+            continue
+        seen.add(replacement)
+        unique.append(replacement)
+    return tuple(sorted(unique, key=lambda replacement: len(replacement[1]), reverse=True))
 
 
-def _protected_identity_values(identity: dict[str, str | int]) -> list[str]:
-    protected: list[str] = []
+def _protected_identity_values(identity: dict[str, str | int]) -> list[ProtectedSummaryReplacement]:
+    protected: list[ProtectedSummaryReplacement] = []
     for key, value in identity.items():
         normalized_key = "".join(char for char in key if char.isalnum()).casefold()
         if "name" in normalized_key:
-            protected.extend(_identity_value_text(value))
+            protected.extend(("substring", text) for text in _identity_value_text(value) if len(text) >= 2)
         elif normalized_key in {"age", "candidateage"}:
-            protected.extend(_identity_value_text(value))
+            protected.extend(("age", text) for text in _identity_value_text(value))
         elif normalized_key in {"gender", "candidategender", "sex", "candidatesex"}:
-            protected.extend(_identity_value_text(value))
+            protected.extend(("gender", text) for text in _identity_value_text(value))
     return protected
 
 
@@ -878,15 +887,31 @@ def _protected_text_values(values: Iterable[object]) -> list[str]:
     return protected
 
 
-def _scrub_scoring_summary(summary: str, protected_values: tuple[str, ...]) -> str:
+def _scrub_scoring_summary(summary: str, protected_values: tuple[ProtectedSummaryReplacement, ...]) -> str:
     scrubbed = summary
-    for value in protected_values:
-        scrubbed = scrubbed.replace(value, "[protected]")
+    for kind, value in protected_values:
+        if kind == "age":
+            scrubbed = _scrub_age_value(scrubbed, value)
+        elif kind == "gender":
+            scrubbed = _scrub_gender_value(scrubbed, value)
+        else:
+            scrubbed = scrubbed.replace(value, "[protected]")
     return scrubbed
 
 
+def _scrub_age_value(summary: str, value: str) -> str:
+    pattern = rf"(?<![0-9A-Za-z]){re.escape(value)}(?![0-9A-Za-z%％年])"
+    return re.sub(pattern, "[protected]", summary)
+
+
+def _scrub_gender_value(summary: str, value: str) -> str:
+    escaped = re.escape(value)
+    pattern = rf"(?:(?<=^)|(?<=[\s,，.。;；:：、()（）和])){escaped}(?=$|[\s,，.。;；:：、()（）])"
+    return re.sub(pattern, "[protected]", summary)
+
+
 def _work_item_for_scoring(
-    item: StructuredResumeTimelineItem, protected_values: tuple[str, ...]
+    item: StructuredResumeTimelineItem, protected_values: tuple[ProtectedSummaryReplacement, ...]
 ) -> StructuredScoringWorkItem:
     return StructuredScoringWorkItem(
         company=item.company,
@@ -897,7 +922,7 @@ def _work_item_for_scoring(
 
 
 def _project_item_for_scoring(
-    item: StructuredResumeTimelineItem, protected_values: tuple[str, ...]
+    item: StructuredResumeTimelineItem, protected_values: tuple[ProtectedSummaryReplacement, ...]
 ) -> StructuredScoringProjectItem:
     return StructuredScoringProjectItem(
         project_name=item.name,
