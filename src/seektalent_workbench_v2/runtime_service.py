@@ -873,8 +873,6 @@ def _candidate_detail_sections(
             "匹配程度",
             [
                 _prefix("推荐理由", identity.summary),
-                *_texts_from_payloads(evidence, ("safeDetail", "summary"), prefix="详情摘要"),
-                *_texts_from_payloads(evidence, ("safeDetail", "profile"), prefix="候选人概况"),
             ],
         ),
         _section(

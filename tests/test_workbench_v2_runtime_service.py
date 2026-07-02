@@ -171,6 +171,8 @@ class CandidateFactStore:
                     },
                     "safeDetail": {
                         "candidateName": "吴所谓",
+                        "summary": "SAFE_DETAIL_SUMMARY_SHOULD_NOT_RENDER",
+                        "profile": "SAFE_DETAIL_PROFILE_SHOULD_NOT_RENDER",
                         "workExperienceList": [
                             {
                                 "duration": "2019.06-至今（7年）",
@@ -509,6 +511,8 @@ def test_runtime_service_candidate_detail_projects_wts_profile_fields() -> None:
     assert "声明：该人选信息仅供公司招聘使用" not in serialized_sections
     assert "简历备注" not in serialized_sections
     assert "ICP备案信息" not in serialized_sections
+    assert "SAFE_DETAIL_SUMMARY_SHOULD_NOT_RENDER" not in serialized_sections
+    assert "SAFE_DETAIL_PROFILE_SHOULD_NOT_RENDER" not in serialized_sections
 
 
 def test_runtime_service_candidate_detail_prefers_rich_liepin_evidence_over_sparse_cts() -> None:

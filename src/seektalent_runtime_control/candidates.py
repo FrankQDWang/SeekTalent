@@ -314,8 +314,6 @@ def _safe_detail_payload(raw: Mapping[str, object]) -> dict[str, object]:
     return _compact_mapping(
         {
             "candidateName": _safe_text(raw.get("candidate_name"), max_length=120),
-            "profile": _safe_text(raw.get("profile"), max_length=600),
-            "summary": _safe_text(raw.get("summary"), max_length=800),
             "currentTitle": _safe_text(raw.get("currentTitle"), max_length=180),
             "currentCompany": _safe_text(raw.get("currentCompany"), max_length=180),
             "workExperienceList": [item for item in work_items if item],

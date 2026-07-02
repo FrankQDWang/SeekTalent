@@ -88,6 +88,8 @@ def test_candidate_truth_safe_detail_uses_field_whitelist() -> None:
     assert isinstance(resume, dict)
     resume["raw"] = {
         "candidate_name": "Alice Chen",
+        "profile": "PROFILE_SHOULD_NOT_SURFACE",
+        "summary": "TOP_LEVEL_SUMMARY_SHOULD_NOT_SURFACE",
         "fullText": "https://h.liepin.com/resume/showresumedetail\n新手任务\n页面导航",
         "workExperienceList": [
             {
@@ -131,6 +133,9 @@ def test_candidate_truth_safe_detail_uses_field_whitelist() -> None:
             }
         ],
     }
+    serialized_truth = json.dumps([item.model_dump(mode="json") for item in truth.evidence], ensure_ascii=False)
+    assert "PROFILE_SHOULD_NOT_SURFACE" not in serialized_truth
+    assert "TOP_LEVEL_SUMMARY_SHOULD_NOT_SURFACE" not in serialized_truth
 
 
 def test_candidate_truth_projects_wts_fields_from_structured_liepin_detail_payload() -> None:

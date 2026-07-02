@@ -6,7 +6,7 @@ import re
 from seektalent.core.retrieval.provider_contract import ProviderPayloadKind, ProviderSnapshot
 from seektalent.models import ResumeCandidate
 from seektalent.providers.liepin.detail_payload_text import (
-    PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+    sanitize_liepin_provider_payload,
     structured_liepin_detail_text,
 )
 from seektalent.providers.liepin.models import LiepinScoreEvidenceSource
@@ -127,7 +127,7 @@ def map_liepin_worker_detail(
 
 
 def _sanitize_liepin_provider_payload(payload: dict[str, object]) -> dict[str, object]:
-    return {key: value for key, value in payload.items() if key not in PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS}
+    return sanitize_liepin_provider_payload(payload)
 
 
 def _mapped_normalized_text(worker_candidate: LiepinWorkerCandidate, provider_payload: dict[str, object]) -> str:

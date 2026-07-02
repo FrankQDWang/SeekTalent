@@ -22,6 +22,72 @@ PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS = frozenset(
 )
 
 STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS = 4000
+_STRUCTURED_SUMMARY_LIST_KEYS = frozenset({"workExperienceList", "projectExperienceList", "educationList"})
+
+
+def find_liepin_whole_page_text_alias_paths(payload: Mapping[str, object]) -> tuple[str, ...]:
+    paths: list[str] = []
+
+    def collect(value: object, path: tuple[str, ...]) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                key_text = str(key)
+                current_path = (*path, key_text)
+                if _is_prohibited_payload_key(key_text, parent_path=path):
+                    paths.append(_format_path(current_path))
+                    continue
+                collect(item, current_path)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                collect(item, (*path, f"[{index}]"))
+
+    collect(payload, ())
+    return tuple(paths)
+
+
+def sanitize_liepin_provider_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    sanitized = _sanitize_payload_value(payload, ())
+    if isinstance(sanitized, dict):
+        return sanitized
+    return {}
+
+
+def _sanitize_payload_value(value: object, path: tuple[str, ...]) -> object:
+    if isinstance(value, Mapping):
+        sanitized: dict[str, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _is_prohibited_payload_key(key_text, parent_path=path):
+                continue
+            sanitized[key_text] = _sanitize_payload_value(item, (*path, key_text))
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_payload_value(item, (*path, f"[{index}]")) for index, item in enumerate(value)]
+    return value
+
+
+def _is_prohibited_payload_key(key: str, *, parent_path: tuple[str, ...]) -> bool:
+    if key not in PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS:
+        return False
+    if key == "summary" and _is_structured_list_item_path(parent_path):
+        return False
+    return True
+
+
+def _is_structured_list_item_path(path: tuple[str, ...]) -> bool:
+    return len(path) >= 2 and path[-1].startswith("[") and path[-2] in _STRUCTURED_SUMMARY_LIST_KEYS
+
+
+def _format_path(path: tuple[str, ...]) -> str:
+    rendered = ""
+    for part in path:
+        if part.startswith("["):
+            rendered += part
+        elif rendered:
+            rendered += f".{part}"
+        else:
+            rendered = part
+    return rendered
 
 
 def structured_liepin_detail_text(

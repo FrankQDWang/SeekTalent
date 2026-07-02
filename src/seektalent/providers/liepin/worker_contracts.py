@@ -8,7 +8,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import model_validator
 from seektalent.core.retrieval.provider_contract import SearchResult
-from seektalent.providers.liepin.detail_payload_text import PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
+from seektalent.providers.liepin.detail_payload_text import find_liepin_whole_page_text_alias_paths
 from seektalent.providers.liepin.models import LiepinAccessScope
 from seektalent.providers.liepin.models import LiepinExtractionSource
 from seektalent.providers.liepin.models import LiepinIdentityConfidence
@@ -187,10 +187,10 @@ class LiepinWorkerCandidateDetail(BaseModel):
 
     @model_validator(mode="after")
     def reject_whole_page_text_payload_aliases(self) -> LiepinWorkerCandidateDetail:
-        prohibited = set(self.payload) & PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS
-        if prohibited:
-            keys = ", ".join(sorted(prohibited))
-            raise ValueError(f"Liepin detail payload includes prohibited whole-page text field(s): {keys}")
+        prohibited_paths = find_liepin_whole_page_text_alias_paths(self.payload)
+        if prohibited_paths:
+            paths = ", ".join(prohibited_paths)
+            raise ValueError(f"Liepin detail payload includes prohibited whole-page text field(s): {paths}")
         return self
 
 

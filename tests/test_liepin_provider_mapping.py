@@ -264,6 +264,15 @@ def test_worker_detail_rejects_whole_page_text_payload_aliases(alias: str) -> No
         LiepinWorkerCandidateDetail.model_validate(payload)
 
 
+def test_worker_detail_rejects_nested_whole_page_text_payload_aliases() -> None:
+    payload = _worker_detail().model_dump(mode="json")
+    assert isinstance(payload["payload"], dict)
+    payload["payload"]["extra"] = {"fullText": "nested whole page text must not cross the boundary"}
+
+    with pytest.raises(ValidationError):
+        LiepinWorkerCandidateDetail.model_validate(payload)
+
+
 def test_detail_mapping_sanitizes_provider_snapshot_payload() -> None:
     raw = _worker_detail().model_dump(mode="python")
     detail_payload = raw["payload"]
@@ -285,6 +294,54 @@ def test_detail_mapping_sanitizes_provider_snapshot_payload() -> None:
     assert not (set(mapped.provider_snapshot.raw_payload) & set(WHOLE_PAGE_TEXT_ALIASES))
     assert mapped.candidate.raw["workExperienceList"][0]["summary"] == "structured work summary stays"
     assert mapped.provider_snapshot.raw_payload["workExperienceList"][0]["summary"] == "structured work summary stays"
+
+
+def test_detail_mapping_sanitizes_nested_provider_snapshot_payload_aliases() -> None:
+    raw = _worker_detail().model_dump(mode="python")
+    detail_payload = raw["payload"]
+    assert isinstance(detail_payload, dict)
+    detail_payload["extra"] = {
+        "fullText": "nested fullText must be dropped",
+        "rawText": "nested rawText must be dropped",
+        "summary": "nested arbitrary summary must be dropped",
+        "safe_note": "non-alias nested value stays",
+    }
+    detail_payload["workExperienceList"] = [
+        {
+            "company": "平安好医",
+            "title": "用户体验设计专家",
+            "summary": "structured work summary stays",
+            "extra": {"page_text": "nested page text must be dropped"},
+        }
+    ]
+    detail_payload["projectExperienceList"] = [
+        {
+            "name": "助力C端业务增长",
+            "summary": "structured project summary stays",
+            "detailBody": "nested detail body must be dropped",
+        }
+    ]
+    detail = LiepinWorkerCandidateDetail.model_construct(**raw)
+
+    mapped = map_liepin_worker_detail(detail, raw_payload_artifact_ref="worker://details/candidate-1.json")
+
+    serialized_payload = str(mapped.provider_snapshot.raw_payload)
+    serialized_raw = str(mapped.candidate.raw)
+    assert "nested fullText must be dropped" not in serialized_payload
+    assert "nested rawText must be dropped" not in serialized_payload
+    assert "nested arbitrary summary must be dropped" not in serialized_payload
+    assert "nested page text must be dropped" not in serialized_payload
+    assert "nested detail body must be dropped" not in serialized_payload
+    assert "nested fullText must be dropped" not in serialized_raw
+    assert "nested rawText must be dropped" not in serialized_raw
+    assert "nested arbitrary summary must be dropped" not in serialized_raw
+    assert "nested page text must be dropped" not in serialized_raw
+    assert "nested detail body must be dropped" not in serialized_raw
+    assert mapped.provider_snapshot.raw_payload["extra"] == {"safe_note": "non-alias nested value stays"}
+    assert mapped.provider_snapshot.raw_payload["workExperienceList"][0]["summary"] == "structured work summary stays"
+    assert mapped.provider_snapshot.raw_payload["projectExperienceList"][0]["summary"] == "structured project summary stays"
+    assert mapped.candidate.raw["workExperienceList"][0]["summary"] == "structured work summary stays"
+    assert mapped.candidate.raw["projectExperienceList"][0]["summary"] == "structured project summary stays"
 
 
 def test_detail_mapping_derives_normalized_text_from_structured_payload() -> None:
