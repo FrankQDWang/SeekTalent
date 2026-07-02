@@ -318,6 +318,45 @@ def test_structured_resume_evidence_scrubs_gender_after_chinese_linking_particle
     assert "候选人为男" not in serialized
 
 
+def test_structured_resume_evidence_scrubs_gender_after_gender_label() -> None:
+    evidence = StructuredResumeEvidence(
+        identity={"gender": "男"},
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                summary="性别男，负责体验设计。",
+            )
+        ],
+        project_experience=[StructuredResumeTimelineItem(name="增长项目", summary="男装业务增长。")],
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "负责体验设计" in serialized
+    assert "男装业务" in serialized
+    assert "性别男" not in serialized
+
+
+def test_structured_resume_evidence_scrubs_gender_after_age_expression() -> None:
+    evidence = StructuredResumeEvidence(
+        identity={"age": 32, "gender": "男"},
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                summary="32岁男，负责体验设计。",
+            )
+        ],
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "负责体验设计" in serialized
+    assert "32岁男" not in serialized
+    assert "男" not in serialized
+
+
 def test_structured_resume_evidence_rejects_boolean_work_years() -> None:
     with pytest.raises(ValidationError):
         StructuredResumeEvidence(current_role={"workYears": False})

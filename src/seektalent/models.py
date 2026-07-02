@@ -951,7 +951,7 @@ def _scrub_age_value(summary: str, value: str) -> str:
 
 def _scrub_gender_value(summary: str, value: str) -> str:
     escaped = re.escape(value)
-    pattern = rf"(?:(?<=^)|(?<=[\s,，.。;；:：、()（）和为是])){escaped}(?=$|[\s,，.。;；:：、()（）])"
+    pattern = rf"(?:(?<=^)|(?<=[\s,，.。;；:：、()（）和为是别岁])){escaped}(?=$|[\s,，.。;；:：、()（）])"
     return re.sub(pattern, "[protected]", summary)
 
 
