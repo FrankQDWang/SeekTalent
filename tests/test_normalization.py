@@ -343,3 +343,39 @@ def test_structured_resume_evidence_preserves_generic_major_word_in_allowed_summ
 def test_structured_scoring_role_rejects_boolean_work_years() -> None:
     with pytest.raises(ValidationError):
         StructuredScoringRole(work_years=False)
+
+
+def test_structured_resume_evidence_scrubs_short_degree_in_education_context() -> None:
+    evidence = StructuredResumeEvidence(
+        education_experience=[StructuredResumeTimelineItem(degree="硕士")],
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                summary="硕士学历，负责 B 端体验设计。",
+            )
+        ],
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "负责 B 端体验设计" in serialized
+    assert "硕士" not in serialized
+
+
+def test_structured_resume_evidence_scrubs_short_major_only_in_education_context() -> None:
+    evidence = StructuredResumeEvidence(
+        education_experience=[StructuredResumeTimelineItem(major="设计")],
+        work_experience=[
+            StructuredResumeTimelineItem(
+                company="平安好医",
+                summary="设计专业背景，负责体验设计。",
+            )
+        ],
+    )
+
+    scoring = evidence.to_scoring_evidence().model_dump(mode="json")
+    serialized = json.dumps(scoring, ensure_ascii=False)
+
+    assert "体验设计" in serialized
+    assert "设计专业" not in serialized

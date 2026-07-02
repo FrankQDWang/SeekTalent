@@ -36,7 +36,7 @@ QueryRetrievalRole = Literal[
 Queryability = Literal["admitted", "score_only", "filter_only", "blocked"]
 QueryRole = Literal["exploit", "explore"]
 LaneType = Literal["exploit", "generic_explore", "prf_probe"]
-ProtectedSummaryReplacementKind = Literal["substring", "age", "gender"]
+ProtectedSummaryReplacementKind = Literal["substring", "age", "gender", "education_degree", "education_major"]
 ProtectedSummaryReplacement = tuple[ProtectedSummaryReplacementKind, str]
 StructuredEvidenceValue = StrictStr | StrictInt
 TopPoolStrength = Literal["empty", "weak", "usable", "strong"]
@@ -868,7 +868,13 @@ def _protected_education_values(item: StructuredResumeTimelineItem) -> list[Prot
     replacements.extend(("substring", value) for value in _protected_text_values((item.school,)))
     replacements.extend(("substring", value) for value in _specific_education_values((item.degree, item.major)))
     replacements.extend(("substring", value) for value in _education_phrase_values(item))
+    replacements.extend(("education_degree", value) for value in _education_field_values((item.degree,)))
+    replacements.extend(("education_major", value) for value in _education_field_values((item.major,)))
     return replacements
+
+
+def _education_field_values(values: Iterable[object]) -> list[str]:
+    return [value.strip() for value in values if isinstance(value, str) and value.strip()]
 
 
 def _specific_education_values(values: Iterable[object]) -> list[str]:
@@ -929,6 +935,10 @@ def _scrub_scoring_summary(summary: str, protected_values: tuple[ProtectedSummar
             scrubbed = _scrub_age_value(scrubbed, value)
         elif kind == "gender":
             scrubbed = _scrub_gender_value(scrubbed, value)
+        elif kind == "education_degree":
+            scrubbed = _scrub_education_degree_value(scrubbed, value)
+        elif kind == "education_major":
+            scrubbed = _scrub_education_major_value(scrubbed, value)
         else:
             scrubbed = scrubbed.replace(value, "[protected]")
     return scrubbed
@@ -942,6 +952,18 @@ def _scrub_age_value(summary: str, value: str) -> str:
 def _scrub_gender_value(summary: str, value: str) -> str:
     escaped = re.escape(value)
     pattern = rf"(?:(?<=^)|(?<=[\s,，.。;；:：、()（）和为是])){escaped}(?=$|[\s,，.。;；:：、()（）])"
+    return re.sub(pattern, "[protected]", summary)
+
+
+def _scrub_education_degree_value(summary: str, value: str) -> str:
+    escaped = re.escape(value)
+    pattern = rf"(?:(?<=^)|(?<=[\s,，.。;；:：、()（）为是])){escaped}(?=$|[\s,，.。;；:：、()（）]|学历|学位|背景|毕业)"
+    return re.sub(pattern, "[protected]", summary)
+
+
+def _scrub_education_major_value(summary: str, value: str) -> str:
+    escaped = re.escape(value)
+    pattern = rf"(?:(?<=^)|(?<=[\s,，.。;；:：、()（）为是])){escaped}(?=$|[\s,，.。;；:：、()（）]|专业|背景)"
     return re.sub(pattern, "[protected]", summary)
 
 
