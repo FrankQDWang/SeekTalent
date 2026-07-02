@@ -5,10 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
-from seektalent.providers.liepin.detail_payload_text import (
-    capped_liepin_detail_text,
-    structured_liepin_detail_text,
-)
+from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
 from seektalent.providers.liepin.worker_contracts import (
     LiepinResumeSearchResponse,
     LiepinWorkerCandidateDetail,
@@ -143,7 +140,7 @@ def _detail_from_resume_payload(
     payload["protectedSnapshotRef"] = resume.get("protected_snapshot_ref")
     payload["normalizedSnapshotRef"] = resume.get("normalized_snapshot_ref")
     payload["actionTraceRef"] = resume.get("action_trace_ref") or action_trace_ref
-    normalized_text = structured_liepin_detail_text(payload) or capped_liepin_detail_text(resume.get("normalized_text"))
+    normalized_text = structured_liepin_detail_text(payload)
     fingerprint = hashlib.sha256(f"liepin-opencli:{provider_candidate_hash}".encode("utf-8")).hexdigest()
     return LiepinWorkerCandidateDetail(
         payload=payload,

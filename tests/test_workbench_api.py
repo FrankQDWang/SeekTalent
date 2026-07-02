@@ -1895,6 +1895,8 @@ def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: P
                 "description": "structured work description stays",
             }
         ],
+        "projectExperienceList": [{"name": "项目增长", "summary": "structured project summary stays"}],
+        "extra": {"fullText": "NESTED_SHOULD_NOT_RENDER"},
         "sourceUrl": source_url,
         "providerCandidateKeyHash": provider_candidate_key_hash,
         "page_url_hash": "private-url-hash",
@@ -2028,6 +2030,8 @@ def test_final_shortlist_liepin_candidate_can_expand_original_resume(tmp_path: P
     assert "李四" in serialized
     assert "数据开发专家" in serialized
     assert "structured work summary stays" in serialized
+    assert "structured project summary stays" in serialized
+    assert "NESTED_SHOULD_NOT_RENDER" not in serialized
     assert "whole-page alias must disappear" not in serialized
     top_level_keys = {
         field["key"]

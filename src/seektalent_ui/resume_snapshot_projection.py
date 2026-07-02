@@ -183,8 +183,9 @@ _STRUCTURED_SECTION_KEYS = set(
     + _PROJECT_TEXT_FIELD_KEYS
     + _LIEPIN_BASIC_FIELD_KEYS
     + _LIEPIN_TEXT_FIELD_KEYS
-    + ("sourceUrl", "source_url", "workExperienceList", "educationList")
+    + ("sourceUrl", "source_url", "workExperienceList", "projectExperienceList", "educationList")
 )
+_LIEPIN_STRUCTURED_ITEM_DENIED_KEYS = PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS - {"summary"}
 _FIELD_LABELS = {
     "candidateName": "姓名",
     "candidate_name": "姓名",
@@ -313,11 +314,43 @@ def _cts_original_sections(payload: dict[str, object]) -> list[WorkbenchOriginal
 
 def _liepin_original_sections(payload: dict[str, object]) -> list[WorkbenchOriginalResumeSectionResponse | None]:
     return [
-        _field_section("基本信息", payload, _LIEPIN_BASIC_FIELD_KEYS, denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS),
-        _list_section("工作经历", payload.get("workExperienceList")),
-        _list_section("教育经历", payload.get("educationList")),
-        _field_section("简历文本", payload, _LIEPIN_TEXT_FIELD_KEYS, denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS),
-        _other_section(payload, denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS),
+        _field_section(
+            "基本信息",
+            payload,
+            _LIEPIN_BASIC_FIELD_KEYS,
+            denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+            nested_denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+        ),
+        _list_section(
+            "工作经历",
+            payload.get("workExperienceList"),
+            denied_keys=_LIEPIN_STRUCTURED_ITEM_DENIED_KEYS,
+            nested_denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+        ),
+        _list_section(
+            "项目经历",
+            payload.get("projectExperienceList"),
+            denied_keys=_LIEPIN_STRUCTURED_ITEM_DENIED_KEYS,
+            nested_denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+        ),
+        _list_section(
+            "教育经历",
+            payload.get("educationList"),
+            denied_keys=_LIEPIN_STRUCTURED_ITEM_DENIED_KEYS,
+            nested_denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+        ),
+        _field_section(
+            "简历文本",
+            payload,
+            _LIEPIN_TEXT_FIELD_KEYS,
+            denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+            nested_denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+        ),
+        _other_section(
+            payload,
+            denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+            nested_denied_keys=PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS,
+        ),
     ]
 
 
@@ -370,8 +403,13 @@ def _field_section(
     keys: tuple[str, ...],
     *,
     denied_keys: frozenset[str] = frozenset(),
+    nested_denied_keys: frozenset[str] = frozenset(),
 ) -> WorkbenchOriginalResumeSectionResponse | None:
-    fields = [_field_response(key, payload.get(key)) for key in keys if key in payload and key not in denied_keys]
+    fields = [
+        _field_response(key, payload.get(key), denied_keys=denied_keys, nested_denied_keys=nested_denied_keys)
+        for key in keys
+        if key in payload
+    ]
     visible_fields = [field for field in fields if field is not None]
     if not visible_fields:
         return None
@@ -381,13 +419,27 @@ def _field_section(
     )
 
 
-def _list_section(title: str, value: object) -> WorkbenchOriginalResumeSectionResponse | None:
+def _list_section(
+    title: str,
+    value: object,
+    *,
+    denied_keys: frozenset[str] = frozenset(),
+    nested_denied_keys: frozenset[str] = frozenset(),
+) -> WorkbenchOriginalResumeSectionResponse | None:
     if not isinstance(value, list) or not value:
         return None
     items: list[WorkbenchOriginalResumeItemResponse] = []
     for index, item in enumerate(value, start=1):
         if isinstance(item, dict):
-            fields = [_field_response(str(key), field_value) for key, field_value in item.items()]
+            fields = [
+                _field_response(
+                    str(key),
+                    field_value,
+                    denied_keys=denied_keys,
+                    nested_denied_keys=nested_denied_keys,
+                )
+                for key, field_value in item.items()
+            ]
             visible_fields = [field for field in fields if field is not None]
             if visible_fields:
                 items.append(
@@ -396,7 +448,12 @@ def _list_section(title: str, value: object) -> WorkbenchOriginalResumeSectionRe
                     )
                 )
             continue
-        field = _field_response(f"{title}.{index}", item)
+        field = _field_response(
+            f"{title}.{index}",
+            item,
+            denied_keys=denied_keys,
+            nested_denied_keys=nested_denied_keys,
+        )
         if field is not None:
             items.append(WorkbenchOriginalResumeItemResponse(title=f"{title} {index}", fields=[field]))
     return WorkbenchOriginalResumeSectionResponse(title=title, items=items) if items else None
@@ -406,11 +463,12 @@ def _other_section(
     payload: dict[str, object],
     *,
     denied_keys: frozenset[str] = frozenset(),
+    nested_denied_keys: frozenset[str] = frozenset(),
 ) -> WorkbenchOriginalResumeSectionResponse | None:
     fields = [
-        _field_response(key, value)
+        _field_response(key, value, denied_keys=denied_keys, nested_denied_keys=nested_denied_keys)
         for key, value in payload.items()
-        if key not in _STRUCTURED_SECTION_KEYS and key not in denied_keys
+        if key not in _STRUCTURED_SECTION_KEYS
     ]
     visible_fields = [field for field in fields if field is not None]
     if not visible_fields:
@@ -421,16 +479,22 @@ def _other_section(
     )
 
 
-def _field_response(key: str, value: object) -> WorkbenchOriginalResumeFieldResponse | None:
-    if _is_sensitive_resume_key(key):
+def _field_response(
+    key: str,
+    value: object,
+    *,
+    denied_keys: frozenset[str] = frozenset(),
+    nested_denied_keys: frozenset[str] = frozenset(),
+) -> WorkbenchOriginalResumeFieldResponse | None:
+    if key in denied_keys or _is_sensitive_resume_key(key):
         return None
-    text = _resume_value_text(value)
+    text = _resume_value_text(value, denied_keys=nested_denied_keys)
     if not text:
         return None
     return WorkbenchOriginalResumeFieldResponse(key=key, label=_FIELD_LABELS.get(key, key), value=text)
 
 
-def _resume_value_text(value: object) -> str | None:
+def _resume_value_text(value: object, *, denied_keys: frozenset[str] = frozenset()) -> str | None:
     if value is None:
         return None
     if isinstance(value, str):
@@ -440,15 +504,15 @@ def _resume_value_text(value: object) -> str | None:
     elif isinstance(value, int | float):
         text = str(value)
     elif isinstance(value, list):
-        parts = [part for item in value if (part := _resume_value_text(item))]
+        parts = [part for item in value if (part := _resume_value_text(item, denied_keys=denied_keys))]
         text = "、".join(parts)
     elif isinstance(value, dict):
         parts = []
         for raw_key, raw_item in value.items():
             key = str(raw_key)
-            if _is_sensitive_resume_key(key):
+            if key in denied_keys or _is_sensitive_resume_key(key):
                 continue
-            item_text = _resume_value_text(raw_item)
+            item_text = _resume_value_text(raw_item, denied_keys=denied_keys)
             if item_text:
                 parts.append(f"{_FIELD_LABELS.get(key, key)}：{item_text}")
         text = "；".join(parts)

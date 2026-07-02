@@ -217,6 +217,46 @@ def test_opencli_retriever_ignores_envelope_normalized_text_for_details(tmp_path
     assert len(text) <= STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS
 
 
+def test_opencli_retriever_does_not_fallback_to_envelope_normalized_text_for_empty_detail_payload(
+    tmp_path: Path,
+) -> None:
+    runner = FakeOpenCliRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+    runner_envelope = runner.search_liepin_resumes(
+        source_run_id="run-1",
+        query="数据开发 Python",
+        target_resumes=1,
+        max_pages=1,
+        max_cards=2,
+    )
+    sentinel = "OPENCLI_NORMALIZED_TEXT_SHOULD_NOT_PERSIST"
+    runner_envelope["resumes"][0]["normalized_text"] = sentinel
+    runner_envelope["resumes"][0]["detail_payload"] = {}
+
+    class EnvelopeRunner(FakeOpenCliRunner):
+        def search_liepin_resumes(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            return runner_envelope
+
+    retriever = LiepinOpenCliResumeRetriever(
+        runner=EnvelopeRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+    )
+
+    response = retriever.search_resumes(
+        LiepinOpenCliResumeRequest(
+            source_run_id="run-1",
+            keyword_query="数据开发 Python",
+            query_terms=("数据开发", "Python"),
+            target_resumes=1,
+            max_cards=2,
+            max_pages=1,
+            requirement_sheet={"job_title": "数据开发专家"},
+        )
+    )
+
+    assert response.resumes[0].normalized_text == ""
+    assert sentinel not in response.resumes[0].normalized_text
+
+
 def test_opencli_retriever_preserves_workflow_steps_in_request_payload(tmp_path: Path) -> None:
     runner = FakeOpenCliRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
     runner_envelope = runner.search_liepin_resumes(

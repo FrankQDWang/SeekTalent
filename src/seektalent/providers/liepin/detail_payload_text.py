@@ -24,16 +24,6 @@ PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS = frozenset(
 STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS = 4000
 
 
-def capped_liepin_detail_text(
-    value: object,
-    *,
-    max_chars: int = STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS,
-) -> str:
-    if max_chars <= 0:
-        return ""
-    return str(value or "")[:max_chars].rstrip()
-
-
 def structured_liepin_detail_text(
     payload: Mapping[str, object],
     *,
