@@ -328,12 +328,16 @@ def test_unknown_source_with_generic_summary_or_profile_uses_cts_fallback(raw: d
     assert normalized.source_provider is None
 
 
-def test_old_liepin_fixture_without_provider_must_be_migrated() -> None:
+def test_old_liepin_fixture_with_source_url_without_provider_must_be_migrated() -> None:
     candidate = ResumeCandidate(
         resume_id="old-liepin-fixture-1",
         dedup_key="old-liepin-fixture-1",
         search_text="用户体验设计",
-        raw={"currentTitle": "资深体验设计工程师", "workExperienceList": [{"company": "平安好医"}]},
+        raw={
+            "sourceUrl": "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc",
+            "currentTitle": "资深体验设计工程师",
+            "workExperienceList": [{"company": "平安好医"}],
+        },
     )
 
     with pytest.raises(ValueError, match="Unsupported or unmigrated Liepin-shaped resume payload"):
@@ -343,10 +347,7 @@ def test_old_liepin_fixture_without_provider_must_be_migrated() -> None:
 @pytest.mark.parametrize(
     ("key", "value"),
     [
-        ("candidateName", "吴**"),
-        ("workYears", 10),
         ("sourceUrl", "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc"),
-        ("skillTags", ["用户研究"]),
         ("safeCardSummary", {"display_title": "资深体验设计工程师"}),
         ("safe_card_summary", {"display_title": "资深体验设计工程师"}),
     ],
@@ -363,6 +364,42 @@ def test_unknown_source_with_liepin_structured_aliases_rejects_instead_of_cts_fa
 
     with pytest.raises(ValueError, match="Unsupported or unmigrated Liepin-shaped resume payload"):
         normalize_resume(candidate)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {"candidateName": "Candidate A"},
+        {"currentTitle": "Backend Engineer"},
+        {"currentCompany": "Example Co"},
+        {"activeStatus": "active"},
+        {"workYears": 8},
+    ],
+)
+def test_unknown_source_with_single_common_cts_fields_uses_cts_fallback(raw: dict[str, object]) -> None:
+    candidate = ResumeCandidate(
+        resume_id="unknown-common-cts-field-1",
+        dedup_key="unknown-common-cts-field-1",
+        search_text="Python backend engineer",
+        raw=raw,
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.source_provider is None
+
+
+def test_unknown_source_with_non_liepin_source_url_uses_cts_fallback() -> None:
+    candidate = ResumeCandidate(
+        resume_id="unknown-generic-source-url-1",
+        dedup_key="unknown-generic-source-url-1",
+        search_text="Python backend engineer",
+        raw={"sourceUrl": "https://example.test/resume/123"},
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.source_provider is None
 
 
 def test_unknown_source_with_generic_cts_timeline_lists_uses_cts_fallback() -> None:
@@ -384,6 +421,26 @@ def test_unknown_source_with_generic_cts_timeline_lists_uses_cts_fallback() -> N
     assert normalized.source_provider is None
     assert normalized.recent_experiences[0].company == "Example Co"
     assert normalized.education_summary == "Fudan University CS Bachelor"
+
+
+def test_unknown_source_with_generic_current_title_and_work_experience_uses_cts_fallback() -> None:
+    candidate = ResumeCandidate(
+        resume_id="generic-cts-current-title-timeline-1",
+        dedup_key="generic-cts-current-title-timeline-1",
+        search_text="Python backend engineer",
+        raw={
+            "currentTitle": "Python Engineer",
+            "workExperienceList": [
+                {"company": "Example Co", "title": "Python Engineer", "summary": "Built retrieval workflows."}
+            ],
+        },
+    )
+
+    normalized = normalize_resume(candidate)
+
+    assert normalized.source_provider is None
+    assert normalized.current_title == "Python Engineer"
+    assert normalized.recent_experiences[0].company == "Example Co"
 
 
 def test_cts_normalizer_ignores_liepin_safe_card_summary() -> None:
