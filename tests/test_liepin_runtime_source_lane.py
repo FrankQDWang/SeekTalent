@@ -408,7 +408,16 @@ def test_liepin_logical_query_bundle_uses_compiled_source_intent_resume_budget()
                     "provider_snapshot_ref": f"artifact://protected/pi-detail/{index}",
                     "safe_summary_ref": f"artifact://public-summary/pi-detail/{index}",
                     "score_evidence_source": "detail_enriched",
-                    "fullText": f"{request.keyword_query} resume {index}",
+                    "currentTitle": "数据开发专家",
+                    "currentCompany": "数据平台公司",
+                    "workExperienceList": [
+                        {
+                            "company": "数据平台公司",
+                            "title": "数据开发专家",
+                            "summary": f"{request.keyword_query} resume {index}",
+                        }
+                    ],
+                    "skills": list(request.query_terms),
                 }
                 candidates.append(
                     ResumeCandidate(
@@ -657,8 +666,17 @@ class ParallelDetailWorker(FakeWorker):
                 "provider_candidate_key_hash": f"hash-{trace_id}-{index}",
                 "provider_snapshot_ref": f"artifact://protected/pi-detail/{trace_id}/{index}",
                 "safe_summary_ref": f"artifact://public-summary/pi-detail/{trace_id}/{index}",
-                "fullText": f"{request.keyword_query} detail resume {index}",
                 "score_evidence_source": "detail_enriched",
+                "currentTitle": "数据开发专家",
+                "currentCompany": "数据平台公司",
+                "workExperienceList": [
+                    {
+                        "company": "数据平台公司",
+                        "title": "数据开发专家",
+                        "summary": f"{request.keyword_query} detail resume {index}",
+                    }
+                ],
+                "skills": list(request.query_terms),
             }
             candidates.append(
                 ResumeCandidate(
@@ -831,7 +849,16 @@ class SingleDetailWorker(FakeWorker):
             "provider_snapshot_ref": "artifact://protected/pi-detail/run-1/1",
             "safe_summary_ref": "artifact://public-summary/pi-detail/run-1/1",
             "score_evidence_source": "detail_enriched",
-            "fullText": "LangGraph RAG detail resume",
+            "currentTitle": "AI Agent Engineer",
+            "currentCompany": "Agent Platform",
+            "workExperienceList": [
+                {
+                    "company": "Agent Platform",
+                    "title": "AI Agent Engineer",
+                    "summary": "LangGraph RAG detail resume",
+                }
+            ],
+            "skills": ["LangGraph", "RAG"],
         }
         candidate = ResumeCandidate(
             resume_id="liepin-detail-1",
@@ -906,7 +933,16 @@ def test_liepin_detail_backed_opencli_candidates_populate_candidate_refs() -> No
                 "provider_snapshot_ref": "artifact://protected/liepin-opencli/raw/run-1/1.json",
                 "normalized_snapshot_ref": "artifact://protected/liepin-opencli/normalized/run-1/1.json",
                 "score_evidence_source": "detail_enriched",
-                "fullText": "数据平台 Python resume",
+                "currentTitle": "数据开发专家",
+                "currentCompany": "数据平台公司",
+                "workExperienceList": [
+                    {
+                        "company": "数据平台公司",
+                        "title": "数据开发专家",
+                        "summary": "数据平台 Python resume",
+                    }
+                ],
+                "skills": ["Python"],
             }
             candidate = ResumeCandidate(
                 resume_id="liepin-opencli-1",
