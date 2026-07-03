@@ -145,6 +145,8 @@ def native_filter_option_ref_in_section(state_text: str, *, section: str, label:
         return _native_filter_option_ref(state_text, label)
     if section in {"current", "expected"}:
         city_picker_open = native_filter_city_search_input_ref(state_text) is not None
+        if city_picker_open:
+            return _native_filter_city_result_option_ref(state_text, label)
         for candidate_section in _city_section_lookup_order(section):
             ref = _native_filter_option_ref_in_exact_section(
                 state_text,
@@ -154,8 +156,6 @@ def native_filter_option_ref_in_section(state_text: str, *, section: str, label:
             )
             if ref is not None:
                 return ref
-        if city_picker_open:
-            return _native_filter_city_result_option_ref(state_text, label)
         return None
     return _native_filter_option_ref_in_exact_section(
         state_text,
@@ -255,6 +255,43 @@ def native_filter_city_search_input_ref(state_text: str) -> str | None:
         if match is not None:
             return match.group(1)
     return None
+
+
+def native_filter_city_overseas_tab_ref(state_text: str) -> str | None:
+    for line in _city_picker_candidate_lines(state_text):
+        if _line_visible_filter_text(line) != "海外":
+            continue
+        match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def native_filter_city_confirm_ref(state_text: str) -> str | None:
+    candidate_lines = _city_picker_candidate_lines(state_text)
+    for index, line in enumerate(candidate_lines):
+        if "<button" not in line:
+            continue
+        nearby_text = _normalize_liepin_filter_text("".join(candidate_lines[index : index + 4]))
+        if "确认" not in nearby_text:
+            continue
+        match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", line)
+        if match is not None:
+            return match.group(1)
+    return None
+
+
+def native_filter_city_picker_selection_contains(state_text: str, *, label: str) -> bool:
+    normalized_label = _normalize_liepin_filter_text(label)
+    if not normalized_label:
+        return False
+    candidate_lines = _city_picker_candidate_lines(state_text)
+    for index, line in enumerate(candidate_lines):
+        if "已选" not in line:
+            continue
+        selected_text = _normalize_liepin_filter_text("".join(candidate_lines[index : index + 10]))
+        return normalized_label in selected_text
+    return False
 
 
 def native_filter_option_visible_in_section(state_text: str, *, section: str, label: str) -> bool:

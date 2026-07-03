@@ -29,6 +29,9 @@ from seektalent.providers.liepin.opencli_filter_planning import (
     LIEPIN_FILTER_SECTION_LABELS,
     RETRYABLE_NATIVE_FILTER_REASONS,
     liepin_filter_actions,
+    native_filter_city_confirm_ref,
+    native_filter_city_overseas_tab_ref,
+    native_filter_city_picker_selection_contains,
     native_filter_city_search_input_ref,
     liepin_filter_menu_label,
     native_filter_control_ref_in_section,
@@ -1377,8 +1380,13 @@ class LiepinSiteAdapter:
                         }
                     )
                     return state
-                if not native_filter_option_visible_in_section(state_text, section=section, label=label):
+                force_city_picker = filter_name == "city" and section in {"current", "expected"} and attempt_index > 0
+                if force_city_picker or not native_filter_option_visible_in_section(
+                    state_text, section=section, label=label
+                ):
                     control_ref = native_filter_control_ref_in_section(state_text, section=section)
+                    if control_ref is None and filter_name == "city" and section in {"current", "expected"}:
+                        control_ref = self._liepin_city_choose_ref_from_dom(section=section)
                     if control_ref is not None:
                         self._click_native_filter_ref(control_ref)
                     else:
@@ -1410,19 +1418,12 @@ class LiepinSiteAdapter:
                     and section in {"current", "expected"}
                     and not native_filter_option_visible_in_section(state_text, section=section, label=label)
                 ):
-                    if (input_ref := native_filter_city_search_input_ref(state_text)) is None:
-                        raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
-                    self.fill(target=input_ref, text=label)
-                    events.append(
-                        {"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True}
+                    state = self._find_liepin_city_filter_option(
+                        section=section,
+                        label=label,
+                        current_state=state,
+                        events=events,
                     )
-                    self.wait_time(seconds=1)
-                    state = self.state()
-                    events.append(
-                        {"action_kind": "observe_native_city_filter_search", "filter": "city", "ok": state.ok}
-                    )
-                    if not state.ok:
-                        raise OpenCliBrowserError(state.safe_reason_code)
                     state_text = _opencli_result_text(state)
                 self._click_native_filter_option(label, state_text=state_text, section=section)
                 self.wait_time(seconds=1)
@@ -1438,6 +1439,36 @@ class LiepinSiteAdapter:
                 if not state.ok:
                     raise OpenCliBrowserError(state.safe_reason_code)
                 state_text = _opencli_result_text(state)
+                if (
+                    filter_name == "city"
+                    and section in {"current", "expected"}
+                    and not native_filter_selection_applied(state_text, section=section, label=label)
+                    and native_filter_city_picker_selection_contains(state_text, label=label)
+                    and (confirm_ref := native_filter_city_confirm_ref(state_text)) is not None
+                ):
+                    self._click_native_filter_ref(confirm_ref)
+                    events.append(
+                        {
+                            "action_kind": "confirm_native_city_filter",
+                            "filter": "city",
+                            "section": section,
+                            "value": label,
+                            "ok": True,
+                        }
+                    )
+                    self.wait_time(seconds=1)
+                    state = self.state()
+                    events.append(
+                        {
+                            "action_kind": "observe_after_native_city_filter_confirm",
+                            "filter": "city",
+                            "section": section,
+                            "ok": state.ok,
+                        }
+                    )
+                    if not state.ok:
+                        raise OpenCliBrowserError(state.safe_reason_code)
+                    state_text = _opencli_result_text(state)
                 if not native_filter_selection_applied(state_text, section=section, label=label):
                     events.append(
                         {
@@ -1486,6 +1517,61 @@ class LiepinSiteAdapter:
                 if not state.ok:
                     raise OpenCliBrowserError(state.safe_reason_code)
         return state
+
+    def _find_liepin_city_filter_option(
+        self,
+        *,
+        section: str,
+        label: str,
+        current_state: OpenCliBrowserResult,
+        events: list[dict[str, object]],
+    ) -> OpenCliBrowserResult:
+        state = current_state
+        state_text = _opencli_result_text(state)
+        if native_filter_option_visible_in_section(state_text, section=section, label=label):
+            return state
+        if (input_ref := native_filter_city_search_input_ref(state_text)) is not None:
+            self.fill(target=input_ref, text=label)
+            events.append({"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True})
+            self.wait_time(seconds=1)
+            state = self.state()
+            events.append({"action_kind": "observe_native_city_filter_search", "filter": "city", "ok": state.ok})
+            if not state.ok:
+                raise OpenCliBrowserError(state.safe_reason_code)
+            state_text = _opencli_result_text(state)
+            if native_filter_option_visible_in_section(state_text, section=section, label=label):
+                return state
+        if (overseas_ref := native_filter_city_overseas_tab_ref(state_text)) is not None:
+            self._click_native_filter_ref(overseas_ref)
+            events.append(
+                {"action_kind": "open_native_city_overseas_tab", "filter": "city", "value": label, "ok": True}
+            )
+            self.wait_time(seconds=1)
+            state = self.state()
+            events.append({"action_kind": "observe_native_city_overseas_tab", "filter": "city", "ok": state.ok})
+            if not state.ok:
+                raise OpenCliBrowserError(state.safe_reason_code)
+            state_text = _opencli_result_text(state)
+            if native_filter_option_visible_in_section(state_text, section=section, label=label):
+                return state
+        raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
+
+    def _liepin_city_choose_ref_from_dom(self, *, section: str) -> str | None:
+        if section not in {"current", "expected"}:
+            return None
+        try:
+            output = self._run_fixed_readonly_eval_probe(probe_name="liepin_city_choose_ref", ref=section).strip()
+        except OpenCliBrowserError:
+            return None
+        if not output or output == "null":
+            return None
+        try:
+            parsed = json.loads(output)
+        except json.JSONDecodeError:
+            parsed = output
+        if isinstance(parsed, str) and parsed.strip():
+            return parsed.strip()
+        return None
 
     def _blocked_cards_envelope(
         self,

@@ -17,7 +17,9 @@ from seektalent.providers.liepin.opencli_card_text import (
     looks_like_liepin_card_start,
 )
 
-FIXED_READONLY_EVAL_PROBES = frozenset({"liepin_detail_url_for_card", "liepin_detail_resume_payload"})
+FIXED_READONLY_EVAL_PROBES = frozenset(
+    {"liepin_city_choose_ref", "liepin_detail_url_for_card", "liepin_detail_resume_payload"}
+)
 LIEPIN_ALLOWED_HOSTS = frozenset({"www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"})
 LIEPIN_RISK_HOSTS = frozenset({"safe.liepin.com"})
 OWNED_PAGE_MARKER_TTL_SECONDS = 24 * 60 * 60
@@ -623,6 +625,8 @@ def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
         raise OpenCliBrowserError("liepin_opencli_forbidden_command")
     if probe_name == "liepin_detail_resume_payload":
         return _liepin_detail_resume_payload_probe_script()
+    if probe_name == "liepin_city_choose_ref":
+        return _liepin_city_choose_ref_probe_script(section=ref)
     if probe_name != "liepin_detail_url_for_card":
         raise OpenCliBrowserError("liepin_opencli_forbidden_command")
     return (
@@ -638,6 +642,22 @@ def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
         "+ '&index=' + index"
         "+ '&position=' + index"
         "+ '&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal';"
+        "})()"
+    )
+
+
+def _liepin_city_choose_ref_probe_script(*, section: str) -> str:
+    if section not in {"current", "expected"}:
+        raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+    title = "目前城市" if section == "current" else "期望城市"
+    return (
+        "(() => {"
+        "const clean = (value) => String(value || '').replace(/\\s+/g, '').trim();"
+        "const boxes = Array.from(document.querySelectorAll('.sfilter-city'));"
+        f"const box = boxes.find((item) => clean(item.querySelector('.search-item-title')?.textContent).includes('{title}'));"
+        "const button = box && Array.from(box.querySelectorAll('.btn-choose')).find((item) => clean(item.textContent) === '其他');"
+        "const ref = button && button.getAttribute('data-opencli-ref');"
+        "return /^[A-Za-z0-9_-]{1,64}$/.test(ref || '') ? ref : null;"
         "})()"
     )
 
