@@ -1313,6 +1313,106 @@ def test_liepin_card_policy_keeps_provider_rank_primary_after_hard_filters_and_b
     assert result.events[-1].safe_counts == {"detail_recommendations": 2}
 
 
+def test_liepin_runtime_card_policy_ignores_candidate_search_text() -> None:
+    class SearchTextOnlyWorker(FakeWorker):
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            del request, round_no, trace_id, provider_account_hash
+            raw_payload = {"candidateId": "search-text-only"}
+            candidate = ResumeCandidate(
+                resume_id="search-text-only",
+                source_resume_id="search-text-only",
+                snapshot_sha256=sha256_json(raw_payload),
+                dedup_key="search-text-only",
+                search_text="FastAPI ranking Backend Engineer SEARCH_TEXT_SENTINEL",
+                raw={"safe_card_summary": {"current_or_recent_title": "Store Manager"}},
+            )
+            snapshot = ProviderSnapshot(
+                provider_name="liepin",
+                payload_kind="card",
+                raw_payload=raw_payload,
+                normalized_text=candidate.search_text,
+                provider_subject_id="search-text-only",
+                provider_listing_id=None,
+                synthetic_candidate_fingerprint="search-text-only",
+                identity_confidence="provider_subject_id",
+                extraction_source="test",
+                extractor_version="test",
+                pii_classification="no_direct_contact",
+                retention_policy="provider_snapshot_7d",
+                access_scope="local_run_only",
+                redaction_state="raw_provider_payload",
+                score_evidence_source="card_only",
+            )
+            return SearchResult(candidates=[candidate], provider_snapshots=[snapshot], raw_candidate_count=1)
+
+    request = RuntimeSourceLaneRequest(
+        source="liepin",
+        lane_mode="card",
+        job_title="Backend Engineer",
+        jd="FastAPI ranking",
+        notes=None,
+        requirement_sheet=_requirement_sheet(),
+        runtime_run_id="runtime-run-1",
+        source_lane_run_id="lane-run-1",
+        source_query_terms=("FastAPI", "ranking"),
+        source_context={"provider_account_hash": "acct_hash_123"},
+    )
+
+    result = asyncio.run(run_liepin_source_lane(settings=make_settings(), request=request, worker_client=SearchTextOnlyWorker()))
+
+    assert result.detail_recommendations == ()
+
+
+def test_liepin_runtime_card_summary_filters_preview_mappings_to_allowed_scalars() -> None:
+    candidate = ResumeCandidate(
+        resume_id="preview-filtering",
+        source_resume_id="preview-filtering",
+        snapshot_sha256=sha256_json({"candidateId": "preview-filtering"}),
+        dedup_key="preview-filtering",
+        search_text="FastAPI ranking Backend Engineer SEARCH_TEXT_SENTINEL",
+        raw={
+            "safe_card_summary": {
+                "experience_preview": [
+                    {
+                        "company": "  Acme  ",
+                        "title": "Backend Engineer",
+                        "date_range": ["2021-2024"],
+                        "duration": {"months": 6},
+                        "is_current": True,
+                        "visible_text": "FastAPI ranking SEARCH_TEXT_SENTINEL",
+                    }
+                ],
+                "education_preview": [
+                    {
+                        "school": "  Qiqihar University  ",
+                        "major": object(),
+                        "degree": "本科",
+                        "recruitment_type": "统招",
+                        "date_range": {"raw": "2017-2021"},
+                        "normalized_card_text": "FastAPI ranking SEARCH_TEXT_SENTINEL",
+                    }
+                ],
+            }
+        },
+    )
+
+    summary = runtime_lane._card_summary_for_candidate(candidate=candidate, provider_rank=1)
+
+    assert summary.experience_preview == (
+        {"company": "Acme", "title": "Backend Engineer", "is_current": True},
+    )
+    assert summary.education_preview == (
+        {"school": "Qiqihar University", "degree": "本科", "recruitment_type": "统招"},
+    )
+
+
 def test_liepin_runtime_lane_normalizes_blocked_worker_error_codes() -> None:
     class BlockedWorker(FakeWorker):
         async def search(

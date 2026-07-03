@@ -301,6 +301,25 @@ def test_worker_card_rejects_card_text_tail_fields() -> None:
     )
 
 
+def test_worker_card_rejects_nested_card_text_tail_fields() -> None:
+    payload = _worker_card_wire_payload()
+    payload["safeCardSummary"] = {
+        "current_or_recent_title": "Backend Engineer",
+        "experience_preview": [
+            {
+                "company": "Acme",
+                "visible_text": "nested raw visible card text",
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError) as nested_visible_text_error:
+        LiepinWorkerCandidateCard.model_validate(payload)
+    assert ("safeCardSummary", "experience_preview", 0, "visible_text") in (
+        error["loc"] for error in nested_visible_text_error.value.errors()
+    )
+
+
 def test_safe_card_summary_does_not_copy_raw_payload_contact_material() -> None:
     card = _worker_card().model_copy(
         update={

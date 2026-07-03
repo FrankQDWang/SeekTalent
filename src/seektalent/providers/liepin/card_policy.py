@@ -12,24 +12,6 @@ class LiepinCardDecisionAction(StrEnum):
 
 
 @dataclass(frozen=True, kw_only=True)
-class LiepinCardExperiencePreview:
-    company: str | None = None
-    title: str | None = None
-    date_range: str | None = None
-    duration: str | None = None
-    is_current: bool | None = None
-
-
-@dataclass(frozen=True, kw_only=True)
-class LiepinCardEducationPreview:
-    school: str | None = None
-    major: str | None = None
-    degree: str | None = None
-    recruitment_type: str | None = None
-    date_range: str | None = None
-
-
-@dataclass(frozen=True, kw_only=True)
 class LiepinCardSummary:
     candidate_resume_id: str
     provider_rank: int
