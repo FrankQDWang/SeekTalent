@@ -40,6 +40,8 @@ class LiepinSearchWorkflowSite(Protocol):
 
     def observe_liepin_search_state(self) -> OpenCliBrowserResult: ...
 
+    def observe_liepin_detail_state(self) -> OpenCliBrowserResult: ...
+
     def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None: ...
 
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult: ...
@@ -53,7 +55,17 @@ class LiepinSearchWorkflowSite(Protocol):
         detail_url: str,
     ) -> OpenCliBrowserResult: ...
 
-    def capture_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult: ...
+    def wait_liepin_detail_ready(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult: ...
+
+    def capture_liepin_detail_resume(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        require_ready: bool = True,
+    ) -> OpenCliBrowserResult: ...
+
+    def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None: ...
 
     def restore_liepin_search_page(self) -> str | None: ...
 
@@ -173,6 +185,16 @@ class LiepinSearchWorkflow:
                 if detail_url is not None:
                     detail_urls_by_rank[rank] = detail_url
 
+        def has_cached_url_for_remaining_candidate() -> bool:
+            for card in card_items:
+                selected = _card_ref_and_rank(card)
+                if selected is None:
+                    continue
+                _ref, rank = selected
+                if rank not in attempted_ranks and rank in detail_urls_by_rank:
+                    return True
+            return False
+
         remember_detail_urls(card_items)
         self._append_event(
             request.source_run_id,
@@ -187,6 +209,7 @@ class LiepinSearchWorkflow:
         opened = 0
         attempted_ranks: set[int] = set()
         using_cached_card_items = False
+        last_detail_safe_reason = "liepin_opencli_detail_not_opened"
         while opened < request.target_resumes:
             selected = _next_unattempted_card(card_items, attempted_ranks)
             if selected is None:
@@ -205,55 +228,47 @@ class LiepinSearchWorkflow:
             )
 
             cached_detail_url = detail_urls_by_rank.get(selected_rank)
-            if using_cached_card_items and cached_detail_url is not None:
-                open_result = self._site.open_liepin_detail_cached_url(
-                    source_run_id=request.source_run_id,
-                    ref=selected_ref,
-                    rank=selected_rank,
-                    detail_url=cached_detail_url,
-                )
-            else:
-                open_result = self._site.open_liepin_detail(
-                    source_run_id=request.source_run_id,
-                    ref=selected_ref,
-                    rank=selected_rank,
-                )
+            open_result = self._open_detail_transition(
+                source_run_id=request.source_run_id,
+                ref=selected_ref,
+                rank=selected_rank,
+                cached_detail_url=cached_detail_url,
+                use_cached=using_cached_card_items,
+            )
             if not open_result.ok:
+                last_detail_safe_reason = open_result.safe_reason_code or "liepin_opencli_detail_not_opened"
                 continue
 
-            capture_result = self._site.capture_liepin_detail_resume(
+            wait_result = self._wait_detail_ready_transition(
                 source_run_id=request.source_run_id,
                 rank=selected_rank,
             )
+            if not wait_result.ok:
+                last_detail_safe_reason = wait_result.safe_reason_code or "liepin_opencli_detail_not_opened"
+                continue
+
+            capture_result = self._capture_detail_transition(
+                source_run_id=request.source_run_id,
+                rank=selected_rank,
+                require_ready=False,
+            )
             if not capture_result.ok:
+                last_detail_safe_reason = capture_result.safe_reason_code or "liepin_opencli_detail_not_opened"
                 continue
 
             opened += 1
-            self._append_event(
-                request.source_run_id,
-                {
-                    "action_kind": "capture_detail_succeeded",
-                    "route_kind": "detail",
-                    "ok": True,
-                    "rank": selected_rank,
-                },
-            )
             if opened >= request.target_resumes:
                 continue
 
-            restored_page_id = self._site.restore_liepin_search_page()
-            self._append_event(
-                request.source_run_id,
-                {
-                    "action_kind": "return_to_search_after_capture",
-                    "route_kind": "search",
-                    "ok": restored_page_id is not None,
-                    "rank": selected_rank,
-                },
+            restored_page_id = self._restore_search_transition(
+                source_run_id=request.source_run_id,
+                rank=selected_rank,
             )
             if restored_page_id is None:
-                using_cached_card_items = True
-                continue
+                if has_cached_url_for_remaining_candidate():
+                    using_cached_card_items = True
+                    continue
+                break
 
             refreshed = self._extract_cards_transition(
                 source_run_id=request.source_run_id,
@@ -277,7 +292,7 @@ class LiepinSearchWorkflow:
                 using_cached_card_items = False
                 remember_detail_urls(card_items)
             else:
-                using_cached_card_items = True
+                using_cached_card_items = has_cached_url_for_remaining_candidate()
             cards_seen_for_resume = max(cards_seen_for_resume, len(refreshed_card_items))
             self._append_event(
                 request.source_run_id,
@@ -294,7 +309,7 @@ class LiepinSearchWorkflow:
             return self._site.blocked_resumes_envelope(
                 source_run_id=request.source_run_id,
                 query=request.query,
-                safe_reason_code="liepin_opencli_detail_not_opened",
+                safe_reason_code=last_detail_safe_reason,
                 cards_seen=cards_seen_for_resume,
             )
         if opened < request.target_resumes:
@@ -381,6 +396,274 @@ class LiepinSearchWorkflow:
             )
         return extracted
 
+    def _open_detail_transition(
+        self,
+        *,
+        source_run_id: str,
+        ref: str,
+        rank: int,
+        cached_detail_url: str | None,
+        use_cached: bool,
+    ) -> OpenCliBrowserResult:
+        opened: OpenCliBrowserResult | None = None
+        open_mode = "cached_url" if use_cached else "visible_card"
+
+        def observe_search_state() -> LiepinStateSnapshot:
+            return _snapshot_from_result(self._site.observe_liepin_search_state())
+
+        def observe_detail_state() -> LiepinStateSnapshot:
+            return _snapshot_from_result(self._site.observe_liepin_detail_state())
+
+        def can_open(snapshot: LiepinStateSnapshot) -> bool:
+            if not snapshot.ok:
+                return False
+            if use_cached:
+                return cached_detail_url is not None
+            return bool(ref and rank > 0 and _search_state_has_detail_target(snapshot.observation, ref))
+
+        def open_detail() -> TransitionResult:
+            nonlocal opened
+            if use_cached:
+                if cached_detail_url is None:
+                    return TransitionResult(ok=False, safe_reason_code="liepin_opencli_detail_not_opened")
+                opened = self._site.open_liepin_detail_cached_url(
+                    source_run_id=source_run_id,
+                    ref=ref,
+                    rank=rank,
+                    detail_url=cached_detail_url,
+                )
+            else:
+                opened = self._site.open_liepin_detail(
+                    source_run_id=source_run_id,
+                    ref=ref,
+                    rank=rank,
+                )
+            if opened.ok:
+                return TransitionResult(ok=True)
+            return TransitionResult(
+                ok=False,
+                safe_reason_code=opened.safe_reason_code or "liepin_opencli_detail_not_opened",
+            )
+
+        result = self._transition_runner.run(
+            LiepinTransition(
+                name="open_detail",
+                phase="detail",
+                observe_pre_state=observe_search_state,
+                precondition=can_open,
+                action=open_detail,
+                observe_post_state=observe_detail_state,
+                postcondition=lambda snapshot: snapshot.ok and bool(opened and opened.ok),
+                safe_reason_code="liepin_opencli_detail_not_opened",
+                trace_event="liepin.detail.open",
+            )
+        )
+        if opened is not None:
+            self._append_event(
+                source_run_id,
+                {
+                    "action_kind": "open_detail",
+                    "route_kind": "detail",
+                    "ok": True,
+                    "rank": rank,
+                    "ref": ref,
+                    "open_mode": open_mode,
+                },
+            )
+        event: dict[str, object] = {
+            "action_kind": "open_detail_succeeded" if result.ok else "open_detail_failed",
+            "route_kind": "detail",
+            "ok": result.ok,
+            "rank": rank,
+            "ref": ref,
+        }
+        if opened is not None:
+            event["open_mode"] = open_mode
+        if not result.ok:
+            event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_detail_not_opened"
+        self._append_event(source_run_id, event)
+        if not result.ok:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="open_liepin_detail",
+                safe_reason_code=result.safe_reason_code or "liepin_opencli_detail_not_opened",
+            )
+        if opened is None:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="open_liepin_detail",
+                safe_reason_code="liepin_opencli_detail_not_opened",
+            )
+        return opened
+
+    def _wait_detail_ready_transition(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
+        waited: OpenCliBrowserResult | None = None
+
+        def observe_detail_state() -> LiepinStateSnapshot:
+            return _snapshot_from_result(self._site.observe_liepin_detail_state())
+
+        def wait_detail_ready() -> TransitionResult:
+            nonlocal waited
+            waited = self._site.wait_liepin_detail_ready(
+                source_run_id=source_run_id,
+                rank=rank,
+            )
+            if waited.ok:
+                return TransitionResult(ok=True)
+            return TransitionResult(
+                ok=False,
+                safe_reason_code=waited.safe_reason_code or "liepin_opencli_detail_not_opened",
+            )
+
+        result = self._transition_runner.run(
+            LiepinTransition(
+                name="wait_detail_ready",
+                phase="detail",
+                observe_pre_state=observe_detail_state,
+                precondition=lambda snapshot: snapshot.ok,
+                action=wait_detail_ready,
+                observe_post_state=observe_detail_state,
+                postcondition=lambda snapshot: snapshot.ok and bool(waited and waited.ok),
+                safe_reason_code="liepin_opencli_detail_not_opened",
+                trace_event="liepin.detail.wait_ready",
+            )
+        )
+        event: dict[str, object] = {
+            "action_kind": "wait_detail_ready",
+            "route_kind": "detail",
+            "ok": result.ok,
+            "rank": rank,
+        }
+        if not result.ok:
+            event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_detail_not_opened"
+        self._append_event(source_run_id, event)
+        if not result.ok:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="wait_liepin_detail_ready",
+                safe_reason_code=result.safe_reason_code or "liepin_opencli_detail_not_opened",
+            )
+        if waited is None:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="wait_liepin_detail_ready",
+                safe_reason_code="liepin_opencli_detail_not_opened",
+            )
+        return waited
+
+    def _capture_detail_transition(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        require_ready: bool = True,
+    ) -> OpenCliBrowserResult:
+        captured: OpenCliBrowserResult | None = None
+
+        def observe_detail_state() -> LiepinStateSnapshot:
+            return _snapshot_from_result(self._site.observe_liepin_detail_state())
+
+        def capture_detail() -> TransitionResult:
+            nonlocal captured
+            captured = self._site.capture_liepin_detail_resume(
+                source_run_id=source_run_id,
+                rank=rank,
+                require_ready=require_ready,
+            )
+            if captured.ok:
+                return TransitionResult(ok=True)
+            return TransitionResult(
+                ok=False,
+                safe_reason_code=captured.safe_reason_code or "liepin_opencli_detail_not_opened",
+            )
+
+        result = self._transition_runner.run(
+            LiepinTransition(
+                name="capture_detail",
+                phase="detail",
+                observe_pre_state=observe_detail_state,
+                precondition=lambda snapshot: snapshot.ok,
+                action=capture_detail,
+                observe_post_state=observe_detail_state,
+                postcondition=lambda snapshot: snapshot.ok and bool(captured and captured.ok),
+                safe_reason_code="liepin_opencli_detail_not_opened",
+                trace_event="liepin.detail.capture",
+            )
+        )
+        observe_event: dict[str, object] = {
+            "action_kind": "observe_detail",
+            "route_kind": "detail",
+            "ok": result.ok,
+            "rank": rank,
+        }
+        if not result.ok:
+            observe_event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_detail_not_opened"
+        self._append_event(source_run_id, observe_event)
+        event: dict[str, object] = {
+            "action_kind": "capture_detail_succeeded" if result.ok else "capture_detail_failed",
+            "route_kind": "detail",
+            "ok": result.ok,
+            "rank": rank,
+        }
+        if not result.ok:
+            event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_detail_not_opened"
+        self._append_event(source_run_id, event)
+        if not result.ok:
+            if captured is not None and captured.ok:
+                self._site.discard_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
+            return OpenCliBrowserResult(
+                ok=False,
+                action="capture_liepin_detail_resume",
+                safe_reason_code=result.safe_reason_code or "liepin_opencli_detail_not_opened",
+            )
+        if captured is None:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="capture_liepin_detail_resume",
+                safe_reason_code="liepin_opencli_detail_not_opened",
+            )
+        return captured
+
+    def _restore_search_transition(self, *, source_run_id: str, rank: int) -> str | None:
+        restored_page_id: str | None = None
+
+        def observe_detail_state() -> LiepinStateSnapshot:
+            return _snapshot_from_result(self._site.observe_liepin_detail_state())
+
+        def observe_search_state() -> LiepinStateSnapshot:
+            return _snapshot_from_result(self._site.observe_liepin_search_state())
+
+        def restore_search() -> TransitionResult:
+            nonlocal restored_page_id
+            restored_page_id = self._site.restore_liepin_search_page()
+            return TransitionResult(ok=True)
+
+        result = self._transition_runner.run(
+            LiepinTransition(
+                name="return_to_search_after_capture",
+                phase="search",
+                observe_pre_state=observe_detail_state,
+                precondition=lambda snapshot: snapshot.ok,
+                action=restore_search,
+                observe_post_state=observe_search_state,
+                postcondition=lambda snapshot: snapshot.ok and restored_page_id is not None,
+                safe_reason_code="liepin_opencli_search_restore_failed",
+                trace_event="liepin.search.restore_after_capture",
+            )
+        )
+        event: dict[str, object] = {
+            "action_kind": "return_to_search_after_capture",
+            "route_kind": "search",
+            "ok": result.ok,
+            "rank": rank,
+        }
+        if not result.ok:
+            event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_search_restore_failed"
+        self._append_event(source_run_id, event)
+        if not result.ok:
+            return None
+        return restored_page_id
+
 
 def _structured_card_items(result: OpenCliBrowserResult) -> list[Mapping[str, object]]:
     raw_cards = result.observation.get("cards") if isinstance(result.observation, Mapping) else None
@@ -402,6 +685,22 @@ def _snapshot_from_result(result: OpenCliBrowserResult) -> LiepinStateSnapshot:
 def _safe_snapshot_observation(observation: Mapping[str, object]) -> dict[str, object] | None:
     safe_observation = {key: value for key, value in observation.items() if key != "text"}
     return safe_observation or None
+
+
+def _search_state_has_detail_target(observation: Mapping[str, object] | None, ref: str) -> bool:
+    stripped_ref = ref.strip()
+    if not stripped_ref or observation is None:
+        return False
+    targets = observation.get("detailTargets")
+    if not isinstance(targets, Sequence) or isinstance(targets, str | bytes | bytearray):
+        return False
+    for target in targets:
+        if not isinstance(target, Mapping):
+            continue
+        target_ref = cast(Mapping[str, object], target).get("ref")
+        if isinstance(target_ref, str) and target_ref.strip() == stripped_ref:
+            return True
+    return False
 
 
 def _next_unattempted_card(

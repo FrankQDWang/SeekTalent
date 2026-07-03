@@ -29,6 +29,7 @@ _ACTION_TO_STEP_EVENT: dict[str, tuple[str, str, str]] = {
     "open_detail_succeeded": ("open_detail", "source_workflow_step_completed", "completed"),
     "open_detail_failed": ("open_detail", "source_workflow_step_failed", "failed"),
     "open_detail_timeout": ("open_detail", "source_workflow_step_failed", "failed"),
+    "wait_detail_ready": ("wait_detail_ready", "source_workflow_step_completed", "completed"),
     "observe_detail": ("capture_detail", "source_workflow_step_completed", "completed"),
     "capture_detail_succeeded": ("capture_detail", "source_workflow_step_completed", "completed"),
     "capture_detail_failed": ("capture_detail", "source_workflow_step_failed", "failed"),

@@ -40,6 +40,7 @@ def test_liepin_site_adapter_public_methods_stay_compatible() -> None:
         "search_liepin_resumes(self, *, source_run_id: 'str', query: 'str', target_resumes: 'int', max_pages: 'int', max_cards: 'int', native_filters: 'Mapping[str, object] | None' = None) -> 'dict[str, object]'",
         "state(self) -> 'OpenCliBrowserResult'",
         "status(self) -> 'OpenCliBrowserResult'",
+        "wait_liepin_detail_ready(self, *, source_run_id: 'str', rank: 'int') -> 'OpenCliBrowserResult'",
         "wait_time(self, *, seconds: 'int') -> 'OpenCliBrowserResult'",
         "watch_idle_lease(self) -> 'OpenCliBrowserResult'",
     }

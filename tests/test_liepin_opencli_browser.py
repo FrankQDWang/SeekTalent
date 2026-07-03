@@ -3184,28 +3184,13 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
                 f'{{"url":"{search_url}","page":"page-search"}}'
             ),
             ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search"): "{}",
-            ("opencli", "browser", "seektalent-liepin", "get", "url"): [search_url] * 40,
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [search_url] * 80,
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 search_form_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                detail70_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                detail71_state,
-                detail71_state,
-                detail71_state,
-                detail71_state,
-                detail71_state,
+                *([search_results_state] * 12),
+                *([detail70_state] * 4),
+                *([search_results_state] * 8),
+                *([detail71_state] * 6),
             ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
             ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
@@ -3363,22 +3348,13 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
                 f'{{"url":"{search_url}","page":"page-search"}}'
             ),
             ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search"): "{}",
-            ("opencli", "browser", "seektalent-liepin", "get", "url"): [search_url] * 20,
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [search_url] * 80,
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 search_form_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                search_results_state,
-                detail70_state,
-                empty_search_state,
-                empty_search_state,
-                empty_search_state,
-                detail71_state,
-                detail71_state,
+                *([search_results_state] * 10),
+                *([detail70_state] * 4),
+                *([empty_search_state] * 5),
+                *([detail71_state] * 6),
             ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
             ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
@@ -3439,6 +3415,21 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
         and event.get("open_mode") == "cached_url"
         for event in trace["events"]
     )
+    assert [
+        (event.get("action_kind"), event.get("rank"), event.get("open_mode"))
+        for event in trace["events"]
+        if event.get("action_kind") in {"open_detail", "open_detail_succeeded"}
+    ] == [
+        ("open_detail", 1, "visible_card"),
+        ("open_detail_succeeded", 1, "visible_card"),
+        ("open_detail", 2, "cached_url"),
+        ("open_detail_succeeded", 2, "cached_url"),
+    ]
+    assert [
+        (event.get("action_kind"), event.get("rank"))
+        for event in trace["events"]
+        if event.get("action_kind") == "observe_detail"
+    ] == [("observe_detail", 1), ("observe_detail", 2)]
 
 
 def test_finalize_liepin_resumes_marks_partial_when_target_is_not_met(tmp_path: Path) -> None:

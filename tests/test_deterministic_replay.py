@@ -212,7 +212,14 @@ class LiepinReplayWorker:
                     snapshot_sha256=sha256_json(raw_payload),
                     dedup_key="dedup-secret-id",
                     search_text="FastAPI retrieval ranking systems.",
-                    raw={},
+                    raw={
+                        "safe_card_summary": {
+                            "display_title": "Backend Engineer",
+                            "current_or_recent_title": "Backend Engineer",
+                            "skill_tags": ["FastAPI", "ranking"],
+                            "masked_name": True,
+                        }
+                    },
                 )
             ],
             provider_snapshots=[

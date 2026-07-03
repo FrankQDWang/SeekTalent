@@ -619,6 +619,12 @@ def _worker_card_search_response() -> dict[str, object]:
                 "retention_policy": "provider_snapshot_7d",
                 "access_scope": "local_run_only",
                 "redaction_state": "raw_provider_payload",
+                "safeCardSummary": {
+                    "display_title": "Python Engineer",
+                    "current_or_recent_title": "Python Engineer",
+                    "skill_tags": ["Python"],
+                    "masked_name": True,
+                },
             }
         ],
         "diagnostics": ["network"],

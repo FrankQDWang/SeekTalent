@@ -11,7 +11,11 @@ from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.corpus.runtime import ProviderReturnedCandidate, materialize_corpus_artifacts, record_corpus_provider_results
 from seektalent.corpus.store import CorpusStore
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
-from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
+from seektalent.providers.liepin.worker_contracts import (
+    LiepinSafeCardSummary,
+    LiepinWorkerCandidateCard,
+    LiepinWorkerCandidateDetail,
+)
 from seektalent.runtime.retrieval_runtime import _validated_provider_snapshots_for_candidates
 
 
@@ -35,6 +39,11 @@ def _worker_card() -> LiepinWorkerCandidateCard:
         retention_policy="provider_snapshot_30d",
         access_scope="local_run_only",
         redaction_state="raw_provider_payload",
+        safe_card_summary=LiepinSafeCardSummary(
+            current_or_recent_title="Python backend engineer",
+            skill_tags=("Python",),
+            masked_name=True,
+        ),
     )
 
 

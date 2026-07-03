@@ -500,6 +500,16 @@ class LiepinSiteAdapter:
         )
 
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
+        return self._open_liepin_detail(source_run_id=source_run_id, ref=ref, rank=rank, emit_events=True)
+
+    def _open_liepin_detail(
+        self,
+        *,
+        source_run_id: str,
+        ref: str,
+        rank: int,
+        emit_events: bool,
+    ) -> OpenCliBrowserResult:
         try:
             if rank < 1 or rank > 100 or not _is_safe_page_id(ref):
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
@@ -516,15 +526,17 @@ class LiepinSiteAdapter:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
             if not state.ok:
                 return state
-            self._append_agent_event(
-                source_run_id,
-                {"action_kind": "open_detail", "route_kind": "detail", "ref": ref, "rank": rank},
-            )
-            if self._open_liepin_detail_ref_controlled(ref, source_run_id=source_run_id):
+            if emit_events:
                 self._append_agent_event(
                     source_run_id,
-                    {"action_kind": "open_detail_succeeded", "route_kind": "detail", "ref": ref, "rank": rank},
+                    {"action_kind": "open_detail", "route_kind": "detail", "ref": ref, "rank": rank},
                 )
+            if self._open_liepin_detail_ref_controlled(ref, source_run_id=source_run_id):
+                if emit_events:
+                    self._append_agent_event(
+                        source_run_id,
+                        {"action_kind": "open_detail_succeeded", "route_kind": "detail", "ref": ref, "rank": rank},
+                    )
                 return OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": rank})
             tabs_before_click = self._safe_list_tabs()
             safe_reason_code = "liepin_opencli_timeout"
@@ -532,39 +544,42 @@ class LiepinSiteAdapter:
                 self._click_liepin_detail_ref(ref)
             except OpenCliBrowserError as exc:
                 if exc.safe_reason_code != "liepin_opencli_timeout":
-                    self._append_agent_event(
-                        source_run_id,
-                        {
-                            "action_kind": "open_detail_failed",
-                            "route_kind": "detail",
-                            "ref": ref,
-                            "rank": rank,
-                            "safe_reason_code": exc.safe_reason_code,
-                        },
-                    )
+                    if emit_events:
+                        self._append_agent_event(
+                            source_run_id,
+                            {
+                                "action_kind": "open_detail_failed",
+                                "route_kind": "detail",
+                                "ref": ref,
+                                "rank": rank,
+                                "safe_reason_code": exc.safe_reason_code,
+                            },
+                        )
                     raise
                 safe_reason_code = exc.safe_reason_code
             if not self._claim_liepin_tab_after_detail_click(tabs_before_click, source_run_id=source_run_id):
-                self._append_agent_event(
-                    source_run_id,
-                    {
-                        "action_kind": "open_detail_timeout",
-                        "route_kind": "detail",
-                        "ref": ref,
-                        "rank": rank,
-                        "safe_reason_code": safe_reason_code,
-                    },
-                )
+                if emit_events:
+                    self._append_agent_event(
+                        source_run_id,
+                        {
+                            "action_kind": "open_detail_timeout",
+                            "route_kind": "detail",
+                            "ref": ref,
+                            "rank": rank,
+                            "safe_reason_code": safe_reason_code,
+                        },
+                    )
                 return OpenCliBrowserResult(
                     ok=False,
                     action="open_liepin_detail",
                     safe_reason_code=safe_reason_code,
                     counts={"rank": rank},
                 )
-            self._append_agent_event(
-                source_run_id,
-                {"action_kind": "open_detail_succeeded", "route_kind": "detail", "ref": ref, "rank": rank},
-            )
+            if emit_events:
+                self._append_agent_event(
+                    source_run_id,
+                    {"action_kind": "open_detail_succeeded", "route_kind": "detail", "ref": ref, "rank": rank},
+                )
             return OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": rank})
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(ok=False, action="open_liepin_detail", safe_reason_code=exc.safe_reason_code)
@@ -576,21 +591,23 @@ class LiepinSiteAdapter:
         ref: str,
         rank: int,
         detail_url: str,
+        emit_events: bool = True,
     ) -> OpenCliBrowserResult:
         try:
             if rank < 1 or rank > 100 or not _is_safe_page_id(ref) or not _is_liepin_detail_url(detail_url):
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
             self._pace_before_action("open_liepin_detail")
-            self._append_agent_event(
-                source_run_id,
-                {
-                    "action_kind": "open_detail",
-                    "route_kind": "detail",
-                    "ref": ref,
-                    "rank": rank,
-                    "open_mode": "cached_url",
-                },
-            )
+            if emit_events:
+                self._append_agent_event(
+                    source_run_id,
+                    {
+                        "action_kind": "open_detail",
+                        "route_kind": "detail",
+                        "ref": ref,
+                        "rank": rank,
+                        "open_mode": "cached_url",
+                    },
+                )
             if not self._open_liepin_detail_url_controlled(detail_url, source_run_id=source_run_id):
                 return OpenCliBrowserResult(
                     ok=False,
@@ -598,26 +615,61 @@ class LiepinSiteAdapter:
                     safe_reason_code="liepin_opencli_forbidden_command",
                     counts={"rank": rank},
                 )
-            self._append_agent_event(
-                source_run_id,
-                {
-                    "action_kind": "open_detail_succeeded",
-                    "route_kind": "detail",
-                    "ref": ref,
-                    "rank": rank,
-                    "open_mode": "cached_url",
-                },
-            )
+            if emit_events:
+                self._append_agent_event(
+                    source_run_id,
+                    {
+                        "action_kind": "open_detail_succeeded",
+                        "route_kind": "detail",
+                        "ref": ref,
+                        "rank": rank,
+                        "open_mode": "cached_url",
+                    },
+                )
             return OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": rank})
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(ok=False, action="open_liepin_detail", safe_reason_code=exc.safe_reason_code)
 
+    def wait_liepin_detail_ready(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
+        try:
+            if rank < 1 or rank > 100:
+                raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            self._detail_state_text_until_resume_ready()
+            return OpenCliBrowserResult(
+                ok=True,
+                action="wait_liepin_detail_ready",
+                counts={"rank": rank},
+            )
+        except OpenCliBrowserError as exc:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="wait_liepin_detail_ready",
+                safe_reason_code=exc.safe_reason_code,
+                counts={"rank": rank},
+            )
+
     def capture_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
+        return self._capture_liepin_detail_resume(
+            source_run_id=source_run_id,
+            rank=rank,
+            require_ready=True,
+            emit_events=True,
+        )
+
+    def _capture_liepin_detail_resume(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        require_ready: bool,
+        emit_events: bool,
+    ) -> OpenCliBrowserResult:
         try:
             if rank < 1 or rank > 100:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
             safe_run_id = _safe_artifact_segment(source_run_id)
-            self._detail_state_text_until_resume_ready()
+            if require_ready:
+                self._detail_state_text_until_resume_ready()
             detail_payload_text = self._run_fixed_readonly_eval_probe(
                 probe_name="liepin_detail_resume_payload",
                 ref="current",
@@ -672,10 +724,11 @@ class LiepinSiteAdapter:
             resumes.append(resume)
             resumes.sort(key=lambda item: _positive_int_or_none(item.get("provider_rank")) or 0)
             self._write_collected_resumes(safe_run_id, resumes)
-            self._append_agent_event(
-                source_run_id,
-                {"action_kind": "observe_detail", "route_kind": "detail", "ok": True, "rank": rank},
-            )
+            if emit_events:
+                self._append_agent_event(
+                    source_run_id,
+                    {"action_kind": "observe_detail", "route_kind": "detail", "ok": True, "rank": rank},
+                )
             return OpenCliBrowserResult(
                 ok=True,
                 action="capture_liepin_detail_resume",
@@ -687,6 +740,17 @@ class LiepinSiteAdapter:
                 action="capture_liepin_detail_resume",
                 safe_reason_code=exc.safe_reason_code,
             )
+
+    def _discard_collected_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
+        if rank < 1 or rank > 100:
+            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        safe_run_id = _safe_artifact_segment(source_run_id)
+        resumes = [
+            resume
+            for resume in self._read_collected_resumes(safe_run_id)
+            if _positive_int_or_none(resume.get("provider_rank")) != rank
+        ]
+        self._write_collected_resumes(safe_run_id, resumes)
 
     def search_liepin_resumes(
         self,
@@ -2792,11 +2856,19 @@ class _LiepinSearchWorkflowSite:
     def observe_liepin_search_state(self) -> OpenCliBrowserResult:
         return self.adapter.state()
 
+    def observe_liepin_detail_state(self) -> OpenCliBrowserResult:
+        return self.adapter.state()
+
     def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
         return self.adapter._safe_liepin_detail_url_for_ref(ref)
 
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
-        return self.adapter.open_liepin_detail(source_run_id=source_run_id, ref=ref, rank=rank)
+        return self.adapter._open_liepin_detail(
+            source_run_id=source_run_id,
+            ref=ref,
+            rank=rank,
+            emit_events=False,
+        )
 
     def open_liepin_detail_cached_url(
         self,
@@ -2811,10 +2883,30 @@ class _LiepinSearchWorkflowSite:
             ref=ref,
             rank=rank,
             detail_url=detail_url,
+            emit_events=False,
         )
 
-    def capture_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
-        return self.adapter.capture_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
+    def wait_liepin_detail_ready(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
+        return self.adapter.wait_liepin_detail_ready(source_run_id=source_run_id, rank=rank)
+
+    def capture_liepin_detail_resume(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        require_ready: bool = True,
+    ) -> OpenCliBrowserResult:
+        if require_ready:
+            return self.adapter.capture_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
+        return self.adapter._capture_liepin_detail_resume(
+            source_run_id=source_run_id,
+            rank=rank,
+            require_ready=False,
+            emit_events=False,
+        )
+
+    def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
+        self.adapter._discard_collected_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
 
     def restore_liepin_search_page(self) -> str | None:
         return self.adapter._select_canonical_liepin_search_page()

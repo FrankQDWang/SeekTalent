@@ -10,6 +10,7 @@ def test_workflow_steps_from_action_events_maps_successful_detail_flow() -> None
             {"action_kind": "detail_urls_cached", "cached_detail_urls": 6},
             {"action_kind": "detail_candidate_selected", "rank": 1, "ref": "70"},
             {"action_kind": "open_detail_succeeded", "rank": 1, "open_mode": "cached_url"},
+            {"action_kind": "wait_detail_ready", "ok": True, "rank": 1},
             {"action_kind": "capture_detail_succeeded", "rank": 1},
             {"action_kind": "return_to_search_after_capture", "ok": True, "rank": 1},
         ],
@@ -23,6 +24,7 @@ def test_workflow_steps_from_action_events_maps_successful_detail_flow() -> None
         "cache_detail_urls",
         "open_detail",
         "open_detail",
+        "wait_detail_ready",
         "capture_detail",
         "observe_cards",
         "finalize",
@@ -30,6 +32,7 @@ def test_workflow_steps_from_action_events_maps_successful_detail_flow() -> None
     assert steps[0]["event_type"] == "source_workflow_step_completed"
     assert steps[0]["safe_counts"] == {"visible_cards": 6, "cards_seen": 6, "target_resumes": 2}
     assert steps[3]["safe_metadata"] == {"rank": 1, "open_mode": "cached_url"}
+    assert steps[4]["safe_metadata"] == {"rank": 1}
     assert steps[-1]["step_name"] == "finalize"
     assert steps[-1]["status"] == "completed"
     assert steps[-1]["artifact_refs"] == ["artifact://protected/liepin-opencli/action-traces/run-1.json"]
