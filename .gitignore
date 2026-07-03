@@ -28,6 +28,7 @@ cts.validated.yaml
 examples/
 obsidian/
 .seektalent/
+domi/
 wandb/
 tea_debug.log
 /artifacts/

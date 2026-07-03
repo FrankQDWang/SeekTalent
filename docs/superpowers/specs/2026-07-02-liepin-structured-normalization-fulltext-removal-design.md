@@ -132,7 +132,20 @@ StructuredResumeEvidence
   source_metadata
 ```
 
-Scoring renders `STRUCTURED_RESUME_EVIDENCE` from this model. `raw_text_excerpt` is removed from the scoring contract. New Liepin normalized resume artifacts must not contain `raw_text_excerpt`, `fullText`, or `rawText`.
+The UI/runtime can consume `StructuredResumeEvidence`, but scoring must not consume that full model directly. Scoring uses a separate `StructuredScoringEvidence` allowlist derived from structured resume evidence:
+
+```text
+StructuredScoringEvidence
+  current_role
+  job_intention
+  work_experience[]
+  project_experience[]
+  skills[]
+```
+
+`StructuredScoringEvidence` must exclude identity, candidate name, age, gender, source URL, source metadata, education school/degree/major, and any other field whose primary value is trace/display rather than job-fit evidence. The scorer must also remove candidate identity and education summary from non-JSON prompt sections such as `RESUME CARD`; otherwise the allowlist does not protect the final prompt. This preserves the existing protected-attribute boundary while removing the raw text excerpt.
+
+Scoring renders `STRUCTURED_RESUME_EVIDENCE` from `StructuredScoringEvidence`. `raw_text_excerpt` is removed from the scoring contract only after scoring, candidate feedback, runtime-control, and tests no longer consume it. New Liepin normalized resume artifacts must not contain `fullText`, `rawText`, or a raw page excerpt derived from either field.
 
 ### CTS Normalization
 
@@ -155,9 +168,12 @@ BrowserAutomationClient
   find_css(...)
   readonly_eval(...)
   run_browser_command(...)
+  open_tab(...)
+  close_blank_window()
+  count_windows()
 ```
 
-Liepin code should depend on this wrapper protocol, not on broad OpenCLI internals. The wrapper can be backed by OpenCLI today, but its methods are the stable surface.
+Liepin code should depend on this wrapper protocol, not on broad OpenCLI internals. The wrapper can be backed by OpenCLI today, but its methods are the stable surface. Liepin-owned recovery stays in `LiepinSiteAdapter` because it opens `LIEPIN_RECRUITER_SEARCH_URL`; do not put `recover_connection()` or Liepin-specific pacing actions into the generic browser protocol.
 
 OpenCLI remains generic. It should not expose Liepin-specific methods like `extract_liepin_resume_detail`. Liepin owns selectors, parsing scripts, source-specific safe payload validation, and mapping from browser observations to Liepin worker contracts.
 
@@ -203,20 +219,17 @@ OpenCLI stable browser wrapper
 
 ### Scoring
 
-Replace scoring prompt `RAW EXCERPT` with a structured resume evidence block.
+Replace scoring prompt `RAW EXCERPT` with a structured scoring evidence block.
 
-The block uses bounded JSON generated from `StructuredResumeEvidence`:
+The block uses bounded JSON generated from `StructuredScoringEvidence`:
 
 ```text
 STRUCTURED_RESUME_EVIDENCE
-  identity
   current_role
   job_intention
   work_experience[]
   project_experience[]
-  education_experience[]
   skills[]
-  source_metadata
 ```
 
 The scorer output schema and parallel scoring execution stay unchanged.
@@ -280,18 +293,21 @@ Add or update tests for:
 
 ## Rollout Plan
 
-1. Introduce registry and source-specific normalizer modules.
-2. Move existing shared behavior into CTS and Liepin normalizers with minimal behavior drift, except for Liepin fullText removal.
-3. Remove `fullText` from Liepin OpenCLI parser, worker contracts, mapper, fixtures, and artifacts.
-4. Replace scoring `RAW EXCERPT` with structured evidence.
-5. Remove `reflection_rationale` from Reflection prompts, output schemas, materialization, public output paths, artifacts, and tests.
-6. Run focused tests for Liepin provider mapping, normalization, scoring prompt construction, runtime-control candidate truth, Workbench runtime service, and reflection contract.
+1. Add safety-gate tests that prove Liepin source payloads, raw snapshots, provider snapshots, normalized resumes, scoring prompts, runtime-control payloads, and UI payloads do not carry whole-page text.
+2. Remove `fullText`, `rawText`, and `page_text` at Liepin source boundaries before changing scoring.
+3. Add structured resume evidence and source-specific normalizers while temporarily keeping old `raw_text_excerpt` consumers intact.
+4. Switch scoring to `StructuredScoringEvidence` and verify protected fields are excluded.
+5. Switch candidate feedback and runtime-control to structured evidence.
+6. Delete `raw_text_excerpt` only after all consumers have moved.
+7. Remove `reflection_rationale` from Reflection prompts, output schemas, materialization, public output paths, artifacts, UI schemas, and tests.
+8. Run focused tests for Liepin provider mapping, normalization, scoring prompt construction, runtime-control candidate truth, Workbench runtime service, and reflection contract.
 
 ## Acceptance Criteria
 
-1. `rg "fullText" src/seektalent/providers/liepin src/seektalent_runtime_control src/seektalent_workbench_v2 tests` returns no production Liepin collection/storage path, except explicit negative tests if kept.
+1. `rg "fullText|full_text|raw_text|page_text|pageText|resumeText|resume_text|resume_free_text|detailBody|detail_body|raw_text_excerpt|RESUME_RAW_EXCERPT|RAW EXCERPT|reflection_rationale|reflectionRationale" src apps tests scripts tools` returns no production path, except explicit negative tests if kept.
+   `rawText` is prohibited in Liepin resume payload and candidate-evidence paths, but runtime-control requirement-review `ReviewItem.raw_text` / `reviewItems[].rawText` is a separate contract and remains out of scope.
 2. A Liepin runtime run produces structured candidate detail in UI without relying on whole-page text.
-3. Scoring prompts for Liepin contain structured resume evidence and do not include a raw page excerpt.
+3. Scoring prompts for Liepin contain allowlisted structured scoring evidence and do not include a raw page excerpt, candidate identity, candidate name, age, gender, source URL, or education school/degree/major.
 4. Scoring concurrency remains implemented through the existing parallel scorer.
 5. CTS and Liepin normalization are dispatched through source-specific normalizers.
 6. OpenCLI generic automation code has no Liepin resume semantics.
