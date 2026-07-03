@@ -96,6 +96,10 @@ def _worker_card() -> LiepinWorkerCandidateCard:
     )
 
 
+def _worker_card_wire_payload() -> dict[str, object]:
+    return _worker_card().model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
 def _worker_detail() -> LiepinWorkerCandidateDetail:
     return LiepinWorkerCandidateDetail(
         payload={
@@ -189,34 +193,32 @@ def test_worker_card_accepts_allowlisted_safe_card_summary() -> None:
 
 
 def test_worker_card_accepts_structured_card_evidence_preview_fields() -> None:
-    card = _worker_card().model_copy(
-        update={
-            "safe_card_summary": LiepinSafeCardSummary(
-                current_or_recent_company="北京思图场景数据科技服务有限公司",
-                current_or_recent_title="AI算法工程师",
-                skill_tags=("Python", "MySQL"),
-                experience_preview=(
-                    {
-                        "company": "北京思图场景数据科技服务有限公司",
-                        "title": "AI算法工程师",
-                        "date_range": "2021.04-至今",
-                        "duration": "6年3个月",
-                        "is_current": True,
-                    },
-                ),
-                education_preview=(
-                    {
-                        "school": "齐齐哈尔大学",
-                        "major": "计算机科学与技术",
-                        "degree": "本科",
-                        "recruitment_type": "统招",
-                        "date_range": "2017.08-2021.07",
-                    },
-                ),
-                masked_name=True,
-            )
-        }
-    )
+    payload = _worker_card_wire_payload()
+    payload["safeCardSummary"] = {
+        "current_or_recent_company": "北京思图场景数据科技服务有限公司",
+        "current_or_recent_title": "AI算法工程师",
+        "skill_tags": ["Python", "MySQL"],
+        "experience_preview": [
+            {
+                "company": "北京思图场景数据科技服务有限公司",
+                "title": "AI算法工程师",
+                "date_range": "2021.04-至今",
+                "duration": "6年3个月",
+                "is_current": True,
+            }
+        ],
+        "education_preview": [
+            {
+                "school": "齐齐哈尔大学",
+                "major": "计算机科学与技术",
+                "degree": "本科",
+                "recruitment_type": "统招",
+                "date_range": "2017.08-2021.07",
+            }
+        ],
+        "masked_name": True,
+    }
+    card = LiepinWorkerCandidateCard.model_validate(payload)
 
     mapped = map_liepin_worker_card(card, raw_payload_artifact_ref="worker://cards/candidate-1.json")
 
@@ -276,22 +278,27 @@ def test_worker_card_rejects_unknown_safe_card_summary_fields() -> None:
 
 
 def test_worker_card_rejects_card_text_tail_fields() -> None:
-    payload = _worker_card().model_dump(mode="json")
+    payload = _worker_card_wire_payload()
     payload["safeCardSummary"] = {
         "current_or_recent_title": "Backend Engineer",
         "visible_text": "raw visible card text",
     }
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as visible_text_error:
         LiepinWorkerCandidateCard.model_validate(payload)
+    assert ("safeCardSummary", "visible_text") in (error["loc"] for error in visible_text_error.value.errors())
 
+    payload = _worker_card_wire_payload()
     payload["safeCardSummary"] = {
         "current_or_recent_title": "Backend Engineer",
         "normalized_card_text": "legacy card text",
     }
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValidationError) as normalized_text_error:
         LiepinWorkerCandidateCard.model_validate(payload)
+    assert ("safeCardSummary", "normalized_card_text") in (
+        error["loc"] for error in normalized_text_error.value.errors()
+    )
 
 
 def test_safe_card_summary_does_not_copy_raw_payload_contact_material() -> None:
