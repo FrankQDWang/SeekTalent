@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -16,6 +17,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserError,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
+from seektalent.providers.liepin.liepin_site_payloads import cards_envelope
 from seektalent.providers.liepin.liepin_site_adapter import (
     LiepinOpenCliSiteConfig,
     LiepinSiteAdapter,
@@ -47,12 +49,15 @@ def _safe_card_summary_contract_fields(card: Mapping[str, object]) -> dict[str, 
 FORBIDDEN_CARD_TEXT_KEYS = (
     "visible_text",
     "normalized_card_text",
+    "normalizedCardText",
     "raw_html",
     "inner_html",
     "inner_text",
     "fullText",
+    "full_text",
     "rawText",
     "page_text",
+    "pageText",
 )
 
 
@@ -64,6 +69,140 @@ def _assert_no_card_text_keys(value: object) -> None:
     elif isinstance(value, list | tuple):
         for item in value:
             _assert_no_card_text_keys(item)
+
+
+def test_cards_envelope_allowlists_safe_card_summary_artifacts() -> None:
+    writes: dict[tuple[str, str], object] = {}
+
+    def write_pi_artifact(visibility: str, path: str, payload: object) -> str:
+        writes[(visibility, path)] = payload
+        return f"artifact://{visibility}/{path}"
+
+    long_title = "AI平台工程师" + ("x" * 500)
+    sentinel = "SENTINEL_RAW_CARD_TEXT"
+    card_summary = {
+        "provider_rank": 99,
+        "ref": "70",
+        "display_name_masked": False,
+        "masked_name": True,
+        "display_title": long_title,
+        "current_or_recent_company": "结构化科技",
+        "current_or_recent_title": "AI平台工程师",
+        "gender": "男",
+        "age": 34,
+        "work_years": 12,
+        "city": "上海",
+        "expected_city": "杭州",
+        "education_level": "硕士",
+        "job_intention": "AI平台专家",
+        "active_status": "近期活跃",
+        "badges": ["统招本科"],
+        "school_names": ["齐齐哈尔大学"],
+        "major_names": ["计算机科学与技术"],
+        "skill_tags": ["Python", "RAG"],
+        "experience_preview": [
+            {
+                "company": "结构化科技",
+                "title": "AI平台工程师",
+                "date_range": "2021.04-至今",
+                "duration": "3年",
+                "is_current": True,
+                "normalizedCardText": sentinel,
+                "unsupported": {"pageText": sentinel},
+            }
+        ],
+        "education_preview": [
+            {
+                "school": "齐齐哈尔大学",
+                "major": "计算机科学与技术",
+                "degree": "本科",
+                "recruitment_type": "统招",
+                "date_range": "2017.08-2021.07",
+                "full_text": sentinel,
+                "unsupported": sentinel,
+            }
+        ],
+        "normalizedCardText": sentinel,
+        "pageText": sentinel,
+        "full_text": sentinel,
+        "visible_text": sentinel,
+        "normalized_card_text": sentinel,
+        "raw_html": sentinel,
+        "unknown_nested": {"safe_note": "must not pass", "pageText": sentinel},
+        "unknown_list": [{"safe_note": "must not pass"}],
+    }
+    expected_summary = {
+        "display_title": long_title[:180],
+        "current_or_recent_company": "结构化科技",
+        "current_or_recent_title": "AI平台工程师",
+        "gender": "男",
+        "city": "上海",
+        "expected_city": "杭州",
+        "education_level": "硕士",
+        "job_intention": "AI平台专家",
+        "active_status": "近期活跃",
+        "age": 34,
+        "work_years": 12,
+        "masked_name": True,
+        "badges": ["统招本科"],
+        "school_names": ["齐齐哈尔大学"],
+        "major_names": ["计算机科学与技术"],
+        "skill_tags": ["Python", "RAG"],
+        "experience_preview": [
+            {
+                "company": "结构化科技",
+                "title": "AI平台工程师",
+                "date_range": "2021.04-至今",
+                "duration": "3年",
+                "is_current": True,
+            }
+        ],
+        "education_preview": [
+            {
+                "school": "齐齐哈尔大学",
+                "major": "计算机科学与技术",
+                "degree": "本科",
+                "recruitment_type": "统招",
+                "date_range": "2017.08-2021.07",
+            }
+        ],
+    }
+    digest = hashlib.sha256(json.dumps(expected_summary, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
+
+    envelope = cards_envelope(
+        source_run_id="run-allowlist",
+        query="AI平台工程师",
+        safe_run_id="run-allowlist",
+        pages_visited=1,
+        events=(),
+        state_text="safe state",
+        cards=(card_summary,),
+        write_pi_artifact=write_pi_artifact,
+    )
+
+    public_summary = writes[("public-summary", "pi-card/run-allowlist/1.json")]
+    protected_snapshot = writes[("protected", "pi-card/run-allowlist/1.json")]
+    assert public_summary == expected_summary
+    assert isinstance(protected_snapshot, Mapping)
+    assert protected_snapshot["summary"] == expected_summary
+    assert envelope["cards"][0]["safe_card_summary"] == expected_summary
+    assert envelope["cards"][0]["candidate_resume_id"] == f"liepin-opencli-run-allowlist-1-{digest}"
+    assert envelope["cards"][0]["provider_candidate_key_material_ref"] == (
+        "artifact://protected/pi-provider-key/run-allowlist/1.txt"
+    )
+    assert writes[("protected", "pi-provider-key/run-allowlist/1.txt")] == (
+        f"liepin-opencli:run-allowlist:1:{digest}"
+    )
+    encoded = json.dumps([envelope, public_summary, protected_snapshot], ensure_ascii=False)
+    assert sentinel not in encoded
+    assert "must not pass" not in encoded
+    for unsupported in ("provider_rank", "ref", "display_name_masked", "unknown_nested", "unknown_list"):
+        assert unsupported not in public_summary
+    assert "unsupported" not in public_summary["experience_preview"][0]
+    assert "unsupported" not in public_summary["education_preview"][0]
+    _assert_no_card_text_keys(envelope)
+    _assert_no_card_text_keys(public_summary)
+    _assert_no_card_text_keys(protected_snapshot)
 
 
 def _structured_cards_probe_json(*refs: str) -> str:
