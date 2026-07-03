@@ -486,6 +486,42 @@ def test_extract_visible_liepin_cards_delegates_to_structured_payload_without_ca
         assert forbidden not in encoded
 
 
+@pytest.mark.parametrize(
+    ("method_name", "expected_action"),
+    [
+        ("extract_structured_liepin_cards", "extract_structured_liepin_cards"),
+        ("extract_visible_liepin_cards", "extract_visible_liepin_cards"),
+    ],
+)
+def test_liepin_card_extractors_sanitize_terminal_state_failures(
+    method_name: str,
+    expected_action: str,
+    tmp_path: Path,
+) -> None:
+    raw_sentinel = "SENTINEL_RAW_PAGE_TEXT visible_text normalized_card_text fullText rawText"
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={ANY_STRUCTURED_CARD_PROBE: _structured_cards_probe_json("70")},
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): f"请登录后继续 {raw_sentinel}",
+        },
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+
+    result = getattr(runner, method_name)(source_run_id="run-1", max_cards=10)
+
+    assert result.ok is False
+    assert result.action == expected_action
+    assert result.safe_reason_code == "liepin_opencli_login_required"
+    assert result.private_output == ""
+    assert "text" not in result.observation
+    encoded = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+    for forbidden in ("visible_text", "normalized_card_text", "fullText", "rawText", "SENTINEL_RAW_PAGE_TEXT"):
+        assert forbidden not in encoded
+
+
 def test_extract_visible_liepin_cards_binds_ref_to_same_card_summary(tmp_path: Path) -> None:
     state_text = "<div id=resultList>共2位人选</div>"
     probe_output = json.dumps(

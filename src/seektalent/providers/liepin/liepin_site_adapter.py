@@ -374,7 +374,14 @@ class LiepinSiteAdapter:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
             state = self.state()
             if not state.ok:
-                return state
+                safe_reason_code = state.safe_reason_code
+                if not safe_reason_code or safe_reason_code == "configured":
+                    safe_reason_code = "liepin_opencli_terminal_state"
+                return OpenCliBrowserResult(
+                    ok=False,
+                    action="extract_structured_liepin_cards",
+                    safe_reason_code=safe_reason_code,
+                )
             probe_output = self._run_opencli_call(
                 lambda: self._automation.readonly_eval(
                     _liepin_structured_cards_payload_probe_script(max_cards=max_cards)
@@ -405,6 +412,16 @@ class LiepinSiteAdapter:
 
     def extract_visible_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
         result = self.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
+        if not result.ok:
+            safe_reason_code = result.safe_reason_code
+            if not safe_reason_code or safe_reason_code == "configured":
+                safe_reason_code = "liepin_opencli_terminal_state"
+            return OpenCliBrowserResult(
+                ok=False,
+                action="extract_visible_liepin_cards",
+                safe_reason_code=safe_reason_code,
+                counts=result.counts,
+            )
         return OpenCliBrowserResult(
             ok=result.ok,
             action="extract_visible_liepin_cards",
