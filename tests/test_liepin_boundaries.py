@@ -126,10 +126,16 @@ def test_liepin_card_text_tail_forbidden_fields_are_not_computed() -> None:
         ('candidate_key = f\'{"visible"}_{"text"}\'', "visible_text"),
         ("candidate_key = '{}_{}'.format('visible', 'text')", "visible_text"),
         ("candidate_key = '%s_%s' % ('visible', 'text')", "visible_text"),
+        ('candidate_key = "%(prefix)s_%(suffix)s" % {"prefix": "visible", "suffix": "text"}', "visible_text"),
         ("suffix = '_text'\ncandidate_key = 'visible' + suffix", "visible_text"),
         ('candidate_key = f\'{"normalized"}_{"card"}_{"text"}\'', "normalized_card_text"),
         ("candidate_key = '{}_{}_{}'.format('normalized', 'card', 'text')", "normalized_card_text"),
         ("candidate_key = '%s_%s_%s' % ('normalized', 'card', 'text')", "normalized_card_text"),
+        (
+            'candidate_key = "%(prefix)s_%(middle)s_%(suffix)s" % '
+            '{"prefix": "normalized", "middle": "card", "suffix": "text"}',
+            "normalized_card_text",
+        ),
         ("suffix = '_card_text'\ncandidate_key = 'normalized' + suffix", "normalized_card_text"),
     ],
 )
@@ -844,11 +850,32 @@ def _static_string_sequence(node: ast.AST, constants: dict[str, str] | None = No
     return tuple(values)
 
 
-def _static_format_values(node: ast.AST, constants: dict[str, str] | None) -> str | tuple[str, ...] | None:
+def _static_format_values(
+    node: ast.AST,
+    constants: dict[str, str] | None,
+) -> str | tuple[str, ...] | dict[str, str] | None:
     values = _static_string_sequence(node, constants)
     if values is not None:
         return values
+    mapping = _static_string_mapping(node, constants)
+    if mapping is not None:
+        return mapping
     return _static_string_value(node, constants)
+
+
+def _static_string_mapping(node: ast.AST, constants: dict[str, str] | None) -> dict[str, str] | None:
+    if not isinstance(node, ast.Dict):
+        return None
+    values: dict[str, str] = {}
+    for key_node, value_node in zip(node.keys, node.values, strict=True):
+        if key_node is None:
+            return None
+        key = _static_string_value(key_node, constants)
+        value = _static_string_value(value_node, constants)
+        if key is None or value is None:
+            return None
+        values[key] = value
+    return values
 
 
 def _static_format_args(nodes: list[ast.expr], constants: dict[str, str] | None) -> tuple[str, ...] | None:
