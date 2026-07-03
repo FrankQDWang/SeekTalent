@@ -31,8 +31,24 @@ ALLOWED_RAW_KEYS = {
     "raw_payload_artifact_ref",
     "score_evidence_source",
 }
+ALLOWED_CARD_RAW_KEYS = ALLOWED_RAW_KEYS | {"safe_card_summary"}
 
 WHOLE_PAGE_TEXT_ALIASES = tuple(sorted(PROHIBITED_LIEPIN_WHOLE_PAGE_TEXT_KEYS))
+CARD_PAYLOAD_TEXT_TAIL_ALIASES = (
+    "visible_text",
+    "normalized_card_text",
+    "fullText",
+    "rawText",
+    "full_text",
+    "raw_text",
+    "pageText",
+    "normalizedCardText",
+    "visibleText",
+    "raw_html",
+    "inner_text",
+    "inner_html",
+    "page_text",
+)
 
 ALLOWED_DETAIL_RAW_KEYS = ALLOWED_RAW_KEYS | {
     "candidate_name",
@@ -93,6 +109,11 @@ def _worker_card() -> LiepinWorkerCandidateCard:
         retention_policy="provider_snapshot_30d",
         access_scope="local_run_only",
         redaction_state="raw_provider_payload",
+        safe_card_summary=LiepinSafeCardSummary(
+            current_or_recent_title="Python backend engineer",
+            skill_tags=("Python",),
+            masked_name=True,
+        ),
     )
 
 
@@ -148,7 +169,7 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
 def test_card_mapping_keeps_raw_payload_out_of_resume_candidate_raw() -> None:
     mapped = map_liepin_worker_card(_worker_card(), raw_payload_artifact_ref="worker://cards/candidate-1.json")
 
-    assert set(mapped.candidate.raw) == ALLOWED_RAW_KEYS
+    assert set(mapped.candidate.raw) == ALLOWED_CARD_RAW_KEYS
     assert not (set(mapped.candidate.raw) & FORBIDDEN_RAW_KEYS)
     assert "13800000000" not in str(mapped.candidate.raw)
     assert "one@example.com" not in str(mapped.candidate.raw)
@@ -267,11 +288,40 @@ def test_worker_card_preserves_pi_safe_hash_and_artifact_refs() -> None:
 
 
 def test_worker_card_rejects_unknown_safe_card_summary_fields() -> None:
-    payload = _worker_card().model_dump(mode="json")
+    payload = _worker_card_wire_payload()
     payload["safeCardSummary"] = {
         "current_or_recent_title": "Backend Engineer",
         "cookie": "session=secret",
     }
+
+    with pytest.raises(ValidationError):
+        LiepinWorkerCandidateCard.model_validate(payload)
+
+
+def test_worker_card_rejects_missing_safe_card_summary() -> None:
+    payload = _worker_card_wire_payload()
+    payload.pop("safeCardSummary", None)
+
+    with pytest.raises(ValidationError) as error:
+        LiepinWorkerCandidateCard.model_validate(payload)
+
+    assert ("safeCardSummary",) in (item["loc"] for item in error.value.errors())
+
+
+@pytest.mark.parametrize("alias", CARD_PAYLOAD_TEXT_TAIL_ALIASES)
+def test_worker_card_rejects_card_payload_text_tail_aliases(alias: str) -> None:
+    payload = _worker_card_wire_payload()
+    assert isinstance(payload["payload"], dict)
+    payload["payload"][alias] = "legacy card text must not cross the worker boundary"
+
+    with pytest.raises(ValidationError):
+        LiepinWorkerCandidateCard.model_validate(payload)
+
+
+def test_worker_card_rejects_nested_card_payload_text_tail_aliases() -> None:
+    payload = _worker_card_wire_payload()
+    assert isinstance(payload["payload"], dict)
+    payload["payload"]["nested"] = {"visibleText": "nested visible card text must be rejected"}
 
     with pytest.raises(ValidationError):
         LiepinWorkerCandidateCard.model_validate(payload)
@@ -338,7 +388,7 @@ def test_safe_card_summary_does_not_copy_raw_payload_contact_material() -> None:
 
 
 def test_card_mapping_derives_normalized_text_from_structured_card_summary() -> None:
-    sentinel = "SENTINEL legacy worker normalized card text"
+    sentinel = "LEGACY NORMALIZED TEXT"
     card = _worker_card().model_copy(
         update={
             "normalized_text": sentinel,

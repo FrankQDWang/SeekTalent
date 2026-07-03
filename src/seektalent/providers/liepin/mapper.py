@@ -11,7 +11,12 @@ from seektalent.providers.liepin.detail_payload_text import (
     structured_liepin_detail_text,
 )
 from seektalent.providers.liepin.models import LiepinScoreEvidenceSource
-from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
+from seektalent.providers.liepin.worker_contracts import (
+    LiepinSafeCardSummary,
+    LiepinWorkerCandidateCard,
+    LiepinWorkerCandidateDetail,
+    find_liepin_card_payload_text_tail_alias_paths,
+)
 from seektalent.storage.json import sha256_json
 
 
@@ -47,9 +52,8 @@ def _safe_raw(
         "raw_payload_artifact_ref": raw_payload_artifact_ref,
         "score_evidence_source": score_evidence_source,
     }
-    if isinstance(worker_candidate, LiepinWorkerCandidateCard) and worker_candidate.safe_card_summary is not None:
-        raw["safe_card_summary"] = worker_candidate.safe_card_summary.model_dump(mode="json")
     if isinstance(worker_candidate, LiepinWorkerCandidateCard):
+        raw["safe_card_summary"] = _required_card_summary(worker_candidate).model_dump(mode="json")
         _copy_safe_card_payload_metadata(raw, provider_payload)
     if isinstance(worker_candidate, LiepinWorkerCandidateDetail):
         _copy_safe_detail_payload_fields(raw, provider_payload)
@@ -63,6 +67,8 @@ def _map_candidate(
     score_evidence_source: LiepinScoreEvidenceSource,
     raw_payload_artifact_ref: str | None,
 ) -> LiepinMappedCandidate:
+    if isinstance(worker_candidate, LiepinWorkerCandidateCard):
+        _validate_card_payload_before_mapping(worker_candidate)
     provider_payload = _sanitize_liepin_provider_payload(worker_candidate.payload)
     snapshot_hash = sha256_json(provider_payload)
     raw = _safe_raw(
@@ -135,9 +141,21 @@ def _sanitize_liepin_provider_payload(payload: dict[str, object]) -> dict[str, o
 def _mapped_normalized_text(worker_candidate: LiepinWorkerCandidate, provider_payload: dict[str, object]) -> str:
     if isinstance(worker_candidate, LiepinWorkerCandidateDetail):
         return structured_liepin_detail_text(provider_payload)
-    if worker_candidate.safe_card_summary is not None:
-        return _structured_card_search_text(worker_candidate.safe_card_summary.model_dump(mode="json"))
-    return worker_candidate.normalized_text
+    return _structured_card_search_text(_required_card_summary(worker_candidate).model_dump(mode="json"))
+
+
+def _required_card_summary(worker_candidate: LiepinWorkerCandidateCard) -> LiepinSafeCardSummary:
+    summary = getattr(worker_candidate, "safe_card_summary", None)
+    if summary is None:
+        raise ValueError("Liepin worker card missing required safe_card_summary")
+    return summary
+
+
+def _validate_card_payload_before_mapping(worker_candidate: LiepinWorkerCandidateCard) -> None:
+    prohibited_paths = find_liepin_card_payload_text_tail_alias_paths(worker_candidate.payload)
+    if prohibited_paths:
+        paths = ", ".join(prohibited_paths)
+        raise ValueError(f"Liepin card payload includes prohibited legacy card text field(s): {paths}")
 
 
 def _structured_card_search_text(summary: Mapping[str, object]) -> str:

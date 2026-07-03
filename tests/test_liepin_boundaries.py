@@ -65,6 +65,7 @@ _ALLOWED_LIEPIN_RESUME_RAW_KEYS = {
     "raw_payload_artifact_ref",
     "score_evidence_source",
 }
+_ALLOWED_LIEPIN_CARD_RESUME_RAW_KEYS = _ALLOWED_LIEPIN_RESUME_RAW_KEYS | {"safe_card_summary"}
 _ALLOWED_LIEPIN_DETAIL_RESUME_RAW_KEYS = _ALLOWED_LIEPIN_RESUME_RAW_KEYS | {
     "currentTitle",
     "currentCompany",
@@ -83,6 +84,7 @@ _LIEPIN_CARD_TEXT_TAIL_FIELDS = {"visible_text", "normalized_card_text"}
 _LITERAL_CARD_TEXT_TAIL_CONSTANTS = {
     "src/seektalent/providers/liepin/liepin_site_parsing.py": {"FORBIDDEN_CARD_EVIDENCE_KEYS"},
     "src/seektalent/providers/liepin/liepin_site_payloads.py": {"FORBIDDEN_CARD_SUMMARY_KEYS"},
+    "src/seektalent/providers/liepin/worker_contracts.py": {"LIEPIN_CARD_PAYLOAD_TEXT_TAIL_KEYS"},
 }
 
 
@@ -539,7 +541,7 @@ def test_liepin_mapper_keeps_provider_payload_out_of_resume_candidate_raw():
 
     assert card_mapping.provider_snapshot.raw_payload == card.payload
     assert detail_mapping.provider_snapshot.raw_payload == detail.payload
-    assert set(card_mapping.candidate.raw) == _ALLOWED_LIEPIN_RESUME_RAW_KEYS
+    assert set(card_mapping.candidate.raw) == _ALLOWED_LIEPIN_CARD_RESUME_RAW_KEYS
     assert set(detail_mapping.candidate.raw) == _ALLOWED_LIEPIN_DETAIL_RESUME_RAW_KEYS
     for mapped in (card_mapping, detail_mapping):
         serialized_raw = str(mapped.candidate.raw)
@@ -671,6 +673,11 @@ def _worker_card() -> LiepinWorkerCandidateCard:
         retention_policy="provider_snapshot_30d",
         access_scope="local_run_only",
         redaction_state="raw_provider_payload",
+        safe_card_summary={
+            "current_or_recent_title": "Python backend engineer",
+            "skill_tags": ("Python",),
+            "masked_name": True,
+        },
     )
 
 

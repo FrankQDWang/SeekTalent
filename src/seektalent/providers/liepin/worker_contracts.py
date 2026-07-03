@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 from typing import Literal
 
@@ -23,6 +24,25 @@ DetailOpenStatus = Literal[
     "failed_after_possible_consumption",
     "unknown",
 ]
+
+LIEPIN_CARD_PAYLOAD_TEXT_TAIL_KEYS = frozenset(
+    {
+        "visible_text",
+        "normalized_card_text",
+        "fullText",
+        "rawText",
+        "full_text",
+        "raw_text",
+        "pageText",
+        "normalizedCardText",
+        "visibleText",
+        "raw_html",
+        "inner_text",
+        "inner_html",
+        "page_text",
+    }
+)
+
 
 class LiepinWorkerModeError(RuntimeError):
     def __init__(
@@ -168,8 +188,40 @@ class LiepinSafeCardSummary(LiepinStructuredCardEvidence):
     """Compatibility name for the structured card evidence payload."""
 
 
+def find_liepin_card_payload_text_tail_alias_paths(payload: Mapping[str, object]) -> tuple[str, ...]:
+    paths: list[str] = []
+
+    def collect(value: object, path: tuple[str, ...]) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                key_text = str(key)
+                current_path = (*path, key_text)
+                if key_text in LIEPIN_CARD_PAYLOAD_TEXT_TAIL_KEYS:
+                    paths.append(_format_payload_path(current_path))
+                    continue
+                collect(item, current_path)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                collect(item, (*path, f"[{index}]"))
+
+    collect(payload, ())
+    return tuple(paths)
+
+
+def _format_payload_path(path: tuple[str, ...]) -> str:
+    rendered = ""
+    for part in path:
+        if part.startswith("["):
+            rendered += part
+        elif rendered:
+            rendered += f".{part}"
+        else:
+            rendered = part
+    return rendered
+
+
 class LiepinWorkerCandidateCard(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     payload: dict[str, Any]
     normalized_text: str
@@ -183,7 +235,15 @@ class LiepinWorkerCandidateCard(BaseModel):
     retention_policy: LiepinRetentionPolicy
     access_scope: LiepinAccessScope
     redaction_state: LiepinRedactionState
-    safe_card_summary: LiepinSafeCardSummary | None = Field(default=None, alias="safeCardSummary")
+    safe_card_summary: LiepinSafeCardSummary = Field(alias="safeCardSummary")
+
+    @model_validator(mode="after")
+    def reject_card_payload_text_tail_aliases(self) -> LiepinWorkerCandidateCard:
+        prohibited_paths = find_liepin_card_payload_text_tail_alias_paths(self.payload)
+        if prohibited_paths:
+            paths = ", ".join(prohibited_paths)
+            raise ValueError(f"Liepin card payload includes prohibited legacy card text field(s): {paths}")
+        return self
 
 
 class LiepinCardSearchResponse(BaseModel):
