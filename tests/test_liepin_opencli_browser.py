@@ -2337,15 +2337,7 @@ def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Pat
                 '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-search"}'
             ),
             ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search"): "{}",
-            ("opencli", "browser", "seektalent-liepin", "get", "url"): [
-                search_url,
-                detail70_url,
-                detail70_url,
-                search_url,
-                search_url,
-                detail71_url,
-                detail71_url,
-            ],
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [search_url] * 10,
             ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
                 json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
                 json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
@@ -2371,7 +2363,10 @@ def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Pat
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 search_state,
                 search_state,
+                detail70_state,
                 search_state,
+                search_state,
+                detail71_state,
             ],
             ("opencli", "browser", "seektalent-liepin", "click", "70"): '{"clicked":true}',
             ("opencli", "browser", "seektalent-liepin", "click", "71"): '{"clicked":true}',
@@ -2386,6 +2381,7 @@ def test_agent_driven_open_detail_restores_search_tab_for_next_ref(tmp_path: Pat
     assert runner.open_liepin_tab(search_url).ok is True
     assert runner.open_liepin_detail(source_run_id="run-1", ref="70", rank=1).ok is True
     assert runner.capture_liepin_detail_resume(source_run_id="run-1", rank=1).ok is True
+    runner._select_and_mark_owned_liepin_tab(page_id="page-search", url=search_url, source_run_id="run-1")
     commands.default_eval_output = _liepin_detail_payload_json(
         candidate_name="张**",
         summary_text=detail71_state,
@@ -2432,6 +2428,8 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
         "云栖数据 · 数据平台负责人 2020.01-至今\n"
         "[171]<div class=detail-resume-card-wrap><span>查看完整简历</span></div>"
     )
+    detail70_state = "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家\n负责数据仓库、数据治理和 Python 平台。"
+    detail71_state = "张** 36岁 工作11年 硕士 上海\n当前职位：数据平台专家\n负责数据治理、Python 和 Spark 平台。"
     commands = RefEvalCommands(
         eval_outputs_by_ref={"70": detail70_url, "171": detail71_url},
         default_eval_output=_liepin_detail_payload_json(),
@@ -2463,10 +2461,12 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
                 search_results_state,
                 search_results_state,
                 search_results_state,
+                detail70_state,
                 refreshed_search_results_state,
                 refreshed_search_results_state,
                 refreshed_search_results_state,
                 refreshed_search_results_state,
+                detail71_state,
             ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
             ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
@@ -2756,6 +2756,46 @@ def test_capture_liepin_detail_resume_preserves_detail_source_url(tmp_path: Path
     assert captured.ok is True
     collected = json.loads((tmp_path / "protected" / "pi-detail" / "run-1" / "collected-resumes.json").read_text())
     assert collected["resumes"][0]["detail_payload"]["sourceUrl"] == detail_url
+
+
+def test_capture_liepin_detail_resume_waits_until_detail_page_is_ready(tmp_path: Path) -> None:
+    class DetailReadyCommands(FakeCommands):
+        def __init__(self) -> None:
+            super().__init__(
+                outputs={
+                    ("opencli", "browser", "seektalent-liepin", "state"): [
+                        "URL: about:blank url: about:blank title: viewport: 1512x707 --- interactive: 0",
+                        detail_state,
+                    ],
+                    ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+                    ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
+                    ),
+                }
+            )
+            self.detail_ready = False
+
+        def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
+            call = tuple(argv)
+            if len(call) >= 4 and call[3] == "eval":
+                del timeout
+                self.calls.append(call)
+                self.envs.append(env)
+                if not self.detail_ready:
+                    return json.dumps({"ok": False, "safeReasonCode": "liepin_opencli_detail_not_opened"})
+                return _liepin_detail_payload_json(summary_text=detail_state)
+            output = super().run(argv, timeout=timeout, env=env)
+            if call == ("opencli", "browser", "seektalent-liepin", "state") and "当前职位" in output:
+                self.detail_ready = True
+            return output
+
+    commands = DetailReadyCommands()
+    captured = _runner(commands, lease_dir=tmp_path).capture_liepin_detail_resume(source_run_id="run-1", rank=1)
+
+    assert captured.ok is True
+    assert commands.calls.index(("opencli", "browser", "seektalent-liepin", "wait", "time", "2")) < next(
+        index for index, call in enumerate(commands.calls) if len(call) >= 4 and call[3] == "eval"
+    )
 
 
 def test_capture_liepin_detail_resume_rejects_blank_detail_probe(tmp_path: Path) -> None:

@@ -211,6 +211,25 @@ def test_normalize_requirement_draft_preserves_explicit_unlimited_constraints() 
     assert requirement_sheet.hard_constraints.gender_requirement.canonical_gender == "不限"
 
 
+def test_normalize_requirement_draft_drops_unlimited_locations() -> None:
+    requirement_sheet = normalize_requirement_draft(
+        RequirementExtractionDraft(
+            title_anchor_terms=["AI Agent"],
+            title_anchor_rationale="AI Agent is the stable searchable role anchor.",
+            jd_query_terms=["Multi-Agent"],
+            role_summary="负责 AI Agent 系统研发。",
+            must_have_capabilities=["AI Agent"],
+            locations=["不限", "城市不限", "工作地点不限"],
+            preferred_locations=["不限"],
+            scoring_rationale="优先看 AI Agent 经验。",
+        ),
+        job_title="AI Agent 工程师",
+    )
+
+    assert requirement_sheet.hard_constraints.locations == []
+    assert requirement_sheet.preferences.preferred_locations == []
+
+
 def test_build_scoring_policy_returns_frozen_copy() -> None:
     requirement_sheet = normalize_requirement_draft(
         RequirementExtractionDraft(

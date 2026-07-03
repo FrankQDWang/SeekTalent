@@ -996,6 +996,52 @@ def test_v2_blocked_liepin_source_result_reports_actionable_reason(tmp_path: Pat
     assert "猎聘检索完成" not in progress_events[-1].payload["summary"]
 
 
+def test_v2_blocked_liepin_source_result_reports_filter_failure(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 20,
+            "runtimeEventType": "runtime_round_source_result",
+            "status": "blocked",
+            "stage": "source_result",
+            "roundNo": 1,
+            "summary": "source_result",
+            "counts": {"roundReturned": 0, "roundIdentities": 0},
+            "safeReasonCode": "source_filter_unavailable",
+            "state": "running",
+        }
+    ]
+
+    view = service.get_conversation(conversation_id)
+    progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
+
+    assert progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：猎聘筛选条件未成功应用，请刷新猎聘页面后重试。"
+
+
+def test_v2_blocked_liepin_source_result_does_not_repeat_formatted_summary(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.progress_payloads["rtrun_1"] = [
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 20,
+            "runtimeEventType": "runtime_round_source_result",
+            "status": "blocked",
+            "stage": "source_result",
+            "roundNo": 1,
+            "sourceKind": "liepin",
+            "summary": "第 1 轮猎聘检索受阻：source_result",
+            "counts": {"roundReturned": 0, "roundIdentities": 0},
+            "state": "running",
+        }
+    ]
+
+    view = service.get_conversation(conversation_id)
+    progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
+
+    assert progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：source_result"
+
+
 def test_list_events_returns_incremental_visible_events_and_refreshes_runtime(tmp_path: Path) -> None:
     service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
     store = service.store

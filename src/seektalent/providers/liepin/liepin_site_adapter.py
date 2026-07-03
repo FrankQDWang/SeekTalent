@@ -545,6 +545,7 @@ class LiepinSiteAdapter:
             if rank < 1 or rank > 100:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
             safe_run_id = _safe_artifact_segment(source_run_id)
+            self._detail_state_text_until_resume_ready()
             detail_payload_text = self._run_fixed_readonly_eval_probe(
                 probe_name="liepin_detail_resume_payload",
                 ref="current",

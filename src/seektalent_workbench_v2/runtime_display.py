@@ -134,6 +134,8 @@ def _blocked_source_result_summary(payload: Mapping[str, object]) -> str | None:
         payload.get("safeReasonCode") or payload.get("summary"),
         max_length=500,
     )
+    if _is_formatted_liepin_blocked_summary(reason):
+        return reason
     return f"{round_prefix}猎聘检索受阻：{_runtime_failure_reason(reason)}"
 
 
@@ -149,7 +151,13 @@ def _runtime_failure_reason(reason: str | None) -> str:
         "source_browser_backend_unavailable",
     }:
         return "猎聘浏览器桥暂不可用，系统会先尝试恢复连接；如果仍失败，请稍后重试。"
+    if reason in {"liepin_opencli_filter_unapplied", "source_filter_unavailable", "source_filter_partial"}:
+        return "猎聘筛选条件未成功应用，请刷新猎聘页面后重试。"
     return reason or "猎聘检索受阻，请稍后重试。"
+
+
+def _is_formatted_liepin_blocked_summary(reason: str | None) -> bool:
+    return isinstance(reason, str) and "猎聘检索受阻：" in reason
 
 
 def safe_runtime_progress_details(value: object) -> dict[str, object]:

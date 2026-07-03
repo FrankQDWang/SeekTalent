@@ -18,6 +18,7 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchStatus,
 )
 from seektalent.sources.cts.filter_projection import project_constraints_to_cts
+from seektalent.sources.liepin.reason_codes import LIEPIN_PUBLIC_EVENT_REASON_MAP
 
 from .evidence import _record_source_provider_results_from_lane, _source_lane_result_from_retrieval_result
 
@@ -179,10 +180,21 @@ async def _run_liepin_source_round(
         status=_source_round_status(result.status),
         candidates=tuple(result.candidate_store_updates.values()),
         raw_candidate_count=int(result.raw_candidate_count or 0),
-        safe_reason_code=result.stop_reason_code or result.blocked_reason_code or filter_warning_reason,
+        safe_reason_code=_public_liepin_reason_code(
+            result.stop_reason_code or result.blocked_reason_code or filter_warning_reason
+        ),
         lane_result=result,
         executed_query_packages=result.executed_query_packages,
     )
+
+
+def _public_liepin_reason_code(reason_code: str | None) -> str | None:
+    if reason_code is None:
+        return None
+    text = str(reason_code).strip()
+    if not text:
+        return None
+    return LIEPIN_PUBLIC_EVENT_REASON_MAP.get(text, text)
 
 
 def _source_filter_warning_reason(intents: tuple[RuntimeSourceQueryIntent, ...]) -> str | None:

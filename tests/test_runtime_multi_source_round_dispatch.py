@@ -1234,6 +1234,60 @@ def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_sourc
     assert result.executed_query_packages == ()
 
 
+def test_liepin_adapter_exposes_public_filter_failure_reason(monkeypatch, tmp_path) -> None:
+    async def blocked_liepin_bundle(**kwargs) -> RuntimeSourceLaneResult:
+        return RuntimeSourceLaneResult(
+            runtime_run_id=kwargs["runtime_run_id"],
+            source_plan_id=kwargs["source_plan_id"],
+            source_lane_run_id=f"{kwargs['source_plan_id']}:blocked",
+            source="liepin",
+            lane_mode="card",
+            attempt=1,
+            status="blocked",
+            blocked_reason_code="liepin_opencli_filter_unapplied",
+            stop_reason_code="liepin_opencli_filter_unapplied",
+        )
+
+    monkeypatch.setattr("seektalent.source_adapters.run_liepin_logical_query_bundle", blocked_liepin_bundle)
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
+    tracer = RunTracer(tmp_path / "trace-liepin-filter")
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=(_dispatch("exploit", 7),),
+        selected_sources=("liepin",),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+    )
+
+    try:
+        result = asyncio.run(
+            _run_liepin_source_round(
+                runtime=runtime,
+                context=_source_round_context(
+                    source_plan=RuntimeSourceLanePlan(
+                        source_plan_id="plan-liepin",
+                        runtime_run_id="run-1",
+                        source="liepin",
+                        label="Liepin",
+                    ),
+                    tracer=tracer,
+                    source_context={"backend_mode": "opencli"},
+                ),
+                request=request,
+                source_id="liepin",
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.status == "blocked"
+    assert result.safe_reason_code == "source_filter_unavailable"
+    assert result.lane_result is not None
+    assert result.lane_result.blocked_reason_code == "liepin_opencli_filter_unapplied"
+
+
 def test_liepin_source_adapter_records_provider_snapshots_to_corpus(monkeypatch, tmp_path) -> None:
     raw_payload = {
         "providerCandidateKeyHash": "liepin-provider-key-hash",

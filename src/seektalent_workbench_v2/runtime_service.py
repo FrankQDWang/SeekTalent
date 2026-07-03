@@ -1456,6 +1456,8 @@ def _runtime_event_user_summary(event: object) -> str | None:
         counts = counts if isinstance(counts, dict) else {}
         if status == "blocked":
             reason = _payload_text(payload.get("safeReasonCode")) or summary
+            if _is_formatted_liepin_blocked_summary(reason):
+                return reason
             return f"{round_prefix}猎聘检索受阻：{_runtime_failure_reason(reason)}"
         returned = counts.get("roundReturned")
         identities = counts.get("roundIdentities")
@@ -1518,7 +1520,13 @@ def _runtime_failure_reason(reason: str) -> str:
         return "猎聘页面引用已失效，需要刷新检索页面后重试。"
     if reason in {"liepin_opencli_extension_disconnected", "source_browser_extension_disconnected"}:
         return "猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
+    if reason in {"liepin_opencli_filter_unapplied", "source_filter_unavailable", "source_filter_partial"}:
+        return "猎聘筛选条件未成功应用，请刷新猎聘页面后重试。"
     return reason or "运行失败，请查看详情。"
+
+
+def _is_formatted_liepin_blocked_summary(reason: str | None) -> bool:
+    return isinstance(reason, str) and "猎聘检索受阻：" in reason
 
 
 def _status_summary(status: str, stage: str) -> str:

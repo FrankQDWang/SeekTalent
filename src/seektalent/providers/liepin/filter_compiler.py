@@ -32,6 +32,17 @@ LIEPIN_RECRUITMENT_TYPE_BY_DEGREE = {
     "硕士": "统招硕士",
     "博士/博士后": "统招博士",
 }
+UNFILTERABLE_CITY_LABELS = frozenset(
+    {
+        "不限",
+        "城市不限",
+        "地点不限",
+        "工作地点不限",
+        "不限城市",
+        "不限地点",
+        "全国不限",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -353,18 +364,23 @@ def _liepin_recruitment_type_label(
 
 def _location_targets(intent: LiepinSourceQueryIntent) -> tuple[tuple[str, int, str | None, int], ...]:
     location = intent.location_intent
-    if location is None or not location.allowed_locations:
+    if location is None:
+        return (("balanced", 1, None, intent.provider_scan_limit),)
+    allowed_locations = _filterable_city_labels(location.allowed_locations)
+    if not allowed_locations:
         return (("balanced", 1, None, intent.provider_scan_limit),)
     if location.mode == "single":
-        return (("balanced", 1, location.allowed_locations[0], intent.provider_scan_limit),)
-    if location.mode == "priority_then_fallback" and location.priority_order:
+        return (("balanced", 1, allowed_locations[0], intent.provider_scan_limit),)
+    priority_order = _filterable_city_labels(location.priority_order)
+    balanced_order = _filterable_city_labels(location.balanced_order) or allowed_locations
+    if location.mode == "priority_then_fallback" and priority_order:
         targets: list[tuple[str, int, str | None, int]] = []
         batch_no = 1
-        for city in location.priority_order:
+        for city in priority_order:
             targets.append(("priority", batch_no, city, intent.provider_scan_limit))
             batch_no += 1
         for city, requested in allocate_balanced_city_targets(
-            ordered_cities=list(location.balanced_order),
+            ordered_cities=list(balanced_order),
             target_new=intent.provider_scan_limit,
         ):
             targets.append(("balanced", batch_no, city, requested))
@@ -375,12 +391,26 @@ def _location_targets(intent: LiepinSourceQueryIntent) -> tuple[tuple[str, int, 
         ("balanced", batch_no, city, requested)
         for batch_no, (city, requested) in enumerate(
             allocate_balanced_city_targets(
-                ordered_cities=list(location.balanced_order or location.allowed_locations),
+                ordered_cities=list(balanced_order),
                 target_new=intent.provider_scan_limit,
             ),
             start=1,
         )
     )
+
+
+def _filterable_city_labels(values: Iterable[str]) -> tuple[str, ...]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    unfilterable = {value.casefold() for value in UNFILTERABLE_CITY_LABELS}
+    for value in values:
+        label = str(value).strip()
+        key = label.casefold()
+        if not label or key in unfilterable or key in seen:
+            continue
+        seen.add(key)
+        labels.append(label)
+    return tuple(labels)
 
 
 def _parse_min_max(value: object) -> dict[str, int]:

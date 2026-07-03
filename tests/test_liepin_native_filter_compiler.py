@@ -155,6 +155,42 @@ def test_compile_liepin_native_filters_preserves_single_city_as_one_target() -> 
     assert plan.targets[0].requested_count == 10
 
 
+def test_compile_liepin_native_filters_treats_unlimited_location_as_no_city_filter() -> None:
+    intent = RuntimeSourceQueryIntent(
+        round_no=1,
+        source_kind="liepin",
+        query_role="exploit",
+        lane_type="exploit",
+        query_instance_id="query-1",
+        query_fingerprint="fp-1",
+        query_terms=("AI Agent",),
+        keyword_query="AI Agent",
+        requested_count=10,
+        provider_scan_limit=10,
+        source_plan_version="test",
+        filter_intents=(),
+        location_intent=RuntimeLocationExecutionIntent(
+            mode="single",
+            allowed_locations=("不限",),
+            preferred_locations=(),
+            priority_order=("不限",),
+            balanced_order=("不限",),
+            rotation_offset=0,
+            target_new=10,
+        ),
+        age_intent=None,
+    )
+
+    plan = compile_liepin_native_filters(intent, budget_policy=DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY)
+    payload = plan.targets[0].to_safe_payload()
+
+    assert len(plan.targets) == 1
+    assert plan.targets[0].city is None
+    assert plan.targets[0].city_section is None
+    assert "city" not in payload
+    assert "requiredFilterNames" not in payload
+
+
 def test_compile_liepin_native_filters_targets_expected_city_section() -> None:
     intent = RuntimeSourceQueryIntent(
         round_no=1,

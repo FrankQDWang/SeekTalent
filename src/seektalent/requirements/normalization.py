@@ -22,6 +22,17 @@ from seektalent.models import (
 from seektalent.requirements.query_compiler import compile_query_term_pool
 
 UNLIMITED = "不限"
+UNLIMITED_LOCATION_VALUES = frozenset(
+    {
+        UNLIMITED,
+        "城市不限",
+        "地点不限",
+        "工作地点不限",
+        "不限城市",
+        "不限地点",
+        "全国不限",
+    }
+)
 DEGREE_PATTERNS = (
     ("博士及以上", ("博士及以上", "博士以上", "博士研究生及以上")),
     ("硕士及以上", ("硕士及以上", "研究生及以上", "硕士以上", "研究生以上", "硕士研究生及以上")),
@@ -102,7 +113,7 @@ def normalize_requirement_draft(draft: RequirementExtractionDraft, *, job_title:
     ]
     if not jd_query_terms:
         raise ValueError("jd_query_terms must contain at least one non-anchor term after normalization")
-    allowed_locations = normalize_locations(draft.locations)
+    allowed_locations = _normalize_allowed_locations(draft.locations)
     preferred_locations = _normalize_preferred_locations(
         allowed_locations=allowed_locations,
         preferred_locations=draft.preferred_locations,
@@ -292,8 +303,16 @@ def _normalize_preferred_locations(
     if len(allowed_locations) <= 1:
         return []
     allowed_keys = {value.casefold() for value in allowed_locations}
-    cleaned = normalize_locations(preferred_locations)
+    cleaned = _normalize_allowed_locations(preferred_locations)
     return [value for value in cleaned if value.casefold() in allowed_keys]
+
+
+def _normalize_allowed_locations(locations: list[str]) -> list[str]:
+    return [
+        location
+        for location in normalize_locations(locations)
+        if location.casefold() not in {value.casefold() for value in UNLIMITED_LOCATION_VALUES}
+    ]
 
 
 def _normalize_numeric_text(value: str) -> str:
