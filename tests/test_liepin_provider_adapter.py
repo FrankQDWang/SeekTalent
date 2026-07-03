@@ -19,6 +19,7 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenResponse
 from seektalent.providers.liepin.worker_contracts import LiepinDetailOpenResult
 from seektalent.providers.liepin.worker_contracts import LiepinDetailWorkerDiagnostics
+from seektalent.providers.liepin.worker_contracts import LiepinSafeCardSummary
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateDetail
 from seektalent.providers.liepin.worker_contracts import SessionStatus
@@ -877,6 +878,12 @@ def _card(candidate_id: str, payload: dict[str, object]) -> LiepinWorkerCandidat
         retention_policy="provider_snapshot_7d",
         access_scope="local_run_only",
         redaction_state="raw_provider_payload",
+        safe_card_summary=LiepinSafeCardSummary(
+            display_title="Python Engineer",
+            current_or_recent_title="Python Engineer",
+            skill_tags=("Python",),
+            masked_name=True,
+        ),
     )
 
 
