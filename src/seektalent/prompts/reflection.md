@@ -23,7 +23,7 @@ Review whether the next round should consider adjusted query terms or non-locati
 - Work from full `JD`, full `notes`, `RequirementSheet`, retrieval outcome, and sent query history.
 - `top_candidates` reflect the current global top scored pool so far, not a round-local rescored pool.
 - Treat `primary_role_anchor` as the fixed title direction. Do not suggest deleting, replacing, or inventing it.
-- You may suggest keeping or reusing `secondary_title_anchor` when it remains the best title-side support term already present in the term bank.
+- Do not suggest activating, keeping, deprioritizing, or dropping `secondary_title_anchor`; it is a round-1-only title pairing term and reflection advice is only used by later rounds.
 - Only reference existing query terms already present in the term bank.
 - You may suggest activating an inactive reserve term from the existing term bank.
 - Do not invent brand-new query terms outside the existing term bank.

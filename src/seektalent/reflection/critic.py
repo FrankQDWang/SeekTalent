@@ -9,11 +9,14 @@ from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import (
     FilterField,
+    QueryTermCandidate,
     ReflectionAdvice,
     ReflectionAdviceDraft,
     ReflectionContext,
     ReflectionFilterAdvice,
     ReflectionKeywordAdvice,
+    is_title_anchor_role,
+    unique_strings,
 )
 from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS, PROTECTED_ATTRIBUTE_FILTER_ADVICE_TEXT
 from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
@@ -77,7 +80,7 @@ def _untried_admitted_terms(context: ReflectionContext) -> list[str]:
         term_pool,
         key=lambda item: (item.priority, item.first_added_round, item.family),
     ):
-        if item.queryability != "admitted" or item.retrieval_role == "role_anchor":
+        if item.queryability != "admitted" or is_title_anchor_role(item.retrieval_role):
             continue
         if item.family in tried_families or item.family in seen_families:
             continue
@@ -86,25 +89,26 @@ def _untried_admitted_terms(context: ReflectionContext) -> list[str]:
     return terms
 
 
-def _admitted_term_index(context: ReflectionContext) -> dict[str, str]:
+def _admitted_term_index(context: ReflectionContext) -> dict[str, QueryTermCandidate]:
     term_pool = context.query_term_pool or context.requirement_sheet.initial_query_term_pool
     return {
-        _term_key(item.term): item.term
+        _term_key(item.term): item
         for item in term_pool
         if item.queryability == "admitted"
     }
 
 
-def _filter_to_admitted_terms(terms: Iterable[str], admitted_terms: dict[str, str]) -> list[str]:
+def _filter_to_reflection_allowed_terms(
+    terms: list[str],
+    admitted_terms: dict[str, QueryTermCandidate],
+) -> list[str]:
     output: list[str] = []
-    seen: set[str] = set()
     for term in terms:
-        key = _term_key(term)
-        if not key or key not in admitted_terms or key in seen:
+        candidate = admitted_terms.get(_term_key(term))
+        if candidate is None or candidate.retrieval_role == "secondary_title_anchor":
             continue
-        output.append(admitted_terms[key])
-        seen.add(key)
-    return output
+        output.append(candidate.term)
+    return unique_strings(output)
 
 
 def _drop_disabled_filter_fields(fields: Iterable[FilterField]) -> list[FilterField]:
@@ -266,13 +270,16 @@ def repair_reflection_stop_fields(draft: ReflectionAdviceDraft) -> ReflectionAdv
 def materialize_reflection_advice(*, context: ReflectionContext, draft: ReflectionAdviceDraft) -> ReflectionAdvice:
     admitted_terms = _admitted_term_index(context)
     keyword_advice = ReflectionKeywordAdvice(
-        suggested_activate_terms=_filter_to_admitted_terms(draft.keyword_advice.suggested_activate_terms, admitted_terms),
-        suggested_keep_terms=_filter_to_admitted_terms(draft.keyword_advice.suggested_keep_terms, admitted_terms),
-        suggested_deprioritize_terms=_filter_to_admitted_terms(
+        suggested_activate_terms=_filter_to_reflection_allowed_terms(
+            draft.keyword_advice.suggested_activate_terms,
+            admitted_terms,
+        ),
+        suggested_keep_terms=_filter_to_reflection_allowed_terms(draft.keyword_advice.suggested_keep_terms, admitted_terms),
+        suggested_deprioritize_terms=_filter_to_reflection_allowed_terms(
             draft.keyword_advice.suggested_deprioritize_terms,
             admitted_terms,
         ),
-        suggested_drop_terms=_filter_to_admitted_terms(draft.keyword_advice.suggested_drop_terms, admitted_terms),
+        suggested_drop_terms=_filter_to_reflection_allowed_terms(draft.keyword_advice.suggested_drop_terms, admitted_terms),
     )
     keyword_summary = _keyword_summary(keyword_advice)
     untried_terms = _untried_admitted_terms(context)

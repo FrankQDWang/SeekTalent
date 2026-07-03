@@ -377,6 +377,66 @@ def test_materialized_reflection_drops_non_admitted_keyword_advice() -> None:
     assert "任务拆解" not in advice.reflection_summary
 
 
+def test_materialized_reflection_drops_secondary_title_anchor_keyword_advice() -> None:
+    context = _context(
+        round_no=2,
+        unique_new_count=0,
+        query_term_pool=[
+            QueryTermCandidate(
+                term="AI",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Job title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                family="role.ai",
+            ),
+            QueryTermCandidate(
+                term="主观投资",
+                source="job_title",
+                category="domain",
+                priority=2,
+                evidence="Job title",
+                first_added_round=1,
+                retrieval_role="secondary_title_anchor",
+                family="title.主观投资",
+            ),
+            QueryTermCandidate(
+                term="模型部署",
+                source="jd",
+                category="domain",
+                priority=3,
+                evidence="JD body",
+                first_added_round=0,
+                retrieval_role="domain_context",
+                family="domain.模型部署",
+            ),
+        ],
+    )
+
+    advice = materialize_reflection_advice(
+        context=cast(Any, context),
+        draft=ReflectionAdviceDraft(
+            keyword_advice=ReflectionKeywordAdviceDraft(
+                suggested_activate_terms=["主观投资", "模型部署"],
+                suggested_keep_terms=["AI", "主观投资"],
+                suggested_deprioritize_terms=["主观投资"],
+                suggested_drop_terms=["主观投资"],
+            ),
+            filter_advice=ReflectionFilterAdviceDraft(),
+            suggest_stop=False,
+        ),
+    )
+
+    assert advice.keyword_advice.suggested_activate_terms == ["模型部署"]
+    assert advice.keyword_advice.suggested_keep_terms == ["AI"]
+    assert advice.keyword_advice.suggested_deprioritize_terms == []
+    assert advice.keyword_advice.suggested_drop_terms == []
+    assert "主观投资" not in advice.reflection_summary
+    assert "模型部署" in advice.reflection_summary
+
+
 def test_materialized_reflection_forces_continue_when_untried_admitted_terms_remain() -> None:
     context = _context(
         round_no=3,
@@ -417,6 +477,87 @@ def test_materialized_reflection_forces_continue_when_untried_admitted_terms_rem
     assert advice.suggested_stop_reason is None
     assert "Paimon" in advice.reflection_summary
     assert "继续搜索：仍有未尝试的准入备用词" in advice.reflection_summary
+
+
+def test_materialized_reflection_ignores_untried_secondary_title_anchor_for_stop_suppression() -> None:
+    context = _context(
+        round_no=3,
+        unique_new_count=7,
+        query_term_pool=[
+            QueryTermCandidate(
+                term="AI",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Job title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                family="role.ai",
+            ),
+            QueryTermCandidate(
+                term="主观投资",
+                source="job_title",
+                category="domain",
+                priority=2,
+                evidence="Job title",
+                first_added_round=1,
+                retrieval_role="secondary_title_anchor",
+                family="title.主观投资",
+            ),
+        ],
+        sent_query_terms=[["AI"]],
+        top_candidates=[_scored_candidate() for _ in range(6)],
+    )
+
+    advice = materialize_reflection_advice(
+        context=cast(Any, context),
+        draft=ReflectionAdviceDraft(
+            keyword_advice=ReflectionKeywordAdviceDraft(),
+            filter_advice=ReflectionFilterAdviceDraft(),
+            suggest_stop=True,
+            suggested_stop_reason="Search is saturated.",
+        ),
+    )
+
+    assert advice.suggest_stop is True
+    assert advice.suggested_stop_reason == "reflection_stop"
+    assert "主观投资" not in advice.reflection_summary
+    assert "继续搜索：仍有未尝试的准入备用词" not in advice.reflection_summary
+
+
+def test_materialized_reflection_ignores_untried_primary_title_anchor_for_stop_suppression() -> None:
+    context = _context(
+        round_no=3,
+        unique_new_count=7,
+        query_term_pool=[
+            QueryTermCandidate(
+                term="AI",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Job title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                family="role.ai",
+            )
+        ],
+        top_candidates=[_scored_candidate() for _ in range(6)],
+    )
+
+    advice = materialize_reflection_advice(
+        context=cast(Any, context),
+        draft=ReflectionAdviceDraft(
+            keyword_advice=ReflectionKeywordAdviceDraft(),
+            filter_advice=ReflectionFilterAdviceDraft(),
+            suggest_stop=True,
+            suggested_stop_reason="Search is saturated.",
+        ),
+    )
+
+    assert advice.suggest_stop is True
+    assert advice.suggested_stop_reason == "reflection_stop"
+    assert "未尝试的准入备用词：AI" not in advice.reflection_summary
+    assert "继续搜索：仍有未尝试的准入备用词" not in advice.reflection_summary
 
 
 def test_materialized_reflection_uses_runtime_term_pool_for_stop_suppression() -> None:

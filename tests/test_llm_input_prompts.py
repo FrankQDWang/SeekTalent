@@ -445,7 +445,7 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     assert "skill.vector_search" in prompt
     assert "Vector Search" in prompt
     assert "UNTRIED ADMITTED TERMS" in prompt
-    assert "backend engineer, Vector Search" in prompt
+    assert "Vector Search\nEND_SEEKTALENT_UNTRUSTED_UNTRIED_ADMITTED_TERMS" in prompt
     assert "| Graph Search | skill.graph_search | framework_tool | admitted | True | 3 | reflection | yes |" in prompt
     assert "active" in prompt
     assert "TOP CANDIDATES" in prompt
@@ -466,7 +466,10 @@ def test_reflection_prompt_excludes_rationale_schema_field() -> None:
     prompt = Path("src/seektalent/prompts/reflection.md").read_text(encoding="utf-8")
 
     assert "Treat `primary_role_anchor` as the fixed title direction." in prompt
-    assert "You may suggest keeping or reusing `secondary_title_anchor`" in prompt
+    assert (
+        "Do not suggest activating, keeping, deprioritizing, or dropping `secondary_title_anchor`"
+        in prompt
+    )
     assert "reflection_rationale" not in prompt
     assert "Do not include free-text rationale" in prompt
 
