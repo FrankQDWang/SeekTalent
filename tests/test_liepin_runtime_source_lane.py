@@ -57,7 +57,13 @@ class FakeWorker:
                     snapshot_sha256=sha256_json(raw_payload),
                     dedup_key="dedup-secret-id",
                     search_text="FastAPI retrieval ranking systems.",
-                    raw={},
+                    raw={
+                        "safe_card_summary": {
+                            "current_or_recent_title": "Backend Engineer",
+                            "current_or_recent_company": "Retrieval Ranking Systems",
+                            "skill_tags": ["FastAPI", "ranking"],
+                        }
+                    },
                 )
             ],
             provider_snapshots=[
@@ -1195,14 +1201,46 @@ def test_liepin_card_policy_keeps_provider_rank_primary_after_hard_filters_and_b
                 }
             )
             rows = [
-                ("rank-1", "provider-rank-1", "FastAPI ranking distributed systems."),
-                ("rank-2", "provider-rank-2", "FastAPI ranking Python services."),
-                ("rank-3-obvious-mismatch", "provider-rank-3", "retail sales store manager."),
-                ("rank-4-over-budget", "provider-rank-4", "FastAPI ranking platform reliability."),
+                (
+                    "rank-1",
+                    "provider-rank-1",
+                    "FastAPI ranking distributed systems.",
+                    {
+                        "current_or_recent_title": "Backend Engineer",
+                        "current_or_recent_company": "Distributed Systems",
+                        "skill_tags": ["FastAPI", "ranking"],
+                    },
+                ),
+                (
+                    "rank-2",
+                    "provider-rank-2",
+                    "FastAPI ranking Python services.",
+                    {
+                        "current_or_recent_title": "Python Engineer",
+                        "current_or_recent_company": "Python Services",
+                        "skill_tags": ["FastAPI", "ranking"],
+                    },
+                ),
+                (
+                    "rank-3-obvious-mismatch",
+                    "provider-rank-3",
+                    "retail sales store manager.",
+                    {"current_or_recent_title": "Store Manager"},
+                ),
+                (
+                    "rank-4-over-budget",
+                    "provider-rank-4",
+                    "FastAPI ranking platform reliability.",
+                    {
+                        "current_or_recent_title": "Backend Engineer",
+                        "current_or_recent_company": "Platform Reliability",
+                        "skill_tags": ["FastAPI", "ranking"],
+                    },
+                ),
             ]
             candidates = []
             snapshots = []
-            for resume_id, provider_id, text in rows:
+            for resume_id, provider_id, text, safe_card_summary in rows:
                 raw_payload = {"candidateId": provider_id, "text": text}
                 candidates.append(
                     ResumeCandidate(
@@ -1211,7 +1249,7 @@ def test_liepin_card_policy_keeps_provider_rank_primary_after_hard_filters_and_b
                         snapshot_sha256=sha256_json(raw_payload),
                         dedup_key=resume_id,
                         search_text=text,
-                        raw={},
+                        raw={"safe_card_summary": safe_card_summary},
                     )
                 )
                 snapshots.append(
