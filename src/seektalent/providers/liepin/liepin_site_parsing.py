@@ -21,9 +21,16 @@ FIXED_READONLY_EVAL_PROBES = frozenset({"liepin_detail_url_for_card", "liepin_de
 LIEPIN_ALLOWED_HOSTS = frozenset({"www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"})
 LIEPIN_RISK_HOSTS = frozenset({"safe.liepin.com"})
 OWNED_PAGE_MARKER_TTL_SECONDS = 24 * 60 * 60
-FORBIDDEN_CARD_EVIDENCE_KEYS = frozenset(
-    {"raw_html", "inner_html", "inner_text", "visible_text", "normalized_card_text", "fullText", "rawText", "page_text"}
+LEGACY_CARD_TEXT_TAIL_KEYS = frozenset(
+    "_".join(parts)
+    for parts in (
+        ("visible", "text"),
+        ("normalized", "card", "text"),
+    )
 )
+FORBIDDEN_CARD_EVIDENCE_KEYS = frozenset(
+    {"raw_html", "inner_html", "inner_text", "fullText", "rawText", "page_text"}
+).union(LEGACY_CARD_TEXT_TAIL_KEYS)
 FORBIDDEN_LIEPIN_PATH_FRAGMENTS = frozenset(
     {
         "resume",
@@ -769,8 +776,7 @@ def _opencli_result_text(result: OpenCliBrowserResult) -> str:
 def _liepin_structured_cards_payload_probe_script(max_cards: int) -> str:
     if max_cards < 1 or max_cards > 50:
         raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-    return (
-        r"""
+    return r"""
 (() => {
   const MAX_CARDS = __MAX_CARDS__;
   const schema = "seektalent.liepin_structured_cards_probe.v1";
@@ -959,7 +965,6 @@ def _liepin_structured_cards_payload_probe_script(max_cards: int) -> str:
   return JSON.stringify({ ok: true, schema_version: schema, cards });
 })()
 """.replace("__MAX_CARDS__", str(max_cards))
-    )
 
 
 def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:

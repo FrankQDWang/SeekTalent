@@ -51,7 +51,8 @@ class FakeLiepinSearchWorkflowSite:
     def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
         del source_run_id, max_cards
         self.calls.append("extract_structured_liepin_cards")
-        index = min(len([call for call in self.calls if call == "extract_structured_liepin_cards"]) - 1, 0)
+        capture_index = len([call for call in self.calls if call == "extract_structured_liepin_cards"]) - 1
+        index = min(capture_index, len(self.structured_cards) - 1)
         return OpenCliBrowserResult(
             ok=True,
             action="extract_structured_liepin_cards",

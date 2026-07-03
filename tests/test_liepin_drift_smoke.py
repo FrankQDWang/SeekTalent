@@ -40,7 +40,17 @@ class FakeSite:
             ok=True,
             action="extract_visible_liepin_cards",
             counts={"cards": 1},
-            observation={"cards": [{"provider_rank": 1, "ref": "70", "visible_text": "Python engineer"}]},
+            observation={
+                "cards": [
+                    {
+                        "provider_rank": 1,
+                        "ref": "70",
+                        "current_or_recent_title": "Python engineer",
+                        "skill_tags": ["Python"],
+                        "experience_preview": [{"title": "Python engineer"}],
+                    }
+                ]
+            },
         )
 
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:

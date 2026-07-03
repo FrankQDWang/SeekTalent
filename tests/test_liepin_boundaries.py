@@ -47,6 +47,7 @@ OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
     "src/seektalent/providers/liepin/liepin_site_parsing.py",
     "src/seektalent/providers/liepin/liepin_site_payloads.py",
+    "src/seektalent/providers/liepin/liepin_search_workflow.py",
     "src/seektalent/providers/liepin/liepin_drift_smoke.py",
 }
 _ALLOWED_LIEPIN_RESUME_RAW_KEYS = {
@@ -72,6 +73,30 @@ _ALLOWED_LIEPIN_DETAIL_RESUME_RAW_KEYS = _ALLOWED_LIEPIN_RESUME_RAW_KEYS | {
     "educationList",
     "skills",
 }
+
+
+def test_liepin_card_evidence_does_not_emit_text_tail_fields() -> None:
+    forbidden = {"visible_text", "normalized_card_text"}
+    scan_paths = [
+        ROOT / "src/seektalent/providers/liepin",
+        ROOT / "src/seektalent/sources/liepin",
+        ROOT / "src/seektalent/resume_normalizers/liepin.py",
+        ROOT / "src/seektalent_runtime_control",
+    ]
+    hits: list[str] = []
+    paths: list[Path] = []
+    for scan_path in scan_paths:
+        if scan_path.is_file():
+            paths.append(scan_path)
+        else:
+            paths.extend(scan_path.rglob("*.py"))
+    for path in paths:
+        rel = path.relative_to(ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        for token in forbidden:
+            if token in text:
+                hits.append(f"{rel}:{token}")
+    assert hits == []
 
 
 def test_production_python_does_not_import_opencli():
@@ -195,9 +220,7 @@ def test_removed_pi_agent_provider_package_is_absent():
         SRC / "seektalent" / "providers" / "pi_agent" / "boundary_patterns.py",
         SRC / "seektalent" / "providers" / "pi_agent" / "boundary_registry.json",
     )
-    workbench_probe = (ROOT / "tests" / "test_workbench_liepin_browser_session_probe.py").read_text(
-        encoding="utf-8"
-    )
+    workbench_probe = (ROOT / "tests" / "test_workbench_liepin_browser_session_probe.py").read_text(encoding="utf-8")
 
     assert [path.relative_to(ROOT).as_posix() for path in removed_paths if path.exists()] == []
     assert "src/seektalent/providers/pi_agent/" not in workbench_probe
@@ -235,7 +258,8 @@ def test_ui_api_translates_store_and_worker_dtos_through_external_models_only(tm
         liepin_session_store_key_id="unit-key-id",
         liepin_stream_token_secret="unit-stream-secret",
         workspace_root=str(tmp_path),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
     )
     app = create_app(settings=settings)
     client = TestClient(app)
@@ -292,7 +316,8 @@ def test_liepin_api_is_fastapi_uvicorn_and_not_legacy_stdlib_routes(tmp_path):
         liepin_session_store_key_id="unit-key-id",
         liepin_stream_token_secret="unit-stream-secret",
         workspace_root=str(tmp_path),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
     )
     app = create_app(settings=settings)
 
@@ -338,7 +363,8 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
         liepin_session_store_key_id="unit-key-id",
         liepin_stream_token_secret="unit-stream-secret",
         workspace_root=str(tmp_path),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
     )
     client = TestClient(create_app(settings=settings))
     router_source = inspect.getsource(create_liepin_router)

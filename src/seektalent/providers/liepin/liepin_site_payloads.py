@@ -11,19 +11,6 @@ from seektalent.providers.liepin.liepin_site_parsing import _safe_artifact_segme
 JsonObject = dict[str, object]
 ArtifactWriter = Callable[[str, str, object], str]
 AgentEventReader = Callable[[str], list[dict[str, object]]]
-FORBIDDEN_CARD_SUMMARY_KEYS = {
-    "visible_text",
-    "normalized_card_text",
-    "normalizedCardText",
-    "raw_html",
-    "inner_html",
-    "inner_text",
-    "fullText",
-    "full_text",
-    "rawText",
-    "page_text",
-    "pageText",
-}
 _CARD_SUMMARY_SCALAR_FIELDS = (
     "display_title",
     "current_or_recent_company",
@@ -170,6 +157,7 @@ def blocked_cards_envelope(
         "cards": [],
     }
 
+
 def cards_envelope(
     *,
     source_run_id: str,
@@ -248,6 +236,7 @@ def cards_envelope(
         "cards": envelope_cards,
     }
 
+
 def resumes_envelope(
     *,
     source_run_id: str,
@@ -306,6 +295,7 @@ def resumes_envelope(
         "protected_snapshot_refs": protected_snapshot_refs,
         "resumes": resumes,
     }
+
 
 def blocked_resumes_envelope(
     *,
