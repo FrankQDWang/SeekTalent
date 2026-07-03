@@ -229,62 +229,18 @@ git commit -m "fix: project reflection advice to legal query terms"
 - Test: `tests/test_controller_contract.py`
 - Test: `tests/test_runtime_state_flow.py`
 
-- [ ] **Step 1: Write the pure projection tests**
+- [ ] **Step 1: Write the narrow projection tests**
 
 In `tests/test_query_plan.py`, add this import:
 
 ```python
-from seektalent.retrieval.query_plan import project_round_legal_query_terms
+from seektalent.retrieval.query_plan import try_project_secondary_title_anchor_after_round_one
 ```
 
 Add these tests near `test_query_plan_rejects_secondary_title_anchor_after_round_one`:
 
 ```python
-def test_project_query_terms_keeps_round_one_secondary_title_anchor() -> None:
-    pool = [
-        QueryTermCandidate(
-            term="Backend",
-            source="job_title",
-            category="role_anchor",
-            priority=1,
-            evidence="compiled title",
-            first_added_round=0,
-            retrieval_role="primary_role_anchor",
-            queryability="admitted",
-            family="role.backend",
-        ),
-        QueryTermCandidate(
-            term="Platform",
-            source="job_title",
-            category="role_anchor",
-            priority=2,
-            evidence="compiled title",
-            first_added_round=0,
-            retrieval_role="secondary_title_anchor",
-            queryability="admitted",
-            family="role.platform",
-        ),
-        QueryTermCandidate(
-            term="Python",
-            source="jd",
-            category="domain",
-            priority=3,
-            evidence="jd",
-            first_added_round=0,
-            retrieval_role="core_skill",
-            queryability="admitted",
-            family="skill.python",
-        ),
-    ]
-
-    assert project_round_legal_query_terms(
-        ["Backend", "Platform"],
-        round_no=1,
-        query_term_pool=pool,
-    ) == ["Backend", "Platform"]
-
-
-def test_project_query_terms_replaces_secondary_title_anchor_after_round_one() -> None:
+def test_try_project_secondary_title_anchor_after_round_one_replaces_only_secondary_anchor() -> None:
     pool = [
         QueryTermCandidate(
             term="AI",
@@ -318,37 +274,61 @@ def test_project_query_terms_replaces_secondary_title_anchor_after_round_one() -
         ),
     ]
 
-    assert project_round_legal_query_terms(
+    assert try_project_secondary_title_anchor_after_round_one(
         ["AI", "主观投资"],
         round_no=3,
         query_term_pool=pool,
     ) == ["AI", "模型部署"]
+
+
+def test_try_project_secondary_title_anchor_after_round_one_returns_none_for_round_one() -> None:
+    assert try_project_secondary_title_anchor_after_round_one(
+        ["Backend", "Platform"],
+        round_no=1,
+        query_term_pool=_projection_pool(),
+    ) is None
+
+
+def test_try_project_secondary_title_anchor_after_round_one_returns_none_without_secondary_anchor() -> None:
+    assert try_project_secondary_title_anchor_after_round_one(
+        ["AI", "模型部署"],
+        round_no=3,
+        query_term_pool=_projection_pool(),
+    ) is None
 ```
+
+Add controller-level negative tests so projection cannot swallow unrelated validation failures:
+
+- `test_controller_projection_does_not_swallow_duplicate_terms`: proposed terms include duplicate terms and `secondary_title_anchor`; final validation must still fail and no projection result is returned.
+- `test_controller_projection_does_not_swallow_too_many_terms`: proposed terms include four terms and `secondary_title_anchor`; final validation must still fail and no truncation is allowed.
+- `test_controller_projection_does_not_swallow_missing_pool_term`: proposed terms include a pool-external term and `secondary_title_anchor`; final validation must still fail.
+
+Define a local `_projection_pool()` test helper in `tests/test_query_plan.py` if the file does not already have one. It must include at least one `primary_role_anchor`, one `secondary_title_anchor`, and one admitted active non-title support candidate.
 
 - [ ] **Step 2: Run the failing projection tests**
 
 Run:
 
 ```bash
-uv run pytest tests/test_query_plan.py::test_project_query_terms_keeps_round_one_secondary_title_anchor tests/test_query_plan.py::test_project_query_terms_replaces_secondary_title_anchor_after_round_one -q
+uv run pytest tests/test_query_plan.py::test_try_project_secondary_title_anchor_after_round_one_replaces_only_secondary_anchor tests/test_query_plan.py::test_try_project_secondary_title_anchor_after_round_one_returns_none_for_round_one tests/test_query_plan.py::test_try_project_secondary_title_anchor_after_round_one_returns_none_without_secondary_anchor -q
 ```
 
-Expected result before implementation: import failure for `project_round_legal_query_terms`.
+Expected result before implementation: import failure for `try_project_secondary_title_anchor_after_round_one`.
 
 - [ ] **Step 3: Implement the pure projection helper**
 
 In `src/seektalent/retrieval/query_plan.py`, add this function after `canonicalize_controller_query_terms()`:
 
 ```python
-def project_round_legal_query_terms(
+def try_project_secondary_title_anchor_after_round_one(
     proposed_terms: list[str],
     *,
     round_no: int,
     query_term_pool: list[QueryTermCandidate],
-) -> list[str]:
-    clean_terms = unique_strings([normalize_term(term) for term in proposed_terms if normalize_term(term)])
+) -> list[str] | None:
+    clean_terms = [normalize_term(term) for term in proposed_terms if normalize_term(term)]
     if round_no <= 1:
-        return clean_terms
+        return None
 
     term_index = _query_term_index(query_term_pool)
     output: list[str] = []
@@ -365,7 +345,7 @@ def project_round_legal_query_terms(
             used_families.add(candidate.family)
 
     if not removed_secondary_title:
-        return output
+        return None
 
     for candidate in sorted(query_term_pool, key=_non_anchor_sort_key):
         if candidate.queryability != "admitted":
@@ -381,13 +361,15 @@ def project_round_legal_query_terms(
         if len(output) >= 2:
             break
 
-    return output[:3]
+    return output
 ```
+
+Do not dedupe, truncate, or otherwise repair unrelated query-term problems in this helper. It only removes the secondary-title anchor and tries to fill the support slot.
 
 If `src/seektalent/retrieval/__init__.py` exports query-plan helpers, add:
 
 ```python
-from seektalent.retrieval.query_plan import project_round_legal_query_terms
+from seektalent.retrieval.query_plan import try_project_secondary_title_anchor_after_round_one
 ```
 
 and include it in `__all__` if the module has an `__all__` list.
@@ -397,12 +379,15 @@ and include it in `__all__` if the module has an `__all__` list.
 In `src/seektalent/controller/react_controller.py`, import:
 
 ```python
-from seektalent.retrieval import project_round_legal_query_terms
+from seektalent.retrieval import try_project_secondary_title_anchor_after_round_one
 ```
 
 Add this helper near `validate_controller_decision()`:
 
 ```python
+_ROUND_SECONDARY_TITLE_ANCHOR_REASON = "rounds after 1 must not use secondary_title_anchor"
+
+
 def project_controller_decision_if_round_legal(
     *,
     context: ControllerContext,
@@ -411,13 +396,15 @@ def project_controller_decision_if_round_legal(
 ) -> ControllerDecision | None:
     if not isinstance(decision, SearchControllerDecision):
         return None
-    if "secondary_title_anchor" not in reason:
+    if _ROUND_SECONDARY_TITLE_ANCHOR_REASON not in reason:
         return None
-    projected_terms = project_round_legal_query_terms(
+    projected_terms = try_project_secondary_title_anchor_after_round_one(
         decision.proposed_query_terms,
         round_no=context.round_no,
         query_term_pool=context.query_term_pool,
     )
+    if projected_terms is None:
+        return None
     if projected_terms == decision.proposed_query_terms:
         return None
     projected = decision.model_copy(update={"proposed_query_terms": projected_terms})
@@ -438,26 +425,41 @@ if projected is not None:
     return projected
 ```
 
-- [ ] **Step 5: Use the same projection in runtime sanitization**
+- [ ] **Step 5: Keep runtime sanitization strict**
 
-In `src/seektalent/runtime/round_decision_runtime.py`, import `project_round_legal_query_terms` from `seektalent.retrieval`.
+Do not call the projection helper unconditionally from `sanitize_controller_decision()`. That path must stay a strict canonicalization/validation boundary.
 
-In `sanitize_controller_decision()`, compute projected terms before canonicalization:
+If runtime sanitization needs the same recovery for already materialized controller decisions, wrap canonicalization narrowly:
 
 ```python
-projected_terms = project_round_legal_query_terms(
-    decision.proposed_query_terms,
-    round_no=round_no,
-    query_term_pool=run_state.retrieval_state.query_term_pool,
-)
-query_terms = canonicalize_controller_query_terms(
-    projected_terms,
-    round_no=round_no,
-    title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
-    query_term_pool=run_state.retrieval_state.query_term_pool,
-    allowed_inactive_non_anchor_terms=allowed_inactive_terms,
-)
+try:
+    query_terms = canonicalize_controller_query_terms(
+        decision.proposed_query_terms,
+        round_no=round_no,
+        title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
+        query_term_pool=run_state.retrieval_state.query_term_pool,
+        allowed_inactive_non_anchor_terms=allowed_inactive_terms,
+    )
+except ValueError as exc:
+    if _ROUND_SECONDARY_TITLE_ANCHOR_REASON not in str(exc):
+        raise
+    projected_terms = try_project_secondary_title_anchor_after_round_one(
+        decision.proposed_query_terms,
+        round_no=round_no,
+        query_term_pool=run_state.retrieval_state.query_term_pool,
+    )
+    if projected_terms is None:
+        raise
+    query_terms = canonicalize_controller_query_terms(
+        projected_terms,
+        round_no=round_no,
+        title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
+        query_term_pool=run_state.retrieval_state.query_term_pool,
+        allowed_inactive_non_anchor_terms=allowed_inactive_terms,
+    )
 ```
+
+The second canonicalization must still enforce duplicates, max term count, pool membership, and inactive-term rules. Re-raise the original validation error when projection does not produce a fully valid decision.
 
 - [ ] **Step 6: Add controller regression coverage**
 
@@ -553,13 +555,15 @@ If `_controller_context()` does not accept `query_term_pool`, extend that test h
 
 - [ ] **Step 7: Add runtime sanitization coverage**
 
-In `tests/test_runtime_state_flow.py`, add a focused unit test for `sanitize_controller_decision()` or update the existing round-decision helper test so a round 3 decision with `["AI", "主观投资"]` is sanitized to `["AI", "模型部署"]`.
+In `tests/test_runtime_state_flow.py`, add focused coverage for `sanitize_controller_decision()` only if that code path implements the narrow catch-and-project branch.
 
-Use this assertion:
+Use this success assertion for the exact secondary-title-anchor reason:
 
 ```python
 assert sanitized.proposed_query_terms == ["AI", "模型部署"]
 ```
+
+Also add negative assertions that duplicate terms, four terms, and missing-pool terms still raise.
 
 - [ ] **Step 8: Run controller/query/runtime tests**
 
@@ -594,28 +598,36 @@ Create `tests/test_liepin_state_machine.py`:
 from __future__ import annotations
 
 from seektalent.providers.liepin.liepin_state_machine import (
+    LiepinStateSnapshot,
     LiepinTransition,
     LiepinTransitionRunner,
     TransitionResult,
 )
 
 
-def test_transition_runner_checks_pre_action_and_postcondition_order() -> None:
+def test_transition_runner_observes_latest_state_before_and_after_action() -> None:
     calls: list[str] = []
+    pre = LiepinStateSnapshot(ok=True, text="search input visible")
+    post = LiepinStateSnapshot(ok=True, text="results visible")
 
     transition = LiepinTransition(
         name="apply_city_filter",
-        precondition=lambda: calls.append("pre") or True,
+        phase="search",
+        observe_pre_state=lambda: calls.append("observe_pre") or pre,
+        precondition=lambda state: calls.append(f"pre:{state.text}") or True,
         action=lambda: calls.append("action") or TransitionResult(ok=True),
-        postcondition=lambda: calls.append("post") or True,
+        observe_post_state=lambda: calls.append("observe_post") or post,
+        postcondition=lambda state: calls.append(f"post:{state.text}") or True,
         retry_policy="none",
+        safe_reason_code="liepin_opencli_filter_unapplied",
+        trace_event="apply_native_filter",
     )
 
     result = LiepinTransitionRunner().run(transition)
 
     assert result.ok is True
-    assert result.reason is None
-    assert calls == ["pre", "action", "post"]
+    assert result.safe_reason_code is None
+    assert calls == ["observe_pre", "pre:search input visible", "action", "observe_post", "post:results visible"]
 
 
 def test_transition_runner_does_not_run_action_when_precondition_fails() -> None:
@@ -623,16 +635,22 @@ def test_transition_runner_does_not_run_action_when_precondition_fails() -> None
 
     transition = LiepinTransition(
         name="wait_results_ready",
-        precondition=lambda: False,
+        phase="search",
+        observe_pre_state=lambda: LiepinStateSnapshot(ok=True, text="login expired"),
+        precondition=lambda state: False,
         action=lambda: calls.append("action") or TransitionResult(ok=True),
-        postcondition=lambda: True,
+        observe_post_state=lambda: LiepinStateSnapshot(ok=True, text="unused"),
+        postcondition=lambda state: True,
         retry_policy="none",
+        safe_reason_code="liepin_opencli_results_not_ready",
+        trace_event="observe_results",
     )
 
     result = LiepinTransitionRunner().run(transition)
 
     assert result.ok is False
-    assert result.reason == "precondition_failed"
+    assert result.safe_reason_code == "liepin_opencli_results_not_ready"
+    assert result.debug_reason == "precondition_failed"
     assert calls == []
 
 
@@ -641,17 +659,36 @@ def test_transition_runner_does_not_repeat_toggle_when_postcondition_is_unknown(
 
     transition = LiepinTransition(
         name="apply_school_type_filter",
-        precondition=lambda: True,
+        phase="search",
+        observe_pre_state=lambda: LiepinStateSnapshot(ok=True, text="985 visible"),
+        precondition=lambda state: True,
         action=lambda: calls.append("action") or TransitionResult(ok=True),
-        postcondition=lambda: False,
+        observe_post_state=lambda: LiepinStateSnapshot(ok=True, text="985 still unverified"),
+        postcondition=lambda state: False,
         retry_policy="no_repeat_toggle",
+        safe_reason_code="liepin_opencli_filter_unapplied",
+        trace_event="apply_native_filter",
     )
 
     result = LiepinTransitionRunner().run(transition)
 
     assert result.ok is False
-    assert result.reason == "postcondition_failed"
+    assert result.safe_reason_code == "liepin_opencli_filter_unapplied"
+    assert result.debug_reason == "postcondition_failed"
     assert calls == ["action"]
+```
+
+Add these matrix tests before implementation:
+
+```python
+def test_transition_runner_propagates_action_safe_reason_code() -> None:
+    # action returns TransitionResult(ok=False, safe_reason_code="liepin_opencli_status_unavailable")
+    # runner returns that exact safe reason without converting it
+
+
+def test_transition_runner_stops_when_pre_state_is_terminal() -> None:
+    # observe_pre_state returns ok=False with safe_reason_code="liepin_opencli_terminal_state"
+    # action and post observation are not called
 ```
 
 - [ ] **Step 2: Run failing transition tests**
@@ -675,38 +712,77 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
-RetryPolicy = Literal["none", "refresh_state_once", "no_repeat_toggle"]
+RetryPolicy = Literal["none", "no_repeat_toggle"]
+
+
+@dataclass(frozen=True, kw_only=True)
+class LiepinStateSnapshot:
+    ok: bool
+    text: str
+    url: str | None = None
+    safe_reason_code: str | None = None
+    observation: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
 class TransitionResult:
     ok: bool
-    reason: str | None = None
+    safe_reason_code: str | None = None
+    debug_reason: str | None = None
     event: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, kw_only=True)
 class LiepinTransition:
     name: str
-    precondition: Callable[[], bool]
+    phase: str
+    observe_pre_state: Callable[[], LiepinStateSnapshot]
+    precondition: Callable[[LiepinStateSnapshot], bool]
     action: Callable[[], TransitionResult]
-    postcondition: Callable[[], bool]
+    observe_post_state: Callable[[], LiepinStateSnapshot]
+    postcondition: Callable[[LiepinStateSnapshot], bool]
+    safe_reason_code: str
+    trace_event: str
     retry_policy: RetryPolicy = "none"
 
 
 class LiepinTransitionRunner:
     def run(self, transition: LiepinTransition) -> TransitionResult:
-        if not transition.precondition():
-            return TransitionResult(ok=False, reason="precondition_failed")
+        pre_state = transition.observe_pre_state()
+        if not pre_state.ok:
+            return TransitionResult(
+                ok=False,
+                safe_reason_code=pre_state.safe_reason_code or transition.safe_reason_code,
+                debug_reason="pre_state_failed",
+            )
+        if not transition.precondition(pre_state):
+            return TransitionResult(
+                ok=False,
+                safe_reason_code=transition.safe_reason_code,
+                debug_reason="precondition_failed",
+            )
         result = transition.action()
         if not result.ok:
             return result
-        if transition.postcondition():
+        post_state = transition.observe_post_state()
+        if not post_state.ok:
+            return TransitionResult(
+                ok=False,
+                safe_reason_code=post_state.safe_reason_code or transition.safe_reason_code,
+                debug_reason="post_state_failed",
+                event=result.event,
+            )
+        if transition.postcondition(post_state):
             return result
-        if transition.retry_policy == "refresh_state_once" and transition.postcondition():
-            return result
-        return TransitionResult(ok=False, reason="postcondition_failed", event=result.event)
+        return TransitionResult(
+            ok=False,
+            safe_reason_code=transition.safe_reason_code,
+            debug_reason="postcondition_failed",
+            event=result.event,
+        )
 ```
+
+Do not add `refresh_state_once` in this slice. Fresh state is already mandatory before and after every action. Future retry behavior must be modeled as a separate named transition or an explicit policy with its own state observation and tests.
 
 - [ ] **Step 4: Run transition tests**
 
@@ -736,6 +812,23 @@ git commit -m "feat: add Liepin transition runner"
 - Test: `tests/test_liepin_opencli_browser.py`
 - Test: `tests/test_liepin_opencli_city_filter.py`
 - Test: `tests/test_liepin_opencli_filter_planning.py`
+
+**State-machine contract:**
+
+Every search/filter browser phase must run through `LiepinTransitionRunner.run(transition)`. Do not merely wrap existing calls in private methods.
+
+| Transition | `action_kind` | Pre-state source | Action | Postcondition | Public safe reason code |
+| --- | --- | --- | --- | --- | --- |
+| Open search | `open_search` | OpenCLI tab/url state | Open or select search route | Search URL or search surface is active | `liepin_opencli_search_not_ready` |
+| Wait search ready | `wait_search_ready` | OpenCLI state/readiness probe | Wait/observe search page | Search input and button are visible | `liepin_opencli_search_not_ready` |
+| Clear filters | `clear_native_filters` | OpenCLI state | Clear is available and not already done for workflow | Click clear once | Filter summaries clear or clear action disappears | `liepin_opencli_filter_unapplied` |
+| Fill keyword | `fill_search` | OpenCLI state | Fill keyword input | Input/search surface remains valid | `liepin_opencli_search_input_missing` |
+| Click search | `click_search` | OpenCLI state | Click search | Loading, results, or empty state observed | `liepin_opencli_search_submit_unconfirmed` |
+| Observe results | `observe_results` | OpenCLI state/readiness probe | Wait/observe results | Result list or empty state classified | `liepin_opencli_results_not_ready` |
+| Apply native filter | `apply_native_filter` | OpenCLI state | One deterministic click/fill/confirm sequence | Selected state or summary verifies target | `liepin_opencli_filter_unapplied` |
+| Extract cards | `extract_structured_cards` | OpenCLI state plus read-only structured probe | Extract structured cards | Card payload validates | `liepin_opencli_results_not_ready` or `liepin_opencli_malformed_state` |
+
+`action_kind` values must stay snake_case and must be wired through both `action-trace.json.events` and final provider `workflow_steps`. If this slice adds or renames an action kind, update `opencli_workflow._ACTION_TO_STEP_EVENT` and the client safe allowlist in the same commit.
 
 - [ ] **Step 1: Preserve existing filter-state regression tests**
 
@@ -882,39 +975,37 @@ def _append_transition_event(
         "route_kind": route_kind,
         "ok": result.ok,
     }
-    if result.reason:
-        event["safe_reason_code"] = result.reason
+    if result.safe_reason_code:
+        event["safe_reason_code"] = result.safe_reason_code
     self._append_event(source_run_id, event)
 ```
 
-- [ ] **Step 4: Name search-card phases without changing the public envelope**
+Keep `debug_reason` internal to runner logs or unit-test assertions. Do not put it into provider envelopes, `workflow_steps`, or UI-visible trace events.
 
-Inside `search_detail_backed_resumes()`, split the existing search/card segment into private methods:
+- [ ] **Step 4: Express search-card phases through transitions**
+
+Inside `search_detail_backed_resumes()`, each documented search phase must call the transition runner:
 
 ```python
-def _search_cards_phase(self, request: LiepinSearchWorkflowRequest) -> dict[str, object]:
-    return self._site.search_liepin_cards(
-        source_run_id=request.source_run_id,
-        query=request.query,
-        max_pages=request.max_pages,
-        max_cards=request.max_cards,
-        native_filters=request.native_filters,
+result = self._runner.run(
+    LiepinTransition(
+        name="fill_keyword",
+        phase="search",
+        observe_pre_state=self._site.observe_liepin_search_state,
+        precondition=lambda state: has_search_input(state.text),
+        action=lambda: self._site.fill_liepin_search_keyword(request.query),
+        observe_post_state=self._site.observe_liepin_search_state,
+        postcondition=lambda state: has_search_surface(state.text),
+        retry_policy="none",
+        safe_reason_code="liepin_opencli_search_input_missing",
+        trace_event="fill_search",
     )
-
-
-def _extract_cards_phase(
-    self,
-    *,
-    source_run_id: str,
-    max_cards: int,
-) -> OpenCliBrowserResult:
-    return self._site.extract_structured_liepin_cards(
-        source_run_id=source_run_id,
-        max_cards=max_cards,
-    )
+)
 ```
 
-Call those methods from `search_detail_backed_resumes()`. Preserve the existing blocked envelope behavior.
+Use the same pattern for `open_search`, `wait_search_ready`, `clear_native_filters`, `click_search`, `observe_results`, `apply_native_filter`, and `extract_structured_cards`. Preserve the existing public envelope shape, but build blocked envelopes from `TransitionResult.safe_reason_code`, not internal debug labels.
+
+Add tests that assert `LiepinTransitionRunner.run` is called for the search phases. A direct call from `search_detail_backed_resumes()` to a mutating adapter method without a transition is a test failure.
 
 - [ ] **Step 5: Guard native filter mutation in the adapter**
 
@@ -944,7 +1035,22 @@ return OpenCliBrowserResult(
 
 Keep the current richer implementation if it already has these semantics. Do not add any modal-closing path.
 
-- [ ] **Step 6: Run focused filter tests**
+- [ ] **Step 6: Add command-order and reason-code coverage**
+
+Add FakeCommands tests that fail if any mutating OpenCLI command (`fill`, `click`, `tab new`, `tab select`) runs without a preceding `state` or explicit readiness probe in the same transition.
+
+Add transition-matrix tests for:
+
+- every transition in the table has at least success, precondition-blocked, action-failed, and postcondition-failed coverage;
+- pre-state terminal failure uses the concrete transition `safe_reason_code`;
+- status unavailable remains terminal unless a transition explicitly declares a safe local recovery path;
+- action failure propagates the action `safe_reason_code`;
+- postcondition failure uses the concrete transition `safe_reason_code`;
+- stale result/card refs fail before the action and do not click a stale ref;
+- `no_repeat_toggle` never runs the same toggle action twice;
+- `action-trace.json.events` and final `workflow_steps` contain the same canonical snake_case action kind.
+
+- [ ] **Step 7: Run focused filter tests**
 
 Run:
 
@@ -954,7 +1060,7 @@ uv run pytest tests/test_liepin_opencli_browser.py tests/test_liepin_opencli_cit
 
 Expected result: all focused filter/browser tests pass.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/seektalent/providers/liepin/liepin_search_workflow.py src/seektalent/providers/liepin/liepin_site_adapter.py src/seektalent/providers/liepin/opencli_filter_planning.py tests/test_liepin_opencli_browser.py tests/test_liepin_opencli_city_filter.py tests/test_liepin_opencli_filter_planning.py
@@ -969,6 +1075,20 @@ git commit -m "refactor: verify Liepin search filters by transition"
 - Modify: `src/seektalent/providers/liepin/liepin_search_workflow.py`
 - Modify: `src/seektalent/providers/liepin/liepin_site_adapter.py`
 - Test: `tests/test_liepin_opencli_browser.py`
+
+**State-machine contract:**
+
+Every detail browser phase must run through `LiepinTransitionRunner.run(transition)`.
+
+| Transition | `action_kind` | Pre-state source | Action | Postcondition | Public safe reason code |
+| --- | --- | --- | --- | --- | --- |
+| Select candidate | `detail_candidate_selected` | Latest structured card state | Choose next target card/ref | Target identity is traceable | `liepin_opencli_results_not_ready` |
+| Open detail | `open_detail` | OpenCLI state | Open card ref or cached detail URL | Active tab is detail route or pending detail state | `liepin_opencli_detail_not_opened` |
+| Wait detail ready | `wait_detail_ready` | OpenCLI state/readiness probe | Wait/observe detail page | Detail resume state is ready | `liepin_opencli_detail_not_opened` |
+| Observe detail | `observe_detail` | OpenCLI state plus read-only structured probe | Extract structured detail payload | Payload validates before artifact write | `liepin_opencli_detail_not_opened` or `liepin_opencli_malformed_state` |
+| Capture detail | `capture_detail_succeeded` | Valid structured detail payload | Persist normalized structured detail artifact | Artifact has structured fields and no fullText aliases | `liepin_opencli_malformed_state` |
+| Restore search | `return_to_search_after_capture` | OpenCLI tab/url state | Select/restore search page | Search page active or cached-detail mode enabled | `liepin_opencli_search_restore_failed` |
+| Refresh visible cards | `visible_cards_refreshed_after_return` | OpenCLI state plus read-only structured probe | Refresh card refs | Cards validate or cached-detail mode continues | `liepin_opencli_results_not_ready` |
 
 - [ ] **Step 1: Preserve detail-ready regression coverage**
 
@@ -1026,54 +1146,68 @@ assert any(event["action_kind"] == "detail_urls_cached" for event in trace["even
 assert any(event["action_kind"] == "return_to_search_after_capture" and event["ok"] is False for event in trace["events"])
 ```
 
-- [ ] **Step 3: Split detail phases in `LiepinSearchWorkflow`**
+- [ ] **Step 3: Express detail phases through transitions**
 
-In `src/seektalent/providers/liepin/liepin_search_workflow.py`, add these private methods:
+In `src/seektalent/providers/liepin/liepin_search_workflow.py`, implement each detail phase as an explicit transition:
 
 ```python
-def _open_detail_phase(
-    self,
-    *,
-    source_run_id: str,
-    ref: str,
-    rank: int,
-    cached_detail_url: str | None,
-    use_cached_detail_url: bool,
-) -> OpenCliBrowserResult:
-    if use_cached_detail_url and cached_detail_url is not None:
-        return self._site.open_liepin_detail_cached_url(
+result = self._runner.run(
+    LiepinTransition(
+        name="open_detail",
+        phase="detail",
+        observe_pre_state=self._site.observe_liepin_search_state,
+        precondition=lambda state: card_ref_is_still_valid(state.text, ref) or cached_detail_url is not None,
+        action=lambda: self._site.open_liepin_detail_or_cached_url(
             source_run_id=source_run_id,
             ref=ref,
             rank=rank,
-            detail_url=cached_detail_url,
-        )
-    return self._site.open_liepin_detail(source_run_id=source_run_id, ref=ref, rank=rank)
-
-
-def _capture_detail_phase(
-    self,
-    *,
-    source_run_id: str,
-    rank: int,
-) -> OpenCliBrowserResult:
-    return self._site.capture_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
-
-
-def _restore_search_phase(self, *, source_run_id: str, rank: int) -> str | None:
-    restored_page_id = self._site.restore_liepin_search_page()
-    self._append_event(
-        source_run_id,
-        {
-            "action_kind": "return_to_search_after_capture",
-            "route_kind": "search",
-            "ok": restored_page_id is not None,
-            "rank": rank,
-        },
+            cached_detail_url=cached_detail_url,
+        ),
+        observe_post_state=self._site.observe_liepin_detail_state,
+        postcondition=lambda state: detail_route_or_pending(state.text, state.url),
+        retry_policy="none",
+        safe_reason_code="liepin_opencli_detail_not_opened",
+        trace_event="open_detail",
     )
-    return restored_page_id
+)
 ```
 
-Use these methods in the existing detail loop. Do not change the public return envelope.
+Use the same pattern for `wait_detail_ready`, `observe_detail`, `capture_detail_succeeded`, `return_to_search_after_capture`, and `visible_cards_refreshed_after_return`.
+
+If `return_to_search_after_capture` fails after a successful capture, record a failed transition event with `safe_reason_code="liepin_opencli_search_restore_failed"` and enter cached-detail-URL mode only if cached URLs were captured before leaving the search page. Cached mode must still respect the target resume budget and all detail payload validation.
+
+Add transition-matrix tests for each detail transition:
+
+- success;
+- precondition-blocked stale ref or missing cached URL;
+- action failure propagating the concrete action `safe_reason_code`;
+- postcondition failure using the transition's concrete `safe_reason_code`;
+- status unavailable and terminal states do not retry;
+- restore failure enters cached-detail-URL mode only after a successful capture and only when cached URLs exist.
+
+Add tests that assert the detail loop cannot call `open_liepin_detail`, `capture_liepin_detail_resume`, or `restore_liepin_search_page` without a corresponding transition event:
+
+```python
+assert any(event["action_kind"] == "open_detail" for event in trace["events"])
+assert any(event["action_kind"] == "wait_detail_ready" for event in trace["events"])
+assert any(event["action_kind"] == "observe_detail" for event in trace["events"])
+assert any(
+    event["action_kind"] == "return_to_search_after_capture"
+    and event.get("safe_reason_code") == "liepin_opencli_search_restore_failed"
+    for event in trace["events"]
+)
+```
+
+Add command-order coverage for detail transitions:
+
+```python
+mutating_ops = {"click", "tab", "fill"}
+for index, call in enumerate(commands.calls):
+    if len(call) >= 4 and call[3] in mutating_ops:
+        assert any(previous[3] in {"state", "eval"} for previous in commands.calls[max(0, index - 3):index])
+```
+
+If a test needs a broader window than three commands because of existing `get url` calls, use a helper that scopes to the current transition event instead of loosening the requirement globally.
 
 - [ ] **Step 4: Keep detail payload fail-closed**
 
@@ -1178,4 +1312,4 @@ If no files changed during final verification, do not create a commit.
 
 - Spec coverage: Tasks 1 and 2 cover the current runtime failure; Tasks 3 through 5 cover Liepin transition hardening; Task 6 covers verification and text-tail guardrails.
 - Unspecified work scan: every task lists exact files, commands, expected outcomes, and concrete code or assertions.
-- Type consistency: helper names are stable across tasks: `_filter_to_reflection_allowed_terms`, `project_round_legal_query_terms`, `project_controller_decision_if_round_legal`, `TransitionResult`, `LiepinTransition`, and `LiepinTransitionRunner`.
+- Type consistency: helper names are stable across tasks: `_filter_to_reflection_allowed_terms`, `try_project_secondary_title_anchor_after_round_one`, `project_controller_decision_if_round_legal`, `TransitionResult`, `LiepinTransition`, and `LiepinTransitionRunner`.

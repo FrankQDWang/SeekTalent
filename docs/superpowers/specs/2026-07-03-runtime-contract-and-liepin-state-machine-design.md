@@ -59,7 +59,7 @@ Therefore:
 - Keep Pydantic AI structured output as the model-output shape contract.
 - Add semantic projection for dynamic business rules that JSON Schema cannot express.
 - Make Liepin browser automation observable as explicit named transitions.
-- Ensure every Liepin mutating action has a current-state precheck and a postcondition.
+- Ensure every Liepin browser action has an OpenCLI latest-state observation immediately before the action and an observation-backed postcondition immediately after the action.
 - Prevent blind repeated clicking of toggle filters.
 - Preserve fullText hard-delete behavior: no collection, no storage, no fallback.
 
@@ -71,6 +71,7 @@ Therefore:
 - Do not add compatibility fallback to `fullText`, `rawText`, `visible_text`, or `normalized_card_text`.
 - Do not add modal-closing behavior.
 - Do not change UI product shape in this slice.
+- Do not expose generic runner failure labels such as `precondition_failed` or `postcondition_failed` as provider `safe_reason_code` values.
 
 ## Design
 
@@ -115,14 +116,35 @@ Add a small Liepin-only transition runner under the provider:
 ```text
 Transition {
   name
+  phase
+  observe_pre_state
   precondition
   action
+  observe_post_state
   postcondition
   retry_policy
+  safe_reason_code
+  trace_event
 }
 ```
 
 This is not a framework. It is a thin way to make each unstable Liepin browser operation explicit and testable.
+
+The transition runner owns lifecycle order, trace emission, and public reason-code emission. `LiepinSiteAdapter` should expose small idempotent page primitives and state-parsing predicates; it must not hide multi-step workflow decisions that bypass the transition runner.
+
+Every transition follows the same order:
+
+```text
+OpenCLI state/readiness probe
+-> parse/classify latest state
+-> precondition
+-> action
+-> OpenCLI state/readiness probe
+-> postcondition
+-> trace event with phase/action_kind/safe_reason_code
+```
+
+Runner-internal debug labels can exist for logs, but provider envelopes and UI-visible workflow steps must use concrete `liepin_opencli_*` safe reason codes.
 
 ### 4. Search And Filter Transitions
 
@@ -139,7 +161,20 @@ ApplyNativeFilters
 ExtractStructuredCards
 ```
 
-Every phase records one workflow-level event. Page-level actions can still record detailed adapter events.
+Every phase records one workflow-level event using canonical snake_case `action_kind` values:
+
+```text
+open_search
+wait_search_ready
+clear_native_filters
+fill_search
+click_search
+observe_results
+apply_native_filter
+extract_structured_cards
+```
+
+Page-level actions can still record detailed adapter events. Any new `action_kind` must be added to the workflow-step mapper and client safe allowlist in the same implementation slice.
 
 Native filters must follow this rule:
 
@@ -177,9 +212,45 @@ RefreshStructuredCards
 Finalize
 ```
 
+Detail trace events must use canonical snake_case `action_kind` values:
+
+```text
+detail_candidate_selected
+open_detail
+open_detail_succeeded
+wait_detail_ready
+observe_detail
+capture_detail_succeeded
+return_to_search_after_capture
+visible_cards_refreshed_after_return
+detail_target_not_met
+```
+
 `WaitDetailReady` must wait for a valid Liepin detail resume state instead of assuming the tab is ready after a fixed delay.
 
 If search-page restore fails after a successful capture, the workflow may use cached detail URLs for remaining selected cards. It must still preserve the target resume budget and detail consumption safety semantics.
+
+## Transition And Reason-Code Matrix
+
+Every listed transition must be implemented through the transition runner, not as an untracked private helper call.
+
+| Transition | Latest State Source | Precondition | Action | Postcondition | Public Safe Reason Code |
+| --- | --- | --- | --- | --- | --- |
+| `open_search` | OpenCLI tab/url state | Search route can be opened or current route is reusable | Open/select search tab | Search URL or known search surface is active | `liepin_opencli_search_not_ready` |
+| `wait_search_ready` | OpenCLI state/readiness probe | Page is not terminal | Wait/observe search page | Search input and submit surface are visible | `liepin_opencli_search_not_ready` |
+| `clear_native_filters` | OpenCLI state | Clear action exists and current workflow has not already cleared | Click clear once | Filter summaries are empty or clear action is gone | `liepin_opencli_filter_unapplied` |
+| `fill_search` | OpenCLI state | Search input ref is visible in latest state | Fill query | Input/search surface remains valid | `liepin_opencli_search_input_missing` |
+| `click_search` | OpenCLI state | Submit button is visible in latest state | Click search | Loading, result list, or empty-result state is observed | `liepin_opencli_search_submit_unconfirmed` |
+| `observe_results` | OpenCLI state/readiness probe | Search page is non-terminal | Wait/observe result surface | Result list or empty-result state is classified | `liepin_opencli_results_not_ready` |
+| `apply_native_filter` | OpenCLI state | Target is not already selected and target option is visible or reachable | One click/fill/confirm sequence | Selected state or section summary verifies target | `liepin_opencli_filter_unapplied` |
+| `extract_structured_cards` | OpenCLI state plus read-only structured probe | Results are ready | Extract structured cards | Structured card payload validates | `liepin_opencli_results_not_ready` or `liepin_opencli_malformed_state` |
+| `open_detail` | OpenCLI state | Card ref or cached detail URL is valid in latest state | Open detail tab/URL | Active tab is detail route or detail pending state | `liepin_opencli_detail_not_opened` |
+| `wait_detail_ready` | OpenCLI state/readiness probe | Detail route or pending blank tab exists | Wait/observe detail page | Detail resume state is ready | `liepin_opencli_detail_not_opened` |
+| `observe_detail` | OpenCLI state plus read-only structured probe | Detail page is ready | Extract structured detail | Structured detail payload validates before artifact write | `liepin_opencli_detail_not_opened` or `liepin_opencli_malformed_state` |
+| `return_to_search_after_capture` | OpenCLI tab/url state | Search page id or cached route exists | Select/restore search page | Search page is active or cached-detail mode is enabled | `liepin_opencli_search_restore_failed` |
+| `visible_cards_refreshed_after_return` | OpenCLI state plus read-only structured probe | Search page was restored | Refresh visible card refs | Card payload validates or cached-detail mode continues | `liepin_opencli_results_not_ready` |
+
+Terminal state classifications remain terminal unless a transition explicitly declares a safe local recovery path: `liepin_opencli_terminal_state`, `liepin_opencli_status_unavailable`, `liepin_opencli_host_blocked`, and `liepin_opencli_malformed_state`.
 
 ## Data Flow
 
@@ -206,7 +277,8 @@ LiepinOpenCliResumeRetriever
 
 - Reflection projection is silent and deterministic because reflection is advisory.
 - Controller projection is narrow and traceable; other validation errors still fail.
-- Liepin transition failure returns existing safe reason semantics through the provider envelope.
+- Liepin transition failure returns concrete safe reason semantics through the provider envelope.
+- Generic transition-runner labels are debug-only and must never be surfaced as provider `safe_reason_code`.
 - Toggle filters do not retry by repeating the same click when postcondition is unknown.
 - Terminal Liepin states remain terminal: login expired, identity verification, host blocked, unavailable backend, malformed state.
 
@@ -218,7 +290,12 @@ Add focused regression tests for:
 - reflection summary is built from projected advice;
 - controller round 2+ can recover from a model choosing `secondary_title_anchor` after repair/retry;
 - query projection never removes round 1 use of `secondary_title_anchor`;
-- Liepin transition runner enforces precondition/action/postcondition order;
+- Liepin transition runner enforces observe-pre-state/precondition/action/observe-post-state/postcondition order;
+- every mutating OpenCLI command in Liepin tests is immediately preceded by `state` or an explicit readiness probe;
+- transition failures surface concrete `liepin_opencli_*` reason codes, not generic runner labels;
+- `action-trace.json.events` and provider `workflow_steps` use the same canonical snake_case `action_kind` mapping;
+- every transition in the reason-code matrix has success, precondition-blocked, action-failed, and postcondition-failed coverage;
+- key external-drift branches are covered: stale card ref, status unavailable, terminal state no retry, toggle no repeat, and restore failure followed by cached detail URL mode;
 - toggle filters do not blindly click twice;
 - city filter verifies current state before opening picker;
 - detail capture waits for resume-ready state;
@@ -238,7 +315,8 @@ The first task group can be shipped independently to unblock current failed runs
 - The latest failure class cannot recur from `secondary_title_anchor` advice after round 1.
 - `secondary_title_anchor` remains valid for round 1.
 - Reflection UI summary does not display impossible `secondary_title_anchor` advice.
-- Liepin search/filter/detail operations are represented as named transitions with preconditions and postconditions.
+- Liepin search/filter/detail operations are represented as named transitions with explicit latest-state sources, preconditions, actions, postconditions, safe reason codes, and workflow trace events.
+- No Liepin browser action can run without an immediately preceding OpenCLI latest-state observation.
 - Existing focused runtime and Liepin tests pass.
 - Ruff and ty pass on touched files.
 - No full-text collection/storage/fallback path is introduced.
