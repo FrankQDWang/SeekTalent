@@ -11,6 +11,19 @@ from seektalent.providers.liepin.liepin_site_parsing import _safe_artifact_segme
 JsonObject = dict[str, object]
 ArtifactWriter = Callable[[str, str, object], str]
 AgentEventReader = Callable[[str], list[dict[str, object]]]
+FORBIDDEN_CARD_SUMMARY_KEYS = {
+    "visible_text",
+    "normalized_card_text",
+    "normalizedCardText",
+    "raw_html",
+    "inner_html",
+    "inner_text",
+    "fullText",
+    "full_text",
+    "rawText",
+    "page_text",
+    "pageText",
+}
 _CARD_SUMMARY_SCALAR_FIELDS = (
     "display_title",
     "current_or_recent_company",

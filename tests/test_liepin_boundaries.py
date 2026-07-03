@@ -73,29 +73,49 @@ _ALLOWED_LIEPIN_DETAIL_RESUME_RAW_KEYS = _ALLOWED_LIEPIN_RESUME_RAW_KEYS | {
     "educationList",
     "skills",
 }
+_LIEPIN_CARD_TEXT_TAIL_SCAN_PATHS = [
+    ROOT / "src/seektalent/providers/liepin",
+    ROOT / "src/seektalent/sources/liepin",
+    ROOT / "src/seektalent/resume_normalizers/liepin.py",
+    ROOT / "src/seektalent_runtime_control",
+]
+_LIEPIN_CARD_TEXT_TAIL_FIELDS = {"visible_text", "normalized_card_text"}
+_LITERAL_CARD_TEXT_TAIL_CONSTANTS = {
+    "src/seektalent/providers/liepin/liepin_site_parsing.py": {"FORBIDDEN_CARD_EVIDENCE_KEYS"},
+    "src/seektalent/providers/liepin/liepin_site_payloads.py": {"FORBIDDEN_CARD_SUMMARY_KEYS"},
+}
 
 
 def test_liepin_card_evidence_does_not_emit_text_tail_fields() -> None:
-    forbidden = {"visible_text", "normalized_card_text"}
-    scan_paths = [
-        ROOT / "src/seektalent/providers/liepin",
-        ROOT / "src/seektalent/sources/liepin",
-        ROOT / "src/seektalent/resume_normalizers/liepin.py",
-        ROOT / "src/seektalent_runtime_control",
-    ]
     hits: list[str] = []
-    paths: list[Path] = []
-    for scan_path in scan_paths:
-        if scan_path.is_file():
-            paths.append(scan_path)
-        else:
-            paths.extend(scan_path.rglob("*.py"))
-    for path in paths:
+    for path in _liepin_card_text_tail_scan_files():
         rel = path.relative_to(ROOT).as_posix()
         text = path.read_text(encoding="utf-8")
-        for token in forbidden:
-            if token in text:
-                hits.append(f"{rel}:{token}")
+        tree = ast.parse(text, filename=str(path))
+        parents = _ast_parent_map(tree)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or node.value not in _LIEPIN_CARD_TEXT_TAIL_FIELDS:
+                continue
+            constant_name = _enclosing_assignment_name(node, parents)
+            if constant_name in _LITERAL_CARD_TEXT_TAIL_CONSTANTS.get(rel, set()):
+                continue
+            hits.append(f"{rel}:{node.lineno}:{node.value}")
+    assert hits == []
+
+
+def test_liepin_card_text_tail_forbidden_fields_are_not_computed() -> None:
+    hits: list[str] = []
+    for path in _liepin_card_text_tail_scan_files():
+        rel = path.relative_to(ROOT).as_posix()
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(path))
+        parents = _ast_parent_map(tree)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant):
+                continue
+            if _computed_forbidden_card_text_tail_field(node, source, parents) is None:
+                continue
+            hits.append(f"{rel}:{getattr(node, 'lineno', '?')}:{ast.get_source_segment(source, node)!r}")
     assert hits == []
 
 
@@ -668,6 +688,101 @@ def _worker_detail() -> LiepinWorkerCandidateDetail:
 
 def _python_source_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.py") if "__pycache__" not in path.parts)
+
+
+def _liepin_card_text_tail_scan_files() -> list[Path]:
+    paths: list[Path] = []
+    for scan_path in _LIEPIN_CARD_TEXT_TAIL_SCAN_PATHS:
+        if scan_path.is_file():
+            paths.append(scan_path)
+        else:
+            paths.extend(scan_path.rglob("*.py"))
+    return sorted(paths)
+
+
+def _ast_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+    return parents
+
+
+def _enclosing_assignment_name(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str | None:
+    current = node
+    while current in parents:
+        current = parents[current]
+        if isinstance(current, ast.Assign):
+            for target in current.targets:
+                if isinstance(target, ast.Name):
+                    return target.id
+        if isinstance(current, ast.AnnAssign) and isinstance(current.target, ast.Name):
+            return current.target.id
+    return None
+
+
+def _computed_forbidden_card_text_tail_field(
+    node: ast.AST,
+    source: str,
+    parents: dict[ast.AST, ast.AST],
+) -> str | None:
+    value = _static_string_value(node)
+    if value in _LIEPIN_CARD_TEXT_TAIL_FIELDS:
+        return value
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "join":
+        segment = _source_segment_with_generator(node, source, parents)
+        for field in _LIEPIN_CARD_TEXT_TAIL_FIELDS:
+            if all(_has_quoted_text_part(segment, part) for part in field.split("_")):
+                return field
+    return None
+
+
+def _static_string_value(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _static_string_value(node.left)
+        right = _static_string_value(node.right)
+        if left is not None and right is not None:
+            return left + right
+    if isinstance(node, ast.JoinedStr):
+        parts: list[str] = []
+        for value in node.values:
+            if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+                return None
+            parts.append(value.value)
+        return "".join(parts)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "join":
+        separator = _static_string_value(node.func.value)
+        if separator is None or len(node.args) != 1:
+            return None
+        values = _static_string_sequence(node.args[0])
+        if values is not None:
+            return separator.join(values)
+    return None
+
+
+def _static_string_sequence(node: ast.AST) -> tuple[str, ...] | None:
+    if not isinstance(node, ast.List | ast.Tuple | ast.Set):
+        return None
+    values: list[str] = []
+    for item in node.elts:
+        value = _static_string_value(item)
+        if value is None:
+            return None
+        values.append(value)
+    return tuple(values)
+
+
+def _source_segment_with_generator(node: ast.AST, source: str, parents: dict[ast.AST, ast.AST]) -> str:
+    current = node
+    while current in parents and isinstance(parents[current], ast.GeneratorExp):
+        current = parents[current]
+    return ast.get_source_segment(source, current) or ""
+
+
+def _has_quoted_text_part(segment: str, part: str) -> bool:
+    return f'"{part}"' in segment or f"'{part}'" in segment
 
 
 def _read_source(path: Path) -> str:

@@ -71,7 +71,7 @@ def _assert_no_card_text_keys(value: object) -> None:
             _assert_no_card_text_keys(item)
 
 
-def test_cards_envelope_allowlists_safe_card_summary_artifacts() -> None:
+def test_cards_envelope_sanitizes_card_summary_before_artifacts() -> None:
     writes: dict[tuple[str, str], object] = {}
 
     def write_pi_artifact(visibility: str, path: str, payload: object) -> str:
@@ -190,9 +190,7 @@ def test_cards_envelope_allowlists_safe_card_summary_artifacts() -> None:
     assert envelope["cards"][0]["provider_candidate_key_material_ref"] == (
         "artifact://protected/pi-provider-key/run-allowlist/1.txt"
     )
-    assert writes[("protected", "pi-provider-key/run-allowlist/1.txt")] == (
-        f"liepin-opencli:run-allowlist:1:{digest}"
-    )
+    assert writes[("protected", "pi-provider-key/run-allowlist/1.txt")] == (f"liepin-opencli:run-allowlist:1:{digest}")
     encoded = json.dumps([envelope, public_summary, protected_snapshot], ensure_ascii=False)
     assert sentinel not in encoded
     assert "must not pass" not in encoded
@@ -772,6 +770,37 @@ def test_structured_liepin_cards_parser_preserves_bool_masked_name_and_rejects_d
     bad_output["cards"][0]["masked_name"] = "王**"
     with pytest.raises(OpenCliBrowserError):
         _safe_structured_cards_from_probe_output(json.dumps(bad_output, ensure_ascii=False), max_cards=10)
+
+
+@pytest.mark.parametrize(
+    "forbidden_patch",
+    [
+        {"visible_text": "raw visible card text"},
+        {"normalized_card_text": "legacy normalized card text"},
+        {"experience_preview": [{"title": "高级主管工程师", "visible_text": "nested card text"}]},
+        {"education_preview": [{"school": "北京大学", "normalized_card_text": "nested normalized text"}]},
+    ],
+)
+def test_structured_card_probe_rejects_forbidden_card_text_fields(
+    forbidden_patch: dict[str, object],
+) -> None:
+    card = {
+        "provider_rank": 1,
+        "ref": "70",
+        "current_or_recent_title": "高级主管工程师",
+    }
+    card.update(forbidden_patch)
+    output = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [card],
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(OpenCliBrowserError):
+        _safe_structured_cards_from_probe_output(output, max_cards=10)
 
 
 @pytest.mark.parametrize("ok_value", [None, False, "true", 1])
@@ -2460,7 +2489,12 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
         default_eval_output=_liepin_detail_payload_json(summary_text=detail70_state),
         outputs={
             **_current_window_open_outputs(page_id="page-1"),
-            ("opencli", "browser", "seektalent-liepin", "state"): [state_before, state_before, state_after, state_after],
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                state_after,
+                state_after,
+            ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
             ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
             ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",

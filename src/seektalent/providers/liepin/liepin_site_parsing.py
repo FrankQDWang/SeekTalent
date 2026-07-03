@@ -21,16 +21,9 @@ FIXED_READONLY_EVAL_PROBES = frozenset({"liepin_detail_url_for_card", "liepin_de
 LIEPIN_ALLOWED_HOSTS = frozenset({"www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"})
 LIEPIN_RISK_HOSTS = frozenset({"safe.liepin.com"})
 OWNED_PAGE_MARKER_TTL_SECONDS = 24 * 60 * 60
-LEGACY_CARD_TEXT_TAIL_KEYS = frozenset(
-    "_".join(parts)
-    for parts in (
-        ("visible", "text"),
-        ("normalized", "card", "text"),
-    )
-)
 FORBIDDEN_CARD_EVIDENCE_KEYS = frozenset(
-    {"raw_html", "inner_html", "inner_text", "fullText", "rawText", "page_text"}
-).union(LEGACY_CARD_TEXT_TAIL_KEYS)
+    {"raw_html", "inner_html", "inner_text", "visible_text", "normalized_card_text", "fullText", "rawText", "page_text"}
+)
 FORBIDDEN_LIEPIN_PATH_FRAGMENTS = frozenset(
     {
         "resume",
