@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from urllib.parse import unquote, urlparse
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
+from seektalent.providers.liepin.detail_payload_text import find_liepin_whole_page_text_alias_paths
 from seektalent.providers.liepin.opencli_card_text import (
     ACCESSIBILITY_NOISE_TOKENS,
     clean_liepin_result_card_text,
@@ -24,6 +25,7 @@ OWNED_PAGE_MARKER_TTL_SECONDS = 24 * 60 * 60
 FORBIDDEN_CARD_EVIDENCE_KEYS = frozenset(
     {"raw_html", "inner_html", "inner_text", "visible_text", "normalized_card_text", "fullText", "rawText", "page_text"}
 )
+EXTRA_DETAIL_PROBE_TEXT_ALIAS_KEYS = frozenset({"wholePageText", "whole_page_text"})
 FORBIDDEN_LIEPIN_PATH_FRAGMENTS = frozenset(
     {
         "resume",
@@ -416,7 +418,44 @@ def _safe_detail_payload_from_probe_output(text: str) -> dict[str, object]:
         raise OpenCliBrowserError(str(payload.get("safeReasonCode") or "liepin_opencli_detail_not_opened"))
     if not isinstance(payload.get("candidate_name"), str) or not payload["candidate_name"].strip():
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    if _detail_payload_text_alias_paths(payload):
+        safe_reason = payload.get("safeReasonCode")
+        if isinstance(safe_reason, str) and safe_reason.strip():
+            raise OpenCliBrowserError(safe_reason)
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
     return payload
+
+
+def _detail_payload_text_alias_paths(payload: Mapping[str, object]) -> tuple[str, ...]:
+    paths = list(find_liepin_whole_page_text_alias_paths(payload))
+
+    def collect_extra(value: object, path: tuple[str, ...]) -> None:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                key_text = str(key)
+                current_path = (*path, key_text)
+                if key_text in EXTRA_DETAIL_PROBE_TEXT_ALIAS_KEYS:
+                    paths.append(_format_mapping_path(current_path))
+                    continue
+                collect_extra(item, current_path)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):
+                collect_extra(item, (*path, f"[{index}]"))
+
+    collect_extra(payload, ())
+    return tuple(paths)
+
+
+def _format_mapping_path(path: tuple[str, ...]) -> str:
+    rendered = ""
+    for part in path:
+        if part.startswith("["):
+            rendered += part
+        elif rendered:
+            rendered += f".{part}"
+        else:
+            rendered = part
+    return rendered
 
 
 def _safe_structured_cards_from_probe_output(output: str, *, max_cards: int) -> tuple[dict[str, object], ...]:

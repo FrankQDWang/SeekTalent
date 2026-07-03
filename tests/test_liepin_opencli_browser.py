@@ -32,6 +32,7 @@ from seektalent.providers.liepin.liepin_site_adapter import (
 )
 from seektalent.providers.liepin.liepin_site_parsing import (
     _liepin_structured_cards_payload_probe_script,
+    _safe_detail_payload_from_probe_output,
     _safe_structured_cards_from_probe_output,
 )
 from seektalent.providers.liepin.worker_contracts import LiepinSafeCardSummary
@@ -3355,6 +3356,40 @@ def test_capture_liepin_detail_resume_rejects_blank_detail_probe(tmp_path: Path)
     assert captured.ok is False
     assert captured.safe_reason_code == "liepin_opencli_detail_not_opened"
     assert not (tmp_path / "protected" / "pi-detail" / "run-1" / "collected-resumes.json").exists()
+
+
+def test_capture_liepin_detail_resume_rejects_whole_page_text_aliases_before_artifact_write(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(_liepin_detail_payload_json(summary_text=detail_state))
+    payload["fullText"] = "SENTINEL_TOP_LEVEL_DETAIL_TEXT"
+    payload["jobIntention"]["rawText"] = "SENTINEL_NESTED_DETAIL_TEXT"
+    commands = EvalCommands(
+        eval_output=json.dumps(payload, ensure_ascii=False),
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad\n"
+                "王** 40岁 工作14年 硕士 上海\n"
+                "当前职位：数据开发专家"
+            ),
+        },
+    )
+
+    captured = _runner(commands, lease_dir=tmp_path).capture_liepin_detail_resume(source_run_id="run-1", rank=1)
+
+    assert captured.ok is False
+    assert captured.safe_reason_code == "liepin_opencli_malformed_state"
+    assert not (tmp_path / "protected").exists()
+
+
+def test_detail_probe_payload_rejects_whole_page_text_extra_alias() -> None:
+    payload = json.loads(_liepin_detail_payload_json(summary_text=detail_state))
+    payload["extra"] = {"wholePageText": "SENTINEL_WHOLE_PAGE_TEXT"}
+
+    with pytest.raises(OpenCliBrowserError) as error:
+        _safe_detail_payload_from_probe_output(json.dumps(payload, ensure_ascii=False))
+
+    assert error.value.safe_reason_code == "liepin_opencli_malformed_state"
 
 
 def test_generic_click_still_rejects_liepin_detail_targets() -> None:
