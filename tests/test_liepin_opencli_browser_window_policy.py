@@ -56,7 +56,7 @@ def test_extract_visible_liepin_cards_accepts_english_education_labels(tmp_path:
                 {
                     "provider_rank": 1,
                     "ref": "333",
-                    "masked_name": "N**",
+                    "masked_name": True,
                     "gender": None,
                     "age": 35,
                     "work_years": 10,

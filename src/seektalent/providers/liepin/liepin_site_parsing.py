@@ -453,8 +453,12 @@ def _sanitize_structured_card_mapping(item: Mapping[str, object]) -> dict[str, o
     if provider_rank is None or not isinstance(ref, str) or not _is_safe_page_id(ref):
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
     card: dict[str, object] = {"provider_rank": provider_rank, "ref": ref}
+    raw_masked_name = item.get("masked_name")
+    if isinstance(raw_masked_name, bool):
+        card["masked_name"] = raw_masked_name
+    elif raw_masked_name is not None:
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
     scalar_fields = (
-        "masked_name",
         "gender",
         "city",
         "expected_city",
@@ -899,7 +903,9 @@ def _liepin_structured_cards_payload_probe_script(max_cards: int) -> str:
     .filter((card, index, items) => items.indexOf(card) === index)
     .slice(0, MAX_CARDS);
   const cards = [];
-  cardNodes.forEach((card, index) => {
+  cardNodes.forEach((card) => {
+    const ref = refFor(card);
+    if (!ref) return;
     const lines = linesOf(card);
     const text = lines.join(" ");
     const expected = expectedFrom(lines);
@@ -914,9 +920,9 @@ def _liepin_structured_cards_payload_probe_script(max_cards: int) -> str:
     }
     const current = experience[0] || {};
     const payload = {
-      provider_rank: index + 1,
-      ref: refFor(card),
-      masked_name: maskedNameFrom(text),
+      provider_rank: cards.length + 1,
+      ref,
+      masked_name: Boolean(maskedNameFrom(text)),
       gender: genderFrom(tokens, text),
       age: intFrom(text, [/(\d{1,2})\s*岁/]),
       work_years: intFrom(text, [/工作\s*(\d{1,2})\s*年/, /(\d{1,2})\s*年经验/]),
@@ -934,13 +940,11 @@ def _liepin_structured_cards_payload_probe_script(max_cards: int) -> str:
       experience_preview: experience,
       education_preview: education,
     };
-    if (payload.ref) {
-      cards.push(Object.fromEntries(Object.entries(payload).filter(([, value]) => {
-        if (value === null || value === undefined || value === "") return false;
-        if (Array.isArray(value) && value.length === 0) return false;
-        return true;
-      })));
-    }
+    cards.push(Object.fromEntries(Object.entries(payload).filter(([, value]) => {
+      if (value === null || value === undefined || value === "") return false;
+      if (Array.isArray(value) && value.length === 0) return false;
+      return true;
+    })));
   });
   return JSON.stringify({ ok: true, schema_version: schema, cards });
 })()
