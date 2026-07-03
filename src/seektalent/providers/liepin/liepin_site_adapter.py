@@ -61,7 +61,6 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _merge_liepin_detail_targets,
     _opencli_result_text,
     _parse_page_id as _parse_page_id,
-    _positive_int,
     _positive_int_or_none,
     _rank_liepin_detail_targets,
     _rank_liepin_result_card_targets,
@@ -70,7 +69,6 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _safe_filename,
     _safe_structured_cards_from_probe_output,
     _state_url as _state_url,
-    _string_key_mapping_or_none,
     _tab_page_id,
     _tab_urls_by_page_id,
     _target_ref,
@@ -630,265 +628,20 @@ class LiepinSiteAdapter:
         max_cards: int,
         native_filters: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        if target_resumes < 1 or target_resumes > 10:
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-        self._append_agent_event(
-            source_run_id,
-            {"action_kind": "search_cards_started", "route_kind": "search", "ok": True},
+        from seektalent.providers.liepin.liepin_search_workflow import (
+            LiepinSearchWorkflow,
+            LiepinSearchWorkflowRequest,
         )
-        if native_filters:
-            self._append_agent_event(
-                source_run_id,
-                {"action_kind": "apply_filters_started", "route_kind": "search", "ok": True},
-            )
-        cards = self.search_liepin_cards(
-            source_run_id=source_run_id,
-            query=query,
-            max_pages=max_pages,
-            max_cards=max_cards,
-            native_filters=native_filters,
-        )
-        self._append_agent_event(
-            source_run_id,
-            {
-                "action_kind": "search_submitted",
-                "route_kind": "search",
-                "ok": cards.get("status") == "succeeded",
-                "cards_seen": _positive_int(cards.get("cards_seen")),
-                "safe_reason_code": (
-                    str(cards.get("safe_reason_code") or cards.get("stop_reason") or "")
-                    if cards.get("status") != "succeeded"
-                    else None
-                ),
-            },
-        )
-        if native_filters:
-            self._append_agent_event(
-                source_run_id,
-                {
-                    "action_kind": "apply_filters_completed",
-                    "route_kind": "search",
-                    "ok": cards.get("status") == "succeeded",
-                },
-            )
-        cards_seen = _positive_int(cards.get("cards_seen"))
-        if cards.get("status") != "succeeded":
-            return self._blocked_resumes_envelope(
-                source_run_id=source_run_id,
-                query=query,
-                safe_reason_code=str(
-                    cards.get("safe_reason_code") or cards.get("stop_reason") or "failed_provider_error"
-                ),
-                cards_seen=cards_seen,
-            )
-        visible = self.extract_visible_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
-        if not visible.ok:
-            return self._blocked_resumes_envelope(
-                source_run_id=source_run_id,
-                query=query,
-                safe_reason_code=visible.safe_reason_code,
-                cards_seen=cards_seen,
-            )
-        raw_cards = visible.observation.get("cards") if isinstance(visible.observation, Mapping) else None
-        card_items = raw_cards if isinstance(raw_cards, list) else []
-        self._append_agent_event(
-            source_run_id,
-            {
-                "action_kind": "visible_cards_observed",
-                "route_kind": "search",
-                "ok": True,
-                "visible_cards": len(card_items),
-                "target_resumes": target_resumes,
-                "cards_seen": cards_seen or len(card_items),
-            },
-        )
-        cards_seen_for_resume = max(cards_seen, len(card_items))
-        detail_urls_by_rank: dict[int, str] = {}
 
-        def remember_detail_urls(cards_to_cache: Sequence[object]) -> None:
-            for card in cards_to_cache:
-                card_payload = _string_key_mapping_or_none(card)
-                if card_payload is None:
-                    continue
-                ref = card_payload.get("ref")
-                if not isinstance(ref, str) or not ref:
-                    continue
-                rank = _positive_int_or_none(card_payload.get("provider_rank") or 0)
-                if rank is None or rank in detail_urls_by_rank:
-                    continue
-                detail_url = self._safe_liepin_detail_url_for_ref(ref)
-                if detail_url is not None:
-                    detail_urls_by_rank[rank] = detail_url
-
-        remember_detail_urls(card_items)
-        self._append_agent_event(
-            source_run_id,
-            {
-                "action_kind": "detail_urls_cached",
-                "route_kind": "search",
-                "ok": True,
-                "cached_detail_urls": len(detail_urls_by_rank),
-            },
-        )
-        opened = 0
-        attempted_ranks: set[int] = set()
-        using_cached_card_items = False
-        while opened < target_resumes:
-            selected_card: Mapping[str, object] | None = None
-            selected_ref: str | None = None
-            selected_rank: int | None = None
-            for card in card_items:
-                card_payload = _string_key_mapping_or_none(card)
-                if card_payload is None:
-                    continue
-                ref = card_payload.get("ref")
-                rank = _positive_int_or_none(card_payload.get("provider_rank") or opened + 1)
-                if rank is None:
-                    continue
-                if rank in attempted_ranks:
-                    continue
-                if not isinstance(ref, str) or not ref:
-                    continue
-                selected_card = card_payload
-                selected_ref = ref
-                selected_rank = rank
-                break
-            if selected_card is None or selected_ref is None or selected_rank is None:
-                break
-            attempted_ranks.add(selected_rank)
-            self._append_agent_event(
-                source_run_id,
-                {
-                    "action_kind": "detail_candidate_selected",
-                    "route_kind": "search",
-                    "ok": True,
-                    "rank": selected_rank,
-                    "ref": selected_ref,
-                },
-            )
-            cached_detail_url = detail_urls_by_rank.get(selected_rank)
-            if using_cached_card_items and cached_detail_url is not None:
-                open_result = self._open_liepin_detail_cached_url(
-                    source_run_id=source_run_id,
-                    ref=selected_ref,
-                    rank=selected_rank,
-                    detail_url=cached_detail_url,
-                )
-            else:
-                open_result = self.open_liepin_detail(
-                    source_run_id=source_run_id,
-                    ref=selected_ref,
-                    rank=selected_rank,
-                )
-            if not open_result.ok:
-                self._append_agent_event(
-                    source_run_id,
-                    {
-                        "action_kind": "open_detail_failed",
-                        "route_kind": "detail",
-                        "ok": False,
-                        "rank": selected_rank,
-                        "ref": selected_ref,
-                        "safe_reason_code": open_result.safe_reason_code,
-                    },
-                )
-                continue
-            capture_result = self.capture_liepin_detail_resume(source_run_id=source_run_id, rank=selected_rank)
-            if capture_result.ok:
-                opened += 1
-                self._append_agent_event(
-                    source_run_id,
-                    {
-                        "action_kind": "capture_detail_succeeded",
-                        "route_kind": "detail",
-                        "ok": True,
-                        "rank": selected_rank,
-                    },
-                )
-                if opened < target_resumes:
-                    restored_page_id = self._select_canonical_liepin_search_page()
-                    self._append_agent_event(
-                        source_run_id,
-                        {
-                            "action_kind": "return_to_search_after_capture",
-                            "route_kind": "search",
-                            "ok": restored_page_id is not None,
-                            "rank": selected_rank,
-                        },
-                    )
-                    if restored_page_id is None:
-                        using_cached_card_items = True
-                        continue
-                    refreshed = self.extract_visible_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
-                    if not refreshed.ok:
-                        self._append_agent_event(
-                            source_run_id,
-                            {
-                                "action_kind": "visible_cards_refresh_failed_after_return",
-                                "route_kind": "search",
-                                "ok": False,
-                                "safe_reason_code": refreshed.safe_reason_code,
-                            },
-                        )
-                        break
-                    raw_refreshed_cards = (
-                        refreshed.observation.get("cards") if isinstance(refreshed.observation, Mapping) else None
-                    )
-                    refreshed_card_items = raw_refreshed_cards if isinstance(raw_refreshed_cards, list) else []
-                    if refreshed_card_items:
-                        card_items = refreshed_card_items
-                        using_cached_card_items = False
-                        remember_detail_urls(card_items)
-                    else:
-                        using_cached_card_items = True
-                    cards_seen_for_resume = max(cards_seen_for_resume, len(refreshed_card_items))
-                    self._append_agent_event(
-                        source_run_id,
-                        {
-                            "action_kind": "visible_cards_refreshed_after_return",
-                            "route_kind": "search",
-                            "ok": True,
-                            "visible_cards": len(refreshed_card_items),
-                            "cards_seen": cards_seen_for_resume,
-                        },
-                    )
-            else:
-                self._append_agent_event(
-                    source_run_id,
-                    {
-                        "action_kind": "capture_detail_failed",
-                        "route_kind": "detail",
-                        "ok": False,
-                        "rank": selected_rank,
-                        "safe_reason_code": capture_result.safe_reason_code,
-                    },
-                )
-        if opened == 0:
-            return self._blocked_resumes_envelope(
+        return LiepinSearchWorkflow(site=_LiepinSearchWorkflowSite(self)).search_detail_backed_resumes(
+            LiepinSearchWorkflowRequest(
                 source_run_id=source_run_id,
                 query=query,
-                safe_reason_code="liepin_opencli_detail_not_opened",
-                cards_seen=cards_seen_for_resume,
+                target_resumes=target_resumes,
+                max_pages=max_pages,
+                max_cards=max_cards,
+                native_filters=native_filters,
             )
-        if opened < target_resumes:
-            self._append_agent_event(
-                source_run_id,
-                {
-                    "action_kind": "detail_target_not_met",
-                    "route_kind": "detail",
-                    "ok": False,
-                    "target_resumes": target_resumes,
-                    "resumes_returned": opened,
-                    "visible_cards": len(card_items),
-                },
-            )
-        return self.finalize_liepin_resumes(
-            source_run_id=source_run_id,
-            query=query,
-            max_pages=max_pages,
-            max_cards=max_cards,
-            cards_seen=cards_seen_for_resume,
-            target_resumes=target_resumes,
         )
 
     def finalize_liepin_resumes(
@@ -2661,6 +2414,95 @@ class LiepinSiteAdapter:
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         if not any(fragment in normalized for fragment in ALLOWED_CLICK_TARGET_FRAGMENTS):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+
+
+@dataclass(frozen=True)
+class _LiepinSearchWorkflowSite:
+    adapter: LiepinSiteAdapter
+
+    def append_agent_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
+        self.adapter._append_agent_event(source_run_id, event)
+
+    def search_liepin_cards(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        max_pages: int,
+        max_cards: int,
+        native_filters: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        return self.adapter.search_liepin_cards(
+            source_run_id=source_run_id,
+            query=query,
+            max_pages=max_pages,
+            max_cards=max_cards,
+            native_filters=native_filters,
+        )
+
+    def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
+        return self.adapter.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
+
+    def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
+        return self.adapter._safe_liepin_detail_url_for_ref(ref)
+
+    def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
+        return self.adapter.open_liepin_detail(source_run_id=source_run_id, ref=ref, rank=rank)
+
+    def open_liepin_detail_cached_url(
+        self,
+        *,
+        source_run_id: str,
+        ref: str,
+        rank: int,
+        detail_url: str,
+    ) -> OpenCliBrowserResult:
+        return self.adapter._open_liepin_detail_cached_url(
+            source_run_id=source_run_id,
+            ref=ref,
+            rank=rank,
+            detail_url=detail_url,
+        )
+
+    def capture_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
+        return self.adapter.capture_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
+
+    def restore_liepin_search_page(self) -> str | None:
+        return self.adapter._select_canonical_liepin_search_page()
+
+    def finalize_liepin_resumes(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        max_pages: int,
+        max_cards: int,
+        cards_seen: int | None = None,
+        target_resumes: int | None = None,
+    ) -> dict[str, object]:
+        return self.adapter.finalize_liepin_resumes(
+            source_run_id=source_run_id,
+            query=query,
+            max_pages=max_pages,
+            max_cards=max_cards,
+            cards_seen=cards_seen,
+            target_resumes=target_resumes,
+        )
+
+    def blocked_resumes_envelope(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        safe_reason_code: str | None,
+        cards_seen: int,
+    ) -> dict[str, object]:
+        return self.adapter._blocked_resumes_envelope(
+            source_run_id=source_run_id,
+            query=query,
+            safe_reason_code=safe_reason_code or "failed_provider_error",
+            cards_seen=cards_seen,
+        )
 
 
 def _is_role_button_command(args: tuple[str, ...]) -> bool:
