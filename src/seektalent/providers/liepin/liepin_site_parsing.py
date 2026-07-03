@@ -429,7 +429,7 @@ def _safe_structured_cards_from_probe_output(output: str, *, max_cards: int) -> 
         raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
     if not isinstance(payload, dict):
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
-    if payload.get("ok") is False:
+    if payload.get("ok") is not True:
         raise OpenCliBrowserError(str(payload.get("safeReasonCode") or "liepin_opencli_malformed_state"))
     if payload.get("schema_version") != "seektalent.liepin_structured_cards_probe.v1":
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
@@ -484,13 +484,14 @@ def _sanitize_structured_card_mapping(item: Mapping[str, object]) -> dict[str, o
             card[field] = values
     experience_preview = _sanitize_card_preview_list(
         item.get("experience_preview"),
-        allowed_fields=("company", "title", "date_range", "duration", "industry", "location"),
+        allowed_fields=("company", "title", "date_range", "duration"),
+        allowed_bool_fields=("is_current",),
     )
     if experience_preview:
         card["experience_preview"] = experience_preview
     education_preview = _sanitize_card_preview_list(
         item.get("education_preview"),
-        allowed_fields=("school", "major", "degree", "date_range", "duration"),
+        allowed_fields=("school", "major", "degree", "recruitment_type", "date_range"),
     )
     if education_preview:
         card["education_preview"] = education_preview
@@ -533,6 +534,7 @@ def _sanitize_card_preview_list(
     value: object,
     *,
     allowed_fields: Sequence[str],
+    allowed_bool_fields: Sequence[str] = (),
 ) -> tuple[dict[str, object], ...]:
     if value is None:
         return ()
@@ -550,6 +552,10 @@ def _sanitize_card_preview_list(
             text = _optional_bounded_card_text(raw_preview.get(field), max_chars=180)
             if text is not None:
                 preview[field] = text
+        for field in allowed_bool_fields:
+            bool_value = raw_preview.get(field)
+            if isinstance(bool_value, bool):
+                preview[field] = bool_value
         if preview:
             previews.append(preview)
     return tuple(previews)

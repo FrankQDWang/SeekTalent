@@ -44,6 +44,48 @@ def _safe_card_summary_contract_fields(card: Mapping[str, object]) -> dict[str, 
     return {key: value for key, value in card.items() if key not in metadata_keys}
 
 
+def _structured_cards_probe_json(*refs: str) -> str:
+    cards: list[dict[str, object]] = []
+    for rank, ref in enumerate(refs or ("70",), start=1):
+        is_second = ref.endswith("1")
+        cards.append(
+            {
+                "provider_rank": rank,
+                "ref": ref,
+                "masked_name": True,
+                "gender": "男",
+                "age": 36 if is_second else 40,
+                "work_years": 11 if is_second else 14,
+                "city": "上海",
+                "expected_city": "上海",
+                "education_level": "硕士",
+                "current_or_recent_company": "云栖数据" if is_second else "海光集成电路",
+                "current_or_recent_title": "数据平台负责人" if is_second else "高级主管工程师",
+                "job_intention": "数据平台专家" if is_second else "数据开发专家",
+                "skill_tags": ["Python", "Spark"] if is_second else ["Python", "Hive"],
+            }
+        )
+    return json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": cards,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _empty_structured_cards_probe_json() -> str:
+    return json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [],
+        },
+        ensure_ascii=False,
+    )
+
+
 class FakeCommands:
     def __init__(
         self,
@@ -63,9 +105,15 @@ class FakeCommands:
         self.envs.append(env)
         if self.fail:
             raise subprocess.TimeoutExpired(cmd=list(argv), timeout=1)
+        if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]:
+            output = self.outputs.get((ANY_STRUCTURED_CARD_PROBE,), _structured_cards_probe_json("70"))
+            return self._resolve_output(output)
         output = self.outputs.get(call, "{}")
         if output == "{}" and len(call) == 6 and call[3:5] == ("tab", "new"):
             return json.dumps({"page": "page-1", "url": call[5]})
+        return self._resolve_output(output)
+
+    def _resolve_output(self, output: object) -> str:
         if isinstance(output, list):
             if output:
                 item = output.pop(0)
@@ -75,7 +123,7 @@ class FakeCommands:
             return "{}"
         if isinstance(output, BaseException):
             raise output
-        return output
+        return str(output)
 
     def prepend_output(self, call: tuple[str, ...], output: str) -> None:
         existing = self.outputs.get(call)
@@ -105,7 +153,7 @@ class RefEvalCommands(FakeCommands):
     def __init__(
         self,
         *,
-        eval_outputs_by_ref: dict[str, str],
+        eval_outputs_by_ref: dict[str, str | list[str]],
         default_eval_output: str = "null",
         outputs: dict[tuple[str, ...], str | list[str]] | None = None,
     ) -> None:
@@ -124,10 +172,15 @@ class RefEvalCommands(FakeCommands):
                 "seektalent.liepin_structured_cards_probe.v1" in script
                 and ANY_STRUCTURED_CARD_PROBE in self.eval_outputs_by_ref
             ):
-                return self.eval_outputs_by_ref[ANY_STRUCTURED_CARD_PROBE]
+                return self._resolve_output(self.eval_outputs_by_ref[ANY_STRUCTURED_CARD_PROBE])
+            if "seektalent.liepin_structured_cards_probe.v1" in script:
+                refs = tuple(ref for ref in self.eval_outputs_by_ref if ref != ANY_STRUCTURED_CARD_PROBE)
+                return _structured_cards_probe_json(*refs)
             for ref, output in self.eval_outputs_by_ref.items():
+                if ref == ANY_STRUCTURED_CARD_PROBE:
+                    continue
                 if f'data-opencli-ref="{ref}"' in script:
-                    return output
+                    return self._resolve_output(output)
             return self.default_eval_output
         return super().run(argv, timeout=timeout, env=env)
 
@@ -522,6 +575,70 @@ def test_structured_liepin_cards_parser_preserves_bool_masked_name_and_rejects_d
     bad_output["cards"][0]["masked_name"] = "王**"
     with pytest.raises(OpenCliBrowserError):
         _safe_structured_cards_from_probe_output(json.dumps(bad_output, ensure_ascii=False), max_cards=10)
+
+
+@pytest.mark.parametrize("ok_value", [None, False, "true", 1])
+def test_structured_liepin_cards_parser_requires_true_ok(ok_value: object) -> None:
+    payload: dict[str, object] = {
+        "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+        "cards": [],
+    }
+    if ok_value is not None:
+        payload["ok"] = ok_value
+
+    with pytest.raises(OpenCliBrowserError):
+        _safe_structured_cards_from_probe_output(json.dumps(payload, ensure_ascii=False), max_cards=10)
+
+
+def test_structured_liepin_cards_parser_drops_preview_fields_outside_worker_contract() -> None:
+    output = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [
+                {
+                    "provider_rank": 1,
+                    "ref": "70",
+                    "masked_name": True,
+                    "experience_preview": [
+                        {
+                            "company": "海光集成电路",
+                            "title": "高级主管工程师",
+                            "date_range": "2023.10-至今",
+                            "duration": "2年",
+                            "is_current": True,
+                            "industry": "芯片",
+                            "location": "上海",
+                        }
+                    ],
+                    "education_preview": [
+                        {
+                            "school": "北京大学",
+                            "major": "计算机",
+                            "degree": "本科",
+                            "recruitment_type": "统招",
+                            "date_range": "2002.09-2006.07",
+                            "duration": "4年",
+                        }
+                    ],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    cards = _safe_structured_cards_from_probe_output(output, max_cards=10)
+
+    experience = cards[0]["experience_preview"][0]
+    education = cards[0]["education_preview"][0]
+    assert experience["is_current"] is True
+    assert experience["duration"] == "2年"
+    assert "industry" not in experience
+    assert "location" not in experience
+    assert education["recruitment_type"] == "统招"
+    assert education["date_range"] == "2002.09-2006.07"
+    assert "duration" not in education
+    LiepinSafeCardSummary.model_validate(_safe_card_summary_contract_fields(cards[0]))
 
 
 def test_structured_liepin_cards_probe_script_is_structured_and_ranks_after_ref_filter() -> None:
@@ -2580,17 +2697,6 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
         "云栖数据 · 数据平台负责人 2020.01-至今\n"
         "[71]<div class=detail-resume-card-wrap><span>查看完整简历</span></div>"
     )
-    refreshed_search_results_state = (
-        "id=resultList\n"
-        "王** 40岁 工作14年 硕士 上海\n"
-        "求职期望：上海 数据开发专家\n"
-        "海光集成电路 · 高级主管工程师 2023.10-至今\n"
-        "[170]<div class=detail-resume-card-wrap><span>查看完整简历</span></div>\n"
-        "张** 36岁 工作11年 硕士 上海\n"
-        "求职期望：上海 数据平台专家\n"
-        "云栖数据 · 数据平台负责人 2020.01-至今\n"
-        "[171]<div class=detail-resume-card-wrap><span>查看完整简历</span></div>"
-    )
     detail70_state = "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家\n负责数据仓库、数据治理和 Python 平台。"
     detail71_state = "张** 36岁 工作11年 硕士 上海\n当前职位：数据平台专家\n负责数据治理、Python 和 Spark 平台。"
     commands = RefEvalCommands(
@@ -2609,14 +2715,16 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
                 search_url,
                 search_url,
                 search_url,
+                search_url,
+                search_url,
                 detail70_url,
                 search_url,
                 search_url,
                 search_url,
                 search_url,
                 detail71_url,
-                search_url,
-                search_url,
+                detail71_url,
+                detail71_url,
             ],
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 search_form_state,
@@ -2624,11 +2732,13 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
                 search_results_state,
                 search_results_state,
                 search_results_state,
+                search_results_state,
+                search_results_state,
                 detail70_state,
-                refreshed_search_results_state,
-                refreshed_search_results_state,
-                refreshed_search_results_state,
-                refreshed_search_results_state,
+                detail71_state,
+                detail71_state,
+                detail71_state,
+                detail71_state,
                 detail71_state,
             ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
@@ -2770,7 +2880,15 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
     )
     detail71_state = "张** 36岁 工作11年 硕士 上海\n当前职位：数据平台专家\n负责数据治理、Python 和 Spark 平台。"
     commands = RefEvalCommands(
-        eval_outputs_by_ref={"70": detail70_url, "71": detail71_url},
+        eval_outputs_by_ref={
+            "70": detail70_url,
+            "71": detail71_url,
+            ANY_STRUCTURED_CARD_PROBE: [
+                _structured_cards_probe_json("70", "71"),
+                _structured_cards_probe_json("70", "71"),
+                _empty_structured_cards_probe_json(),
+            ],
+        },
         default_eval_output=_liepin_detail_payload_json(),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
@@ -2782,6 +2900,8 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
             ("opencli", "browser", "seektalent-liepin", "get", "url"): [search_url] * 12,
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 search_form_state,
+                search_results_state,
+                search_results_state,
                 search_results_state,
                 search_results_state,
                 search_results_state,
