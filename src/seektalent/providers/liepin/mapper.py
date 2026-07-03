@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 import re
 
@@ -21,6 +22,7 @@ class LiepinMappedCandidate:
 
 
 LiepinWorkerCandidate = LiepinWorkerCandidateCard | LiepinWorkerCandidateDetail
+STRUCTURED_CARD_SEARCH_TEXT_MAX_CHARS = 4000
 
 
 def _safe_raw(
@@ -133,7 +135,63 @@ def _sanitize_liepin_provider_payload(payload: dict[str, object]) -> dict[str, o
 def _mapped_normalized_text(worker_candidate: LiepinWorkerCandidate, provider_payload: dict[str, object]) -> str:
     if isinstance(worker_candidate, LiepinWorkerCandidateDetail):
         return structured_liepin_detail_text(provider_payload)
+    if worker_candidate.safe_card_summary is not None:
+        return _structured_card_search_text(worker_candidate.safe_card_summary.model_dump(mode="json"))
     return worker_candidate.normalized_text
+
+
+def _structured_card_search_text(summary: Mapping[str, object]) -> str:
+    parts: list[str] = []
+    seen: set[str] = set()
+    for key in (
+        "display_title",
+        "current_or_recent_company",
+        "current_or_recent_title",
+        "work_years",
+        "city",
+        "expected_city",
+        "education_level",
+        "job_intention",
+        "active_status",
+    ):
+        _append_structured_text(parts, seen, summary.get(key))
+    for key in ("school_names", "major_names", "skill_tags", "badges"):
+        _append_structured_sequence(parts, seen, summary.get(key))
+    for item in _mapping_sequence(summary.get("experience_preview")):
+        for key in ("company", "title", "date_range", "duration"):
+            _append_structured_text(parts, seen, item.get(key))
+    for item in _mapping_sequence(summary.get("education_preview")):
+        for key in ("school", "major", "degree", "recruitment_type", "date_range"):
+            _append_structured_text(parts, seen, item.get(key))
+    return " ".join(parts)[:STRUCTURED_CARD_SEARCH_TEXT_MAX_CHARS]
+
+
+def _append_structured_sequence(parts: list[str], seen: set[str], value: object) -> None:
+    if not isinstance(value, list | tuple):
+        return
+    for item in value:
+        _append_structured_text(parts, seen, item)
+
+
+def _mapping_sequence(value: object) -> tuple[Mapping[str, object], ...]:
+    if not isinstance(value, list | tuple):
+        return ()
+    return tuple(item for item in value if isinstance(item, Mapping))
+
+
+def _append_structured_text(parts: list[str], seen: set[str], value: object) -> None:
+    if isinstance(value, bool) or value is None:
+        return
+    if not isinstance(value, str | int):
+        return
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    if not text:
+        return
+    key = text.casefold()
+    if key in seen:
+        return
+    seen.add(key)
+    parts.append(text)
 
 
 def _copy_safe_card_payload_metadata(raw: dict[str, object], payload: dict[str, object]) -> None:

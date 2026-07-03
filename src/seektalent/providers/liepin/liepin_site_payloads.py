@@ -10,6 +10,38 @@ from seektalent.providers.liepin.liepin_site_parsing import _safe_artifact_segme
 JsonObject = dict[str, object]
 ArtifactWriter = Callable[[str, str, object], str]
 AgentEventReader = Callable[[str], list[dict[str, object]]]
+FORBIDDEN_CARD_SUMMARY_KEYS = {
+    "visible_text",
+    "normalized_card_text",
+    "raw_html",
+    "inner_html",
+    "inner_text",
+    "fullText",
+    "rawText",
+    "page_text",
+}
+_CARD_SUMMARY_IDENTITY_KEYS = {"provider_rank", "ref"}
+
+
+def _safe_card_summary_payload(summary: Mapping[str, object]) -> dict[str, object]:
+    return {
+        str(key): _safe_card_summary_value(value)
+        for key, value in summary.items()
+        if str(key) not in FORBIDDEN_CARD_SUMMARY_KEYS and str(key) not in _CARD_SUMMARY_IDENTITY_KEYS
+    }
+
+
+def _safe_card_summary_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _safe_card_summary_value(item)
+            for key, item in value.items()
+            if str(key) not in FORBIDDEN_CARD_SUMMARY_KEYS and str(key) not in _CARD_SUMMARY_IDENTITY_KEYS
+        }
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_safe_card_summary_value(item) for item in value]
+    return value
+
 
 def blocked_cards_envelope(
     *,
@@ -83,7 +115,8 @@ def cards_envelope(
     safe_summary_refs: list[str] = []
     protected_snapshot_refs: list[str] = [page_snapshot_ref]
     for rank, summary in enumerate(cards, start=1):
-        digest = hashlib.sha256(json.dumps(summary, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
+        safe_summary = _safe_card_summary_payload(summary)
+        digest = hashlib.sha256(json.dumps(safe_summary, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
         provider_material_ref = write_pi_artifact(
             "protected",
             f"pi-provider-key/{safe_run_id}/{rank}.txt",
@@ -92,12 +125,12 @@ def cards_envelope(
         safe_summary_ref = write_pi_artifact(
             "public-summary",
             f"pi-card/{safe_run_id}/{rank}.json",
-            summary,
+            safe_summary,
         )
         protected_snapshot_ref = write_pi_artifact(
             "protected",
             f"pi-card/{safe_run_id}/{rank}.json",
-            {"schema_version": "seektalent.opencli_card_snapshot.v1", "rank": rank, "summary": summary},
+            {"schema_version": "seektalent.opencli_card_snapshot.v1", "rank": rank, "summary": safe_summary},
         )
         safe_summary_refs.append(safe_summary_ref)
         protected_snapshot_refs.append(protected_snapshot_ref)
@@ -108,7 +141,7 @@ def cards_envelope(
                 "candidate_resume_id": f"liepin-opencli-{safe_run_id}-{rank}-{digest}",
                 "display_name_masked": bool(summary.get("display_name_masked", True)),
                 "safe_card_summary": {
-                    key: value for key, value in summary.items() if key != "display_name_masked"
+                    key: value for key, value in safe_summary.items() if key != "display_name_masked"
                 },
                 "safe_card_summary_ref": safe_summary_ref,
                 "protected_snapshot_ref": protected_snapshot_ref,

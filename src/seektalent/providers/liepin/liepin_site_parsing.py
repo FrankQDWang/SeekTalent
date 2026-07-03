@@ -227,8 +227,7 @@ def extract_liepin_card_summaries(text: str, *, max_cards: int) -> tuple[dict[st
         if not looks_like_liepin_card(block):
             continue
         summary = _safe_card_summary_from_block(block)
-        normalized_card_text = str(summary["normalized_card_text"])
-        fingerprint = hashlib.sha256(normalized_card_text.encode("utf-8")).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps(summary, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
         if fingerprint in seen:
             continue
         seen.add(fingerprint)
@@ -567,7 +566,6 @@ def _detail_provider_key_material(*, safe_run_id: str, rank: int, payload: Mappi
 
 
 def _safe_card_summary_from_block(block: str) -> dict[str, object]:
-    normalized_block = _bounded_public_text(block, max_chars=900)
     company, title = _company_title_from_block(block)
     job_intention = _job_intention_from_block(block)
     work_years = _int_match(block, r"工作\s*(\d+)\s*年|(\d+)\s*年经验")
@@ -591,8 +589,7 @@ def _safe_card_summary_from_block(block: str) -> dict[str, object]:
         "major_names": [],
         "skill_tags": skill_tags,
         "job_intention": job_intention,
-        "recent_experience_text": _recent_experience_from_block(block),
-        "normalized_card_text": normalized_block,
+        "experience_preview": _experience_preview_from_block(block, company=company, title=title),
     }
 
 
@@ -617,11 +614,18 @@ def _job_intention_from_block(block: str) -> str | None:
     return _bounded_public_text(text, max_chars=80)
 
 
-def _recent_experience_from_block(block: str) -> str | None:
-    for line in block.splitlines():
-        if "·" in line and re.search(r"\d{4}[./-]\d{2}", line):
-            return _bounded_public_text(line, max_chars=180)
-    return None
+def _experience_preview_from_block(
+    block: str, *, company: str | None, title: str | None
+) -> tuple[dict[str, object], ...]:
+    item: dict[str, object] = {}
+    if company:
+        item["company"] = company
+    if title:
+        item["title"] = title
+    match = re.search(r"\d{4}[./-]\d{2}\s*[-–—]\s*(?:至今|\d{4}[./-]\d{2})", block)
+    if match:
+        item["date_range"] = _bounded_public_text(match.group(0), max_chars=40)
+    return (item,) if item else ()
 
 
 def _expected_city_from_block(block: str) -> str | None:

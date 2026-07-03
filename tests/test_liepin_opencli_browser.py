@@ -44,6 +44,28 @@ def _safe_card_summary_contract_fields(card: Mapping[str, object]) -> dict[str, 
     return {key: value for key, value in card.items() if key not in metadata_keys}
 
 
+FORBIDDEN_CARD_TEXT_KEYS = (
+    "visible_text",
+    "normalized_card_text",
+    "raw_html",
+    "inner_html",
+    "inner_text",
+    "fullText",
+    "rawText",
+    "page_text",
+)
+
+
+def _assert_no_card_text_keys(value: object) -> None:
+    if isinstance(value, Mapping):
+        assert not (set(value) & set(FORBIDDEN_CARD_TEXT_KEYS))
+        for item in value.values():
+            _assert_no_card_text_keys(item)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            _assert_no_card_text_keys(item)
+
+
 def _structured_cards_probe_json(*refs: str) -> str:
     cards: list[dict[str, object]] = []
     for rank, ref in enumerate(refs or ("70",), start=1):
@@ -2271,6 +2293,24 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
                     "current_or_recent_title": "高级主管工程师",
                     "job_intention": "数据开发专家",
                     "skill_tags": ["FTI", "SDP", "CXL", "Pcie", "verilog"],
+                    "experience_preview": [
+                        {
+                            "company": "海光集成电路",
+                            "title": "高级主管工程师",
+                            "date_range": "2023.10-至今",
+                            "duration": "8个月",
+                            "is_current": True,
+                        }
+                    ],
+                    "education_preview": [
+                        {
+                            "school": "北京大学",
+                            "major": "计算机",
+                            "degree": "本科",
+                            "recruitment_type": "统招",
+                            "date_range": "2002.09-2006.07",
+                        }
+                    ],
                 }
             ],
         },
@@ -2301,16 +2341,25 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     assert envelope["cards"][0]["safe_card_summary"]["current_or_recent_company"] == "海光集成电路"
     assert envelope["cards"][0]["safe_card_summary"]["current_or_recent_title"] == "高级主管工程师"
     assert envelope["cards"][0]["safe_card_summary"]["work_years"] == 14
-    assert "visible_text" not in envelope["cards"][0]["safe_card_summary"]
-    assert "normalized_card_text" not in envelope["cards"][0]["safe_card_summary"]
+    assert envelope["cards"][0]["safe_card_summary"]["experience_preview"][0]["company"] == "海光集成电路"
+    assert "provider_rank" not in envelope["cards"][0]["safe_card_summary"]
+    assert "ref" not in envelope["cards"][0]["safe_card_summary"]
+    _assert_no_card_text_keys(envelope)
+    serialized_envelope = json.dumps(envelope, ensure_ascii=False)
+    for forbidden in FORBIDDEN_CARD_TEXT_KEYS:
+        assert forbidden not in serialized_envelope
     assert envelope["cards"][0]["safe_card_summary_ref"].startswith("artifact://public-summary/pi-card/run-1/")
     assert (tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").is_file()
     public_summary_path = tmp_path / "public-summary" / "pi-card" / "run-1" / "1.json"
     assert public_summary_path.is_file()
     public_summary = json.loads(public_summary_path.read_text(encoding="utf-8"))
     assert public_summary["current_or_recent_company"] == "海光集成电路"
-    assert "visible_text" not in public_summary
-    assert "normalized_card_text" not in public_summary
+    assert public_summary["skill_tags"] == ["FTI", "SDP", "CXL", "Pcie", "verilog"]
+    assert public_summary["experience_preview"][0]["title"] == "高级主管工程师"
+    assert public_summary["education_preview"][0]["school"] == "北京大学"
+    assert "provider_rank" not in public_summary
+    assert "ref" not in public_summary
+    _assert_no_card_text_keys(public_summary)
     assert ("opencli", "browser", "seektalent-liepin", "tab", "list") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL) in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "get", "url") in commands.calls
@@ -3743,10 +3792,11 @@ def test_extract_liepin_card_summaries_strips_opencli_accessibility_markup() -> 
 
     assert len(cards) == 1
     summary = cards[0]
-    normalized = str(summary["normalized_card_text"])
-    assert "<" not in normalized
-    assert "role=" not in normalized
-    assert "aria-label" not in normalized
+    serialized = json.dumps(summary, ensure_ascii=False)
+    assert "normalized_card_text" not in summary
+    assert "<" not in serialized
+    assert "role=" not in serialized
+    assert "aria-label" not in serialized
     assert {"span", "svg", "div", "table"}.isdisjoint(set(summary["skill_tags"]))
 
 

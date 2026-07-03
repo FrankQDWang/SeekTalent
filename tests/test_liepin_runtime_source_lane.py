@@ -1370,6 +1370,58 @@ def test_liepin_runtime_card_policy_ignores_candidate_search_text() -> None:
     assert result.detail_recommendations == ()
 
 
+def test_liepin_card_summary_for_candidate_ignores_candidate_search_text() -> None:
+    sentinel = "SENTINEL raw-ish visible_text normalized_card_text fullText"
+    candidate = ResumeCandidate(
+        resume_id="structured-summary-only",
+        source_resume_id="structured-summary-only",
+        snapshot_sha256=sha256_json({"candidateId": "structured-summary-only"}),
+        dedup_key="structured-summary-only",
+        search_text=f"Backend Engineer FastAPI ranking {sentinel}",
+        raw={
+            "safe_card_summary": {
+                "current_or_recent_company": "结构化科技",
+                "current_or_recent_title": "AI平台工程师",
+                "skill_tags": ["Python", "RAG"],
+                "experience_preview": [
+                    {
+                        "company": "结构化科技",
+                        "title": "AI平台工程师",
+                        "date_range": "2021.04-至今",
+                        "duration": "3年",
+                    }
+                ],
+                "education_preview": [
+                    {
+                        "school": "齐齐哈尔大学",
+                        "major": "计算机科学与技术",
+                        "degree": "本科",
+                    }
+                ],
+            }
+        },
+    )
+
+    summary = runtime_lane._card_summary_for_candidate(candidate=candidate, provider_rank=7)
+
+    assert summary.provider_rank == 7
+    assert summary.current_or_recent_company == "结构化科技"
+    assert summary.current_or_recent_title == "AI平台工程师"
+    assert summary.skill_tags == ("Python", "RAG")
+    assert summary.experience_preview == (
+        {
+            "company": "结构化科技",
+            "title": "AI平台工程师",
+            "date_range": "2021.04-至今",
+            "duration": "3年",
+        },
+    )
+    assert summary.education_preview == (
+        {"school": "齐齐哈尔大学", "major": "计算机科学与技术", "degree": "本科"},
+    )
+    assert sentinel not in repr(summary)
+
+
 def test_liepin_runtime_card_summary_filters_preview_mappings_to_allowed_scalars() -> None:
     candidate = ResumeCandidate(
         resume_id="preview-filtering",

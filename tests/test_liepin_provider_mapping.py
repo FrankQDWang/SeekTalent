@@ -337,6 +337,36 @@ def test_safe_card_summary_does_not_copy_raw_payload_contact_material() -> None:
     assert "session=secret" not in str(mapped.candidate.raw["safe_card_summary"])
 
 
+def test_card_mapping_derives_normalized_text_from_structured_card_summary() -> None:
+    sentinel = "SENTINEL legacy worker normalized card text"
+    card = _worker_card().model_copy(
+        update={
+            "normalized_text": sentinel,
+            "safe_card_summary": LiepinSafeCardSummary(
+                current_or_recent_company="结构化科技",
+                current_or_recent_title="AI平台工程师",
+                skill_tags=("Python", "RAG"),
+                experience_preview=(
+                    {
+                        "company": "结构化科技",
+                        "title": "AI平台工程师",
+                        "date_range": "2021.04-至今",
+                        "duration": "3年",
+                    },
+                ),
+            ),
+        }
+    )
+
+    mapped = map_liepin_worker_card(card)
+
+    for text in (mapped.candidate.search_text, mapped.provider_snapshot.normalized_text):
+        assert "AI平台工程师" in text
+        assert "结构化科技" in text
+        assert "Python" in text
+        assert sentinel not in text
+
+
 def test_detail_mapping_keeps_raw_payload_and_detail_body_out_of_resume_candidate_raw() -> None:
     mapped = map_liepin_worker_detail(_worker_detail(), raw_payload_artifact_ref="worker://details/candidate-1.json")
 
