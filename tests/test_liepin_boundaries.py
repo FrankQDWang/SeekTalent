@@ -110,13 +110,34 @@ def test_liepin_card_text_tail_forbidden_fields_are_not_computed() -> None:
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
         parents = _ast_parent_map(tree)
+        constants = _constant_string_names(tree)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant):
+            if isinstance(node, ast.Constant) or _is_assignment_target_name(node):
                 continue
-            if _computed_forbidden_card_text_tail_field(node, source, parents) is None:
+            if _computed_forbidden_card_text_tail_field(node, source, parents, constants) is None:
                 continue
             hits.append(f"{rel}:{getattr(node, 'lineno', '?')}:{ast.get_source_segment(source, node)!r}")
     assert hits == []
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('candidate_key = f\'{"visible"}_{"text"}\'', "visible_text"),
+        ("candidate_key = '{}_{}'.format('visible', 'text')", "visible_text"),
+        ("candidate_key = '%s_%s' % ('visible', 'text')", "visible_text"),
+        ("suffix = '_text'\ncandidate_key = 'visible' + suffix", "visible_text"),
+        ('candidate_key = f\'{"normalized"}_{"card"}_{"text"}\'', "normalized_card_text"),
+        ("candidate_key = '{}_{}_{}'.format('normalized', 'card', 'text')", "normalized_card_text"),
+        ("candidate_key = '%s_%s_%s' % ('normalized', 'card', 'text')", "normalized_card_text"),
+        ("suffix = '_card_text'\ncandidate_key = 'normalized' + suffix", "normalized_card_text"),
+    ],
+)
+def test_liepin_card_text_tail_computed_detector_catches_adversarial_constructions(
+    source: str,
+    expected: str,
+) -> None:
+    assert _computed_card_text_tail_fields_from_source(source) == [expected]
 
 
 def test_production_python_does_not_import_opencli():
@@ -725,8 +746,9 @@ def _computed_forbidden_card_text_tail_field(
     node: ast.AST,
     source: str,
     parents: dict[ast.AST, ast.AST],
+    constants: dict[str, str] | None = None,
 ) -> str | None:
-    value = _static_string_value(node)
+    value = _static_string_value(node, constants)
     if value in _LIEPIN_CARD_TEXT_TAIL_FIELDS:
         return value
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "join":
@@ -737,41 +759,138 @@ def _computed_forbidden_card_text_tail_field(
     return None
 
 
-def _static_string_value(node: ast.AST) -> str | None:
+def _computed_card_text_tail_fields_from_source(source: str) -> list[str]:
+    tree = ast.parse(source)
+    parents = _ast_parent_map(tree)
+    constants = _constant_string_names(tree)
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) or _is_assignment_target_name(node):
+            continue
+        field = _computed_forbidden_card_text_tail_field(node, source, parents, constants)
+        if field is not None:
+            hits.append(field)
+    return hits
+
+
+def _is_assignment_target_name(node: ast.AST) -> bool:
+    return isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load)
+
+
+def _static_string_value(node: ast.AST, constants: dict[str, str] | None = None) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+    if isinstance(node, ast.Name) and constants is not None:
+        return constants.get(node.id)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left = _static_string_value(node.left)
-        right = _static_string_value(node.right)
+        left = _static_string_value(node.left, constants)
+        right = _static_string_value(node.right, constants)
         if left is not None and right is not None:
             return left + right
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mod):
+        template = _static_string_value(node.left, constants)
+        values = _static_format_values(node.right, constants)
+        if template is None or values is None:
+            return None
+        try:
+            return template % values
+        except (TypeError, ValueError):
+            return None
     if isinstance(node, ast.JoinedStr):
         parts: list[str] = []
         for value in node.values:
-            if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+                continue
+            if isinstance(value, ast.FormattedValue) and value.conversion == -1 and value.format_spec is None:
+                formatted = _static_string_value(value.value, constants)
+                if formatted is not None:
+                    parts.append(formatted)
+                    continue
                 return None
-            parts.append(value.value)
+            return None
         return "".join(parts)
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "join":
-        separator = _static_string_value(node.func.value)
+        separator = _static_string_value(node.func.value, constants)
         if separator is None or len(node.args) != 1:
             return None
-        values = _static_string_sequence(node.args[0])
+        values = _static_string_sequence(node.args[0], constants)
         if values is not None:
             return separator.join(values)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "format":
+        template = _static_string_value(node.func.value, constants)
+        if template is None:
+            return None
+        args = _static_format_args(node.args, constants)
+        kwargs = _static_format_kwargs(node.keywords, constants)
+        if args is None or kwargs is None:
+            return None
+        try:
+            return template.format(*args, **kwargs)
+        except (IndexError, KeyError, ValueError):
+            return None
     return None
 
 
-def _static_string_sequence(node: ast.AST) -> tuple[str, ...] | None:
+def _static_string_sequence(node: ast.AST, constants: dict[str, str] | None = None) -> tuple[str, ...] | None:
     if not isinstance(node, ast.List | ast.Tuple | ast.Set):
         return None
     values: list[str] = []
     for item in node.elts:
-        value = _static_string_value(item)
+        value = _static_string_value(item, constants)
         if value is None:
             return None
         values.append(value)
     return tuple(values)
+
+
+def _static_format_values(node: ast.AST, constants: dict[str, str] | None) -> str | tuple[str, ...] | None:
+    values = _static_string_sequence(node, constants)
+    if values is not None:
+        return values
+    return _static_string_value(node, constants)
+
+
+def _static_format_args(nodes: list[ast.expr], constants: dict[str, str] | None) -> tuple[str, ...] | None:
+    values: list[str] = []
+    for node in nodes:
+        value = _static_string_value(node, constants)
+        if value is None:
+            return None
+        values.append(value)
+    return tuple(values)
+
+
+def _static_format_kwargs(
+    nodes: list[ast.keyword],
+    constants: dict[str, str] | None,
+) -> dict[str, str] | None:
+    values: dict[str, str] = {}
+    for node in nodes:
+        if node.arg is None:
+            return None
+        value = _static_string_value(node.value, constants)
+        if value is None:
+            return None
+        values[node.arg] = value
+    return values
+
+
+def _constant_string_names(tree: ast.AST) -> dict[str, str]:
+    constants: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            value = _static_string_value(node.value, constants)
+            if value is None:
+                continue
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    constants[target.id] = value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            value = _static_string_value(node.value, constants) if node.value is not None else None
+            if value is not None:
+                constants[node.target.id] = value
+    return constants
 
 
 def _source_segment_with_generator(node: ast.AST, source: str, parents: dict[ast.AST, ast.AST]) -> str:
