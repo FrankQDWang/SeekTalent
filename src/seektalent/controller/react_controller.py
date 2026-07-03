@@ -22,7 +22,12 @@ from seektalent.prompt_safety import (
 )
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_controller_decision, unpack_repair_result
-from seektalent.retrieval.query_plan import canonicalize_controller_query_terms, normalize_term
+from seektalent.retrieval.query_plan import (
+    _ROUND_SECONDARY_TITLE_ANCHOR_REASON,
+    canonicalize_controller_query_terms,
+    normalize_term,
+    try_project_secondary_title_anchor_after_round_one,
+)
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
 DISABLED_FILTER_FIELDS = frozenset({"position", *PROTECTED_ATTRIBUTE_FIELDS})
@@ -222,6 +227,28 @@ def validate_controller_decision(*, context: ControllerContext, decision: Contro
     return None
 
 
+def project_controller_decision_if_round_legal(
+    context: ControllerContext,
+    decision: ControllerDecision,
+    reason: str,
+) -> ControllerDecision | None:
+    if _ROUND_SECONDARY_TITLE_ANCHOR_REASON not in reason:
+        return None
+    if not isinstance(decision, SearchControllerDecision):
+        return None
+    projected_terms = try_project_secondary_title_anchor_after_round_one(
+        decision.proposed_query_terms,
+        round_no=context.round_no,
+        query_term_pool=context.query_term_pool,
+    )
+    if projected_terms is None:
+        return None
+    projected = decision.model_copy(update={"proposed_query_terms": projected_terms})
+    if validate_controller_decision(context=context, decision=projected) is not None:
+        return None
+    return projected
+
+
 class ReActController:
     def __init__(
         self,
@@ -336,4 +363,7 @@ class ReActController:
         retry_reason = validate_controller_decision(context=context, decision=retried)
         if retry_reason is None:
             return retried
+        projected = project_controller_decision_if_round_legal(context, retried, retry_reason)
+        if projected is not None:
+            return projected
         raise ValueError(retry_reason)

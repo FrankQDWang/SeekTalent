@@ -7,6 +7,7 @@ from seektalent.retrieval.query_plan import (
     derive_explore_query_terms,
     select_query_terms,
     serialize_keyword_query,
+    try_project_secondary_title_anchor_after_round_one,
 )
 
 
@@ -531,6 +532,68 @@ def test_query_plan_rejects_secondary_title_anchor_after_round_one() -> None:
             title_anchor_terms=["Backend Engineer", "Platform Engineer"],
             query_term_pool=pool,
         )
+
+
+def _projection_pool() -> list[QueryTermCandidate]:
+    return [
+        QueryTermCandidate(
+            term="AI",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="Compiled title",
+            first_added_round=0,
+            retrieval_role="primary_role_anchor",
+            queryability="admitted",
+            family="role.ai",
+        ),
+        QueryTermCandidate(
+            term="主观投资",
+            source="job_title",
+            category="role_anchor",
+            priority=2,
+            evidence="Compiled title",
+            first_added_round=0,
+            retrieval_role="secondary_title_anchor",
+            queryability="admitted",
+            family="role.investment",
+        ),
+        QueryTermCandidate(
+            term="模型部署",
+            source="jd",
+            category="domain",
+            priority=3,
+            evidence="JD body",
+            first_added_round=0,
+            retrieval_role="core_skill",
+            queryability="admitted",
+            family="skill.model-deploy",
+        ),
+    ]
+
+
+def test_try_project_secondary_title_anchor_after_round_one_replaces_only_secondary_anchor() -> None:
+    assert try_project_secondary_title_anchor_after_round_one(
+        ["AI", "主观投资"],
+        round_no=3,
+        query_term_pool=_projection_pool(),
+    ) == ["AI", "模型部署"]
+
+
+def test_try_project_secondary_title_anchor_after_round_one_returns_none_for_round_one() -> None:
+    assert try_project_secondary_title_anchor_after_round_one(
+        ["AI", "主观投资"],
+        round_no=1,
+        query_term_pool=_projection_pool(),
+    ) is None
+
+
+def test_try_project_secondary_title_anchor_after_round_one_returns_none_without_secondary_anchor() -> None:
+    assert try_project_secondary_title_anchor_after_round_one(
+        ["AI", "模型部署"],
+        round_no=3,
+        query_term_pool=_projection_pool(),
+    ) is None
 
 
 def test_query_plan_derives_distinct_explore_query_from_active_and_reserve_terms() -> None:

@@ -7,6 +7,7 @@ from seektalent.retrieval.query_plan import (
     rotate_locations,
     serialize_keyword_query,
     select_query_terms,
+    try_project_secondary_title_anchor_after_round_one,
 )
 from seektalent.retrieval.query_builder import CTSQueryBuildInput, ProviderQueryBuildInput, build_cts_query, build_provider_query
 from seektalent.retrieval.service_factory import build_retrieval_service
@@ -25,4 +26,5 @@ __all__ = [
     "rotate_locations",
     "select_query_terms",
     "serialize_keyword_query",
+    "try_project_secondary_title_anchor_after_round_one",
 ]

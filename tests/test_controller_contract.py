@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
-from seektalent.controller.react_controller import ReActController, render_controller_prompt, validate_controller_decision
+from seektalent.controller.react_controller import (
+    ReActController,
+    project_controller_decision_if_round_legal,
+    render_controller_prompt,
+    validate_controller_decision,
+)
 from seektalent.llm import ResolvedTextModelConfig
 from seektalent.models import (
     CTSQuery,
@@ -195,6 +200,64 @@ def _agent_requirement_sheet() -> RequirementSheet:
             ),
         ],
         scoring_rationale="Score Agent fit first.",
+    )
+
+
+def _projection_requirement_sheet() -> RequirementSheet:
+    return RequirementSheet(
+        job_title="AI 主观投资工程师",
+        title_anchor_terms=["AI", "主观投资"],
+        title_anchor_rationale="Title contributes both AI and investment anchors.",
+        role_summary="Build AI investment systems.",
+        must_have_capabilities=["AI", "模型部署"],
+        hard_constraints=HardConstraintSlots(locations=["上海市"]),
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="AI",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                queryability="admitted",
+                family="role.ai",
+            ),
+            QueryTermCandidate(
+                term="主观投资",
+                source="job_title",
+                category="role_anchor",
+                priority=2,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="secondary_title_anchor",
+                queryability="admitted",
+                family="role.investment",
+            ),
+            QueryTermCandidate(
+                term="模型部署",
+                source="jd",
+                category="domain",
+                priority=3,
+                evidence="JD body",
+                first_added_round=0,
+                retrieval_role="core_skill",
+                queryability="admitted",
+                family="skill.model-deploy",
+            ),
+            QueryTermCandidate(
+                term="检索增强",
+                source="jd",
+                category="domain",
+                priority=4,
+                evidence="JD body",
+                first_added_round=0,
+                retrieval_role="domain_context",
+                queryability="admitted",
+                family="domain.rag",
+            ),
+        ],
+        scoring_rationale="Score AI system fit first.",
     )
 
 
@@ -719,6 +782,109 @@ def test_validate_controller_decision_rejects_query_terms_over_budget() -> None:
     result = validate_controller_decision(context=context, decision=decision)
     assert result is not None
     assert "must not exceed 3 terms" in result
+
+
+def test_project_controller_decision_if_round_legal_rejects_duplicate_terms_with_secondary_anchor() -> None:
+    context = _controller_context(requirement_sheet=_projection_requirement_sheet(), round_no=3)
+    decision = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Try projected query.",
+        proposed_query_terms=["AI", "AI", "主观投资"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    projected = project_controller_decision_if_round_legal(
+        context,
+        decision,
+        "rounds after 1 must not use secondary_title_anchor as a support term: 主观投资",
+    )
+
+    assert projected is None
+
+
+def test_project_controller_decision_if_round_legal_rejects_too_many_terms_with_secondary_anchor() -> None:
+    context = _controller_context(requirement_sheet=_projection_requirement_sheet(), round_no=3)
+    decision = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Try projected query.",
+        proposed_query_terms=["AI", "主观投资", "模型部署", "检索增强"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    projected = project_controller_decision_if_round_legal(
+        context,
+        decision,
+        "rounds after 1 must not use secondary_title_anchor as a support term: 主观投资",
+    )
+
+    assert projected is None
+
+
+def test_project_controller_decision_if_round_legal_rejects_missing_pool_term_with_secondary_anchor() -> None:
+    context = _controller_context(requirement_sheet=_projection_requirement_sheet(), round_no=3)
+    decision = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Try projected query.",
+        proposed_query_terms=["AI", "主观投资", "LLMTerm"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    projected = project_controller_decision_if_round_legal(
+        context,
+        decision,
+        "rounds after 1 must not use secondary_title_anchor as a support term: 主观投资",
+    )
+
+    assert projected is None
+
+
+def test_controller_projects_secondary_title_anchor_after_repair_and_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    controller = ReActController(
+        make_settings(),
+        LoadedPrompt(name="controller", path=Path("controller.md"), content="controller prompt", sha256="hash"),
+    )
+    context = _controller_context(requirement_sheet=_projection_requirement_sheet(), round_no=3)
+    invalid = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Use the title anchors.",
+        proposed_query_terms=["AI", "主观投资"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+    calls = {"count": 0}
+
+    async def fake_decide_live(
+        *,
+        context: ControllerContext,
+        prompt_cache_key: str | None = None,
+        source_user_prompt: str | None = None,
+    ) -> ControllerDecision:
+        del context, prompt_cache_key, source_user_prompt
+        calls["count"] += 1
+        return invalid
+
+    async def fake_repair_controller_decision(
+        settings, prompt, repair_prompt, source_user_prompt, decision, reason  # noqa: ANN001
+    ) -> tuple[ControllerDecision, None, None]:
+        del settings, prompt, repair_prompt, source_user_prompt, decision, reason
+        return invalid, None, None
+
+    monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
+    monkeypatch.setattr("seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision)
+
+    result = asyncio.run(controller.decide(context=context))
+
+    assert isinstance(result, SearchControllerDecision)
+    assert result.proposed_query_terms == ["AI", "模型部署"]
+    assert calls["count"] == 2
+    assert controller.last_validator_retry_count == 1
+    assert controller.last_repair_attempt_count == 1
+    assert controller.last_repair_succeeded is False
+    assert controller.last_full_retry_count == 1
 
 
 def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.MonkeyPatch) -> None:

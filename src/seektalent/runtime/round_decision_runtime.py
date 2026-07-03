@@ -13,8 +13,13 @@ from seektalent.models import (
 )
 from seektalent.progress import ProgressCallback
 from seektalent.core.filter_plan import build_default_filter_plan, canonicalize_filter_plan
-from seektalent.retrieval import canonicalize_controller_query_terms, select_query_terms
+from seektalent.retrieval import (
+    canonicalize_controller_query_terms,
+    select_query_terms,
+    try_project_secondary_title_anchor_after_round_one,
+)
 from seektalent.retrieval.query_plan import normalize_term
+from seektalent.retrieval.query_plan import _ROUND_SECONDARY_TITLE_ANCHOR_REASON
 from seektalent.runtime.rescue_router import RescueDecision
 from seektalent.tracing import RunTracer
 
@@ -169,13 +174,31 @@ def sanitize_controller_decision(
                 ),
             }
         )
-    query_terms = canonicalize_controller_query_terms(
-        decision.proposed_query_terms,
-        round_no=round_no,
-        title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
-        query_term_pool=run_state.retrieval_state.query_term_pool,
-        allowed_inactive_non_anchor_terms=allowed_inactive_terms,
-    )
+    try:
+        query_terms = canonicalize_controller_query_terms(
+            decision.proposed_query_terms,
+            round_no=round_no,
+            title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
+            query_term_pool=run_state.retrieval_state.query_term_pool,
+            allowed_inactive_non_anchor_terms=allowed_inactive_terms,
+        )
+    except ValueError as exc:
+        if not str(exc).startswith(_ROUND_SECONDARY_TITLE_ANCHOR_REASON):
+            raise
+        projected_terms = try_project_secondary_title_anchor_after_round_one(
+            decision.proposed_query_terms,
+            round_no=round_no,
+            query_term_pool=run_state.retrieval_state.query_term_pool,
+        )
+        if projected_terms is None:
+            raise
+        query_terms = canonicalize_controller_query_terms(
+            projected_terms,
+            round_no=round_no,
+            title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
+            query_term_pool=run_state.retrieval_state.query_term_pool,
+            allowed_inactive_non_anchor_terms=allowed_inactive_terms,
+        )
     filter_plan = canonicalize_filter_plan(
         requirement_sheet=run_state.requirement_sheet,
         filter_plan=decision.proposed_filter_plan,

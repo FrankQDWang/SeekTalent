@@ -13,6 +13,9 @@ from seektalent.models import (
 )
 
 
+_ROUND_SECONDARY_TITLE_ANCHOR_REASON = "rounds after 1 must not use secondary_title_anchor"
+
+
 def normalize_term(term: str) -> str:
     return " ".join(term.strip().split())
 
@@ -65,7 +68,7 @@ def canonicalize_controller_query_terms(
         ]
         if secondary_title_terms:
             raise ValueError(
-                "rounds after 1 must not use secondary_title_anchor as a support term: "
+                f"{_ROUND_SECONDARY_TITLE_ANCHOR_REASON} as a support term: "
                 + ", ".join(secondary_title_terms)
             )
     allowed_inactive = allowed_inactive_non_anchor_terms or set()
@@ -97,6 +100,49 @@ def serialize_keyword_query(terms: list[str]) -> str:
             continue
         serialized.append(clean)
     return " ".join(serialized)
+
+
+def try_project_secondary_title_anchor_after_round_one(
+    proposed_terms: list[str],
+    *,
+    round_no: int,
+    query_term_pool: list[QueryTermCandidate],
+) -> list[str] | None:
+    if round_no <= 1:
+        return None
+    terms = [normalize_term(item) for item in proposed_terms if normalize_term(item)]
+    if len(terms) > 3:
+        return None
+    term_index = _query_term_index(query_term_pool)
+    projected: list[str] = []
+    removed_secondary = False
+    for term in terms:
+        candidate = term_index.get(term.casefold())
+        if candidate is not None and candidate.retrieval_role == "secondary_title_anchor":
+            removed_secondary = True
+            continue
+        projected.append(candidate.term if candidate is not None else term)
+    if not removed_secondary:
+        return None
+    if len(projected) >= 2:
+        return projected
+    projected_keys = {term.casefold() for term in projected}
+    support_terms = sorted(
+        [
+            item
+            for item in query_term_pool
+            if (
+                item.active
+                and item.queryability == "admitted"
+                and not _is_title_anchor_candidate(item)
+                and item.term.casefold() not in projected_keys
+            )
+        ],
+        key=_non_anchor_sort_key,
+    )
+    if support_terms:
+        projected.append(support_terms[0].term)
+    return projected
 
 
 def select_query_terms(

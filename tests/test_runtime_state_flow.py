@@ -4252,6 +4252,163 @@ def test_runtime_helpers_use_primary_anchor_and_skip_secondary_title_anchor_rese
     assert reserve.term == "Python"
 
 
+def _projection_run_state() -> RunState:
+    requirement_sheet = RequirementSheet(
+        job_title="AI 主观投资工程师",
+        title_anchor_terms=["AI", "主观投资"],
+        title_anchor_rationale="Title contributes both AI and investment anchors.",
+        role_summary="Build AI investment systems.",
+        must_have_capabilities=["AI", "模型部署"],
+        hard_constraints=HardConstraintSlots(locations=["上海"]),
+        initial_query_term_pool=[
+            QueryTermCandidate(
+                term="AI",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                queryability="admitted",
+                family="role.ai",
+            ),
+            QueryTermCandidate(
+                term="主观投资",
+                source="job_title",
+                category="role_anchor",
+                priority=2,
+                evidence="Compiled title",
+                first_added_round=0,
+                retrieval_role="secondary_title_anchor",
+                queryability="admitted",
+                family="role.investment",
+            ),
+            QueryTermCandidate(
+                term="模型部署",
+                source="jd",
+                category="domain",
+                priority=3,
+                evidence="JD body",
+                first_added_round=0,
+                retrieval_role="core_skill",
+                queryability="admitted",
+                family="skill.model-deploy",
+            ),
+            QueryTermCandidate(
+                term="检索增强",
+                source="jd",
+                category="domain",
+                priority=4,
+                evidence="JD body",
+                first_added_round=0,
+                retrieval_role="domain_context",
+                queryability="admitted",
+                family="domain.rag",
+            ),
+        ],
+        scoring_rationale="Score AI system fit first.",
+    )
+    return RunState(
+        input_truth=InputTruth(
+            job_title=requirement_sheet.job_title,
+            jd="Build AI investment systems.",
+            notes="Prefer model deployment.",
+            job_title_sha256="title-hash",
+            jd_sha256="jd-hash",
+            notes_sha256="notes-hash",
+        ),
+        requirement_sheet=requirement_sheet,
+        scoring_policy=ScoringPolicy(
+            job_title=requirement_sheet.job_title,
+            role_summary=requirement_sheet.role_summary,
+            must_have_capabilities=requirement_sheet.must_have_capabilities,
+            preferred_capabilities=[],
+            exclusion_signals=[],
+            hard_constraints=requirement_sheet.hard_constraints,
+            preferences=requirement_sheet.preferences,
+            scoring_rationale=requirement_sheet.scoring_rationale,
+        ),
+        retrieval_state=RetrievalState(
+            current_plan_version=1,
+            query_term_pool=requirement_sheet.initial_query_term_pool,
+        ),
+    )
+
+
+def test_runtime_sanitize_projects_secondary_title_anchor_exact_reason(tmp_path: Path) -> None:
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
+    decision = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Use the title anchors.",
+        proposed_query_terms=["AI", "主观投资"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    sanitized = runtime._sanitize_controller_decision(
+        decision=decision,
+        run_state=_projection_run_state(),
+        round_no=3,
+    )
+
+    assert isinstance(sanitized, SearchControllerDecision)
+    assert sanitized.proposed_query_terms == ["AI", "模型部署"]
+
+
+def test_runtime_sanitize_does_not_project_duplicate_terms_with_secondary_anchor(tmp_path: Path) -> None:
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
+    decision = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Use the title anchors.",
+        proposed_query_terms=["AI", "AI", "主观投资"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    with pytest.raises(ValueError, match="duplicates"):
+        runtime._sanitize_controller_decision(
+            decision=decision,
+            run_state=_projection_run_state(),
+            round_no=3,
+        )
+
+
+def test_runtime_sanitize_does_not_project_too_many_terms_with_secondary_anchor(tmp_path: Path) -> None:
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
+    decision = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Use the title anchors.",
+        proposed_query_terms=["AI", "主观投资", "模型部署", "检索增强"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    with pytest.raises(ValueError, match="must not exceed 3 terms"):
+        runtime._sanitize_controller_decision(
+            decision=decision,
+            run_state=_projection_run_state(),
+            round_no=3,
+        )
+
+
+def test_runtime_sanitize_does_not_project_missing_pool_term_with_secondary_anchor(tmp_path: Path) -> None:
+    runtime = _workflow_runtime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
+    decision = SearchControllerDecision(
+        thought_summary="Search.",
+        action="search_cts",
+        decision_rationale="Use the title anchors.",
+        proposed_query_terms=["AI", "主观投资", "LLMTerm"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    with pytest.raises(ValueError, match="compiled query term pool"):
+        runtime._sanitize_controller_decision(
+            decision=decision,
+            run_state=_projection_run_state(),
+            round_no=3,
+        )
+
+
 def test_search_once_routes_through_retrieval_service_with_provider_filters(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts")
     runtime = _workflow_runtime(settings)
