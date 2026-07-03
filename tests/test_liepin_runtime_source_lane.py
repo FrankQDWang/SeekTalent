@@ -57,7 +57,13 @@ class FakeWorker:
                     snapshot_sha256=sha256_json(raw_payload),
                     dedup_key="dedup-secret-id",
                     search_text="FastAPI retrieval ranking systems.",
-                    raw={},
+                    raw={
+                        "safe_card_summary": {
+                            "current_or_recent_title": "Backend Engineer",
+                            "current_or_recent_company": "Retrieval Ranking Systems",
+                            "skill_tags": ["FastAPI", "ranking"],
+                        }
+                    },
                 )
             ],
             provider_snapshots=[
@@ -1195,14 +1201,46 @@ def test_liepin_card_policy_keeps_provider_rank_primary_after_hard_filters_and_b
                 }
             )
             rows = [
-                ("rank-1", "provider-rank-1", "FastAPI ranking distributed systems."),
-                ("rank-2", "provider-rank-2", "FastAPI ranking Python services."),
-                ("rank-3-obvious-mismatch", "provider-rank-3", "retail sales store manager."),
-                ("rank-4-over-budget", "provider-rank-4", "FastAPI ranking platform reliability."),
+                (
+                    "rank-1",
+                    "provider-rank-1",
+                    "FastAPI ranking distributed systems.",
+                    {
+                        "current_or_recent_title": "Backend Engineer",
+                        "current_or_recent_company": "Distributed Systems",
+                        "skill_tags": ["FastAPI", "ranking"],
+                    },
+                ),
+                (
+                    "rank-2",
+                    "provider-rank-2",
+                    "FastAPI ranking Python services.",
+                    {
+                        "current_or_recent_title": "Python Engineer",
+                        "current_or_recent_company": "Python Services",
+                        "skill_tags": ["FastAPI", "ranking"],
+                    },
+                ),
+                (
+                    "rank-3-obvious-mismatch",
+                    "provider-rank-3",
+                    "retail sales store manager.",
+                    {"current_or_recent_title": "Store Manager"},
+                ),
+                (
+                    "rank-4-over-budget",
+                    "provider-rank-4",
+                    "FastAPI ranking platform reliability.",
+                    {
+                        "current_or_recent_title": "Backend Engineer",
+                        "current_or_recent_company": "Platform Reliability",
+                        "skill_tags": ["FastAPI", "ranking"],
+                    },
+                ),
             ]
             candidates = []
             snapshots = []
-            for resume_id, provider_id, text in rows:
+            for resume_id, provider_id, text, safe_card_summary in rows:
                 raw_payload = {"candidateId": provider_id, "text": text}
                 candidates.append(
                     ResumeCandidate(
@@ -1211,7 +1249,7 @@ def test_liepin_card_policy_keeps_provider_rank_primary_after_hard_filters_and_b
                         snapshot_sha256=sha256_json(raw_payload),
                         dedup_key=resume_id,
                         search_text=text,
-                        raw={},
+                        raw={"safe_card_summary": safe_card_summary},
                     )
                 )
                 snapshots.append(
@@ -1273,6 +1311,158 @@ def test_liepin_card_policy_keeps_provider_rank_primary_after_hard_filters_and_b
     assert {item.budget_reason_code for item in result.detail_recommendations} == {"within_run_detail_budget"}
     assert all("safe_reason" not in item.to_public_payload() for item in result.detail_recommendations)
     assert result.events[-1].safe_counts == {"detail_recommendations": 2}
+
+
+def test_liepin_runtime_card_policy_ignores_candidate_search_text() -> None:
+    class SearchTextOnlyWorker(FakeWorker):
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            del request, round_no, trace_id, provider_account_hash
+            raw_payload = {"candidateId": "search-text-only"}
+            candidate = ResumeCandidate(
+                resume_id="search-text-only",
+                source_resume_id="search-text-only",
+                snapshot_sha256=sha256_json(raw_payload),
+                dedup_key="search-text-only",
+                search_text="FastAPI ranking Backend Engineer SEARCH_TEXT_SENTINEL",
+                raw={"safe_card_summary": {"current_or_recent_title": "Store Manager"}},
+            )
+            snapshot = ProviderSnapshot(
+                provider_name="liepin",
+                payload_kind="card",
+                raw_payload=raw_payload,
+                normalized_text=candidate.search_text,
+                provider_subject_id="search-text-only",
+                provider_listing_id=None,
+                synthetic_candidate_fingerprint="search-text-only",
+                identity_confidence="provider_subject_id",
+                extraction_source="test",
+                extractor_version="test",
+                pii_classification="no_direct_contact",
+                retention_policy="provider_snapshot_7d",
+                access_scope="local_run_only",
+                redaction_state="raw_provider_payload",
+                score_evidence_source="card_only",
+            )
+            return SearchResult(candidates=[candidate], provider_snapshots=[snapshot], raw_candidate_count=1)
+
+    request = RuntimeSourceLaneRequest(
+        source="liepin",
+        lane_mode="card",
+        job_title="Backend Engineer",
+        jd="FastAPI ranking",
+        notes=None,
+        requirement_sheet=_requirement_sheet(),
+        runtime_run_id="runtime-run-1",
+        source_lane_run_id="lane-run-1",
+        source_query_terms=("FastAPI", "ranking"),
+        source_context={"provider_account_hash": "acct_hash_123"},
+    )
+
+    result = asyncio.run(run_liepin_source_lane(settings=make_settings(), request=request, worker_client=SearchTextOnlyWorker()))
+
+    assert result.detail_recommendations == ()
+
+
+def test_liepin_card_summary_for_candidate_ignores_candidate_search_text() -> None:
+    sentinel = "SENTINEL raw-ish visible_text normalized_card_text fullText"
+    candidate = ResumeCandidate(
+        resume_id="structured-summary-only",
+        source_resume_id="structured-summary-only",
+        snapshot_sha256=sha256_json({"candidateId": "structured-summary-only"}),
+        dedup_key="structured-summary-only",
+        search_text=f"Backend Engineer FastAPI ranking {sentinel}",
+        raw={
+            "safe_card_summary": {
+                "current_or_recent_company": "结构化科技",
+                "current_or_recent_title": "AI平台工程师",
+                "skill_tags": ["Python", "RAG"],
+                "experience_preview": [
+                    {
+                        "company": "结构化科技",
+                        "title": "AI平台工程师",
+                        "date_range": "2021.04-至今",
+                        "duration": "3年",
+                    }
+                ],
+                "education_preview": [
+                    {
+                        "school": "齐齐哈尔大学",
+                        "major": "计算机科学与技术",
+                        "degree": "本科",
+                    }
+                ],
+            }
+        },
+    )
+
+    summary = runtime_lane._card_summary_for_candidate(candidate=candidate, provider_rank=7)
+
+    assert summary.provider_rank == 7
+    assert summary.current_or_recent_company == "结构化科技"
+    assert summary.current_or_recent_title == "AI平台工程师"
+    assert summary.skill_tags == ("Python", "RAG")
+    assert summary.experience_preview == (
+        {
+            "company": "结构化科技",
+            "title": "AI平台工程师",
+            "date_range": "2021.04-至今",
+            "duration": "3年",
+        },
+    )
+    assert summary.education_preview == (
+        {"school": "齐齐哈尔大学", "major": "计算机科学与技术", "degree": "本科"},
+    )
+    assert sentinel not in repr(summary)
+
+
+def test_liepin_runtime_card_summary_filters_preview_mappings_to_allowed_scalars() -> None:
+    candidate = ResumeCandidate(
+        resume_id="preview-filtering",
+        source_resume_id="preview-filtering",
+        snapshot_sha256=sha256_json({"candidateId": "preview-filtering"}),
+        dedup_key="preview-filtering",
+        search_text="FastAPI ranking Backend Engineer SEARCH_TEXT_SENTINEL",
+        raw={
+            "safe_card_summary": {
+                "experience_preview": [
+                    {
+                        "company": "  Acme  ",
+                        "title": "Backend Engineer",
+                        "date_range": ["2021-2024"],
+                        "duration": {"months": 6},
+                        "is_current": True,
+                        "visible_text": "FastAPI ranking SEARCH_TEXT_SENTINEL",
+                    }
+                ],
+                "education_preview": [
+                    {
+                        "school": "  Qiqihar University  ",
+                        "major": object(),
+                        "degree": "本科",
+                        "recruitment_type": "统招",
+                        "date_range": {"raw": "2017-2021"},
+                        "normalized_card_text": "FastAPI ranking SEARCH_TEXT_SENTINEL",
+                    }
+                ],
+            }
+        },
+    )
+
+    summary = runtime_lane._card_summary_for_candidate(candidate=candidate, provider_rank=1)
+
+    assert summary.experience_preview == (
+        {"company": "Acme", "title": "Backend Engineer", "is_current": True},
+    )
+    assert summary.education_preview == (
+        {"school": "Qiqihar University", "degree": "本科", "recruitment_type": "统招"},
+    )
 
 
 def test_liepin_runtime_lane_normalizes_blocked_worker_error_codes() -> None:

@@ -876,6 +876,7 @@ def _card_summary_for_candidate(*, candidate: ResumeCandidate, provider_rank: in
         current_or_recent_title=_summary_string(summary, "current_or_recent_title"),
         work_years=_summary_int(summary, "work_years"),
         age=_summary_int(summary, "age"),
+        gender=_summary_string(summary, "gender"),
         city=_summary_string(summary, "city"),
         expected_city=_summary_string(summary, "expected_city"),
         education_level=_summary_string(summary, "education_level"),
@@ -883,8 +884,19 @@ def _card_summary_for_candidate(*, candidate: ResumeCandidate, provider_rank: in
         major_names=_summary_string_tuple(summary, "major_names"),
         skill_tags=_summary_string_tuple(summary, "skill_tags"),
         job_intention=_summary_string(summary, "job_intention"),
-        recent_experience_text=_summary_string(summary, "recent_experience_text"),
-        normalized_card_text=candidate.search_text,
+        active_status=_summary_string(summary, "active_status"),
+        badges=_summary_string_tuple(summary, "badges"),
+        experience_preview=_summary_mapping_tuple(
+            summary,
+            "experience_preview",
+            string_keys=("company", "title", "date_range", "duration"),
+            bool_keys=("is_current",),
+        ),
+        education_preview=_summary_mapping_tuple(
+            summary,
+            "education_preview",
+            string_keys=("school", "major", "degree", "recruitment_type", "date_range"),
+        ),
         masked_name=bool(summary.get("masked_name", False)),
     )
 
@@ -904,6 +916,34 @@ def _summary_string_tuple(summary: dict[object, object], key: str) -> tuple[str,
     if not isinstance(value, list | tuple):
         return ()
     return tuple(item.strip() for item in value if isinstance(item, str) and item.strip())
+
+
+def _summary_mapping_tuple(
+    summary: dict[object, object],
+    key: str,
+    *,
+    string_keys: tuple[str, ...],
+    bool_keys: tuple[str, ...] = (),
+) -> tuple[dict[str, object], ...]:
+    value = summary.get(key)
+    if not isinstance(value, list | tuple):
+        return ()
+    items: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            continue
+        filtered: dict[str, object] = {}
+        for item_key in string_keys:
+            item_value = item.get(item_key)
+            if isinstance(item_value, str) and item_value.strip():
+                filtered[item_key] = item_value.strip()
+        for item_key in bool_keys:
+            item_value = item.get(item_key)
+            if isinstance(item_value, bool):
+                filtered[item_key] = item_value
+        if filtered:
+            items.append(filtered)
+    return tuple(items)
 
 
 def _primary_card_policy_reason(reason_codes: tuple[str, ...]) -> str:

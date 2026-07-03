@@ -198,10 +198,22 @@ def _timeline_items(value: object) -> list[StructuredResumeTimelineItem]:
 
 
 def _safe_card_work_items(safe_card: Mapping[str, object]) -> list[StructuredResumeTimelineItem]:
+    preview_items: list[StructuredResumeTimelineItem] = []
+    for raw_item in _list_of_mappings(safe_card.get("experience_preview")):
+        item = StructuredResumeTimelineItem(
+            company=_text(raw_item.get("company")),
+            title=_text(raw_item.get("title")),
+            duration=_first_text(raw_item.get("date_range"), raw_item.get("duration")),
+        )
+        if any(item.model_dump(mode="json").values()):
+            preview_items.append(item)
+    if preview_items:
+        return preview_items
+
     title = _first_text(safe_card.get("current_or_recent_title"), safe_card.get("display_title"))
     company = _text(safe_card.get("current_or_recent_company"))
     work_years = _int_or_none(safe_card.get("work_years"))
-    summary = _first_text(safe_card.get("recent_experience_text"), safe_card.get("normalized_card_text"))
+    summary = _text(safe_card.get("recent_experience_text"))
     item = StructuredResumeTimelineItem(
         company=company,
         title=title,
@@ -209,6 +221,12 @@ def _safe_card_work_items(safe_card: Mapping[str, object]) -> list[StructuredRes
         summary=summary,
     )
     return [item] if any(item.model_dump(mode="json").values()) else []
+
+
+def _list_of_mappings(value: object) -> list[Mapping[str, object]]:
+    if not isinstance(value, list | tuple):
+        return []
+    return [cast(Mapping[str, object], item) for item in value if isinstance(item, Mapping)]
 
 
 def _structured_text_for_legacy_consumers(evidence: StructuredResumeEvidence) -> str:

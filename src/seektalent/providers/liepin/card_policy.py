@@ -20,6 +20,7 @@ class LiepinCardSummary:
     current_or_recent_title: str | None = None
     work_years: int | None = None
     age: int | None = None
+    gender: str | None = None
     city: str | None = None
     expected_city: str | None = None
     education_level: str | None = None
@@ -27,8 +28,10 @@ class LiepinCardSummary:
     major_names: tuple[str, ...] = ()
     skill_tags: tuple[str, ...] = ()
     job_intention: str | None = None
-    recent_experience_text: str | None = None
-    normalized_card_text: str = ""
+    active_status: str | None = None
+    badges: tuple[str, ...] = ()
+    experience_preview: tuple[dict[str, object], ...] = ()
+    education_preview: tuple[dict[str, object], ...] = ()
     masked_name: bool = False
 
 
@@ -190,26 +193,35 @@ def _card_signal_score(
 
 
 def _card_tokens(card: LiepinCardSummary) -> set[str]:
-    return _tokens(
-        " ".join(
-            value
-            for value in (
-                card.display_title,
-                card.current_or_recent_company,
-                card.current_or_recent_title,
-                card.city,
-                card.expected_city,
-                card.education_level,
-                card.job_intention,
-                card.recent_experience_text,
-                card.normalized_card_text,
-                *card.school_names,
-                *card.major_names,
-                *card.skill_tags,
-            )
-            if value
+    return _tokens(" ".join(_card_text_values(card)))
+
+
+def _card_text_values(card: LiepinCardSummary) -> tuple[str, ...]:
+    values: list[str] = [
+        value
+        for value in (
+            card.display_title,
+            card.current_or_recent_company,
+            card.current_or_recent_title,
+            card.city,
+            card.expected_city,
+            card.education_level,
+            card.job_intention,
+            card.active_status,
+            *card.badges,
+            *card.school_names,
+            *card.major_names,
+            *card.skill_tags,
         )
-    )
+        if value
+    ]
+    for item in card.experience_preview:
+        values.extend(str(item.get(key) or "") for key in ("company", "title", "date_range", "duration"))
+    for item in card.education_preview:
+        values.extend(
+            str(item.get(key) or "") for key in ("school", "major", "degree", "recruitment_type", "date_range")
+        )
+    return tuple(value for value in values if value)
 
 
 def _query_tokens(query_terms: tuple[str, ...]) -> set[str]:
@@ -230,26 +242,7 @@ def _matched_cjk_query_phrases(*, card_text: str, query_terms: tuple[str, ...]) 
 
 
 def _compact_card_text(card: LiepinCardSummary) -> str:
-    return _compact_cjk(
-        " ".join(
-            value
-            for value in (
-                card.display_title,
-                card.current_or_recent_company,
-                card.current_or_recent_title,
-                card.city,
-                card.expected_city,
-                card.education_level,
-                card.job_intention,
-                card.recent_experience_text,
-                card.normalized_card_text,
-                *card.school_names,
-                *card.major_names,
-                *card.skill_tags,
-            )
-            if value
-        )
-    )
+    return _compact_cjk(" ".join(_card_text_values(card)))
 
 
 def _compact_cjk(value: str) -> str:

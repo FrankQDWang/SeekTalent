@@ -26,6 +26,7 @@ def test_liepin_site_adapter_public_methods_stay_compatible() -> None:
         "cleanup_idle_lease(self, *, force: 'bool' = False) -> 'OpenCliBrowserResult'",
         "cleanup_orphaned_tabs(self, *, force: 'bool' = False) -> 'OpenCliBrowserResult'",
         "click(self, *, target: 'str') -> 'OpenCliBrowserResult'",
+        "extract_structured_liepin_cards(self, *, source_run_id: 'str', max_cards: 'int') -> 'OpenCliBrowserResult'",
         "extract_visible_liepin_cards(self, *, source_run_id: 'str', max_cards: 'int') -> 'OpenCliBrowserResult'",
         "fill(self, *, target: 'str', text: 'str') -> 'OpenCliBrowserResult'",
         "finalize_liepin_resumes(self, *, source_run_id: 'str', query: 'str', max_pages: 'int', max_cards: 'int', cards_seen: 'int | None' = None, target_resumes: 'int | None' = None) -> 'dict[str, object]'",

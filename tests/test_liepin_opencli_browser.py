@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -16,6 +17,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserError,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
+from seektalent.providers.liepin.liepin_site_payloads import cards_envelope
 from seektalent.providers.liepin.liepin_site_adapter import (
     LiepinOpenCliSiteConfig,
     LiepinSiteAdapter,
@@ -28,9 +30,220 @@ from seektalent.providers.liepin.liepin_site_adapter import (
     extract_liepin_search_button_ref,
     extract_liepin_search_input_ref,
 )
+from seektalent.providers.liepin.liepin_site_parsing import (
+    _liepin_structured_cards_payload_probe_script,
+    _safe_detail_payload_from_probe_output,
+    _safe_structured_cards_from_probe_output,
+)
+from seektalent.providers.liepin.worker_contracts import LiepinSafeCardSummary
 
 
 LIEPIN_SEARCH_URL = LIEPIN_RECRUITER_SEARCH_URL
+ANY_STRUCTURED_CARD_PROBE = "__structured_card_probe__"
+
+
+def _safe_card_summary_contract_fields(card: Mapping[str, object]) -> dict[str, object]:
+    metadata_keys = {"provider_rank", "ref", "display_name_masked"}
+    return {key: value for key, value in card.items() if key not in metadata_keys}
+
+
+FORBIDDEN_CARD_TEXT_KEYS = (
+    "visible_text",
+    "normalized_card_text",
+    "normalizedCardText",
+    "raw_html",
+    "inner_html",
+    "inner_text",
+    "fullText",
+    "full_text",
+    "rawText",
+    "page_text",
+    "pageText",
+)
+
+
+def _assert_no_card_text_keys(value: object) -> None:
+    if isinstance(value, Mapping):
+        assert not (set(value) & set(FORBIDDEN_CARD_TEXT_KEYS))
+        for item in value.values():
+            _assert_no_card_text_keys(item)
+    elif isinstance(value, list | tuple):
+        for item in value:
+            _assert_no_card_text_keys(item)
+
+
+def test_cards_envelope_sanitizes_card_summary_before_artifacts() -> None:
+    writes: dict[tuple[str, str], object] = {}
+
+    def write_pi_artifact(visibility: str, path: str, payload: object) -> str:
+        writes[(visibility, path)] = payload
+        return f"artifact://{visibility}/{path}"
+
+    long_title = "AI平台工程师" + ("x" * 500)
+    sentinel = "SENTINEL_RAW_CARD_TEXT"
+    card_summary = {
+        "provider_rank": 99,
+        "ref": "70",
+        "display_name_masked": False,
+        "masked_name": True,
+        "display_title": long_title,
+        "current_or_recent_company": "结构化科技",
+        "current_or_recent_title": "AI平台工程师",
+        "gender": "男",
+        "age": 34,
+        "work_years": 12,
+        "city": "上海",
+        "expected_city": "杭州",
+        "education_level": "硕士",
+        "job_intention": "AI平台专家",
+        "active_status": "近期活跃",
+        "badges": ["统招本科"],
+        "school_names": ["齐齐哈尔大学"],
+        "major_names": ["计算机科学与技术"],
+        "skill_tags": ["Python", "RAG"],
+        "experience_preview": [
+            {
+                "company": "结构化科技",
+                "title": "AI平台工程师",
+                "date_range": "2021.04-至今",
+                "duration": "3年",
+                "is_current": True,
+                "normalizedCardText": sentinel,
+                "unsupported": {"pageText": sentinel},
+            }
+        ],
+        "education_preview": [
+            {
+                "school": "齐齐哈尔大学",
+                "major": "计算机科学与技术",
+                "degree": "本科",
+                "recruitment_type": "统招",
+                "date_range": "2017.08-2021.07",
+                "full_text": sentinel,
+                "unsupported": sentinel,
+            }
+        ],
+        "normalizedCardText": sentinel,
+        "pageText": sentinel,
+        "full_text": sentinel,
+        "visible_text": sentinel,
+        "normalized_card_text": sentinel,
+        "raw_html": sentinel,
+        "unknown_nested": {"safe_note": "must not pass", "pageText": sentinel},
+        "unknown_list": [{"safe_note": "must not pass"}],
+    }
+    expected_summary = {
+        "display_title": long_title[:180],
+        "current_or_recent_company": "结构化科技",
+        "current_or_recent_title": "AI平台工程师",
+        "gender": "男",
+        "city": "上海",
+        "expected_city": "杭州",
+        "education_level": "硕士",
+        "job_intention": "AI平台专家",
+        "active_status": "近期活跃",
+        "age": 34,
+        "work_years": 12,
+        "masked_name": True,
+        "badges": ["统招本科"],
+        "school_names": ["齐齐哈尔大学"],
+        "major_names": ["计算机科学与技术"],
+        "skill_tags": ["Python", "RAG"],
+        "experience_preview": [
+            {
+                "company": "结构化科技",
+                "title": "AI平台工程师",
+                "date_range": "2021.04-至今",
+                "duration": "3年",
+                "is_current": True,
+            }
+        ],
+        "education_preview": [
+            {
+                "school": "齐齐哈尔大学",
+                "major": "计算机科学与技术",
+                "degree": "本科",
+                "recruitment_type": "统招",
+                "date_range": "2017.08-2021.07",
+            }
+        ],
+    }
+    digest = hashlib.sha256(json.dumps(expected_summary, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
+
+    envelope = cards_envelope(
+        source_run_id="run-allowlist",
+        query="AI平台工程师",
+        safe_run_id="run-allowlist",
+        pages_visited=1,
+        events=(),
+        state_text="safe state",
+        cards=(card_summary,),
+        write_pi_artifact=write_pi_artifact,
+    )
+
+    public_summary = writes[("public-summary", "pi-card/run-allowlist/1.json")]
+    protected_snapshot = writes[("protected", "pi-card/run-allowlist/1.json")]
+    assert public_summary == expected_summary
+    assert isinstance(protected_snapshot, Mapping)
+    assert protected_snapshot["summary"] == expected_summary
+    assert envelope["cards"][0]["safe_card_summary"] == expected_summary
+    assert envelope["cards"][0]["candidate_resume_id"] == f"liepin-opencli-run-allowlist-1-{digest}"
+    assert envelope["cards"][0]["provider_candidate_key_material_ref"] == (
+        "artifact://protected/pi-provider-key/run-allowlist/1.txt"
+    )
+    assert writes[("protected", "pi-provider-key/run-allowlist/1.txt")] == (f"liepin-opencli:run-allowlist:1:{digest}")
+    encoded = json.dumps([envelope, public_summary, protected_snapshot], ensure_ascii=False)
+    assert sentinel not in encoded
+    assert "must not pass" not in encoded
+    for unsupported in ("provider_rank", "ref", "display_name_masked", "unknown_nested", "unknown_list"):
+        assert unsupported not in public_summary
+    assert "unsupported" not in public_summary["experience_preview"][0]
+    assert "unsupported" not in public_summary["education_preview"][0]
+    _assert_no_card_text_keys(envelope)
+    _assert_no_card_text_keys(public_summary)
+    _assert_no_card_text_keys(protected_snapshot)
+
+
+def _structured_cards_probe_json(*refs: str) -> str:
+    cards: list[dict[str, object]] = []
+    for rank, ref in enumerate(refs or ("70",), start=1):
+        is_second = ref.endswith("1")
+        cards.append(
+            {
+                "provider_rank": rank,
+                "ref": ref,
+                "masked_name": True,
+                "gender": "男",
+                "age": 36 if is_second else 40,
+                "work_years": 11 if is_second else 14,
+                "city": "上海",
+                "expected_city": "上海",
+                "education_level": "硕士",
+                "current_or_recent_company": "云栖数据" if is_second else "海光集成电路",
+                "current_or_recent_title": "数据平台负责人" if is_second else "高级主管工程师",
+                "job_intention": "数据平台专家" if is_second else "数据开发专家",
+                "skill_tags": ["Python", "Spark"] if is_second else ["Python", "Hive"],
+            }
+        )
+    return json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": cards,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _empty_structured_cards_probe_json() -> str:
+    return json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [],
+        },
+        ensure_ascii=False,
+    )
 
 
 class FakeCommands:
@@ -52,9 +265,15 @@ class FakeCommands:
         self.envs.append(env)
         if self.fail:
             raise subprocess.TimeoutExpired(cmd=list(argv), timeout=1)
+        if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]:
+            output = self.outputs.get((ANY_STRUCTURED_CARD_PROBE,), _structured_cards_probe_json("70"))
+            return self._resolve_output(output)
         output = self.outputs.get(call, "{}")
         if output == "{}" and len(call) == 6 and call[3:5] == ("tab", "new"):
             return json.dumps({"page": "page-1", "url": call[5]})
+        return self._resolve_output(output)
+
+    def _resolve_output(self, output: object) -> str:
         if isinstance(output, list):
             if output:
                 item = output.pop(0)
@@ -64,7 +283,7 @@ class FakeCommands:
             return "{}"
         if isinstance(output, BaseException):
             raise output
-        return output
+        return str(output)
 
     def prepend_output(self, call: tuple[str, ...], output: str) -> None:
         existing = self.outputs.get(call)
@@ -94,7 +313,7 @@ class RefEvalCommands(FakeCommands):
     def __init__(
         self,
         *,
-        eval_outputs_by_ref: dict[str, str],
+        eval_outputs_by_ref: dict[str, str | list[str]],
         default_eval_output: str = "null",
         outputs: dict[tuple[str, ...], str | list[str]] | None = None,
     ) -> None:
@@ -109,9 +328,19 @@ class RefEvalCommands(FakeCommands):
             self.calls.append(call)
             self.envs.append(env)
             script = call[4] if len(call) > 4 else ""
+            if (
+                "seektalent.liepin_structured_cards_probe.v1" in script
+                and ANY_STRUCTURED_CARD_PROBE in self.eval_outputs_by_ref
+            ):
+                return self._resolve_output(self.eval_outputs_by_ref[ANY_STRUCTURED_CARD_PROBE])
+            if "seektalent.liepin_structured_cards_probe.v1" in script:
+                refs = tuple(ref for ref in self.eval_outputs_by_ref if ref != ANY_STRUCTURED_CARD_PROBE)
+                return _structured_cards_probe_json(*refs)
             for ref, output in self.eval_outputs_by_ref.items():
+                if ref == ANY_STRUCTURED_CARD_PROBE:
+                    continue
                 if f'data-opencli-ref="{ref}"' in script:
-                    return output
+                    return self._resolve_output(output)
             return self.default_eval_output
         return super().run(argv, timeout=timeout, env=env)
 
@@ -302,19 +531,50 @@ def test_opencli_mutating_actions_apply_pacing(tmp_path: Path, monkeypatch: pyte
     assert sleeps == [0.7]
 
 
-def test_extract_visible_liepin_cards_returns_structured_safe_cards(tmp_path: Path) -> None:
-    state_text = (
-        "[70]<button><span>查看完整简历</span></button>\n"
-        "王** 40岁 工作14年 硕士 上海\n"
-        "数据仓库 数据治理 Python Hive\n"
-        "某科技公司 · 大数据开发工程师2022.08-至今(3年9个月)\n"
-        "沈阳工业大学 · 本科\n"
-        "[71]<button><span>查看完整简历</span></button>\n"
-        "李** 29岁 工作6年 本科 杭州\n"
-        "Flink Spark 实时数仓\n"
+def test_extract_structured_liepin_cards_returns_structured_evidence_without_card_text(tmp_path: Path) -> None:
+    state_text = "<div id=resultList>共1位人选</div>"
+    probe_output = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [
+                {
+                    "provider_rank": 1,
+                    "ref": "70",
+                    "masked_name": True,
+                    "gender": "男",
+                    "age": 40,
+                    "work_years": 14,
+                    "city": "上海",
+                    "expected_city": "上海",
+                    "education_level": "硕士",
+                    "current_or_recent_company": "海光集成电路",
+                    "current_or_recent_title": "高级主管工程师",
+                    "job_intention": "数据开发专家",
+                    "active_status": "7天内活跃",
+                    "badges": ["统招本科"],
+                    "skill_tags": ["Python", "Hive", "数据仓库"],
+                    "experience_preview": [
+                        {
+                            "company": "海光集成电路",
+                            "title": "高级主管工程师",
+                            "date_range": "2023.10-至今",
+                        }
+                    ],
+                    "education_preview": [
+                        {
+                            "school": "北京大学",
+                            "major": "计算机",
+                            "degree": "本科",
+                        }
+                    ],
+                }
+            ],
+        },
+        ensure_ascii=False,
     )
     commands = RefEvalCommands(
-        eval_outputs_by_ref={},
+        eval_outputs_by_ref={ANY_STRUCTURED_CARD_PROBE: probe_output},
         default_eval_output=_liepin_detail_payload_json(summary_text=detail_state),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
@@ -324,84 +584,300 @@ def test_extract_visible_liepin_cards_returns_structured_safe_cards(tmp_path: Pa
         },
     )
 
-    result = _runner(commands, lease_dir=tmp_path).extract_visible_liepin_cards(source_run_id="run-1", max_cards=10)
+    result = _runner(commands, lease_dir=tmp_path).extract_structured_liepin_cards(source_run_id="run-1", max_cards=10)
 
     assert result.ok is True
     payload = json.loads(result.private_output)
-    assert payload["schema_version"] == "seektalent.opencli_liepin_visible_cards.v1"
+    assert payload["schema_version"] == "seektalent.opencli_liepin_structured_cards.v1"
     assert result.to_tool_payload()["observation"] == payload
     first = payload["cards"][0]
     assert first["provider_rank"] == 1
     assert first["ref"] == "70"
-    assert first["current_or_recent_company"] == "某科技公司"
-    assert first["current_or_recent_title"].startswith("大数据开发工程师")
+    assert first["masked_name"] is True
+    assert first["current_or_recent_company"] == "海光集成电路"
+    assert first["current_or_recent_title"] == "高级主管工程师"
     assert first["education_level"] == "硕士"
     assert first["work_years"] == 14
-    assert "数据仓库" in first["visible_text"]
+    assert first["skill_tags"] == ["Python", "Hive", "数据仓库"]
+    assert first["experience_preview"][0]["company"] == "海光集成电路"
+    assert first["education_preview"][0]["school"] == "北京大学"
+    LiepinSafeCardSummary.model_validate(_safe_card_summary_contract_fields(first))
     encoded = json.dumps(payload, ensure_ascii=False)
-    assert "raw_html" not in encoded
-    assert "cookie" not in encoded.lower()
+    for forbidden in ("visible_text", "normalized_card_text", "raw_html", "inner_text", "fullText", "rawText"):
+        assert forbidden not in encoded
 
 
-def test_extract_visible_liepin_cards_binds_ref_to_same_card_summary(tmp_path: Path) -> None:
-    state_text = (
-        "<div id=resultList>\n"
-        "王** 40岁 工作14年 硕士 上海\n"
-        "数据仓库 数据治理 Python Hive\n"
-        "某科技公司 · 大数据开发工程师2022.08-至今(3年9个月)\n"
-        "沈阳工业大学 · 本科\n"
-        "李** 29岁 工作6年 本科 杭州\n"
-        "Flink Spark 实时数仓\n"
-        "杭州科技公司 · 实时数仓工程师2021.01-至今\n"
-        "浙江大学 · 本科\n"
+def test_extract_visible_liepin_cards_delegates_to_structured_payload_without_card_text(tmp_path: Path) -> None:
+    probe_output = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [
+                {
+                    "provider_rank": 1,
+                    "ref": "70",
+                    "masked_name": True,
+                    "current_or_recent_company": "海光集成电路",
+                    "current_or_recent_title": "高级主管工程师",
+                }
+            ],
+        },
+        ensure_ascii=False,
     )
-    second_card = {
-        "entries": [
-            {
-                "ref": "71",
-                "text": (
-                    "李** 29岁 工作6年 本科 杭州\n"
-                    "Flink Spark 实时数仓\n"
-                    "杭州科技公司 · 实时数仓工程师2021.01-至今\n"
-                    "浙江大学 · 本科"
-                ),
-            }
-        ]
-    }
     commands = RefEvalCommands(
-        eval_outputs_by_ref={},
-        default_eval_output=_liepin_detail_payload_json(summary_text=detail70_state),
+        eval_outputs_by_ref={ANY_STRUCTURED_CARD_PROBE: probe_output},
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                 "https://h.liepin.com/search/getConditionItem#session"
             ),
-            ("opencli", "browser", "seektalent-liepin", "state"): state_text,
-            (
-                "opencli",
-                "browser",
-                "seektalent-liepin",
-                "find",
-                "--css",
-                "#resultList .detail-resume-card-wrap",
-                "--limit",
-                "10",
-                "--text-max",
-                "1200",
-            ): json.dumps(second_card, ensure_ascii=False),
+            ("opencli", "browser", "seektalent-liepin", "state"): "<div id=resultList>共1位人选</div>",
         },
     )
 
     result = _runner(commands, lease_dir=tmp_path).extract_visible_liepin_cards(source_run_id="run-1", max_cards=10)
 
     assert result.ok is True
+    assert result.action == "extract_visible_liepin_cards"
+    payload = json.loads(result.private_output)
+    assert payload["schema_version"] == "seektalent.opencli_liepin_structured_cards.v1"
+    assert payload["cards"][0]["masked_name"] is True
+    encoded = json.dumps(payload, ensure_ascii=False)
+    for forbidden in ("visible_text", "normalized_card_text", "raw_html", "inner_text", "fullText", "rawText"):
+        assert forbidden not in encoded
+
+
+@pytest.mark.parametrize(
+    ("method_name", "expected_action"),
+    [
+        ("extract_structured_liepin_cards", "extract_structured_liepin_cards"),
+        ("extract_visible_liepin_cards", "extract_visible_liepin_cards"),
+    ],
+)
+def test_liepin_card_extractors_sanitize_terminal_state_failures(
+    method_name: str,
+    expected_action: str,
+    tmp_path: Path,
+) -> None:
+    raw_sentinel = "SENTINEL_RAW_PAGE_TEXT visible_text normalized_card_text fullText rawText"
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={ANY_STRUCTURED_CARD_PROBE: _structured_cards_probe_json("70")},
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): f"请登录后继续 {raw_sentinel}",
+        },
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+
+    result = getattr(runner, method_name)(source_run_id="run-1", max_cards=10)
+
+    assert result.ok is False
+    assert result.action == expected_action
+    assert result.safe_reason_code == "liepin_opencli_login_required"
+    assert result.private_output == ""
+    assert "text" not in result.observation
+    encoded = json.dumps(result.to_tool_payload(), ensure_ascii=False)
+    for forbidden in ("visible_text", "normalized_card_text", "fullText", "rawText", "SENTINEL_RAW_PAGE_TEXT"):
+        assert forbidden not in encoded
+
+
+def test_extract_visible_liepin_cards_binds_ref_to_same_card_summary(tmp_path: Path) -> None:
+    state_text = "<div id=resultList>共2位人选</div>"
+    probe_output = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [
+                {
+                    "provider_rank": 1,
+                    "ref": "71",
+                    "masked_name": True,
+                    "gender": "女",
+                    "age": 29,
+                    "work_years": 6,
+                    "city": "杭州",
+                    "expected_city": "杭州",
+                    "education_level": "本科",
+                    "current_or_recent_company": "杭州科技公司",
+                    "current_or_recent_title": "实时数仓工程师",
+                    "skill_tags": ["Flink", "Spark", "实时数仓"],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={ANY_STRUCTURED_CARD_PROBE: probe_output},
+        default_eval_output=_liepin_detail_payload_json(summary_text=detail70_state),
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): state_text,
+        },
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).extract_structured_liepin_cards(source_run_id="run-1", max_cards=10)
+
+    assert result.ok is True
     payload = json.loads(result.private_output)
     assert payload["card_count"] == 1
     card = payload["cards"][0]
     assert card["ref"] == "71"
+    assert card["masked_name"] is True
     assert card["current_or_recent_company"] == "杭州科技公司"
     assert card["current_or_recent_title"].startswith("实时数仓工程师")
-    assert "李**" in card["visible_text"]
-    assert "王**" not in card["visible_text"]
+    assert "visible_text" not in card
+    assert "normalized_card_text" not in card
+
+
+def test_structured_liepin_cards_parser_preserves_bool_masked_name_and_rejects_display_string() -> None:
+    output = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [
+                {
+                    "provider_rank": 1,
+                    "ref": "70",
+                    "masked_name": True,
+                    "gender": "男",
+                    "age": 40,
+                    "work_years": 14,
+                    "city": "上海",
+                    "expected_city": "上海",
+                    "education_level": "硕士",
+                    "current_or_recent_company": "海光集成电路",
+                    "current_or_recent_title": "高级主管工程师",
+                    "job_intention": "数据开发专家",
+                    "active_status": "7天内活跃",
+                    "badges": ["统招本科"],
+                    "skill_tags": ["Python", "Hive", "数据仓库"],
+                    "experience_preview": [{"company": "海光集成电路", "title": "高级主管工程师"}],
+                    "education_preview": [{"school": "北京大学", "major": "计算机", "degree": "本科"}],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    cards = _safe_structured_cards_from_probe_output(output, max_cards=10)
+
+    assert cards[0]["masked_name"] is True
+    LiepinSafeCardSummary.model_validate(_safe_card_summary_contract_fields(cards[0]))
+
+    bad_output = json.loads(output)
+    bad_output["cards"][0]["masked_name"] = "王**"
+    with pytest.raises(OpenCliBrowserError):
+        _safe_structured_cards_from_probe_output(json.dumps(bad_output, ensure_ascii=False), max_cards=10)
+
+
+@pytest.mark.parametrize(
+    "forbidden_patch",
+    [
+        {"visible_text": "raw visible card text"},
+        {"normalized_card_text": "legacy normalized card text"},
+        {"experience_preview": [{"title": "高级主管工程师", "visible_text": "nested card text"}]},
+        {"education_preview": [{"school": "北京大学", "normalized_card_text": "nested normalized text"}]},
+    ],
+)
+def test_structured_card_probe_rejects_forbidden_card_text_fields(
+    forbidden_patch: dict[str, object],
+) -> None:
+    card = {
+        "provider_rank": 1,
+        "ref": "70",
+        "current_or_recent_title": "高级主管工程师",
+    }
+    card.update(forbidden_patch)
+    output = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [card],
+        },
+        ensure_ascii=False,
+    )
+
+    with pytest.raises(OpenCliBrowserError):
+        _safe_structured_cards_from_probe_output(output, max_cards=10)
+
+
+@pytest.mark.parametrize("ok_value", [None, False, "true", 1])
+def test_structured_liepin_cards_parser_requires_true_ok(ok_value: object) -> None:
+    payload: dict[str, object] = {
+        "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+        "cards": [],
+    }
+    if ok_value is not None:
+        payload["ok"] = ok_value
+
+    with pytest.raises(OpenCliBrowserError):
+        _safe_structured_cards_from_probe_output(json.dumps(payload, ensure_ascii=False), max_cards=10)
+
+
+def test_structured_liepin_cards_parser_drops_preview_fields_outside_worker_contract() -> None:
+    output = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [
+                {
+                    "provider_rank": 1,
+                    "ref": "70",
+                    "masked_name": True,
+                    "experience_preview": [
+                        {
+                            "company": "海光集成电路",
+                            "title": "高级主管工程师",
+                            "date_range": "2023.10-至今",
+                            "duration": "2年",
+                            "is_current": True,
+                            "industry": "芯片",
+                            "location": "上海",
+                        }
+                    ],
+                    "education_preview": [
+                        {
+                            "school": "北京大学",
+                            "major": "计算机",
+                            "degree": "本科",
+                            "recruitment_type": "统招",
+                            "date_range": "2002.09-2006.07",
+                            "duration": "4年",
+                        }
+                    ],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+    cards = _safe_structured_cards_from_probe_output(output, max_cards=10)
+
+    experience = cards[0]["experience_preview"][0]
+    education = cards[0]["education_preview"][0]
+    assert experience["is_current"] is True
+    assert experience["duration"] == "2年"
+    assert "industry" not in experience
+    assert "location" not in experience
+    assert education["recruitment_type"] == "统招"
+    assert education["date_range"] == "2002.09-2006.07"
+    assert "duration" not in education
+    LiepinSafeCardSummary.model_validate(_safe_card_summary_contract_fields(cards[0]))
+
+
+def test_structured_liepin_cards_probe_script_is_structured_and_ranks_after_ref_filter() -> None:
+    script = _liepin_structured_cards_payload_probe_script(max_cards=10)
+
+    assert "seektalent.liepin_structured_cards_probe.v1" in script
+    assert "provider_rank: cards.length + 1" in script
+    assert "provider_rank: index + 1" not in script
+    assert "masked_name: Boolean(maskedNameFrom(text))" in script
+    assert "masked_name: maskedNameFrom(text)" not in script
+    for forbidden in ("visible_text", "normalized_card_text", "raw_html", "inner_text", "fullText", "rawText"):
+        assert forbidden not in script
 
 
 def test_status_maps_opencli_doctor_success() -> None:
@@ -1967,12 +2443,59 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
         "海光集成电路 · 高级主管工程师 2023.10-至今\n"
         "FTI SDP CXL Pcie verilog"
     )
+    structured_cards = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [
+                {
+                    "provider_rank": 1,
+                    "ref": "70",
+                    "masked_name": True,
+                    "gender": "男",
+                    "age": 40,
+                    "work_years": 14,
+                    "city": "上海",
+                    "expected_city": "上海",
+                    "education_level": "硕士",
+                    "current_or_recent_company": "海光集成电路",
+                    "current_or_recent_title": "高级主管工程师",
+                    "job_intention": "数据开发专家",
+                    "skill_tags": ["FTI", "SDP", "CXL", "Pcie", "verilog"],
+                    "experience_preview": [
+                        {
+                            "company": "海光集成电路",
+                            "title": "高级主管工程师",
+                            "date_range": "2023.10-至今",
+                            "duration": "8个月",
+                            "is_current": True,
+                        }
+                    ],
+                    "education_preview": [
+                        {
+                            "school": "北京大学",
+                            "major": "计算机",
+                            "degree": "本科",
+                            "recruitment_type": "统招",
+                            "date_range": "2002.09-2006.07",
+                        }
+                    ],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
     commands = RefEvalCommands(
-        eval_outputs_by_ref={},
+        eval_outputs_by_ref={ANY_STRUCTURED_CARD_PROBE: structured_cards},
         default_eval_output=_liepin_detail_payload_json(summary_text=detail70_state),
         outputs={
             **_current_window_open_outputs(page_id="page-1"),
-            ("opencli", "browser", "seektalent-liepin", "state"): [state_before, state_before, state_after],
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                state_after,
+                state_after,
+            ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
             ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
             ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
@@ -1992,9 +2515,25 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     assert envelope["cards"][0]["safe_card_summary"]["current_or_recent_company"] == "海光集成电路"
     assert envelope["cards"][0]["safe_card_summary"]["current_or_recent_title"] == "高级主管工程师"
     assert envelope["cards"][0]["safe_card_summary"]["work_years"] == 14
+    assert envelope["cards"][0]["safe_card_summary"]["experience_preview"][0]["company"] == "海光集成电路"
+    assert "provider_rank" not in envelope["cards"][0]["safe_card_summary"]
+    assert "ref" not in envelope["cards"][0]["safe_card_summary"]
+    _assert_no_card_text_keys(envelope)
+    serialized_envelope = json.dumps(envelope, ensure_ascii=False)
+    for forbidden in FORBIDDEN_CARD_TEXT_KEYS:
+        assert forbidden not in serialized_envelope
     assert envelope["cards"][0]["safe_card_summary_ref"].startswith("artifact://public-summary/pi-card/run-1/")
     assert (tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").is_file()
-    assert (tmp_path / "public-summary" / "pi-card" / "run-1" / "1.json").is_file()
+    public_summary_path = tmp_path / "public-summary" / "pi-card" / "run-1" / "1.json"
+    assert public_summary_path.is_file()
+    public_summary = json.loads(public_summary_path.read_text(encoding="utf-8"))
+    assert public_summary["current_or_recent_company"] == "海光集成电路"
+    assert public_summary["skill_tags"] == ["FTI", "SDP", "CXL", "Pcie", "verilog"]
+    assert public_summary["experience_preview"][0]["title"] == "高级主管工程师"
+    assert public_summary["education_preview"][0]["school"] == "北京大学"
+    assert "provider_rank" not in public_summary
+    assert "ref" not in public_summary
+    _assert_no_card_text_keys(public_summary)
     assert ("opencli", "browser", "seektalent-liepin", "tab", "list") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL) in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "get", "url") in commands.calls
@@ -2417,17 +2956,6 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
         "云栖数据 · 数据平台负责人 2020.01-至今\n"
         "[71]<div class=detail-resume-card-wrap><span>查看完整简历</span></div>"
     )
-    refreshed_search_results_state = (
-        "id=resultList\n"
-        "王** 40岁 工作14年 硕士 上海\n"
-        "求职期望：上海 数据开发专家\n"
-        "海光集成电路 · 高级主管工程师 2023.10-至今\n"
-        "[170]<div class=detail-resume-card-wrap><span>查看完整简历</span></div>\n"
-        "张** 36岁 工作11年 硕士 上海\n"
-        "求职期望：上海 数据平台专家\n"
-        "云栖数据 · 数据平台负责人 2020.01-至今\n"
-        "[171]<div class=detail-resume-card-wrap><span>查看完整简历</span></div>"
-    )
     detail70_state = "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家\n负责数据仓库、数据治理和 Python 平台。"
     detail71_state = "张** 36岁 工作11年 硕士 上海\n当前职位：数据平台专家\n负责数据治理、Python 和 Spark 平台。"
     commands = RefEvalCommands(
@@ -2446,14 +2974,16 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
                 search_url,
                 search_url,
                 search_url,
+                search_url,
+                search_url,
                 detail70_url,
                 search_url,
                 search_url,
                 search_url,
                 search_url,
                 detail71_url,
-                search_url,
-                search_url,
+                detail71_url,
+                detail71_url,
             ],
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 search_form_state,
@@ -2461,11 +2991,13 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
                 search_results_state,
                 search_results_state,
                 search_results_state,
+                search_results_state,
+                search_results_state,
                 detail70_state,
-                refreshed_search_results_state,
-                refreshed_search_results_state,
-                refreshed_search_results_state,
-                refreshed_search_results_state,
+                detail71_state,
+                detail71_state,
+                detail71_state,
+                detail71_state,
                 detail71_state,
             ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
@@ -2607,7 +3139,15 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
     )
     detail71_state = "张** 36岁 工作11年 硕士 上海\n当前职位：数据平台专家\n负责数据治理、Python 和 Spark 平台。"
     commands = RefEvalCommands(
-        eval_outputs_by_ref={"70": detail70_url, "71": detail71_url},
+        eval_outputs_by_ref={
+            "70": detail70_url,
+            "71": detail71_url,
+            ANY_STRUCTURED_CARD_PROBE: [
+                _structured_cards_probe_json("70", "71"),
+                _structured_cards_probe_json("70", "71"),
+                _empty_structured_cards_probe_json(),
+            ],
+        },
         default_eval_output=_liepin_detail_payload_json(),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
@@ -2619,6 +3159,8 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
             ("opencli", "browser", "seektalent-liepin", "get", "url"): [search_url] * 12,
             ("opencli", "browser", "seektalent-liepin", "state"): [
                 search_form_state,
+                search_results_state,
+                search_results_state,
                 search_results_state,
                 search_results_state,
                 search_results_state,
@@ -2814,6 +3356,40 @@ def test_capture_liepin_detail_resume_rejects_blank_detail_probe(tmp_path: Path)
     assert captured.ok is False
     assert captured.safe_reason_code == "liepin_opencli_detail_not_opened"
     assert not (tmp_path / "protected" / "pi-detail" / "run-1" / "collected-resumes.json").exists()
+
+
+def test_capture_liepin_detail_resume_rejects_whole_page_text_aliases_before_artifact_write(
+    tmp_path: Path,
+) -> None:
+    payload = json.loads(_liepin_detail_payload_json(summary_text=detail_state))
+    payload["fullText"] = "SENTINEL_TOP_LEVEL_DETAIL_TEXT"
+    payload["jobIntention"]["rawText"] = "SENTINEL_NESTED_DETAIL_TEXT"
+    commands = EvalCommands(
+        eval_output=json.dumps(payload, ensure_ascii=False),
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad\n"
+                "王** 40岁 工作14年 硕士 上海\n"
+                "当前职位：数据开发专家"
+            ),
+        },
+    )
+
+    captured = _runner(commands, lease_dir=tmp_path).capture_liepin_detail_resume(source_run_id="run-1", rank=1)
+
+    assert captured.ok is False
+    assert captured.safe_reason_code == "liepin_opencli_malformed_state"
+    assert not (tmp_path / "protected").exists()
+
+
+def test_detail_probe_payload_rejects_whole_page_text_extra_alias() -> None:
+    payload = json.loads(_liepin_detail_payload_json(summary_text=detail_state))
+    payload["extra"] = {"wholePageText": "SENTINEL_WHOLE_PAGE_TEXT"}
+
+    with pytest.raises(OpenCliBrowserError) as error:
+        _safe_detail_payload_from_probe_output(json.dumps(payload, ensure_ascii=False))
+
+    assert error.value.safe_reason_code == "liepin_opencli_malformed_state"
 
 
 def test_generic_click_still_rejects_liepin_detail_targets() -> None:
@@ -3424,10 +4000,11 @@ def test_extract_liepin_card_summaries_strips_opencli_accessibility_markup() -> 
 
     assert len(cards) == 1
     summary = cards[0]
-    normalized = str(summary["normalized_card_text"])
-    assert "<" not in normalized
-    assert "role=" not in normalized
-    assert "aria-label" not in normalized
+    serialized = json.dumps(summary, ensure_ascii=False)
+    assert "normalized_card_text" not in summary
+    assert "<" not in serialized
+    assert "role=" not in serialized
+    assert "aria-label" not in serialized
     assert {"span", "svg", "div", "table"}.isdisjoint(set(summary["skill_tags"]))
 
 

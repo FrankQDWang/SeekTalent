@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 
 from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
@@ -10,6 +11,125 @@ from seektalent.providers.liepin.liepin_site_parsing import _safe_artifact_segme
 JsonObject = dict[str, object]
 ArtifactWriter = Callable[[str, str, object], str]
 AgentEventReader = Callable[[str], list[dict[str, object]]]
+FORBIDDEN_CARD_SUMMARY_KEYS = {
+    "visible_text",
+    "normalized_card_text",
+    "normalizedCardText",
+    "raw_html",
+    "inner_html",
+    "inner_text",
+    "fullText",
+    "full_text",
+    "rawText",
+    "page_text",
+    "pageText",
+}
+_CARD_SUMMARY_SCALAR_FIELDS = (
+    "display_title",
+    "current_or_recent_company",
+    "current_or_recent_title",
+    "gender",
+    "city",
+    "expected_city",
+    "education_level",
+    "job_intention",
+    "active_status",
+)
+_CARD_SUMMARY_INT_FIELDS = ("age", "work_years")
+_CARD_SUMMARY_LIST_FIELDS = ("badges", "school_names", "major_names", "skill_tags")
+_CARD_SUMMARY_EXPERIENCE_FIELDS = ("company", "title", "date_range", "duration")
+_CARD_SUMMARY_EDUCATION_FIELDS = ("school", "major", "degree", "recruitment_type", "date_range")
+_CARD_SUMMARY_TEXT_MAX_CHARS = 180
+_CARD_SUMMARY_LIST_TEXT_MAX_CHARS = 80
+_CARD_SUMMARY_LIST_MAX_ITEMS = 20
+_CARD_SUMMARY_PREVIEW_MAX_ITEMS = 5
+
+
+def _safe_card_summary_payload(summary: Mapping[str, object]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for field in _CARD_SUMMARY_SCALAR_FIELDS:
+        text = _safe_card_summary_text(summary.get(field))
+        if text is not None:
+            payload[field] = text
+    for field in _CARD_SUMMARY_INT_FIELDS:
+        value = _safe_card_summary_int(summary.get(field))
+        if value is not None:
+            payload[field] = value
+    masked_name = summary.get("masked_name")
+    if isinstance(masked_name, bool):
+        payload["masked_name"] = masked_name
+    for field in _CARD_SUMMARY_LIST_FIELDS:
+        values = _safe_card_summary_text_list(summary.get(field))
+        if values:
+            payload[field] = values
+    experience_preview = _safe_card_summary_preview(
+        summary.get("experience_preview"),
+        text_fields=_CARD_SUMMARY_EXPERIENCE_FIELDS,
+        bool_fields=("is_current",),
+    )
+    if experience_preview:
+        payload["experience_preview"] = experience_preview
+    education_preview = _safe_card_summary_preview(
+        summary.get("education_preview"),
+        text_fields=_CARD_SUMMARY_EDUCATION_FIELDS,
+    )
+    if education_preview:
+        payload["education_preview"] = education_preview
+    return payload
+
+
+def _safe_card_summary_text(value: object, *, max_chars: int = _CARD_SUMMARY_TEXT_MAX_CHARS) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = re.sub(r"\s+", " ", value).strip()
+    return text[:max_chars] if text else None
+
+
+def _safe_card_summary_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _safe_card_summary_text_list(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw_item in value:
+        item = _safe_card_summary_text(raw_item, max_chars=_CARD_SUMMARY_LIST_TEXT_MAX_CHARS)
+        if item is None or item in seen:
+            continue
+        seen.add(item)
+        items.append(item)
+        if len(items) >= _CARD_SUMMARY_LIST_MAX_ITEMS:
+            break
+    return items
+
+
+def _safe_card_summary_preview(
+    value: object,
+    *,
+    text_fields: tuple[str, ...],
+    bool_fields: tuple[str, ...] = (),
+) -> list[dict[str, object]]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    previews: list[dict[str, object]] = []
+    for raw_item in value[:_CARD_SUMMARY_PREVIEW_MAX_ITEMS]:
+        if not isinstance(raw_item, Mapping):
+            continue
+        item: dict[str, object] = {}
+        for field in text_fields:
+            text = _safe_card_summary_text(raw_item.get(field))
+            if text is not None:
+                item[field] = text
+        for field in bool_fields:
+            bool_value = raw_item.get(field)
+            if isinstance(bool_value, bool):
+                item[field] = bool_value
+        if item:
+            previews.append(item)
+    return previews
+
 
 def blocked_cards_envelope(
     *,
@@ -50,6 +170,7 @@ def blocked_cards_envelope(
         "cards": [],
     }
 
+
 def cards_envelope(
     *,
     source_run_id: str,
@@ -83,7 +204,8 @@ def cards_envelope(
     safe_summary_refs: list[str] = []
     protected_snapshot_refs: list[str] = [page_snapshot_ref]
     for rank, summary in enumerate(cards, start=1):
-        digest = hashlib.sha256(json.dumps(summary, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
+        safe_summary = _safe_card_summary_payload(summary)
+        digest = hashlib.sha256(json.dumps(safe_summary, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
         provider_material_ref = write_pi_artifact(
             "protected",
             f"pi-provider-key/{safe_run_id}/{rank}.txt",
@@ -92,12 +214,12 @@ def cards_envelope(
         safe_summary_ref = write_pi_artifact(
             "public-summary",
             f"pi-card/{safe_run_id}/{rank}.json",
-            summary,
+            safe_summary,
         )
         protected_snapshot_ref = write_pi_artifact(
             "protected",
             f"pi-card/{safe_run_id}/{rank}.json",
-            {"schema_version": "seektalent.opencli_card_snapshot.v1", "rank": rank, "summary": summary},
+            {"schema_version": "seektalent.opencli_card_snapshot.v1", "rank": rank, "summary": safe_summary},
         )
         safe_summary_refs.append(safe_summary_ref)
         protected_snapshot_refs.append(protected_snapshot_ref)
@@ -106,10 +228,8 @@ def cards_envelope(
                 "provider_rank": rank,
                 "provider_candidate_key_material_ref": provider_material_ref,
                 "candidate_resume_id": f"liepin-opencli-{safe_run_id}-{rank}-{digest}",
-                "display_name_masked": bool(summary.get("display_name_masked", True)),
-                "safe_card_summary": {
-                    key: value for key, value in summary.items() if key != "display_name_masked"
-                },
+                "display_name_masked": bool(summary.get("display_name_masked", summary.get("masked_name", True))),
+                "safe_card_summary": safe_summary,
                 "safe_card_summary_ref": safe_summary_ref,
                 "protected_snapshot_ref": protected_snapshot_ref,
             }
@@ -128,6 +248,7 @@ def cards_envelope(
         "protected_snapshot_refs": protected_snapshot_refs,
         "cards": envelope_cards,
     }
+
 
 def resumes_envelope(
     *,
@@ -187,6 +308,7 @@ def resumes_envelope(
         "protected_snapshot_refs": protected_snapshot_refs,
         "resumes": resumes,
     }
+
 
 def blocked_resumes_envelope(
     *,

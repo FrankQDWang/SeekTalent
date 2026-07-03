@@ -115,6 +115,11 @@ def _run_action(runner: LiepinSiteAdapter, action: str, payload: dict[str, objec
             source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
             native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else {},
         )
+    if action == "extract_structured_liepin_cards":
+        return runner.extract_structured_liepin_cards(
+            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
+            max_cards=_payload_int(payload, "maxCards", "max_cards", default=10),
+        )
     if action == "extract_visible_liepin_cards":
         return runner.extract_visible_liepin_cards(
             source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),

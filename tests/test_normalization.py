@@ -82,9 +82,15 @@ def test_liepin_safe_card_summary_feeds_normalized_resume() -> None:
                 "education_level": "硕士",
                 "school_names": ["华东理工大学"],
                 "major_names": ["计算机科学"],
-                "skill_tags": ["Python", "Java", "Hive"],
-                "recent_experience_text": "负责数据仓库、数据治理和大规模数据处理平台建设。",
-                "normalized_card_text": "数据开发 数据仓库 数据治理 Python Java 大规模数据处理",
+                "skill_tags": ["Python", "Java", "Hive", "数据仓库", "数据治理", "大规模数据处理"],
+                "experience_preview": [
+                    {
+                        "company": "业务线科技公司",
+                        "title": "数据开发工程师",
+                        "date_range": "2019.01-至今",
+                        "duration": "5年",
+                    }
+                ],
             },
         },
     )
@@ -97,9 +103,47 @@ def test_liepin_safe_card_summary_feeds_normalized_resume() -> None:
     assert "上海" in normalized.locations
     assert "硕士" in normalized.education_summary
     assert "Python" in normalized.skills
-    assert normalized.recent_experiences[0].summary == "负责数据仓库、数据治理和大规模数据处理平台建设。"
+    assert normalized.recent_experiences[0].company == "业务线科技公司"
+    assert normalized.recent_experiences[0].title == "数据开发工程师"
+    assert normalized.recent_experiences[0].duration == "2019.01-至今"
     assert "大规模数据处理" in normalized.raw_text_excerpt
+    serialized = json.dumps(normalized.model_dump(mode="json"), ensure_ascii=False)
+    assert "normalized_card_text" not in serialized
+    assert "visible_text" not in serialized
     assert normalized.completeness_score >= 60
+
+
+def test_liepin_normalizer_uses_card_experience_preview_not_normalized_card_text() -> None:
+    candidate = ResumeCandidate(
+        resume_id="liepin-card-preview-1",
+        dedup_key="dedup-liepin-card-preview-1",
+        search_text="structured search text",
+        raw={
+            "provider": "liepin",
+            "safe_card_summary": {
+                "current_or_recent_company": "结构化科技",
+                "current_or_recent_title": "AI平台工程师",
+                "skill_tags": ["Python", "RAG"],
+                "normalized_card_text": "SENTINEL legacy card text",
+                "experience_preview": [
+                    {
+                        "company": "结构化科技",
+                        "title": "AI平台工程师",
+                        "date_range": "2021.04-至今",
+                        "duration": "3年",
+                    }
+                ],
+            },
+        },
+    )
+
+    normalized = normalize_resume(candidate)
+    serialized = json.dumps(normalized.model_dump(mode="json"), ensure_ascii=False)
+
+    assert normalized.current_title == "AI平台工程师"
+    assert normalized.recent_experiences[0].title == "AI平台工程师"
+    assert normalized.recent_experiences[0].company == "结构化科技"
+    assert "SENTINEL legacy card text" not in serialized
 
 
 def test_liepin_detail_candidate_reuses_shared_structured_resume_normalization() -> None:
@@ -343,7 +387,14 @@ def test_liepin_normalization_accepts_camel_case_safe_card_summary() -> None:
                 "work_years": 8,
                 "city": "上海",
                 "skill_tags": ["Python", "Hive"],
-                "recent_experience_text": "负责数据仓库和数据治理平台建设。",
+                "experience_preview": [
+                    {
+                        "company": "业务线科技公司",
+                        "title": "数据开发工程师",
+                        "date_range": "2020.01-至今",
+                        "duration": "4年",
+                    }
+                ],
             },
         },
     )
@@ -355,7 +406,8 @@ def test_liepin_normalization_accepts_camel_case_safe_card_summary() -> None:
     assert normalized.years_of_experience == 8
     assert "上海" in normalized.locations
     assert "Python" in normalized.skills
-    assert normalized.recent_experiences[0].summary == "负责数据仓库和数据治理平台建设。"
+    assert normalized.recent_experiences[0].company == "业务线科技公司"
+    assert normalized.recent_experiences[0].title == "数据开发工程师"
 
 
 def test_unknown_source_with_liepin_text_alias_rejects_instead_of_cts_fallback() -> None:
