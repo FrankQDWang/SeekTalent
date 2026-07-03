@@ -10,12 +10,12 @@ from seektalent.providers.liepin.card_policy import (
 def _summary(
     candidate_id: str,
     provider_rank: int,
-    text: str,
     *,
     title: str | None = None,
     company: str | None = None,
     city: str | None = None,
     skills: tuple[str, ...] = (),
+    experience: tuple[dict[str, object], ...] = (),
 ) -> LiepinCardSummary:
     return LiepinCardSummary(
         candidate_resume_id=candidate_id,
@@ -24,17 +24,34 @@ def _summary(
         current_or_recent_title=title,
         city=city,
         skill_tags=skills,
-        normalized_card_text=text,
+        experience_preview=experience,
     )
 
 
 def test_provider_rank_is_primary_after_hard_filters_and_budget() -> None:
     decisions = build_liepin_card_decisions(
         cards=[
-            _summary("rank-1", 1, "FastAPI ranking platform", title="Backend Engineer", skills=("FastAPI",)),
-            _summary("rank-2", 2, "store sales manager", title="Store Manager"),
-            _summary("rank-3", 3, "FastAPI search services", title="Python Engineer", skills=("Python",)),
-            _summary("rank-4", 4, "FastAPI distributed systems", title="Backend Engineer"),
+            _summary(
+                "rank-1",
+                1,
+                title="Backend Engineer",
+                company="Ranking Platform",
+                skills=("FastAPI", "ranking"),
+            ),
+            _summary("rank-2", 2, title="Store Manager"),
+            _summary(
+                "rank-3",
+                3,
+                title="Python Engineer",
+                company="Search Services",
+                skills=("Python", "FastAPI"),
+            ),
+            _summary(
+                "rank-4",
+                4,
+                title="Backend Engineer",
+                experience=({"company": "Distributed Systems", "title": "FastAPI Engineer"},),
+            ),
         ],
         query_terms=("FastAPI", "ranking"),
         job_title="Backend Engineer",
@@ -53,7 +70,7 @@ def test_provider_rank_is_primary_after_hard_filters_and_budget() -> None:
 def test_missing_card_fields_hold_instead_of_recommending_detail() -> None:
     decisions = build_liepin_card_decisions(
         cards=[
-            _summary("thin-card", 1, "engineer"),
+            _summary("thin-card", 1, title="Engineer"),
         ],
         query_terms=("FastAPI", "ranking"),
         job_title="Backend Engineer",
@@ -70,10 +87,9 @@ def test_chinese_card_terms_can_recommend_detail() -> None:
             _summary(
                 "cn-card",
                 1,
-                "数据开发 数据仓库 数据治理 Python Java 大规模数据处理",
                 title="高级数据开发工程师",
                 company="业务线科技公司",
-                skills=("Python", "Java"),
+                skills=("数据开发", "数据仓库", "数据治理", "Python", "Java"),
             ),
         ],
         query_terms=("数据开发", "数据仓库", "数据治理"),
@@ -88,8 +104,14 @@ def test_chinese_card_terms_can_recommend_detail() -> None:
 def test_obvious_mismatch_does_not_consume_recommendation_budget() -> None:
     decisions = build_liepin_card_decisions(
         cards=[
-            _summary("wrong", 1, "retail sales store manager", title="Store Manager"),
-            _summary("right", 2, "FastAPI ranking backend services", title="Backend Engineer"),
+            _summary("wrong", 1, title="Store Manager"),
+            _summary(
+                "right",
+                2,
+                title="Backend Engineer",
+                company="Ranking Platform",
+                skills=("FastAPI", "ranking"),
+            ),
         ],
         query_terms=("FastAPI", "ranking"),
         job_title="Backend Engineer",
@@ -99,3 +121,9 @@ def test_obvious_mismatch_does_not_consume_recommendation_budget() -> None:
     recommended = [item for item in decisions if item.action == LiepinCardDecisionAction.RECOMMEND_DETAIL]
 
     assert [item.candidate_resume_id for item in recommended] == ["right"]
+
+
+def test_card_policy_has_no_normalized_card_text_field() -> None:
+    fields = LiepinCardSummary.__dataclass_fields__
+
+    assert "normalized_card_text" not in fields

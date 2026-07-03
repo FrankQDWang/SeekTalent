@@ -121,7 +121,27 @@ class RedactedWorkerDiagnostics(BaseModel):
     stderr: Literal["[redacted]"] | None = None
 
 
-class LiepinSafeCardSummary(BaseModel):
+class LiepinCardExperiencePreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    company: str | None = None
+    title: str | None = None
+    date_range: str | None = None
+    duration: str | None = None
+    is_current: bool | None = None
+
+
+class LiepinCardEducationPreview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    school: str | None = None
+    major: str | None = None
+    degree: str | None = None
+    recruitment_type: str | None = None
+    date_range: str | None = None
+
+
+class LiepinStructuredCardEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     display_title: str | None = None
@@ -129,6 +149,7 @@ class LiepinSafeCardSummary(BaseModel):
     current_or_recent_title: str | None = None
     work_years: int | None = None
     age: int | None = None
+    gender: str | None = None
     city: str | None = None
     expected_city: str | None = None
     education_level: str | None = None
@@ -136,8 +157,15 @@ class LiepinSafeCardSummary(BaseModel):
     major_names: tuple[str, ...] = ()
     skill_tags: tuple[str, ...] = ()
     job_intention: str | None = None
-    recent_experience_text: str | None = None
+    active_status: str | None = None
+    badges: tuple[str, ...] = ()
+    experience_preview: tuple[LiepinCardExperiencePreview, ...] = ()
+    education_preview: tuple[LiepinCardEducationPreview, ...] = ()
     masked_name: bool = False
+
+
+class LiepinSafeCardSummary(LiepinStructuredCardEvidence):
+    """Compatibility name for the structured card evidence payload."""
 
 
 class LiepinWorkerCandidateCard(BaseModel):

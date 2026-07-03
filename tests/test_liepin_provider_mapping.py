@@ -172,6 +172,7 @@ def test_worker_card_accepts_allowlisted_safe_card_summary() -> None:
         "current_or_recent_title": "Backend Engineer",
         "work_years": None,
         "age": None,
+        "gender": None,
         "city": None,
         "expected_city": None,
         "education_level": None,
@@ -179,9 +180,65 @@ def test_worker_card_accepts_allowlisted_safe_card_summary() -> None:
         "major_names": [],
         "skill_tags": ["Python", "FastAPI"],
         "job_intention": None,
-        "recent_experience_text": None,
+        "active_status": None,
+        "badges": [],
+        "experience_preview": [],
+        "education_preview": [],
         "masked_name": True,
     }
+
+
+def test_worker_card_accepts_structured_card_evidence_preview_fields() -> None:
+    card = _worker_card().model_copy(
+        update={
+            "safe_card_summary": LiepinSafeCardSummary(
+                current_or_recent_company="北京思图场景数据科技服务有限公司",
+                current_or_recent_title="AI算法工程师",
+                skill_tags=("Python", "MySQL"),
+                experience_preview=(
+                    {
+                        "company": "北京思图场景数据科技服务有限公司",
+                        "title": "AI算法工程师",
+                        "date_range": "2021.04-至今",
+                        "duration": "6年3个月",
+                        "is_current": True,
+                    },
+                ),
+                education_preview=(
+                    {
+                        "school": "齐齐哈尔大学",
+                        "major": "计算机科学与技术",
+                        "degree": "本科",
+                        "recruitment_type": "统招",
+                        "date_range": "2017.08-2021.07",
+                    },
+                ),
+                masked_name=True,
+            )
+        }
+    )
+
+    mapped = map_liepin_worker_card(card, raw_payload_artifact_ref="worker://cards/candidate-1.json")
+
+    summary = mapped.candidate.raw["safe_card_summary"]
+    assert summary["experience_preview"] == [
+        {
+            "company": "北京思图场景数据科技服务有限公司",
+            "title": "AI算法工程师",
+            "date_range": "2021.04-至今",
+            "duration": "6年3个月",
+            "is_current": True,
+        }
+    ]
+    assert summary["education_preview"] == [
+        {
+            "school": "齐齐哈尔大学",
+            "major": "计算机科学与技术",
+            "degree": "本科",
+            "recruitment_type": "统招",
+            "date_range": "2017.08-2021.07",
+        }
+    ]
 
 
 def test_worker_card_preserves_pi_safe_hash_and_artifact_refs() -> None:
@@ -218,12 +275,31 @@ def test_worker_card_rejects_unknown_safe_card_summary_fields() -> None:
         LiepinWorkerCandidateCard.model_validate(payload)
 
 
+def test_worker_card_rejects_card_text_tail_fields() -> None:
+    payload = _worker_card().model_dump(mode="json")
+    payload["safeCardSummary"] = {
+        "current_or_recent_title": "Backend Engineer",
+        "visible_text": "raw visible card text",
+    }
+
+    with pytest.raises(ValidationError):
+        LiepinWorkerCandidateCard.model_validate(payload)
+
+    payload["safeCardSummary"] = {
+        "current_or_recent_title": "Backend Engineer",
+        "normalized_card_text": "legacy card text",
+    }
+
+    with pytest.raises(ValidationError):
+        LiepinWorkerCandidateCard.model_validate(payload)
+
+
 def test_safe_card_summary_does_not_copy_raw_payload_contact_material() -> None:
     card = _worker_card().model_copy(
         update={
             "safe_card_summary": LiepinSafeCardSummary(
                 current_or_recent_title="Backend Engineer",
-                recent_experience_text="Built FastAPI services",
+                experience_preview=({"company": "Acme", "title": "Backend Engineer"},),
             )
         }
     )
