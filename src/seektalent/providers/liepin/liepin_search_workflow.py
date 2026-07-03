@@ -2,9 +2,15 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, cast
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
+from seektalent.providers.liepin.liepin_state_machine import (
+    LiepinStateSnapshot,
+    LiepinTransition,
+    LiepinTransitionRunner,
+    TransitionResult,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -31,6 +37,8 @@ class LiepinSearchWorkflowSite(Protocol):
     ) -> dict[str, object]: ...
 
     def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult: ...
+
+    def observe_liepin_search_state(self) -> OpenCliBrowserResult: ...
 
     def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None: ...
 
@@ -73,6 +81,7 @@ class LiepinSearchWorkflowSite(Protocol):
 class LiepinSearchWorkflow:
     def __init__(self, *, site: LiepinSearchWorkflowSite) -> None:
         self._site = site
+        self._transition_runner = LiepinTransitionRunner()
 
     def search_detail_backed_resumes(self, request: LiepinSearchWorkflowRequest) -> dict[str, object]:
         if request.target_resumes < 1 or request.target_resumes > 10:
@@ -124,9 +133,10 @@ class LiepinSearchWorkflow:
                 cards_seen=cards_seen,
             )
 
-        structured_cards = self._site.extract_structured_liepin_cards(
+        structured_cards = self._extract_cards_transition(
             source_run_id=request.source_run_id,
             max_cards=request.max_cards,
+            action_kind="extract_structured_cards",
         )
         if not structured_cards.ok:
             return self._site.blocked_resumes_envelope(
@@ -245,9 +255,10 @@ class LiepinSearchWorkflow:
                 using_cached_card_items = True
                 continue
 
-            refreshed = self._site.extract_structured_liepin_cards(
+            refreshed = self._extract_cards_transition(
                 source_run_id=request.source_run_id,
                 max_cards=request.max_cards,
+                action_kind="extract_structured_cards",
             )
             if not refreshed.ok:
                 self._append_event(
@@ -310,12 +321,87 @@ class LiepinSearchWorkflow:
     def _append_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
         self._site.append_agent_event(source_run_id, event)
 
+    def _extract_cards_transition(
+        self,
+        *,
+        source_run_id: str,
+        max_cards: int,
+        action_kind: str = "extract_structured_cards",
+    ) -> OpenCliBrowserResult:
+        extracted: OpenCliBrowserResult | None = None
+
+        def observe_state() -> LiepinStateSnapshot:
+            return _snapshot_from_result(self._site.observe_liepin_search_state())
+
+        def extract_cards() -> TransitionResult:
+            nonlocal extracted
+            extracted = self._site.extract_structured_liepin_cards(
+                source_run_id=source_run_id,
+                max_cards=max_cards,
+            )
+            if extracted.ok:
+                return TransitionResult(ok=True)
+            return TransitionResult(
+                ok=False,
+                safe_reason_code=extracted.safe_reason_code or "failed_provider_error",
+            )
+
+        result = self._transition_runner.run(
+            LiepinTransition(
+                name="extract_structured_cards",
+                phase="search",
+                observe_pre_state=observe_state,
+                precondition=lambda snapshot: snapshot.ok,
+                action=extract_cards,
+                observe_post_state=observe_state,
+                postcondition=lambda snapshot: snapshot.ok,
+                safe_reason_code="liepin_opencli_results_not_ready",
+                trace_event="liepin.search.extract_cards",
+            )
+        )
+        event: dict[str, object] = {
+            "action_kind": action_kind,
+            "route_kind": "search",
+            "ok": result.ok,
+        }
+        if not result.ok:
+            event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_results_not_ready"
+        self._append_event(source_run_id, event)
+        if not result.ok:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="extract_structured_liepin_cards",
+                safe_reason_code=result.safe_reason_code or "liepin_opencli_results_not_ready",
+            )
+        if extracted is None:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="extract_structured_liepin_cards",
+                safe_reason_code="liepin_opencli_results_not_ready",
+            )
+        return extracted
+
 
 def _structured_card_items(result: OpenCliBrowserResult) -> list[Mapping[str, object]]:
     raw_cards = result.observation.get("cards") if isinstance(result.observation, Mapping) else None
     if not isinstance(raw_cards, Sequence) or isinstance(raw_cards, str | bytes | bytearray):
         return []
-    return [item for item in raw_cards if isinstance(item, Mapping)]
+    return [cast(Mapping[str, object], item) for item in raw_cards if isinstance(item, Mapping)]
+
+
+def _snapshot_from_result(result: OpenCliBrowserResult) -> LiepinStateSnapshot:
+    text = result.private_output or str(result.observation.get("text") or "")
+    return LiepinStateSnapshot(
+        ok=result.ok,
+        text=text,
+        safe_reason_code=result.safe_reason_code,
+        observation=_safe_snapshot_observation(result.observation),
+    )
+
+
+def _safe_snapshot_observation(observation: Mapping[str, object]) -> dict[str, object] | None:
+    safe_observation = {key: value for key, value in observation.items() if key != "text"}
+    return safe_observation or None
 
 
 def _next_unattempted_card(

@@ -112,3 +112,18 @@ def test_workflow_steps_from_action_events_maps_native_filter_verification() -> 
     assert [step["step_name"] for step in steps] == ["apply_filters", "apply_filters", "finalize"]
     assert steps[1]["event_type"] == "source_workflow_step_completed"
     assert steps[1]["status"] == "completed"
+
+
+def test_workflow_steps_from_action_events_maps_clear_native_filters() -> None:
+    steps = workflow_steps_from_action_events(
+        [
+            {"action_kind": "clear_native_filters", "route_kind": "search", "ok": True},
+        ],
+        final_status="succeeded",
+        resumes_returned=0,
+        action_trace_ref="artifact://protected/liepin-opencli/action-traces/run-4.json",
+    )
+
+    assert [step["step_name"] for step in steps] == ["apply_filters", "finalize"]
+    assert steps[0]["event_type"] == "source_workflow_step_completed"
+    assert steps[0]["status"] == "completed"

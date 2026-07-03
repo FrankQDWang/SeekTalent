@@ -13,6 +13,9 @@ from seektalent.providers.liepin.liepin_search_workflow import (
 @dataclass
 class FakeLiepinSearchWorkflowSite:
     capture_ok: bool = True
+    search_states: list[OpenCliBrowserResult] = field(
+        default_factory=lambda: [OpenCliBrowserResult(ok=True, action="state")]
+    )
     calls: list[str] = field(default_factory=list)
     events: list[dict[str, object]] = field(default_factory=list)
     resumes: list[dict[str, object]] = field(default_factory=list)
@@ -47,6 +50,12 @@ class FakeLiepinSearchWorkflowSite:
             "stop_reason": "completed",
             "cards_seen": max_cards,
         }
+
+    def observe_liepin_search_state(self) -> OpenCliBrowserResult:
+        self.calls.append("observe_liepin_search_state")
+        if self.search_states:
+            return self.search_states.pop(0)
+        return OpenCliBrowserResult(ok=True, action="state")
 
     def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
         del source_run_id, max_cards
@@ -157,6 +166,81 @@ def test_workflow_opens_details_until_target_count() -> None:
     assert "search_liepin_cards" in site.calls
     assert "extract_structured_liepin_cards" in site.calls
     assert "finalize_liepin_resumes" in site.calls
+
+
+def test_workflow_initial_card_extraction_uses_state_probe_before_and_after() -> None:
+    site = FakeLiepinSearchWorkflowSite()
+
+    envelope = LiepinSearchWorkflow(site=site).search_detail_backed_resumes(_request(target_resumes=1))
+
+    assert envelope["status"] == "succeeded"
+    extract_index = site.calls.index("extract_structured_liepin_cards")
+    assert site.calls[extract_index - 1] == "observe_liepin_search_state"
+    assert site.calls[extract_index + 1] == "observe_liepin_search_state"
+    assert any(event.get("action_kind") == "extract_structured_cards" and event.get("ok") is True for event in site.events)
+
+
+def test_workflow_refresh_card_extraction_uses_state_probe_before_and_after() -> None:
+    site = FakeLiepinSearchWorkflowSite(
+        structured_cards=[
+            [{"ref": "70", "provider_rank": 1}, {"ref": "71", "provider_rank": 2}],
+            [{"ref": "71", "provider_rank": 2}],
+        ]
+    )
+
+    envelope = LiepinSearchWorkflow(site=site).search_detail_backed_resumes(_request(target_resumes=2))
+
+    assert envelope["status"] == "succeeded"
+    extract_indexes = [index for index, call in enumerate(site.calls) if call == "extract_structured_liepin_cards"]
+    assert len(extract_indexes) == 2
+    refresh_index = extract_indexes[1]
+    assert site.calls[refresh_index - 1] == "observe_liepin_search_state"
+    assert site.calls[refresh_index + 1] == "observe_liepin_search_state"
+    assert any(
+        event.get("action_kind") == "visible_cards_refreshed_after_return" and event.get("ok") is True
+        for event in site.events
+    )
+
+
+def test_workflow_blocks_when_initial_card_extraction_pre_state_fails_without_debug_reason() -> None:
+    site = FakeLiepinSearchWorkflowSite(
+        search_states=[
+            OpenCliBrowserResult(
+                ok=False,
+                action="state",
+                safe_reason_code="liepin_opencli_results_not_ready",
+            )
+        ]
+    )
+
+    envelope = LiepinSearchWorkflow(site=site).search_detail_backed_resumes(_request())
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_results_not_ready"
+    assert "extract_structured_liepin_cards" not in site.calls
+    assert "precondition_failed" not in repr(site.events)
+    assert "postcondition_failed" not in repr(site.events)
+
+
+def test_workflow_blocks_when_initial_card_extraction_post_state_fails_without_debug_reason() -> None:
+    site = FakeLiepinSearchWorkflowSite(
+        search_states=[
+            OpenCliBrowserResult(ok=True, action="state"),
+            OpenCliBrowserResult(
+                ok=False,
+                action="state",
+                safe_reason_code="liepin_opencli_results_not_ready",
+            ),
+        ]
+    )
+
+    envelope = LiepinSearchWorkflow(site=site).search_detail_backed_resumes(_request())
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_results_not_ready"
+    assert "extract_structured_liepin_cards" in site.calls
+    assert "precondition_failed" not in repr(site.events)
+    assert "postcondition_failed" not in repr(site.events)
 
 
 def test_workflow_blocks_when_no_detail_can_be_captured() -> None:

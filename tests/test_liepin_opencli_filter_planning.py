@@ -49,6 +49,25 @@ def test_liepin_filter_selection_detects_selected_chip_in_section() -> None:
     assert native_filter_selection_applied(state_text, section="recruitment_type", label="统招本科") is True
 
 
+def test_liepin_filter_selection_detects_checked_option_in_section() -> None:
+    state_text = """
+    <span>期望城市：</span>
+    [22]<label class=ant-checkbox-wrapper ant-checkbox-wrapper-checked>上海</label>
+    <span>工作年限：</span>
+    """
+
+    assert native_filter_selection_applied(state_text, section="expected", label="上海") is True
+
+
+def test_liepin_filter_selection_detects_section_summary_value() -> None:
+    state_text = """
+    <span>期望城市：上海</span>
+    <span>工作年限：</span>
+    """
+
+    assert native_filter_selection_applied(state_text, section="expected", label="上海") is True
+
+
 def test_liepin_filter_planning_uses_other_city_picker_for_secondary_city() -> None:
     state_text = """
     [20]<label>期望城市：</label>
@@ -125,6 +144,28 @@ def test_liepin_filter_planning_prefers_exact_city_result() -> None:
     """
 
     assert native_filter_option_ref_in_section(state_text, section="expected", label="苏州") == "62"
+
+
+def test_liepin_filter_planning_prefers_final_whole_city_over_city_picker_navigation() -> None:
+    state_text = """
+    <span>请选择城市</span>
+    [294]<input autocomplete=off placeholder=搜索城市 type=text />
+    [298]<div>国内</div>
+    <ul role=menu tabindex=0 />
+    [302]<li role=menuitem tabindex=-1 />
+      <span>上海</span>
+    <p />
+      [334]<span>热门城市</span>
+      [335]<span>/</span>
+      [336]<span>上海</span>
+    <div />
+      <ul />
+        <li />
+          [337]<span>全上海</span>
+    <i>已选（0/9）</i>
+    """
+
+    assert native_filter_option_ref_in_section(state_text, section="expected", label="上海") == "337"
 
 
 @pytest.mark.parametrize(("city_name", "city_ref"), [("苏州", "74"), ("宁波", "75")])

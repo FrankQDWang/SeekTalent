@@ -33,6 +33,7 @@ from seektalent.providers.liepin.opencli_filter_planning import (
     native_filter_city_overseas_tab_ref,
     native_filter_city_picker_selection_contains,
     native_filter_city_search_input_ref,
+    native_filter_clear_filters_ref,
     liepin_filter_menu_label,
     native_filter_control_ref_in_section,
     native_filter_is_required,
@@ -45,6 +46,12 @@ from seektalent.providers.liepin.liepin_opencli_policy import (
     LIEPIN_RECRUITER_SEARCH_URL,
     liepin_error_from_opencli_error,
     liepin_result_from_opencli_result,
+)
+from seektalent.providers.liepin.liepin_state_machine import (
+    LiepinStateSnapshot,
+    LiepinTransition,
+    LiepinTransitionRunner,
+    TransitionResult,
 )
 from seektalent.providers.liepin import liepin_site_payloads
 from seektalent.providers.liepin.liepin_site_parsing import (
@@ -82,7 +89,6 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     build_observation,
     classify_liepin_state,
     extract_allowed_click_refs as extract_allowed_click_refs,
-    extract_known_modal_close_ref,
     extract_liepin_card_summaries,  # noqa: F401 - public re-export for callers/tests.
     extract_liepin_search_button_ref,
     extract_liepin_search_input_ref,
@@ -116,6 +122,63 @@ _RECOVERABLE_TAB_REUSE_REASONS = {
 }
 
 
+def _native_filter_clear_scope(source_run_id: str) -> str:
+    clean = source_run_id.strip()
+    if not clean:
+        return "__default__"
+    for separator in (":source:", "-source-"):
+        if separator in clean:
+            return clean.split(separator, 1)[0]
+    return clean
+
+
+def _native_filter_clear_signature(native_filters: Mapping[str, object] | None) -> str:
+    if not native_filters:
+        return "[]"
+    return json.dumps(liepin_filter_actions(native_filters), ensure_ascii=False, separators=(",", ":"))
+
+
+def _snapshot_from_result(result: OpenCliBrowserResult) -> LiepinStateSnapshot:
+    text = _opencli_result_text(result)
+    url = _state_url(text)
+    if url is None:
+        private_text = (result.private_output or "").strip()
+        if private_text.startswith(("http://", "https://")):
+            url = private_text
+    return LiepinStateSnapshot(
+        ok=result.ok,
+        text=text,
+        url=url,
+        safe_reason_code=result.safe_reason_code,
+        observation=_safe_snapshot_observation(result.observation),
+    )
+
+
+def _safe_snapshot_observation(observation: Mapping[str, object]) -> dict[str, object] | None:
+    safe_observation = {key: value for key, value in observation.items() if key != "text"}
+    return safe_observation or None
+
+
+def _result_from_opencli(result: OpenCliBrowserResult, *, event: dict[str, object] | None = None) -> TransitionResult:
+    return TransitionResult(
+        ok=result.ok,
+        safe_reason_code=result.safe_reason_code,
+        event=event,
+    )
+
+
+def _result_from_error(error: OpenCliBrowserError) -> TransitionResult:
+    return TransitionResult(ok=False, safe_reason_code=error.safe_reason_code)
+
+
+def _search_url_ready(snapshot: LiepinStateSnapshot) -> bool:
+    return snapshot.url is not None and _url_matches_start_surface(snapshot.url, LIEPIN_RECRUITER_SEARCH_URL)
+
+
+def _search_state_nonterminal(snapshot: LiepinStateSnapshot) -> bool:
+    return bool(snapshot.text.strip())
+
+
 class LiepinSiteAdapter:
     def __init__(
         self,
@@ -127,6 +190,7 @@ class LiepinSiteAdapter:
         self._browser_config = browser_config
         self._site_config = site_config
         self._automation = automation
+        self._native_filter_clear_signatures_by_scope: dict[str, str] = {}
 
     @property
     def _commands(self):
@@ -139,6 +203,9 @@ class LiepinSiteAdapter:
     @property
     def _blank_window_closer(self):
         return self._automation.blank_window_closer
+
+    def _run_liepin_transition(self, transition: LiepinTransition) -> TransitionResult:
+        return LiepinTransitionRunner().run(transition)
 
     def _pace_before_action(self, action: str) -> None:
         if action in {"fill", "click", "scroll"}:
@@ -694,144 +761,217 @@ class LiepinSiteAdapter:
         try:
             self._validate_keyword_text(query)
             events.append({"action_kind": "open_search", "route_kind": "search"})
-            opened = self.open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)
+            opened_result: OpenCliBrowserResult | None = None
+            open_post_snapshot: LiepinStateSnapshot | None = None
+
+            def open_search_action() -> TransitionResult:
+                nonlocal opened_result
+                opened_result = self.open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)
+                return _result_from_opencli(opened_result)
+
+            def observe_after_open_search() -> LiepinStateSnapshot:
+                nonlocal open_post_snapshot
+                open_post_snapshot = _snapshot_from_result(self.get_url())
+                return open_post_snapshot
+
+            opened = self._run_liepin_transition(
+                LiepinTransition(
+                    name="open_search",
+                    phase="search",
+                    observe_pre_state=lambda: LiepinStateSnapshot(ok=True, text="open_search_ready"),
+                    precondition=lambda snapshot: snapshot.ok,
+                    action=open_search_action,
+                    observe_post_state=observe_after_open_search,
+                    postcondition=_search_url_ready,
+                    safe_reason_code="liepin_opencli_search_not_ready",
+                    trace_event="liepin.search.open",
+                )
+            )
             if not opened.ok:
+                events[-1]["ok"] = False
+                events[-1]["safe_reason_code"] = opened.safe_reason_code
                 return self._blocked_cards_envelope(
                     source_run_id=source_run_id,
                     query=query,
-                    safe_reason_code=opened.safe_reason_code,
+                    safe_reason_code=opened.safe_reason_code or "liepin_opencli_search_not_ready",
                     safe_run_id=safe_run_id,
                     pages_visited=pages_visited,
                     events=events,
                 )
             pages_visited = 1
             events.append({"action_kind": "wait_search_ready", "route_kind": "search"})
-            self.wait_time(seconds=3)
-            first_state = self.state()
-            events.append({"action_kind": "observe", "route_kind": "search", "ok": first_state.ok})
-            if not first_state.ok and first_state.safe_reason_code in {
-                "liepin_opencli_risk_page",
-                "liepin_opencli_status_unavailable",
-            }:
-                events.append(
-                    {
-                        "action_kind": "observe_retry_after_unready",
-                        "route_kind": "search",
-                        "safe_reason_code": first_state.safe_reason_code,
-                    }
-                )
-                self.wait_time(seconds=2)
+            first_state: OpenCliBrowserResult | None = None
+
+            def observe_search_ready() -> LiepinStateSnapshot:
+                nonlocal first_state
                 first_state = self.state()
-                events.append(
-                    {"action_kind": "observe_after_unready_retry", "route_kind": "search", "ok": first_state.ok}
+                events.append({"action_kind": "observe", "route_kind": "search", "ok": first_state.ok})
+                if not first_state.ok and first_state.safe_reason_code in {
+                    "liepin_opencli_risk_page",
+                    "liepin_opencli_status_unavailable",
+                }:
+                    events.append(
+                        {
+                            "action_kind": "observe_retry_after_unready",
+                            "route_kind": "search",
+                            "safe_reason_code": first_state.safe_reason_code,
+                        }
+                    )
+                    self.wait_time(seconds=2)
+                    first_state = self.state()
+                    events.append(
+                        {"action_kind": "observe_after_unready_retry", "route_kind": "search", "ok": first_state.ok}
+                    )
+                return _snapshot_from_result(first_state)
+
+            ready_result = self._run_liepin_transition(
+                LiepinTransition(
+                    name="wait_search_ready",
+                    phase="search",
+                    observe_pre_state=lambda: open_post_snapshot
+                    or LiepinStateSnapshot(
+                        ok=False,
+                        text="",
+                        safe_reason_code="liepin_opencli_search_not_ready",
+                    ),
+                    precondition=_search_url_ready,
+                    action=lambda: _result_from_opencli(self.wait_time(seconds=3)),
+                    observe_post_state=observe_search_ready,
+                    postcondition=_search_state_nonterminal,
+                    safe_reason_code="liepin_opencli_search_not_ready",
+                    trace_event="liepin.search.ready",
                 )
-            if not first_state.ok:
+            )
+            if not ready_result.ok or first_state is None:
+                events[-1]["ok"] = False
+                events[-1]["safe_reason_code"] = ready_result.safe_reason_code
                 return self._blocked_cards_envelope(
                     source_run_id=source_run_id,
                     query=query,
-                    safe_reason_code=first_state.safe_reason_code,
+                    safe_reason_code=ready_result.safe_reason_code or "liepin_opencli_search_not_ready",
                     safe_run_id=safe_run_id,
                     pages_visited=pages_visited,
                     events=events,
                 )
             first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
-            modal_close_ref = extract_known_modal_close_ref(first_state_text)
-            if modal_close_ref is not None:
-                events.append({"action_kind": "close_known_modal", "route_kind": "search"})
-                self._click_known_modal_close_ref(modal_close_ref)
-                self.wait_time(seconds=1)
-                first_state = self.state()
-                events.append(
-                    {"action_kind": "observe_after_modal_close", "route_kind": "search", "ok": first_state.ok}
+            clear_state = first_state
+
+            def clear_native_filters_action() -> TransitionResult:
+                nonlocal clear_state
+                clear_state = self._clear_liepin_native_filters_if_needed(
+                    source_run_id=source_run_id,
+                    native_filters=native_filters,
+                    current_state=clear_state,
+                    events=events,
                 )
-                if not first_state.ok:
-                    return self._blocked_cards_envelope(
-                        source_run_id=source_run_id,
-                        query=query,
-                        safe_reason_code=first_state.safe_reason_code,
-                        safe_run_id=safe_run_id,
-                        pages_visited=pages_visited,
-                        events=events,
-                    )
-                first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
-            events.append({"action_kind": "fill_search", "route_kind": "search", "chars": len(query)})
-            search_input_ref = extract_liepin_search_input_ref(first_state_text)
-            fill_target = search_input_ref or "搜索"
-            for attempt_index in range(3):
-                try:
-                    self.fill(target=fill_target, text=query)
-                    break
-                except OpenCliBrowserError as exc:
-                    if (
-                        exc.safe_reason_code
-                        not in {
-                            "liepin_opencli_stale_ref",
-                            "liepin_opencli_status_unavailable",
-                        }
-                        or attempt_index == 2
-                    ):
-                        raise
-                    retry_event: dict[str, object] = {
-                        "action_kind": "fill_search_retry",
-                        "route_kind": "search",
-                        "chars": len(query),
-                    }
-                    if exc.safe_reason_code == "liepin_opencli_stale_ref":
-                        retry_event["safe_reason_code"] = exc.safe_reason_code
-                    events.append(retry_event)
-                    self.wait_time(seconds=2)
-                    retry_state = self.state()
-                    events.append(
-                        {"action_kind": "observe_before_fill_retry", "route_kind": "search", "ok": retry_state.ok}
-                    )
-                    if not retry_state.ok:
-                        return self._blocked_cards_envelope(
-                            source_run_id=source_run_id,
-                            query=query,
-                            safe_reason_code=retry_state.safe_reason_code,
-                            safe_run_id=safe_run_id,
-                            pages_visited=pages_visited,
-                            events=events,
-                        )
-                    retry_state_text = retry_state.private_output or str(retry_state.observation.get("text") or "")
-                    modal_close_ref = extract_known_modal_close_ref(retry_state_text)
-                    if modal_close_ref is not None:
-                        events.append({"action_kind": "close_known_modal_before_fill_retry", "route_kind": "search"})
-                        self._click_known_modal_close_ref(modal_close_ref)
-                        self.wait_time(seconds=1)
-                        retry_state = self.state()
-                        events.append(
-                            {
-                                "action_kind": "observe_after_retry_modal_close",
-                                "route_kind": "search",
-                                "ok": retry_state.ok,
-                            }
-                        )
-                        if not retry_state.ok:
-                            return self._blocked_cards_envelope(
-                                source_run_id=source_run_id,
-                                query=query,
-                                safe_reason_code=retry_state.safe_reason_code,
-                                safe_run_id=safe_run_id,
-                                pages_visited=pages_visited,
-                                events=events,
-                            )
-                        retry_state_text = retry_state.private_output or str(retry_state.observation.get("text") or "")
-                    retry_input_ref = extract_liepin_search_input_ref(retry_state_text)
-                    fill_target = retry_input_ref or fill_target
-            click_ready_state = self.state()
-            events.append(
-                {
-                    "action_kind": "observe_before_click_search",
-                    "route_kind": "search",
-                    "ok": click_ready_state.ok,
-                }
+                return _result_from_opencli(clear_state)
+
+            clear_result = self._run_liepin_transition(
+                LiepinTransition(
+                    name="clear_native_filters",
+                    phase="search",
+                    observe_pre_state=lambda: _snapshot_from_result(clear_state),
+                    precondition=lambda snapshot: snapshot.ok,
+                    action=clear_native_filters_action,
+                    observe_post_state=lambda: _snapshot_from_result(clear_state),
+                    postcondition=lambda snapshot: snapshot.ok,
+                    safe_reason_code="liepin_opencli_filter_clear_failed",
+                    trace_event="liepin.filter.clear",
+                )
             )
-            if not click_ready_state.ok:
+            first_state = clear_state
+            if not clear_result.ok or not first_state.ok:
                 return self._blocked_cards_envelope(
                     source_run_id=source_run_id,
                     query=query,
-                    safe_reason_code=click_ready_state.safe_reason_code,
+                    safe_reason_code=clear_result.safe_reason_code
+                    or first_state.safe_reason_code
+                    or "liepin_opencli_filter_clear_failed",
+                    safe_run_id=safe_run_id,
+                    pages_visited=pages_visited,
+                    events=events,
+                )
+            first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
+            events.append({"action_kind": "fill_search", "route_kind": "search", "chars": len(query)})
+            search_input_ref = extract_liepin_search_input_ref(first_state_text)
+            fill_target = search_input_ref or "搜索"
+            fill_retry_state: OpenCliBrowserResult | None = None
+            click_ready_state: OpenCliBrowserResult | None = None
+
+            def fill_search_action() -> TransitionResult:
+                nonlocal fill_target, fill_retry_state
+                for attempt_index in range(3):
+                    try:
+                        self.fill(target=fill_target, text=query)
+                        return TransitionResult(ok=True)
+                    except OpenCliBrowserError as exc:
+                        if (
+                            exc.safe_reason_code
+                            not in {
+                                "liepin_opencli_stale_ref",
+                                "liepin_opencli_status_unavailable",
+                            }
+                            or attempt_index == 2
+                        ):
+                            return _result_from_error(exc)
+                        retry_event: dict[str, object] = {
+                            "action_kind": "fill_search_retry",
+                            "route_kind": "search",
+                            "chars": len(query),
+                        }
+                        if exc.safe_reason_code == "liepin_opencli_stale_ref":
+                            retry_event["safe_reason_code"] = exc.safe_reason_code
+                        events.append(retry_event)
+                        self.wait_time(seconds=2)
+                        fill_retry_state = self.state()
+                        events.append(
+                            {
+                                "action_kind": "observe_before_fill_retry",
+                                "route_kind": "search",
+                                "ok": fill_retry_state.ok,
+                            }
+                        )
+                        if not fill_retry_state.ok:
+                            return _result_from_opencli(fill_retry_state)
+                        retry_state_text = fill_retry_state.private_output or str(
+                            fill_retry_state.observation.get("text") or ""
+                        )
+                        retry_input_ref = extract_liepin_search_input_ref(retry_state_text)
+                        fill_target = retry_input_ref or fill_target
+                return TransitionResult(ok=False, safe_reason_code="liepin_opencli_search_not_ready")
+
+            def observe_after_fill() -> LiepinStateSnapshot:
+                nonlocal click_ready_state
+                click_ready_state = self.state()
+                events.append(
+                    {
+                        "action_kind": "observe_before_click_search",
+                        "route_kind": "search",
+                        "ok": click_ready_state.ok,
+                    }
+                )
+                return _snapshot_from_result(click_ready_state)
+
+            fill_result = self._run_liepin_transition(
+                LiepinTransition(
+                    name="fill_search",
+                    phase="search",
+                    observe_pre_state=lambda: _snapshot_from_result(fill_retry_state or first_state),
+                    precondition=lambda snapshot: snapshot.ok,
+                    action=fill_search_action,
+                    observe_post_state=observe_after_fill,
+                    postcondition=_search_state_nonterminal,
+                    safe_reason_code="liepin_opencli_search_not_ready",
+                    trace_event="liepin.search.fill",
+                )
+            )
+            if not fill_result.ok or click_ready_state is None or not click_ready_state.ok:
+                return self._blocked_cards_envelope(
+                    source_run_id=source_run_id,
+                    query=query,
+                    safe_reason_code=fill_result.safe_reason_code
+                    or (click_ready_state.safe_reason_code if click_ready_state is not None else None)
+                    or "liepin_opencli_search_not_ready",
                     safe_run_id=safe_run_id,
                     pages_visited=pages_visited,
                     events=events,
@@ -839,192 +979,259 @@ class LiepinSiteAdapter:
             click_ready_state_text = click_ready_state.private_output or str(
                 click_ready_state.observation.get("text") or ""
             )
-            modal_close_ref = extract_known_modal_close_ref(click_ready_state_text)
-            if modal_close_ref is not None:
-                events.append({"action_kind": "close_known_modal_before_click_search", "route_kind": "search"})
-                self._click_known_modal_close_ref(modal_close_ref)
-                self.wait_time(seconds=1)
-                click_ready_state = self.state()
-                events.append(
-                    {
-                        "action_kind": "observe_after_click_search_modal_close",
-                        "route_kind": "search",
-                        "ok": click_ready_state.ok,
-                    }
-                )
-                if not click_ready_state.ok:
-                    return self._blocked_cards_envelope(
-                        source_run_id=source_run_id,
-                        query=query,
-                        safe_reason_code=click_ready_state.safe_reason_code,
-                        safe_run_id=safe_run_id,
-                        pages_visited=pages_visited,
-                        events=events,
-                    )
-                click_ready_state_text = click_ready_state.private_output or str(
-                    click_ready_state.observation.get("text") or ""
-                )
             events.append({"action_kind": "click_search", "route_kind": "search"})
             search_click_state_text = click_ready_state_text
-            for attempt_index in range(3):
-                try:
-                    self._click_liepin_search_button(search_click_state_text)
-                    break
-                except OpenCliBrowserError as exc:
-                    if (
-                        exc.safe_reason_code
-                        not in {
-                            "liepin_opencli_stale_ref",
-                            "liepin_opencli_status_unavailable",
-                        }
-                        or attempt_index == 2
-                    ):
-                        raise
-                    events.append(
-                        {
-                            "action_kind": "click_search_retry",
-                            "route_kind": "search",
-                            "safe_reason_code": exc.safe_reason_code,
-                        }
-                    )
-                    self.wait_time(seconds=2)
-                    retry_state = self.state()
-                    events.append(
-                        {
-                            "action_kind": "observe_before_click_retry",
-                            "route_kind": "search",
-                            "ok": retry_state.ok,
-                        }
-                    )
-                    if not retry_state.ok:
-                        return self._blocked_cards_envelope(
-                            source_run_id=source_run_id,
-                            query=query,
-                            safe_reason_code=retry_state.safe_reason_code,
-                            safe_run_id=safe_run_id,
-                            pages_visited=pages_visited,
-                            events=events,
-                        )
-                    search_click_state_text = retry_state.private_output or str(
-                        retry_state.observation.get("text") or ""
-                    )
-                    modal_close_ref = extract_known_modal_close_ref(search_click_state_text)
-                    if modal_close_ref is not None:
-                        events.append({"action_kind": "close_known_modal_before_click_retry", "route_kind": "search"})
-                        self._click_known_modal_close_ref(modal_close_ref)
-                        self.wait_time(seconds=1)
-                        retry_state = self.state()
+            click_retry_state: OpenCliBrowserResult | None = None
+            click_post_snapshot: LiepinStateSnapshot | None = None
+
+            def click_search_action() -> TransitionResult:
+                nonlocal search_click_state_text, click_retry_state
+                for attempt_index in range(3):
+                    try:
+                        self._click_liepin_search_button(search_click_state_text)
+                        return TransitionResult(ok=True)
+                    except OpenCliBrowserError as exc:
+                        if (
+                            exc.safe_reason_code
+                            not in {
+                                "liepin_opencli_stale_ref",
+                                "liepin_opencli_status_unavailable",
+                            }
+                            or attempt_index == 2
+                        ):
+                            return _result_from_error(exc)
                         events.append(
                             {
-                                "action_kind": "observe_after_click_retry_modal_close",
+                                "action_kind": "click_search_retry",
                                 "route_kind": "search",
-                                "ok": retry_state.ok,
+                                "safe_reason_code": exc.safe_reason_code,
                             }
                         )
-                        if not retry_state.ok:
-                            return self._blocked_cards_envelope(
-                                source_run_id=source_run_id,
-                                query=query,
-                                safe_reason_code=retry_state.safe_reason_code,
-                                safe_run_id=safe_run_id,
-                                pages_visited=pages_visited,
-                                events=events,
-                            )
-                        search_click_state_text = retry_state.private_output or str(
-                            retry_state.observation.get("text") or ""
+                        self.wait_time(seconds=2)
+                        click_retry_state = self.state()
+                        events.append(
+                            {
+                                "action_kind": "observe_before_click_retry",
+                                "route_kind": "search",
+                                "ok": click_retry_state.ok,
+                            }
                         )
-            final_state: OpenCliBrowserResult | None = None
-            for attempt_index in range(3):
-                try:
-                    self.wait_time(seconds=3 if attempt_index == 0 else 2)
-                    observed_state = self.state()
-                except OpenCliBrowserError as exc:
-                    events.append(
-                        {
-                            "action_kind": "observe_results_retry",
-                            "route_kind": "search",
-                            "safe_reason_code": exc.safe_reason_code,
-                        }
-                    )
-                    if (
-                        exc.safe_reason_code
-                        not in {
-                            "liepin_opencli_stale_ref",
-                            "liepin_opencli_status_unavailable",
-                        }
-                        or attempt_index == 2
-                    ):
-                        return self._blocked_cards_envelope(
-                            source_run_id=source_run_id,
-                            query=query,
-                            safe_reason_code=exc.safe_reason_code,
-                            safe_run_id=safe_run_id,
-                            pages_visited=pages_visited,
-                            events=events,
+                        if not click_retry_state.ok:
+                            return _result_from_opencli(click_retry_state)
+                        search_click_state_text = click_retry_state.private_output or str(
+                            click_retry_state.observation.get("text") or ""
                         )
-                    continue
-                events.append(
-                    {
-                        "action_kind": "observe_results" if attempt_index == 0 else "observe_results_after_retry",
-                        "route_kind": "search",
-                        "ok": observed_state.ok,
-                    }
+                return TransitionResult(ok=False, safe_reason_code="liepin_opencli_search_not_ready")
+
+            def observe_after_click_search() -> LiepinStateSnapshot:
+                nonlocal click_post_snapshot
+                click_post_snapshot = _snapshot_from_result(self.get_url())
+                return click_post_snapshot
+
+            click_result = self._run_liepin_transition(
+                LiepinTransition(
+                    name="click_search",
+                    phase="search",
+                    observe_pre_state=lambda: _snapshot_from_result(click_retry_state or click_ready_state),
+                    precondition=lambda snapshot: snapshot.ok,
+                    action=click_search_action,
+                    observe_post_state=observe_after_click_search,
+                    postcondition=_search_url_ready,
+                    safe_reason_code="liepin_opencli_search_not_ready",
+                    trace_event="liepin.search.submit",
                 )
-                if observed_state.ok:
-                    final_state = observed_state
-                    break
-                if observed_state.safe_reason_code == "liepin_opencli_status_unavailable" and attempt_index < 2:
-                    events.append(
-                        {
-                            "action_kind": "observe_results_retry",
-                            "route_kind": "search",
-                            "safe_reason_code": observed_state.safe_reason_code,
-                        }
-                    )
-                    continue
+            )
+            if not click_result.ok:
                 return self._blocked_cards_envelope(
                     source_run_id=source_run_id,
                     query=query,
-                    safe_reason_code=observed_state.safe_reason_code,
+                    safe_reason_code=click_result.safe_reason_code or "liepin_opencli_search_not_ready",
                     safe_run_id=safe_run_id,
                     pages_visited=pages_visited,
                     events=events,
                 )
-            if final_state is None:
+            final_state: OpenCliBrowserResult | None = None
+
+            def observe_results_action() -> TransitionResult:
+                try:
+                    self.wait_time(seconds=3)
+                except OpenCliBrowserError as exc:
+                    events.append(
+                        {
+                            "action_kind": "observe_results_retry",
+                            "route_kind": "search",
+                            "safe_reason_code": exc.safe_reason_code,
+                        }
+                    )
+                    if exc.safe_reason_code not in {
+                        "liepin_opencli_stale_ref",
+                        "liepin_opencli_status_unavailable",
+                    }:
+                        return _result_from_error(exc)
+                    try:
+                        self.wait_time(seconds=2)
+                    except OpenCliBrowserError as retry_exc:
+                        return _result_from_error(retry_exc)
+                return TransitionResult(ok=True)
+
+            def observe_results_post_state() -> LiepinStateSnapshot:
+                nonlocal final_state
+                for attempt_index in range(3):
+                    try:
+                        if attempt_index > 0:
+                            self.wait_time(seconds=2)
+                        observed_state = self.state()
+                    except OpenCliBrowserError as exc:
+                        events.append(
+                            {
+                                "action_kind": "observe_results_retry",
+                                "route_kind": "search",
+                                "safe_reason_code": exc.safe_reason_code,
+                            }
+                        )
+                        if exc.safe_reason_code not in {
+                            "liepin_opencli_stale_ref",
+                            "liepin_opencli_status_unavailable",
+                        }:
+                            return LiepinStateSnapshot(
+                                ok=False,
+                                text="",
+                                safe_reason_code=exc.safe_reason_code,
+                            )
+                        continue
+                    events.append(
+                        {
+                            "action_kind": "observe_results" if attempt_index == 0 else "observe_results_after_retry",
+                            "route_kind": "search",
+                            "ok": observed_state.ok,
+                        }
+                    )
+                    if observed_state.ok:
+                        final_state = observed_state
+                        return _snapshot_from_result(observed_state)
+                    if observed_state.safe_reason_code == "liepin_opencli_status_unavailable" and attempt_index < 2:
+                        events.append(
+                            {
+                                "action_kind": "observe_results_retry",
+                                "route_kind": "search",
+                                "safe_reason_code": observed_state.safe_reason_code,
+                            }
+                        )
+                        continue
+                    return _snapshot_from_result(observed_state)
+                return LiepinStateSnapshot(
+                    ok=False,
+                    text="",
+                    safe_reason_code="liepin_opencli_status_unavailable",
+                )
+
+            observe_results = self._run_liepin_transition(
+                LiepinTransition(
+                    name="observe_results",
+                    phase="search",
+                    observe_pre_state=lambda: click_post_snapshot
+                    or LiepinStateSnapshot(
+                        ok=False,
+                        text="",
+                        safe_reason_code="liepin_opencli_search_not_ready",
+                    ),
+                    precondition=_search_url_ready,
+                    action=observe_results_action,
+                    observe_post_state=observe_results_post_state,
+                    postcondition=_search_state_nonterminal,
+                    safe_reason_code="liepin_opencli_status_unavailable",
+                    trace_event="liepin.search.observe_results",
+                )
+            )
+            if not observe_results.ok or final_state is None:
                 return self._blocked_cards_envelope(
                     source_run_id=source_run_id,
                     query=query,
-                    safe_reason_code="liepin_opencli_status_unavailable",
+                    safe_reason_code=observe_results.safe_reason_code or "liepin_opencli_status_unavailable",
                     safe_run_id=safe_run_id,
                     pages_visited=pages_visited,
                     events=events,
                 )
             if native_filters:
-                final_state = self._apply_liepin_native_filters(
-                    native_filters=native_filters,
-                    current_state=final_state,
-                    events=events,
+                filter_state = final_state
+
+                def apply_native_filter_action() -> TransitionResult:
+                    nonlocal filter_state
+                    filter_state = self._apply_liepin_native_filters(
+                        native_filters=native_filters,
+                        current_state=filter_state,
+                        events=events,
+                    )
+                    return _result_from_opencli(filter_state)
+
+                apply_filter_result = self._run_liepin_transition(
+                    LiepinTransition(
+                        name="apply_native_filter",
+                        phase="search",
+                        observe_pre_state=lambda: _snapshot_from_result(filter_state),
+                        precondition=lambda snapshot: snapshot.ok,
+                        action=apply_native_filter_action,
+                        observe_post_state=lambda: _snapshot_from_result(filter_state),
+                        postcondition=lambda snapshot: snapshot.ok,
+                        safe_reason_code="liepin_opencli_filter_unapplied",
+                        trace_event="liepin.filter.apply_native",
+                    )
                 )
-                if not final_state.ok:
+                final_state = filter_state
+                if not apply_filter_result.ok or not final_state.ok:
                     return self._blocked_cards_envelope(
                         source_run_id=source_run_id,
                         query=query,
-                        safe_reason_code=final_state.safe_reason_code,
+                        safe_reason_code=apply_filter_result.safe_reason_code
+                        or final_state.safe_reason_code
+                        or "liepin_opencli_filter_unapplied",
                         safe_run_id=safe_run_id,
                         pages_visited=pages_visited,
                         events=events,
                     )
             state_text = final_state.private_output
-            structured_cards = self.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
-            if not structured_cards.ok:
+            structured_cards: OpenCliBrowserResult | None = None
+            events.append({"action_kind": "extract_structured_cards", "route_kind": "search"})
+
+            def extract_structured_cards_action() -> TransitionResult:
+                nonlocal structured_cards
+                structured_cards = self.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
+                return _result_from_opencli(structured_cards)
+
+            extract_result = self._run_liepin_transition(
+                LiepinTransition(
+                    name="extract_structured_cards",
+                    phase="search",
+                    observe_pre_state=lambda: _snapshot_from_result(final_state),
+                    precondition=lambda snapshot: snapshot.ok,
+                    action=extract_structured_cards_action,
+                    observe_post_state=lambda: _snapshot_from_result(
+                        structured_cards
+                        or OpenCliBrowserResult(
+                            ok=False,
+                            action="extract_structured_liepin_cards",
+                            safe_reason_code="liepin_opencli_malformed_state",
+                        )
+                    ),
+                    postcondition=lambda snapshot: snapshot.ok,
+                    safe_reason_code="liepin_opencli_card_extract_failed",
+                    trace_event="liepin.search.extract_cards",
+                )
+            )
+            if not extract_result.ok or structured_cards is None or not structured_cards.ok:
+                events[-1]["ok"] = False
+                events[-1]["safe_reason_code"] = extract_result.safe_reason_code
                 return self._blocked_cards_envelope(
                     source_run_id=source_run_id,
                     query=query,
-                    safe_reason_code=structured_cards.safe_reason_code,
+                    safe_reason_code=extract_result.safe_reason_code
+                    or (structured_cards.safe_reason_code if structured_cards is not None else None)
+                    or "liepin_opencli_card_extract_failed",
                     safe_run_id=safe_run_id,
                     pages_visited=pages_visited,
                     events=events,
                 )
+            events[-1]["ok"] = True
             raw_cards = structured_cards.observation.get("cards")
             cards = (
                 tuple(dict(item) for item in raw_cards if isinstance(item, Mapping))
@@ -1056,6 +1263,32 @@ class LiepinSiteAdapter:
                 pages_visited=pages_visited,
                 events=events,
             )
+
+    def _clear_liepin_native_filters_if_needed(
+        self,
+        *,
+        source_run_id: str,
+        native_filters: Mapping[str, object] | None,
+        current_state: OpenCliBrowserResult,
+        events: list[dict[str, object]],
+    ) -> OpenCliBrowserResult:
+        scope = _native_filter_clear_scope(source_run_id)
+        signature = _native_filter_clear_signature(native_filters)
+        if self._native_filter_clear_signatures_by_scope.get(scope) == signature:
+            return current_state
+        state_text = _opencli_result_text(current_state)
+        clear_ref = native_filter_clear_filters_ref(state_text)
+        if clear_ref is None:
+            self._native_filter_clear_signatures_by_scope[scope] = signature
+            return current_state
+        self._click_native_filter_ref(clear_ref)
+        events.append({"action_kind": "clear_native_filters", "route_kind": "search", "ok": True})
+        self.wait_time(seconds=1)
+        state = self.state()
+        events.append({"action_kind": "observe_after_clear_native_filters", "route_kind": "search", "ok": state.ok})
+        if state.ok:
+            self._native_filter_clear_signatures_by_scope[scope] = signature
+        return state
 
     def _apply_liepin_native_filters(
         self,
@@ -1145,6 +1378,7 @@ class LiepinSiteAdapter:
     ) -> OpenCliBrowserResult:
         state = current_state
         for attempt_index in range(3):
+            clicked_option = False
             try:
                 state_text = _opencli_result_text(state)
                 if native_filter_selection_applied(state_text, section=section, label=label):
@@ -1205,6 +1439,7 @@ class LiepinSiteAdapter:
                     )
                     state_text = _opencli_result_text(state)
                 self._click_native_filter_option(label, state_text=state_text, section=section)
+                clicked_option = True
                 self.wait_time(seconds=1)
                 state = self.state()
                 events.append(
@@ -1260,6 +1495,31 @@ class LiepinSiteAdapter:
                             "attempt": attempt_index + 1,
                         }
                     )
+                    if filter_name == "schoolTypes":
+                        self.wait_time(seconds=1)
+                        state = self.state()
+                        events.append(
+                            {
+                                "action_kind": "observe_after_unverified_toggle_filter",
+                                "filter": filter_name,
+                                "section": section,
+                                "ok": state.ok,
+                            }
+                        )
+                        if not state.ok:
+                            raise OpenCliBrowserError(state.safe_reason_code)
+                        state_text = _opencli_result_text(state)
+                        if native_filter_selection_applied(state_text, section=section, label=label):
+                            events.append(
+                                {
+                                    "action_kind": "verify_native_filter",
+                                    "filter": filter_name,
+                                    "section": section,
+                                    "value": label,
+                                    "ok": True,
+                                }
+                            )
+                            return state
                     raise OpenCliBrowserError("liepin_opencli_filter_unapplied")
                 events.append(
                     {
@@ -1272,6 +1532,12 @@ class LiepinSiteAdapter:
                 )
                 return state
             except OpenCliBrowserError as exc:
+                if (
+                    filter_name == "schoolTypes"
+                    and clicked_option
+                    and exc.safe_reason_code == "liepin_opencli_filter_unapplied"
+                ):
+                    raise
                 if exc.safe_reason_code not in RETRYABLE_NATIVE_FILTER_REASONS or attempt_index == 2:
                     raise
                 events.append(
@@ -1637,12 +1903,6 @@ class LiepinSiteAdapter:
                 raise
             self.state()
             return self._run_opencli_call(call)
-
-    def _click_known_modal_close_ref(self, ref: str) -> None:
-        if not _is_safe_page_id(ref):
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-        self._run_opencli_call(lambda: self._automation.click_ref(ref))
-        self._touch_lease()
 
     def _click_liepin_search_button(self, state_text: str) -> None:
         ref = extract_liepin_search_button_ref(state_text)
@@ -2528,6 +2788,9 @@ class _LiepinSearchWorkflowSite:
 
     def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
         return self.adapter.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
+
+    def observe_liepin_search_state(self) -> OpenCliBrowserResult:
+        return self.adapter.state()
 
     def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
         return self.adapter._safe_liepin_detail_url_for_ref(ref)

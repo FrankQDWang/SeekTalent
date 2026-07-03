@@ -282,6 +282,166 @@ def test_search_liepin_cards_selects_overseas_expected_city_from_city_picker(tmp
     } in trace["events"]
 
 
+def test_search_liepin_cards_keeps_visible_expected_city_without_picker_retry(tmp_path: Path) -> None:
+    state_before = (
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = """
+<span>期望城市：</span>
+[21]<label>北京</label>
+[22]<label>上海</label>
+[23]<label>其他</label>
+王** 男 34岁 工作5年 硕士 上海
+"""
+    state_after_expected_city = """
+<span>期望城市：</span>
+[21]<label>北京</label>
+[22]<label class=ant-checkbox-wrapper ant-checkbox-wrapper-checked>上海</label>
+[23]<label>其他</label>
+王** 男 34岁 工作5年 硕士 上海
+求职期望：上海 数据开发专家
+某数据公司 · 数据开发专家 2021.01-至今
+"""
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                state_after_search,
+                state_after_expected_city,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "22"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "23"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": {"section": "expected", "label": "上海"}},
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert ("opencli", "browser", "seektalent-liepin", "click", "22") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "23") not in commands.calls
+
+
+def test_search_liepin_cards_selects_domestic_whole_city_from_city_picker(tmp_path: Path) -> None:
+    state_before = (
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = """
+[20]<label>期望城市：</label>
+[66]<label>上海</label>
+[67]<label>美国</label>
+[68]<label>杭州</label>
+[74]<span>其他</span>
+王** 男 34岁 工作5年 硕士 上海
+"""
+    state_after_quick_city_unapplied = state_after_search
+    state_city_picker = """
+<span>请选择城市</span>
+[294]<input autocomplete=off placeholder=搜索城市 type=text />
+[298]<div>国内</div>
+[299]<div>海外</div>
+<ul role=menu tabindex=0 />
+[302]<li role=menuitem tabindex=-1 />
+  <span>上海</span>
+<p />
+  [334]<span>热门城市</span>
+  [335]<span>/</span>
+  [336]<span>上海</span>
+<div />
+  <ul />
+    <li />
+      [337]<span>全上海</span>
+<i>已选（0/9）</i>
+"""
+    state_after_shanghai_selected = """
+<span>请选择城市</span>
+[294]<input autocomplete=off placeholder=搜索城市 type=text />
+[298]<div>国内</div>
+[299]<div>海外</div>
+[337]<span>全上海</span>
+<i>已选（1/9）</i>
+[340]<span>全上海</span>
+[341]<button />
+  <span>确认</span>
+"""
+    state_after_expected_city = """
+已选 期望城市上海
+[20]<label>期望城市：</label>
+[66]<label>上海</label>
+[67]<label>美国</label>
+[68]<label>杭州</label>
+[74]<span>其他</span>
+王** 男 34岁 工作5年 硕士 上海
+求职期望：上海 AI技术负责人
+某科技公司 · AI技术负责人 2021.01-至今
+"""
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (
+                '{"url":"https://h.liepin.com/search/getConditionItem#session","page":"page-1"}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/search/getConditionItem#session",
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                state_after_search,
+                state_after_quick_city_unapplied,
+                state_after_quick_city_unapplied,
+                state_city_picker,
+                state_after_shanghai_selected,
+                state_after_expected_city,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "AI 技术负责人"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "66"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "74"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "337"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "341"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="AI 技术负责人",
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": {"section": "expected", "label": "上海"}},
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert ("opencli", "browser", "seektalent-liepin", "click", "337") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "341") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "302") not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "336") not in commands.calls
+
+
 @pytest.mark.parametrize(("city_name", "city_ref"), [("苏州", "74"), ("宁波", "75")])
 def test_search_liepin_cards_uses_visible_current_city_when_expected_city_missing(
     tmp_path: Path, city_name: str, city_ref: str

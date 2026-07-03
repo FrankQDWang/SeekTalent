@@ -184,21 +184,6 @@ def extract_liepin_search_input_ref(text: str) -> str | None:
     return None
 
 
-def extract_known_modal_close_ref(text: str) -> str | None:
-    if "新增人才" not in text and "新增人选" not in text:
-        return None
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        if not re.search(r"\[\w+\]<a[^>]*>\s*X\s*</a>", line):
-            continue
-        nearby = "\n".join(lines[index : index + 12])
-        if "新增人才" in nearby or "新增人选" in nearby:
-            refs = _extract_refs_from_line(line)
-            if refs:
-                return refs[0]
-    return None
-
-
 def classify_liepin_state(*, url: str, text: str) -> str | None:
     host = urlparse(url).hostname or ""
     lowered = text.lower()
@@ -214,7 +199,19 @@ def classify_liepin_state(*, url: str, text: str) -> str | None:
         return "liepin_opencli_login_required"
     if "验证码" in text or "安全验证" in text or "风险提示" in text or re.search(r"\bcaptcha\b", lowered):
         return "liepin_opencli_risk_page"
-    if any(marker in text for marker in ("联系候选人", "查看联系方式", "聊天弹窗", "下载简历", "付费查看", "购买套餐")):
+    if any(
+        marker in text
+        for marker in (
+            "新增人才",
+            "新增人选",
+            "联系候选人",
+            "查看联系方式",
+            "聊天弹窗",
+            "下载简历",
+            "付费查看",
+            "购买套餐",
+        )
+    ):
         return "liepin_opencli_unknown_modal"
     return None
 
@@ -585,15 +582,16 @@ def _sanitize_card_preview_list(
     for raw_preview in value[:5]:
         if not isinstance(raw_preview, Mapping):
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
-        if FORBIDDEN_CARD_EVIDENCE_KEYS.intersection(str(key) for key in raw_preview):
+        preview_mapping = {str(key): item for key, item in raw_preview.items()}
+        if FORBIDDEN_CARD_EVIDENCE_KEYS.intersection(preview_mapping):
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
         preview: dict[str, object] = {}
         for field in allowed:
-            text = _optional_bounded_card_text(raw_preview.get(field), max_chars=180)
+            text = _optional_bounded_card_text(preview_mapping.get(field), max_chars=180)
             if text is not None:
                 preview[field] = text
         for field in allowed_bool_fields:
-            bool_value = raw_preview.get(field)
+            bool_value = preview_mapping.get(field)
             if isinstance(bool_value, bool):
                 preview[field] = bool_value
         if preview:

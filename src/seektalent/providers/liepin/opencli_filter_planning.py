@@ -118,10 +118,13 @@ def native_filter_selection_applied(state_text: str, *, section: str, label: str
     }
     normalized_sections = {candidate for candidate in normalized_sections if candidate}
     lines = state_text.splitlines()
+    in_target_section = False
     for index, raw_line in enumerate(lines):
         line = _normalize_liepin_filter_text(raw_line)
         if not line:
             continue
+        if _line_starts_known_filter_section(raw_line):
+            in_target_section = any(normalized_section in line for normalized_section in normalized_sections)
         has_label = any(candidate in line for candidate in accepted_labels)
         if not has_label:
             title_section = next(
@@ -136,6 +139,10 @@ def native_filter_selection_applied(state_text: str, *, section: str, label: str
         if line.startswith(("已选", "当前条件", "筛选条件")):
             return True
         if any(normalized_section in line for normalized_section in normalized_sections) and "已选" in line:
+            return True
+        if in_target_section and _line_indicates_selected_filter(raw_line):
+            return True
+        if any(normalized_section in line for normalized_section in normalized_sections) and "<label" not in raw_line:
             return True
     return False
 
@@ -294,6 +301,18 @@ def native_filter_city_picker_selection_contains(state_text: str, *, label: str)
     return False
 
 
+def native_filter_clear_filters_ref(state_text: str) -> str | None:
+    lines = state_text.splitlines()
+    for index, line in enumerate(lines):
+        if "清空筛选条件" not in line:
+            continue
+        for candidate in (line, *reversed(lines[max(0, index - 2) : index])):
+            match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", candidate)
+            if match is not None:
+                return match.group(1)
+    return None
+
+
 def native_filter_option_visible_in_section(state_text: str, *, section: str, label: str) -> bool:
     if native_filter_option_ref_in_section(state_text, section=section, label=label) is not None:
         return True
@@ -394,6 +413,8 @@ def _city_result_match_score(line: str, normalized_label: str) -> int | None:
     text = re.sub(r"\[[^\]]+\]", "", line)
     text = re.sub(r"<[^>]*>", "", text)
     normalized_line = _normalize_liepin_filter_text(text)
+    if normalized_line == f"全{normalized_label}":
+        return -1
     if normalized_line == normalized_label:
         return 0
     if normalized_line.endswith(f"·{normalized_label}"):
@@ -460,3 +481,13 @@ def _line_visible_filter_text(line: str) -> str:
 
 def _line_starts_known_filter_section(line: str) -> bool:
     return any(label and label in line for label in LIEPIN_FILTER_SECTION_LABELS.values())
+
+
+def _line_indicates_selected_filter(line: str) -> bool:
+    lowered = line.lower()
+    return bool(
+        re.search(
+            r"(?:[-_]checked\b|\bchecked\b|\bselected\b|\bactive\b|aria-(?:checked|selected)=['\"]?true)",
+            lowered,
+        )
+    )
