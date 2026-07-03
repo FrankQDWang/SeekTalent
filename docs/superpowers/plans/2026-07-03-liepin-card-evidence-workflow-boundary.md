@@ -25,14 +25,18 @@
 - Modify: `src/seektalent/providers/liepin/liepin_site_adapter.py`
   - Add `extract_structured_liepin_cards()`.
   - Keep `extract_visible_liepin_cards()` as a delegating compatibility entry for CLI action compatibility, but make it return structured evidence with no `visible_text`.
-  - Add small public adapter methods needed by the workflow.
+  - Add a private workflow-facing wrapper object instead of expanding the public adapter method surface.
   - Replace the old `search_liepin_resumes()` body with a workflow delegate.
 - Modify: `src/seektalent/providers/liepin/liepin_site_payloads.py`
   - Store structured card evidence artifacts with no raw card text keys.
 - Modify: `src/seektalent/providers/liepin/mapper.py`
   - Keep card compatibility `search_text` derived from structured card evidence only.
+- Modify: `src/seektalent/sources/liepin/runtime_lane.py`
+  - Build card-policy input only from `safe_card_summary`, never from `candidate.search_text`.
+- Modify: `src/seektalent/resume_normalizers/liepin.py`
+  - Build card fallback timeline items from structured previews, never from `normalized_card_text`.
 - Modify: `src/seektalent/providers/liepin/opencli_retriever.py`
-  - Depend on a workflow-style runner method.
+  - Keep the stable runner method unless implementation discovers a safe private runner wrapper; do not require a public `LiepinSiteAdapter` method expansion.
 - Create: `src/seektalent/providers/liepin/liepin_search_workflow.py`
   - Own the detail-backed search loop and workflow events.
 - Modify tests:
@@ -614,7 +618,7 @@ def _sanitize_card_preview_list(
 
 - [ ] **Step 5: Add fixed structured-card readonly probe**
 
-In `src/seektalent/providers/liepin/liepin_site_parsing.py`, add:
+In `src/seektalent/providers/liepin/liepin_site_parsing.py`, add a selector-first probe builder. The probe may use per-card `innerText` internally, but it must not return raw text fields. It must parse education per line, collect Chinese and Latin skill chips, avoid a hard-coded city-only allowlist, and use Chinese-safe gender matching.
 
 ```python
 def _liepin_structured_cards_payload_probe_script(*, max_cards: int) -> str:
@@ -623,59 +627,82 @@ def _liepin_structured_cards_payload_probe_script(*, max_cards: int) -> str:
     return rf"""
 (() => {{
   const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
-  const intFrom = (value, pattern) => {{
-    const match = clean(value).match(pattern);
-    return match ? Number(match[1]) : null;
-  }};
   const lines = (node) => String((node && node.innerText) || "")
     .split(/\n+/)
     .map(clean)
     .filter(Boolean);
-  const firstMatch = (items, pattern) => items.find((line) => pattern.test(line)) || "";
-  const splitTags = (items) => Array.from(new Set(items.join(" ").split(/\s+/).filter((item) => /^[A-Za-z][A-Za-z0-9+#./-]{{1,20}}$/.test(item)).slice(0, 20)));
+  const unique = (items) => Array.from(new Set(items.filter(Boolean)));
+  const intFrom = (value, pattern) => {{
+    const match = clean(value).match(pattern);
+    return match ? Number(match[1]) : null;
+  }};
+  const firstLine = (items, pattern) => items.find((line) => pattern.test(line)) || "";
+  const textOf = (root, selectors) => {{
+    for (const selector of selectors) {{
+      const value = clean(root.querySelector(selector)?.textContent);
+      if (value) return value;
+    }}
+    return "";
+  }};
+  const tagTexts = (root) => unique(
+    Array.from(root.querySelectorAll(".tag, .skill-tag, [class*=tag], [class*=skill]"))
+      .map((node) => clean(node.textContent))
+      .filter((value) => /^[A-Za-z][A-Za-z0-9+#./-]{{1,20}}$/.test(value) || /^[\u4e00-\u9fa5][\u4e00-\u9fa5A-Za-z0-9+#./-]{{1,20}}$/.test(value))
+  ).slice(0, 20);
+  const parseExperience = (line) => {{
+    const match = clean(line).match(/^(.+?)\s*·\s*(.+?)\s+(\d{{4}}[./-]\d{{2}}[^ ]*)?/);
+    if (!match) return null;
+    return {{
+      company: clean(match[1]).slice(0, 160),
+      title: clean(match[2]).replace(/\d{{4}}[./-].*$/, "").slice(0, 160),
+      date_range: clean(match[3] || ""),
+      is_current: /至今/.test(line),
+    }};
+  }};
+  const parseEducation = (line) => {{
+    const parts = clean(line).split("·").map(clean).filter(Boolean);
+    const school = parts.find((part) => /(大学|学院|学校)$/.test(part)) || "";
+    if (!school) return null;
+    return {{
+      school: school.slice(0, 160),
+      major: (parts.find((part) => !/(大学|学院|学校|本科|硕士|博士|大专|统招)/.test(part)) || "").slice(0, 160),
+      degree: (parts.find((part) => /^(本科|硕士|博士|大专)$/.test(part)) || "").slice(0, 80),
+      recruitment_type: (parts.find((part) => /统招/.test(part)) || "").slice(0, 80),
+      date_range: (line.match(/\d{{4}}[./-]\d{{2}}[^ ]*/) || [""])[0],
+    }};
+  }};
   const cards = Array.from(document.querySelectorAll("#resultList .detail-resume-card-wrap")).slice(0, {max_cards});
   const payloadCards = cards.map((card, index) => {{
     const cardLines = lines(card);
     const text = cardLines.join(" ");
     const ref = card.getAttribute("data-opencli-ref") || card.dataset.opencliRef || String(index + 1);
-    const profile = firstMatch(cardLines, /\d{{2}}\s*岁|工作\s*\d+\s*年/);
-    const intention = firstMatch(cardLines, /求职期望/);
+    const profile = firstLine(cardLines, /\d{{2}}\s*岁|工作\s*\d+\s*年/);
+    const intention = firstLine(cardLines, /求职期望/);
     const experienceLines = cardLines.filter((line) => /·/.test(line) && /\d{{4}}[./-]\d{{2}}/.test(line));
     const educationLines = cardLines.filter((line) => /(大学|学院|本科|硕士|博士|大专|统招)/.test(line));
-    const firstExperience = experienceLines[0] || "";
-    const expMatch = firstExperience.match(/^(.+?)\s*·\s*(.+?)\s*(\d{{4}}[./-]\d{{2}}[^ ]*)?/);
-    const eduMatch = (educationLines[0] || "").match(/^(.+?(?:大学|学院))\s*·?\s*([^·]*)?\s*·?\s*(本科|硕士|博士|大专)?\s*·?\s*(统招)?/);
+    const experiencePreview = experienceLines.map(parseExperience).filter(Boolean).slice(0, 3);
+    const educationPreview = educationLines.map(parseEducation).filter(Boolean).slice(0, 2);
+    const firstExperience = experiencePreview[0] || {{}};
+    const explicitCity = textOf(card, ["[class*=city]", "[class*=area]", "[class*=location]"]);
+    const profileCity = (profile.match(/(?:^|\s)([\u4e00-\u9fa5]{{2,8}}(?:区|市)?)(?:$|\s)/) || [null, null])[1];
     return {{
       provider_rank: index + 1,
       ref,
       masked_name: /[\u4e00-\u9fa5A-Za-z][*＊]{{1,3}}|[*＊][\u4e00-\u9fa5A-Za-z]/.test(text),
-      gender: /\b男\b/.test(text) ? "男" : (/\b女\b/.test(text) ? "女" : null),
+      gender: /(?:^|\s|，|,|·)男(?:\s|，|,|·|$)/.test(text) ? "男" : (/(?:^|\s|，|,|·)女(?:\s|，|,|·|$)/.test(text) ? "女" : null),
       age: intFrom(profile, /(\d{{2}})\s*岁/),
       work_years: intFrom(profile, /工作\s*(\d{{1,2}})\s*年/),
-      city: (profile.match(/(北京|上海|深圳|广州|杭州|南京|苏州|成都|武汉|西安)/) || [null, null])[1],
+      city: explicitCity || profileCity,
       expected_city: (intention.match(/求职期望[:：]?\s*([\u4e00-\u9fa5]{{2,8}})/) || [null, null])[1],
       education_level: (text.match(/(博士|硕士|本科|大专)/) || [null, null])[1],
-      current_or_recent_company: expMatch ? clean(expMatch[1]).slice(0, 160) : null,
-      current_or_recent_title: expMatch ? clean(expMatch[2]).replace(/\d{{4}}[./-].*$/, "").slice(0, 160) : null,
+      current_or_recent_company: firstExperience.company || null,
+      current_or_recent_title: firstExperience.title || null,
       job_intention: intention ? clean(intention.replace(/^求职期望[:：]?\s*/, "")).slice(0, 160) : null,
       active_status: (text.match(/(今天活跃|近\d+天活跃|隐藏活跃状态)/) || [null, null])[1],
       badges: Array.from(new Set(cardLines.filter((line) => /金领|热度/.test(line)).slice(0, 8))),
-      skill_tags: splitTags(cardLines),
-      experience_preview: experienceLines.slice(0, 3).map((line) => {{
-        const match = line.match(/^(.+?)\s*·\s*(.+?)\s*(\d{{4}}[./-]\d{{2}}[^ ]*)?/);
-        return match ? {{
-          company: clean(match[1]).slice(0, 160),
-          title: clean(match[2]).replace(/\d{{4}}[./-].*$/, "").slice(0, 160),
-          date_range: clean(match[3] || ""),
-          is_current: /至今/.test(line),
-        }} : {{}};
-      }}).filter((item) => Object.keys(item).length),
-      education_preview: educationLines.slice(0, 2).map((line) => eduMatch ? {{
-        school: clean(eduMatch[1]).slice(0, 160),
-        major: clean(eduMatch[2] || "").slice(0, 160),
-        degree: clean(eduMatch[3] || ""),
-        recruitment_type: clean(eduMatch[4] || ""),
-      }} : {{}}).filter((item) => Object.keys(item).length),
+      skill_tags: tagTexts(card),
+      experience_preview: experiencePreview,
+      education_preview: educationPreview,
     }};
   }});
   return JSON.stringify({{
@@ -737,12 +764,57 @@ Replace the old `extract_visible_liepin_cards()` body with a compatibility deleg
 ```python
 def extract_visible_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
     result = self.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
-    if result.ok:
-        result.action = "extract_visible_liepin_cards"
-    return result
+    return OpenCliBrowserResult(
+        ok=result.ok,
+        action="extract_visible_liepin_cards",
+        safe_reason_code=result.safe_reason_code,
+        counts=result.counts,
+        observation=result.observation,
+        private_output=result.private_output,
+    )
 ```
 
-- [ ] **Step 7: Update CLI and extension action names**
+- [ ] **Step 7: Make `search_liepin_cards()` use the same structured evidence**
+
+In `src/seektalent/providers/liepin/liepin_site_adapter.py`, replace the post-search card parsing path inside `search_liepin_cards()`. After the final search state is ready, do not call `extract_liepin_card_summaries(state_text, max_cards=max_cards)` and do not use `normalized_card_text` for fingerprints. Call the structured card extractor and pass those structured card mappings to `cards_envelope()`:
+
+```python
+structured_cards = self.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
+if not structured_cards.ok:
+    return self._blocked_cards_envelope(
+        source_run_id=source_run_id,
+        query=query,
+        safe_reason_code=structured_cards.safe_reason_code,
+        safe_run_id=safe_run_id,
+        pages_visited=pages_visited,
+        events=events,
+    )
+raw_cards = structured_cards.observation.get("cards") if isinstance(structured_cards.observation, Mapping) else None
+cards = raw_cards if isinstance(raw_cards, list) else []
+events.append({"action_kind": "visible_cards_observed", "route_kind": "search", "visible_cards": len(cards)})
+return self._cards_envelope(
+    source_run_id=source_run_id,
+    query=query,
+    safe_run_id=safe_run_id,
+    pages_visited=pages_visited,
+    events=events,
+    state_text=final_state_text,
+    cards=[card for card in cards if isinstance(card, Mapping)],
+)
+```
+
+Update `tests/test_liepin_opencli_browser.py::test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifacts` so it proves the public card-search envelope and the written `public-summary/pi-card/...json` artifact contain structured fields and do not contain text-tail fields:
+
+```python
+summary_path = tmp_path / "public-summary" / "pi-card" / "run-1" / "1.json"
+summary = json.loads(summary_path.read_text(encoding="utf-8"))
+assert summary["current_or_recent_company"] == "海光集成电路"
+encoded_summary = json.dumps(summary, ensure_ascii=False)
+assert "visible_text" not in encoded_summary
+assert "normalized_card_text" not in encoded_summary
+```
+
+- [ ] **Step 8: Update CLI and extension action names**
 
 In `src/seektalent/providers/liepin/opencli_browser_cli.py`, add an action branch:
 
@@ -756,15 +828,45 @@ if action == "extract_structured_liepin_cards":
 
 Keep the existing `extract_visible_liepin_cards` branch as compatibility.
 
-In `src/seektalent/providers/liepin/opencli_extensions/seektalent_opencli_browser.ts`, add the new tool name beside the old one and dispatch it to the new action:
+In `src/seektalent/providers/liepin/opencli_extensions/seektalent_opencli_browser.ts`, update every action gate that knows about the old extractor:
 
-```ts
-if (action === "extract_structured_liepin_cards") {
-  return textResult(await runAction("extract_structured_liepin_cards", params));
-}
-```
+1. Add `"seektalent_opencli_extract_structured_liepin_cards"` to `capabilitiesPayload().capabilities.tools`.
+2. In `updateStateFromPayload()`, treat both extractor actions identically:
 
-- [ ] **Step 8: Update browser boundary tests**
+   ```ts
+   if (action === "extract_visible_liepin_cards" || action === "extract_structured_liepin_cards") {
+     stateReady = parsed.ok === true && parsed.observation?.terminal !== true;
+     if (stateReady) {
+       terminalReason = null;
+     } else {
+       terminalReason =
+         parsed.observation?.terminal === true && typeof parsed.safeReasonCode === "string"
+           ? parsed.safeReasonCode
+           : null;
+     }
+   }
+   ```
+
+3. Add `"extract_structured_liepin_cards"` to the terminal bypass action list next to `"extract_visible_liepin_cards"`.
+4. Add `"extract_structured_liepin_cards"` to the budget-exempt action list next to `"extract_visible_liepin_cards"`.
+5. Register the new structured-card tool:
+
+   ```ts
+   pi.registerTool({
+     name: "seektalent_opencli_extract_structured_liepin_cards",
+     label: "Read structured Liepin cards",
+     description: "Read structured Liepin result card evidence from the current search results page without clicking or opening details.",
+     parameters: Type.Object({
+       sourceRunId: Type.String(),
+       maxCards: Type.Optional(Type.Number()),
+     }),
+     async execute(_toolCallId: string, params: ToolParams) {
+       return textResult(await runAction("extract_structured_liepin_cards", params));
+     },
+   });
+   ```
+
+- [ ] **Step 9: Update browser boundary tests**
 
 In `tests/test_liepin_browser_boundaries.py`, update the expected extension action/tool allowlist to include:
 
@@ -774,7 +876,7 @@ In `tests/test_liepin_browser_boundaries.py`, update the expected extension acti
 
 Keep the old `extract_visible_liepin_cards` assertions only where the compatibility action is intentionally checked.
 
-- [ ] **Step 9: Run focused extraction tests**
+- [ ] **Step 10: Run focused extraction tests**
 
 Run:
 
@@ -787,7 +889,7 @@ pytest tests/test_liepin_opencli_browser.py::test_extract_structured_liepin_card
 
 Expected: PASS after updating assertions away from `visible_text`.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add src/seektalent/providers/liepin/liepin_site_parsing.py \
@@ -808,9 +910,12 @@ git commit -m "feat: extract structured Liepin card evidence"
 - Modify: `src/seektalent/providers/liepin/liepin_site_payloads.py`
 - Modify: `src/seektalent/providers/liepin/mapper.py`
 - Modify: `src/seektalent/providers/liepin/card_policy.py`
+- Modify: `src/seektalent/sources/liepin/runtime_lane.py`
+- Modify: `src/seektalent/resume_normalizers/liepin.py`
 - Modify: `tests/test_normalization.py`
 - Modify: `tests/test_liepin_opencli_browser.py`
 - Modify: `tests/test_liepin_runtime_source_lane.py`
+- Modify: `tests/test_liepin_provider_mapping.py`
 
 - [ ] **Step 1: Write failing artifact and normalization assertions**
 
@@ -851,6 +956,98 @@ assert "normalized_card_text" not in encoded
 assert "visible_text" not in encoded
 ```
 
+In `tests/test_liepin_runtime_source_lane.py`, add a test that proves runtime card policy input does not read `ResumeCandidate.search_text`:
+
+```python
+def test_liepin_card_summary_for_candidate_ignores_candidate_search_text() -> None:
+    from seektalent.core.retrieval.provider_contract import ResumeCandidate
+    from seektalent.sources.liepin.runtime_lane import _card_summary_for_candidate
+
+    candidate = ResumeCandidate(
+        resume_id="liepin-card-1",
+        source_resume_id=None,
+        snapshot_sha256="sha",
+        dedup_key="dedup",
+        search_text="SENTINEL raw-ish compatibility text",
+        raw={
+            "safe_card_summary": {
+                "current_or_recent_company": "北京思图场景数据科技服务有限公司",
+                "current_or_recent_title": "AI算法工程师",
+                "skill_tags": ["Python", "数据仓库"],
+                "experience_preview": [
+                    {
+                        "company": "北京思图场景数据科技服务有限公司",
+                        "title": "AI算法工程师",
+                        "date_range": "2021.04-至今",
+                    }
+                ],
+            }
+        },
+    )
+
+    summary = _card_summary_for_candidate(candidate=candidate, provider_rank=1)
+
+    assert "normalized_card_text" not in summary.__dataclass_fields__
+    assert summary.current_or_recent_title == "AI算法工程师"
+    assert summary.experience_preview[0]["title"] == "AI算法工程师"
+    assert "SENTINEL" not in repr(summary)
+```
+
+In `tests/test_normalization.py`, add a focused normalizer test:
+
+```python
+def test_liepin_normalizer_uses_card_experience_preview_not_normalized_card_text() -> None:
+    candidate = ResumeCandidate(
+        resume_id="liepin-card-1",
+        source_resume_id=None,
+        snapshot_sha256="sha",
+        dedup_key="dedup",
+        search_text="ignored",
+        raw={
+            "source": "liepin",
+            "safe_card_summary": {
+                "current_or_recent_title": "AI算法工程师",
+                "normalized_card_text": "SENTINEL legacy card text",
+                "experience_preview": [
+                    {
+                        "company": "北京思图场景数据科技服务有限公司",
+                        "title": "AI算法工程师",
+                        "date_range": "2021.04-至今",
+                    }
+                ],
+            },
+        },
+    )
+
+    normalized = normalize_resume(candidate)
+
+    encoded = json.dumps(normalized.model_dump(mode="json"), ensure_ascii=False)
+    assert "AI算法工程师" in encoded
+    assert "SENTINEL" not in encoded
+```
+
+In `tests/test_liepin_provider_mapping.py`, add a mapper sentinel test:
+
+```python
+def test_card_mapping_ignores_worker_normalized_text_when_safe_card_summary_exists() -> None:
+    card = _worker_card().model_copy(
+        update={
+            "normalized_text": "SENTINEL raw-ish card text",
+            "safe_card_summary": LiepinSafeCardSummary(
+                current_or_recent_company="北京思图场景数据科技服务有限公司",
+                current_or_recent_title="AI算法工程师",
+                skill_tags=("Python",),
+            ),
+        }
+    )
+
+    mapped = map_liepin_worker_card(card)
+
+    assert "AI算法工程师" in mapped.candidate.search_text
+    assert "SENTINEL" not in mapped.candidate.search_text
+    assert "SENTINEL" not in mapped.provider_snapshot.normalized_text
+```
+
 - [ ] **Step 2: Run tests and verify they fail**
 
 Run:
@@ -864,7 +1061,7 @@ Expected: FAIL while payload and normalization code still know `normalized_card_
 
 - [ ] **Step 3: Update card envelopes**
 
-In `src/seektalent/providers/liepin/liepin_site_payloads.py`, change `cards_envelope()` so it stores structured evidence under `safe_card_summary` without copying text-tail fields:
+In `src/seektalent/providers/liepin/liepin_site_payloads.py`, change `cards_envelope()` so it sanitizes structured evidence before digest calculation, public summary writing, protected snapshot writing, and envelope construction:
 
 ```python
 FORBIDDEN_CARD_SUMMARY_KEYS = {
@@ -880,20 +1077,51 @@ FORBIDDEN_CARD_SUMMARY_KEYS = {
 
 
 def _safe_card_summary_payload(summary: Mapping[str, object]) -> dict[str, object]:
-    return {
-        str(key): value
-        for key, value in summary.items()
-        if str(key) not in FORBIDDEN_CARD_SUMMARY_KEYS and str(key) not in {"provider_rank", "ref"}
-    }
+    return _safe_card_summary_mapping(summary, skip_keys={"provider_rank", "ref"})
+
+
+def _safe_card_summary_mapping(value: Mapping[str, object], *, skip_keys: set[str] | None = None) -> dict[str, object]:
+    skipped = skip_keys or set()
+    result: dict[str, object] = {}
+    for key, item in value.items():
+        key_text = str(key)
+        if key_text in FORBIDDEN_CARD_SUMMARY_KEYS or key_text in skipped:
+            continue
+        result[key_text] = _safe_card_summary_value(item)
+    return result
+
+
+def _safe_card_summary_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        return _safe_card_summary_mapping(value)
+    if isinstance(value, list):
+        return [_safe_card_summary_value(item) for item in value]
+    return value
 ```
 
-Use it in the envelope:
+Use it before any write:
 
 ```python
 safe_summary = _safe_card_summary_payload(summary)
+digest = hashlib.sha256(json.dumps(safe_summary, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
 ...
 "display_name_masked": bool(safe_summary.get("masked_name", True)),
 "safe_card_summary": safe_summary,
+```
+
+Write `safe_summary` to both artifacts:
+
+```python
+safe_summary_ref = write_pi_artifact(
+    "public-summary",
+    f"pi-card/{safe_run_id}/{rank}.json",
+    safe_summary,
+)
+protected_snapshot_ref = write_pi_artifact(
+    "protected",
+    f"pi-card/{safe_run_id}/{rank}.json",
+    {"schema_version": "seektalent.opencli_card_snapshot.v1", "rank": rank, "summary": safe_summary},
+)
 ```
 
 - [ ] **Step 4: Add structured compatibility text helper**
@@ -967,7 +1195,88 @@ rg -n "normalized_card_text|visible_text" src/seektalent/providers/liepin tests/
 
 Expected: remaining hits are only test names or compatibility action names that explicitly prove absence.
 
-- [ ] **Step 6: Run payload and normalization tests**
+- [ ] **Step 6: Update runtime lane and Liepin normalizer**
+
+In `src/seektalent/sources/liepin/runtime_lane.py`, update `_card_summary_for_candidate()` so it builds `LiepinCardSummary` from `safe_card_summary` only. Remove `normalized_card_text=candidate.search_text`, and add structured preview fields:
+
+```python
+return LiepinCardSummary(
+    candidate_resume_id=candidate.resume_id,
+    provider_rank=provider_rank,
+    display_title=_summary_string(summary, "display_title"),
+    current_or_recent_company=_summary_string(summary, "current_or_recent_company"),
+    current_or_recent_title=_summary_string(summary, "current_or_recent_title"),
+    work_years=_summary_int(summary, "work_years"),
+    age=_summary_int(summary, "age"),
+    gender=_summary_string(summary, "gender"),
+    city=_summary_string(summary, "city"),
+    expected_city=_summary_string(summary, "expected_city"),
+    education_level=_summary_string(summary, "education_level"),
+    school_names=_summary_string_tuple(summary, "school_names"),
+    major_names=_summary_string_tuple(summary, "major_names"),
+    skill_tags=_summary_string_tuple(summary, "skill_tags"),
+    job_intention=_summary_string(summary, "job_intention"),
+    active_status=_summary_string(summary, "active_status"),
+    badges=_summary_string_tuple(summary, "badges"),
+    experience_preview=_summary_mapping_tuple(summary, "experience_preview"),
+    education_preview=_summary_mapping_tuple(summary, "education_preview"),
+    masked_name=bool(summary.get("masked_name", False)),
+)
+```
+
+Add:
+
+```python
+def _summary_mapping_tuple(summary: dict[object, object], key: str) -> tuple[dict[str, object], ...]:
+    value = summary.get(key)
+    if not isinstance(value, list | tuple):
+        return ()
+    result: list[dict[str, object]] = []
+    for item in value:
+        if isinstance(item, dict):
+            result.append({str(field): field_value for field, field_value in item.items()})
+    return tuple(result)
+```
+
+In `src/seektalent/resume_normalizers/liepin.py`, replace `_safe_card_work_items()` so it prefers `experience_preview` and never reads `normalized_card_text`:
+
+```python
+def _safe_card_work_items(safe_card: Mapping[str, object]) -> list[StructuredResumeTimelineItem]:
+    preview_items = _list_of_mappings(safe_card.get("experience_preview"))
+    items = [
+        StructuredResumeTimelineItem(
+            company=_text(item.get("company")),
+            title=_text(item.get("title")),
+            duration=_first_text(item.get("duration"), item.get("date_range")),
+            summary="",
+        )
+        for item in preview_items
+    ]
+    items = [item for item in items if any(item.model_dump(mode="json").values())]
+    if items:
+        return items
+    title = _first_text(safe_card.get("current_or_recent_title"), safe_card.get("display_title"))
+    company = _text(safe_card.get("current_or_recent_company"))
+    work_years = _int_or_none(safe_card.get("work_years"))
+    item = StructuredResumeTimelineItem(
+        company=company,
+        title=title,
+        duration=f"{work_years}y" if work_years is not None else "",
+        summary=_text(safe_card.get("recent_experience_text")),
+    )
+    return [item] if any(item.model_dump(mode="json").values()) else []
+```
+
+Add the helper if the module does not already have it:
+
+```python
+def _list_of_mappings(value: object) -> list[Mapping[str, object]]:
+    if not isinstance(value, list | tuple):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
+```
+
+- [ ] **Step 7: Run payload, mapping, runtime, and normalization tests**
 
 Run:
 
@@ -975,18 +1284,22 @@ Run:
 pytest tests/test_liepin_opencli_browser.py::test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifacts \
   tests/test_liepin_provider_mapping.py \
   tests/test_liepin_card_policy.py \
+  tests/test_liepin_runtime_source_lane.py::test_liepin_card_summary_for_candidate_ignores_candidate_search_text \
   tests/test_normalization.py::test_liepin_safe_card_summary_feeds_normalized_resume \
+  tests/test_normalization.py::test_liepin_normalizer_uses_card_experience_preview_not_normalized_card_text \
   tests/test_normalization.py::test_cts_normalizer_ignores_liepin_safe_card_summary -q
 ```
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add src/seektalent/providers/liepin/liepin_site_payloads.py \
   src/seektalent/providers/liepin/mapper.py \
   src/seektalent/providers/liepin/card_policy.py \
+  src/seektalent/sources/liepin/runtime_lane.py \
+  src/seektalent/resume_normalizers/liepin.py \
   tests/test_liepin_opencli_browser.py \
   tests/test_liepin_provider_mapping.py \
   tests/test_liepin_card_policy.py \
@@ -1223,7 +1536,7 @@ class LiepinSearchWorkflowSite(Protocol):
         *,
         source_run_id: str,
         query: str,
-        safe_reason_code: str | None,
+        safe_reason_code: str,
         cards_seen: int,
     ) -> dict[str, object]: ...
 ```
@@ -1372,33 +1685,16 @@ Add helper methods by moving the loop from `LiepinSiteAdapter.search_liepin_resu
                     rank=selected_rank,
                 )
             if not open_result.ok:
-                self._event(
-                    request.source_run_id,
-                    {
-                        "action_kind": "open_detail_failed",
-                        "route_kind": "detail",
-                        "ok": False,
-                        "rank": selected_rank,
-                        "ref": selected_ref,
-                        "safe_reason_code": open_result.safe_reason_code,
-                    },
-                )
+                # The adapter records page-level open_detail failure events.
+                # The workflow does not duplicate those events.
                 continue
             capture_result = self._site.capture_liepin_detail_resume(
                 source_run_id=request.source_run_id,
                 rank=selected_rank,
             )
             if not capture_result.ok:
-                self._event(
-                    request.source_run_id,
-                    {
-                        "action_kind": "capture_detail_failed",
-                        "route_kind": "detail",
-                        "ok": False,
-                        "rank": selected_rank,
-                        "safe_reason_code": capture_result.safe_reason_code,
-                    },
-                )
+                # The adapter records page-level capture failure events.
+                # The workflow does not duplicate those events.
                 continue
             opened += 1
             self._event(
@@ -1527,53 +1823,68 @@ Add remaining helpers:
         self._site.append_agent_event(source_run_id, event)
 ```
 
-- [ ] **Step 5: Add workflow-facing methods to the adapter**
+- [ ] **Step 5: Add a private workflow-facing wrapper**
 
-In `src/seektalent/providers/liepin/liepin_site_adapter.py`, add:
+In `src/seektalent/providers/liepin/liepin_site_adapter.py`, do not add public methods such as `append_agent_event()` or `blocked_resumes_envelope()`. The repository has an exact public-method signature test for `LiepinSiteAdapter`; keep that public surface narrow. Add a private wrapper class near `LiepinSiteAdapter` instead:
 
 ```python
-def append_agent_event(self, source_run_id: str, event: dict[str, object]) -> None:
-    self._append_agent_event(source_run_id, event)
+class _LiepinSearchWorkflowSite:
+    def __init__(self, adapter: LiepinSiteAdapter) -> None:
+        self._adapter = adapter
 
+    def append_agent_event(self, source_run_id: str, event: dict[str, object]) -> None:
+        self._adapter._append_agent_event(source_run_id, event)
 
-def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
-    return self._safe_liepin_detail_url_for_ref(ref)
+    def search_liepin_cards(self, **kwargs: object) -> dict[str, object]:
+        return self._adapter.search_liepin_cards(**kwargs)
 
+    def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
+        return self._adapter.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
 
-def open_liepin_detail_cached_url(
-    self,
-    *,
-    source_run_id: str,
-    ref: str,
-    rank: int,
-    detail_url: str,
-) -> OpenCliBrowserResult:
-    return self._open_liepin_detail_cached_url(
-        source_run_id=source_run_id,
-        ref=ref,
-        rank=rank,
-        detail_url=detail_url,
-    )
+    def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
+        return self._adapter._safe_liepin_detail_url_for_ref(ref)
 
+    def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
+        return self._adapter.open_liepin_detail(source_run_id=source_run_id, ref=ref, rank=rank)
 
-def restore_liepin_search_page(self) -> str | None:
-    return self._select_canonical_liepin_search_page()
+    def open_liepin_detail_cached_url(
+        self,
+        *,
+        source_run_id: str,
+        ref: str,
+        rank: int,
+        detail_url: str,
+    ) -> OpenCliBrowserResult:
+        return self._adapter._open_liepin_detail_cached_url(
+            source_run_id=source_run_id,
+            ref=ref,
+            rank=rank,
+            detail_url=detail_url,
+        )
 
+    def capture_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
+        return self._adapter.capture_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
 
-def blocked_resumes_envelope(
-    self,
-    *,
-    source_run_id: str,
-    query: str,
-    safe_reason_code: str | None,
-    cards_seen: int,
-) -> dict[str, object]:
-    return self._blocked_resumes_envelope(
-        source_run_id=source_run_id,
-        query=query,
-        safe_reason_code=safe_reason_code,
-        cards_seen=cards_seen,
-    )
+    def restore_liepin_search_page(self) -> str | None:
+        return self._adapter._select_canonical_liepin_search_page()
+
+    def finalize_liepin_resumes(self, **kwargs: object) -> dict[str, object]:
+        return self._adapter.finalize_liepin_resumes(**kwargs)
+
+    def blocked_resumes_envelope(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        safe_reason_code: str,
+        cards_seen: int,
+    ) -> dict[str, object]:
+        return self._adapter._blocked_resumes_envelope(
+            source_run_id=source_run_id,
+            query=query,
+            safe_reason_code=safe_reason_code or "failed_provider_error",
+            cards_seen=cards_seen,
+        )
 ```
 
 Replace `search_liepin_resumes()` with:
@@ -1594,7 +1905,7 @@ def search_liepin_resumes(
         LiepinSearchWorkflowRequest,
     )
 
-    return LiepinSearchWorkflow(site=self).search_detail_backed_resumes(
+    return LiepinSearchWorkflow(site=_LiepinSearchWorkflowSite(self)).search_detail_backed_resumes(
         LiepinSearchWorkflowRequest(
             source_run_id=source_run_id,
             query=query,
@@ -1606,32 +1917,11 @@ def search_liepin_resumes(
     )
 ```
 
-Also add:
+- [ ] **Step 6: Keep the retriever protocol stable**
 
-```python
-def search_detail_backed_resumes(
-    self,
-    *,
-    source_run_id: str,
-    query: str,
-    target_resumes: int,
-    max_pages: int,
-    max_cards: int,
-    native_filters: Mapping[str, object] | None = None,
-) -> dict[str, object]:
-    return self.search_liepin_resumes(
-        source_run_id=source_run_id,
-        query=query,
-        target_resumes=target_resumes,
-        max_pages=max_pages,
-        max_cards=max_cards,
-        native_filters=native_filters,
-    )
-```
+Do not require a new public `LiepinSiteAdapter.search_detail_backed_resumes()` method. Keep the existing retriever call to `search_liepin_resumes()` unless the implementation creates a separate non-adapter runner object. The public adapter signature test should only need to add `extract_structured_liepin_cards()`, not the private workflow wrapper methods.
 
-- [ ] **Step 6: Update retriever protocol**
-
-In `src/seektalent/providers/liepin/opencli_retriever.py`, change the protocol method:
+If a separate runner object is introduced, the protocol can use:
 
 ```python
 def search_detail_backed_resumes(
@@ -1646,7 +1936,7 @@ def search_detail_backed_resumes(
 ) -> dict[str, object]: ...
 ```
 
-Update `_search_liepin_resumes()`:
+In that case only, update `_search_liepin_resumes()`:
 
 ```python
 return self._runner.search_detail_backed_resumes(
@@ -1659,21 +1949,17 @@ return self._runner.search_detail_backed_resumes(
 )
 ```
 
-Update fakes in `tests/test_liepin_opencli_retriever.py` so they implement `search_detail_backed_resumes()`.
+Otherwise, leave `opencli_retriever.py` and its fakes on `search_liepin_resumes()`.
 
 - [ ] **Step 7: Add composition boundary test**
 
-In `tests/test_liepin_provider_source_composition.py`, update the expected public method list to include:
+In `tests/test_liepin_provider_source_composition.py`, update the expected public method list to include only the new public extraction method:
 
 ```python
-"search_detail_backed_resumes"
+"extract_structured_liepin_cards(self, *, source_run_id: 'str', max_cards: 'int') -> 'OpenCliBrowserResult'"
 ```
 
-Add this assertion if the file already inspects adapter method text:
-
-```python
-assert "search_detail_backed_resumes" in public_methods
-```
+Do not add `append_agent_event`, `safe_liepin_detail_url_for_ref`, `open_liepin_detail_cached_url`, `restore_liepin_search_page`, `blocked_resumes_envelope`, or `search_detail_backed_resumes` to the public signature expectation.
 
 - [ ] **Step 8: Run workflow and retriever tests**
 
@@ -1715,7 +2001,12 @@ git commit -m "refactor: split Liepin search workflow from site adapter"
 Run:
 
 ```bash
-rg -n "visible_text|normalized_card_text|extract_visible_liepin_cards|search_liepin_resumes" tests src/seektalent/providers/liepin
+rg -n "visible_text|normalized_card_text|extract_visible_liepin_cards|search_liepin_resumes" \
+  tests \
+  src/seektalent/providers/liepin \
+  src/seektalent/sources/liepin \
+  src/seektalent/resume_normalizers/liepin.py \
+  src/seektalent_runtime_control
 ```
 
 For fixtures that model current card payloads, replace:
@@ -1748,15 +2039,21 @@ def test_liepin_card_evidence_does_not_emit_text_tail_fields() -> None:
         "visible_text",
         "normalized_card_text",
     }
-    allowed_paths = {
-        "docs/superpowers/specs/2026-07-03-liepin-card-evidence-workflow-boundary-design.md",
-        "docs/superpowers/plans/2026-07-03-liepin-card-evidence-workflow-boundary.md",
-    }
+    scan_paths = [
+        ROOT / "src/seektalent/providers/liepin",
+        ROOT / "src/seektalent/sources/liepin",
+        ROOT / "src/seektalent/resume_normalizers/liepin.py",
+        ROOT / "src/seektalent_runtime_control",
+    ]
     hits: list[str] = []
-    for path in (ROOT / "src").rglob("*.py"):
+    paths: list[Path] = []
+    for scan_path in scan_paths:
+        if scan_path.is_file():
+            paths.append(scan_path)
+        else:
+            paths.extend(scan_path.rglob("*.py"))
+    for path in paths:
         rel = path.relative_to(ROOT).as_posix()
-        if rel in allowed_paths:
-            continue
         text = path.read_text(encoding="utf-8")
         for token in forbidden:
             if token in text:
@@ -1801,7 +2098,12 @@ Expected: PASS.
 Run:
 
 ```bash
-rg -n "visible_text|normalized_card_text|fullText|rawText" src/seektalent/providers/liepin src/seektalent_runtime_control tests
+rg -n "visible_text|normalized_card_text|fullText|rawText" \
+  src/seektalent/providers/liepin \
+  src/seektalent/sources/liepin \
+  src/seektalent/resume_normalizers/liepin.py \
+  src/seektalent_runtime_control \
+  tests
 ```
 
 Expected:
@@ -1835,6 +2137,7 @@ Spec coverage:
 5. Worker/client stability: Task 4 keeps `LiepinOpenCliResumeRetriever` response mapping unchanged.
 6. Scoring parallelism unchanged: no task modifies scoring code or runtime scoring concurrency.
 7. UI workflow observations preserved: Task 4 keeps safe action events and existing workflow-step projection.
+8. Production tail risks from external review are covered: `search_liepin_cards()` is structured-only, `runtime_lane.py` does not rehydrate card policy from `candidate.search_text`, `resume_normalizers/liepin.py` does not use `normalized_card_text`, card artifacts are sanitized before write, TS extension gates are fully updated, public adapter signatures stay narrow, workflow event duplication is avoided, and blocked reason codes are non-null.
 
 Completion scan:
 
