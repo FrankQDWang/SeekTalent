@@ -7,7 +7,14 @@ from pathlib import Path
 from seektalent.opencli_browser.runtime import SubprocessCurrentChromeTabOpener
 from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS
 from seektalent.providers.liepin.liepin_site_adapter import classify_liepin_state
-from tests.test_liepin_opencli_browser import FakeCommands, FakeCurrentChromeTabOpener, FakeWindowCounter, _runner
+from tests.test_liepin_opencli_browser import (
+    ANY_STRUCTURED_CARD_PROBE,
+    FakeCommands,
+    FakeCurrentChromeTabOpener,
+    FakeWindowCounter,
+    RefEvalCommands,
+    _runner,
+)
 
 
 def test_subprocess_current_chrome_tab_opener_accepts_canonical_return_url(monkeypatch) -> None:
@@ -41,40 +48,41 @@ def test_subprocess_current_chrome_tab_opener_rejects_missing_chrome_window(monk
 
 def test_extract_visible_liepin_cards_accepts_english_education_labels(tmp_path: Path) -> None:
     state_text = "<div id=resultList>共3000+位人选</div>"
-    result_card = {
-        "entries": [
-            {
-                "ref": "333",
-                "text": "N**35岁工作10年MasterShanghai求职期望：ShanghaiData Analyst"
-                "Python 数据分析 SQL Alibaba Taotian Group · Data Analysis2024.09-2025.03 "
-                "ByteDance E-commerce China Data Science Team Data Science · Data Science2021.09-2024.08 "
-                "Risk Control Platform Growth Analytics Recommendation Search Ads Revenue Operations "
-                "Data Warehouse Streaming Batch Modeling Stakeholder Delivery Reliability",
-            }
-        ]
-    }
-    commands = FakeCommands(
+    result_card = json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_structured_cards_probe.v1",
+            "cards": [
+                {
+                    "provider_rank": 1,
+                    "ref": "333",
+                    "masked_name": "N**",
+                    "gender": None,
+                    "age": 35,
+                    "work_years": 10,
+                    "city": "Shanghai",
+                    "expected_city": "Shanghai",
+                    "education_level": "硕士",
+                    "current_or_recent_company": "Alibaba Taotian Group",
+                    "current_or_recent_title": "Data Analysis",
+                    "job_intention": "Data Analyst",
+                    "skill_tags": ["Python", "数据分析", "SQL"],
+                }
+            ],
+        },
+        ensure_ascii=False,
+    )
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={ANY_STRUCTURED_CARD_PROBE: result_card},
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                 "https://h.liepin.com/search/getConditionItem#session"
             ),
             ("opencli", "browser", "seektalent-liepin", "state"): state_text,
-            (
-                "opencli",
-                "browser",
-                "seektalent-liepin",
-                "find",
-                "--css",
-                "#resultList .detail-resume-card-wrap",
-                "--limit",
-                "10",
-                "--text-max",
-                "1200",
-            ): json.dumps(result_card, ensure_ascii=False),
-        }
+        },
     )
 
-    result = _runner(commands, lease_dir=tmp_path).extract_visible_liepin_cards(source_run_id="run-1", max_cards=10)
+    result = _runner(commands, lease_dir=tmp_path).extract_structured_liepin_cards(source_run_id="run-1", max_cards=10)
 
     assert result.ok is True
     payload = json.loads(result.private_output)
@@ -83,7 +91,10 @@ def test_extract_visible_liepin_cards_accepts_english_education_labels(tmp_path:
     assert card["ref"] == "333"
     assert card["education_level"] == "硕士"
     assert card["work_years"] == 10
-    assert "Data Analyst" in card["visible_text"]
+    assert card["job_intention"] == "Data Analyst"
+    assert "visible_text" not in card
+    assert "normalized_card_text" not in card
+
 
 def test_open_liepin_tab_creates_background_opencli_tab_without_current_window_opener(tmp_path: Path) -> None:
     liepin_url = "https://h.liepin.com/search/getConditionItem#session"

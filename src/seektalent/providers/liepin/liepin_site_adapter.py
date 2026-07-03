@@ -38,7 +38,6 @@ from seektalent.providers.liepin.opencli_filter_planning import (
     native_filter_selection_applied,
     skipped_liepin_filter_names,
 )
-from seektalent.providers.liepin.opencli_card_text import looks_like_liepin_card
 from seektalent.providers.liepin.liepin_opencli_policy import (
     LIEPIN_RECRUITER_SEARCH_URL,
     liepin_error_from_opencli_error,
@@ -56,6 +55,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _fixed_readonly_eval_probe_script,
     _is_liepin_detail_url,
     _is_safe_page_id,
+    _liepin_structured_cards_payload_probe_script,
     _looks_like_liepin_detail_resume_state,
     _looks_like_liepin_search_result_page,
     _merge_liepin_detail_targets,
@@ -66,10 +66,9 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _rank_liepin_detail_targets,
     _rank_liepin_result_card_targets,
     _safe_artifact_segment,
-    _safe_card_summary_from_block,
     _safe_detail_payload_from_probe_output,
     _safe_filename,
-    _safe_visible_card_text,
+    _safe_structured_cards_from_probe_output,
     _state_url as _state_url,
     _string_key_mapping_or_none,
     _tab_page_id,
@@ -83,7 +82,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     classify_liepin_state,
     extract_allowed_click_refs as extract_allowed_click_refs,
     extract_known_modal_close_ref,
-    extract_liepin_card_summaries,
+    extract_liepin_card_summaries,  # noqa: F401 - public re-export for callers/tests.
     extract_liepin_search_button_ref,
     extract_liepin_search_input_ref,
 )
@@ -369,53 +368,30 @@ class LiepinSiteAdapter:
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(ok=False, action="apply_liepin_filters", safe_reason_code=exc.safe_reason_code)
 
-    def extract_visible_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
+    def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
         try:
             if max_cards < 1 or max_cards > 50:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
             state = self.state()
             if not state.ok:
                 return state
-            state_text = state.private_output or str(state.observation.get("text") or "")
-            targets = _merge_liepin_detail_targets(
-                _rank_liepin_detail_targets(state_text, max_cards=max_cards),
-                self._find_liepin_result_card_detail_targets(state_text=state_text, max_cards=max_cards),
-                max_cards=max_cards,
-            )
-            cards: list[dict[str, object]] = []
-            for index, target in enumerate(targets, start=1):
-                summary: dict[str, object] = {}
-                if looks_like_liepin_card(target.block_text):
-                    summary = _safe_card_summary_from_block(target.block_text)
-                visible_text = str(summary.get("normalized_card_text") or target.block_text)
-                cards.append(
-                    {
-                        "provider_rank": index,
-                        "ref": target.ref,
-                        "visible_text": _safe_visible_card_text(visible_text),
-                        "display_title": summary.get("display_title"),
-                        "current_or_recent_company": summary.get("current_or_recent_company"),
-                        "current_or_recent_title": summary.get("current_or_recent_title"),
-                        "city": summary.get("city"),
-                        "expected_city": summary.get("expected_city"),
-                        "education_level": summary.get("education_level"),
-                        "work_years": summary.get("work_years"),
-                        "age": summary.get("age"),
-                        "school_names": summary.get("school_names") or [],
-                        "skill_tags": summary.get("skill_tags") or [],
-                        "job_intention": summary.get("job_intention"),
-                        "recent_experience_text": summary.get("recent_experience_text"),
-                    }
+            probe_output = self._run_opencli_call(
+                lambda: self._automation.readonly_eval(
+                    _liepin_structured_cards_payload_probe_script(max_cards=max_cards)
                 )
+            )
+            self._touch_lease()
+            cards = _safe_structured_cards_from_probe_output(probe_output, max_cards=max_cards)
+            payload_cards = json.loads(json.dumps(cards, ensure_ascii=False))
             payload = {
-                "schema_version": "seektalent.opencli_liepin_visible_cards.v1",
+                "schema_version": "seektalent.opencli_liepin_structured_cards.v1",
                 "source_run_id": source_run_id,
-                "cards": cards,
+                "cards": payload_cards,
                 "card_count": len(cards),
             }
             return OpenCliBrowserResult(
                 ok=True,
-                action="extract_visible_liepin_cards",
+                action="extract_structured_liepin_cards",
                 counts={"cards": len(cards)},
                 observation=payload,
                 private_output=json.dumps(payload, ensure_ascii=False),
@@ -423,9 +399,20 @@ class LiepinSiteAdapter:
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(
                 ok=False,
-                action="extract_visible_liepin_cards",
+                action="extract_structured_liepin_cards",
                 safe_reason_code=exc.safe_reason_code,
             )
+
+    def extract_visible_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
+        result = self.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
+        return OpenCliBrowserResult(
+            ok=result.ok,
+            action="extract_visible_liepin_cards",
+            safe_reason_code=result.safe_reason_code,
+            counts=result.counts,
+            observation=result.observation,
+            private_output=result.private_output,
+        )
 
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
         try:
@@ -1255,7 +1242,29 @@ class LiepinSiteAdapter:
                         events=events,
                     )
             state_text = final_state.private_output
-            cards = extract_liepin_card_summaries(state_text, max_cards=max_cards)
+            structured_cards = self.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
+            if not structured_cards.ok:
+                return self._blocked_cards_envelope(
+                    source_run_id=source_run_id,
+                    query=query,
+                    safe_reason_code=structured_cards.safe_reason_code,
+                    safe_run_id=safe_run_id,
+                    pages_visited=pages_visited,
+                    events=events,
+                )
+            raw_cards = structured_cards.observation.get("cards")
+            cards = (
+                tuple(dict(item) for item in raw_cards if isinstance(item, Mapping))
+                if isinstance(raw_cards, Sequence)
+                else ()
+            )
+            events.append(
+                {
+                    "action_kind": "visible_cards_observed",
+                    "route_kind": "search",
+                    "visible_cards": len(cards),
+                }
+            )
             return self._cards_envelope(
                 source_run_id=source_run_id,
                 query=query,

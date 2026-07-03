@@ -45,6 +45,7 @@ function capabilitiesPayload() {
         "seektalent_opencli_fill",
         "seektalent_opencli_click",
         "seektalent_opencli_apply_liepin_filters",
+        "seektalent_opencli_extract_structured_liepin_cards",
         "seektalent_opencli_extract_visible_liepin_cards",
         "seektalent_opencli_open_liepin_detail",
         "seektalent_opencli_capture_liepin_detail_resume",
@@ -81,7 +82,7 @@ function updateStateFromPayload(action: string, text: string) {
           ? new Set(parsed.observation.allowedClickRefs.filter((ref) => typeof ref === "string"))
           : new Set();
     }
-    if (action === "extract_visible_liepin_cards") {
+    if (action === "extract_visible_liepin_cards" || action === "extract_structured_liepin_cards") {
       stateReady = parsed.ok === true && parsed.observation?.terminal !== true;
       if (stateReady) {
         terminalReason = null;
@@ -136,6 +137,7 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
       "search_cards",
       "search_resumes",
       "extract_visible_liepin_cards",
+      "extract_structured_liepin_cards",
       "capture_liepin_detail_resume",
       "finalize_liepin_resumes",
     ].includes(action) &&
@@ -160,6 +162,7 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
       action !== "search_cards" &&
       action !== "search_resumes" &&
       action !== "extract_visible_liepin_cards" &&
+      action !== "extract_structured_liepin_cards" &&
       action !== "finalize_liepin_resumes"
     ) {
       actionCount += 1;
@@ -333,6 +336,20 @@ export default function registerSeekTalentOpenCliBrowser(pi: ExtensionAPI) {
     }),
     async execute(_toolCallId: string, params: ToolParams) {
       return textResult(await runAction("apply_liepin_filters", params));
+    },
+  });
+
+  pi.registerTool({
+    name: "seektalent_opencli_extract_structured_liepin_cards",
+    label: "Read structured Liepin cards",
+    description:
+      "Read structured Liepin result card evidence from the current search results page without clicking or opening details.",
+    parameters: Type.Object({
+      sourceRunId: Type.String(),
+      maxCards: Type.Optional(Type.Number()),
+    }),
+    async execute(_toolCallId: string, params: ToolParams) {
+      return textResult(await runAction("extract_structured_liepin_cards", params));
     },
   });
 

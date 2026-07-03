@@ -335,6 +335,7 @@ def test_opencli_extension_exposes_only_restricted_tools() -> None:
 
     assert "seektalent_opencli_status" in text
     assert "seektalent_opencli_search_liepin_cards" in text
+    assert "seektalent_opencli_extract_structured_liepin_cards" in text
     assert "seektalent_opencli_extract_visible_liepin_cards" in text
     assert "Never use this tool for liepin.search_resumes" in text
     assert "seektalent_opencli_capabilities" in text
@@ -363,13 +364,14 @@ def test_opencli_extension_exposes_only_restricted_tools() -> None:
     assert 'action === "search_cards"' in text
 
 
-def test_opencli_extension_marks_visible_card_extract_as_fresh_state() -> None:
+def test_opencli_extension_marks_card_extractors_as_fresh_state() -> None:
     text = Path("src/seektalent/providers/liepin/opencli_extensions/seektalent_opencli_browser.ts").read_text(
         encoding="utf-8"
     )
 
-    assert 'if (action === "extract_visible_liepin_cards")' in text
-    extract_branch_start = text.index('if (action === "extract_visible_liepin_cards")')
+    assert 'action === "extract_visible_liepin_cards"' in text
+    assert 'action === "extract_structured_liepin_cards"' in text
+    extract_branch_start = text.index('action === "extract_visible_liepin_cards"')
     extract_branch = text[extract_branch_start : extract_branch_start + 500]
     assert "stateReady = parsed.ok === true" in extract_branch
     assert "terminalReason = null" in extract_branch

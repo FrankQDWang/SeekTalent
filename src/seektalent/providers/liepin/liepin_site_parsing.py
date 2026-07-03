@@ -21,6 +21,9 @@ FIXED_READONLY_EVAL_PROBES = frozenset({"liepin_detail_url_for_card", "liepin_de
 LIEPIN_ALLOWED_HOSTS = frozenset({"www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"})
 LIEPIN_RISK_HOSTS = frozenset({"safe.liepin.com"})
 OWNED_PAGE_MARKER_TTL_SECONDS = 24 * 60 * 60
+FORBIDDEN_CARD_EVIDENCE_KEYS = frozenset(
+    {"raw_html", "inner_html", "inner_text", "visible_text", "normalized_card_text", "fullText", "rawText", "page_text"}
+)
 FORBIDDEN_LIEPIN_PATH_FRAGMENTS = frozenset(
     {
         "resume",
@@ -417,6 +420,137 @@ def _safe_detail_payload_from_probe_output(text: str) -> dict[str, object]:
     return payload
 
 
+def _safe_structured_cards_from_probe_output(output: str, *, max_cards: int) -> tuple[dict[str, object], ...]:
+    if max_cards < 1 or max_cards > 50:
+        raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+    if not isinstance(payload, dict):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    if payload.get("ok") is False:
+        raise OpenCliBrowserError(str(payload.get("safeReasonCode") or "liepin_opencli_malformed_state"))
+    if payload.get("schema_version") != "seektalent.liepin_structured_cards_probe.v1":
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    raw_cards = payload.get("cards")
+    if not isinstance(raw_cards, list):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    cards: list[dict[str, object]] = []
+    for item in raw_cards[:max_cards]:
+        if not isinstance(item, Mapping):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        cards.append(_sanitize_structured_card_mapping(item))
+    return tuple(cards)
+
+
+def _sanitize_structured_card_mapping(item: Mapping[str, object]) -> dict[str, object]:
+    if FORBIDDEN_CARD_EVIDENCE_KEYS.intersection(str(key) for key in item):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    raw_provider_rank = item.get("provider_rank")
+    provider_rank = None if isinstance(raw_provider_rank, bool) else _positive_int_or_none(raw_provider_rank)
+    ref = item.get("ref")
+    if provider_rank is None or not isinstance(ref, str) or not _is_safe_page_id(ref):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    card: dict[str, object] = {"provider_rank": provider_rank, "ref": ref}
+    scalar_fields = (
+        "masked_name",
+        "gender",
+        "city",
+        "expected_city",
+        "education_level",
+        "current_or_recent_company",
+        "current_or_recent_title",
+        "job_intention",
+        "active_status",
+        "display_title",
+    )
+    for field in scalar_fields:
+        value = _optional_bounded_card_text(item.get(field), max_chars=180)
+        if value is not None:
+            card[field] = value
+    for field in ("age", "work_years"):
+        raw_value = item.get(field)
+        value = None if isinstance(raw_value, bool) else _positive_int_or_none(raw_value)
+        if value is not None:
+            card[field] = value
+    for field in ("badges", "skill_tags", "school_names", "major_names"):
+        values = _bounded_text_tuple(item.get(field), max_items=20, max_chars=80)
+        if values:
+            card[field] = values
+    experience_preview = _sanitize_card_preview_list(
+        item.get("experience_preview"),
+        allowed_fields=("company", "title", "date_range", "duration", "industry", "location"),
+    )
+    if experience_preview:
+        card["experience_preview"] = experience_preview
+    education_preview = _sanitize_card_preview_list(
+        item.get("education_preview"),
+        allowed_fields=("school", "major", "degree", "date_range", "duration"),
+    )
+    if education_preview:
+        card["education_preview"] = education_preview
+    card.setdefault("display_name_masked", True)
+    card.setdefault(
+        "display_title",
+        card.get("current_or_recent_title") or card.get("job_intention") or "Liepin candidate card",
+    )
+    return card
+
+
+def _optional_bounded_card_text(value: object, *, max_chars: int = 180) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        return None
+    cleaned = _bounded_public_text(value, max_chars=max_chars)
+    return cleaned or None
+
+
+def _bounded_text_tuple(value: object, *, max_items: int, max_chars: int) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw_item in value:
+        item = _optional_bounded_card_text(raw_item, max_chars=max_chars)
+        if item is None or item in seen:
+            continue
+        seen.add(item)
+        items.append(item)
+        if len(items) >= max_items:
+            break
+    return tuple(items)
+
+
+def _sanitize_card_preview_list(
+    value: object,
+    *,
+    allowed_fields: Sequence[str],
+) -> tuple[dict[str, object], ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, Sequence) or isinstance(value, str):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    previews: list[dict[str, object]] = []
+    allowed = set(allowed_fields)
+    for raw_preview in value[:5]:
+        if not isinstance(raw_preview, Mapping):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        if FORBIDDEN_CARD_EVIDENCE_KEYS.intersection(str(key) for key in raw_preview):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        preview: dict[str, object] = {}
+        for field in allowed:
+            text = _optional_bounded_card_text(raw_preview.get(field), max_chars=180)
+            if text is not None:
+                preview[field] = text
+        if preview:
+            previews.append(preview)
+    return tuple(previews)
+
+
 def _detail_provider_key_material(*, safe_run_id: str, rank: int, payload: Mapping[str, object]) -> str:
     digest = hashlib.sha256(json.dumps(dict(payload), ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
     return f"liepin-opencli-detail:{safe_run_id}:{rank}:{digest}"
@@ -616,6 +750,202 @@ def _opencli_result_text(result: OpenCliBrowserResult) -> str:
         return result.private_output
     observation = result.observation or {}
     return str(observation.get("text") or "")
+
+
+def _liepin_structured_cards_payload_probe_script(max_cards: int) -> str:
+    if max_cards < 1 or max_cards > 50:
+        raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+    return (
+        r"""
+(() => {
+  const MAX_CARDS = __MAX_CARDS__;
+  const schema = "seektalent.liepin_structured_cards_probe.v1";
+  const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const bounded = (value, max) => {
+    const next = clean(value);
+    return next ? next.slice(0, max) : null;
+  };
+  const textOf = (node) => clean(node && (node.innerText || node.textContent));
+  const linesOf = (node) =>
+    String((node && node.innerText) || "")
+      .split(/\n+/)
+      .map(clean)
+      .filter(Boolean);
+  const uniquePush = (items, value, max = 20) => {
+    const next = bounded(value, 80);
+    if (next && !items.includes(next) && items.length < max) items.push(next);
+  };
+  const degreeLabel = (value) => {
+    const text = clean(value);
+    if (/博士/.test(text) || /(?<![A-Za-z])(phd|doctor)(?=\b|[A-Z\u4e00-\u9fa5])/i.test(text)) return "博士";
+    if (/硕士/.test(text) || /(?<![A-Za-z])(master|msc|mba)(?=\b|[A-Z\u4e00-\u9fa5])/i.test(text)) return "硕士";
+    if (/本科/.test(text) || /(?<![A-Za-z])(bachelor|bsc|ba)(?=\b|[A-Z\u4e00-\u9fa5])/i.test(text)) return "本科";
+    if (/大专/.test(text) || /(?<![A-Za-z])associate(?=\b|[A-Z\u4e00-\u9fa5])/i.test(text)) return "大专";
+    return null;
+  };
+  const profileTokens = (lines) =>
+    lines
+      .flatMap((line) => line.split(/[|｜·,，;；\s]+/))
+      .map(clean)
+      .filter(Boolean);
+  const genderFrom = (tokens, text) => {
+    const token = tokens.find((item) => /^(男|女)$/.test(item));
+    if (token) return token;
+    const match = clean(text).match(/(^|[^\u4e00-\u9fa5A-Za-z])(男|女)(?=\d{1,2}岁|\s|[^\u4e00-\u9fa5A-Za-z]|$)/);
+    return match ? match[2] : null;
+  };
+  const intFrom = (value, patterns) => {
+    const text = clean(value);
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (!match) continue;
+      const group = match.slice(1).find(Boolean);
+      if (group) return Number(group);
+    }
+    return null;
+  };
+  const expectedFrom = (lines) => {
+    const line = lines.find((item) => /求职期望|期望职位|意向职位/.test(item));
+    if (!line) return {};
+    const value = clean(line.replace(/^.*?(求职期望|期望职位|意向职位)\s*[:：]?/, ""));
+    const parts = value.split(/[|｜,，;；\s]+/).map(clean).filter(Boolean);
+    return {
+      expected_city: bounded(parts[0], 80),
+      job_intention: bounded(parts.slice(1).join(" ") || parts[0], 120),
+    };
+  };
+  const cityFrom = (tokens, expectedCity) => {
+    const skipped = /^(男|女|\d{1,2}岁|工作\d{1,2}年|\d{1,2}年经验|博士|硕士|本科|大专|统招本科|群众|党员|共青团员)$/;
+    const candidate = tokens.find((item, index) => {
+      if (index === 0) return false;
+      if (skipped.test(item) || degreeLabel(item)) return false;
+      if (/[*＊]|求职|期望|公司|大学|学院|工作|年|岁/.test(item)) return false;
+      return /^[A-Za-z\u4e00-\u9fa5]{2,30}$/.test(item);
+    });
+    return bounded(candidate || expectedCity, 80);
+  };
+  const maskedNameFrom = (text) => {
+    const match = clean(text).match(/[\u4e00-\u9fa5A-Za-z][*＊]{1,3}|[*＊]{1,3}[\u4e00-\u9fa5A-Za-z]/);
+    return match ? bounded(match[0], 80) : null;
+  };
+  const parseExperience = (lines) => {
+    const previews = [];
+    for (const line of lines) {
+      if (!line.includes("·")) continue;
+      const parts = line.split("·").map(clean).filter(Boolean);
+      if (parts.length < 2) continue;
+      const payload = {
+        company: bounded(parts[0], 160),
+        title: bounded(parts.slice(1).join(" · ").replace(/\d{4}[./-]\d{2}.*$/, ""), 160),
+      };
+      const date = line.match(/\d{4}[./-]\d{2}\s*[-~至到]\s*(?:至今|\d{4}[./-]\d{2})/);
+      if (date) payload.date_range = bounded(date[0], 80);
+      if (payload.company && payload.title) previews.push(payload);
+      if (previews.length >= 3) break;
+    }
+    return previews;
+  };
+  const parseEducation = (lines) => {
+    const previews = [];
+    for (const line of lines) {
+      const degree = degreeLabel(line);
+      if (!degree && !/(大学|学院|University|College|School)/i.test(line)) continue;
+      const parts = line.split("·").map(clean).filter(Boolean);
+      const school = bounded(parts.find((item) => /(大学|学院|University|College|School)/i.test(item)) || parts[0], 160);
+      const major = bounded(parts.find((item) => item !== school && !degreeLabel(item) && !/\d{4}[./-]/.test(item)), 120);
+      const payload = { school, major, degree };
+      const date = line.match(/\d{4}[./-]\d{2}\s*[-~至到]\s*(?:至今|\d{4}[./-]\d{2})/);
+      if (date) payload.date_range = bounded(date[0], 80);
+      if (payload.school || payload.major || payload.degree) previews.push(payload);
+      if (previews.length >= 3) break;
+    }
+    return previews;
+  };
+  const collectBadges = (card, lines) => {
+    const badges = [];
+    for (const node of card.querySelectorAll('[class*="badge"], [class*="tag"]')) {
+      const value = textOf(node);
+      if (/统招|认证|活跃|优选/.test(value)) uniquePush(badges, value, 12);
+    }
+    for (const line of lines) {
+      for (const match of line.matchAll(/(统招本科|统招硕士|统招博士|统招大专)/g)) uniquePush(badges, match[1], 12);
+    }
+    return badges;
+  };
+  const collectSkills = (card, lines) => {
+    const skills = [];
+    for (const node of card.querySelectorAll('[class*="skill"], [class*="tag"], [class*="label"]')) {
+      const value = textOf(node);
+      if (value && !/统招|活跃|男|女|\d{1,2}岁/.test(value)) uniquePush(skills, value);
+    }
+    const profileNoise = /求职|期望|工作|岁|男|女|博士|硕士|本科|大专|大学|学院|公司|至今/;
+    for (const line of lines) {
+      if (/求职期望|工作\d{1,2}年|\d{1,2}岁|·/.test(line)) continue;
+      for (const token of line.split(/[|｜,，;；\s]+/).map(clean).filter(Boolean)) {
+        if (profileNoise.test(token)) continue;
+        if (/^[A-Za-z][A-Za-z0-9+#./-]{1,30}$/.test(token) || /^[\u4e00-\u9fa5]{2,12}$/.test(token)) {
+          uniquePush(skills, token);
+        }
+      }
+    }
+    return skills;
+  };
+  const refFor = (card) => {
+    const node = card.matches("[data-opencli-ref]") ? card : card.querySelector("[data-opencli-ref]");
+    const value = node && node.getAttribute("data-opencli-ref");
+    return /^[A-Za-z0-9_-]{1,128}$/.test(value || "") ? value : null;
+  };
+  const cardNodes = Array.from(document.querySelectorAll("#resultList .detail-resume-card-wrap, .detail-resume-card-wrap"))
+    .filter((card, index, items) => items.indexOf(card) === index)
+    .slice(0, MAX_CARDS);
+  const cards = [];
+  cardNodes.forEach((card, index) => {
+    const lines = linesOf(card);
+    const text = lines.join(" ");
+    const expected = expectedFrom(lines);
+    const tokens = profileTokens(lines);
+    const experience = parseExperience(lines);
+    const education = parseEducation(lines);
+    const schoolNames = [];
+    const majorNames = [];
+    for (const item of education) {
+      uniquePush(schoolNames, item.school, 5);
+      uniquePush(majorNames, item.major, 5);
+    }
+    const current = experience[0] || {};
+    const payload = {
+      provider_rank: index + 1,
+      ref: refFor(card),
+      masked_name: maskedNameFrom(text),
+      gender: genderFrom(tokens, text),
+      age: intFrom(text, [/(\d{1,2})\s*岁/]),
+      work_years: intFrom(text, [/工作\s*(\d{1,2})\s*年/, /(\d{1,2})\s*年经验/]),
+      city: cityFrom(tokens, expected.expected_city),
+      expected_city: expected.expected_city,
+      education_level: degreeLabel(text),
+      current_or_recent_company: current.company || null,
+      current_or_recent_title: current.title || null,
+      job_intention: expected.job_intention,
+      active_status: bounded((lines.find((line) => /活跃|在线/.test(line)) || "").replace(/^.*?(活跃|在线)/, "$1"), 80),
+      badges: collectBadges(card, lines),
+      skill_tags: collectSkills(card, lines),
+      school_names: schoolNames,
+      major_names: majorNames,
+      experience_preview: experience,
+      education_preview: education,
+    };
+    if (payload.ref) {
+      cards.push(Object.fromEntries(Object.entries(payload).filter(([, value]) => {
+        if (value === null || value === undefined || value === "") return false;
+        if (Array.isArray(value) && value.length === 0) return false;
+        return true;
+      })));
+    }
+  });
+  return JSON.stringify({ ok: true, schema_version: schema, cards });
+})()
+""".replace("__MAX_CARDS__", str(max_cards))
+    )
 
 
 def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
