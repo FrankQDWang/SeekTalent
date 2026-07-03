@@ -47,12 +47,13 @@ def test_verify_workbench_supports_python_preflight_skip_mode():
 def test_storybook_contract_runs_against_static_ci_build():
     script = (ROOT / "scripts" / "verify-dev-workbench.sh").read_text(encoding="utf-8")
 
-    assert "pnpm storybook:build --test --quiet --disable-telemetry" in script
+    assert "PNPM_CMD=(corepack pnpm)" in script
+    assert '"${PNPM_CMD[@]}" storybook:build --test --quiet --disable-telemetry' in script
     assert "python3 -m http.server 6006" in script
     assert "curl -fsS \"http://127.0.0.1:6006/iframe.html\"" in script
-    assert "SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:a11y" in script
-    assert "SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:interactions" in script
-    assert "SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:visual" in script
+    assert 'SEEKTALENT_STORYBOOK_EXTERNAL=1 "${PNPM_CMD[@]}" storybook:a11y' in script
+    assert 'SEEKTALENT_STORYBOOK_EXTERNAL=1 "${PNPM_CMD[@]}" storybook:interactions' in script
+    assert 'SEEKTALENT_STORYBOOK_EXTERNAL=1 "${PNPM_CMD[@]}" storybook:visual' in script
 
     for relative_path in (
         "apps/web-react/playwright.storybook.config.ts",
@@ -64,7 +65,7 @@ def test_storybook_contract_runs_against_static_ci_build():
         assert "SEEKTALENT_STORYBOOK_EXTERNAL" in config, relative_path
         assert "python3 -m http.server 6006" in config, relative_path
         assert "storybook-static" in config, relative_path
-        assert "pnpm exec storybook dev" in config, relative_path
+        assert "corepack pnpm exec storybook dev" in config, relative_path
         assert "...storybookWebServer" in config, relative_path
 
 

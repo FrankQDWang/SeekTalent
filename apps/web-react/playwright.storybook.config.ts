@@ -6,7 +6,7 @@ const storybookBaseURL =
   process.env.SEEKTALENT_STORYBOOK_BASE_URL ?? "http://127.0.0.1:6006";
 const storybookServerCommand = useStaticStorybook
   ? "python3 -m http.server 6006 --bind 127.0.0.1 --directory storybook-static >/tmp/seektalent-storybook-static-server.log 2>&1"
-  : "pnpm exec storybook dev -p 6006 --host 127.0.0.1 --ci";
+  : "corepack pnpm exec storybook dev -p 6006 --host 127.0.0.1 --ci";
 const storybookWebServer = useExternalStorybook
   ? {}
   : {

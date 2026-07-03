@@ -11,17 +11,22 @@ FRONTEND_PORT="${SEEKTALENT_DEV_FRONTEND_PORT:-5178}"
 
 cd "$ROOT"
 
-command -v pnpm >/dev/null 2>&1 || {
+PNPM_CMD=()
+if command -v corepack >/dev/null 2>&1; then
+  PNPM_CMD=(corepack pnpm)
+elif command -v pnpm >/dev/null 2>&1; then
+  PNPM_CMD=(pnpm)
+else
   echo "pnpm is required for the React workbench dev server." >&2
   exit 1
-}
+fi
 
 if [[ ! -x "$OPENCLI_BIN" ]]; then
   echo "Installing React workspace dependencies, including the repo-local OpenCLI browser helper..." >&2
   if [[ -f "$WEB_DIR/pnpm-lock.yaml" ]]; then
-    (cd "$WEB_DIR" && pnpm install --frozen-lockfile)
+    (cd "$WEB_DIR" && "${PNPM_CMD[@]}" install --frozen-lockfile)
   else
-    (cd "$WEB_DIR" && pnpm install)
+    (cd "$WEB_DIR" && "${PNPM_CMD[@]}" install)
   fi
 fi
 
@@ -192,5 +197,5 @@ echo "Liepin worker mode: opencli via deterministic local browser retrieval" >&2
 
 (
   cd "$WEB_DIR"
-  pnpm exec vite --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
+  "${PNPM_CMD[@]}" exec vite --host "$FRONTEND_HOST" --port "$FRONTEND_PORT" --strictPort
 )

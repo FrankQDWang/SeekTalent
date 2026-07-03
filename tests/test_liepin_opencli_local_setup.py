@@ -50,6 +50,7 @@ def test_dev_launcher_uses_liepin_opencli_helper_without_legacy_mcp_adapter() ->
     assert "reason_code=liepin_opencli_daemon_not_running" in script
     assert "reason_code=liepin_opencli_daemon_stale" in script
     assert "reason_code=liepin_opencli_extension_disconnected" in script
+    assert "PNPM_CMD=(corepack pnpm)" in script
 
 
 def test_dev_launcher_waits_for_backend_before_starting_vite() -> None:
@@ -58,5 +59,5 @@ def test_dev_launcher_waits_for_backend_before_starting_vite() -> None:
     assert "wait_for_backend_ready()" in script
     backend_pid_index = script.index("backend_pid=$!")
     wait_call_index = script.index("\nwait_for_backend_ready\n")
-    vite_index = script.index("pnpm exec vite")
+    vite_index = script.index('"${PNPM_CMD[@]}" exec vite')
     assert backend_pid_index < wait_call_index < vite_index

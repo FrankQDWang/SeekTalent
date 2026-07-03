@@ -60,10 +60,15 @@ if [[ "${SEEKTALENT_VERIFY_PYTHON_ONLY:-0}" == "1" ]]; then
   exit 0
 fi
 
-command -v pnpm >/dev/null 2>&1 || {
+PNPM_CMD=()
+if command -v corepack >/dev/null 2>&1; then
+  PNPM_CMD=(corepack pnpm)
+elif command -v pnpm >/dev/null 2>&1; then
+  PNPM_CMD=(pnpm)
+else
   echo "pnpm not found; rerun with SEEKTALENT_VERIFY_PYTHON_ONLY=1 only for Python-only local checks" >&2
   exit 1
-}
+fi
 
 tmp_root="$(mktemp -d)"
 api_pid=""
@@ -103,7 +108,7 @@ schema_before="$(shasum "$schema_path" | awk '{print $1}')"
 
 (
   cd apps/web-react
-  SEEKTALENT_OPENAPI_URL="$api_base_url/openapi.json" pnpm api:gen
+  SEEKTALENT_OPENAPI_URL="$api_base_url/openapi.json" "${PNPM_CMD[@]}" api:gen
 )
 
 schema_after="$(shasum "$schema_path" | awk '{print $1}')"
@@ -163,11 +168,11 @@ done
   }
   trap cleanup_storybook EXIT
 
-  pnpm check
-  pnpm lint
-  pnpm test
-  pnpm build
-  pnpm storybook:build --test --quiet --disable-telemetry
+  "${PNPM_CMD[@]}" check
+  "${PNPM_CMD[@]}" lint
+  "${PNPM_CMD[@]}" test
+  "${PNPM_CMD[@]}" build
+  "${PNPM_CMD[@]}" storybook:build --test --quiet --disable-telemetry
   rm -f "$storybook_log"
   python3 -m http.server 6006 --bind 127.0.0.1 --directory storybook-static >"$storybook_log" 2>&1 &
   storybook_pid=$!
@@ -183,12 +188,12 @@ done
     sleep 0.2
   done
   curl -fsS "http://127.0.0.1:6006/iframe.html" >/dev/null
-  SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:a11y
-  SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:interactions
-  SEEKTALENT_STORYBOOK_EXTERNAL=1 pnpm storybook:visual
+  SEEKTALENT_STORYBOOK_EXTERNAL=1 "${PNPM_CMD[@]}" storybook:a11y
+  SEEKTALENT_STORYBOOK_EXTERNAL=1 "${PNPM_CMD[@]}" storybook:interactions
+  SEEKTALENT_STORYBOOK_EXTERNAL=1 "${PNPM_CMD[@]}" storybook:visual
   SEEKTALENT_DEV_BACKEND_HOST=127.0.0.1 \
     SEEKTALENT_DEV_BACKEND_PORT="$api_port" \
-    pnpm test:e2e
+    "${PNPM_CMD[@]}" test:e2e
 )
 
 conversation_json="$tmp_root/conversation.json"
