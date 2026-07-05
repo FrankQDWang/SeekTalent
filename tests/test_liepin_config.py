@@ -56,6 +56,50 @@ def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.Mo
         AppSettings(_env_file=None)
 
 
+@pytest.mark.parametrize(
+    "env_key",
+    (
+        "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
+        "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
+    ),
+)
+def test_removed_liepin_opencli_cleanup_env_vars_are_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    env_key: str,
+) -> None:
+    monkeypatch.setenv(env_key, "1")
+
+    with pytest.raises(ValueError, match="removed Liepin OpenCLI cleanup config"):
+        AppSettings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    "env_key",
+    (
+        "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
+        "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
+    ),
+)
+def test_removed_liepin_opencli_cleanup_env_file_values_are_rejected(tmp_path: Path, env_key: str) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{env_key}=1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="removed Liepin OpenCLI cleanup config"):
+        AppSettings(_env_file=env_file)
+
+
+@pytest.mark.parametrize(
+    "init_key",
+    (
+        "liepin_opencli_idle_" + "close_seconds",
+        "liepin_opencli_close_" + "blank_window",
+    ),
+)
+def test_removed_liepin_opencli_cleanup_init_kwargs_are_rejected(init_key: str) -> None:
+    with pytest.raises(ValueError, match="removed Liepin OpenCLI cleanup config"):
+        AppSettings(_env_file=None, **{init_key: 1})
+
+
 def test_liepin_detail_targets_are_small_opencli_task_targets() -> None:
     settings = AppSettings(
         _env_file=None,

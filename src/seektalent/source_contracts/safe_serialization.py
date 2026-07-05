@@ -67,7 +67,6 @@ _SAFE_COUNT_KEYS = {
     "candidates",
     "cards_filtered",
     "cards_seen",
-    "closed_tabs",
     "detail_recommendations",
     "details_opened",
     "raw_candidates",

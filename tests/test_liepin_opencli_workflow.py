@@ -134,6 +134,7 @@ def test_workflow_steps_from_action_events_maps_clear_native_filters() -> None:
 
 def test_workflow_steps_from_action_events_drops_removed_cleanup_actions() -> None:
     removed_step = "cleanup_" + "detail_tabs"
+    removed_count = "closed_" + "tabs"
     removed_actions = (
         removed_step,
         removed_step + "_after_capture",
@@ -142,10 +143,24 @@ def test_workflow_steps_from_action_events_drops_removed_cleanup_actions() -> No
     )
 
     steps = workflow_steps_from_action_events(
-        [{"action_kind": action, "ok": True, "closed_tabs": 3} for action in removed_actions],
+        [{"action_kind": action, "ok": True, removed_count: 3} for action in removed_actions],
         final_status="succeeded",
         resumes_returned=0,
         action_trace_ref=None,
     )
 
     assert [step["step_name"] for step in steps] == ["finalize"]
+
+
+def test_workflow_steps_from_action_events_drops_removed_cleanup_count() -> None:
+    removed_count = "closed_" + "tabs"
+
+    steps = workflow_steps_from_action_events(
+        [{"action_kind": "visible_cards_observed", "visible_cards": 2, removed_count: 3}],
+        final_status="succeeded",
+        resumes_returned=0,
+        action_trace_ref=None,
+    )
+
+    assert steps[0]["step_name"] == "observe_cards"
+    assert steps[0]["safe_counts"] == {"visible_cards": 2}

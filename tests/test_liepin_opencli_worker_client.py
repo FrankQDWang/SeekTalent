@@ -208,6 +208,7 @@ def test_opencli_worker_blocked_error_preserves_workflow_steps() -> None:
 
 def test_opencli_worker_drops_removed_cleanup_workflow_steps() -> None:
     removed_step = "cleanup_" + "detail_tabs"
+    removed_count = "closed_" + "tabs"
 
     class BlockedRetriever(FakeRetriever):
         def search_resumes(self, request):
@@ -223,7 +224,7 @@ def test_opencli_worker_drops_removed_cleanup_workflow_steps() -> None:
                             "event_type": "source_workflow_step_completed",
                             "step_name": removed_step,
                             "status": "completed",
-                            "safe_counts": {"closed_tabs": 3},
+                            "safe_counts": {removed_count: 3},
                             "safe_metadata": {},
                             "artifact_refs": [],
                         },
@@ -269,6 +270,63 @@ def test_opencli_worker_drops_removed_cleanup_workflow_steps() -> None:
 
     partial_result = getattr(error.value, "partial_search_result")
     assert [step["step_name"] for step in partial_result.request_payload["workflowSteps"]] == ["open_detail"]
+
+
+def test_opencli_worker_drops_removed_cleanup_workflow_count() -> None:
+    removed_count = "closed_" + "tabs"
+
+    class BlockedRetriever(FakeRetriever):
+        def search_resumes(self, request):
+            return LiepinResumeSearchResponse(
+                resumes=[],
+                exhausted=False,
+                requestPayload={
+                    "backend": "opencli",
+                    "opencliStatus": "blocked",
+                    "safeReasonCode": "liepin_opencli_detail_not_opened",
+                    "workflowSteps": [
+                        {
+                            "event_type": "source_workflow_step_failed",
+                            "step_name": "open_detail",
+                            "status": "failed",
+                            "safe_reason_code": "liepin_opencli_detail_not_opened",
+                            "safe_counts": {"details_opened": 1, removed_count: 3},
+                            "safe_metadata": {"rank": 1},
+                            "artifact_refs": [],
+                        }
+                    ],
+                },
+                rawCandidateCount=0,
+            )
+
+    client = LiepinOpenCliWorkerClient(
+        retriever=BlockedRetriever(calls=[]),
+        connection_id="liepin-opencli",
+        provider_account_hash="local-opencli",
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(
+            client.search(
+                SearchRequest(
+                    query_terms=["数据开发", "Python"],
+                    query_role="primary",
+                    keyword_query="数据开发 Python",
+                    adapter_notes=[],
+                    runtime_constraints=[],
+                    fetch_mode="detail",
+                    page_size=2,
+                    provider_context={
+                        "liepin_requirement_sheet_json": "{\"job_title\":\"数据开发专家\"}",
+                    },
+                ),
+                round_no=1,
+                trace_id="run-1",
+            )
+        )
+
+    partial_result = getattr(error.value, "partial_search_result")
+    assert partial_result.request_payload["workflowSteps"][0]["safe_counts"] == {"details_opened": 1}
 
 
 def test_opencli_worker_session_status_reports_local_provider_subject_before_binding() -> None:

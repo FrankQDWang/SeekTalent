@@ -41,7 +41,6 @@ _ACTION_TO_STEP_EVENT: dict[str, tuple[str, str, str]] = {
 _SAFE_COUNT_KEYS = {
     "cached_detail_urls",
     "cards_seen",
-    "closed_tabs",
     "resumes_returned",
     "target_resumes",
     "visible_cards",

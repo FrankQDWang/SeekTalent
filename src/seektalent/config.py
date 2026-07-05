@@ -131,6 +131,14 @@ REMOVED_PRF_ENV_KEYS = {
     "SEEKTALENT_PRF_SIDECAR_MAX_PAYLOAD_BYTES",
     "SEEKTALENT_PRF_SIDECAR_BAKEOFF_PROMOTED",
 }
+REMOVED_LIEPIN_OPENCLI_CLEANUP_ENV_KEYS = {
+    "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
+    "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
+}
+REMOVED_LIEPIN_OPENCLI_CLEANUP_INIT_KEYS = {
+    "liepin_opencli_idle_" + "close_seconds",
+    "liepin_opencli_close_" + "blank_window",
+}
 
 
 def load_process_env(env_file: str | Path = ".env") -> None:
@@ -161,6 +169,10 @@ class TextLLMConfigMigrationError(ValueError):
 
 class PRFConfigMigrationError(ValueError):
     """Raised when removed PRF config surfaces are still present."""
+
+
+class LiepinOpenCliCleanupConfigMigrationError(ValueError):
+    """Raised when removed Liepin OpenCLI cleanup config surfaces are still present."""
 
 
 @dataclass(frozen=True)
@@ -429,6 +441,34 @@ def _scan_removed_prf_inputs(
         )
 
 
+def _scan_removed_liepin_opencli_cleanup_inputs(
+    *,
+    env_file: str | Path | None,
+    init_data: Mapping[str, object],
+    include_default_env_file: bool,
+) -> None:
+    sources: list[Mapping[str, str]] = [dict(os.environ)]
+    if include_default_env_file:
+        sources.append(_read_env_kv_pairs(".env"))
+    if env_file is not None:
+        sources.append(_read_env_kv_pairs(env_file))
+
+    removed_keys = [
+        key for source in sources for key in sorted(REMOVED_LIEPIN_OPENCLI_CLEANUP_ENV_KEYS) if key in source
+    ]
+    removed_keys.extend(
+        key
+        for key in sorted(REMOVED_LIEPIN_OPENCLI_CLEANUP_INIT_KEYS)
+        if key in init_data and init_data.get(key) is not None
+    )
+    if removed_keys:
+        detail = ", ".join(dict.fromkeys(removed_keys))
+        raise LiepinOpenCliCleanupConfigMigrationError(
+            "removed Liepin OpenCLI cleanup config detected: "
+            f"{detail}. Remove stale OpenCLI tab-cleanup settings; Liepin tab cleanup automation has been removed."
+        )
+
+
 def _packaged_runtime_forces_prod() -> bool:
     return os.environ.get("SEEKTALENT_PACKAGED") == "1" or bool(getattr(sys, "frozen", False))
 
@@ -450,6 +490,11 @@ class AppSettings(BaseSettings):
             include_default_env_file=env_file is ENV_FILE_SENTINEL,
         )
         _scan_removed_prf_inputs(
+            env_file=scan_env_file,
+            init_data=data,
+            include_default_env_file=env_file is ENV_FILE_SENTINEL,
+        )
+        _scan_removed_liepin_opencli_cleanup_inputs(
             env_file=scan_env_file,
             init_data=data,
             include_default_env_file=env_file is ENV_FILE_SENTINEL,
