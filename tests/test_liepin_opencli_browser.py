@@ -1970,10 +1970,6 @@ def test_state_classifier_blocks_login_and_risk_pages_before_next_action() -> No
     assert classify_liepin_state(url="https://www.liepin.com/resume/detail/123", text="候选人详情") == (
         "liepin_opencli_unknown_modal"
     )
-    assert classify_liepin_state(
-        url="https://h.liepin.com/search/getConditionItem#session",
-        text="新增人才\n新增人选",
-    ) == "liepin_opencli_unknown_modal"
 
 
 def test_state_classifier_does_not_block_recruiter_search_page_copy() -> None:
@@ -1981,6 +1977,41 @@ def test_state_classifier_does_not_block_recruiter_search_page_copy() -> None:
         classify_liepin_state(
             url="https://h.liepin.com/search/getConditionItem#session",
             text="找简历\n你好，夏诚\n安全退出\n使用本机 Chrome 登录态",
+        )
+        is None
+    )
+
+
+def test_state_classifier_ignores_hidden_add_resume_drawer_on_search_page() -> None:
+    state_text = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "<span>包含全部关键词</span>\n"
+        "[27]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[30]<button><span>搜 索</span></button>\n"
+        "<div id=addResume />\n"
+        "<div>新增人才</div>\n"
+        "<form name=form />\n"
+        "<input name=chineseName autocomplete=off placeholder=姓名 />"
+    )
+
+    assert classify_liepin_state(url=LIEPIN_SEARCH_URL, text=state_text) is None
+
+
+def test_state_classifier_allows_owned_liepin_resume_detail_page() -> None:
+    state_text = (
+        "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&type=normal\n"
+        "<span>候选人详情</span>\n"
+        "<button><span>立即沟通</span></button>\n"
+        "<button><span>查看联系方式</span></button>\n"
+        "<button><span>下载简历</span></button>\n"
+        "<div id=addResume />\n"
+        "<div>新增人才</div>"
+    )
+
+    assert (
+        classify_liepin_state(
+            url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&type=normal",
+            text=state_text,
         )
         is None
     )
@@ -2005,6 +2036,28 @@ def test_state_blocks_forbidden_url_before_reading_page_text() -> None:
         "terminal": True,
     }
     assert commands.calls == [("opencli", "browser", "seektalent-liepin", "get", "url")]
+
+
+def test_state_reads_owned_liepin_resume_detail_page_without_click_allowing_actions() -> None:
+    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&type=normal"
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): detail_url,
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "候选人详情\n"
+                "[15]<button><span>立即沟通</span></button>\n"
+                "[20]<button><span>查看联系方式</span></button>\n"
+                "[30]<button><span>下载简历</span></button>"
+            ),
+        }
+    )
+
+    result = _runner(commands).state()
+
+    assert result.ok is True
+    payload = result.to_tool_payload()
+    assert payload["observation"]["terminal"] is False
+    assert "allowedClickRefs" not in payload["observation"]
 
 
 def test_state_reports_safe_liepin_intercept_as_risk_page_before_reading_text() -> None:
@@ -2575,17 +2628,31 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     assert ("opencli", "browser", "seektalent-liepin", "state") in commands.calls[fill_index + 1 : click_index]
 
 
-def test_search_liepin_cards_blocks_new_candidate_modal_without_closing_or_filling(tmp_path: Path) -> None:
-    modal_state = (
-        "新增人才\n"
-        "新增人选\n"
-        "[88]<button><span>关闭</span></button>\n"
-        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />"
+def test_search_liepin_cards_ignores_add_resume_copy_without_closing_it(tmp_path: Path) -> None:
+    state_before = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>\n"
+        "<div id=addResume />\n"
+        "<div>新增人才</div>\n"
+        "[88]<button><span>关闭</span></button>"
+    )
+    state_after = (
+        "王** 男 40岁 工作14年 硕士 上海\n"
+        "求职期望：上海 数据开发专家\n"
+        "海光集成电路 · 高级主管工程师 2023.10-至今"
     )
     commands = FakeCommands(
         outputs={
             **_current_window_open_outputs(page_id="page-1"),
-            ("opencli", "browser", "seektalent-liepin", "state"): modal_state,
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                state_after,
+                state_after,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
             ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
         }
     )
@@ -2597,11 +2664,10 @@ def test_search_liepin_cards_blocks_new_candidate_modal_without_closing_or_filli
         max_cards=10,
     )
 
-    assert envelope["status"] == "blocked"
-    assert envelope["safe_reason_code"] == "liepin_opencli_unknown_modal"
-    assert ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家") not in commands.calls
+    assert envelope["status"] == "succeeded"
+    assert ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "29") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "click", "88") not in commands.calls
-    assert all(call[3] != "fill" for call in commands.calls if len(call) > 3)
 
 
 def test_search_liepin_cards_probes_around_search_and_filter_mutations(tmp_path: Path) -> None:

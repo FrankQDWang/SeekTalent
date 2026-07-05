@@ -191,7 +191,7 @@ def classify_liepin_state(*, url: str, text: str) -> str | None:
         return "liepin_opencli_risk_page"
     if host not in LIEPIN_ALLOWED_HOSTS:
         return "liepin_opencli_host_blocked"
-    if _is_forbidden_liepin_url(url):
+    if _is_forbidden_liepin_url(url) and not _is_allowed_liepin_resume_detail_url(url):
         return "liepin_opencli_unknown_modal"
     if host == "lpt.liepin.com" and ("身份" in text or "请选择" in text):
         return "liepin_opencli_identity_intercept"
@@ -199,20 +199,6 @@ def classify_liepin_state(*, url: str, text: str) -> str | None:
         return "liepin_opencli_login_required"
     if "验证码" in text or "安全验证" in text or "风险提示" in text or re.search(r"\bcaptcha\b", lowered):
         return "liepin_opencli_risk_page"
-    if any(
-        marker in text
-        for marker in (
-            "新增人才",
-            "新增人选",
-            "联系候选人",
-            "查看联系方式",
-            "聊天弹窗",
-            "下载简历",
-            "付费查看",
-            "购买套餐",
-        )
-    ):
-        return "liepin_opencli_unknown_modal"
     return None
 
 
@@ -744,6 +730,13 @@ def _is_forbidden_liepin_url(url: str) -> bool:
     parsed = urlparse(url)
     path = unquote(parsed.path or "").lower()
     return any(fragment in path for fragment in FORBIDDEN_LIEPIN_PATH_FRAGMENTS)
+
+
+def _is_allowed_liepin_resume_detail_url(url: str) -> bool:
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    path = unquote(parsed.path or "").lower()
+    return host == "h.liepin.com" and path.startswith("/resume/showresumedetail")
 
 
 def _positive_int_or_none(value: object) -> int | None:
