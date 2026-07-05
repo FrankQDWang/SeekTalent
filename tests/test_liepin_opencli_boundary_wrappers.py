@@ -339,8 +339,6 @@ def test_liepin_site_adapter_maps_generic_opencli_errors_at_public_boundary(tmp_
 
     class FailingAutomation:
         commands = object()
-        window_counter = object()
-        blank_window_closer = object()
         current_tab_opener = object()
 
         def status(self) -> OpenCliBrowserResult:
@@ -388,8 +386,6 @@ def test_liepin_site_adapter_reobserves_and_retries_stale_ref_once(tmp_path: Pat
 
     class Automation:
         commands = object()
-        window_counter = object()
-        blank_window_closer = object()
         current_tab_opener = object()
 
         def __init__(self) -> None:
@@ -447,8 +443,6 @@ def test_liepin_site_adapter_propagates_persistent_stale_ref_after_single_retry(
 
     class Automation:
         commands = object()
-        window_counter = object()
-        blank_window_closer = object()
         current_tab_opener = object()
 
         def __init__(self) -> None:

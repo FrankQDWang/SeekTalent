@@ -23,6 +23,12 @@ from seektalent.providers.liepin.liepin_opencli_policy import (
 from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
 
 
+_REMOVED_CLEANUP_ENV_KEYS = (
+    "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
+    "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
+)
+
+
 def main() -> int:
     action = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
@@ -46,6 +52,7 @@ def main() -> int:
 
 
 def _runner_from_env() -> LiepinSiteAdapter:
+    _reject_removed_cleanup_env()
     command = tuple(shlex.split(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or DEFAULT_LIEPIN_OPENCLI_COMMAND))
     window_mode = _env_window_mode(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE"))
     allowed_hosts = _json_tuple(
@@ -84,6 +91,11 @@ def _runner_from_env() -> LiepinSiteAdapter:
         site_config=site_config,
         automation=OpenCliBrowserAutomation(config=browser_config),
     )
+
+
+def _reject_removed_cleanup_env() -> None:
+    if any(key in os.environ for key in _REMOVED_CLEANUP_ENV_KEYS):
+        raise OpenCliBrowserError("liepin_opencli_removed_config")
 
 
 def _run_action(runner: LiepinSiteAdapter, action: str, payload: dict[str, object]) -> OpenCliBrowserResult | dict[str, object]:

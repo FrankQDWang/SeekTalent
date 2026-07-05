@@ -15,6 +15,7 @@ from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
+    OpenCliBrowserResult,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
 from seektalent.providers.liepin.liepin_site_payloads import cards_envelope
@@ -4479,6 +4480,35 @@ def test_cli_rejects_removed_cleanup_actions(
     payload = json.loads(capsys.readouterr().out)
     assert payload["action"] == removed_action
     assert payload["safeReasonCode"] == "liepin_opencli_forbidden_command"
+
+
+@pytest.mark.parametrize(
+    "removed_env_key",
+    (
+        "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
+        "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
+    ),
+)
+def test_cli_rejects_removed_cleanup_env_config(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    removed_env_key: str,
+) -> None:
+    monkeypatch.setenv(removed_env_key, "1")
+    monkeypatch.setattr("sys.argv", ["opencli_browser_cli", "status"])
+    monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
+    monkeypatch.setattr(
+        opencli_browser_cli,
+        "_run_action",
+        lambda runner, action, payload: OpenCliBrowserResult(ok=True, action=action),
+    )
+
+    rc = opencli_browser_cli.main()
+
+    assert rc == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == "status"
+    assert payload["safeReasonCode"] == "liepin_opencli_removed_config"
 
 
 def test_cli_search_cards_prints_strict_envelope(
