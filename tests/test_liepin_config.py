@@ -100,6 +100,18 @@ def test_removed_liepin_opencli_cleanup_init_kwargs_are_rejected(init_key: str) 
         AppSettings(_env_file=None, **{init_key: 1})
 
 
+@pytest.mark.parametrize(
+    "init_key",
+    (
+        "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
+        "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
+    ),
+)
+def test_removed_liepin_opencli_cleanup_env_style_init_kwargs_are_rejected(init_key: str) -> None:
+    with pytest.raises(ValueError, match="removed Liepin OpenCLI cleanup config"):
+        AppSettings(_env_file=None, **{init_key: "1"})
+
+
 def test_liepin_detail_targets_are_small_opencli_task_targets() -> None:
     settings = AppSettings(
         _env_file=None,

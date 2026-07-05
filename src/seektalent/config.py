@@ -457,9 +457,14 @@ def _scan_removed_liepin_opencli_cleanup_inputs(
         key for source in sources for key in sorted(REMOVED_LIEPIN_OPENCLI_CLEANUP_ENV_KEYS) if key in source
     ]
     removed_keys.extend(
-        key
-        for key in sorted(REMOVED_LIEPIN_OPENCLI_CLEANUP_INIT_KEYS)
-        if key in init_data and init_data.get(key) is not None
+        str(key)
+        for key, value in init_data.items()
+        if value is not None
+        and not str(key).startswith("_")
+        and (
+            str(key) in REMOVED_LIEPIN_OPENCLI_CLEANUP_INIT_KEYS
+            or _env_key_for_init_key(str(key)) in REMOVED_LIEPIN_OPENCLI_CLEANUP_ENV_KEYS
+        )
     )
     if removed_keys:
         detail = ", ".join(dict.fromkeys(removed_keys))
