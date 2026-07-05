@@ -18,7 +18,7 @@
 - Remove cleanup-tab automation from this module. User-owned manual tab closing is the expected behavior.
 - Do not classify allowed recruiter search/result pages as terminal just because the URL path contains `resume`.
 - `session_status()` must perform real OpenCLI/Liepin preflight and return raw `liepin_opencli_*` reason codes.
-- Local lease, owned-marker, and agent-event JSON writes must use cross-process file locks.
+- Local lease, owned-marker, agent-event, and collected-resume JSON updates must use cross-process file locks around the full read-modify-write transaction.
 
 ## File Structure
 
@@ -38,6 +38,27 @@
 - Modify `src/seektalent/config.py`, `src/seektalent_ui/server.py`, `src/seektalent/cli.py`, and `src/seektalent/liepin_smoke_cli.py`: remove `managed_local` from user-facing mode choices and keep preflight reason propagation raw.
 - Modify `src/seektalent/dev_mode.py` and `src/seektalent_ui/workbench_liepin_start_probe.py`: use real OpenCLI readiness and raw reason codes.
 - Update focused tests under `tests/test_opencli_launcher.py`, `tests/test_liepin_opencli_browser.py`, `tests/test_liepin_opencli_worker_client.py`, `tests/test_liepin_config.py`, `tests/test_liepin_opencli_local_setup.py`, `tests/test_liepin_boundaries.py`, `tests/test_liepin_worker_client.py`, `tests/test_liepin_provider_adapter.py`, `tests/test_workbench_liepin_browser_session_probe.py`, and `tests/test_liepin_runtime_source_lane.py`.
+
+---
+
+### Task 0: Lock The Corrected Invariants Before Implementation
+
+**Files:**
+- Modify: this plan only during planning review.
+- Modify: `docs/superpowers/specs/2026-07-05-liepin-opencli-runtime-hardening-design.md`
+
+- [ ] **Step 1: Enforce these invariants before editing product code**
+
+These are build blockers, not implementation suggestions:
+
+- `session_status()` must prepare the canonical recruiter search surface with `open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)` before deciding readiness. It must not block just because the active Chrome tab was initially GitHub, Baidu, blank, or another non-Liepin page.
+- Ready `SessionStatus` must not echo the caller's requested `provider_account_hash`. Until a reliable Liepin account DOM probe exists, OpenCLI local mode reports a stable local browser-profile subject and Workbench treats it as browser-profile binding, not actual Liepin account identity proof.
+- Known recruiter search surface URLs are non-terminal after login/risk/identity checks, even without result DOM. DOM evidence improves readiness, but lack of `resultList` must not turn `/resume/search` into `unknown_modal`.
+- `state()` classifies against `_state_url(output) or current_url`, not only the earlier `get_url()` result.
+- `agent-events.json` keeps the dict schema `{"schema_version": "seektalent.opencli_agent_events.v1", "events": [...]}`.
+- Locks cover the full read-modify-write transaction for lease, owned-page markers, agent events, and collected resumes.
+- Workbench start-probe raw reason validation imports the authoritative Liepin worker reason set instead of maintaining a partial duplicate set.
+- `liepin_opencli_bootstrap_failed` is implemented end-to-end, including Python launcher stderr from browser commands, or it must be removed from error handling and acceptance. This plan keeps it and implements it.
 
 ---
 
@@ -101,6 +122,14 @@ Change:
 "@jackwener/opencli": "1.8.6"
 ```
 
+Verify that the package exists before changing the lockfile:
+
+```bash
+corepack pnpm --dir apps/web-react view @jackwener/opencli@1.8.6 version
+```
+
+Expected: prints `1.8.6`.
+
 Run:
 
 ```bash
@@ -109,13 +138,26 @@ corepack pnpm --dir apps/web-react install --lockfile-only
 
 Expected: `apps/web-react/pnpm-lock.yaml` records `@jackwener/opencli` specifier and resolved version as `1.8.6`.
 
-- [ ] **Step 5: Change dev startup to use the managed launcher**
+- [ ] **Step 5: Change dev startup to use the managed launcher without unsafe shell parsing**
 
-In `scripts/start-dev-workbench.sh`, replace the `OPENCLI_BIN` variable and direct calls with a command array:
+In `scripts/start-dev-workbench.sh`, replace the `OPENCLI_BIN` variable and direct calls with a command array. The default path is a fixed Bash array, not a free-text command parse:
 
 ```bash
-OPENCLI_COMMAND_TEXT="${SEEKTALENT_LIEPIN_OPENCLI_COMMAND:-uv run python -m seektalent.opencli_launcher}"
-read -r -a OPENCLI_CMD <<< "$OPENCLI_COMMAND_TEXT"
+OPENCLI_COMMAND_TEXT="${SEEKTALENT_LIEPIN_OPENCLI_COMMAND:-}"
+if [[ -z "$OPENCLI_COMMAND_TEXT" ]]; then
+  OPENCLI_CMD=(uv run python -m seektalent.opencli_launcher)
+  OPENCLI_COMMAND_TEXT="uv run python -m seektalent.opencli_launcher"
+else
+  mapfile -d '' -t OPENCLI_CMD < <(
+    uv run python - "$OPENCLI_COMMAND_TEXT" <<'PY'
+import shlex
+import sys
+
+for part in shlex.split(sys.argv[1]):
+    print(part, end="\0")
+PY
+  )
+fi
 
 opencli_cmd() {
   "${OPENCLI_CMD[@]}" "$@"
@@ -143,6 +185,7 @@ Run:
 
 ```bash
 pytest tests/test_opencli_launcher.py tests/test_liepin_opencli_local_setup.py -q
+corepack pnpm --dir apps/web-react install --frozen-lockfile
 rg -n "1\\.8\\.0|1\\.8\\.3|@jackwener/opencli" src apps/web-react tests scripts -g '!apps/web-react/node_modules/**'
 ```
 
@@ -362,6 +405,28 @@ def test_state_reads_dom_before_classifying_resume_search_url() -> None:
 
     assert result.ok is True
     assert ("opencli", "browser", "seektalent-liepin", "state") in commands.calls
+
+
+def test_classifier_allows_recruiter_search_surface_initial_state_without_result_dom() -> None:
+    state_text = "URL: https://h.liepin.com/resume/search\n页面加载中"
+
+    assert classify_liepin_state(url="https://h.liepin.com/resume/search", text=state_text) is None
+
+
+def test_state_classifies_against_url_reported_by_state_output() -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/resume/detail?id=old",
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://h.liepin.com/resume/search\n"
+                "页面加载中"
+            ),
+        }
+    )
+
+    result = _runner(commands).state()
+
+    assert result.ok is True
 ```
 
 Replace the old forbidden-before-reading test with:
@@ -390,7 +455,7 @@ Run:
 pytest tests/test_liepin_opencli_browser.py -k "resume_search_surface or reads_dom" -q
 ```
 
-Expected: FAIL because `resume/search` is classified as `liepin_opencli_unknown_modal` and `state()` returns before reading DOM.
+Expected: FAIL because `resume/search` is classified as `liepin_opencli_unknown_modal`, `state()` returns before reading DOM, or `state()` classifies against the stale `get_url()` result instead of the URL reported by `state`.
 
 - [ ] **Step 3: Add shared search-surface policy**
 
@@ -453,7 +518,7 @@ def classify_liepin_state(*, url: str, text: str) -> str | None:
         return "liepin_opencli_login_required"
     if "验证码" in text or "安全验证" in text or "风险提示" in text or re.search(r"\bcaptcha\b", lowered):
         return "liepin_opencli_risk_page"
-    if _is_liepin_recruiter_search_surface(url) and _looks_like_liepin_search_result_surface(text):
+    if _is_liepin_recruiter_search_surface(url):
         return None
     if _is_forbidden_liepin_url(url) and not _is_allowed_liepin_resume_detail_url(url):
         return "liepin_opencli_unknown_modal"
@@ -469,11 +534,12 @@ def state(self) -> OpenCliBrowserResult:
     current_url = self._current_url()
     output = self._run_browser_command("state", ())
     observation = build_observation(output)
-    terminal_reason = classify_liepin_state(url=current_url, text=output)
+    observed_url = _state_url(output) or current_url
+    terminal_reason = classify_liepin_state(url=observed_url, text=output)
     observation["terminal"] = terminal_reason is not None
 ```
 
-Do not call `classify_liepin_state(url=current_url, text="")` for allowed Liepin hosts.
+Do not call `classify_liepin_state(url=current_url, text="")` for allowed Liepin hosts. Use the state-output URL when OpenCLI provides one, because `get_url()` and `state()` can observe different pages during Liepin redirects.
 
 - [ ] **Step 7: Update search URL readiness**
 
@@ -513,11 +579,11 @@ Update `tests/test_liepin_config.py` expected defaults to include both URLs.
 Run:
 
 ```bash
-pytest tests/test_liepin_opencli_browser.py -k "state_classifier or reads_dom or resume_search_surface or search_url" -q
+pytest tests/test_liepin_opencli_browser.py -k "state_classifier or reads_dom or resume_search_surface or search_url or state_output" -q
 pytest tests/test_liepin_config.py -q
 ```
 
-Expected: PASS. Existing detail URL tests should still block `www.liepin.com/resume/detail/...` after DOM is read.
+Expected: PASS. Known recruiter search surfaces are non-terminal even without result DOM after login/risk/identity checks. Existing detail URL tests should still block `www.liepin.com/resume/detail/...` after DOM is read.
 
 Commit:
 
@@ -536,6 +602,7 @@ git commit -m "fix: classify Liepin recruiter search surfaces by DOM"
 - Modify: `src/seektalent/providers/liepin/opencli_worker_client.py`
 - Modify: `src/seektalent/providers/liepin/liepin_site_adapter.py`
 - Modify: `src/seektalent_ui/workbench_liepin_start_probe.py`
+- Test: `tests/test_liepin_opencli_browser.py`
 - Test: `tests/test_liepin_opencli_worker_client.py`
 - Test: `tests/test_workbench_liepin_browser_session_probe.py`
 
@@ -585,9 +652,68 @@ def test_opencli_worker_session_status_delegates_to_retriever_probe() -> None:
 
     assert status == expected
     assert retriever.calls == [("session_status", "liepin-opencli", None)]
+
+
+def test_opencli_worker_session_status_does_not_echo_requested_provider_hash() -> None:
+    expected = SessionStatus(
+        connectionId="liepin-opencli",
+        status="ready",
+        providerAccountHash="liepin-opencli-local-browser-profile",
+        safeReasonCode="configured",
+        currentUrl="https://h.liepin.com/search/getConditionItem#session",
+        searchSurfaceReady=True,
+    )
+    retriever = FakeRetriever(calls=[], session_status_value=expected)
+    client = LiepinOpenCliWorkerClient(
+        retriever=retriever,
+        connection_id="liepin-opencli",
+        provider_account_hash="local-opencli",
+    )
+
+    status = asyncio.run(
+        client.session_status(
+            connection_id="liepin-opencli",
+            provider_account_hash="workbench-bound-real-account-hash",
+        )
+    )
+
+    assert status.provider_account_hash == "liepin-opencli-local-browser-profile"
+    assert retriever.calls == [("session_status", "liepin-opencli", "workbench-bound-real-account-hash")]
 ```
 
 Import `SessionStatus` in the test file.
+
+Add to `tests/test_liepin_opencli_browser.py`:
+
+```python
+def test_session_status_probe_prepares_search_surface_from_non_liepin_active_tab() -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "daemon", "status"): "Daemon: running\nExtension: connected\n",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [
+                "https://github.com/",
+                LIEPIN_SEARCH_URL,
+                LIEPIN_SEARCH_URL,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                f"URL: {LIEPIN_SEARCH_URL}\n"
+                "<span>包含全部关键词</span>\n"
+                "[27]<input type=search autocomplete=off role=combobox id=rc_select_1 />"
+            ),
+        }
+    )
+
+    status = _runner(commands).session_status_probe(
+        connection_id="liepin-opencli",
+        provider_account_hash="caller-hash-that-must-not-be-echoed",
+    )
+
+    assert status.status == "ready"
+    assert status.provider_account_hash == "liepin-opencli-local-browser-profile"
+    assert status.current_url == LIEPIN_SEARCH_URL
+    assert status.search_surface_ready is True
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL) in commands.calls
+```
 
 - [ ] **Step 2: Extend `SessionStatus` contract**
 
@@ -612,7 +738,11 @@ class SessionStatus(BaseModel):
 Add to `LiepinSiteAdapter`:
 
 ```python
+OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT = "liepin-opencli-local-browser-profile"
+
+
 def session_status_probe(self, *, connection_id: str, provider_account_hash: str | None) -> SessionStatus:
+    del provider_account_hash
     status = self.status()
     if not status.ok:
         return SessionStatus(
@@ -621,9 +751,26 @@ def session_status_probe(self, *, connection_id: str, provider_account_hash: str
             providerAccountHash=None,
             safeReasonCode=status.safe_reason_code,
         )
+
+    try:
+        opened = self.open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)
+    except OpenCliBrowserError as exc:
+        return SessionStatus(
+            connectionId=connection_id,
+            status=_session_status_for_liepin_reason(exc.safe_reason_code),
+            providerAccountHash=None,
+            safeReasonCode=exc.safe_reason_code,
+        )
+    if not opened.ok:
+        return SessionStatus(
+            connectionId=connection_id,
+            status=_session_status_for_liepin_reason(opened.safe_reason_code),
+            providerAccountHash=None,
+            safeReasonCode=opened.safe_reason_code,
+        )
+
     current_url = ""
     try:
-        current_url = self._current_url()
         state = self.state()
     except OpenCliBrowserError as exc:
         return SessionStatus(
@@ -633,6 +780,8 @@ def session_status_probe(self, *, connection_id: str, provider_account_hash: str
             safeReasonCode=exc.safe_reason_code,
             currentUrl=current_url or None,
         )
+    state_text = state.private_output or str(state.observation.get("text") or "")
+    current_url = _state_url(state_text) or self._current_url()
     if not state.ok:
         return SessionStatus(
             connectionId=connection_id,
@@ -641,29 +790,32 @@ def session_status_probe(self, *, connection_id: str, provider_account_hash: str
             safeReasonCode=state.safe_reason_code,
             currentUrl=current_url or None,
         )
-    state_text = state.private_output or str(state.observation.get("text") or "")
     search_ready = _is_liepin_recruiter_search_surface(current_url)
     result_ready = _looks_like_liepin_search_result_surface(state_text)
-    if not search_ready and not result_ready:
+    if not search_ready:
         return SessionStatus(
             connectionId=connection_id,
-            status="login_required",
+            status="missing",
             providerAccountHash=None,
-            safeReasonCode="liepin_opencli_login_required",
+            safeReasonCode="liepin_opencli_search_not_ready",
             currentUrl=current_url or None,
             searchSurfaceReady=False,
-            resultSurfaceReady=False,
+            resultSurfaceReady=result_ready,
         )
     return SessionStatus(
         connectionId=connection_id,
         status="ready",
-        providerAccountHash=provider_account_hash or "liepin-opencli-local",
+        providerAccountHash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
         safeReasonCode="configured",
         currentUrl=current_url or None,
         searchSurfaceReady=search_ready,
         resultSurfaceReady=result_ready,
     )
 ```
+
+This probe intentionally changes browser state by opening or reusing the canonical recruiter search surface. That is acceptable because the Workbench start probe is meant to prove that a Liepin search can begin. It must not reject a user just because their currently active Chrome tab started somewhere else.
+
+`OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT` is a browser-profile binding subject, not a real Liepin account identity. Do not copy `provider_account_hash` from the request into the ready response unless a future DOM probe reads and hashes a real provider account subject.
 
 Add helper:
 
@@ -720,6 +872,26 @@ async def session_status(
 
 - [ ] **Step 6: Preserve raw reason codes in Workbench start probe**
 
+Replace the local hand-maintained reason set with an imported authoritative Liepin set:
+
+```python
+from seektalent.sources.liepin.reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
+
+RUNTIME_SOURCE_REASON_CODES = {
+    "blocked_backend_unavailable",
+    "failed_provider_error",
+    "login_required",
+    "partial_timeout",
+    "cancelled_by_user",
+    "liepin_connection_not_connected",
+    "liepin_browser_login_required",
+    "liepin_browser_probe_unavailable",
+    "liepin_browser_account_mismatch",
+    "runtime_failed",
+    *LIEPIN_WORKER_SAFE_REASON_CODES,
+}
+```
+
 Add helper to `src/seektalent_ui/workbench_liepin_start_probe.py`:
 
 ```python
@@ -739,11 +911,14 @@ warning_message = liepin_start_probe_warning_message(warning_code)
 
 Pass `warning_code` and `warning_message` to `_mark_login_required()`. Return `LiepinStartProbeResult(ready=False, reason_code=warning_code, warning_message=warning_message)`.
 
+When `status.status == "ready"`, Workbench may bind/check `status.provider_account_hash` as the OpenCLI local browser-profile subject. It must not treat that value as a verified real Liepin account subject unless `SessionStatus` later gains an explicit provider-account identity proof field backed by DOM evidence.
+
 - [ ] **Step 7: Verify session preflight**
 
 Run:
 
 ```bash
+pytest tests/test_liepin_opencli_browser.py -k "session_status_probe" -q
 pytest tests/test_liepin_opencli_worker_client.py tests/test_workbench_liepin_browser_session_probe.py -q
 ```
 
@@ -752,7 +927,7 @@ Expected: PASS. The fake-ready behavior is gone; tests assert raw `liepin_opencl
 Commit:
 
 ```bash
-git add src/seektalent/providers/liepin/worker_contracts.py src/seektalent/providers/liepin/opencli_retriever.py src/seektalent/providers/liepin/opencli_worker_client.py src/seektalent/providers/liepin/liepin_site_adapter.py src/seektalent_ui/workbench_liepin_start_probe.py tests/test_liepin_opencli_worker_client.py tests/test_workbench_liepin_browser_session_probe.py
+git add src/seektalent/providers/liepin/worker_contracts.py src/seektalent/providers/liepin/opencli_retriever.py src/seektalent/providers/liepin/opencli_worker_client.py src/seektalent/providers/liepin/liepin_site_adapter.py src/seektalent_ui/workbench_liepin_start_probe.py tests/test_liepin_opencli_browser.py tests/test_liepin_opencli_worker_client.py tests/test_workbench_liepin_browser_session_probe.py
 git commit -m "fix: probe real Liepin OpenCLI session readiness"
 ```
 
@@ -882,7 +1057,7 @@ Run:
 
 ```bash
 pytest tests/test_liepin_config.py tests/test_liepin_worker_client.py tests/test_liepin_provider_adapter.py tests/test_liepin_boundaries.py tests/test_liepin_runtime_source_lane.py tests/test_runtime_source_lanes.py -q
-rg -n "managed_local|worker_compat" src tests
+rg -n '"managed_local"|managed_local|worker_compat' src tests apps scripts
 ```
 
 Expected: pytest PASS. `rg` has no live `managed_local` compatibility path except historical docs/plans if searched.
@@ -896,7 +1071,7 @@ git commit -m "refactor: remove managed_local Liepin compatibility mode"
 
 ---
 
-### Task 6: Lock Lease, Owned-Page Marker, And Agent-Event JSON Updates
+### Task 6: Lock Liepin OpenCLI Local JSON State Updates
 
 **Files:**
 - Create: `src/seektalent/providers/liepin/opencli_local_state.py`
@@ -904,7 +1079,7 @@ git commit -m "refactor: remove managed_local Liepin compatibility mode"
 - Test: `tests/test_liepin_opencli_local_state.py`
 - Test: `tests/test_liepin_opencli_browser.py`
 
-- [ ] **Step 1: Add failing tests for locked JSON updates**
+- [ ] **Step 1: Add failing tests for locked JSON updates and preserved schemas**
 
 Create `tests/test_liepin_opencli_local_state.py`:
 
@@ -919,14 +1094,23 @@ from seektalent.providers.liepin.opencli_local_state import locked_json_update
 
 
 def test_locked_json_update_preserves_concurrent_appends(tmp_path: Path) -> None:
-    path = tmp_path / "events.json"
+    path = tmp_path / "agent-events.json"
 
     def append_event(index: int) -> None:
-        def update(value: object) -> list[dict[str, int]]:
-            events = value if isinstance(value, list) else []
-            return [*events, {"index": index}]
+        def update(value: object) -> dict[str, object]:
+            loaded = value if isinstance(value, dict) else {}
+            raw_events = loaded.get("events")
+            events = raw_events if isinstance(raw_events, list) else []
+            return {
+                "schema_version": "seektalent.opencli_agent_events.v1",
+                "events": [*events, {"index": index}],
+            }
 
-        locked_json_update(path, default=[], update=update)
+        locked_json_update(
+            path,
+            default={"schema_version": "seektalent.opencli_agent_events.v1", "events": []},
+            update=update,
+        )
 
     threads = [threading.Thread(target=append_event, args=(index,)) for index in range(25)]
     for thread in threads:
@@ -934,8 +1118,34 @@ def test_locked_json_update_preserves_concurrent_appends(tmp_path: Path) -> None
     for thread in threads:
         thread.join()
 
-    events = json.loads(path.read_text(encoding="utf-8"))
-    assert sorted(event["index"] for event in events) == list(range(25))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "seektalent.opencli_agent_events.v1"
+    assert sorted(event["index"] for event in payload["events"]) == list(range(25))
+
+
+def test_locked_json_update_preserves_dict_schema(tmp_path: Path) -> None:
+    path = tmp_path / "agent-events.json"
+
+    def update(value: object) -> dict[str, object]:
+        loaded = value if isinstance(value, dict) else {}
+        raw_events = loaded.get("events")
+        events = raw_events if isinstance(raw_events, list) else []
+        return {
+            "schema_version": "seektalent.opencli_agent_events.v1",
+            "events": [*events, {"action_kind": "observe"}],
+        }
+
+    locked_json_update(
+        path,
+        default={"schema_version": "seektalent.opencli_agent_events.v1", "events": []},
+        update=update,
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload == {
+        "schema_version": "seektalent.opencli_agent_events.v1",
+        "events": [{"action_kind": "observe"}],
+    }
 ```
 
 - [ ] **Step 2: Run the failing test**
@@ -956,12 +1166,11 @@ Create `src/seektalent/providers/liepin/opencli_local_state.py`:
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TypeVar
-
-import fcntl
 
 
 T = TypeVar("T")
@@ -972,11 +1181,40 @@ def opencli_state_lock(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(f"{path.name}.lock")
     with lock_path.open("a+", encoding="utf-8") as lock_file:
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        _lock_file(lock_file)
         try:
             yield
         finally:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            _unlock_file(lock_file)
+
+
+def _lock_file(lock_file) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    raise RuntimeError("liepin_opencli_file_lock_unsupported")
+
+
+def _unlock_file(lock_file) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        return
 
 
 def locked_json_update(path: Path, *, default: object, update: Callable[[object], object]) -> object:
@@ -993,7 +1231,7 @@ def locked_json_update(path: Path, *, default: object, update: Callable[[object]
         return next_value
 ```
 
-- [ ] **Step 4: Use locks in adapter state writes**
+- [ ] **Step 4: Use locks around complete adapter read-modify-write transactions**
 
 In `liepin_site_adapter.py`, import:
 
@@ -1001,7 +1239,7 @@ In `liepin_site_adapter.py`, import:
 from seektalent.providers.liepin.opencli_local_state import locked_json_update, opencli_state_lock
 ```
 
-Wrap lease writes:
+Wrap lease writes and deletes, but do not rely on write-only locking for read-modify-write operations:
 
 ```python
 def _write_lease_payload(self, payload: Mapping[str, object]) -> None:
@@ -1022,30 +1260,110 @@ def _delete_lease(self) -> None:
         path.unlink(missing_ok=True)
 ```
 
-Replace `_append_agent_event()` body with:
+Replace `_touch_lease()` so the read, mutation, and write happen under one lock:
+
+```python
+def _touch_lease(self) -> None:
+    path = self._lease_path()
+    with opencli_state_lock(path):
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return
+        except json.JSONDecodeError as exc:
+            raise OpenCliBrowserError("liepin_opencli_lease_malformed") from exc
+        if not isinstance(loaded, dict):
+            raise OpenCliBrowserError("liepin_opencli_lease_malformed")
+        loaded["last_activity_at"] = time.time()
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(loaded, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+```
+
+Replace `_append_agent_event()` body while preserving the existing dict schema:
 
 ```python
 def _append_agent_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
-    path = self._action_trace_events_path(source_run_id)
+    safe_run_id = _safe_artifact_segment(source_run_id)
+    path = self._pi_artifact_path("protected", f"pi-trace/{safe_run_id}/agent-events.json")
 
-    def update(value: object) -> list[object]:
-        events = value if isinstance(value, list) else []
-        return [*events, dict(event)]
+    def update(value: object) -> dict[str, object]:
+        loaded = value if isinstance(value, dict) else {}
+        raw_events = loaded.get("events")
+        events = raw_events if isinstance(raw_events, list) else []
+        return {
+            "schema_version": "seektalent.opencli_agent_events.v1",
+            "events": [*events, dict(event)],
+        }
 
-    locked_json_update(path, default=[], update=update)
+    locked_json_update(
+        path,
+        default={"schema_version": "seektalent.opencli_agent_events.v1", "events": []},
+        update=update,
+    )
 ```
 
 In `_write_owned_page_marker()` and `_forget_owned_page_marker()`, hold `opencli_state_lock(self._owned_pages_path())` across read, mutation, and write.
+
+Replace the collected resume read-append-write in `_capture_liepin_detail_resume()` with a locked upsert helper:
+
+```python
+def _upsert_collected_resume(
+    self,
+    safe_run_id: str,
+    *,
+    rank: int,
+    resume: Mapping[str, object],
+) -> list[dict[str, object]]:
+    path = self._pi_artifact_path("protected", f"pi-detail/{safe_run_id}/collected-resumes.json")
+
+    def update(value: object) -> dict[str, object]:
+        loaded = value if isinstance(value, dict) else {}
+        raw_resumes = loaded.get("resumes")
+        resumes = [dict(item) for item in raw_resumes if isinstance(item, dict)] if isinstance(raw_resumes, list) else []
+        resumes = [item for item in resumes if item.get("provider_rank") != rank]
+        resumes.append(dict(resume))
+        resumes.sort(key=lambda item: _positive_int_or_none(item.get("provider_rank")) or 0)
+        return {
+            "schema_version": "seektalent.opencli_collected_resumes.v1",
+            "resumes": resumes,
+        }
+
+    payload = locked_json_update(
+        path,
+        default={"schema_version": "seektalent.opencli_collected_resumes.v1", "resumes": []},
+        update=update,
+    )
+    raw_resumes = payload.get("resumes") if isinstance(payload, dict) else None
+    if not isinstance(raw_resumes, list):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    return [dict(item) for item in raw_resumes if isinstance(item, dict)]
+```
+
+Then replace:
+
+```python
+resumes = [item for item in self._read_collected_resumes(safe_run_id) if item.get("provider_rank") != rank]
+resumes.append(resume)
+resumes.sort(key=lambda item: _positive_int_or_none(item.get("provider_rank")) or 0)
+self._write_collected_resumes(safe_run_id, resumes)
+```
+
+with:
+
+```python
+resumes = self._upsert_collected_resume(safe_run_id, rank=rank, resume=resume)
+```
 
 - [ ] **Step 5: Verify local state updates**
 
 Run:
 
 ```bash
-pytest tests/test_liepin_opencli_local_state.py tests/test_liepin_opencli_browser.py -k "owned_pages or append_agent_event or lease" -q
+pytest tests/test_liepin_opencli_local_state.py tests/test_liepin_opencli_browser.py -k "owned_pages or append_agent_event or collected_resumes or lease" -q
 ```
 
-Expected: PASS. Existing stale lease and owned-marker recovery tests still pass.
+Expected: PASS. Existing stale lease and owned-marker recovery tests still pass. `agent-events.json` and `collected-resumes.json` remain dict payloads with their existing `schema_version` fields.
 
 Commit:
 
@@ -1183,6 +1501,10 @@ git commit -m "fix: recover Liepin OpenCLI via daemon restart"
 ### Task 8: End-To-End Reason Propagation And Verification
 
 **Files:**
+- Modify: `src/seektalent/opencli_browser/reason_codes.py`
+- Modify: `src/seektalent/opencli_browser/automation.py`
+- Modify: `src/seektalent/providers/liepin/liepin_opencli_policy.py`
+- Modify: `src/seektalent/sources/liepin/reason_codes.py`
 - Modify: `src/seektalent/cli.py`
 - Modify: `src/seektalent/dev_mode.py`
 - Modify: `src/seektalent_ui/workbench_liepin_start_probe.py`
@@ -1241,7 +1563,34 @@ Add missing messages for any new raw reasons used by `session_status()`:
 "liepin_opencli_results_not_ready": "Liepin search results are not ready in the browser.",
 ```
 
-- [ ] **Step 4: Make dev diagnostics more than command existence**
+- [ ] **Step 4: Implement managed launcher bootstrap failure as a real reason**
+
+In `src/seektalent/opencli_browser/reason_codes.py`, add:
+
+```python
+OPENCLI_BOOTSTRAP_FAILED = "opencli_bootstrap_failed"
+```
+
+In `src/seektalent/providers/liepin/liepin_opencli_policy.py`, add the mapping:
+
+```python
+OPENCLI_BOOTSTRAP_FAILED: "liepin_opencli_bootstrap_failed",
+```
+
+In `src/seektalent/sources/liepin/reason_codes.py`, add `liepin_opencli_bootstrap_failed` to `LIEPIN_WORKER_SAFE_REASON_CODES` and map it to `source_browser_backend_unavailable` in public/source-lane maps.
+
+In `OpenCliBrowserAutomation._run()`, detect the Python launcher failure:
+
+```python
+except subprocess.CalledProcessError as exc:
+    output = f"{getattr(exc, 'stdout', None) or getattr(exc, 'output', '') or ''}\n{exc.stderr or ''}"
+    if exc.returncode == 127 and "SeekTalent OpenCLI bootstrap failed:" in output:
+        raise OpenCliBrowserError(OPENCLI_BOOTSTRAP_FAILED) from exc
+```
+
+Keep this before generic daemon/status parsing so bootstrap failure does not collapse to `opencli_status_unavailable`.
+
+- [ ] **Step 5: Make dev diagnostics more than command existence**
 
 In `src/seektalent/dev_mode.py`, add a status field that distinguishes command existence from runtime readiness without running browser actions in pure config diagnostics:
 
@@ -1256,20 +1605,21 @@ return _component(
 
 Use the real preflight path in Workbench start checks, not dev diagnostics, so diagnostics do not falsely claim browser readiness.
 
-- [ ] **Step 5: Verify reason propagation**
+- [ ] **Step 6: Verify reason propagation**
 
 Run:
 
 ```bash
 pytest tests/test_liepin_cli.py tests/test_liepin_opencli_local_setup.py tests/test_workbench_liepin_browser_session_probe.py tests/test_runtime_public_event_contract.py -q
+rg -n "RUNTIME_SOURCE_REASON_CODES = \\{" src/seektalent_ui/workbench_liepin_start_probe.py
 ```
 
-Expected: PASS. Public runtime events may still publish public-safe reason codes, but Workbench preflight and internal Liepin session status preserve raw `liepin_opencli_*` reasons.
+Expected: PASS. Public runtime events may still publish public-safe reason codes, but Workbench preflight and internal Liepin session status preserve raw `liepin_opencli_*` reasons. The `rg` result should show only a set that composes `LIEPIN_WORKER_SAFE_REASON_CODES`, not a manually duplicated partial Liepin list.
 
 Commit:
 
 ```bash
-git add src/seektalent/cli.py src/seektalent/dev_mode.py src/seektalent_ui/workbench_liepin_start_probe.py tests/test_liepin_cli.py tests/test_liepin_opencli_local_setup.py tests/test_workbench_liepin_browser_session_probe.py tests/test_runtime_public_event_contract.py
+git add src/seektalent/opencli_browser/reason_codes.py src/seektalent/opencli_browser/automation.py src/seektalent/providers/liepin/liepin_opencli_policy.py src/seektalent/sources/liepin/reason_codes.py src/seektalent/cli.py src/seektalent/dev_mode.py src/seektalent_ui/workbench_liepin_start_probe.py tests/test_liepin_cli.py tests/test_liepin_opencli_local_setup.py tests/test_workbench_liepin_browser_session_probe.py tests/test_runtime_public_event_contract.py
 git commit -m "fix: preserve raw Liepin OpenCLI readiness reasons"
 ```
 

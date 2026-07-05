@@ -24,6 +24,8 @@ docs/superpowers/plans/2026-07-05-liepin-opencli-runtime-hardening.md
 - `managed_local` is removed as a live compatibility mode. Live local Liepin is `opencli`.
 - Liepin tab cleanup automation is removed from this module. SeekTalent may leave opened/reused tabs for the user to close manually.
 - Workbench and CLI readiness must expose raw `liepin_opencli_*` reason codes where the failure comes from Liepin/OpenCLI.
+- `session_status()` proves readiness by preparing the canonical recruiter search surface; it must not fail only because Chrome's active tab starts on a non-Liepin page.
+- OpenCLI local mode does not provide reliable Liepin account identity proof unless a future DOM probe can read one. It must not echo the caller's `providerAccountHash` as proof.
 
 ## Current Failure Modes
 
@@ -61,7 +63,7 @@ https://h.liepin.com/search/getConditionItem#session
 
 Liepin can serve recruiter search or result pages under nearby surfaces such as `h.liepin.com/resume/search`. A URL-only terminal check that runs before DOM observation can misclassify a valid search/result page as an unknown modal because the path contains `resume`.
 
-The classifier must treat search/result DOM evidence as stronger than broad forbidden path fragments for known recruiter search surfaces.
+The classifier must treat known recruiter search surface URLs as non-terminal after login/risk/identity checks. Search/result DOM evidence strengthens readiness, but it is not required just to avoid `unknown_modal` on a known search surface.
 
 ### 4. Cleanup Is The Wrong Ownership Model
 
@@ -76,7 +78,7 @@ This module should stop trying to close tabs. Manual user cleanup is the accepte
 
 ### 5. Local State Writes Are Race-Prone
 
-Lease files, owned-page markers, and action trace event files are read-modify-write JSON files. Multiple OpenCLI/Liepin processes can touch them. Atomic replace protects against partial writes, but it does not protect against lost updates when two processes read the same old value and both write a different next value.
+Lease files, owned-page markers, action trace event files, and collected resume files are read-modify-write JSON files. Multiple OpenCLI/Liepin processes can touch them. Atomic replace protects against partial writes, but it does not protect against lost updates when two processes read the same old value and both write a different next value.
 
 ## Goals
 
@@ -146,11 +148,14 @@ The classifier should evaluate in this order:
 1. hard risk host;
 2. allowed host check;
 3. identity, login, captcha, risk markers from DOM text;
-4. known recruiter search/result surface with search/result DOM evidence;
-5. forbidden non-search URL fragments;
-6. no terminal state.
+4. known recruiter search surface URL is non-terminal, even if the page is initial, empty, loading, or on a new Liepin UI variant;
+5. search/result DOM evidence can enhance readiness but is not required to avoid terminal classification for a known search surface;
+6. forbidden non-search URL fragments;
+7. no terminal state.
 
 This means a `resume/search` URL with result-list DOM is allowed, while a non-search `resume/detail` page is still blocked unless it is an explicitly owned/allowed detail surface.
+
+`state()` should classify against the URL observed inside the `state` output when present, falling back to `get_url()` only when state output has no URL. This avoids a race where `get_url()` and `state()` observe different pages during Liepin redirects.
 
 ### 4. Real Session Status Preflight
 
@@ -158,7 +163,8 @@ This means a `resume/search` URL with result-list DOM is allowed, while a non-se
 
 - OpenCLI daemon status;
 - extension connectivity;
-- current URL;
+- ability to open or reuse the canonical recruiter search surface;
+- current URL after that preparation;
 - page state text;
 - login-required markers;
 - recruiter identity or identity-selection intercept;
@@ -172,7 +178,9 @@ The returned `SessionStatus` remains the Workbench contract, but gains OpenCLI/L
 - `searchSurfaceReady`;
 - `resultSurfaceReady`.
 
-`status="ready"` is only valid when the preflight sees a usable recruiter search/result surface or a verified equivalent page state. For local OpenCLI, the provider account subject can remain the local stable subject after real readiness is proven.
+`status="ready"` is only valid when the preflight has opened or reused a usable recruiter search/result surface and then observed a non-terminal page state. The active Chrome tab before preflight starts is not a startup gate.
+
+For local OpenCLI, `providerAccountHash` is a stable local browser-profile subject unless a later implementation can read a real Liepin account subject from the page. It must never be copied from the caller's requested hash. Workbench can bind/check that local browser-profile subject, but it must not present it as proof that the actual Liepin account has not changed.
 
 ### 5. Raw Reason Propagation
 
@@ -206,10 +214,26 @@ Lease and owned-page markers may still exist as active-run coordination state, s
 Use a small local file-lock helper for Liepin OpenCLI JSON state:
 
 - lease writes and deletes;
+- lease read-modify-write touch updates;
 - owned-page marker read-modify-write updates;
-- action trace event appends.
+- action trace event appends;
+- collected resume read-modify-write updates.
 
 The lock should cover the full read-modify-write operation. Atomic replace remains useful, but it is not enough without a cross-process lock.
+
+The helper must preserve existing on-disk schemas. In particular, `agent-events.json` remains:
+
+```json
+{"schema_version":"seektalent.opencli_agent_events.v1","events":[]}
+```
+
+and `collected-resumes.json` remains:
+
+```json
+{"schema_version":"seektalent.opencli_collected_resumes.v1","resumes":[]}
+```
+
+The lock implementation must not make module import fail on non-POSIX platforms. If the product is macOS-only for this release, that constraint belongs in preflight/config; otherwise the lock helper should use a POSIX lock on POSIX and an explicit Windows branch instead of a top-level unconditional `fcntl` import.
 
 ### 8. Compatibility Removal
 
@@ -275,6 +299,7 @@ Does not own:
 - Login, identity, and risk states are not treated as backend unavailable.
 - Malformed helper output remains a helper/backend reason.
 - Unknown removed actions fail closed as `liepin_opencli_forbidden_command`.
+- Managed launcher bootstrap failures raised from the Python OpenCLI wrapper must map to `liepin_opencli_bootstrap_failed`, not generic status unavailable.
 
 No new retry ladder is introduced. The only retained recovery is explicit OpenCLI daemon restart for known daemon/extension stale states.
 
@@ -288,10 +313,13 @@ Focused tests must cover:
 - `resume/search` with result DOM is not terminal.
 - non-search resume detail URLs still block after DOM observation.
 - `session_status()` delegates to real runner preflight.
+- `session_status()` can start from a non-Liepin active tab and still prepare the canonical recruiter search surface.
+- `session_status()` does not echo the caller's requested provider account hash.
 - Workbench preserves raw `liepin_opencli_*` start-probe reasons.
 - `managed_local` is rejected.
 - helper CLI and app settings use the same Liepin policy defaults.
 - concurrent local JSON appends do not lose events.
+- agent-events and collected-resumes files keep their dict schema while being updated under lock.
 
 Verification should include the focused Liepin/OpenCLI suite, boundary tests, static drift checks for removed modes/actions, and a managed launcher smoke command.
 
@@ -303,6 +331,7 @@ Verification should include the focused Liepin/OpenCLI suite, boundary tests, st
 - Workbench cannot mark OpenCLI Liepin as ready without a real browser/Liepin readiness probe.
 - A valid recruiter search/result page under the supported surface family is not blocked by URL-only `resume` path classification.
 - Other-user machine failures report actionable raw reasons such as daemon missing, extension disconnected, login required, identity intercept, risk page, or search not ready.
+- Bootstrap failures from the managed OpenCLI launcher surface as `liepin_opencli_bootstrap_failed`.
 - No new browser backend, modal closer, tab closer, or compatibility fallback is added.
 
 ## Implementation Plan
