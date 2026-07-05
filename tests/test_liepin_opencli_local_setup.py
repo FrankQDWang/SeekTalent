@@ -53,6 +53,13 @@ def test_dev_launcher_uses_liepin_opencli_helper_without_legacy_mcp_adapter() ->
     assert "PNPM_CMD=(corepack pnpm)" in script
 
 
+def test_dev_launcher_uses_managed_opencli_launcher_instead_of_node_modules_binary() -> None:
+    script = Path("scripts/start-dev-workbench.sh").read_text(encoding="utf-8")
+
+    assert "python -m seektalent.opencli_launcher" in script
+    assert "apps/web-react/node_modules/.bin/opencli" not in script
+
+
 def test_dev_launcher_waits_for_backend_before_starting_vite() -> None:
     script = Path("scripts/start-dev-workbench.sh").read_text(encoding="utf-8")
 
