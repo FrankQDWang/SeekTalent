@@ -71,9 +71,9 @@ def test_generic_opencli_browser_contracts_do_not_expose_site_config_fields() ->
         "artifact_root",
         "detail_open_timeout_seconds",
         "allowed_click_refs",
-        "cleanup_worker_enabled",
-        "idle_close_seconds",
-        "close_blank_window",
+        "cleanup_" + "worker_enabled",
+        "idle_" + "close_seconds",
+        "close_" + "blank_window",
     )
 
     assert all(item not in text for item in forbidden)
@@ -83,7 +83,7 @@ def test_generic_opencli_browser_automation_does_not_launch_provider_cleanup_wor
     text = _text(OPENCLI_BROWSER_ROOT / "automation.py")
     forbidden = (
         "launch_idle_cleanup_worker",
-        "watch_idle_lease",
+        "watch_" + "idle_lease",
         "subprocess.Popen",
         "SEEKTALENT_LIEPIN_OPENCLI_",
     )

@@ -78,8 +78,6 @@ def _runner_from_env() -> LiepinSiteAdapter:
         ),
         lease_dir=_optional_path(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR")),
         artifact_root=_optional_path(os.environ.get("SEEKTALENT_PI_ARTIFACT_ROOT")),
-        idle_close_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS") or "120"),
-        close_blank_window=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"), default=False),
     )
     return LiepinSiteAdapter(
         browser_config=browser_config,
@@ -164,12 +162,6 @@ def _run_action(runner: LiepinSiteAdapter, action: str, payload: dict[str, objec
             max_cards=_payload_int(payload, "maxCards", "max_cards", default=10),
             native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else None,
         )
-    if action == "cleanup_idle_lease":
-        return runner.cleanup_idle_lease(force=bool(payload.get("force") or False))
-    if action == "cleanup_orphaned_tabs":
-        return runner.cleanup_orphaned_tabs(force=bool(payload.get("force") or False))
-    if action == "watch_idle_lease":
-        return runner.watch_idle_lease()
     raise OpenCliBrowserError("liepin_opencli_forbidden_command")
 
 

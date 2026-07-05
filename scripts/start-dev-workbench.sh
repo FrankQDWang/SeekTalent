@@ -191,13 +191,6 @@ fi
 
 backend_pid=""
 cleanup() {
-  env \
-    NODE_PATH="$WEB_DIR/node_modules" \
-    PYTHONPATH="$ROOT/src" \
-    SEEKTALENT_LIEPIN_OPENCLI_COMMAND="$OPENCLI_COMMAND_TEXT" \
-    SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR="$WORKSPACE_ROOT/.seektalent/opencli_leases" \
-    uv run python -m seektalent.providers.liepin.opencli_browser_cli cleanup_orphaned_tabs \
-      <<< '{"force":true}' >/dev/null 2>&1 || true
   if [[ -n "$backend_pid" ]]; then
     kill "$backend_pid" 2>/dev/null || true
   fi

@@ -211,8 +211,6 @@ class SourceProviderSettings:
     liepin_opencli_max_cards_per_task: int
     liepin_opencli_timeout_seconds: int
     liepin_opencli_detail_open_timeout_seconds: int
-    liepin_opencli_idle_close_seconds: int
-    liepin_opencli_close_blank_window: bool
     liepin_opencli_pacing_enabled: bool
     liepin_opencli_pacing_min_ms: int
     liepin_opencli_pacing_max_ms: int
@@ -479,8 +477,6 @@ class AppSettings(BaseSettings):
     liepin_opencli_max_cards_per_task: int = 20
     liepin_opencli_timeout_seconds: int = 900
     liepin_opencli_detail_open_timeout_seconds: int = 90
-    liepin_opencli_idle_close_seconds: int = 120
-    liepin_opencli_close_blank_window: bool = False
     liepin_opencli_pacing_enabled: bool = True
     liepin_opencli_pacing_min_ms: int = 700
     liepin_opencli_pacing_max_ms: int = 1800
@@ -768,7 +764,6 @@ class AppSettings(BaseSettings):
                 self.liepin_opencli_max_cards_per_task,
                 self.liepin_opencli_timeout_seconds,
                 self.liepin_opencli_detail_open_timeout_seconds,
-                self.liepin_opencli_idle_close_seconds,
             )
             < 1
         ):
@@ -844,8 +839,6 @@ class AppSettings(BaseSettings):
             liepin_opencli_max_cards_per_task=self.liepin_opencli_max_cards_per_task,
             liepin_opencli_timeout_seconds=self.liepin_opencli_timeout_seconds,
             liepin_opencli_detail_open_timeout_seconds=self.liepin_opencli_detail_open_timeout_seconds,
-            liepin_opencli_idle_close_seconds=self.liepin_opencli_idle_close_seconds,
-            liepin_opencli_close_blank_window=self.liepin_opencli_close_blank_window,
             liepin_opencli_pacing_enabled=self.liepin_opencli_pacing_enabled,
             liepin_opencli_pacing_min_ms=self.liepin_opencli_pacing_min_ms,
             liepin_opencli_pacing_max_ms=self.liepin_opencli_pacing_max_ms,

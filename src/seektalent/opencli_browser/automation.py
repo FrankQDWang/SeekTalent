@@ -25,12 +25,8 @@ from seektalent.opencli_browser.reason_codes import (
 from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
-    BlankChromeWindowCloser,
-    ChromeWindowCounter,
     CurrentChromeTabOpener,
     OpenCliCommandRunner,
-    SubprocessBlankChromeWindowCloser,
-    SubprocessChromeWindowCounter,
     SubprocessCurrentChromeTabOpener,
     SubprocessOpenCliCommandRunner,
     strip_opencli_stdout_notice,
@@ -46,14 +42,10 @@ class OpenCliBrowserAutomation:
         *,
         config: OpenCliBrowserConfig,
         commands: OpenCliCommandRunner | None = None,
-        window_counter: ChromeWindowCounter | None = None,
-        blank_window_closer: BlankChromeWindowCloser | None = None,
         current_tab_opener: CurrentChromeTabOpener | None = None,
     ) -> None:
         self.config = config
         self.commands = commands or SubprocessOpenCliCommandRunner()
-        self.window_counter = window_counter or SubprocessChromeWindowCounter()
-        self.blank_window_closer = blank_window_closer or SubprocessBlankChromeWindowCloser()
         self.current_tab_opener = current_tab_opener or SubprocessCurrentChromeTabOpener(
             reuse_url_fragments=config.current_tab_reuse_url_fragments
         )

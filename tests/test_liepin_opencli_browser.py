@@ -360,27 +360,6 @@ class RefEvalCommands(FakeCommands):
         return super().run(argv, timeout=timeout, env=env)
 
 
-class FakeWindowCounter:
-    def __init__(self, counts: Sequence[int | None] = (1,)) -> None:
-        self._counts = list(counts)
-        self.calls = 0
-
-    def count(self) -> int | None:
-        self.calls += 1
-        if self._counts:
-            return self._counts.pop(0)
-        return 1
-
-
-class FakeBlankWindowCloser:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def close_blank(self) -> bool:
-        self.calls += 1
-        return True
-
-
 class FakeCurrentChromeTabOpener:
     def __init__(self, result: bool = True, commands: FakeCommands | None = None) -> None:
         self.result = result
@@ -413,10 +392,6 @@ def _runner(
     allowed_click_refs: tuple[str, ...] = (),
     lease_dir: Path | None = None,
     detail_open_timeout_seconds: int = 5,
-    idle_close_seconds: int = 120,
-    close_blank_window: bool = True,
-    window_counter: FakeWindowCounter | None = None,
-    blank_window_closer: FakeBlankWindowCloser | None = None,
     current_tab_opener: FakeCurrentChromeTabOpener | None = None,
     pacing_enabled: bool = False,
     pacing_min_ms: int = 0,
@@ -437,9 +412,6 @@ def _runner(
         lease_dir=lease_dir,
         artifact_root=lease_dir,
         detail_open_timeout_seconds=detail_open_timeout_seconds,
-        idle_close_seconds=idle_close_seconds,
-        close_blank_window=close_blank_window,
-        cleanup_worker_enabled=False,
     )
     return LiepinSiteAdapter(
         browser_config=browser_config,
@@ -447,8 +419,6 @@ def _runner(
         automation=OpenCliBrowserAutomation(
             config=browser_config,
             commands=commands,
-            window_counter=window_counter or FakeWindowCounter(),
-            blank_window_closer=blank_window_closer,
             current_tab_opener=current_tab_opener or FakeCurrentChromeTabOpener(commands=commands),
         ),
     )
@@ -1004,8 +974,7 @@ def test_open_liepin_tab_reuses_verified_owned_lease_instead_of_opening_duplicat
         },
     )
     owner_nonce = "nonce-owned-0"
-    blank_window_closer = FakeBlankWindowCloser()
-    runner = _runner(commands, lease_dir=tmp_path, blank_window_closer=blank_window_closer)
+    runner = _runner(commands, lease_dir=tmp_path)
     runner._write_owned_page_marker(
         page_id="page-0",
         url=liepin_url,
@@ -1037,7 +1006,6 @@ def test_open_liepin_tab_reuses_verified_owned_lease_instead_of_opening_duplicat
         ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-0"),
         ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-0", liepin_url),
     ]
-    assert blank_window_closer.calls == 0
     lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
     assert lease["page_id"] == "page-0"
 
@@ -1330,354 +1298,6 @@ def test_open_liepin_tab_keeps_failing_when_bound_page_is_not_liepin(tmp_path: P
     assert error.value.safe_reason_code == "liepin_opencli_tab_response_malformed"
 
 
-def test_cleanup_idle_lease_releases_lease_without_closing_tabs(tmp_path: Path) -> None:
-    liepin_url = "https://h.liepin.com/resume/showresumedetail?id=357"
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
-                f'[{{"id":"page-1","url":"{liepin_url}"}}]',
-                f'[{{"id":"page-1","url":"{liepin_url}"}}]',
-                "[]",
-            ],
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-1"): '{"closed":"page-1"}',
-        }
-    )
-    blank_window_closer = FakeBlankWindowCloser()
-    runner = _runner(commands, lease_dir=tmp_path, blank_window_closer=blank_window_closer)
-    runner._write_owned_page_marker(
-        page_id="page-1",
-        url=liepin_url,
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
-        owner_nonce="nonce-owned-1",
-        opened_at=9_999_999_999.0,
-    )
-    lease_path = tmp_path / "seektalent-liepin.json"
-    lease_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "seektalent.opencli_lease.v1",
-                "session": "seektalent-liepin",
-                "page_id": "page-1",
-                "url": liepin_url,
-                "last_activity_at": 1,
-                "owner_nonce": "nonce-owned-1",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = runner.cleanup_idle_lease(force=True)
-
-    assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0}
-    assert commands.calls == []
-    assert blank_window_closer.calls == 0
-    assert not lease_path.exists()
-    owned_pages = json.loads((tmp_path / "seektalent-liepin-owned-pages.json").read_text(encoding="utf-8"))
-    assert "page-1" in owned_pages
-
-
-def test_cleanup_idle_lease_preserves_owned_search_tab(tmp_path: Path) -> None:
-    liepin_url = "https://h.liepin.com/search/getConditionItem#session"
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): (
-                f'[{{"id":"page-search","url":"{liepin_url}"}}]'
-            ),
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-search"): '{"closed":"page-search"}',
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path, close_blank_window=False)
-    runner._write_owned_page_marker(
-        page_id="page-search",
-        url=liepin_url,
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
-        owner_nonce="nonce-owned-search",
-        opened_at=9_999_999_999.0,
-    )
-    lease_path = tmp_path / "seektalent-liepin.json"
-    lease_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "seektalent.opencli_lease.v1",
-                "session": "seektalent-liepin",
-                "page_id": "page-search",
-                "url": liepin_url,
-                "last_activity_at": 1,
-                "owner_nonce": "nonce-owned-search",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = runner.cleanup_idle_lease(force=True)
-
-    assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0}
-    assert commands.calls == []
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-search") not in commands.calls
-    assert not lease_path.exists()
-
-
-def test_cleanup_idle_lease_skips_close_when_owned_tab_cannot_be_reverified(tmp_path: Path) -> None:
-    liepin_url = "https://h.liepin.com/resume/showresumedetail?id=357"
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
-                f'[{{"id":"page-1","url":"{liepin_url}"}}]',
-                "[]",
-            ],
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-1"): '{"closed":"page-1"}',
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path, close_blank_window=False)
-    runner._write_owned_page_marker(
-        page_id="page-1",
-        url=liepin_url,
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
-        owner_nonce="nonce-owned-1",
-        opened_at=9_999_999_999.0,
-    )
-    (tmp_path / "seektalent-liepin.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "seektalent.opencli_lease.v1",
-                "session": "seektalent-liepin",
-                "page_id": "page-1",
-                "url": liepin_url,
-                "last_activity_at": 1,
-                "owner_nonce": "nonce-owned-1",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = runner.cleanup_idle_lease(force=True)
-
-    assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0}
-    assert commands.calls == []
-
-
-def test_cleanup_idle_lease_does_not_unbind_or_retry_when_close_fails(tmp_path: Path) -> None:
-    liepin_url = "https://h.liepin.com/resume/showresumedetail?id=357"
-    close_error = subprocess.CalledProcessError(
-        returncode=1,
-        cmd=["opencli", "browser", "seektalent-liepin", "tab", "close", "page-1"],
-        stderr="status unavailable",
-    )
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): (f'[{{"id":"page-1","url":"{liepin_url}"}}]'),
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-1"): close_error,
-            ("opencli", "browser", "seektalent-liepin", "unbind"): '{"unbound":true}',
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path, close_blank_window=False)
-    runner._write_owned_page_marker(
-        page_id="page-1",
-        url=liepin_url,
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
-        owner_nonce="nonce-owned-1",
-        opened_at=9_999_999_999.0,
-    )
-    (tmp_path / "seektalent-liepin.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "seektalent.opencli_lease.v1",
-                "session": "seektalent-liepin",
-                "page_id": "page-1",
-                "url": liepin_url,
-                "last_activity_at": 1,
-                "owner_nonce": "nonce-owned-1",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = runner.cleanup_idle_lease(force=True)
-
-    assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0}
-    assert commands.calls == []
-
-
-def test_cleanup_idle_lease_keeps_owned_page_marker_for_user_managed_tabs(tmp_path: Path) -> None:
-    liepin_url = "https://h.liepin.com/resume/showresumedetail?id=357"
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
-                f'[{{"id":"page-1","url":"{liepin_url}"}}]',
-                f'[{{"id":"page-1","url":"{liepin_url}"}}]',
-                "[]",
-            ],
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-1"): '{"closed":"page-1"}',
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path, close_blank_window=False)
-    runner._write_owned_page_marker(
-        page_id="page-1",
-        url=liepin_url,
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
-        owner_nonce="nonce-owned-1",
-        opened_at=9_999_999_999.0,
-    )
-    (tmp_path / "seektalent-liepin.json").write_text(
-        json.dumps(
-            {
-                "schema_version": "seektalent.opencli_lease.v1",
-                "session": "seektalent-liepin",
-                "page_id": "page-1",
-                "url": liepin_url,
-                "last_activity_at": 1,
-                "owner_nonce": "nonce-owned-1",
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = runner.cleanup_idle_lease(force=True)
-
-    assert result.ok is True
-    owned_pages = json.loads((tmp_path / "seektalent-liepin-owned-pages.json").read_text(encoding="utf-8"))
-    assert "page-1" in owned_pages
-
-
-def test_cleanup_idle_lease_does_not_close_without_owned_marker(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-user"): '{"closed":"page-user"}',
-        }
-    )
-    lease_path = tmp_path / "seektalent-liepin.json"
-    lease_path.write_text(
-        json.dumps(
-            {
-                "schema_version": "seektalent.opencli_lease.v1",
-                "session": "seektalent-liepin",
-                "page_id": "page-user",
-                "url": "https://h.liepin.com/search/getConditionItem#session",
-                "last_activity_at": 1,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    result = _runner(commands, lease_dir=tmp_path, close_blank_window=False).cleanup_idle_lease(force=True)
-
-    assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0}
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-user") not in commands.calls
-    assert not lease_path.exists()
-
-
-def test_cleanup_orphaned_tabs_without_lease_never_closes_chrome_tabs(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): json.dumps(
-                [
-                    {"id": "page-owned-1", "url": "https://h.liepin.com/search/getConditionItem#session"},
-                    {"id": "page-user-1", "url": "https://h.liepin.com/search/getConditionItem#session"},
-                    {"id": "page-other-1", "url": "https://example.com/"},
-                ]
-            ),
-            ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-owned-1"): "",
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path, close_blank_window=False)
-    runner._write_owned_page_marker(
-        page_id="page-owned-1",
-        url="https://h.liepin.com/search/getConditionItem#session",
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
-        owner_nonce="nonce-owned-1",
-        opened_at=9_999_999_999.0,
-    )
-
-    result = runner.cleanup_orphaned_tabs(force=True)
-
-    assert result.ok
-    assert result.counts == {"leases": 0, "closedTabs": 0, "blankWindows": 0, "skipped": 1}
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-owned-1") not in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-user-1") not in commands.calls
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-other-1") not in commands.calls
-
-
-def test_cleanup_orphaned_owned_tabs_keeps_tabs_when_force_is_false(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): json.dumps(
-                [{"id": "page-owned-1", "url": "https://h.liepin.com/search/getConditionItem#session"}]
-            )
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path, close_blank_window=False)
-    runner._write_owned_page_marker(
-        page_id="page-owned-1",
-        url="https://h.liepin.com/search/getConditionItem#session",
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
-        owner_nonce="nonce-owned-1",
-        opened_at=9_999_999_999.0,
-    )
-
-    result = runner.cleanup_orphaned_tabs(force=False)
-
-    assert result.ok
-    assert result.counts == {"leases": 0, "closedTabs": 0, "blankWindows": 0}
-    assert commands.calls == []
-
-
-def test_cleanup_orphaned_owned_tabs_ignores_stale_marker(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): json.dumps(
-                [{"id": "page-owned-1", "url": "https://h.liepin.com/search/getConditionItem#session"}]
-            )
-        }
-    )
-    runner = _runner(commands, lease_dir=tmp_path, close_blank_window=False)
-    runner._write_owned_page_marker(
-        page_id="page-owned-1",
-        url="https://h.liepin.com/search/getConditionItem#session",
-        runtime_run_id="run-opencli-test",
-        source_lane_run_id="run-opencli-test:source:liepin:lane:1",
-        owner_nonce="nonce-owned-1",
-        opened_at=1.0,
-    )
-
-    result = runner.cleanup_orphaned_tabs(force=True)
-
-    assert result.ok
-    assert result.counts == {"leases": 0, "closedTabs": 0, "blankWindows": 0, "skipped": 1}
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-owned-1") not in commands.calls
-    assert not (tmp_path / "seektalent-liepin-owned-pages.json").exists()
-
-
-def test_cleanup_orphaned_owned_tabs_never_closes_for_malformed_marker(tmp_path: Path) -> None:
-    commands = FakeCommands(
-        outputs={
-            ("opencli", "browser", "seektalent-liepin", "tab", "list"): json.dumps(
-                [{"id": "page-owned-1", "url": "https://h.liepin.com/search/getConditionItem#session"}]
-            )
-        }
-    )
-    marker_path = tmp_path / "seektalent-liepin-owned-pages.json"
-    marker_path.write_text("{not-json", encoding="utf-8")
-    runner = _runner(commands, lease_dir=tmp_path, close_blank_window=False)
-
-    with pytest.raises(OpenCliBrowserError) as error:
-        runner.cleanup_orphaned_tabs(force=True)
-
-    assert error.value.safe_reason_code == "liepin_opencli_owned_marker_malformed"
-    assert ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-owned-1") not in commands.calls
-
-
 def test_open_liepin_tab_quarantines_malformed_owned_marker_and_writes_fresh_marker(tmp_path: Path) -> None:
     commands = FakeCommands(
         outputs={
@@ -1711,22 +1331,6 @@ def test_open_liepin_tab_quarantines_malformed_lease_and_opens_new_tab(tmp_path:
     lease = json.loads(lease_path.read_text(encoding="utf-8"))
     assert lease["page_id"] == "page-2"
     assert list(tmp_path.glob("seektalent-liepin.json.malformed-*"))
-
-
-def test_cleanup_idle_lease_keeps_active_lease(tmp_path: Path) -> None:
-    commands = FakeCommands()
-    lease_path = tmp_path / "seektalent-liepin.json"
-    lease_path.write_text(
-        json.dumps({"page_id": "page-1", "last_activity_at": 9_999_999_999}),
-        encoding="utf-8",
-    )
-
-    result = _runner(commands, lease_dir=tmp_path).cleanup_idle_lease()
-
-    assert result.ok is True
-    assert result.counts == {"leases": 1, "closed": 0}
-    assert commands.calls == []
-    assert lease_path.exists()
 
 
 def test_fill_rejects_long_or_sensitive_text() -> None:
@@ -4852,26 +4456,21 @@ def test_cli_state_returns_pi_observation(
     assert payload["observation"]["text"] == "搜索职位、公司 [ref=16]"
 
 
-def test_cli_exposes_cleanup_orphaned_tabs(
+def test_cli_rejects_removed_cleanup_actions(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
-    commands = FakeCommands(outputs={("opencli", "browser", "seektalent-liepin", "tab", "list"): "[]"})
-    monkeypatch.setattr("sys.argv", ["opencli_browser_cli", "cleanup_orphaned_tabs"])
+    removed_action = "cleanup_" + "orphaned_tabs"
+    monkeypatch.setattr("sys.argv", ["opencli_browser_cli", removed_action])
     monkeypatch.setattr("sys.stdin", io.StringIO('{"force":true}'))
-    monkeypatch.setattr(
-        opencli_browser_cli,
-        "_runner_from_env",
-        lambda: _runner(commands, lease_dir=tmp_path, close_blank_window=False),
-    )
+    monkeypatch.setattr(opencli_browser_cli, "_runner_from_env", lambda: _runner(FakeCommands()))
 
     rc = opencli_browser_cli.main()
 
-    assert rc == 0
+    assert rc == 1
     payload = json.loads(capsys.readouterr().out)
-    assert payload["action"] == "cleanup_orphaned_tabs"
-    assert payload["counts"] == {"blankWindows": 0, "closedTabs": 0, "leases": 0, "skipped": 0}
+    assert payload["action"] == removed_action
+    assert payload["safeReasonCode"] == "liepin_opencli_forbidden_command"
 
 
 def test_cli_search_cards_prints_strict_envelope(
@@ -4915,13 +4514,9 @@ def test_cli_runner_reads_state_derived_click_refs_from_env(monkeypatch: pytest.
     assert runner._site_config.allowed_click_refs == ("16", "next")
 
 
-def test_cli_runner_reads_idle_cleanup_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cli_runner_reads_lease_dir_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR", str(tmp_path))
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS", "3")
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW", "false")
 
     runner = opencli_browser_cli._runner_from_env()
 
     assert runner._site_config.lease_dir == tmp_path
-    assert runner._site_config.idle_close_seconds == 3
-    assert runner._site_config.close_blank_window is False

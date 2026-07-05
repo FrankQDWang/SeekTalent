@@ -398,8 +398,6 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         detail_open_timeout_seconds=settings.liepin_opencli_detail_open_timeout_seconds,
         lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
         artifact_root=settings.artifacts_path,
-        idle_close_seconds=settings.liepin_opencli_idle_close_seconds,
-        close_blank_window=settings.liepin_opencli_close_blank_window,
     )
 
     return LiepinOpenCliWorkerClient(

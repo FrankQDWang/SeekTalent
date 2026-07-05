@@ -41,7 +41,6 @@ def test_env_diagnostics_reports_configured_opencli_without_legacy_mcp(tmp_path:
 def test_dev_launcher_uses_liepin_opencli_helper_without_legacy_mcp_adapter() -> None:
     script = Path("scripts/start-dev-workbench.sh").read_text(encoding="utf-8")
 
-    assert "seektalent.providers.liepin.opencli_browser_cli cleanup_orphaned_tabs" in script
     assert "seektalent.providers.pi_agent.opencli_browser_cli" not in script
     assert "node_modules/pi-mcp-adapter/index.ts" not in script
     assert "SEEKTALENT_LIEPIN_DOKOBOT_MCP_COMMAND" not in script
@@ -51,6 +50,14 @@ def test_dev_launcher_uses_liepin_opencli_helper_without_legacy_mcp_adapter() ->
     assert "reason_code=liepin_opencli_daemon_stale" in script
     assert "reason_code=liepin_opencli_extension_disconnected" in script
     assert "PNPM_CMD=(corepack pnpm)" in script
+
+
+def test_dev_launcher_does_not_try_to_cleanup_liepin_tabs() -> None:
+    script = Path("scripts/start-dev-workbench.sh").read_text(encoding="utf-8")
+
+    assert "cleanup_" + "orphaned_tabs" not in script
+    assert "watch_" + "idle_lease" not in script
+    assert "cleanup_" + "idle_lease" not in script
 
 
 def test_dev_launcher_uses_managed_opencli_launcher_instead_of_node_modules_binary() -> None:

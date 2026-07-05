@@ -18,14 +18,6 @@ class OpenCliCommandRunner(Protocol):
     def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str: ...
 
 
-class ChromeWindowCounter(Protocol):
-    def count(self) -> int | None: ...
-
-
-class BlankChromeWindowCloser(Protocol):
-    def close_blank(self) -> bool: ...
-
-
 class CurrentChromeTabOpener(Protocol):
     def open_tab(self, url: str) -> bool: ...
 
@@ -46,52 +38,6 @@ class SubprocessOpenCliCommandRunner:
             env=process_env,
         )
         return completed.stdout
-
-
-@dataclass(frozen=True)
-class SubprocessChromeWindowCounter:
-    def count(self) -> int | None:
-        try:
-            completed = subprocess.run(
-                ("osascript", "-e", 'tell application "Google Chrome" to get count of windows'),
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return None
-        try:
-            return int(completed.stdout.strip())
-        except ValueError:
-            return None
-
-
-@dataclass(frozen=True)
-class SubprocessBlankChromeWindowCloser:
-    def close_blank(self) -> bool:
-        script = '''
-tell application "Google Chrome"
-  repeat with w in windows
-    if (count of tabs of w) = 1 and (URL of active tab of w) is "about:blank" then
-      close w
-      return "closed"
-    end if
-  end repeat
-  return "none"
-end tell
-'''
-        try:
-            completed = subprocess.run(
-                ("osascript", "-e", script),
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=3,
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return False
-        return completed.stdout.strip() == "closed"
 
 
 @dataclass(frozen=True)

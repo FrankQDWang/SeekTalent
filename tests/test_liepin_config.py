@@ -44,8 +44,6 @@ def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.Mo
     assert settings.liepin_opencli_max_cards_per_task == 20
     assert settings.liepin_opencli_timeout_seconds == 900
     assert settings.liepin_opencli_detail_open_timeout_seconds == 90
-    assert settings.liepin_opencli_idle_close_seconds == 120
-    assert settings.liepin_opencli_close_blank_window is False
     assert settings.liepin_opencli_pacing_enabled is True
     assert settings.liepin_opencli_pacing_min_ms == 700
     assert settings.liepin_opencli_pacing_max_ms == 1800

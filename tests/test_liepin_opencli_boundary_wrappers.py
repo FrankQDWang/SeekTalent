@@ -40,8 +40,6 @@ def test_liepin_site_adapter_does_not_own_opencli_subprocess_boundary() -> None:
     forbidden = (
         "subprocess.run",
         "SubprocessOpenCliCommandRunner",
-        "SubprocessChromeWindowCounter",
-        "SubprocessBlankChromeWindowCloser",
         "SubprocessCurrentChromeTabOpener",
     )
     assert all(item not in text for item in forbidden)
@@ -499,61 +497,6 @@ def test_liepin_site_adapter_propagates_persistent_stale_ref_after_single_retry(
     assert raised.value.safe_reason_code == "liepin_opencli_stale_ref"
     assert automation.click_calls == 2
     assert automation.state_calls == 1
-
-
-def test_liepin_site_adapter_launches_idle_cleanup_worker_at_provider_boundary(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserResult
-    from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
-    from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
-
-    class Automation:
-        commands = object()
-        window_counter = object()
-        blank_window_closer = object()
-        current_tab_opener = object()
-
-        def status(self) -> OpenCliBrowserResult:
-            return OpenCliBrowserResult(ok=True, action="status")
-
-    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
-
-    def fake_popen(argv, **kwargs):
-        calls.append((tuple(argv), dict(kwargs)))
-        return object()
-
-    monkeypatch.setattr("seektalent.providers.liepin.liepin_site_adapter.subprocess.Popen", fake_popen)
-
-    browser_config = OpenCliBrowserConfig(
-        command=("opencli",),
-        session="seektalent-liepin",
-        timeout_seconds=10,
-    )
-    site_config = LiepinOpenCliSiteConfig(
-        allowed_hosts=("www.liepin.com", "h.liepin.com"),
-        allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
-        lease_dir=tmp_path,
-        idle_close_seconds=3,
-        close_blank_window=False,
-        cleanup_worker_enabled=True,
-    )
-    adapter = LiepinSiteAdapter(
-        browser_config=browser_config,
-        site_config=site_config,
-        automation=Automation(),  # type: ignore[arg-type]
-    )
-
-    adapter._launch_idle_cleanup_worker()
-
-    argv, kwargs = calls[0]
-    assert argv[-2:] == ("seektalent.providers.liepin.opencli_browser_cli", "watch_idle_lease")
-    env = kwargs["env"]
-    assert isinstance(env, dict)
-    assert env["SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR"] == str(tmp_path)
-    assert env["SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS"] == "3"
-    assert env["SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"] == "false"
 
 
 def test_liepin_site_adapter_exposes_stable_search_surface() -> None:

@@ -23,8 +23,6 @@ def test_liepin_site_adapter_public_methods_stay_compatible() -> None:
     assert signatures == {
         "apply_liepin_native_filters(self, *, source_run_id: 'str', native_filters: 'Mapping[str, object]') -> 'OpenCliBrowserResult'",
         "capture_liepin_detail_resume(self, *, source_run_id: 'str', rank: 'int') -> 'OpenCliBrowserResult'",
-        "cleanup_idle_lease(self, *, force: 'bool' = False) -> 'OpenCliBrowserResult'",
-        "cleanup_orphaned_tabs(self, *, force: 'bool' = False) -> 'OpenCliBrowserResult'",
         "click(self, *, target: 'str') -> 'OpenCliBrowserResult'",
         "extract_structured_liepin_cards(self, *, source_run_id: 'str', max_cards: 'int') -> 'OpenCliBrowserResult'",
         "extract_visible_liepin_cards(self, *, source_run_id: 'str', max_cards: 'int') -> 'OpenCliBrowserResult'",
@@ -42,7 +40,6 @@ def test_liepin_site_adapter_public_methods_stay_compatible() -> None:
         "status(self) -> 'OpenCliBrowserResult'",
         "wait_liepin_detail_ready(self, *, source_run_id: 'str', rank: 'int') -> 'OpenCliBrowserResult'",
         "wait_time(self, *, seconds: 'int') -> 'OpenCliBrowserResult'",
-        "watch_idle_lease(self) -> 'OpenCliBrowserResult'",
     }
 
 
@@ -70,8 +67,6 @@ def test_liepin_site_adapter_does_not_own_opencli_runtime_boundaries() -> None:
     forbidden = (
         "subprocess.run",
         "SubprocessOpenCliCommandRunner",
-        "SubprocessChromeWindowCounter",
-        "SubprocessBlankChromeWindowCloser",
         "SubprocessCurrentChromeTabOpener",
         ".run_raw(",
         '"browser", self._config.session',

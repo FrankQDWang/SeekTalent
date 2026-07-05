@@ -4,8 +4,6 @@ import json
 import hashlib
 import os
 import random
-import subprocess
-import sys
 import tempfile
 import time
 import uuid
@@ -104,9 +102,6 @@ class LiepinOpenCliSiteConfig:
     lease_dir: Path | None = None
     artifact_root: Path | None = None
     detail_open_timeout_seconds: int = 90
-    idle_close_seconds: int = 120
-    close_blank_window: bool = False
-    cleanup_worker_enabled: bool = True
 
 
 _RECOVERABLE_CONNECTION_REASONS = {
@@ -195,14 +190,6 @@ class LiepinSiteAdapter:
     @property
     def _commands(self):
         return self._automation.commands
-
-    @property
-    def _window_counter(self):
-        return self._automation.window_counter
-
-    @property
-    def _blank_window_closer(self):
-        return self._automation.blank_window_closer
 
     def _run_liepin_transition(self, transition: LiepinTransition) -> TransitionResult:
         return LiepinTransitionRunner().run(transition)
@@ -1877,52 +1864,6 @@ class LiepinSiteAdapter:
         except OpenCliBrowserError:
             return ()
 
-    def cleanup_idle_lease(self, *, force: bool = False) -> OpenCliBrowserResult:
-        lease = self._read_lease()
-        if lease is None:
-            return OpenCliBrowserResult(ok=True, action="cleanup_idle_lease", counts={"leases": 0})
-        if not force and not self._lease_is_idle(lease):
-            return OpenCliBrowserResult(ok=True, action="cleanup_idle_lease", counts={"leases": 1, "closed": 0})
-        self._delete_lease()
-        return OpenCliBrowserResult(
-            ok=True,
-            action="cleanup_idle_lease",
-            counts={"leases": 1, "closed": 0},
-        )
-
-    def watch_idle_lease(self) -> OpenCliBrowserResult:
-        while True:
-            lease = self._read_lease()
-            if lease is None:
-                return OpenCliBrowserResult(ok=True, action="watch_idle_lease", counts={"leases": 0})
-            remaining_seconds = self._lease_remaining_seconds(lease)
-            if remaining_seconds <= 0:
-                return self.cleanup_idle_lease(force=True)
-            time.sleep(min(max(remaining_seconds, 1), 30))
-
-    def cleanup_orphaned_tabs(self, *, force: bool = False) -> OpenCliBrowserResult:
-        lease = self._read_lease()
-        if lease is not None:
-            return self.cleanup_idle_lease(force=force)
-        if not force:
-            return OpenCliBrowserResult(
-                ok=True,
-                action="cleanup_orphaned_tabs",
-                counts={"leases": 0, "closedTabs": 0, "blankWindows": 0},
-            )
-        skipped = self._forget_orphaned_owned_page_markers()
-        return OpenCliBrowserResult(
-            ok=True,
-            action="cleanup_orphaned_tabs",
-            counts={"leases": 0, "closedTabs": 0, "blankWindows": 0, "skipped": skipped},
-        )
-
-    def _forget_orphaned_owned_page_markers(self) -> int:
-        markers = self._read_owned_page_markers()
-        for page_id in tuple(markers):
-            self._forget_owned_page_marker(page_id)
-        return len(markers)
-
     def _list_tabs(self) -> list[dict[str, object]]:
         output = self._run_browser_command("tab", ("list",))
         try:
@@ -2655,9 +2596,6 @@ class LiepinSiteAdapter:
         else:
             path.unlink(missing_ok=True)
 
-    def _lease_is_idle(self, lease: Mapping[str, object]) -> bool:
-        return self._lease_remaining_seconds(lease) <= 0
-
     def _lease_page_id(self, lease: Mapping[str, object]) -> str:
         page_id = str(lease.get("page_id") or "")
         if not _is_safe_page_id(page_id):
@@ -2703,42 +2641,6 @@ class LiepinSiteAdapter:
                 return page_id
             return None
         return None
-
-    def _lease_remaining_seconds(self, lease: Mapping[str, object]) -> int:
-        last_activity = lease.get("last_activity_at")
-        if not isinstance(last_activity, int | float):
-            raise OpenCliBrowserError("liepin_opencli_malformed_state")
-        return int(last_activity + self._site_config.idle_close_seconds - time.time())
-
-    def _close_blank_window_if_enabled(self) -> bool:
-        if not self._site_config.close_blank_window:
-            return False
-        return self._blank_window_closer.close_blank()
-
-    def _launch_idle_cleanup_worker(self) -> None:
-        if not self._site_config.cleanup_worker_enabled:
-            return
-        env = os.environ.copy()
-        if self._site_config.lease_dir is not None:
-            env["SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR"] = str(self._site_config.lease_dir)
-        env["SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS"] = str(self._site_config.idle_close_seconds)
-        env["SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE"] = self._browser_config.window_mode
-        env["SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"] = (
-            "true" if self._site_config.close_blank_window else "false"
-        )
-        try:
-            # shell=False with fixed argv; site config values are only child env.
-            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
-            subprocess.Popen(
-                (sys.executable, "-m", "seektalent.providers.liepin.opencli_browser_cli", "watch_idle_lease"),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=env,
-                start_new_session=True,
-            )
-        except OSError:
-            return
 
     def _validate_command_shape(self, command: str, args: tuple[str, ...]) -> None:
         valid = {
