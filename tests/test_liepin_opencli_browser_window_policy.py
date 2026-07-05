@@ -11,7 +11,6 @@ from tests.test_liepin_opencli_browser import (
     ANY_STRUCTURED_CARD_PROBE,
     FakeCommands,
     FakeCurrentChromeTabOpener,
-    FakeWindowCounter,
     RefEvalCommands,
     _runner,
 )
@@ -538,12 +537,10 @@ def test_open_liepin_tab_does_not_count_or_bind_foreground_windows(tmp_path: Pat
             ),
         }
     )
-    window_counter = FakeWindowCounter((1, 1, 1, 2, 2, 2))
     current_tab_opener = FakeCurrentChromeTabOpener()
     runner = _runner(
         commands,
         lease_dir=tmp_path,
-        window_counter=window_counter,
         current_tab_opener=current_tab_opener,
     )
 
@@ -551,7 +548,6 @@ def test_open_liepin_tab_does_not_count_or_bind_foreground_windows(tmp_path: Pat
 
     assert result.ok is True
     assert current_tab_opener.calls == []
-    assert window_counter.calls == 0
     assert commands.calls == [
         ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url),
@@ -573,7 +569,6 @@ def test_open_liepin_tab_writes_lease_for_background_tab(tmp_path: Path) -> None
     runner = _runner(
         commands,
         lease_dir=tmp_path,
-        window_counter=FakeWindowCounter((1, 1, 1, 2, 2, 3)),
         current_tab_opener=current_tab_opener,
     )
 

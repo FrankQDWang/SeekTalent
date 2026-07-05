@@ -4456,11 +4456,19 @@ def test_cli_state_returns_pi_observation(
     assert payload["observation"]["text"] == "搜索职位、公司 [ref=16]"
 
 
+@pytest.mark.parametrize(
+    "removed_action",
+    (
+        "cleanup_" + "idle_lease",
+        "cleanup_" + "orphaned_tabs",
+        "watch_" + "idle_lease",
+    ),
+)
 def test_cli_rejects_removed_cleanup_actions(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
+    removed_action: str,
 ) -> None:
-    removed_action = "cleanup_" + "orphaned_tabs"
     monkeypatch.setattr("sys.argv", ["opencli_browser_cli", removed_action])
     monkeypatch.setattr("sys.stdin", io.StringIO('{"force":true}'))
     monkeypatch.setattr(opencli_browser_cli, "_runner_from_env", lambda: _runner(FakeCommands()))
