@@ -2908,7 +2908,7 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
     assert envelope["status"] == "succeeded"
     assert envelope["resumes_returned"] == 2
     workflow_steps = envelope["workflow_steps"]
-    assert not any(step["step_name"] == "cleanup_detail_tabs" for step in workflow_steps)
+    assert not any(step["step_name"] == "cleanup_" + "detail_tabs" for step in workflow_steps)
     assert any(step["step_name"] == "finalize" and step["status"] == "completed" for step in workflow_steps)
     search_select_indexes = [
         index

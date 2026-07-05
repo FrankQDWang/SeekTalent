@@ -79,7 +79,6 @@ _SAFE_WORKFLOW_STEP_NAMES = {
     "apply_filters",
     "cache_detail_urls",
     "capture_detail",
-    "cleanup_detail_tabs",
     "finalize",
     "observe_cards",
     "open_detail",

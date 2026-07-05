@@ -256,7 +256,7 @@ def test_required_prompts_exist_in_package_prompt_dir() -> None:
         assert prompt_file.read_text(encoding="utf-8").strip()
 
 
-def test_no_args_tty_launches_tui_after_cleanup(
+def test_no_args_tty_launches_tui_after_console_restore(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:

@@ -615,8 +615,6 @@ _SAFE_WORKFLOW_STEP_NAMES = {
     "cache_detail_urls",
     "open_detail",
     "capture_detail",
-    # Reserved for legacy traces and future safe OpenCLI detail-tab cleanup.
-    "cleanup_detail_tabs",
     "finalize",
 }
 _SAFE_WORKFLOW_STATUSES = {"running", "completed", "partial", "blocked", "failed", "cancelled"}
