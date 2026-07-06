@@ -4,14 +4,14 @@
 
 - `SEEKTALENT_*` variables are loaded by `pydantic-settings`.
 - Provider-native variables such as `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `ANTHROPIC_API_KEY`, and `GOOGLE_API_KEY` remain optional compatibility inputs when explicitly configured.
-- The canonical text-LLM runtime surface is the `SEEKTALENT_TEXT_LLM_*` tuple plus bare `*_MODEL_ID` variables. The provider-native variables do not replace that surface.
+- The canonical text-LLM runtime surface is the `SEEKTALENT_TEXT_LLM_*` tuple, Domi `SEEKTALENT_DOMI_*` auth/transport when the provider label is `domi`, and bare `*_MODEL_ID` variables. The provider-native variables do not replace that surface.
 - `seektalent init` writes the starter env template from `.env.example` in a source checkout, or the packaged template from `src/seektalent/default.env` in an installed package.
 
 In this repository, `.env.example` and `src/seektalent/default.env` are intentionally minimal user templates. Product defaults live in `AppSettings`.
 
 ## Minimal Setup
 
-For the default Liepin/OpenCLI run, you need one value:
+For the default non-Domi Liepin/OpenCLI run, you need one direct provider key:
 
 ```dotenv
 SEEKTALENT_TEXT_LLM_API_KEY=your-text-llm-key
@@ -28,7 +28,7 @@ SEEKTALENT_TEXT_LLM_ENDPOINT_REGION=beijing
 
 Leave `SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE` empty unless you need to override the built-in endpoint mapping.
 
-For installed PyPI users and source checkout users, `seektalent init` writes a minimal `.env` with one required value:
+For non-Domi installed PyPI users and source checkout users, `seektalent init` writes a minimal `.env` with one required value:
 
 ```env
 SEEKTALENT_TEXT_LLM_API_KEY=
@@ -48,6 +48,7 @@ SEEKTALENT_DOMI_NODE=<path to Domi node executable or node bin directory>
 ```
 
 `DOMI_NODE` is accepted as an alias for `SEEKTALENT_DOMI_NODE`.
+`SEEKTALENT_DOMI_LLM_BASE_URL` and `SEEKTALENT_DOMI_LLM_CHANNEL` are optional Domi transport overrides; defaults are documented in the text LLM table below.
 
 Run either installed entrypoint from the Domi Python environment:
 
@@ -70,11 +71,15 @@ Advanced settings are documented below and should be set only when the default p
 
 ## Provider Boundary Variables
 
-These variables exist at the process boundary. Only `SEEKTALENT_TEXT_LLM_API_KEY` is part of the canonical text-LLM runtime surface.
+These variables exist at the process boundary. For non-Domi Workbench and direct Bailian-compatible runs, `SEEKTALENT_TEXT_LLM_API_KEY` is the required direct provider key. For prepared-machine Domi Workbench, `SEEKTALENT_DOMI_JWT` is the required authorization value and must be provided explicitly.
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `SEEKTALENT_TEXT_LLM_API_KEY` | Required for active text-LLM calls | Canonical runtime credential for both supported text protocols. |
+| `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL` | Optional | Selects the text LLM provider label. Supported labels include `bailian` and `domi`; default is `bailian`. |
+| `SEEKTALENT_TEXT_LLM_API_KEY` | Required for non-Domi active text-LLM calls | Direct provider credential for Bailian-compatible configuration. Not required when `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi`. |
+| `SEEKTALENT_DOMI_JWT` | Required when `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` | Manually supplied Domi authorization token. SeekTalent does not discover it from Domi Electron storage. |
+| `SEEKTALENT_DOMI_LLM_BASE_URL` | Optional for Domi | Domi LLM proxy base URL. |
+| `SEEKTALENT_DOMI_LLM_CHANNEL` | Optional for Domi | Domi LLM proxy channel. |
 | `OPENAI_API_KEY` | Optional | Convenience mirror for tools or integrations that expect the provider-native OpenAI env var. |
 | `OPENAI_BASE_URL` | Optional | Convenience mirror for tools that expect the provider-native OpenAI base URL. |
 | `ANTHROPIC_API_KEY` | Optional | Convenience mirror for tools or integrations that expect the Anthropic-native env var. |
@@ -94,20 +99,29 @@ CTS is not part of the default run path. These variables are required only when 
 
 ## Canonical Text LLM Surface
 
-The active text runtime is configured by one protocol tuple plus per-stage model ids. The current codebase supports two protocol families and one provider label:
+The active text runtime is configured by one protocol tuple plus per-stage model ids. The current codebase supports these protocol families:
 
 - `openai_chat_completions_compatible`
 - `anthropic_messages_compatible`
+
+Supported provider labels include:
+
 - `bailian`
+- `domi`
+
+`domi` uses the OpenAI-compatible protocol with a Domi JWT and Domi proxy transport. It does not read Domi Electron storage or automatically discover JWTs.
 
 | Variable | Starter value | Notes |
 | --- | --- | --- |
 | `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY` | `openai_chat_completions_compatible` | Selects the wire protocol. |
-| `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL` | `bailian` | Provider label for the current compatibility matrix. |
-| `SEEKTALENT_TEXT_LLM_ENDPOINT_KIND` | `bailian_openai_chat_completions` | Must match the selected protocol family. |
+| `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL` | `bailian` | Provider label for the current compatibility matrix. Supported labels include `bailian` and `domi`. |
+| `SEEKTALENT_TEXT_LLM_ENDPOINT_KIND` | `bailian_openai_chat_completions` | Must match the selected protocol family. For `domi`, use the OpenAI-compatible protocol. |
 | `SEEKTALENT_TEXT_LLM_ENDPOINT_REGION` | `beijing` | Current active regions are `beijing` and `singapore`. |
 | `SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE` | empty | Optional full base URL override. Leave empty to use the built-in mapping. |
-| `SEEKTALENT_TEXT_LLM_API_KEY` | empty | Required for canonical text-LLM configuration. |
+| `SEEKTALENT_TEXT_LLM_API_KEY` | empty | Required for non-Domi direct provider configuration. |
+| `SEEKTALENT_DOMI_JWT` | empty | Required when `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi`; provide it manually. |
+| `SEEKTALENT_DOMI_LLM_BASE_URL` | `https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1` | Domi LLM proxy base URL. |
+| `SEEKTALENT_DOMI_LLM_CHANNEL` | `seek_talent` | Domi LLM proxy channel. |
 
 Built-in endpoint mapping:
 
