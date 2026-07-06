@@ -57,6 +57,16 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     assert "inspect" in help_result.stdout
     assert "SEEKTALENT_TEXT_LLM_API_KEY" in help_result.stdout
 
+    domi_help = subprocess.run(
+        [str(domi_cli), "--help"],
+        cwd=work_dir,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "Start the local SeekTalent Workbench" in domi_help.stdout
+
     version_result = subprocess.run(
         [str(cli), "version"],
         cwd=work_dir,

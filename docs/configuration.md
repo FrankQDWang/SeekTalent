@@ -76,7 +76,7 @@ These variables exist at the process boundary. For non-Domi Workbench and direct
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL` | Optional | Selects the text LLM provider label. Supported labels include `bailian` and `domi`; default is `bailian`. |
-| `SEEKTALENT_TEXT_LLM_API_KEY` | Required for non-Domi active text-LLM calls | Direct provider credential for Bailian-compatible configuration. Not required when `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi`. |
+| `SEEKTALENT_TEXT_LLM_API_KEY` | Required for non-Domi/direct providers | Direct provider credential for Bailian-compatible configuration. Not required when `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi`. |
 | `SEEKTALENT_DOMI_JWT` | Required when `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` | Manually supplied Domi authorization token. SeekTalent does not discover it from Domi Electron storage. |
 | `SEEKTALENT_DOMI_LLM_BASE_URL` | Optional for Domi | Domi LLM proxy base URL. |
 | `SEEKTALENT_DOMI_LLM_CHANNEL` | Optional for Domi | Domi LLM proxy channel. |
@@ -301,7 +301,7 @@ The rescue `candidate_feedback` lane does not call the LLM PRF extractor; it use
 Before each run, the runtime validates the active config surface:
 
 - `SEEKTALENT_TEXT_LLM_ENDPOINT_KIND` must match `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY`.
-- `SEEKTALENT_TEXT_LLM_API_KEY` is required for active text-LLM calls.
+- Non-Domi direct providers require `SEEKTALENT_TEXT_LLM_API_KEY`; prepared-machine Domi requires a manually provided `SEEKTALENT_DOMI_JWT`.
 - CTS tenant credentials are required only when `SEEKTALENT_PROVIDER_NAME=cts` is set explicitly.
 - Removed legacy text-LLM keys and provider-prefixed `*_MODEL_ID` values now fail fast with a migration error.
 
