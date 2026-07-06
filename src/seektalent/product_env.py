@@ -27,6 +27,15 @@ DOMI_LLM_ENV_VARS = frozenset(
     }
 )
 
+DOMI_OPENCLI_NODE_ENV_VARS = frozenset(
+    {
+        "SEEKTALENT_OPENCLI_NODE_POLICY",
+        "SEEKTALENT_OPENCLI_NODE",
+        "SEEKTALENT_DOMI_NODE",
+        "DOMI_NODE",
+    }
+)
+
 _PASSTHROUGH_ENV_VARS = frozenset(
     {
         "HOME",
@@ -71,6 +80,7 @@ def build_workbench_command_env(
     env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] = "opencli"
     env["SEEKTALENT_PYTHON"] = sys.executable
     load_product_user_env(env, env_file=env_file)
+    _preserve_domi_opencli_node_env(env, source_env)
     _prune_unused_llm_credentials(env)
     env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = DEFAULT_LIEPIN_OPENCLI_COMMAND
     ensure_workbench_internal_liepin_env(env)
@@ -84,6 +94,16 @@ def _prune_unused_llm_credentials(env: MutableMapping[str, str]) -> None:
         return
     for key in DOMI_LLM_ENV_VARS:
         env.pop(key, None)
+
+
+def _preserve_domi_opencli_node_env(env: MutableMapping[str, str], source_env: Mapping[str, str]) -> None:
+    provider_label = str(env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL") or "bailian").strip().lower() or "bailian"
+    if provider_label != "domi":
+        return
+    for key in DOMI_OPENCLI_NODE_ENV_VARS:
+        value = source_env.get(key)
+        if value and value.strip():
+            env[key] = value
 
 
 def _read_product_env_file(path: Path) -> dict[str, str]:
