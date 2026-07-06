@@ -22,6 +22,7 @@ from seektalent.providers.liepin.worker_contracts import LiepinDetailWorkerDiagn
 from seektalent.providers.liepin.worker_contracts import LiepinSafeCardSummary
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateDetail
+from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.providers.liepin.worker_contracts import SessionStatus
 from tests.settings_factory import make_settings
 
@@ -50,6 +51,7 @@ class RecordingWorkerClient:
         self.search_result = search_result
         self.detail_response = detail_response
         self.calls: list[str] = []
+        self.session_status_requests: list[dict[str, str | None]] = []
         self.search_requests: list[tuple[SearchRequest, int, str, str | None]] = []
         self.detail_requests: list[object] = []
 
@@ -77,6 +79,14 @@ class RecordingWorkerClient:
         provider_account_hash: str | None = None,
     ) -> SessionStatus:
         self.calls.append("session_status")
+        self.session_status_requests.append(
+            {
+                "connection_id": connection_id,
+                "tenant": tenant,
+                "workspace": workspace,
+                "provider_account_hash": provider_account_hash,
+            }
+        )
         return SessionStatus(
             connectionId=connection_id,
             status=self.session_status_value,
@@ -488,6 +498,44 @@ def test_opencli_mode_uses_live_compliance_branch(tmp_path: Path) -> None:
     assert worker.search_requests[0][3] == "account-hash-a"
 
 
+def test_opencli_mode_accepts_browser_profile_session_subject_and_uses_connection_hash(tmp_path: Path) -> None:
+    settings = make_settings(
+        provider_name="liepin",
+        liepin_worker_mode="opencli",
+        liepin_browser_action_backend="opencli",
+    )
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    result = SearchResult(candidates=[], diagnostics=["ok"], exhausted=True)
+    worker = RecordingWorkerClient(
+        session_provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+        search_result=result,
+    )
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    actual = asyncio.run(
+        adapter.search(
+            _request(provider_context=_live_filters(gate_ref, connection_id)),
+            round_no=1,
+            trace_id="trace-1",
+        )
+    )
+
+    assert actual is result
+    assert worker.calls == ["ensure_ready", "session_status", "search"]
+    assert worker.session_status_requests == [
+        {
+            "connection_id": connection_id,
+            "tenant": "tenant-a",
+            "workspace": "workspace-a",
+            "provider_account_hash": "account-hash-a",
+        }
+    ]
+    search_request, _round_no, _trace_id, provider_account_hash = worker.search_requests[0]
+    assert provider_account_hash == "account-hash-a"
+    assert search_request.provider_context["liepin_connection_id"] == connection_id
+    assert search_request.provider_context["liepin_compliance_gate_ref"] == gate_ref
+
+
 def test_registry_fake_fixture_mode_builds_explicit_fixture_worker() -> None:
     settings = make_settings(
         provider_name="liepin",
@@ -802,7 +850,10 @@ def test_adapter_rejects_normalized_and_nested_unsafe_candidate_raw_keys(
         ({"resumeId": "candidate-a", "note": "Authorization: Bearer blocked-secret"}, "blocked-secret"),
         ({"resumeId": "candidate-a", "message": "rawProviderPayload={blocked}"}, "rawProviderPayload={blocked}"),
         ({"resumeId": "candidate-a", "message": "raw_provider_payload={blocked}"}, "raw_provider_payload={blocked}"),
-        ({"resumeId": "candidate-a", "diagnostics": "internal-worker-observed-account-a"}, "internal-worker-observed-account-a"),
+        (
+            {"resumeId": "candidate-a", "diagnostics": "internal-worker-observed-account-a"},
+            "internal-worker-observed-account-a",
+        ),
     ],
 )
 def test_adapter_rejects_unsafe_candidate_raw_values_without_leaking_values(
