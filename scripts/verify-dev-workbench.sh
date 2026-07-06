@@ -136,7 +136,6 @@ for forbidden in \
   'login/snapshot' \
   'login/frame' \
   server_managed_browser \
-  managed_local \
   external_http \
   pi_runner.py \
   'browser fallback' \

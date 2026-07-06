@@ -37,7 +37,7 @@ TextLLMEndpointKind = Literal[
 ]
 TextLLMEndpointRegion = Literal["beijing", "singapore"]
 ProviderName = Literal["cts", "liepin"]
-LiepinWorkerMode = Literal["disabled", "fake_fixture", "managed_local", "external_http", "opencli"]
+LiepinWorkerMode = Literal["disabled", "fake_fixture", "external_http", "opencli"]
 LiepinBrowserActionBackend = Literal["disabled", "opencli"]
 OpenCliWindowMode = Literal["foreground", "background"]
 DEV_ARTIFACTS_DIR = "artifacts"

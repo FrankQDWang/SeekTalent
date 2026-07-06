@@ -757,7 +757,7 @@ async def _run_parallel_liepin_bundle(worker: ParallelDetailWorker) -> None:
                 ),
             ),
             source_budget_policy=RuntimeSourceBudgetPolicy.defaults(),
-            liepin_context={"backend_mode": "worker_compat"},
+            liepin_context={"backend_mode": "external_http"},
             worker_client=worker,
         )
     )
@@ -1013,9 +1013,11 @@ def test_liepin_backend_posture_records_worker_modes_without_removed_fallback() 
         "backend_mode": "opencli",
         "reason": "opencli",
     }
-    assert liepin_backend_posture(make_settings(liepin_worker_mode="managed_local")) == {
-        "backend_mode": "worker_compat",
-        "reason": "managed_local",
+    assert liepin_backend_posture(
+        make_settings(liepin_worker_mode="external_http", liepin_worker_base_url="http://127.0.0.1:8123")
+    ) == {
+        "backend_mode": "external_http",
+        "reason": "external_http",
     }
     assert liepin_backend_posture(
         make_settings(liepin_worker_mode="fake_fixture", liepin_allow_fake_fixture_worker=True)

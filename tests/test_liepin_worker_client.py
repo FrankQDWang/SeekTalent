@@ -79,7 +79,7 @@ def test_fake_fixture_client_requires_mode_and_explicit_allow_flag() -> None:
     assert isinstance(build_liepin_worker_client(settings), FakeLiepinWorkerClient)
 
     managed_settings = make_settings(
-        liepin_worker_mode="managed_local",
+        liepin_worker_mode="opencli",
         liepin_allow_fake_fixture_worker=True,
     )
     with pytest.raises(LiepinWorkerModeError, match="fake_fixture"):
@@ -112,8 +112,8 @@ def test_fake_fixture_mode_is_rejected_when_live_enabled() -> None:
         build_liepin_worker_client(settings)
 
 
-def test_build_managed_local_client_for_live_capable_local_mode() -> None:
-    settings = make_settings(liepin_worker_mode="managed_local")
+def test_build_opencli_client_for_live_capable_local_mode() -> None:
+    settings = make_settings(liepin_worker_mode="opencli")
 
     client = build_liepin_worker_client(settings)
 
@@ -169,9 +169,9 @@ def test_external_http_client_requires_external_mode() -> None:
 
     assert isinstance(build_liepin_worker_client(settings), ExternalHttpLiepinWorkerClient)
 
-    managed_settings = make_settings(liepin_worker_mode="managed_local")
+    opencli_settings = make_settings(liepin_worker_mode="opencli")
     with pytest.raises(LiepinWorkerModeError, match="external_http"):
-        ExternalHttpLiepinWorkerClient(managed_settings)
+        ExternalHttpLiepinWorkerClient(opencli_settings)
 
 
 def test_missing_external_http_worker_url_fails_before_search_dispatch() -> None:

@@ -964,7 +964,7 @@ def test_liepin_smoke_worker_base_url_overrides_local_mode(monkeypatch, tmp_path
             "--compliance-gate-ref",
             gate_ref,
             "--worker-mode",
-            "managed_local",
+            "opencli",
             "--worker-base-url",
             "http://127.0.0.1:8123",
             "--db-path",

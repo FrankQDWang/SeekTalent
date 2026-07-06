@@ -559,7 +559,7 @@ def test_source_plan_public_payload_uses_allowlist_and_redacts_posture() -> None
         runtime_run_id="run-1",
         source="liepin",
         label="Liepin",
-        backend_mode="worker_compat",
+        backend_mode="external_http",
         safe_posture={
             "connection_state": "connected",
             "approval_secret": "secret-value",
@@ -570,7 +570,7 @@ def test_source_plan_public_payload_uses_allowlist_and_redacts_posture() -> None
     payload = plan.to_public_payload()
 
     assert payload["source"] == "liepin"
-    assert payload["backend_mode"] == "worker_compat"
+    assert payload["backend_mode"] == "external_http"
     assert payload["safe_posture"] == {
         "connection_state": "connected",
         "approval_secret": "[REDACTED]",
@@ -1095,7 +1095,7 @@ def test_source_lane_result_public_payload_is_retained_for_workbench_projection(
 
 
 def test_build_runtime_source_plan_has_no_concrete_default_and_uses_safe_source_context() -> None:
-    settings = make_settings(liepin_worker_mode="managed_local")
+    settings = make_settings(liepin_worker_mode="opencli")
 
     default_plan = build_runtime_source_plan(source_kinds=None, settings=settings, runtime_run_id="run-1")
     multi_source_plan = build_runtime_source_plan(
@@ -1111,7 +1111,7 @@ def test_build_runtime_source_plan_has_no_concrete_default_and_uses_safe_source_
 
 
 def test_runtime_writes_source_plan_artifact_with_public_payload(tmp_path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = WorkflowRuntime(settings)
     tracer = RunTracer(settings.artifacts_path)
     try:
@@ -1513,7 +1513,7 @@ def _scored_candidate(resume_id: str, *, source_round: int) -> ScoredCandidate:
 
 
 def test_source_round_dispatch_merge_preserves_selected_source_candidates_before_finalization(tmp_path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state()
     source_plan = build_runtime_source_plan(
@@ -1590,7 +1590,7 @@ def test_source_round_dispatch_merge_preserves_selected_source_candidates_before
 
 
 def test_source_round_dispatch_merge_finalizes_top_10_by_identity_not_raw_resume(tmp_path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state()
     source_plan = build_runtime_source_plan(
@@ -1870,7 +1870,7 @@ def test_full_source_lanes_keep_cts_when_liepin_backend_is_blocked(tmp_path, mon
 
 
 def test_full_source_lanes_enter_cts_and_liepin_provider_calls_concurrently(tmp_path, monkeypatch) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state()
     tracer = RunTracer(settings.artifacts_path)
@@ -1946,7 +1946,7 @@ def test_full_source_lanes_enter_cts_and_liepin_provider_calls_concurrently(tmp_
 
 
 def test_full_source_lanes_failed_liepin_does_not_cancel_cts_lane(tmp_path, monkeypatch) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state()
     tracer = RunTracer(settings.artifacts_path)
@@ -2007,7 +2007,7 @@ def test_full_source_lanes_failed_liepin_does_not_cancel_cts_lane(tmp_path, monk
 
 
 def test_full_source_lanes_records_structured_degraded_coverage_without_missing_source_alias(tmp_path, monkeypatch) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state()
     tracer = RunTracer(settings.artifacts_path)
@@ -2078,7 +2078,7 @@ def test_full_source_lanes_records_structured_degraded_coverage_without_missing_
 
 
 def test_full_source_lanes_marks_coverage_empty_when_all_selected_sources_return_no_candidates(tmp_path, monkeypatch) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state()
     tracer = RunTracer(settings.artifacts_path)
@@ -2116,7 +2116,7 @@ def test_full_source_lanes_marks_coverage_empty_when_all_selected_sources_return
 
 
 def test_full_source_lanes_do_not_publish_raw_provider_exception_text(tmp_path, monkeypatch) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state()
     tracer = RunTracer(settings.artifacts_path)

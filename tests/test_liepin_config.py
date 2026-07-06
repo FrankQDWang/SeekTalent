@@ -18,6 +18,12 @@ def test_dokobot_action_is_not_a_live_worker_mode() -> None:
         AppSettings(_env_file=None, liepin_worker_mode="dokobot_action")
 
 
+def test_removed_local_worker_mode_is_rejected() -> None:
+    removed_mode = "managed" + "_local"
+    with pytest.raises(ValidationError, match=removed_mode):
+        AppSettings(_env_file=None, liepin_worker_mode=removed_mode)
+
+
 def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SEEKTALENT_LIEPIN_WORKER_MODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", raising=False)

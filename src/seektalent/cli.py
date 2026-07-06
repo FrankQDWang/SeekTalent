@@ -2458,7 +2458,7 @@ def build_exec_parser() -> argparse.ArgumentParser:
     liepin_smoke_parser.add_argument("--min-final-candidates", type=int, default=1)
     liepin_smoke_parser.add_argument(
         "--worker-mode",
-        choices=["fake_fixture", "managed_local", "external_http", "opencli"],
+        choices=["fake_fixture", "external_http", "opencli"],
     )
     liepin_smoke_parser.add_argument("--worker-base-url")
     liepin_smoke_parser.add_argument("--db-path")

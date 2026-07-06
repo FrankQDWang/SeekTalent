@@ -218,7 +218,7 @@ def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
     configured_mode = args.worker_mode or base_settings.liepin_worker_mode
     if args.worker_base_url is not None:
         configured_mode = "external_http"
-    if configured_mode in {"fake_fixture", "managed_local", "external_http", "opencli"}:
+    if configured_mode in {"fake_fixture", "external_http", "opencli"}:
         worker_mode = configured_mode
     else:
         worker_mode = "opencli"

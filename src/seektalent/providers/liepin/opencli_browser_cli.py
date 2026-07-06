@@ -17,8 +17,9 @@ from seektalent.opencli_browser.contracts import (
     OpenCliWindowMode,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_OPENCLI_ALLOWED_HOSTS,
     LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
-    LIEPIN_RECRUITER_SEARCH_URL,
+    LIEPIN_RECRUITER_SEARCH_URLS,
 )
 from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
 
@@ -57,11 +58,11 @@ def _runner_from_env() -> LiepinSiteAdapter:
     window_mode = _env_window_mode(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE"))
     allowed_hosts = _json_tuple(
         os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON"),
-        default=("www.liepin.com", "h.liepin.com"),
+        default=LIEPIN_OPENCLI_ALLOWED_HOSTS,
     )
     allowed_start_urls = _json_tuple(
         os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON"),
-        default=(LIEPIN_RECRUITER_SEARCH_URL,),
+        default=LIEPIN_RECRUITER_SEARCH_URLS,
     )
     browser_config = OpenCliBrowserConfig(
         command=command,

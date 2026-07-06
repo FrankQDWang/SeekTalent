@@ -163,7 +163,7 @@ def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pyt
 
 
 def test_source_round_empty_coverage_does_not_block_next_runtime_step(tmp_path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = _workflow_runtime(settings)
     source_plan = build_runtime_source_plan(source_kinds=["cts"], settings=settings, runtime_run_id="run-1")
     dispatch_result = SourceRoundDispatchResult(
@@ -196,7 +196,7 @@ def test_source_round_empty_coverage_does_not_block_next_runtime_step(tmp_path) 
 
 
 def test_source_round_unknown_coverage_status_remains_blocking(tmp_path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = _workflow_runtime(settings)
 
     reason = runtime._source_round_not_ready_reason(

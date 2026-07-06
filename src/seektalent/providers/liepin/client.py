@@ -41,7 +41,7 @@ from seektalent.providers.liepin.worker_contracts import decode_worker_health
 
 EventCallback = Callable[[str, dict[str, object]], None]
 DecodedWorkerPayload = TypeVar("DecodedWorkerPayload")
-LIVE_LIEPIN_WORKER_MODES = frozenset({"managed_local", "external_http", "opencli"})
+LIVE_LIEPIN_WORKER_MODES = frozenset({"external_http", "opencli"})
 
 
 def is_live_liepin_worker_mode(worker_mode: str) -> bool:
@@ -357,13 +357,6 @@ class ExternalHttpLiepinWorkerClient:
 def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
     if settings.liepin_worker_mode == "fake_fixture":
         return FakeLiepinWorkerClient(settings)
-    if settings.liepin_worker_mode == "managed_local":
-        return build_liepin_opencli_worker_client(
-            settings.with_overrides(
-                liepin_worker_mode="opencli",
-                liepin_browser_action_backend="opencli",
-            )
-        )
     if settings.liepin_worker_mode == "external_http":
         return ExternalHttpLiepinWorkerClient(settings)
     if settings.liepin_worker_mode == "opencli":
