@@ -63,6 +63,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _detail_provider_key_material,
     _detail_targets_payload,
     _fixed_readonly_eval_probe_script,
+    _is_blank_tab_url,
     _is_liepin_detail_url,
     _is_safe_page_id,
     _liepin_structured_cards_payload_probe_script,
@@ -1993,7 +1994,10 @@ class LiepinSiteAdapter:
     def _open_liepin_detail_url_controlled(self, detail_url: str, *, source_run_id: str) -> bool:
         if not _is_liepin_detail_url(detail_url):
             return False
-        self._open_new_liepin_tab(url=detail_url, source_run_id=source_run_id)
+        page_id = self._open_new_liepin_tab(url=detail_url, source_run_id=source_run_id)
+        if page_id is None:
+            return False
+        self._wait_for_controlled_detail_navigation(page_id=page_id)
         self._touch_lease()
         return True
 
@@ -2341,6 +2345,36 @@ class LiepinSiteAdapter:
         except OpenCliBrowserError:
             return False
         return self._opened_tab_url_matches_requested_url(current_url, requested_url)
+
+    def _wait_for_controlled_detail_navigation(self, *, page_id: str) -> None:
+        attempts = max(1, int(self._site_config.detail_open_timeout_seconds))
+        for attempt_index in range(attempts):
+            current_url = self._current_url()
+            if _is_liepin_detail_url(current_url):
+                return
+            tab_url = self._tab_url_for_page_id(page_id)
+            if tab_url is not None and _is_liepin_detail_url(tab_url):
+                self._run_browser_command("tab", ("select", page_id))
+                return
+            if not _is_blank_tab_url(current_url):
+                safe_reason_code = classify_liepin_state(url=current_url, text="")
+                if safe_reason_code:
+                    raise OpenCliBrowserError(safe_reason_code)
+            if attempt_index < attempts - 1:
+                time.sleep(1)
+        raise OpenCliBrowserError("liepin_opencli_detail_not_opened")
+
+    def _tab_url_for_page_id(self, page_id: str) -> str | None:
+        if not _is_safe_page_id(page_id):
+            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        try:
+            tabs = self._list_tabs()
+        except OpenCliBrowserError:
+            return None
+        for tab in tabs:
+            if _tab_page_id(tab) == page_id:
+                return str(tab.get("url") or "")
+        return None
 
     def _reuse_liepin_search_page(self, *, page_id: str, url: str) -> bool:
         try:

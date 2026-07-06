@@ -32,6 +32,7 @@ class FakeLiepinSearchWorkflowSite:
     events: list[dict[str, object]] = field(default_factory=list)
     resumes: list[dict[str, object]] = field(default_factory=list)
     capture_require_ready_values: list[bool] = field(default_factory=list)
+    open_results: list[OpenCliBrowserResult] = field(default_factory=list)
     structured_cards: list[list[dict[str, object]]] = field(
         default_factory=lambda: [
             [
@@ -96,6 +97,8 @@ class FakeLiepinSearchWorkflowSite:
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
         del source_run_id, ref
         self.calls.append("open_liepin_detail")
+        if self.open_results:
+            return self.open_results.pop(0)
         if not self.open_ok:
             return OpenCliBrowserResult(
                 ok=False,
@@ -399,8 +402,8 @@ def test_workflow_open_action_failure_skips_wait_and_capture_without_debug_reaso
     envelope = LiepinSearchWorkflow(site=site).search_detail_backed_resumes(_request(target_resumes=1))
 
     assert envelope["status"] == "blocked"
-    assert envelope["safe_reason_code"] == "liepin_opencli_detail_not_opened"
-    assert "open_liepin_detail" in site.calls
+    assert envelope["safe_reason_code"] == "liepin_opencli_detail_open_retry_exhausted"
+    assert site.calls.count("open_liepin_detail") == 2
     assert "wait_liepin_detail_ready" not in site.calls
     assert "capture_liepin_detail_resume" not in site.calls
     failed_events = [event for event in site.events if event.get("action_kind") == "open_detail_failed"]
@@ -411,7 +414,58 @@ def test_workflow_open_action_failure_skips_wait_and_capture_without_debug_reaso
     assert "postcondition_failed" not in repr(site.events)
 
 
-def test_workflow_open_post_observe_failure_skips_wait_and_capture_without_debug_reason() -> None:
+def test_workflow_retries_same_detail_open_after_refreshing_search_state() -> None:
+    site = FakeLiepinSearchWorkflowSite(
+        structured_cards=[
+            [{"ref": "70", "provider_rank": 1}],
+        ],
+        open_results=[
+            OpenCliBrowserResult(
+                ok=False,
+                action="open_liepin_detail",
+                safe_reason_code="liepin_opencli_detail_not_opened",
+            ),
+            OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": 1}),
+        ],
+        search_states=[
+            _search_state_with_detail_targets("70"),
+            _search_state_with_detail_targets("70"),
+            _search_state_with_detail_targets("70"),
+            _search_state_with_detail_targets("70"),
+        ],
+    )
+
+    envelope = LiepinSearchWorkflow(site=site).search_detail_backed_resumes(_request(target_resumes=1))
+
+    assert envelope["status"] == "succeeded"
+    assert envelope["resumes_returned"] == 1
+    open_indexes = [index for index, call in enumerate(site.calls) if call == "open_liepin_detail"]
+    assert len(open_indexes) == 2
+    assert all(site.calls[index - 1] == "observe_liepin_search_state" for index in open_indexes)
+    retry_events = [event for event in site.events if event.get("action_kind") == "open_detail_retry_scheduled"]
+    assert retry_events[-1]["rank"] == 1
+    assert retry_events[-1]["safe_reason_code"] == "liepin_opencli_detail_not_opened"
+
+
+def test_workflow_reports_detail_open_retry_exhausted_after_retries() -> None:
+    site = FakeLiepinSearchWorkflowSite(
+        open_ok=False,
+        open_safe_reason_code="liepin_opencli_detail_not_opened",
+        structured_cards=[
+            [{"ref": "70", "provider_rank": 1}],
+        ],
+    )
+
+    envelope = LiepinSearchWorkflow(site=site).search_detail_backed_resumes(_request(target_resumes=1))
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_detail_open_retry_exhausted"
+    assert site.calls.count("open_liepin_detail") == 2
+    exhausted_events = [event for event in site.events if event.get("action_kind") == "open_detail_retry_exhausted"]
+    assert exhausted_events[-1]["safe_reason_code"] == "liepin_opencli_detail_open_retry_exhausted"
+
+
+def test_workflow_open_post_observe_failure_retries_before_wait_and_capture() -> None:
     site = FakeLiepinSearchWorkflowSite(
         structured_cards=[
             [{"ref": "70", "provider_rank": 1}],
@@ -427,15 +481,15 @@ def test_workflow_open_post_observe_failure_skips_wait_and_capture_without_debug
 
     envelope = LiepinSearchWorkflow(site=site).search_detail_backed_resumes(_request(target_resumes=1))
 
-    assert envelope["status"] == "blocked"
-    assert envelope["safe_reason_code"] == "liepin_opencli_detail_not_opened"
-    assert "open_liepin_detail" in site.calls
-    assert "wait_liepin_detail_ready" not in site.calls
-    assert "capture_liepin_detail_resume" not in site.calls
+    assert envelope["status"] == "succeeded"
+    assert envelope["resumes_returned"] == 1
+    assert site.calls.count("open_liepin_detail") == 2
+    assert "wait_liepin_detail_ready" in site.calls
+    assert "capture_liepin_detail_resume" in site.calls
     failed_events = [event for event in site.events if event.get("action_kind") == "open_detail_failed"]
     assert failed_events
     assert failed_events[-1]["safe_reason_code"] == "liepin_opencli_detail_not_opened"
-    assert not any(event.get("action_kind") == "open_detail_succeeded" for event in site.events)
+    assert any(event.get("action_kind") == "open_detail_succeeded" for event in site.events)
     assert "precondition_failed" not in repr(site.events)
     assert "postcondition_failed" not in repr(site.events)
 

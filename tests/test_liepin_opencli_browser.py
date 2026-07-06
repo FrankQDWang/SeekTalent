@@ -2292,6 +2292,45 @@ def test_open_liepin_detail_opens_card_detail_url_in_controlled_tab(tmp_path: Pa
     assert lease["url"] == detail_url
 
 
+def test_open_liepin_detail_waits_for_controlled_tab_navigation_before_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("seektalent.providers.liepin.liepin_site_adapter.time.sleep", lambda _: None)
+    search_url = "https://h.liepin.com/search/getConditionItem#session"
+    detail_url = (
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
+        "&index=5&position=5&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal"
+    )
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={"357": detail_url},
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [
+                search_url,
+                "about:blank",
+                detail_url,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "摆** 31岁 工作7年 本科 北京\n"
+                "数据开发 ETL Python\n"
+                "[357]<div class=detail-resume-card-wrap>查看完整简历</div>"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): _single_tab_list(
+                page_id="page-search",
+                url=search_url,
+            ),
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", detail_url): (
+                json.dumps({"page": "page-detail-357", "url": detail_url})
+            ),
+        },
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_detail(source_run_id="run-1", ref="357", rank=1)
+
+    assert result.ok is True
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "get", "url")) == 3
+
+
 def test_open_liepin_detail_reuses_already_opened_ref_without_duplicate_click(tmp_path: Path) -> None:
     commands = FakeCommands()
     runner = _runner(commands, lease_dir=tmp_path)
@@ -3276,12 +3315,15 @@ def test_search_liepin_resumes_leaves_detail_tabs_open_and_restores_search_for_n
             ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-71"): "{}",
             ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
                 json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
+                json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
                 json.dumps(
                     [
                         {"page": "page-search", "url": search_url, "active": False},
                         {"page": "page-detail-70", "url": detail70_url, "active": True},
                     ]
                 ),
+                json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
+                json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
                 json.dumps(
                     [
                         {"page": "page-search", "url": search_url, "active": False},
@@ -3439,12 +3481,15 @@ def test_search_liepin_resumes_uses_cached_detail_urls_when_refresh_after_return
             ("opencli", "browser", "seektalent-liepin", "tab", "close", "page-detail-71"): "{}",
             ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
                 json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
+                json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
                 json.dumps(
                     [
                         {"page": "page-search", "url": search_url, "active": False},
                         {"page": "page-detail-70", "url": detail70_url, "active": True},
                     ]
                 ),
+                json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
+                json.dumps([{"page": "page-search", "url": search_url, "active": True}]),
                 json.dumps(
                     [
                         {"page": "page-search", "url": search_url, "active": False},

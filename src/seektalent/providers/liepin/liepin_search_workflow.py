@@ -12,6 +12,15 @@ from seektalent.providers.liepin.liepin_state_machine import (
     TransitionResult,
 )
 
+_DETAIL_OPEN_MAX_ATTEMPTS = 2
+_DETAIL_OPEN_RETRY_EXHAUSTED_REASON = "liepin_opencli_detail_open_retry_exhausted"
+_DETAIL_OPEN_RETRYABLE_REASON_CODES = frozenset(
+    {
+        "liepin_opencli_detail_not_opened",
+        "liepin_opencli_timeout",
+    }
+)
+
 
 @dataclass(frozen=True, kw_only=True)
 class LiepinSearchWorkflowRequest:
@@ -228,7 +237,7 @@ class LiepinSearchWorkflow:
             )
 
             cached_detail_url = detail_urls_by_rank.get(selected_rank)
-            open_result = self._open_detail_transition(
+            open_result = self._open_detail_with_retry(
                 source_run_id=request.source_run_id,
                 ref=selected_ref,
                 rank=selected_rank,
@@ -396,6 +405,81 @@ class LiepinSearchWorkflow:
             )
         return extracted
 
+    def _open_detail_with_retry(
+        self,
+        *,
+        source_run_id: str,
+        ref: str,
+        rank: int,
+        cached_detail_url: str | None,
+        use_cached: bool,
+    ) -> OpenCliBrowserResult:
+        last_result: OpenCliBrowserResult | None = None
+        for attempt in range(1, _DETAIL_OPEN_MAX_ATTEMPTS + 1):
+            result = self._open_detail_transition(
+                source_run_id=source_run_id,
+                ref=ref,
+                rank=rank,
+                cached_detail_url=cached_detail_url,
+                use_cached=use_cached,
+                attempt=attempt,
+            )
+            if result.ok:
+                return result
+            last_result = result
+            reason = result.safe_reason_code or "liepin_opencli_detail_not_opened"
+            action_attempted = int(result.counts.get("action_attempted") or 0) > 0
+            if (
+                not action_attempted
+                or reason not in _DETAIL_OPEN_RETRYABLE_REASON_CODES
+                or attempt >= _DETAIL_OPEN_MAX_ATTEMPTS
+            ):
+                break
+            self._append_event(
+                source_run_id,
+                {
+                    "action_kind": "open_detail_retry_scheduled",
+                    "route_kind": "detail",
+                    "ok": True,
+                    "rank": rank,
+                    "ref": ref,
+                    "attempt": attempt,
+                    "next_attempt": attempt + 1,
+                    "safe_reason_code": reason,
+                },
+            )
+
+        if (
+            last_result is not None
+            and int(last_result.counts.get("action_attempted") or 0) > 0
+            and (last_result.safe_reason_code or "liepin_opencli_detail_not_opened")
+            in _DETAIL_OPEN_RETRYABLE_REASON_CODES
+        ):
+            self._append_event(
+                source_run_id,
+                {
+                    "action_kind": "open_detail_retry_exhausted",
+                    "route_kind": "detail",
+                    "ok": False,
+                    "rank": rank,
+                    "ref": ref,
+                    "attempts": _DETAIL_OPEN_MAX_ATTEMPTS,
+                    "safe_reason_code": _DETAIL_OPEN_RETRY_EXHAUSTED_REASON,
+                },
+            )
+            return OpenCliBrowserResult(
+                ok=False,
+                action="open_liepin_detail",
+                safe_reason_code=_DETAIL_OPEN_RETRY_EXHAUSTED_REASON,
+                counts={"rank": rank, "attempts": _DETAIL_OPEN_MAX_ATTEMPTS, "action_attempted": 1},
+            )
+        return last_result or OpenCliBrowserResult(
+            ok=False,
+            action="open_liepin_detail",
+            safe_reason_code="liepin_opencli_detail_not_opened",
+            counts={"rank": rank, "action_attempted": 0},
+        )
+
     def _open_detail_transition(
         self,
         *,
@@ -404,6 +488,7 @@ class LiepinSearchWorkflow:
         rank: int,
         cached_detail_url: str | None,
         use_cached: bool,
+        attempt: int = 1,
     ) -> OpenCliBrowserResult:
         opened: OpenCliBrowserResult | None = None
         open_mode = "cached_url" if use_cached else "visible_card"
@@ -468,6 +553,7 @@ class LiepinSearchWorkflow:
                     "rank": rank,
                     "ref": ref,
                     "open_mode": open_mode,
+                    "attempt": attempt,
                 },
             )
         event: dict[str, object] = {
@@ -476,6 +562,7 @@ class LiepinSearchWorkflow:
             "ok": result.ok,
             "rank": rank,
             "ref": ref,
+            "attempt": attempt,
         }
         if opened is not None:
             event["open_mode"] = open_mode
@@ -487,12 +574,14 @@ class LiepinSearchWorkflow:
                 ok=False,
                 action="open_liepin_detail",
                 safe_reason_code=result.safe_reason_code or "liepin_opencli_detail_not_opened",
+                counts={"rank": rank, "action_attempted": 1 if opened is not None else 0},
             )
         if opened is None:
             return OpenCliBrowserResult(
                 ok=False,
                 action="open_liepin_detail",
                 safe_reason_code="liepin_opencli_detail_not_opened",
+                counts={"rank": rank, "action_attempted": 0},
             )
         return opened
 

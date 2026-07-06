@@ -26,8 +26,10 @@ _ACTION_TO_STEP_EVENT: dict[str, tuple[str, str, str]] = {
     "detail_urls_cached": ("cache_detail_urls", "source_workflow_step_completed", "completed"),
     "detail_candidate_selected": ("open_detail", "source_workflow_step_started", "running"),
     "open_detail": ("open_detail", "source_workflow_step_started", "running"),
+    "open_detail_retry_scheduled": ("open_detail", "source_workflow_step_started", "running"),
     "open_detail_succeeded": ("open_detail", "source_workflow_step_completed", "completed"),
     "open_detail_failed": ("open_detail", "source_workflow_step_failed", "failed"),
+    "open_detail_retry_exhausted": ("open_detail", "source_workflow_step_failed", "failed"),
     "open_detail_timeout": ("open_detail", "source_workflow_step_failed", "failed"),
     "wait_detail_ready": ("wait_detail_ready", "source_workflow_step_completed", "completed"),
     "observe_detail": ("capture_detail", "source_workflow_step_completed", "completed"),
@@ -50,8 +52,9 @@ _SAFE_COUNT_KEYS = {
     "resumes_returned",
     "target_resumes",
     "visible_cards",
+    "attempts",
 }
-_SAFE_METADATA_KEYS = {"rank", "open_mode"}
+_SAFE_METADATA_KEYS = {"rank", "open_mode", "attempt", "next_attempt"}
 _SENSITIVE_TEXT = re.compile(r"(?:cookie|secret|token|password|authorization|bearer|raw_resume|provider_id)", re.I)
 _SAFE_REASON_CODE = re.compile(r"^[a-z][a-z0-9_]{0,127}$")
 _SAFE_METADATA_TEXT = re.compile(r"^[a-z0-9_:-]{1,80}$")

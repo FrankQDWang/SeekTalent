@@ -45,6 +45,7 @@ _LIEPIN_PIPELINE_REASON_MAP = {
     "blocked_login_required": "source_login_required",
     "failed_provider_error": "source_provider_failed",
     "liepin_opencli_detail_not_opened": "source_browser_timeout",
+    "liepin_opencli_detail_open_retry_exhausted": "source_browser_timeout",
     "login_required": "source_login_required",
     "partial_timeout": "source_browser_timeout",
     "runtime_failed": "source_provider_failed",
