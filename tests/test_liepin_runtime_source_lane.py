@@ -19,6 +19,7 @@ from seektalent.runtime.source_filters import RuntimeLocationExecutionIntent
 from seektalent.runtime.source_lanes import RuntimeApprovedDetailLease, RuntimeSourceBudgetPolicy, RuntimeSourceLaneRequest
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 from seektalent.storage.json import sha256_json
+from seektalent.sources.liepin.reason_codes import LIEPIN_SOURCE_LANE_REASON_CODE_MAP
 from tests.settings_factory import make_settings
 
 
@@ -1032,6 +1033,7 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
         "liepin_opencli_risk_page",
         "liepin_opencli_detail_not_opened",
         "liepin_opencli_filter_unapplied",
+        "liepin_opencli_search_not_ready",
         "liepin_opencli_stale_ref",
         "liepin_opencli_selector_not_found",
         "liepin_opencli_selector_ambiguous",
@@ -1040,6 +1042,13 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
         "liepin_opencli_daemon_stale",
     ):
         assert runtime_safe_reason_code_from_worker_failure_code(reason_code) == reason_code
+
+
+def test_opencli_search_not_ready_maps_to_source_lane_backend_unavailable() -> None:
+    assert (
+        LIEPIN_SOURCE_LANE_REASON_CODE_MAP["liepin_opencli_search_not_ready"]
+        == "source_browser_backend_unavailable"
+    )
 
 
 def test_liepin_runtime_lane_uses_provider_adapter_context_and_public_payload_is_safe() -> None:

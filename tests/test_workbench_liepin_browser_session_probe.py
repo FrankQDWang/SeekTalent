@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.providers.liepin.worker_contracts import SessionStatus
@@ -497,7 +499,18 @@ def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
         assert liepin_card["warningCode"] == "source_login_required"
 
 
-def test_start_session_opencli_mode_preserves_raw_status_reason_when_not_ready(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("safe_reason_code", "public_reason_code"),
+    [
+        ("liepin_opencli_filter_unapplied", "source_filter_unavailable"),
+        ("liepin_opencli_search_not_ready", "source_browser_backend_unavailable"),
+    ],
+)
+def test_start_session_opencli_mode_preserves_raw_status_reason_when_not_ready(
+    tmp_path: Path,
+    safe_reason_code: str,
+    public_reason_code: str,
+) -> None:
     with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
         actor_payload = _ensure_local_actor(client)
         user = _workbench_user_from_actor_payload(actor_payload)
@@ -511,7 +524,7 @@ def test_start_session_opencli_mode_preserves_raw_status_reason_when_not_ready(t
         worker = ProbeLiepinWorker(
             status="missing",
             provider_account_hash=None,
-            safe_reason_code="liepin_opencli_filter_unapplied",
+            safe_reason_code=safe_reason_code,
         )
         _install_probe_worker(client, worker)
 
@@ -529,25 +542,25 @@ def test_start_session_opencli_mode_preserves_raw_status_reason_when_not_ready(t
             {
                 "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
                 "sourceKind": "liepin",
-                "reason": "source_filter_unavailable",
+                "reason": public_reason_code,
             }
         ]
         assert worker.probe_calls[0]["provider_account_hash"] == provider_account_hash
 
         session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
-        assert liepin_card["warningCode"] == "source_filter_unavailable"
+        assert liepin_card["warningCode"] == public_reason_code
         with sqlite3.connect(_db_path(tmp_path)) as db:
             raw_warning_code = db.execute(
                 "SELECT warning_code FROM source_runs WHERE source_run_id = ?",
                 (_started_source(session, "liepin")["sourceRunId"],),
             ).fetchone()[0]
-        assert raw_warning_code == "liepin_opencli_filter_unapplied"
+        assert raw_warning_code == safe_reason_code
         liepin_runtime = next(
             source
             for source in session_payload.get("runtimeSourceState", {}).get("sources", [])
             if source["sourceKind"] == "liepin"
         )
-        assert liepin_runtime["reasonCode"] == "source_filter_unavailable"
+        assert liepin_runtime["reasonCode"] == public_reason_code
 
 
 def test_create_session_opencli_mode_auto_binds_ready_local_browser_from_clean_db(

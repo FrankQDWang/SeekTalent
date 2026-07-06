@@ -49,7 +49,6 @@ RUNTIME_SOURCE_REASON_CODES = (
         }
     )
     | LIEPIN_WORKER_SAFE_REASON_CODES
-    | {"liepin_opencli_search_not_ready"}
 )
 
 
