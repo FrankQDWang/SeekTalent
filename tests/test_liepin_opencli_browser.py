@@ -1653,7 +1653,7 @@ def test_state_reads_dom_before_classifying_resume_search_url() -> None:
     result = _runner(commands).state()
 
     assert result.ok is True
-    assert commands.calls[:2] == [
+    assert commands.calls == [
         ("opencli", "browser", "seektalent-liepin", "get", "url"),
         ("opencli", "browser", "seektalent-liepin", "state"),
     ]

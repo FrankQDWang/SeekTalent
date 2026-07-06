@@ -361,16 +361,15 @@ def _line_has_detail_open_label(line: str) -> bool:
 
 
 def _looks_like_liepin_search_result_page(text: str) -> bool:
-    return _looks_like_liepin_search_result_surface(text)
-
-
-def _looks_like_liepin_search_result_surface(text: str) -> bool:
     return (
         "id=resultList" in text
         or "detail-resume-card-wrap" in text
         or bool(re.search(r"\b\d+\s*位人选\b", text))
-        or extract_liepin_search_input_ref(text) is not None
     )
+
+
+def _looks_like_liepin_search_result_surface(text: str) -> bool:
+    return _looks_like_liepin_search_result_page(text) or extract_liepin_search_input_ref(text) is not None
 
 
 def _is_liepin_recruiter_search_surface(url: str) -> bool:
@@ -404,7 +403,7 @@ def _looks_like_liepin_detail_resume_state(text: str) -> bool:
     url = _state_url(text)
     if url is not None and not _is_liepin_detail_url(url):
         return False
-    if _looks_like_liepin_search_result_page(text):
+    if _looks_like_liepin_search_result_surface(text):
         return False
     detail_markers = ("当前职位", "工作经历", "教育经历", "项目经历", "自我评价", "求职意向", "任职经历")
     if any(marker in text for marker in detail_markers):
