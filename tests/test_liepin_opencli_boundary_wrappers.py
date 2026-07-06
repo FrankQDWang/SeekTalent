@@ -299,6 +299,7 @@ def test_liepin_opencli_policy_mapping_is_complete() -> None:
         "opencli_timeout": "liepin_opencli_timeout",
         "opencli_extension_disconnected": "liepin_opencli_extension_disconnected",
         "opencli_status_unavailable": "liepin_opencli_status_unavailable",
+        "opencli_bootstrap_failed": "liepin_opencli_bootstrap_failed",
         "opencli_daemon_not_running": "liepin_opencli_daemon_not_running",
         "opencli_daemon_stale": "liepin_opencli_daemon_stale",
         "opencli_forbidden_command": "liepin_opencli_forbidden_command",

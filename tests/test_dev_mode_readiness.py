@@ -204,7 +204,7 @@ def test_dev_mode_status_uses_configured_opencli_env(monkeypatch: pytest.MonkeyP
     components = {item.name: item for item in status.components}
     assert "cts" not in components
     assert components["liepin_opencli_browser"].status == "configured"
-    assert components["liepin_opencli_browser"].reasonCode == "configured"
+    assert components["liepin_opencli_browser"].reasonCode == "liepin_opencli_preflight_required"
     assert not any(name.startswith("liepin_pi") for name in components)
 
 
