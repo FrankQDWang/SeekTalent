@@ -521,7 +521,9 @@ class AppSettings(BaseSettings):
     liepin_opencli_session: str = DEFAULT_LIEPIN_OPENCLI_SESSION
     liepin_opencli_window_mode: OpenCliWindowMode = "background"
     liepin_opencli_allowed_hosts_json: str = '["www.liepin.com","h.liepin.com","c.liepin.com","lpt.liepin.com"]'
-    liepin_opencli_allowed_start_urls_json: str = '["https://h.liepin.com/search/getConditionItem#session"]'
+    liepin_opencli_allowed_start_urls_json: str = (
+        '["https://h.liepin.com/search/getConditionItem#session","https://h.liepin.com/resume/search"]'
+    )
     liepin_opencli_max_actions_per_task: int = 80
     liepin_opencli_max_pages_per_task: int = 1
     liepin_opencli_max_cards_per_task: int = 20

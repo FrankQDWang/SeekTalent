@@ -38,7 +38,10 @@ def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.Mo
         "c.liepin.com",
         "lpt.liepin.com",
     )
-    assert settings.liepin_opencli_allowed_start_urls == ("https://h.liepin.com/search/getConditionItem#session",)
+    assert settings.liepin_opencli_allowed_start_urls == (
+        "https://h.liepin.com/search/getConditionItem#session",
+        "https://h.liepin.com/resume/search",
+    )
     assert settings.liepin_opencli_max_actions_per_task == 80
     assert settings.liepin_opencli_max_pages_per_task == 1
     assert settings.liepin_opencli_max_cards_per_task == 20

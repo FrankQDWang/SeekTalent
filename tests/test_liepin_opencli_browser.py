@@ -1602,6 +1602,22 @@ def test_state_classifier_ignores_hidden_add_resume_drawer_on_search_page() -> N
     assert classify_liepin_state(url=LIEPIN_SEARCH_URL, text=state_text) is None
 
 
+def test_classifier_allows_recruiter_resume_search_surface_with_result_dom() -> None:
+    state_text = (
+        "URL: https://h.liepin.com/resume/search\n"
+        "<span>包含全部关键词</span>\n"
+        "[27]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "<div id=resultList><div class=detail-resume-card-wrap>查看完整简历</div></div>"
+    )
+
+    assert classify_liepin_state(url="https://h.liepin.com/resume/search", text=state_text) is None
+
+
+def test_classifier_allows_recruiter_search_surface_initial_state_without_result_dom() -> None:
+    assert classify_liepin_state(url="https://h.liepin.com/search/getConditionItem#session", text="找简历") is None
+    assert classify_liepin_state(url="https://h.liepin.com/resume/search", text="找简历") is None
+
+
 def test_state_classifier_allows_owned_liepin_resume_detail_page() -> None:
     state_text = (
         "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&type=normal\n"
@@ -1622,7 +1638,50 @@ def test_state_classifier_allows_owned_liepin_resume_detail_page() -> None:
     )
 
 
-def test_state_blocks_forbidden_url_before_reading_page_text() -> None:
+def test_state_reads_dom_before_classifying_resume_search_url() -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://h.liepin.com/resume/search",
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://h.liepin.com/resume/search\n"
+                "<span>包含全部关键词</span>\n"
+                "[27]<input type=search autocomplete=off role=combobox id=rc_select_1 />"
+            ),
+        }
+    )
+
+    result = _runner(commands).state()
+
+    assert result.ok is True
+    assert commands.calls[:2] == [
+        ("opencli", "browser", "seektalent-liepin", "get", "url"),
+        ("opencli", "browser", "seektalent-liepin", "state"),
+    ]
+
+
+def test_state_classifies_against_url_reported_by_state_output() -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://www.liepin.com/resume/detail/123\n候选人详情"
+            ),
+        }
+    )
+
+    result = _runner(commands).state()
+
+    assert result.ok is False
+    assert result.safe_reason_code == "liepin_opencli_unknown_modal"
+    assert commands.calls == [
+        ("opencli", "browser", "seektalent-liepin", "get", "url"),
+        ("opencli", "browser", "seektalent-liepin", "state"),
+    ]
+
+
+def test_state_blocks_forbidden_url_after_reading_page_text() -> None:
     commands = FakeCommands(
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): ("https://www.liepin.com/resume/detail/123"),
@@ -1635,12 +1694,15 @@ def test_state_blocks_forbidden_url_before_reading_page_text() -> None:
     assert result.ok is False
     assert result.safe_reason_code == "liepin_opencli_unknown_modal"
     assert result.to_tool_payload()["observation"] == {
-        "text": "",
-        "chars": 0,
+        "text": "raw detail resume text",
+        "chars": len("raw detail resume text"),
         "truncated": False,
         "terminal": True,
     }
-    assert commands.calls == [("opencli", "browser", "seektalent-liepin", "get", "url")]
+    assert commands.calls == [
+        ("opencli", "browser", "seektalent-liepin", "get", "url"),
+        ("opencli", "browser", "seektalent-liepin", "state"),
+    ]
 
 
 def test_state_reads_owned_liepin_resume_detail_page_without_click_allowing_actions() -> None:

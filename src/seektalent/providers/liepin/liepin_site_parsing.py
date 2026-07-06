@@ -9,6 +9,10 @@ from urllib.parse import unquote, urlparse
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
 from seektalent.providers.liepin.detail_payload_text import find_liepin_whole_page_text_alias_paths
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_OPENCLI_ALLOWED_HOSTS,
+    LIEPIN_RECRUITER_SEARCH_SURFACE_PATHS,
+)
 from seektalent.providers.liepin.opencli_card_text import (
     ACCESSIBILITY_NOISE_TOKENS,
     clean_liepin_result_card_text,
@@ -21,7 +25,7 @@ from seektalent.providers.liepin.opencli_card_text import (
 FIXED_READONLY_EVAL_PROBES = frozenset(
     {"liepin_city_choose_ref", "liepin_detail_url_for_card", "liepin_detail_resume_payload"}
 )
-LIEPIN_ALLOWED_HOSTS = frozenset({"www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com"})
+LIEPIN_ALLOWED_HOSTS = frozenset(LIEPIN_OPENCLI_ALLOWED_HOSTS)
 LIEPIN_RISK_HOSTS = frozenset({"safe.liepin.com"})
 OWNED_PAGE_MARKER_TTL_SECONDS = 24 * 60 * 60
 FORBIDDEN_CARD_EVIDENCE_KEYS = frozenset(
@@ -191,14 +195,16 @@ def classify_liepin_state(*, url: str, text: str) -> str | None:
         return "liepin_opencli_risk_page"
     if host not in LIEPIN_ALLOWED_HOSTS:
         return "liepin_opencli_host_blocked"
-    if _is_forbidden_liepin_url(url) and not _is_allowed_liepin_resume_detail_url(url):
-        return "liepin_opencli_unknown_modal"
     if host == "lpt.liepin.com" and ("身份" in text or "请选择" in text):
         return "liepin_opencli_identity_intercept"
     if _looks_like_login_required(text):
         return "liepin_opencli_login_required"
     if "验证码" in text or "安全验证" in text or "风险提示" in text or re.search(r"\bcaptcha\b", lowered):
         return "liepin_opencli_risk_page"
+    if _is_liepin_recruiter_search_surface(url):
+        return None
+    if _is_forbidden_liepin_url(url) and not _is_allowed_liepin_resume_detail_url(url):
+        return "liepin_opencli_unknown_modal"
     return None
 
 
@@ -355,7 +361,23 @@ def _line_has_detail_open_label(line: str) -> bool:
 
 
 def _looks_like_liepin_search_result_page(text: str) -> bool:
-    return "id=resultList" in text or "detail-resume-card-wrap" in text or bool(re.search(r"\b\d+\s*位人选\b", text))
+    return _looks_like_liepin_search_result_surface(text)
+
+
+def _looks_like_liepin_search_result_surface(text: str) -> bool:
+    return (
+        "id=resultList" in text
+        or "detail-resume-card-wrap" in text
+        or bool(re.search(r"\b\d+\s*位人选\b", text))
+        or extract_liepin_search_input_ref(text) is not None
+    )
+
+
+def _is_liepin_recruiter_search_surface(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").casefold()
+    path = unquote(parsed.path or "").rstrip("/")
+    return host in {"h.liepin.com", "c.liepin.com"} and path in LIEPIN_RECRUITER_SEARCH_SURFACE_PATHS
 
 
 def _state_url(text: str) -> str | None:

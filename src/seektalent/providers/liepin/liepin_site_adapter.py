@@ -41,6 +41,7 @@ from seektalent.providers.liepin.opencli_filter_planning import (
     skipped_liepin_filter_names,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_OPENCLI_ALLOWED_HOSTS,
     LIEPIN_RECRUITER_SEARCH_URL,
     liepin_error_from_opencli_error,
     liepin_result_from_opencli_result,
@@ -61,6 +62,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _detail_provider_key_material,
     _detail_targets_payload,
     _fixed_readonly_eval_probe_script,
+    _is_liepin_recruiter_search_surface,
     _is_liepin_detail_url,
     _is_safe_page_id,
     _liepin_structured_cards_payload_probe_script,
@@ -167,7 +169,7 @@ def _result_from_error(error: OpenCliBrowserError) -> TransitionResult:
 
 
 def _search_url_ready(snapshot: LiepinStateSnapshot) -> bool:
-    return snapshot.url is not None and _url_matches_start_surface(snapshot.url, LIEPIN_RECRUITER_SEARCH_URL)
+    return snapshot.url is not None and _is_liepin_recruiter_search_surface(snapshot.url)
 
 
 def _search_state_nonterminal(snapshot: LiepinStateSnapshot) -> bool:
@@ -291,8 +293,9 @@ class LiepinSiteAdapter:
 
     def state(self) -> OpenCliBrowserResult:
         current_url = self._current_url()
-        url_terminal_reason = classify_liepin_state(url=current_url, text="")
-        if url_terminal_reason:
+        current_host = urlparse(current_url).hostname or ""
+        if current_host not in LIEPIN_OPENCLI_ALLOWED_HOSTS:
+            url_terminal_reason = classify_liepin_state(url=current_url, text="")
             observation = build_observation("")
             observation["terminal"] = True
             return OpenCliBrowserResult(
@@ -303,7 +306,8 @@ class LiepinSiteAdapter:
             )
         output = self._run_browser_command("state", ())
         observation = build_observation(output)
-        terminal_reason = classify_liepin_state(url=current_url, text=output)
+        observed_url = _state_url(output) or current_url
+        terminal_reason = classify_liepin_state(url=observed_url, text=output)
         observation["terminal"] = terminal_reason is not None
         result_card_targets = self._find_liepin_result_card_detail_targets(
             state_text=output,
@@ -1878,6 +1882,8 @@ class LiepinSiteAdapter:
         tab = urlparse(tab_url)
         if (tab.hostname or "") not in self._site_config.allowed_hosts:
             return False
+        if _is_liepin_recruiter_search_surface(tab_url):
+            return True
         if any(_url_matches_start_surface(tab_url, start_url) for start_url in self._site_config.allowed_start_urls):
             return True
         path = tab.path or ""
@@ -2094,6 +2100,8 @@ class LiepinSiteAdapter:
         parsed = urlparse(url)
         if (parsed.hostname or "") not in self._site_config.allowed_hosts:
             return False
+        if _is_liepin_recruiter_search_surface(url):
+            return True
         path = parsed.path or ""
         if path.startswith("/resume/showresumedetail"):
             return False
@@ -2160,7 +2168,9 @@ class LiepinSiteAdapter:
             tab_url = str(tab.get("url") or "")
             if not _is_safe_page_id(page_id):
                 continue
-            if not _url_matches_start_surface(tab_url, expected_url):
+            if not _is_liepin_recruiter_search_surface(tab_url) and not _url_matches_start_surface(
+                tab_url, expected_url
+            ):
                 continue
             if tab.get("active") is True:
                 continue
@@ -2270,6 +2280,8 @@ class LiepinSiteAdapter:
         return max(candidates, key=lambda item: item[0])[1]
 
     def _opened_tab_url_matches_requested_url(self, tab_url: str, requested_url: str) -> bool:
+        if _is_liepin_recruiter_search_surface(tab_url) and _is_liepin_recruiter_search_surface(requested_url):
+            return True
         if _url_matches_start_or_detail_surface(tab_url, requested_url):
             return True
         if _is_liepin_detail_url(requested_url):
@@ -2691,14 +2703,19 @@ class LiepinSiteAdapter:
         host = urlparse(url).hostname or ""
         if host not in self._site_config.allowed_hosts:
             raise OpenCliBrowserError("liepin_opencli_host_blocked")
-        if url not in self._site_config.allowed_start_urls:
-            raise OpenCliBrowserError("liepin_opencli_start_url_blocked")
+        if url in self._site_config.allowed_start_urls or _is_liepin_recruiter_search_surface(url):
+            return
+        raise OpenCliBrowserError("liepin_opencli_start_url_blocked")
 
     def _validate_tab_new_url(self, url: str) -> None:
         host = urlparse(url).hostname or ""
         if host not in self._site_config.allowed_hosts:
             raise OpenCliBrowserError("liepin_opencli_host_blocked")
-        if url in self._site_config.allowed_start_urls or _is_liepin_detail_url(url):
+        if (
+            url in self._site_config.allowed_start_urls
+            or _is_liepin_recruiter_search_surface(url)
+            or _is_liepin_detail_url(url)
+        ):
             return
         raise OpenCliBrowserError("liepin_opencli_start_url_blocked")
 
