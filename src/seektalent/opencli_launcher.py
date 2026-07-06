@@ -29,6 +29,9 @@ PROVIDER_SECRET_ENV_VARS = frozenset(
         "SEEKTALENT_DOMI_LLM_CHANNEL",
     }
 )
+OPENCLI_NODE_POLICY_ENV = "SEEKTALENT_OPENCLI_NODE_POLICY"
+EXPLICIT_OPENCLI_NODE_ENV = "SEEKTALENT_OPENCLI_NODE"
+DOMI_NODE_ENV_VARS = ("SEEKTALENT_DOMI_NODE", "DOMI_NODE")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -64,11 +67,45 @@ def ensure_opencli_runtime(
     opencli_version: str = OPENCLI_VERSION,
 ) -> OpenCliRuntime:
     runtime_root = (root or RUNTIME_ROOT).expanduser()
+    node_policy = os.environ.get(OPENCLI_NODE_POLICY_ENV, "").strip().lower()
+    external_node = _configured_node_from_env()
     runtime_root.mkdir(parents=True, exist_ok=True)
     with _runtime_lock(runtime_root):
-        node = _ensure_managed_node(runtime_root, node_version=node_version)
+        if node_policy == "domi":
+            if external_node is None:
+                raise BootstrapError(
+                    "domi_node_missing: SEEKTALENT_DOMI_NODE or DOMI_NODE is required "
+                    "when SEEKTALENT_OPENCLI_NODE_POLICY=domi"
+                )
+            node = _ensure_external_node(external_node)
+        elif external_node is not None:
+            node = _ensure_external_node(external_node)
+        else:
+            node = _ensure_managed_node(runtime_root, node_version=node_version)
         opencli_main = _ensure_managed_opencli(runtime_root, node=node, opencli_version=opencli_version)
     return OpenCliRuntime(node=node, opencli_main=opencli_main)
+
+
+def _configured_node_from_env() -> Path | None:
+    for key in (EXPLICIT_OPENCLI_NODE_ENV, *DOMI_NODE_ENV_VARS):
+        raw = os.environ.get(key)
+        if raw and raw.strip():
+            return _resolve_node_env_path(raw)
+    return None
+
+
+def _resolve_node_env_path(raw: str) -> Path:
+    path = Path(raw).expanduser()
+    if path.is_dir():
+        return path / ("node.exe" if sys.platform == "win32" else "node")
+    return path
+
+
+def _ensure_external_node(node: Path) -> Path:
+    if not node.exists():
+        raise BootstrapError(f"domi_node_missing: Node runtime is not executable: {node}")
+    _npm_for_node(node)
+    return node
 
 
 def _ensure_managed_node(runtime_root: Path, *, node_version: str) -> Path:
@@ -151,10 +188,10 @@ def _opencli_subprocess_env(*, node_bin_dir: Path) -> dict[str, str]:
 
 
 def _npm_for_node(node: Path) -> Path:
-    managed_npm = node.parent / ("npm.cmd" if sys.platform == "win32" else "npm")
-    if managed_npm.exists():
-        return managed_npm
-    raise BootstrapError("managed Node npm is missing; reinstall the managed OpenCLI runtime")
+    npm = node.parent / ("npm.cmd" if sys.platform == "win32" else "npm")
+    if npm.exists():
+        return npm
+    raise BootstrapError(f"Node npm is missing beside Node runtime: {node}")
 
 
 def _package_version(path: Path) -> str | None:

@@ -76,6 +76,58 @@ def test_opencli_install_requires_managed_npm(
         opencli_launcher._npm_for_node(node)
 
 
+def test_domi_node_policy_uses_explicit_domi_node_without_downloading(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
+    _write_fake_npm(domi_node.parent)
+    _write_managed_opencli(tmp_path / "runtime")
+    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
+    monkeypatch.setattr(
+        opencli_launcher,
+        "_ensure_managed_node",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Domi policy must not download managed Node")
+        ),
+    )
+
+    runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
+
+    assert runtime.node == domi_node
+    assert runtime.opencli_main.name == "main.js"
+
+
+def test_domi_node_policy_requires_domi_node_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
+    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
+    monkeypatch.delenv("DOMI_NODE", raising=False)
+
+    with pytest.raises(opencli_launcher.BootstrapError, match="domi_node_missing"):
+        opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
+
+
+def test_domi_node_env_accepts_node_bin_directory(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    domi_bin = tmp_path / "domi-bin"
+    domi_node = _write_fake_node(domi_bin, exit_code=0)
+    _write_fake_npm(domi_bin)
+    _write_managed_opencli(tmp_path / "runtime")
+    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
+    monkeypatch.setenv("DOMI_NODE", str(domi_bin))
+
+    runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
+
+    assert runtime.node == domi_node
+
+
 def test_opencli_install_env_excludes_provider_secrets(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
