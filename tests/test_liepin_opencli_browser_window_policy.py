@@ -4,45 +4,13 @@ import json
 import subprocess
 from pathlib import Path
 
-from seektalent.opencli_browser.runtime import SubprocessCurrentChromeTabOpener
-from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS
 from seektalent.providers.liepin.liepin_site_adapter import classify_liepin_state
 from tests.test_liepin_opencli_browser import (
     ANY_STRUCTURED_CARD_PROBE,
     FakeCommands,
-    FakeCurrentChromeTabOpener,
     RefEvalCommands,
     _runner,
 )
-
-
-def test_subprocess_current_chrome_tab_opener_accepts_canonical_return_url(monkeypatch) -> None:
-    requested_url = "https://h.liepin.com/search/getConditionItem#session"
-    opened_url = "https://h.liepin.com/search/getConditionItem?from=redirect#session"
-
-    def fake_run(argv, *, check, capture_output, text, timeout):
-        del check, capture_output, text
-        assert argv[-2:] == (requested_url, "h.liepin.com/search/getConditionItem")
-        assert timeout == 5
-        return subprocess.CompletedProcess(argv, 0, stdout=f"{opened_url}\n")
-
-    monkeypatch.setattr("seektalent.opencli_browser.runtime.subprocess.run", fake_run)
-
-    opener = SubprocessCurrentChromeTabOpener(reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS)
-
-    assert opener.open_tab(requested_url) is True
-
-
-def test_subprocess_current_chrome_tab_opener_rejects_missing_chrome_window(monkeypatch) -> None:
-    def fake_run(argv, *, check, capture_output, text, timeout):
-        del check, capture_output, text, timeout
-        return subprocess.CompletedProcess(argv, 0, stdout="no-window\n")
-
-    monkeypatch.setattr("seektalent.opencli_browser.runtime.subprocess.run", fake_run)
-
-    opener = SubprocessCurrentChromeTabOpener(reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS)
-
-    assert opener.open_tab("https://h.liepin.com/search/getConditionItem#session") is False
 
 
 def test_extract_visible_liepin_cards_accepts_english_education_labels(tmp_path: Path) -> None:
@@ -105,12 +73,9 @@ def test_open_liepin_tab_creates_background_opencli_tab_without_current_window_o
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-
-    result = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener).open_liepin_tab(liepin_url)
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "unbind") not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "bind") not in commands.calls
@@ -148,12 +113,9 @@ def test_open_liepin_tab_unbinds_and_retries_when_initial_background_tab_new_is_
             ("opencli", "browser", "seektalent-liepin", "unbind"): "",
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-
-    result = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener).open_liepin_tab(liepin_url)
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert commands.calls == [
         ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url),
@@ -176,12 +138,9 @@ def test_open_liepin_tab_ignores_active_user_tab_and_opens_background_tab(tmp_pa
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-
-    result = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener).open_liepin_tab(liepin_url)
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "open", liepin_url) not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) in commands.calls
     lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
@@ -200,12 +159,9 @@ def test_open_liepin_tab_does_not_read_current_url_before_background_open(tmp_pa
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-
-    result = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener).open_liepin_tab(liepin_url)
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "get", "url") not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) in commands.calls
 
@@ -230,8 +186,7 @@ def test_open_liepin_tab_unbinds_stale_workbench_tab_before_binding_liepin(tmp_p
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-    runner = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener)
+    runner = _runner(commands, lease_dir=tmp_path)
     runner._write_owned_page_marker(
         page_id="page-stale-search",
         url=liepin_url,
@@ -257,7 +212,6 @@ def test_open_liepin_tab_unbinds_stale_workbench_tab_before_binding_liepin(tmp_p
     result = runner.open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "open", liepin_url) not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "bind") not in commands.calls
@@ -277,12 +231,9 @@ def test_open_liepin_tab_accepts_canonical_background_search_url(tmp_path: Path)
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-
-    result = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener).open_liepin_tab(liepin_url)
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "open", liepin_url) not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) in commands.calls
     lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
@@ -299,13 +250,11 @@ def test_open_liepin_detail_accepts_canonical_background_detail_url(tmp_path: Pa
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-    runner = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener)
+    runner = _runner(commands, lease_dir=tmp_path)
 
     page_id = runner._open_new_liepin_tab(url=detail_url, source_run_id="source-1")
 
     assert page_id == "page-background-detail"
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "open", detail_url) not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", detail_url) in commands.calls
 
@@ -385,8 +334,7 @@ def test_open_liepin_tab_recovers_from_lease_select_blocked_on_workbench_tab(tmp
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener(commands=commands)
-    runner = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener)
+    runner = _runner(commands, lease_dir=tmp_path)
     runner._write_owned_page_marker(
         page_id="page-bound-search",
         url=liepin_url,
@@ -412,7 +360,6 @@ def test_open_liepin_tab_recovers_from_lease_select_blocked_on_workbench_tab(tmp
     result = runner.open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "open", liepin_url) not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "bind") not in commands.calls
@@ -434,12 +381,9 @@ def test_open_liepin_tab_does_not_reuse_active_user_search_tab_without_marker(tm
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-
-    result = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener).open_liepin_tab(liepin_url)
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "open", liepin_url) not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "bind") not in commands.calls
@@ -476,8 +420,7 @@ def test_open_liepin_tab_does_not_walk_all_search_markers_when_canonical_is_stal
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-    runner = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener)
+    runner = _runner(commands, lease_dir=tmp_path)
     runner._write_owned_page_marker(
         page_id="page-search-old",
         url=liepin_url,
@@ -500,7 +443,6 @@ def test_open_liepin_tab_does_not_walk_all_search_markers_when_canonical_is_stal
     assert result.ok is True
     assert ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search-newer") not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) in commands.calls
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "bind") not in commands.calls
 
 def test_open_liepin_tab_uses_background_tab_without_overwriting_active_non_liepin_tab(tmp_path: Path) -> None:
@@ -515,12 +457,9 @@ def test_open_liepin_tab_uses_background_tab_without_overwriting_active_non_liep
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
-
-    result = _runner(commands, lease_dir=tmp_path, current_tab_opener=current_tab_opener).open_liepin_tab(liepin_url)
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "bind") not in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) in commands.calls
     assert all(call[3] != "open" for call in commands.calls)
@@ -537,17 +476,14 @@ def test_open_liepin_tab_does_not_count_or_bind_foreground_windows(tmp_path: Pat
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
     runner = _runner(
         commands,
         lease_dir=tmp_path,
-        current_tab_opener=current_tab_opener,
     )
 
     result = runner.open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert commands.calls == [
         ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url),
@@ -565,17 +501,14 @@ def test_open_liepin_tab_writes_lease_for_background_tab(tmp_path: Path) -> None
             ),
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener()
     runner = _runner(
         commands,
         lease_dir=tmp_path,
-        current_tab_opener=current_tab_opener,
     )
 
     result = runner.open_liepin_tab(liepin_url)
 
     assert result.ok is True
-    assert current_tab_opener.calls == []
     assert commands.calls == [
         ("opencli", "browser", "seektalent-liepin", "tab", "list"),
         ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url),

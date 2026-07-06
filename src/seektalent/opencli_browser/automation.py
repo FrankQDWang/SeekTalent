@@ -25,9 +25,7 @@ from seektalent.opencli_browser.reason_codes import (
 from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
-    CurrentChromeTabOpener,
     OpenCliCommandRunner,
-    SubprocessCurrentChromeTabOpener,
     SubprocessOpenCliCommandRunner,
     strip_opencli_stdout_notice,
 )
@@ -42,13 +40,9 @@ class OpenCliBrowserAutomation:
         *,
         config: OpenCliBrowserConfig,
         commands: OpenCliCommandRunner | None = None,
-        current_tab_opener: CurrentChromeTabOpener | None = None,
     ) -> None:
         self.config = config
         self.commands = commands or SubprocessOpenCliCommandRunner()
-        self.current_tab_opener = current_tab_opener or SubprocessCurrentChromeTabOpener(
-            reuse_url_fragments=config.current_tab_reuse_url_fragments
-        )
 
     def status(self) -> OpenCliBrowserResult:
         try:
@@ -64,6 +58,21 @@ class OpenCliBrowserAutomation:
                 private_output=output,
             )
         return OpenCliBrowserResult(ok=True, action="status", private_output=output)
+
+    def restart_daemon(self) -> OpenCliBrowserResult:
+        try:
+            output = self._run(tuple(self.config.command) + ("daemon", "restart"))
+        except OpenCliBrowserError as exc:
+            return OpenCliBrowserResult(ok=False, action="restart_daemon", safe_reason_code=exc.safe_reason_code)
+        reason = _opencli_status_reason(output)
+        if reason is not None:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="restart_daemon",
+                safe_reason_code=reason,
+                private_output=output,
+            )
+        return OpenCliBrowserResult(ok=True, action="restart_daemon", private_output=output)
 
     def get_url(self) -> OpenCliBrowserResult:
         output = self.run_browser_command("get", ("url",))

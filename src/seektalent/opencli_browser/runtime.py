@@ -18,10 +18,6 @@ class OpenCliCommandRunner(Protocol):
     def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str: ...
 
 
-class CurrentChromeTabOpener(Protocol):
-    def open_tab(self, url: str) -> bool: ...
-
-
 @dataclass(frozen=True)
 class SubprocessOpenCliCommandRunner:
     def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:

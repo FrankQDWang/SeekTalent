@@ -114,6 +114,7 @@ class LiepinOpenCliSiteConfig:
 
 
 _RECOVERABLE_CONNECTION_REASONS = {
+    "liepin_opencli_daemon_not_running",
     "liepin_opencli_extension_disconnected",
     "liepin_opencli_daemon_stale",
     "liepin_opencli_status_unavailable",
@@ -336,20 +337,20 @@ class LiepinSiteAdapter:
                 safe_reason_code=status.safe_reason_code,
                 private_output=status.private_output,
             )
-        opened = self._automation.current_tab_opener.open_tab(LIEPIN_RECRUITER_SEARCH_URL)
-        if not opened:
+        restarted = liepin_result_from_opencli_result(self._automation.restart_daemon())
+        if not restarted.ok:
             return OpenCliBrowserResult(
                 ok=False,
                 action="recover_connection",
-                safe_reason_code=status.safe_reason_code,
-                private_output=status.private_output,
+                safe_reason_code=restarted.safe_reason_code,
+                private_output=restarted.private_output,
             )
         last_status = status
         for _attempt in range(5):
             time.sleep(1)
             last_status = self.status()
             if last_status.ok:
-                return OpenCliBrowserResult(ok=True, action="recover_connection", counts={"opened": 1})
+                return OpenCliBrowserResult(ok=True, action="recover_connection", counts={"restarted": 1})
         return OpenCliBrowserResult(
             ok=False,
             action="recover_connection",

@@ -397,7 +397,6 @@ def _runner(
     allowed_click_refs: tuple[str, ...] = (),
     lease_dir: Path | None = None,
     detail_open_timeout_seconds: int = 5,
-    current_tab_opener: FakeCurrentChromeTabOpener | None = None,
     pacing_enabled: bool = False,
     pacing_min_ms: int = 0,
     pacing_max_ms: int = 0,
@@ -424,13 +423,33 @@ def _runner(
         automation=OpenCliBrowserAutomation(
             config=browser_config,
             commands=commands,
-            current_tab_opener=current_tab_opener or FakeCurrentChromeTabOpener(commands=commands),
         ),
     )
 
 
 def _single_tab_list(*, page_id: str = "page-1", url: str = LIEPIN_SEARCH_URL) -> str:
     return json.dumps([{"page": page_id, "url": url, "active": True}])
+
+
+def test_recover_connection_restarts_opencli_daemon_without_current_chrome_tab_opener(monkeypatch) -> None:
+    monkeypatch.setattr("seektalent.providers.liepin.liepin_site_adapter.time.sleep", lambda _: None)
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "daemon", "status"): [
+                "Daemon: stale\nExtension: disconnected",
+                "Daemon: running\nExtension: connected",
+            ],
+            ("opencli", "daemon", "restart"): "Daemon: running\nExtension: connected",
+        }
+    )
+    opener = FakeCurrentChromeTabOpener(commands=commands)
+
+    result = _runner(commands).recover_connection()
+
+    assert result.ok is True
+    assert result.counts == {"restarted": 1}
+    assert ("opencli", "daemon", "restart") in commands.calls
+    assert opener.calls == []
 
 
 def _current_window_open_outputs(
@@ -1111,17 +1130,13 @@ def test_open_liepin_tab_selects_existing_search_tab_when_current_active_tab_is_
             ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-search", liepin_url): "{}",
         }
     )
-    current_tab_opener = FakeCurrentChromeTabOpener(result=False)
-
     result = _runner(
         commands,
         lease_dir=tmp_path,
-        current_tab_opener=current_tab_opener,
     ).open_liepin_tab(liepin_url)
 
     assert result.ok is True
     assert result.counts == {"reused": 1}
-    assert current_tab_opener.calls == []
     assert ("opencli", "browser", "seektalent-liepin", "tab", "select", "page-search") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "tab", "new", liepin_url) not in commands.calls
     lease = json.loads((tmp_path / "seektalent-liepin.json").read_text(encoding="utf-8"))
