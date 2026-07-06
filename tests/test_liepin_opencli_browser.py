@@ -412,7 +412,7 @@ def test_recover_connection_restarts_opencli_daemon_without_current_chrome_tab_o
                 "Daemon: stale\nExtension: disconnected",
                 "Daemon: running\nExtension: connected",
             ],
-            ("opencli", "daemon", "restart"): "Daemon: running\nExtension: connected",
+            ("opencli", "daemon", "restart"): "Daemon restarted successfully\n",
         }
     )
     result = _runner(commands).recover_connection()

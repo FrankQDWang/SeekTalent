@@ -64,14 +64,6 @@ class OpenCliBrowserAutomation:
             output = self._run(tuple(self.config.command) + ("daemon", "restart"))
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(ok=False, action="restart_daemon", safe_reason_code=exc.safe_reason_code)
-        reason = _opencli_status_reason(output)
-        if reason is not None:
-            return OpenCliBrowserResult(
-                ok=False,
-                action="restart_daemon",
-                safe_reason_code=reason,
-                private_output=output,
-            )
         return OpenCliBrowserResult(ok=True, action="restart_daemon", private_output=output)
 
     def get_url(self) -> OpenCliBrowserResult:
