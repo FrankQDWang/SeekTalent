@@ -102,10 +102,38 @@ def _resolve_node_env_path(raw: str) -> Path:
 
 
 def _ensure_external_node(node: Path) -> Path:
-    if not node.exists():
+    if not node.is_file():
+        raise BootstrapError(f"domi_node_missing: Node runtime is not an executable file: {node}")
+    if sys.platform != "win32" and not os.access(node, os.X_OK):
         raise BootstrapError(f"domi_node_missing: Node runtime is not executable: {node}")
-    _npm_for_node(node)
+    try:
+        _npm_for_node(node)
+        _probe_node_version(node)
+    except BootstrapError as exc:
+        message = str(exc)
+        if message.startswith("domi_node_missing:"):
+            raise
+        raise BootstrapError(f"domi_node_missing: {message}") from exc
     return node
+
+
+def _probe_node_version(node: Path) -> None:
+    try:
+        completed = subprocess.run(
+            (str(node), "--version"),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise BootstrapError(f"Node runtime failed version probe: {node}") from exc
+    output = (completed.stdout or completed.stderr or "").strip()
+    if completed.returncode != 0:
+        detail = f": {output[:200]}" if output else ""
+        raise BootstrapError(f"Node runtime failed version probe: {node}{detail}")
+    if not output.startswith("v"):
+        raise BootstrapError(f"Node runtime returned an unexpected version: {node}")
 
 
 def _ensure_managed_node(runtime_root: Path, *, node_version: str) -> Path:

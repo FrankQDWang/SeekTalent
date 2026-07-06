@@ -99,6 +99,33 @@ def test_domi_node_policy_uses_explicit_domi_node_without_downloading(
     assert runtime.opencli_main.name == "main.js"
 
 
+def test_domi_node_policy_rejects_unusable_external_node(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
+    _write_fake_npm(domi_node.parent)
+    _write_managed_opencli(tmp_path / "runtime")
+    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
+    version_probe_calls: list[tuple[str, ...]] = []
+
+    class Completed:
+        returncode = 1
+        stdout = ""
+        stderr = "not node"
+
+    def fake_run(argv, **_kwargs):
+        version_probe_calls.append(tuple(str(part) for part in argv))
+        return Completed()
+
+    monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
+
+    with pytest.raises(opencli_launcher.BootstrapError, match="domi_node_missing"):
+        opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
+    assert version_probe_calls == [(str(domi_node), "--version")]
+
+
 def test_domi_node_policy_requires_domi_node_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
