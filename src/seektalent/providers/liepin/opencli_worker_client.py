@@ -68,7 +68,9 @@ class LiepinOpenCliWorkerClient:
                     keyword_query=request.keyword_query or " ".join(request.query_terms),
                     query_terms=tuple(request.query_terms),
                     target_resumes=request.page_size,
-                    max_cards=_positive_int(request.provider_context.get("liepin_max_cards"), default=request.page_size),
+                    max_cards=_positive_int(
+                        request.provider_context.get("liepin_max_cards"), default=request.page_size
+                    ),
                     max_pages=_positive_int(request.provider_context.get("liepin_max_pages"), default=1),
                     requirement_sheet=requirement_sheet,
                     native_filters=_native_filters_from_request(request),
@@ -106,10 +108,10 @@ class LiepinOpenCliWorkerClient:
         provider_account_hash: str | None = None,
     ) -> SessionStatus:
         del tenant, workspace
-        return SessionStatus(
-            connectionId=connection_id or self._connection_id,
-            status="ready",
-            provider_account_hash=provider_account_hash or self._provider_account_hash,
+        return await asyncio.to_thread(
+            self._retriever.session_status,
+            connection_id=connection_id or self._connection_id,
+            provider_account_hash=provider_account_hash,
         )
 
     async def open_details(self, request: LiepinDetailOpenRequest) -> LiepinDetailOpenResponse:

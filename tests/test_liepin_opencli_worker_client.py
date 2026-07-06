@@ -12,12 +12,15 @@ from seektalent.providers.liepin.worker_contracts import (
     LiepinResumeSearchResponse,
     LiepinWorkerModeError,
     LiepinWorkerPartialSearchError,
+    SessionStatus,
 )
 
 
 @dataclass
 class FakeRetriever:
     calls: list[object]
+    ready_calls: int = 0
+    session_status_calls: list[dict[str, object]] | None = None
 
     def search_resumes(self, request):
         self.calls.append(request)
@@ -26,6 +29,29 @@ class FakeRetriever:
             exhausted=True,
             requestPayload={"backend": "opencli"},
             rawCandidateCount=3,
+        )
+
+    def ensure_ready(self) -> None:
+        self.ready_calls += 1
+
+    def session_status(
+        self,
+        *,
+        connection_id: str,
+        provider_account_hash: str | None,
+    ) -> SessionStatus:
+        if self.session_status_calls is None:
+            self.session_status_calls = []
+        self.session_status_calls.append(
+            {
+                "connection_id": connection_id,
+                "provider_account_hash": provider_account_hash,
+            }
+        )
+        return SessionStatus(
+            connectionId=connection_id,
+            status="ready",
+            providerAccountHash="liepin-opencli-local-browser-profile",
         )
 
 
@@ -48,7 +74,7 @@ def test_opencli_worker_forwards_runtime_request_to_deterministic_retriever() ->
                 fetch_mode="detail",
                 page_size=2,
                 provider_context={
-                    "liepin_requirement_sheet_json": "{\"job_title\":\"数据开发专家\"}",
+                    "liepin_requirement_sheet_json": '{"job_title":"数据开发专家"}',
                     "liepin_max_cards": "10",
                     "liepin_max_pages": "1",
                 },
@@ -89,7 +115,7 @@ def test_opencli_worker_search_does_not_block_event_loop() -> None:
                     fetch_mode="detail",
                     page_size=2,
                     provider_context={
-                        "liepin_requirement_sheet_json": "{\"job_title\":\"数据开发专家\"}",
+                        "liepin_requirement_sheet_json": '{"job_title":"数据开发专家"}',
                     },
                 ),
                 round_no=1,
@@ -138,7 +164,7 @@ def test_opencli_worker_raises_partial_error_with_captured_candidates() -> None:
                     fetch_mode="detail",
                     page_size=2,
                     provider_context={
-                        "liepin_requirement_sheet_json": "{\"job_title\":\"数据开发专家\"}",
+                        "liepin_requirement_sheet_json": '{"job_title":"数据开发专家"}',
                     },
                 ),
                 round_no=1,
@@ -193,7 +219,7 @@ def test_opencli_worker_blocked_error_preserves_workflow_steps() -> None:
                     fetch_mode="detail",
                     page_size=2,
                     provider_context={
-                        "liepin_requirement_sheet_json": "{\"job_title\":\"数据开发专家\"}",
+                        "liepin_requirement_sheet_json": '{"job_title":"数据开发专家"}',
                     },
                 ),
                 round_no=1,
@@ -260,7 +286,7 @@ def test_opencli_worker_drops_removed_cleanup_workflow_steps() -> None:
                     fetch_mode="detail",
                     page_size=2,
                     provider_context={
-                        "liepin_requirement_sheet_json": "{\"job_title\":\"数据开发专家\"}",
+                        "liepin_requirement_sheet_json": '{"job_title":"数据开发专家"}',
                     },
                 ),
                 round_no=1,
@@ -317,7 +343,7 @@ def test_opencli_worker_drops_removed_cleanup_workflow_count() -> None:
                     fetch_mode="detail",
                     page_size=2,
                     provider_context={
-                        "liepin_requirement_sheet_json": "{\"job_title\":\"数据开发专家\"}",
+                        "liepin_requirement_sheet_json": '{"job_title":"数据开发专家"}',
                     },
                 ),
                 round_no=1,
@@ -329,9 +355,10 @@ def test_opencli_worker_drops_removed_cleanup_workflow_count() -> None:
     assert partial_result.request_payload["workflowSteps"][0]["safe_counts"] == {"details_opened": 1}
 
 
-def test_opencli_worker_session_status_reports_local_provider_subject_before_binding() -> None:
+def test_opencli_worker_session_status_delegates_to_retriever_probe_without_readiness_check() -> None:
+    retriever = FakeRetriever(calls=[])
     client = LiepinOpenCliWorkerClient(
-        retriever=FakeRetriever(calls=[]),
+        retriever=retriever,
         connection_id="liepin-opencli",
         provider_account_hash="local-opencli",
     )
@@ -339,12 +366,20 @@ def test_opencli_worker_session_status_reports_local_provider_subject_before_bin
     status = asyncio.run(client.session_status(connection_id="liepin-opencli"))
 
     assert status.status == "ready"
-    assert status.provider_account_hash == "local-opencli"
+    assert status.provider_account_hash == "liepin-opencli-local-browser-profile"
+    assert retriever.ready_calls == 0
+    assert retriever.session_status_calls == [
+        {
+            "connection_id": "liepin-opencli",
+            "provider_account_hash": None,
+        }
+    ]
 
 
-def test_opencli_worker_session_status_echoes_bound_provider_hash() -> None:
+def test_opencli_worker_session_status_does_not_echo_bound_provider_hash() -> None:
+    retriever = FakeRetriever(calls=[])
     client = LiepinOpenCliWorkerClient(
-        retriever=FakeRetriever(calls=[]),
+        retriever=retriever,
         connection_id="liepin-opencli",
         provider_account_hash="local-opencli",
     )
@@ -357,4 +392,10 @@ def test_opencli_worker_session_status_echoes_bound_provider_hash() -> None:
     )
 
     assert status.status == "ready"
-    assert status.provider_account_hash == "workbench-bound-hash"
+    assert status.provider_account_hash == "liepin-opencli-local-browser-profile"
+    assert retriever.session_status_calls == [
+        {
+            "connection_id": "liepin-opencli",
+            "provider_account_hash": "workbench-bound-hash",
+        }
+    ]

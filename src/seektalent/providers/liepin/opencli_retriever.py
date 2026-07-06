@@ -9,11 +9,19 @@ from seektalent.providers.liepin.detail_payload_text import structured_liepin_de
 from seektalent.providers.liepin.worker_contracts import (
     LiepinResumeSearchResponse,
     LiepinWorkerCandidateDetail,
+    SessionStatus,
 )
 
 
 class LiepinResumeSearchSite(Protocol):
     def status(self): ...
+
+    def session_status_probe(
+        self,
+        *,
+        connection_id: str,
+        provider_account_hash: str | None,
+    ) -> SessionStatus: ...
 
     def search_liepin_resumes(
         self,
@@ -60,6 +68,17 @@ class LiepinOpenCliResumeRetriever:
         if reason in _RECOVERABLE_OPENCLI_READY_REASONS and self._recover_connection():
             return
         raise RuntimeError(reason)
+
+    def session_status(
+        self,
+        *,
+        connection_id: str,
+        provider_account_hash: str | None,
+    ) -> SessionStatus:
+        return self._runner.session_status_probe(
+            connection_id=connection_id,
+            provider_account_hash=provider_account_hash,
+        )
 
     def search_resumes(self, request: LiepinOpenCliResumeRequest) -> LiepinResumeSearchResponse:
         self.ensure_ready()

@@ -1124,6 +1124,41 @@ def test_open_liepin_tab_selects_existing_search_tab_when_current_active_tab_is_
     assert lease["page_id"] == "page-search"
 
 
+def test_session_status_probe_prepares_search_surface_from_non_liepin_active_tab(tmp_path: Path) -> None:
+    state_text = "\n".join(
+        [
+            f"URL: {LIEPIN_SEARCH_URL}",
+            "包含全部关键词",
+            "[ref=search-input] <input id=rc_select_1 role=combobox />",
+        ]
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "daemon", "status"): "Daemon: running\nExtension: connected",
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): json.dumps(
+                [{"page": "page-github", "url": "https://github.com/", "active": True}]
+            ),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): LIEPIN_SEARCH_URL,
+            ("opencli", "browser", "seektalent-liepin", "state"): state_text,
+        }
+    )
+
+    status = _runner(commands, lease_dir=tmp_path).session_status_probe(
+        connection_id="liepin-opencli",
+        provider_account_hash="caller-provider-hash",
+    )
+
+    assert status.status == "ready"
+    assert status.provider_account_hash == "liepin-opencli-local-browser-profile"
+    assert status.current_url == LIEPIN_SEARCH_URL
+    assert status.search_surface_ready is True
+    assert status.result_surface_ready is True
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL) in commands.calls
+    assert status.model_dump(by_alias=True)["providerAccountHash"] == "liepin-opencli-local-browser-profile"
+    assert status.model_dump(by_alias=True)["currentUrl"] == LIEPIN_SEARCH_URL
+    assert status.model_dump(by_alias=True)["searchSurfaceReady"] is True
+
+
 def test_open_liepin_tab_rejects_malformed_page_id(tmp_path: Path) -> None:
     commands = FakeCommands(
         outputs={
@@ -2305,9 +2340,7 @@ def test_search_liepin_cards_ignores_add_resume_copy_without_closing_it(tmp_path
         "[88]<button><span>关闭</span></button>"
     )
     state_after = (
-        "王** 男 40岁 工作14年 硕士 上海\n"
-        "求职期望：上海 数据开发专家\n"
-        "海光集成电路 · 高级主管工程师 2023.10-至今"
+        "王** 男 40岁 工作14年 硕士 上海\n求职期望：上海 数据开发专家\n海光集成电路 · 高级主管工程师 2023.10-至今"
     )
     commands = FakeCommands(
         outputs={
@@ -3454,9 +3487,7 @@ def test_search_liepin_cards_clears_existing_filters_before_keyword_search(tmp_p
         "[65]<span>不限</span>"
     )
     result_state = (
-        "王** 男 34岁 工作12年 硕士 上海\n"
-        "求职期望：上海 AI技术负责人\n"
-        "某科技公司 · AI技术负责人 2021.01-至今"
+        "王** 男 34岁 工作12年 硕士 上海\n求职期望：上海 AI技术负责人\n某科技公司 · AI技术负责人 2021.01-至今"
     )
     commands = FakeCommands(
         outputs={
@@ -3504,9 +3535,7 @@ def test_search_liepin_cards_does_not_clear_again_for_same_workflow_and_filters(
         "[29]<button><span>搜 索</span></button>"
     )
     result_state_1 = (
-        "王** 男 34岁 工作12年 硕士 上海\n"
-        "求职期望：上海 AI技术负责人\n"
-        "某科技公司 · AI技术负责人 2021.01-至今"
+        "王** 男 34岁 工作12年 硕士 上海\n求职期望：上海 AI技术负责人\n某科技公司 · AI技术负责人 2021.01-至今"
     )
     dirty_state_2 = (
         "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
@@ -3516,9 +3545,7 @@ def test_search_liepin_cards_does_not_clear_again_for_same_workflow_and_filters(
     )
     clean_state_2 = clean_state_1
     result_state_2 = (
-        "张** 男 36岁 工作14年 硕士 上海\n"
-        "求职期望：上海 大模型负责人\n"
-        "某智能公司 · 大模型负责人 2020.01-至今"
+        "张** 男 36岁 工作14年 硕士 上海\n求职期望：上海 大模型负责人\n某智能公司 · 大模型负责人 2020.01-至今"
     )
     commands = FakeCommands(
         outputs={

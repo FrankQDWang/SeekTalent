@@ -4,6 +4,7 @@ import sqlite3
 from pathlib import Path
 
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
+from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.providers.liepin.worker_contracts import SessionStatus
 from seektalent_ui.liepin_account_binding import (
     bind_observed_liepin_account,
@@ -15,7 +16,7 @@ from tests.test_workbench_api import (
     _ensure_local_actor,
     _client,
     _create_session,
-        _db_path,
+    _db_path,
     _workbench_user_from_actor_payload,
 )
 
@@ -52,12 +53,14 @@ class ProbeLiepinWorker:
         error: Exception | None = None,
         readiness_error: Exception | None = None,
         echo_requested_provider_account_hash: bool = True,
+        safe_reason_code: str | None = None,
     ) -> None:
         self.status = status
         self.provider_account_hash = provider_account_hash
         self.error = error
         self.readiness_error = readiness_error
         self.echo_requested_provider_account_hash = echo_requested_provider_account_hash
+        self.safe_reason_code = safe_reason_code
         self.readiness_calls = 0
         self.probe_calls: list[dict[str, object]] = []
 
@@ -92,6 +95,7 @@ class ProbeLiepinWorker:
             connectionId=connection_id,
             status=self.status,
             providerAccountHash=returned_provider_account_hash if self.status == "ready" else None,
+            safeReasonCode=self.safe_reason_code,
         )
 
 
@@ -157,9 +161,7 @@ def _get_liepin_card(client, session_id: str) -> tuple[dict, dict]:
         f"/api/workbench/sessions/{session_id}",
     )
     assert session_response.status_code == 200, session_response.text
-    liepin_card = next(
-        card for card in session_response.json()["sourceCards"] if card["sourceKind"] == "liepin"
-    )
+    liepin_card = next(card for card in session_response.json()["sourceCards"] if card["sourceKind"] == "liepin")
     return session_response.json(), liepin_card
 
 
@@ -495,6 +497,59 @@ def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
         assert liepin_card["warningCode"] == "source_login_required"
 
 
+def test_start_session_opencli_mode_preserves_raw_status_reason_when_not_ready(tmp_path: Path) -> None:
+    with _client(tmp_path, settings_overrides=_opencli_settings()) as client:
+        actor_payload = _ensure_local_actor(client)
+        user = _workbench_user_from_actor_payload(actor_payload)
+        store = client.app.state.workbench_store
+        connection, _created = store.get_or_create_liepin_source_connection(user=user)
+        provider_account_hash = _bind_workbench_liepin_account(
+            client,
+            user=user,
+            connection=connection,
+        )
+        worker = ProbeLiepinWorker(
+            status="missing",
+            provider_account_hash=None,
+            safe_reason_code="liepin_opencli_filter_unapplied",
+        )
+        _install_probe_worker(client, worker)
+
+        session = _create_session(client, source_kinds=["cts", "liepin"])
+        _approve_requirement_review(client, session["sessionId"])
+
+        response = client.post(
+            f"/api/workbench/sessions/{session['sessionId']}/start",
+        )
+
+        assert response.status_code == 202, response.text
+        payload = response.json()
+        _assert_runtime_start(payload, ["cts"])
+        assert payload["blockedSources"] == [
+            {
+                "sourceRunId": _started_source(session, "liepin")["sourceRunId"],
+                "sourceKind": "liepin",
+                "reason": "source_filter_unavailable",
+            }
+        ]
+        assert worker.probe_calls[0]["provider_account_hash"] == provider_account_hash
+
+        session_payload, liepin_card = _get_liepin_card(client, session["sessionId"])
+        assert liepin_card["warningCode"] == "source_filter_unavailable"
+        with sqlite3.connect(_db_path(tmp_path)) as db:
+            raw_warning_code = db.execute(
+                "SELECT warning_code FROM source_runs WHERE source_run_id = ?",
+                (_started_source(session, "liepin")["sourceRunId"],),
+            ).fetchone()[0]
+        assert raw_warning_code == "liepin_opencli_filter_unapplied"
+        liepin_runtime = next(
+            source
+            for source in session_payload.get("runtimeSourceState", {}).get("sources", [])
+            if source["sourceKind"] == "liepin"
+        )
+        assert liepin_runtime["reasonCode"] == "source_filter_unavailable"
+
+
 def test_create_session_opencli_mode_auto_binds_ready_local_browser_from_clean_db(
     tmp_path: Path,
 ) -> None:
@@ -610,7 +665,11 @@ def test_start_session_opencli_mode_queues_liepin_with_existing_bound_account(
             user=user,
             connection=connection,
         )
-        worker = ProbeLiepinWorker(status="ready", provider_account_hash=provider_account_hash)
+        worker = ProbeLiepinWorker(
+            status="ready",
+            provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+            echo_requested_provider_account_hash=False,
+        )
         _install_probe_worker(client, worker)
         client.app.state.settings.liepin_browser_action_backend = "opencli"
 
@@ -663,7 +722,11 @@ def test_start_session_opencli_mode_recovers_bound_account_after_provider_connec
             provider_db.execute("DELETE FROM liepin_connections")
             provider_db.execute("DELETE FROM liepin_compliance_gates")
 
-        worker = ProbeLiepinWorker(status="ready", provider_account_hash=provider_account_hash)
+        worker = ProbeLiepinWorker(
+            status="ready",
+            provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+            echo_requested_provider_account_hash=False,
+        )
         _install_probe_worker(client, worker)
 
         session = _create_session(client, source_kinds=["cts", "liepin"])

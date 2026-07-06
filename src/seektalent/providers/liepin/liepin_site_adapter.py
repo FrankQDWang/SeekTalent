@@ -46,6 +46,10 @@ from seektalent.providers.liepin.liepin_opencli_policy import (
     liepin_error_from_opencli_error,
     liepin_result_from_opencli_result,
 )
+from seektalent.providers.liepin.worker_contracts import (
+    OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+    SessionStatus,
+)
 from seektalent.providers.liepin.liepin_state_machine import (
     LiepinStateSnapshot,
     LiepinTransition,
@@ -68,6 +72,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _liepin_structured_cards_payload_probe_script,
     _looks_like_liepin_detail_resume_state,
     _looks_like_liepin_search_result_page,
+    _looks_like_liepin_search_result_surface,
     _merge_liepin_detail_targets,
     _opencli_result_text,
     _parse_page_id as _parse_page_id,
@@ -117,6 +122,35 @@ _RECOVERABLE_TAB_REUSE_REASONS = {
     "liepin_opencli_window_policy_blocked",
     "liepin_opencli_stale_ref",
 }
+
+_LIEPIN_SESSION_LOGIN_REQUIRED_REASONS = {
+    "liepin_opencli_login_required",
+    "liepin_opencli_identity_intercept",
+    "liepin_opencli_risk_page",
+    "liepin_opencli_unknown_modal",
+}
+
+
+def _session_status_for_liepin_reason(reason: str) -> str:
+    if reason in _LIEPIN_SESSION_LOGIN_REQUIRED_REASONS:
+        return "login_required"
+    return "missing"
+
+
+def _opencli_safe_reason(reason: str | None, *, default: str) -> str:
+    clean = str(reason or "").strip()
+    if clean and clean != "configured":
+        return clean
+    return default
+
+
+def _state_text_for_probe(result: OpenCliBrowserResult) -> str:
+    if result.private_output:
+        return result.private_output
+    observation_text = result.observation.get("text")
+    if isinstance(observation_text, str):
+        return observation_text
+    return _opencli_result_text(result)
 
 
 def _native_filter_clear_scope(source_run_id: str) -> str:
@@ -212,6 +246,82 @@ class LiepinSiteAdapter:
 
     def status(self) -> OpenCliBrowserResult:
         return liepin_result_from_opencli_result(self._automation.status())
+
+    def session_status_probe(
+        self,
+        *,
+        connection_id: str,
+        provider_account_hash: str | None,
+    ) -> SessionStatus:
+        del provider_account_hash
+        status = self.status()
+        if not status.ok:
+            reason = _opencli_safe_reason(status.safe_reason_code, default="liepin_opencli_status_unavailable")
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+            )
+        try:
+            opened = self.open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)
+        except OpenCliBrowserError as exc:
+            reason = _opencli_safe_reason(exc.safe_reason_code, default="liepin_opencli_status_unavailable")
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+            )
+        if not opened.ok:
+            reason = _opencli_safe_reason(opened.safe_reason_code, default="liepin_opencli_status_unavailable")
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+            )
+        try:
+            state = self.state()
+        except OpenCliBrowserError as exc:
+            reason = _opencli_safe_reason(exc.safe_reason_code, default="liepin_opencli_status_unavailable")
+            current_url = self._current_url_or_none()
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+                currentUrl=current_url,
+            )
+
+        state_text = _state_text_for_probe(state)
+        current_url = _state_url(state_text) or self._current_url_or_none()
+        if not state.ok:
+            reason = _opencli_safe_reason(state.safe_reason_code, default="liepin_opencli_status_unavailable")
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+                currentUrl=current_url,
+            )
+
+        search_ready = current_url is not None and _is_liepin_recruiter_search_surface(current_url)
+        result_ready = _looks_like_liepin_search_result_surface(state_text)
+        if not search_ready:
+            return SessionStatus(
+                connectionId=connection_id,
+                status="missing",
+                safeReasonCode="liepin_opencli_search_not_ready",
+                currentUrl=current_url,
+                searchSurfaceReady=False,
+                resultSurfaceReady=result_ready,
+            )
+
+        return SessionStatus(
+            connectionId=connection_id,
+            status="ready",
+            providerAccountHash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+            safeReasonCode="configured",
+            currentUrl=current_url,
+            searchSurfaceReady=True,
+            resultSurfaceReady=result_ready,
+        )
 
     def recover_connection(self) -> OpenCliBrowserResult:
         status = self.status()
@@ -341,6 +451,13 @@ class LiepinSiteAdapter:
             observation=build_observation(output),
             private_output=output,
         )
+
+    def _current_url_or_none(self) -> str | None:
+        try:
+            current_url = self._current_url().strip()
+        except OpenCliBrowserError:
+            return None
+        return current_url or None
 
     def find(self, *, query: str) -> OpenCliBrowserResult:
         self._validate_keyword_text(query)
@@ -883,11 +1000,13 @@ class LiepinSiteAdapter:
                 LiepinTransition(
                     name="wait_search_ready",
                     phase="search",
-                    observe_pre_state=lambda: open_post_snapshot
-                    or LiepinStateSnapshot(
-                        ok=False,
-                        text="",
-                        safe_reason_code="liepin_opencli_search_not_ready",
+                    observe_pre_state=lambda: (
+                        open_post_snapshot
+                        or LiepinStateSnapshot(
+                            ok=False,
+                            text="",
+                            safe_reason_code="liepin_opencli_search_not_ready",
+                        )
                     ),
                     precondition=_search_url_ready,
                     action=lambda: _result_from_opencli(self.wait_time(seconds=3)),
@@ -1184,11 +1303,13 @@ class LiepinSiteAdapter:
                 LiepinTransition(
                     name="observe_results",
                     phase="search",
-                    observe_pre_state=lambda: click_post_snapshot
-                    or LiepinStateSnapshot(
-                        ok=False,
-                        text="",
-                        safe_reason_code="liepin_opencli_search_not_ready",
+                    observe_pre_state=lambda: (
+                        click_post_snapshot
+                        or LiepinStateSnapshot(
+                            ok=False,
+                            text="",
+                            safe_reason_code="liepin_opencli_search_not_ready",
+                        )
                     ),
                     precondition=_search_url_ready,
                     action=observe_results_action,
@@ -1250,7 +1371,9 @@ class LiepinSiteAdapter:
 
             def extract_structured_cards_action() -> TransitionResult:
                 nonlocal structured_cards
-                structured_cards = self.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
+                structured_cards = self.extract_structured_liepin_cards(
+                    source_run_id=source_run_id, max_cards=max_cards
+                )
                 return _result_from_opencli(structured_cards)
 
             extract_result = self._run_liepin_transition(
@@ -1632,7 +1755,9 @@ class LiepinSiteAdapter:
             return state
         if (input_ref := native_filter_city_search_input_ref(state_text)) is not None:
             self.fill(target=input_ref, text=label)
-            events.append({"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True})
+            events.append(
+                {"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True}
+            )
             self.wait_time(seconds=1)
             state = self.state()
             events.append({"action_kind": "observe_native_city_filter_search", "filter": "city", "ok": state.ok})
