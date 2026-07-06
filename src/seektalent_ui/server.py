@@ -325,7 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-mode", choices=["dev", "prod"], default=None)
     parser.add_argument(
         "--liepin-worker-mode",
-        choices=["disabled", "fake_fixture", "managed_local", "external_http", "opencli"],
+        choices=["disabled", "fake_fixture", "external_http", "opencli"],
         default=None,
     )
     parser.add_argument("--liepin-browser-action-backend", choices=["disabled", "opencli"], default=None)

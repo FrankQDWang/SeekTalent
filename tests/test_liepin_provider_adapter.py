@@ -22,6 +22,7 @@ from seektalent.providers.liepin.worker_contracts import LiepinDetailWorkerDiagn
 from seektalent.providers.liepin.worker_contracts import LiepinSafeCardSummary
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateDetail
+from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.providers.liepin.worker_contracts import SessionStatus
 from tests.settings_factory import make_settings
 
@@ -50,6 +51,7 @@ class RecordingWorkerClient:
         self.search_result = search_result
         self.detail_response = detail_response
         self.calls: list[str] = []
+        self.session_status_requests: list[dict[str, str | None]] = []
         self.search_requests: list[tuple[SearchRequest, int, str, str | None]] = []
         self.detail_requests: list[object] = []
 
@@ -65,7 +67,7 @@ class RecordingWorkerClient:
         self.calls.append("ensure_ready")
         if self.fail_ready:
             if on_event is not None:
-                on_event("worker_start_timeout", {"mode": "managed_local", "setup_status": "timeout"})
+                on_event("worker_start_timeout", {"mode": "opencli", "setup_status": "timeout"})
             raise LiepinWorkerModeError("worker_start_timeout")
 
     async def session_status(
@@ -77,6 +79,14 @@ class RecordingWorkerClient:
         provider_account_hash: str | None = None,
     ) -> SessionStatus:
         self.calls.append("session_status")
+        self.session_status_requests.append(
+            {
+                "connection_id": connection_id,
+                "tenant": tenant,
+                "workspace": workspace,
+                "provider_account_hash": provider_account_hash,
+            }
+        )
         return SessionStatus(
             connectionId=connection_id,
             status=self.session_status_value,
@@ -272,7 +282,7 @@ def test_adapter_never_substitutes_fake_worker_when_no_client_is_passed() -> Non
 
 
 def test_summary_search_requires_compliance_gate_and_ready_session(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     result = SearchResult(candidates=[], diagnostics=["ok"], exhausted=True)
     worker = RecordingWorkerClient(search_result=result)
@@ -307,7 +317,7 @@ def test_compliance_gate_blocks_before_worker_calls(
     gate: ComplianceGate,
     match: str,
 ) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path, gate=gate)
     worker = RecordingWorkerClient()
     adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
@@ -325,7 +335,7 @@ def test_compliance_gate_blocks_before_worker_calls(
 
 
 def test_missing_compliance_gate_blocks_before_worker_calls(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, _gate_ref, connection_id = _live_store(tmp_path)
     worker = RecordingWorkerClient()
     adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
@@ -343,7 +353,7 @@ def test_missing_compliance_gate_blocks_before_worker_calls(tmp_path: Path) -> N
 
 
 def test_missing_connection_id_blocks_before_worker_calls(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, _connection_id = _live_store(tmp_path)
     context = _live_filters(gate_ref, "conn-a")
     del context["liepin_connection_id"]
@@ -357,7 +367,7 @@ def test_missing_connection_id_blocks_before_worker_calls(tmp_path: Path) -> Non
 
 
 def test_non_ready_session_blocks_before_search(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     worker = RecordingWorkerClient(session_status="login_required")
     adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
@@ -375,7 +385,7 @@ def test_non_ready_session_blocks_before_search(tmp_path: Path) -> None:
 
 
 def test_connection_safety_missing_session_metadata_blocks_before_search(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path, record_session=False)
     worker = RecordingWorkerClient()
     adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
@@ -394,7 +404,7 @@ def test_connection_safety_missing_session_metadata_blocks_before_search(tmp_pat
 
 
 def test_connection_safety_expired_session_blocks_before_search(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(
         tmp_path,
         session_updated_at=datetime.now(UTC) - timedelta(hours=13),
@@ -416,7 +426,7 @@ def test_connection_safety_expired_session_blocks_before_search(tmp_path: Path) 
 
 
 def test_connection_safety_blocks_remote_transport_before_search(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     worker = RecordingWorkerClient()
     adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
@@ -441,7 +451,7 @@ def test_connection_safety_blocks_remote_transport_before_search(tmp_path: Path)
 
 
 def test_session_account_hash_mismatch_blocks_before_search(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     worker = RecordingWorkerClient(session_provider_account_hash="other-account-hash")
     adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
@@ -488,6 +498,44 @@ def test_opencli_mode_uses_live_compliance_branch(tmp_path: Path) -> None:
     assert worker.search_requests[0][3] == "account-hash-a"
 
 
+def test_opencli_mode_accepts_browser_profile_session_subject_and_uses_connection_hash(tmp_path: Path) -> None:
+    settings = make_settings(
+        provider_name="liepin",
+        liepin_worker_mode="opencli",
+        liepin_browser_action_backend="opencli",
+    )
+    store, gate_ref, connection_id = _live_store(tmp_path)
+    result = SearchResult(candidates=[], diagnostics=["ok"], exhausted=True)
+    worker = RecordingWorkerClient(
+        session_provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+        search_result=result,
+    )
+    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
+
+    actual = asyncio.run(
+        adapter.search(
+            _request(provider_context=_live_filters(gate_ref, connection_id)),
+            round_no=1,
+            trace_id="trace-1",
+        )
+    )
+
+    assert actual is result
+    assert worker.calls == ["ensure_ready", "session_status", "search"]
+    assert worker.session_status_requests == [
+        {
+            "connection_id": connection_id,
+            "tenant": "tenant-a",
+            "workspace": "workspace-a",
+            "provider_account_hash": "account-hash-a",
+        }
+    ]
+    search_request, _round_no, _trace_id, provider_account_hash = worker.search_requests[0]
+    assert provider_account_hash == "account-hash-a"
+    assert search_request.provider_context["liepin_connection_id"] == connection_id
+    assert search_request.provider_context["liepin_compliance_gate_ref"] == gate_ref
+
+
 def test_registry_fake_fixture_mode_builds_explicit_fixture_worker() -> None:
     settings = make_settings(
         provider_name="liepin",
@@ -502,7 +550,7 @@ def test_registry_fake_fixture_mode_builds_explicit_fixture_worker() -> None:
 
 
 def test_detail_fetch_requires_detail_open_plan_before_worker_calls(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     worker = RecordingWorkerClient()
     adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
@@ -523,7 +571,7 @@ def test_detail_fetch_requires_detail_open_plan_before_worker_calls(tmp_path: Pa
 def test_detail_fetch_executes_open_plan_and_returns_mapped_detail_results(tmp_path: Path) -> None:
     settings = make_settings(
         provider_name="liepin",
-        liepin_worker_mode="managed_local",
+        liepin_worker_mode="opencli",
         liepin_detail_open_approval_secret="unit-detail-approval-secret",
     )
     store, gate_ref, connection_id = _live_store(tmp_path)
@@ -583,7 +631,7 @@ def test_detail_fetch_executes_open_plan_and_returns_mapped_detail_results(tmp_p
 
 
 def test_detail_fetch_missing_required_context_blocks_before_detail_dispatch(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     worker = RecordingWorkerClient()
     adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
@@ -603,7 +651,7 @@ def test_detail_fetch_missing_required_context_blocks_before_detail_dispatch(tmp
 
 
 def test_detail_fetch_requires_approval_secret_before_detail_dispatch(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     worker = RecordingWorkerClient()
     adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store)
@@ -621,7 +669,7 @@ def test_detail_fetch_requires_approval_secret_before_detail_dispatch(tmp_path: 
 
 
 def test_adapter_preserves_provider_snapshots_and_keeps_candidate_raw_safe(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     first = map_liepin_worker_card(_card("candidate-a", {"rawProviderPayload": {"secret": "blocked"}}))
     second = map_liepin_worker_card(_card("candidate-b", {"title": "Python Engineer"}))
@@ -648,7 +696,7 @@ def test_adapter_preserves_provider_snapshots_and_keeps_candidate_raw_safe(tmp_p
 
 
 def test_live_scope_stays_out_of_provider_filters(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     result = SearchResult(candidates=[], diagnostics=["ok"], exhausted=True)
     worker = RecordingWorkerClient(search_result=result)
@@ -710,7 +758,7 @@ def test_adapter_passes_bound_provider_hash_to_worker_search_without_response_le
 
 
 def test_adapter_rejects_missing_provider_snapshots(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))
     result = SearchResult(candidates=[mapped.candidate], provider_snapshots=[], raw_candidate_count=1)
@@ -730,7 +778,7 @@ def test_adapter_rejects_missing_provider_snapshots(tmp_path: Path) -> None:
 
 
 def test_adapter_rejects_unsafe_candidate_raw(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))
     unsafe_candidate = mapped.candidate.model_copy(
@@ -769,7 +817,7 @@ def test_adapter_rejects_normalized_and_nested_unsafe_candidate_raw_keys(
     tmp_path: Path,
     candidate_raw: dict[str, object],
 ) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))
     unsafe_candidate = mapped.candidate.model_copy(update={"raw": candidate_raw})
@@ -802,7 +850,10 @@ def test_adapter_rejects_normalized_and_nested_unsafe_candidate_raw_keys(
         ({"resumeId": "candidate-a", "note": "Authorization: Bearer blocked-secret"}, "blocked-secret"),
         ({"resumeId": "candidate-a", "message": "rawProviderPayload={blocked}"}, "rawProviderPayload={blocked}"),
         ({"resumeId": "candidate-a", "message": "raw_provider_payload={blocked}"}, "raw_provider_payload={blocked}"),
-        ({"resumeId": "candidate-a", "diagnostics": "internal-worker-observed-account-a"}, "internal-worker-observed-account-a"),
+        (
+            {"resumeId": "candidate-a", "diagnostics": "internal-worker-observed-account-a"},
+            "internal-worker-observed-account-a",
+        ),
     ],
 )
 def test_adapter_rejects_unsafe_candidate_raw_values_without_leaking_values(
@@ -810,7 +861,7 @@ def test_adapter_rejects_unsafe_candidate_raw_values_without_leaking_values(
     candidate_raw: dict[str, object],
     blocked_value: str,
 ) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))
     unsafe_candidate = mapped.candidate.model_copy(update={"raw": candidate_raw})
@@ -838,7 +889,7 @@ def test_adapter_rejects_unsafe_candidate_raw_values_without_leaking_values(
 
 
 def test_adapter_allows_raw_payload_artifact_ref_candidate_raw_key(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     mapped = map_liepin_worker_card(_card("candidate-a", {"title": "Python Engineer"}))
     candidate = mapped.candidate.model_copy(update={"raw": {"raw_payload_artifact_ref": "worker://cards/a.json"}})
@@ -926,7 +977,7 @@ def _detail(candidate_id: str) -> LiepinWorkerCandidateDetail:
 
 
 def test_adapter_records_worker_start_timeout_and_does_not_dispatch_search(tmp_path: Path) -> None:
-    settings = make_settings(provider_name="liepin", liepin_worker_mode="managed_local")
+    settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     events: list[tuple[str, dict[str, object]]] = []
     worker = RecordingWorkerClient(fail_ready=True)
@@ -947,4 +998,4 @@ def test_adapter_records_worker_start_timeout_and_does_not_dispatch_search(tmp_p
         )
 
     assert worker.calls == ["ensure_ready"]
-    assert events == [("worker_start_timeout", {"mode": "managed_local", "setup_status": "timeout"})]
+    assert events == [("worker_start_timeout", {"mode": "opencli", "setup_status": "timeout"})]

@@ -41,7 +41,7 @@ from seektalent.providers.liepin.worker_contracts import decode_worker_health
 
 EventCallback = Callable[[str, dict[str, object]], None]
 DecodedWorkerPayload = TypeVar("DecodedWorkerPayload")
-LIVE_LIEPIN_WORKER_MODES = frozenset({"managed_local", "external_http", "opencli"})
+LIVE_LIEPIN_WORKER_MODES = frozenset({"external_http", "opencli"})
 
 
 def is_live_liepin_worker_mode(worker_mode: str) -> bool:
@@ -357,13 +357,6 @@ class ExternalHttpLiepinWorkerClient:
 def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
     if settings.liepin_worker_mode == "fake_fixture":
         return FakeLiepinWorkerClient(settings)
-    if settings.liepin_worker_mode == "managed_local":
-        return build_liepin_opencli_worker_client(
-            settings.with_overrides(
-                liepin_worker_mode="opencli",
-                liepin_browser_action_backend="opencli",
-            )
-        )
     if settings.liepin_worker_mode == "external_http":
         return ExternalHttpLiepinWorkerClient(settings)
     if settings.liepin_worker_mode == "opencli":
@@ -377,7 +370,6 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
 def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerClient:
     from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
     from seektalent.opencli_browser.contracts import OpenCliBrowserConfig
-    from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS
     from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
     from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
@@ -387,7 +379,6 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         session=settings.liepin_opencli_session,
         timeout_seconds=settings.liepin_opencli_timeout_seconds,
         window_mode=settings.liepin_opencli_window_mode,
-        current_tab_reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
         pacing_enabled=settings.liepin_opencli_pacing_enabled,
         pacing_min_ms=settings.liepin_opencli_pacing_min_ms,
         pacing_max_ms=settings.liepin_opencli_pacing_max_ms,
@@ -398,8 +389,6 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         detail_open_timeout_seconds=settings.liepin_opencli_detail_open_timeout_seconds,
         lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
         artifact_root=settings.artifacts_path,
-        idle_close_seconds=settings.liepin_opencli_idle_close_seconds,
-        close_blank_window=settings.liepin_opencli_close_blank_window,
     )
 
     return LiepinOpenCliWorkerClient(
@@ -617,15 +606,12 @@ _SAFE_WORKFLOW_STEP_NAMES = {
     "cache_detail_urls",
     "open_detail",
     "capture_detail",
-    # Reserved for legacy traces and future safe OpenCLI detail-tab cleanup.
-    "cleanup_detail_tabs",
     "finalize",
 }
 _SAFE_WORKFLOW_STATUSES = {"running", "completed", "partial", "blocked", "failed", "cancelled"}
 _SAFE_WORKFLOW_COUNT_KEYS = {
     "cards_seen",
     "cached_detail_urls",
-    "closed_tabs",
     "details_opened",
     "resumes_returned",
     "target_resumes",

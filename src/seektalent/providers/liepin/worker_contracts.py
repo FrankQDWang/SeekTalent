@@ -85,12 +85,19 @@ class WorkerHealth(BaseModel):
     worker_version: str | None = Field(default=None, alias="workerVersion")
 
 
+OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT = "liepin-opencli-local-browser-profile"
+
+
 class SessionStatus(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     connection_id: str = Field(alias="connectionId")
     status: Literal["missing", "login_required", "ready", "revoked"]
     provider_account_hash: str | None = Field(default=None, alias="providerAccountHash")
+    safe_reason_code: str | None = Field(default=None, alias="safeReasonCode")
+    current_url: str | None = Field(default=None, alias="currentUrl")
+    search_surface_ready: bool = Field(default=False, alias="searchSurfaceReady")
+    result_surface_ready: bool = Field(default=False, alias="resultSurfaceReady")
     fixture_only: bool = Field(default=False, alias="fixtureOnly")
 
 

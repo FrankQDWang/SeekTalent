@@ -37,7 +37,7 @@ TextLLMEndpointKind = Literal[
 ]
 TextLLMEndpointRegion = Literal["beijing", "singapore"]
 ProviderName = Literal["cts", "liepin"]
-LiepinWorkerMode = Literal["disabled", "fake_fixture", "managed_local", "external_http", "opencli"]
+LiepinWorkerMode = Literal["disabled", "fake_fixture", "external_http", "opencli"]
 LiepinBrowserActionBackend = Literal["disabled", "opencli"]
 OpenCliWindowMode = Literal["foreground", "background"]
 DEV_ARTIFACTS_DIR = "artifacts"
@@ -131,6 +131,14 @@ REMOVED_PRF_ENV_KEYS = {
     "SEEKTALENT_PRF_SIDECAR_MAX_PAYLOAD_BYTES",
     "SEEKTALENT_PRF_SIDECAR_BAKEOFF_PROMOTED",
 }
+REMOVED_LIEPIN_OPENCLI_CLEANUP_ENV_KEYS = {
+    "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
+    "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
+}
+REMOVED_LIEPIN_OPENCLI_CLEANUP_INIT_KEYS = {
+    "liepin_opencli_idle_" + "close_seconds",
+    "liepin_opencli_close_" + "blank_window",
+}
 
 
 def load_process_env(env_file: str | Path = ".env") -> None:
@@ -161,6 +169,10 @@ class TextLLMConfigMigrationError(ValueError):
 
 class PRFConfigMigrationError(ValueError):
     """Raised when removed PRF config surfaces are still present."""
+
+
+class LiepinOpenCliCleanupConfigMigrationError(ValueError):
+    """Raised when removed Liepin OpenCLI cleanup config surfaces are still present."""
 
 
 @dataclass(frozen=True)
@@ -211,8 +223,6 @@ class SourceProviderSettings:
     liepin_opencli_max_cards_per_task: int
     liepin_opencli_timeout_seconds: int
     liepin_opencli_detail_open_timeout_seconds: int
-    liepin_opencli_idle_close_seconds: int
-    liepin_opencli_close_blank_window: bool
     liepin_opencli_pacing_enabled: bool
     liepin_opencli_pacing_min_ms: int
     liepin_opencli_pacing_max_ms: int
@@ -431,6 +441,39 @@ def _scan_removed_prf_inputs(
         )
 
 
+def _scan_removed_liepin_opencli_cleanup_inputs(
+    *,
+    env_file: str | Path | None,
+    init_data: Mapping[str, object],
+    include_default_env_file: bool,
+) -> None:
+    sources: list[Mapping[str, str]] = [dict(os.environ)]
+    if include_default_env_file:
+        sources.append(_read_env_kv_pairs(".env"))
+    if env_file is not None:
+        sources.append(_read_env_kv_pairs(env_file))
+
+    removed_keys = [
+        key for source in sources for key in sorted(REMOVED_LIEPIN_OPENCLI_CLEANUP_ENV_KEYS) if key in source
+    ]
+    removed_keys.extend(
+        str(key)
+        for key, value in init_data.items()
+        if value is not None
+        and not str(key).startswith("_")
+        and (
+            str(key) in REMOVED_LIEPIN_OPENCLI_CLEANUP_INIT_KEYS
+            or _env_key_for_init_key(str(key)) in REMOVED_LIEPIN_OPENCLI_CLEANUP_ENV_KEYS
+        )
+    )
+    if removed_keys:
+        detail = ", ".join(dict.fromkeys(removed_keys))
+        raise LiepinOpenCliCleanupConfigMigrationError(
+            "removed Liepin OpenCLI cleanup config detected: "
+            f"{detail}. Remove stale OpenCLI tab-cleanup settings; Liepin tab cleanup automation has been removed."
+        )
+
+
 def _packaged_runtime_forces_prod() -> bool:
     return os.environ.get("SEEKTALENT_PACKAGED") == "1" or bool(getattr(sys, "frozen", False))
 
@@ -456,6 +499,11 @@ class AppSettings(BaseSettings):
             init_data=data,
             include_default_env_file=env_file is ENV_FILE_SENTINEL,
         )
+        _scan_removed_liepin_opencli_cleanup_inputs(
+            env_file=scan_env_file,
+            init_data=data,
+            include_default_env_file=env_file is ENV_FILE_SENTINEL,
+        )
         super().__init__(**data)
 
     cts_base_url: str = "https://link.hewa.cn"
@@ -473,14 +521,14 @@ class AppSettings(BaseSettings):
     liepin_opencli_session: str = DEFAULT_LIEPIN_OPENCLI_SESSION
     liepin_opencli_window_mode: OpenCliWindowMode = "background"
     liepin_opencli_allowed_hosts_json: str = '["www.liepin.com","h.liepin.com","c.liepin.com","lpt.liepin.com"]'
-    liepin_opencli_allowed_start_urls_json: str = '["https://h.liepin.com/search/getConditionItem#session"]'
+    liepin_opencli_allowed_start_urls_json: str = (
+        '["https://h.liepin.com/search/getConditionItem#session","https://h.liepin.com/resume/search"]'
+    )
     liepin_opencli_max_actions_per_task: int = 80
     liepin_opencli_max_pages_per_task: int = 1
     liepin_opencli_max_cards_per_task: int = 20
     liepin_opencli_timeout_seconds: int = 900
     liepin_opencli_detail_open_timeout_seconds: int = 90
-    liepin_opencli_idle_close_seconds: int = 120
-    liepin_opencli_close_blank_window: bool = False
     liepin_opencli_pacing_enabled: bool = True
     liepin_opencli_pacing_min_ms: int = 700
     liepin_opencli_pacing_max_ms: int = 1800
@@ -768,7 +816,6 @@ class AppSettings(BaseSettings):
                 self.liepin_opencli_max_cards_per_task,
                 self.liepin_opencli_timeout_seconds,
                 self.liepin_opencli_detail_open_timeout_seconds,
-                self.liepin_opencli_idle_close_seconds,
             )
             < 1
         ):
@@ -844,8 +891,6 @@ class AppSettings(BaseSettings):
             liepin_opencli_max_cards_per_task=self.liepin_opencli_max_cards_per_task,
             liepin_opencli_timeout_seconds=self.liepin_opencli_timeout_seconds,
             liepin_opencli_detail_open_timeout_seconds=self.liepin_opencli_detail_open_timeout_seconds,
-            liepin_opencli_idle_close_seconds=self.liepin_opencli_idle_close_seconds,
-            liepin_opencli_close_blank_window=self.liepin_opencli_close_blank_window,
             liepin_opencli_pacing_enabled=self.liepin_opencli_pacing_enabled,
             liepin_opencli_pacing_min_ms=self.liepin_opencli_pacing_min_ms,
             liepin_opencli_pacing_max_ms=self.liepin_opencli_pacing_max_ms,

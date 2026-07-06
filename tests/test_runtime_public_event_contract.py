@@ -99,6 +99,46 @@ def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_una
     assert event["safeReasonCode"] == "source_browser_backend_unavailable"
 
 
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "liepin_opencli_search_not_ready",
+        "liepin_opencli_results_not_ready",
+        "liepin_opencli_removed_config",
+    ],
+)
+def test_source_result_public_event_maps_liepin_opencli_backend_unavailable_reasons(reason_code: str) -> None:
+    from seektalent.source_adapters import public_source_reason_code
+
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="source_result",
+        event_seq=131,
+        round_no=1,
+        source_kind="liepin",
+        status="blocked",
+        safe_reason_code=public_source_reason_code(reason_code),
+    )
+
+    assert event["safeReasonCode"] == "source_browser_backend_unavailable"
+
+
+def test_source_result_public_event_maps_liepin_opencli_bootstrap_failed() -> None:
+    from seektalent.source_adapters import public_source_reason_code
+
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="source_result",
+        event_seq=131,
+        round_no=1,
+        source_kind="liepin",
+        status="blocked",
+        safe_reason_code=public_source_reason_code("liepin_opencli_bootstrap_failed"),
+    )
+
+    assert event["safeReasonCode"] == "source_browser_backend_unavailable"
+
+
 def test_source_result_public_event_maps_liepin_extension_disconnected() -> None:
     from seektalent.source_adapters import public_source_reason_code
 
@@ -147,7 +187,7 @@ def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pyt
 
 
 def test_source_round_empty_coverage_does_not_block_next_runtime_step(tmp_path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = _workflow_runtime(settings)
     source_plan = build_runtime_source_plan(source_kinds=["cts"], settings=settings, runtime_run_id="run-1")
     dispatch_result = SourceRoundDispatchResult(
@@ -180,7 +220,7 @@ def test_source_round_empty_coverage_does_not_block_next_runtime_step(tmp_path) 
 
 
 def test_source_round_unknown_coverage_status_remains_blocking(tmp_path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="managed_local")
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
     runtime = _workflow_runtime(settings)
 
     reason = runtime._source_round_not_ready_reason(

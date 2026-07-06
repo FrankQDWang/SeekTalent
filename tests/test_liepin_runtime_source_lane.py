@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.providers.liepin.client import LiepinWorkerModeError
@@ -19,6 +21,7 @@ from seektalent.runtime.source_filters import RuntimeLocationExecutionIntent
 from seektalent.runtime.source_lanes import RuntimeApprovedDetailLease, RuntimeSourceBudgetPolicy, RuntimeSourceLaneRequest
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 from seektalent.storage.json import sha256_json
+from seektalent.sources.liepin.reason_codes import LIEPIN_SOURCE_LANE_REASON_CODE_MAP
 from tests.settings_factory import make_settings
 
 
@@ -756,7 +759,7 @@ async def _run_parallel_liepin_bundle(worker: ParallelDetailWorker) -> None:
                 ),
             ),
             source_budget_policy=RuntimeSourceBudgetPolicy.defaults(),
-            liepin_context={"backend_mode": "worker_compat"},
+            liepin_context={"backend_mode": "external_http"},
             worker_client=worker,
         )
     )
@@ -1012,9 +1015,11 @@ def test_liepin_backend_posture_records_worker_modes_without_removed_fallback() 
         "backend_mode": "opencli",
         "reason": "opencli",
     }
-    assert liepin_backend_posture(make_settings(liepin_worker_mode="managed_local")) == {
-        "backend_mode": "worker_compat",
-        "reason": "managed_local",
+    assert liepin_backend_posture(
+        make_settings(liepin_worker_mode="external_http", liepin_worker_base_url="http://127.0.0.1:8123")
+    ) == {
+        "backend_mode": "external_http",
+        "reason": "external_http",
     }
     assert liepin_backend_posture(
         make_settings(liepin_worker_mode="fake_fixture", liepin_allow_fake_fixture_worker=True)
@@ -1032,14 +1037,32 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
         "liepin_opencli_risk_page",
         "liepin_opencli_detail_not_opened",
         "liepin_opencli_filter_unapplied",
+        "liepin_opencli_search_not_ready",
+        "liepin_opencli_results_not_ready",
         "liepin_opencli_stale_ref",
         "liepin_opencli_selector_not_found",
         "liepin_opencli_selector_ambiguous",
         "liepin_opencli_target_not_found",
         "liepin_opencli_daemon_not_running",
         "liepin_opencli_daemon_stale",
+        "liepin_opencli_removed_config",
     ):
         assert runtime_safe_reason_code_from_worker_failure_code(reason_code) == reason_code
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "liepin_opencli_search_not_ready",
+        "liepin_opencli_results_not_ready",
+        "liepin_opencli_removed_config",
+    ],
+)
+def test_opencli_backend_unavailable_reasons_map_to_source_lane_backend_unavailable(reason_code: str) -> None:
+    assert (
+        LIEPIN_SOURCE_LANE_REASON_CODE_MAP[reason_code]
+        == "source_browser_backend_unavailable"
+    )
 
 
 def test_liepin_runtime_lane_uses_provider_adapter_context_and_public_payload_is_safe() -> None:

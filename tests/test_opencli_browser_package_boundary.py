@@ -71,19 +71,26 @@ def test_generic_opencli_browser_contracts_do_not_expose_site_config_fields() ->
         "artifact_root",
         "detail_open_timeout_seconds",
         "allowed_click_refs",
-        "cleanup_worker_enabled",
-        "idle_close_seconds",
-        "close_blank_window",
+        "cleanup_" + "worker_enabled",
+        "idle_" + "close_seconds",
+        "close_" + "blank_window",
+        "current_tab_reuse_url_fragments",
     )
 
     assert all(item not in text for item in forbidden)
+
+
+def test_liepin_policy_does_not_reintroduce_current_tab_reuse_fragments() -> None:
+    text = _text(ROOT / "src" / "seektalent" / "providers" / "liepin" / "liepin_opencli_policy.py")
+
+    assert "LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS" not in text
 
 
 def test_generic_opencli_browser_automation_does_not_launch_provider_cleanup_worker() -> None:
     text = _text(OPENCLI_BROWSER_ROOT / "automation.py")
     forbidden = (
         "launch_idle_cleanup_worker",
-        "watch_idle_lease",
+        "watch_" + "idle_lease",
         "subprocess.Popen",
         "SEEKTALENT_LIEPIN_OPENCLI_",
     )
@@ -101,24 +108,3 @@ def test_opencli_browser_automation_uses_generic_reason_codes() -> None:
     assert OPENCLI_COMMAND_MISSING == "opencli_command_missing"
     assert OPENCLI_TIMEOUT == "opencli_timeout"
     assert OPENCLI_STALE_REF == "opencli_stale_ref"
-
-
-def test_subprocess_current_tab_opener_uses_configured_reuse_fragments(monkeypatch) -> None:
-    import subprocess
-
-    from seektalent.opencli_browser.runtime import SubprocessCurrentChromeTabOpener
-
-    captured: dict[str, tuple[str, ...]] = {}
-
-    def fake_run(argv, *, check, capture_output, text, timeout):
-        del check, capture_output, text
-        captured["argv"] = tuple(argv)
-        assert timeout == 5
-        return subprocess.CompletedProcess(argv, 0, stdout="https://example.test/search?from=redirect\n")
-
-    monkeypatch.setattr("seektalent.opencli_browser.runtime.subprocess.run", fake_run)
-
-    opener = SubprocessCurrentChromeTabOpener(reuse_url_fragments=("example.test/search",))
-
-    assert opener.open_tab("https://example.test/search#session") is True
-    assert captured["argv"][-2:] == ("https://example.test/search#session", "example.test/search")

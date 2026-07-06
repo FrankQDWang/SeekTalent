@@ -15,7 +15,6 @@ def local_opencli_liepin_source_context(
     if "liepin" not in {str(source_id) for source_id in source_ids}:
         return None
     worker_mode = str(getattr(settings, "liepin_worker_mode", "") or "")
-    backend_mode = "opencli" if worker_mode in {"managed_local", "opencli"} else worker_mode
     context: dict[str, str | int | bool | None] = {
         "actor_id": "local",
         "connection_id": "liepin-opencli",
@@ -23,9 +22,9 @@ def local_opencli_liepin_source_context(
         "tenant_id": "local",
         "workspace_id": "default",
     }
-    if backend_mode:
-        context["backend_mode"] = backend_mode
-    if backend_mode == "opencli":
+    if worker_mode:
+        context["backend_mode"] = worker_mode
+    if worker_mode == "opencli":
         compliance_gate_ref = _ensure_local_opencli_liepin_context(settings=settings, context=context)
         if compliance_gate_ref:
             context["compliance_gate_ref"] = compliance_gate_ref

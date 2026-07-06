@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 OPENCLI_PACKAGE = "@jackwener/opencli"
-OPENCLI_VERSION = "1.8.0"
+OPENCLI_VERSION = "1.8.6"
 NODE_VERSION = "v24.16.0"
 RUNTIME_ROOT = Path.home() / ".seektalent" / "opencli-runtime"
 NODE_DIST_BASE_URL = "https://nodejs.org/dist"

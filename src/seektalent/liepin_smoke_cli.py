@@ -12,6 +12,7 @@ from seektalent.providers.liepin.client import LiepinWorkerClient, build_liepin_
 from seektalent.providers.liepin.policy import LiepinCardCandidate, build_detail_open_plan
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
+from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.source_adapters import build_source_enabled_runtime
 
 WorkflowRuntime = build_source_enabled_runtime
@@ -117,7 +118,12 @@ def liepin_smoke_command(args: argparse.Namespace) -> int:
         print(f"validation failed: {reason}", file=sys.stderr)
         return 1
 
-    settings = _liepin_smoke_settings(args)
+    try:
+        settings = _liepin_smoke_settings(args)
+    except LiepinWorkerModeError as exc:
+        setup_status = exc.setup_status or "unsupported_worker_mode"
+        print(f"validation failed: worker setup failed: {setup_status}", file=sys.stderr)
+        return 1
     if settings.liepin_worker_mode == "fake_fixture":
         print("validation failed: live smoke refuses fake fixture worker mode", file=sys.stderr)
         return 1
@@ -157,7 +163,11 @@ def liepin_smoke_command(args: argparse.Namespace) -> int:
     if getattr(session, "status", None) != "ready":
         print(f"validation failed: session not ready: {getattr(session, 'status', 'unknown')}", file=sys.stderr)
         return 1
-    if getattr(session, "provider_account_hash", None) != connection.provider_account_hash:
+    if not _liepin_smoke_session_provider_account_matches(
+        session_provider_account_hash=getattr(session, "provider_account_hash", None),
+        connection_provider_account_hash=connection.provider_account_hash,
+        settings=settings,
+    ):
         print("validation failed: provider_account_mismatch", file=sys.stderr)
         return 1
 
@@ -214,10 +224,13 @@ def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
     configured_mode = args.worker_mode or base_settings.liepin_worker_mode
     if args.worker_base_url is not None:
         configured_mode = "external_http"
-    if configured_mode in {"fake_fixture", "managed_local", "external_http", "opencli"}:
+    if configured_mode in {"fake_fixture", "external_http", "opencli"}:
         worker_mode = configured_mode
     else:
-        worker_mode = "opencli"
+        raise LiepinWorkerModeError(
+            f"Unsupported Liepin smoke worker mode: {configured_mode}",
+            setup_status="unsupported_worker_mode",
+        )
     settings_data: dict[str, object] = {
         "provider_name": "liepin",
         "liepin_live_enabled": True,
@@ -231,6 +244,20 @@ def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
     if args.worker_base_url is not None:
         settings_data["liepin_worker_base_url"] = args.worker_base_url
     return base_settings.with_overrides(**settings_data)
+
+
+def _liepin_smoke_session_provider_account_matches(
+    *,
+    session_provider_account_hash: object,
+    connection_provider_account_hash: str | None,
+    settings: AppSettings,
+) -> bool:
+    if session_provider_account_hash == connection_provider_account_hash:
+        return True
+    return (
+        settings.liepin_worker_mode == "opencli"
+        and session_provider_account_hash == OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
+    )
 
 
 async def _liepin_smoke_worker_session(

@@ -4,9 +4,8 @@ import json
 import hashlib
 import os
 import random
-import subprocess
-import sys
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -43,9 +42,15 @@ from seektalent.providers.liepin.opencli_filter_planning import (
     skipped_liepin_filter_names,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_OPENCLI_ALLOWED_HOSTS,
     LIEPIN_RECRUITER_SEARCH_URL,
     liepin_error_from_opencli_error,
     liepin_result_from_opencli_result,
+)
+from seektalent.providers.liepin.opencli_local_state import locked_json_update, opencli_state_lock
+from seektalent.providers.liepin.worker_contracts import (
+    OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+    SessionStatus,
 )
 from seektalent.providers.liepin.liepin_state_machine import (
     LiepinStateSnapshot,
@@ -64,11 +69,13 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _detail_targets_payload,
     _fixed_readonly_eval_probe_script,
     _is_blank_tab_url,
+    _is_liepin_recruiter_search_surface,
     _is_liepin_detail_url,
     _is_safe_page_id,
     _liepin_structured_cards_payload_probe_script,
     _looks_like_liepin_detail_resume_state,
     _looks_like_liepin_search_result_page,
+    _looks_like_liepin_search_result_surface,
     _merge_liepin_detail_targets,
     _opencli_result_text,
     _parse_page_id as _parse_page_id,
@@ -105,12 +112,10 @@ class LiepinOpenCliSiteConfig:
     lease_dir: Path | None = None
     artifact_root: Path | None = None
     detail_open_timeout_seconds: int = 90
-    idle_close_seconds: int = 120
-    close_blank_window: bool = False
-    cleanup_worker_enabled: bool = True
 
 
 _RECOVERABLE_CONNECTION_REASONS = {
+    "liepin_opencli_daemon_not_running",
     "liepin_opencli_extension_disconnected",
     "liepin_opencli_daemon_stale",
     "liepin_opencli_status_unavailable",
@@ -121,6 +126,35 @@ _RECOVERABLE_TAB_REUSE_REASONS = {
     "liepin_opencli_window_policy_blocked",
     "liepin_opencli_stale_ref",
 }
+
+_LIEPIN_SESSION_LOGIN_REQUIRED_REASONS = {
+    "liepin_opencli_login_required",
+    "liepin_opencli_identity_intercept",
+    "liepin_opencli_risk_page",
+    "liepin_opencli_unknown_modal",
+}
+
+
+def _session_status_for_liepin_reason(reason: str) -> str:
+    if reason in _LIEPIN_SESSION_LOGIN_REQUIRED_REASONS:
+        return "login_required"
+    return "missing"
+
+
+def _opencli_safe_reason(reason: str | None, *, default: str) -> str:
+    clean = str(reason or "").strip()
+    if clean and clean != "configured":
+        return clean
+    return default
+
+
+def _state_text_for_probe(result: OpenCliBrowserResult) -> str:
+    if result.private_output:
+        return result.private_output
+    observation_text = result.observation.get("text")
+    if isinstance(observation_text, str):
+        return observation_text
+    return _opencli_result_text(result)
 
 
 def _native_filter_clear_scope(source_run_id: str) -> str:
@@ -173,7 +207,7 @@ def _result_from_error(error: OpenCliBrowserError) -> TransitionResult:
 
 
 def _search_url_ready(snapshot: LiepinStateSnapshot) -> bool:
-    return snapshot.url is not None and _url_matches_start_surface(snapshot.url, LIEPIN_RECRUITER_SEARCH_URL)
+    return snapshot.url is not None and _is_liepin_recruiter_search_surface(snapshot.url)
 
 
 def _search_state_nonterminal(snapshot: LiepinStateSnapshot) -> bool:
@@ -197,14 +231,6 @@ class LiepinSiteAdapter:
     def _commands(self):
         return self._automation.commands
 
-    @property
-    def _window_counter(self):
-        return self._automation.window_counter
-
-    @property
-    def _blank_window_closer(self):
-        return self._automation.blank_window_closer
-
     def _run_liepin_transition(self, transition: LiepinTransition) -> TransitionResult:
         return LiepinTransitionRunner().run(transition)
 
@@ -225,6 +251,82 @@ class LiepinSiteAdapter:
     def status(self) -> OpenCliBrowserResult:
         return liepin_result_from_opencli_result(self._automation.status())
 
+    def session_status_probe(
+        self,
+        *,
+        connection_id: str,
+        provider_account_hash: str | None,
+    ) -> SessionStatus:
+        del provider_account_hash
+        status = self.status()
+        if not status.ok:
+            reason = _opencli_safe_reason(status.safe_reason_code, default="liepin_opencli_status_unavailable")
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+            )
+        try:
+            opened = self.open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)
+        except OpenCliBrowserError as exc:
+            reason = _opencli_safe_reason(exc.safe_reason_code, default="liepin_opencli_status_unavailable")
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+            )
+        if not opened.ok:
+            reason = _opencli_safe_reason(opened.safe_reason_code, default="liepin_opencli_status_unavailable")
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+            )
+        try:
+            state = self.state()
+        except OpenCliBrowserError as exc:
+            reason = _opencli_safe_reason(exc.safe_reason_code, default="liepin_opencli_status_unavailable")
+            current_url = self._current_url_or_none()
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+                currentUrl=current_url,
+            )
+
+        state_text = _state_text_for_probe(state)
+        current_url = _state_url(state_text) or self._current_url_or_none()
+        if not state.ok:
+            reason = _opencli_safe_reason(state.safe_reason_code, default="liepin_opencli_status_unavailable")
+            return SessionStatus(
+                connectionId=connection_id,
+                status=_session_status_for_liepin_reason(reason),
+                safeReasonCode=reason,
+                currentUrl=current_url,
+            )
+
+        search_ready = current_url is not None and _is_liepin_recruiter_search_surface(current_url)
+        result_ready = _looks_like_liepin_search_result_surface(state_text)
+        if not search_ready:
+            return SessionStatus(
+                connectionId=connection_id,
+                status="missing",
+                safeReasonCode="liepin_opencli_search_not_ready",
+                currentUrl=current_url,
+                searchSurfaceReady=False,
+                resultSurfaceReady=result_ready,
+            )
+
+        return SessionStatus(
+            connectionId=connection_id,
+            status="ready",
+            providerAccountHash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+            safeReasonCode="configured",
+            currentUrl=current_url,
+            searchSurfaceReady=True,
+            resultSurfaceReady=result_ready,
+        )
+
     def recover_connection(self) -> OpenCliBrowserResult:
         status = self.status()
         if status.ok:
@@ -236,20 +338,20 @@ class LiepinSiteAdapter:
                 safe_reason_code=status.safe_reason_code,
                 private_output=status.private_output,
             )
-        opened = self._automation.current_tab_opener.open_tab(LIEPIN_RECRUITER_SEARCH_URL)
-        if not opened:
+        restarted = liepin_result_from_opencli_result(self._automation.restart_daemon())
+        if not restarted.ok:
             return OpenCliBrowserResult(
                 ok=False,
                 action="recover_connection",
-                safe_reason_code=status.safe_reason_code,
-                private_output=status.private_output,
+                safe_reason_code=restarted.safe_reason_code,
+                private_output=restarted.private_output,
             )
         last_status = status
         for _attempt in range(5):
             time.sleep(1)
             last_status = self.status()
             if last_status.ok:
-                return OpenCliBrowserResult(ok=True, action="recover_connection", counts={"opened": 1})
+                return OpenCliBrowserResult(ok=True, action="recover_connection", counts={"restarted": 1})
         return OpenCliBrowserResult(
             ok=False,
             action="recover_connection",
@@ -305,8 +407,9 @@ class LiepinSiteAdapter:
 
     def state(self) -> OpenCliBrowserResult:
         current_url = self._current_url()
-        url_terminal_reason = classify_liepin_state(url=current_url, text="")
-        if url_terminal_reason:
+        current_host = urlparse(current_url).hostname or ""
+        if current_host not in LIEPIN_OPENCLI_ALLOWED_HOSTS:
+            url_terminal_reason = classify_liepin_state(url=current_url, text="")
             observation = build_observation("")
             observation["terminal"] = True
             return OpenCliBrowserResult(
@@ -317,7 +420,8 @@ class LiepinSiteAdapter:
             )
         output = self._run_browser_command("state", ())
         observation = build_observation(output)
-        terminal_reason = classify_liepin_state(url=current_url, text=output)
+        observed_url = _state_url(output) or current_url
+        terminal_reason = classify_liepin_state(url=observed_url, text=output)
         observation["terminal"] = terminal_reason is not None
         result_card_targets = self._find_liepin_result_card_detail_targets(
             state_text=output,
@@ -351,6 +455,13 @@ class LiepinSiteAdapter:
             observation=build_observation(output),
             private_output=output,
         )
+
+    def _current_url_or_none(self) -> str | None:
+        try:
+            current_url = self._current_url().strip()
+        except OpenCliBrowserError:
+            return None
+        return current_url or None
 
     def find(self, *, query: str) -> OpenCliBrowserResult:
         self._validate_keyword_text(query)
@@ -721,10 +832,7 @@ class LiepinSiteAdapter:
                 "detail_payload": detail_payload,
                 "normalized_text": structured_liepin_detail_text(payload),
             }
-            resumes = [item for item in self._read_collected_resumes(safe_run_id) if item.get("provider_rank") != rank]
-            resumes.append(resume)
-            resumes.sort(key=lambda item: _positive_int_or_none(item.get("provider_rank")) or 0)
-            self._write_collected_resumes(safe_run_id, resumes)
+            resumes = self._upsert_collected_resume(safe_run_id, rank=rank, resume=resume)
             if emit_events:
                 self._append_agent_event(
                     source_run_id,
@@ -746,12 +854,7 @@ class LiepinSiteAdapter:
         if rank < 1 or rank > 100:
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         safe_run_id = _safe_artifact_segment(source_run_id)
-        resumes = [
-            resume
-            for resume in self._read_collected_resumes(safe_run_id)
-            if _positive_int_or_none(resume.get("provider_rank")) != rank
-        ]
-        self._write_collected_resumes(safe_run_id, resumes)
+        self._delete_collected_resume(safe_run_id, rank=rank)
 
     def search_liepin_resumes(
         self,
@@ -893,11 +996,13 @@ class LiepinSiteAdapter:
                 LiepinTransition(
                     name="wait_search_ready",
                     phase="search",
-                    observe_pre_state=lambda: open_post_snapshot
-                    or LiepinStateSnapshot(
-                        ok=False,
-                        text="",
-                        safe_reason_code="liepin_opencli_search_not_ready",
+                    observe_pre_state=lambda: (
+                        open_post_snapshot
+                        or LiepinStateSnapshot(
+                            ok=False,
+                            text="",
+                            safe_reason_code="liepin_opencli_search_not_ready",
+                        )
                     ),
                     precondition=_search_url_ready,
                     action=lambda: _result_from_opencli(self.wait_time(seconds=3)),
@@ -1194,11 +1299,13 @@ class LiepinSiteAdapter:
                 LiepinTransition(
                     name="observe_results",
                     phase="search",
-                    observe_pre_state=lambda: click_post_snapshot
-                    or LiepinStateSnapshot(
-                        ok=False,
-                        text="",
-                        safe_reason_code="liepin_opencli_search_not_ready",
+                    observe_pre_state=lambda: (
+                        click_post_snapshot
+                        or LiepinStateSnapshot(
+                            ok=False,
+                            text="",
+                            safe_reason_code="liepin_opencli_search_not_ready",
+                        )
                     ),
                     precondition=_search_url_ready,
                     action=observe_results_action,
@@ -1260,7 +1367,9 @@ class LiepinSiteAdapter:
 
             def extract_structured_cards_action() -> TransitionResult:
                 nonlocal structured_cards
-                structured_cards = self.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
+                structured_cards = self.extract_structured_liepin_cards(
+                    source_run_id=source_run_id, max_cards=max_cards
+                )
                 return _result_from_opencli(structured_cards)
 
             extract_result = self._run_liepin_transition(
@@ -1642,7 +1751,9 @@ class LiepinSiteAdapter:
             return state
         if (input_ref := native_filter_city_search_input_ref(state_text)) is not None:
             self.fill(target=input_ref, text=label)
-            events.append({"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True})
+            events.append(
+                {"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True}
+            )
             self.wait_time(seconds=1)
             state = self.state()
             events.append({"action_kind": "observe_native_city_filter_search", "filter": "city", "ok": state.ok})
@@ -1795,15 +1906,40 @@ class LiepinSiteAdapter:
         target.parent.mkdir(parents=True, exist_ok=True)
         return target
 
+    def _write_json_atomic(self, path: Path, payload: object) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
     def _append_agent_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
         safe_run_id = _safe_artifact_segment(source_run_id)
-        events = self._read_agent_events(safe_run_id)
-        events.append(dict(event))
-        self._write_pi_artifact(
-            "protected",
-            f"pi-trace/{safe_run_id}/agent-events.json",
-            {"schema_version": "seektalent.opencli_agent_events.v1", "events": events},
-        )
+        path = self._pi_artifact_path("protected", f"pi-trace/{safe_run_id}/agent-events.json")
+
+        def update(state: object) -> dict[str, object]:
+            if not isinstance(state, dict):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            raw_events = state.get("events")
+            if not isinstance(raw_events, list):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            events = [dict(item) for item in raw_events if isinstance(item, dict)]
+            events.append(dict(event))
+            return {
+                "schema_version": "seektalent.opencli_agent_events.v1",
+                "events": events,
+            }
+
+        try:
+            locked_json_update(
+                path,
+                {"schema_version": "seektalent.opencli_agent_events.v1", "events": []},
+                update,
+            )
+        except json.JSONDecodeError as exc:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
 
     def _read_agent_events(self, safe_run_id: str) -> list[dict[str, object]]:
         path = self._pi_artifact_path("protected", f"pi-trace/{safe_run_id}/agent-events.json")
@@ -1849,11 +1985,83 @@ class LiepinSiteAdapter:
         return [dict(item) for item in raw_resumes if isinstance(item, dict)]
 
     def _write_collected_resumes(self, safe_run_id: str, resumes: Sequence[Mapping[str, object]]) -> None:
-        self._write_pi_artifact(
-            "protected",
-            f"pi-detail/{safe_run_id}/collected-resumes.json",
-            {"schema_version": "seektalent.opencli_collected_resumes.v1", "resumes": [dict(item) for item in resumes]},
-        )
+        path = self._pi_artifact_path("protected", f"pi-detail/{safe_run_id}/collected-resumes.json")
+        with opencli_state_lock(path):
+            self._write_json_atomic(
+                path,
+                {
+                    "schema_version": "seektalent.opencli_collected_resumes.v1",
+                    "resumes": [dict(item) for item in resumes],
+                },
+            )
+
+    def _upsert_collected_resume(
+        self,
+        safe_run_id: str,
+        *,
+        rank: int,
+        resume: Mapping[str, object],
+    ) -> list[dict[str, object]]:
+        path = self._pi_artifact_path("protected", f"pi-detail/{safe_run_id}/collected-resumes.json")
+
+        def update(state: object) -> dict[str, object]:
+            if not isinstance(state, dict):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            raw_resumes = state.get("resumes")
+            if not isinstance(raw_resumes, list):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            resumes = [
+                dict(item)
+                for item in raw_resumes
+                if isinstance(item, dict) and _positive_int_or_none(item.get("provider_rank")) != rank
+            ]
+            resumes.append(dict(resume))
+            resumes.sort(key=lambda item: _positive_int_or_none(item.get("provider_rank")) or 0)
+            return {
+                "schema_version": "seektalent.opencli_collected_resumes.v1",
+                "resumes": resumes,
+            }
+
+        try:
+            updated = locked_json_update(
+                path,
+                {"schema_version": "seektalent.opencli_collected_resumes.v1", "resumes": []},
+                update,
+            )
+        except json.JSONDecodeError as exc:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+        raw_resumes = updated["resumes"]
+        return [dict(item) for item in raw_resumes if isinstance(item, dict)]
+
+    def _delete_collected_resume(self, safe_run_id: str, *, rank: int) -> list[dict[str, object]]:
+        path = self._pi_artifact_path("protected", f"pi-detail/{safe_run_id}/collected-resumes.json")
+
+        def update(state: object) -> dict[str, object]:
+            if not isinstance(state, dict):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            raw_resumes = state.get("resumes")
+            if not isinstance(raw_resumes, list):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            resumes = [
+                dict(item)
+                for item in raw_resumes
+                if isinstance(item, dict) and _positive_int_or_none(item.get("provider_rank")) != rank
+            ]
+            return {
+                "schema_version": "seektalent.opencli_collected_resumes.v1",
+                "resumes": resumes,
+            }
+
+        try:
+            updated = locked_json_update(
+                path,
+                {"schema_version": "seektalent.opencli_collected_resumes.v1", "resumes": []},
+                update,
+            )
+        except json.JSONDecodeError as exc:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+        raw_resumes = updated["resumes"]
+        return [dict(item) for item in raw_resumes if isinstance(item, dict)]
 
     def _find_liepin_result_card_detail_targets(
         self,
@@ -1878,52 +2086,6 @@ class LiepinSiteAdapter:
         except OpenCliBrowserError:
             return ()
 
-    def cleanup_idle_lease(self, *, force: bool = False) -> OpenCliBrowserResult:
-        lease = self._read_lease()
-        if lease is None:
-            return OpenCliBrowserResult(ok=True, action="cleanup_idle_lease", counts={"leases": 0})
-        if not force and not self._lease_is_idle(lease):
-            return OpenCliBrowserResult(ok=True, action="cleanup_idle_lease", counts={"leases": 1, "closed": 0})
-        self._delete_lease()
-        return OpenCliBrowserResult(
-            ok=True,
-            action="cleanup_idle_lease",
-            counts={"leases": 1, "closed": 0},
-        )
-
-    def watch_idle_lease(self) -> OpenCliBrowserResult:
-        while True:
-            lease = self._read_lease()
-            if lease is None:
-                return OpenCliBrowserResult(ok=True, action="watch_idle_lease", counts={"leases": 0})
-            remaining_seconds = self._lease_remaining_seconds(lease)
-            if remaining_seconds <= 0:
-                return self.cleanup_idle_lease(force=True)
-            time.sleep(min(max(remaining_seconds, 1), 30))
-
-    def cleanup_orphaned_tabs(self, *, force: bool = False) -> OpenCliBrowserResult:
-        lease = self._read_lease()
-        if lease is not None:
-            return self.cleanup_idle_lease(force=force)
-        if not force:
-            return OpenCliBrowserResult(
-                ok=True,
-                action="cleanup_orphaned_tabs",
-                counts={"leases": 0, "closedTabs": 0, "blankWindows": 0},
-            )
-        skipped = self._forget_orphaned_owned_page_markers()
-        return OpenCliBrowserResult(
-            ok=True,
-            action="cleanup_orphaned_tabs",
-            counts={"leases": 0, "closedTabs": 0, "blankWindows": 0, "skipped": skipped},
-        )
-
-    def _forget_orphaned_owned_page_markers(self) -> int:
-        markers = self._read_owned_page_markers()
-        for page_id in tuple(markers):
-            self._forget_owned_page_marker(page_id)
-        return len(markers)
-
     def _list_tabs(self) -> list[dict[str, object]]:
         output = self._run_browser_command("tab", ("list",))
         try:
@@ -1938,6 +2100,8 @@ class LiepinSiteAdapter:
         tab = urlparse(tab_url)
         if (tab.hostname or "") not in self._site_config.allowed_hosts:
             return False
+        if _is_liepin_recruiter_search_surface(tab_url):
+            return True
         if any(_url_matches_start_surface(tab_url, start_url) for start_url in self._site_config.allowed_start_urls):
             return True
         path = tab.path or ""
@@ -2157,6 +2321,8 @@ class LiepinSiteAdapter:
         parsed = urlparse(url)
         if (parsed.hostname or "") not in self._site_config.allowed_hosts:
             return False
+        if _is_liepin_recruiter_search_surface(url):
+            return True
         path = parsed.path or ""
         if path.startswith("/resume/showresumedetail"):
             return False
@@ -2223,7 +2389,9 @@ class LiepinSiteAdapter:
             tab_url = str(tab.get("url") or "")
             if not _is_safe_page_id(page_id):
                 continue
-            if not _url_matches_start_surface(tab_url, expected_url):
+            if not _is_liepin_recruiter_search_surface(tab_url) and not _url_matches_start_surface(
+                tab_url, expected_url
+            ):
                 continue
             if tab.get("active") is True:
                 continue
@@ -2333,6 +2501,8 @@ class LiepinSiteAdapter:
         return max(candidates, key=lambda item: item[0])[1]
 
     def _opened_tab_url_matches_requested_url(self, tab_url: str, requested_url: str) -> bool:
+        if _is_liepin_recruiter_search_surface(tab_url) and _is_liepin_recruiter_search_surface(requested_url):
+            return True
         if _url_matches_start_or_detail_surface(tab_url, requested_url):
             return True
         if _is_liepin_detail_url(requested_url):
@@ -2563,8 +2733,6 @@ class LiepinSiteAdapter:
         if not _is_safe_page_id(page_id):
             raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
         now = time.time()
-        path = self._lease_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": "seektalent.opencli_lease.v1",
             "session": self._browser_config.session,
@@ -2577,24 +2745,31 @@ class LiepinSiteAdapter:
         self._write_lease_payload(payload)
 
     def _touch_lease(self) -> None:
-        lease = self._read_lease()
-        if lease is None:
-            return
-        lease["last_activity_at"] = time.time()
-        self._write_lease_payload(lease)
+        path = self._lease_path()
+        with opencli_state_lock(path):
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return
+            except json.JSONDecodeError as exc:
+                raise OpenCliBrowserError("liepin_opencli_lease_malformed") from exc
+            if not isinstance(loaded, dict):
+                raise OpenCliBrowserError("liepin_opencli_lease_malformed")
+            loaded["last_activity_at"] = time.time()
+            self._write_json_atomic(path, loaded)
 
     def _write_lease_payload(self, payload: Mapping[str, object]) -> None:
         path = self._lease_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(dict(payload), sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
+        with opencli_state_lock(path):
+            self._write_json_atomic(path, dict(payload))
 
     def _delete_lease(self) -> None:
-        try:
-            self._lease_path().unlink()
-        except FileNotFoundError:
-            return
+        path = self._lease_path()
+        with opencli_state_lock(path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                return
 
     def _quarantine_lease_file(self) -> None:
         path = self._lease_path()
@@ -2660,37 +2835,33 @@ class LiepinSiteAdapter:
     ) -> None:
         if not _is_safe_page_id(page_id) or not self._is_owned_liepin_tab(url):
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
-        markers = self._read_owned_page_markers_for_write()
-        markers[page_id] = {
-            "schema_version": "seektalent.opencli_owned_page.v1",
-            "session": self._browser_config.session,
-            "page_id": page_id,
-            "url": url,
-            "opened_at": opened_at or time.time(),
-            "source_run_id": source_run_id,
-            "runtime_run_id": runtime_run_id,
-            "source_lane_run_id": source_lane_run_id,
-            "owner_nonce": owner_nonce,
-        }
         path = self._owned_pages_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(markers, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
+        with opencli_state_lock(path):
+            markers = self._read_owned_page_markers_for_write()
+            markers[page_id] = {
+                "schema_version": "seektalent.opencli_owned_page.v1",
+                "session": self._browser_config.session,
+                "page_id": page_id,
+                "url": url,
+                "opened_at": opened_at or time.time(),
+                "source_run_id": source_run_id,
+                "runtime_run_id": runtime_run_id,
+                "source_lane_run_id": source_lane_run_id,
+                "owner_nonce": owner_nonce,
+            }
+            self._write_json_atomic(path, markers)
 
     def _forget_owned_page_marker(self, page_id: str) -> None:
-        markers = self._read_owned_page_markers_for_write()
-        if page_id not in markers:
-            return
-        markers.pop(page_id)
         path = self._owned_pages_path()
-        if markers:
-            path.write_text(json.dumps(markers, sort_keys=True), encoding="utf-8")
-        else:
-            path.unlink(missing_ok=True)
-
-    def _lease_is_idle(self, lease: Mapping[str, object]) -> bool:
-        return self._lease_remaining_seconds(lease) <= 0
+        with opencli_state_lock(path):
+            markers = self._read_owned_page_markers_for_write()
+            if page_id not in markers:
+                return
+            markers.pop(page_id)
+            if markers:
+                self._write_json_atomic(path, markers)
+            else:
+                path.unlink(missing_ok=True)
 
     def _lease_page_id(self, lease: Mapping[str, object]) -> str:
         page_id = str(lease.get("page_id") or "")
@@ -2737,42 +2908,6 @@ class LiepinSiteAdapter:
                 return page_id
             return None
         return None
-
-    def _lease_remaining_seconds(self, lease: Mapping[str, object]) -> int:
-        last_activity = lease.get("last_activity_at")
-        if not isinstance(last_activity, int | float):
-            raise OpenCliBrowserError("liepin_opencli_malformed_state")
-        return int(last_activity + self._site_config.idle_close_seconds - time.time())
-
-    def _close_blank_window_if_enabled(self) -> bool:
-        if not self._site_config.close_blank_window:
-            return False
-        return self._blank_window_closer.close_blank()
-
-    def _launch_idle_cleanup_worker(self) -> None:
-        if not self._site_config.cleanup_worker_enabled:
-            return
-        env = os.environ.copy()
-        if self._site_config.lease_dir is not None:
-            env["SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR"] = str(self._site_config.lease_dir)
-        env["SEEKTALENT_LIEPIN_OPENCLI_IDLE_CLOSE_SECONDS"] = str(self._site_config.idle_close_seconds)
-        env["SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE"] = self._browser_config.window_mode
-        env["SEEKTALENT_LIEPIN_OPENCLI_CLOSE_BLANK_WINDOW"] = (
-            "true" if self._site_config.close_blank_window else "false"
-        )
-        try:
-            # shell=False with fixed argv; site config values are only child env.
-            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
-            subprocess.Popen(
-                (sys.executable, "-m", "seektalent.providers.liepin.opencli_browser_cli", "watch_idle_lease"),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=env,
-                start_new_session=True,
-            )
-        except OSError:
-            return
 
     def _validate_command_shape(self, command: str, args: tuple[str, ...]) -> None:
         valid = {
@@ -2823,14 +2958,19 @@ class LiepinSiteAdapter:
         host = urlparse(url).hostname or ""
         if host not in self._site_config.allowed_hosts:
             raise OpenCliBrowserError("liepin_opencli_host_blocked")
-        if url not in self._site_config.allowed_start_urls:
-            raise OpenCliBrowserError("liepin_opencli_start_url_blocked")
+        if url in self._site_config.allowed_start_urls or _is_liepin_recruiter_search_surface(url):
+            return
+        raise OpenCliBrowserError("liepin_opencli_start_url_blocked")
 
     def _validate_tab_new_url(self, url: str) -> None:
         host = urlparse(url).hostname or ""
         if host not in self._site_config.allowed_hosts:
             raise OpenCliBrowserError("liepin_opencli_host_blocked")
-        if url in self._site_config.allowed_start_urls or _is_liepin_detail_url(url):
+        if (
+            url in self._site_config.allowed_start_urls
+            or _is_liepin_recruiter_search_surface(url)
+            or _is_liepin_detail_url(url)
+        ):
             return
         raise OpenCliBrowserError("liepin_opencli_start_url_blocked")
 

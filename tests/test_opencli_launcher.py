@@ -7,6 +7,11 @@ import pytest
 from seektalent import opencli_launcher
 
 
+def test_managed_opencli_version_is_pinned_to_1_8_6() -> None:
+    assert opencli_launcher.OPENCLI_PACKAGE == "@jackwener/opencli"
+    assert opencli_launcher.OPENCLI_VERSION == "1.8.6"
+
+
 def test_ensure_opencli_runtime_ignores_supported_system_node(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

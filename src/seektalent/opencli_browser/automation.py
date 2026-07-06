@@ -13,6 +13,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserResult,
 )
 from seektalent.opencli_browser.reason_codes import (
+    OPENCLI_BOOTSTRAP_FAILED,
     OPENCLI_COMMAND_MISSING,
     OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_DAEMON_STALE,
@@ -25,13 +26,7 @@ from seektalent.opencli_browser.reason_codes import (
 from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
-    BlankChromeWindowCloser,
-    ChromeWindowCounter,
-    CurrentChromeTabOpener,
     OpenCliCommandRunner,
-    SubprocessBlankChromeWindowCloser,
-    SubprocessChromeWindowCounter,
-    SubprocessCurrentChromeTabOpener,
     SubprocessOpenCliCommandRunner,
     strip_opencli_stdout_notice,
 )
@@ -46,17 +41,9 @@ class OpenCliBrowserAutomation:
         *,
         config: OpenCliBrowserConfig,
         commands: OpenCliCommandRunner | None = None,
-        window_counter: ChromeWindowCounter | None = None,
-        blank_window_closer: BlankChromeWindowCloser | None = None,
-        current_tab_opener: CurrentChromeTabOpener | None = None,
     ) -> None:
         self.config = config
         self.commands = commands or SubprocessOpenCliCommandRunner()
-        self.window_counter = window_counter or SubprocessChromeWindowCounter()
-        self.blank_window_closer = blank_window_closer or SubprocessBlankChromeWindowCloser()
-        self.current_tab_opener = current_tab_opener or SubprocessCurrentChromeTabOpener(
-            reuse_url_fragments=config.current_tab_reuse_url_fragments
-        )
 
     def status(self) -> OpenCliBrowserResult:
         try:
@@ -72,6 +59,13 @@ class OpenCliBrowserAutomation:
                 private_output=output,
             )
         return OpenCliBrowserResult(ok=True, action="status", private_output=output)
+
+    def restart_daemon(self) -> OpenCliBrowserResult:
+        try:
+            output = self._run(tuple(self.config.command) + ("daemon", "restart"))
+        except OpenCliBrowserError as exc:
+            return OpenCliBrowserResult(ok=False, action="restart_daemon", safe_reason_code=exc.safe_reason_code)
+        return OpenCliBrowserResult(ok=True, action="restart_daemon", private_output=output)
 
     def get_url(self) -> OpenCliBrowserResult:
         output = self.run_browser_command("get", ("url",))
@@ -169,6 +163,8 @@ class OpenCliBrowserAutomation:
             raise OpenCliBrowserError(OPENCLI_TIMEOUT) from exc
         except subprocess.CalledProcessError as exc:
             output = f"{getattr(exc, 'stdout', None) or getattr(exc, 'output', '') or ''}\n{exc.stderr or ''}"
+            if exc.returncode == 127 and "SeekTalent OpenCLI bootstrap failed:" in output:
+                raise OpenCliBrowserError(OPENCLI_BOOTSTRAP_FAILED) from exc
             if "Extension" in output and ("not connected" in output or "disconnected" in output):
                 raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED) from exc
             if "Daemon:" in output:

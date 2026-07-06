@@ -8,8 +8,29 @@ import seektalent.liepin_smoke_cli as smoke_cli
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import ResumeCandidate
 from seektalent.providers.liepin.store import LiepinStore
+from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from tests.settings_factory import make_settings
+
+
+def test_workbench_action_reason_preserves_liepin_opencli_reason_only() -> None:
+    assert (
+        cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_identity_intercept"})
+        == "liepin_opencli_identity_intercept"
+    )
+    assert (
+        cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_removed_config"})
+        == "liepin_opencli_removed_config"
+    )
+    assert cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_typo"}) == "liepin_opencli_status_unavailable"
+    assert cli._workbench_action_reason({"safeReasonCode": "source_login_required"}) == "liepin_opencli_status_unavailable"
+    assert cli._workbench_action_reason({"safeReasonCode": ""}) == "liepin_opencli_status_unavailable"
+
+
+def test_workbench_reason_message_covers_search_and_results_readiness() -> None:
+    assert cli._workbench_reason_message("liepin_opencli_search_not_ready") != "OpenCLI/Liepin preflight failed."
+    assert cli._workbench_reason_message("liepin_opencli_results_not_ready") != "OpenCLI/Liepin preflight failed."
+    assert cli._workbench_reason_message("liepin_opencli_removed_config") != "OpenCLI/Liepin preflight failed."
 
 
 def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> None:
@@ -234,12 +255,15 @@ def test_liepin_compliance_gate_create_rejects_non_search_purpose(capsys, tmp_pa
     assert "purpose" in captured.err
     assert "gate_" not in captured.out
     store = LiepinStore(db_path)
-    assert store.get_compliance_gate(
-        gate_ref="gate_missing",
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-    ) is None
+    assert (
+        store.get_compliance_gate(
+            gate_ref="gate_missing",
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+        )
+        is None
+    )
 
 
 def test_liepin_compliance_gate_bind_rejects_connection_for_different_gate(capsys, tmp_path: Path) -> None:
@@ -289,18 +313,24 @@ def test_liepin_compliance_gate_bind_rejects_connection_for_different_gate(capsy
 
     assert status == 1
     assert "account binding failed" in capsys.readouterr().err
-    assert store.get_compliance_gate(
-        gate_ref=gate_a,
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-    ).status == "pending_account_binding"
-    assert store.get_compliance_gate(
-        gate_ref=gate_b,
-        tenant_id="tenant-a",
-        workspace_id="workspace-a",
-        actor_id="actor-a",
-    ).status == "pending_account_binding"
+    assert (
+        store.get_compliance_gate(
+            gate_ref=gate_a,
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+        ).status
+        == "pending_account_binding"
+    )
+    assert (
+        store.get_compliance_gate(
+            gate_ref=gate_b,
+            tenant_id="tenant-a",
+            workspace_id="workspace-a",
+            actor_id="actor-a",
+        ).status
+        == "pending_account_binding"
+    )
 
 
 def test_liepin_compliance_gate_bind_rejects_denied_and_expired_gates(capsys, tmp_path: Path) -> None:
@@ -377,9 +407,7 @@ def test_liepin_compliance_gate_bind_rejects_denied_and_expired_gates(capsys, tm
         assert status in capsys.readouterr().err
 
 
-def test_liepin_compliance_gate_bind_rejects_raw_account_identity_arg(
-    capsys, tmp_path: Path
-) -> None:
+def test_liepin_compliance_gate_bind_rejects_raw_account_identity_arg(capsys, tmp_path: Path) -> None:
     db_path = tmp_path / "liepin.sqlite3"
     store = LiepinStore(db_path)
     gate_ref = store.create_compliance_gate(
@@ -579,12 +607,14 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_opencli_budget(
     monkeypatch.setattr(
         smoke_cli,
         "build_detail_open_plan",
-        lambda **kwargs: detail_plan_calls.append(kwargs)
-        or SimpleNamespace(
-            decisions=[
-                SimpleNamespace(action="open_detail"),
-                SimpleNamespace(action="card_only"),
-            ]
+        lambda **kwargs: (
+            detail_plan_calls.append(kwargs)
+            or SimpleNamespace(
+                decisions=[
+                    SimpleNamespace(action="open_detail"),
+                    SimpleNamespace(action="card_only"),
+                ]
+            )
         ),
         raising=False,
     )
@@ -603,6 +633,8 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_opencli_budget(
             connection_id,
             "--compliance-gate-ref",
             gate_ref,
+            "--worker-mode",
+            "opencli",
             "--max-detail-opens",
             "1",
             "--keyword",
@@ -651,9 +683,71 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_opencli_budget(
     assert provider_account_hash not in captured.out
 
 
-def test_liepin_smoke_live_uses_external_http_when_configured(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_liepin_smoke_live_accepts_opencli_browser_profile_session_subject(capsys, monkeypatch, tmp_path: Path) -> None:
+    db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
+    worker = RecordingSmokeWorker(
+        connection_id=connection_id,
+        provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+    )
+
+    monkeypatch.setattr(
+        smoke_cli,
+        "AppSettings",
+        lambda: make_settings(
+            liepin_worker_mode="disabled",
+            liepin_api_token="worker-token",
+            liepin_detail_open_approval_secret="detail-approval-secret",
+        ),
+    )
+    monkeypatch.setattr(smoke_cli, "build_liepin_worker_client", lambda settings: worker, raising=False)
+    monkeypatch.setattr(
+        smoke_cli,
+        "build_detail_open_plan",
+        lambda **_kwargs: SimpleNamespace(decisions=[]),
+        raising=False,
+    )
+
+    status = cli.main(
+        [
+            "liepin-smoke",
+            "--live",
+            "--tenant-id",
+            "tenant-a",
+            "--workspace-id",
+            "workspace-a",
+            "--actor-id",
+            "actor-a",
+            "--connection-id",
+            connection_id,
+            "--compliance-gate-ref",
+            gate_ref,
+            "--worker-mode",
+            "opencli",
+            "--keyword",
+            "算法",
+            "--page-size",
+            "2",
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 0
+    assert "session: ready" in captured.out
+    assert worker.session_status_calls == [
+        {
+            "connection_id": connection_id,
+            "tenant": "tenant-a",
+            "workspace": "workspace-a",
+            "provider_account_hash": provider_account_hash,
+        }
+    ]
+    assert worker.search_calls[0]["provider_account_hash"] == provider_account_hash
+    assert provider_account_hash not in captured.out
+
+
+def test_liepin_smoke_live_uses_external_http_when_configured(monkeypatch, tmp_path: Path) -> None:
     db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
     worker = RecordingSmokeWorker(connection_id=connection_id, provider_account_hash=provider_account_hash)
     built_settings: list[object] = []
@@ -698,9 +792,7 @@ def test_liepin_smoke_live_uses_external_http_when_configured(
     assert built_settings[0].liepin_worker_mode == "external_http"
 
 
-def test_liepin_smoke_worker_base_url_implies_external_http(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_liepin_smoke_worker_base_url_implies_external_http(monkeypatch, tmp_path: Path) -> None:
     db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
     worker = RecordingSmokeWorker(connection_id=connection_id, provider_account_hash=provider_account_hash)
     built_settings: list[object] = []
@@ -745,6 +837,48 @@ def test_liepin_smoke_worker_base_url_implies_external_http(
     assert status == 0
     assert built_settings[0].liepin_worker_mode == "external_http"
     assert built_settings[0].liepin_worker_base_url == "http://127.0.0.1:8123"
+
+
+def test_liepin_smoke_settings_rejects_stale_env_worker_mode(
+    capsys,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path, gate_ref, connection_id, _provider_account_hash = _approved_gate_and_connection(tmp_path)
+    removed_mode = "managed" + "_local"
+    built_settings: list[object] = []
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", removed_mode)
+    monkeypatch.setattr(
+        smoke_cli,
+        "build_liepin_worker_client",
+        lambda settings: built_settings.append(settings),
+        raising=False,
+    )
+
+    status = cli.main(
+        [
+            "liepin-smoke",
+            "--live",
+            "--tenant-id",
+            "tenant-a",
+            "--workspace-id",
+            "workspace-a",
+            "--actor-id",
+            "actor-a",
+            "--connection-id",
+            connection_id,
+            "--compliance-gate-ref",
+            gate_ref,
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "validation error for AppSettings" in captured.err
+    assert removed_mode in captured.err
+    assert built_settings == []
 
 
 def test_liepin_smoke_rejects_removed_pi_agent_mode(capsys) -> None:
@@ -804,9 +938,7 @@ def test_liepin_smoke_live_uses_opencli_when_configured(monkeypatch, tmp_path: P
     assert built_settings[0].liepin_browser_action_backend == "opencli"
 
 
-def test_liepin_smoke_opencli_override_revalidates_settings(
-    monkeypatch, tmp_path: Path, capsys
-) -> None:
+def test_liepin_smoke_opencli_override_revalidates_settings(monkeypatch, tmp_path: Path, capsys) -> None:
     db_path, gate_ref, connection_id, _provider_account_hash = _approved_gate_and_connection(tmp_path)
     built_settings: list[object] = []
 
@@ -824,9 +956,12 @@ def test_liepin_smoke_opencli_override_revalidates_settings(
     monkeypatch.setattr(
         smoke_cli,
         "build_liepin_worker_client",
-        lambda settings: built_settings.append(settings) or RecordingSmokeWorker(
-            connection_id=connection_id,
-            provider_account_hash="account-hash",
+        lambda settings: (
+            built_settings.append(settings)
+            or RecordingSmokeWorker(
+                connection_id=connection_id,
+                provider_account_hash="account-hash",
+            )
         ),
         raising=False,
     )
@@ -857,9 +992,7 @@ def test_liepin_smoke_opencli_override_revalidates_settings(
     assert "liepin_opencli_allowed_hosts_json must not be empty" in capsys.readouterr().err
 
 
-def test_liepin_smoke_worker_base_url_overrides_local_mode(
-    monkeypatch, tmp_path: Path
-) -> None:
+def test_liepin_smoke_worker_base_url_overrides_local_mode(monkeypatch, tmp_path: Path) -> None:
     db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
     worker = RecordingSmokeWorker(connection_id=connection_id, provider_account_hash=provider_account_hash)
     built_settings: list[object] = []
@@ -895,7 +1028,7 @@ def test_liepin_smoke_worker_base_url_overrides_local_mode(
             "--compliance-gate-ref",
             gate_ref,
             "--worker-mode",
-            "managed_local",
+            "opencli",
             "--worker-base-url",
             "http://127.0.0.1:8123",
             "--db-path",
@@ -937,6 +1070,8 @@ def test_liepin_smoke_live_rejects_session_connection_mismatch(capsys, monkeypat
             connection_id,
             "--compliance-gate-ref",
             gate_ref,
+            "--worker-mode",
+            "opencli",
             "--db-path",
             str(db_path),
         ]
@@ -994,9 +1129,7 @@ def test_liepin_smoke_live_refuses_fake_fixture_mode(capsys, monkeypatch, tmp_pa
     assert "fake fixture" in captured.err.lower()
 
 
-def test_liepin_smoke_live_reports_worker_failure_without_raw_streams(
-    capsys, monkeypatch, tmp_path: Path
-) -> None:
+def test_liepin_smoke_live_reports_worker_failure_without_raw_streams(capsys, monkeypatch, tmp_path: Path) -> None:
     db_path, gate_ref, connection_id, provider_account_hash = _approved_gate_and_connection(tmp_path)
     worker = FailingSmokeWorker()
 
@@ -1025,6 +1158,8 @@ def test_liepin_smoke_live_reports_worker_failure_without_raw_streams(
             connection_id,
             "--compliance-gate-ref",
             gate_ref,
+            "--worker-mode",
+            "opencli",
             "--db-path",
             str(db_path),
         ]
@@ -1075,6 +1210,8 @@ def test_liepin_smoke_live_reports_unexpected_worker_failure_without_raw_excepti
             connection_id,
             "--compliance-gate-ref",
             gate_ref,
+            "--worker-mode",
+            "opencli",
             "--db-path",
             str(db_path),
         ]
@@ -1089,7 +1226,9 @@ def test_liepin_smoke_live_reports_unexpected_worker_failure_without_raw_excepti
 
 
 class RecordingSmokeWorker:
-    def __init__(self, *, provider_account_hash: str, connection_id: str = "conn-default", fixture_only: bool = False) -> None:
+    def __init__(
+        self, *, provider_account_hash: str, connection_id: str = "conn-default", fixture_only: bool = False
+    ) -> None:
         self.connection_id = connection_id
         self.provider_account_hash = provider_account_hash
         self.fixture_only = fixture_only

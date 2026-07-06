@@ -7,7 +7,12 @@ from fastapi import HTTPException, Request
 from seektalent.config import AppSettings
 from seektalent.dev_mode import build_dev_mode_status
 from seektalent.providers.liepin.client import build_liepin_worker_client
-from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError, SessionStatus
+from seektalent.providers.liepin.worker_contracts import (
+    LiepinWorkerModeError,
+    OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+    SessionStatus,
+)
+from seektalent.sources.liepin.reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
 from seektalent_ui.liepin_account_binding import (
     bind_observed_liepin_account,
     ensure_workbench_liepin_provider_connection,
@@ -28,43 +33,23 @@ from seektalent_ui.workbench_store import (
 )
 
 
-RUNTIME_SOURCE_REASON_CODES = {
-    "blocked_backend_unavailable",
-    "failed_provider_error",
-    "login_required",
-    "partial_timeout",
-    "cancelled_by_user",
-    "liepin_connection_not_connected",
-    "liepin_browser_login_required",
-    "liepin_browser_probe_unavailable",
-    "liepin_browser_account_mismatch",
-    "liepin_opencli_backend_disabled",
-    "liepin_opencli_command_missing",
-    "liepin_opencli_extension_disconnected",
-    "liepin_opencli_daemon_not_running",
-    "liepin_opencli_daemon_stale",
-    "liepin_opencli_status_unavailable",
-    "liepin_opencli_forbidden_command",
-    "liepin_opencli_forbidden_text",
-    "liepin_opencli_host_blocked",
-    "liepin_opencli_start_url_blocked",
-    "liepin_opencli_window_policy_blocked",
-    "liepin_opencli_budget_exhausted",
-    "liepin_opencli_timeout",
-    "liepin_opencli_login_required",
-    "liepin_opencli_identity_intercept",
-    "liepin_opencli_risk_page",
-    "liepin_opencli_unknown_modal",
-    "liepin_opencli_source_policy_missing",
-    "liepin_opencli_malformed_state",
-    "liepin_opencli_detail_not_opened",
-    "liepin_opencli_filter_unapplied",
-    "liepin_opencli_stale_ref",
-    "liepin_opencli_selector_not_found",
-    "liepin_opencli_selector_ambiguous",
-    "liepin_opencli_target_not_found",
-    "runtime_failed",
-}
+RUNTIME_SOURCE_REASON_CODES = (
+    frozenset(
+        {
+            "blocked_backend_unavailable",
+            "failed_provider_error",
+            "login_required",
+            "partial_timeout",
+            "cancelled_by_user",
+            "liepin_connection_not_connected",
+            "liepin_browser_login_required",
+            "liepin_browser_probe_unavailable",
+            "liepin_browser_account_mismatch",
+            "runtime_failed",
+        }
+    )
+    | LIEPIN_WORKER_SAFE_REASON_CODES
+)
 
 
 @dataclass(frozen=True)
@@ -114,6 +99,13 @@ def liepin_probe_account_mismatch_result() -> LiepinStartProbeResult:
         reason_code=LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
         warning_message=LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
     )
+
+
+def _status_warning_code(status: SessionStatus, default_code: str) -> str:
+    code = str(status.safe_reason_code or "").strip()
+    if code in RUNTIME_SOURCE_REASON_CODES and code.startswith("liepin_opencli_"):
+        return code
+    return default_code
 
 
 async def refresh_liepin_opencli_connection_if_ready(
@@ -392,18 +384,20 @@ async def _ensure_opencli_session_ready_for_start(
         provider_account_hash=connection.provider_account_hash,
     )
     if status.status != "ready":
+        warning_code = _status_warning_code(status, LIEPIN_BROWSER_LOGIN_REQUIRED_CODE)
+        warning_message = liepin_start_probe_warning_message(warning_code)
         if not _mark_login_required(
             store=store,
             user=user,
             connection_id=connection.connection_id,
-            warning_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
-            warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
+            warning_code=warning_code,
+            warning_message=warning_message,
             session_id=session_id,
             source_run_id=source_run_id,
         ):
             return LiepinStartProbeResult(ready=True)
-        return liepin_probe_login_required_result()
-    if status.provider_account_hash != connection.provider_account_hash:
+        return LiepinStartProbeResult(ready=False, reason_code=warning_code, warning_message=warning_message)
+    if status.provider_account_hash != OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT:
         if not _mark_login_required(
             store=store,
             user=user,
@@ -447,17 +441,19 @@ def _ensure_browser_session_ready_for_start(
     source_run_id: str,
 ) -> LiepinStartProbeResult:
     if status.status != "ready":
+        warning_code = _status_warning_code(status, LIEPIN_BROWSER_LOGIN_REQUIRED_CODE)
+        warning_message = liepin_start_probe_warning_message(warning_code)
         if not _mark_login_required(
             store=store,
             user=user,
             connection_id=connection.connection_id,
-            warning_code=LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
-            warning_message=LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
+            warning_code=warning_code,
+            warning_message=warning_message,
             session_id=session_id,
             source_run_id=source_run_id,
         ):
             return LiepinStartProbeResult(ready=True)
-        return liepin_probe_login_required_result()
+        return LiepinStartProbeResult(ready=False, reason_code=warning_code, warning_message=warning_message)
     if not status.provider_account_hash:
         if not _mark_login_required(
             store=store,

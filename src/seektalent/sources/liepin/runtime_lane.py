@@ -53,8 +53,8 @@ def liepin_backend_posture(settings: AppSettings) -> dict[str, str]:
     worker_mode = settings.liepin_worker_mode
     if worker_mode == "opencli":
         return {"backend_mode": "opencli", "reason": worker_mode}
-    if is_live_liepin_worker_mode(worker_mode):
-        return {"backend_mode": "worker_compat", "reason": worker_mode}
+    if worker_mode == "external_http":
+        return {"backend_mode": "external_http", "reason": worker_mode}
     if worker_mode == "fake_fixture" and settings.liepin_allow_fake_fixture_worker:
         return {"backend_mode": "fake_fixture", "reason": "explicit_test_fixture"}
     return {"backend_mode": "blocked", "reason": "no_live_action_backend"}

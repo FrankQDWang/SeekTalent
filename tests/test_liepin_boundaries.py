@@ -15,7 +15,6 @@ from seektalent.flywheel.runtime import query_hit_rows_from_hits
 from seektalent.models import QueryResumeHit
 from seektalent.providers.liepin.client import LiepinWorkerModeError, build_liepin_worker_client
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
-from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 from seektalent.providers.liepin.security import issue_stream_token
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
@@ -512,13 +511,14 @@ def test_stream_tokens_are_short_lived_cookie_only_and_scope_bound(tmp_path):
     assert query_token.status_code == 400
 
 
-def test_managed_local_worker_mode_uses_opencli_compatibility_path():
-    settings = make_settings(liepin_worker_mode="managed_local")
-    client = build_liepin_worker_client(settings)
+def test_removed_local_worker_mode_is_not_a_live_compatibility_path():
+    removed_mode = "managed" + "_local"
     client_source = _read_source(SRC / "seektalent" / "providers" / "liepin" / "client.py")
 
-    assert isinstance(client, LiepinOpenCliWorkerClient)
+    with pytest.raises(ValueError, match=removed_mode):
+        make_settings(liepin_worker_mode=removed_mode)
     assert "worker_runtime" not in client_source
+    assert removed_mode not in client_source
 
 
 def test_fake_fixture_mode_is_not_reachable_when_live_enabled():

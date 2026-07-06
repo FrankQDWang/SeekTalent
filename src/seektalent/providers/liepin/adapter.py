@@ -25,6 +25,7 @@ from seektalent.providers.liepin.policy import LiepinCardCandidate
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.store import has_unsafe_payload
 from seektalent.providers.liepin.verified_loop import execute_liepin_detail_open_plan
+from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.storage.json import sha256_json
 
 
@@ -186,7 +187,10 @@ class LiepinProviderAdapter:
             )
         else:
             await self.worker_client.ensure_ready(on_event=self.worker_event_callback)
-        if request.fetch_mode == "detail" and request.provider_context.get("liepin_fetch_strategy") != "detail_backed_resume_search":
+        if (
+            request.fetch_mode == "detail"
+            and request.provider_context.get("liepin_fetch_strategy") != "detail_backed_resume_search"
+        ):
             if connection is None:
                 raise LiepinWorkerModeError("Liepin detail fetch requires a live provider connection.")
             return await self._detail_search(
@@ -200,7 +204,9 @@ class LiepinProviderAdapter:
             round_no=round_no,
             trace_id=trace_id,
             provider_account_hash=(
-                connection.provider_account_hash if connection is not None else _string_context(request, "liepin_provider_account_hash")
+                connection.provider_account_hash
+                if connection is not None
+                else _string_context(request, "liepin_provider_account_hash")
             ),
         )
         _validate_liepin_search_result(result)
@@ -243,7 +249,11 @@ class LiepinProviderAdapter:
             raise LiepinWorkerModeError(f"Liepin worker session is not ready: {session_status.status}.")
         if session_status.fixture_only:
             raise LiepinWorkerModeError("Liepin live provider search cannot use a fixture-only session.")
-        if session_status.provider_account_hash != provider_account_hash:
+        if not _session_provider_account_matches(
+            session_provider_account_hash=session_status.provider_account_hash,
+            connection_provider_account_hash=provider_account_hash,
+            accept_opencli_local_profile=_accepts_opencli_local_profile_subject(self.settings),
+        ):
             raise LiepinWorkerModeError("Liepin worker session provider account hash does not match the connection.")
 
     def _enforce_connection_safety(
@@ -379,6 +389,21 @@ def _required_provider_account_hash(provider_account_hash: str | None) -> str:
     if provider_account_hash is None:
         _raise_liepin_connection_safety_error("connection_safety_provider_account_mismatch")
     return provider_account_hash
+
+
+def _accepts_opencli_local_profile_subject(settings: AppSettings) -> bool:
+    return settings.liepin_worker_mode == "opencli"
+
+
+def _session_provider_account_matches(
+    *,
+    session_provider_account_hash: str | None,
+    connection_provider_account_hash: str | None,
+    accept_opencli_local_profile: bool,
+) -> bool:
+    if session_provider_account_hash == connection_provider_account_hash:
+        return True
+    return accept_opencli_local_profile and session_provider_account_hash == OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 
 
 def _raise_liepin_connection_safety_error(code: str) -> NoReturn:
@@ -556,8 +581,7 @@ def _validate_liepin_search_result(result: SearchResult) -> None:
     for candidate, snapshot in zip(result.candidates, result.provider_snapshots, strict=True):
         if snapshot.provider_name != "liepin":
             raise LiepinWorkerModeError(
-                "Liepin provider snapshot provider mismatch: "
-                f"expected=liepin, snapshot={snapshot.provider_name}"
+                f"Liepin provider snapshot provider mismatch: expected=liepin, snapshot={snapshot.provider_name}"
             )
         if snapshot.synthetic_candidate_fingerprint != candidate.dedup_key:
             raise LiepinWorkerModeError(

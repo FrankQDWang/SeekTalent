@@ -7,6 +7,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserResult,
 )
 from seektalent.opencli_browser.reason_codes import (
+    OPENCLI_BOOTSTRAP_FAILED,
     OPENCLI_COMMAND_MISSING,
     OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_DAEMON_STALE,
@@ -22,14 +23,20 @@ from seektalent.opencli_browser.reason_codes import (
 )
 
 
-LIEPIN_RECRUITER_SEARCH_URL = "https://h.liepin.com/search/getConditionItem#session"
-LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS = ("h.liepin.com/search/getConditionItem",)
+LIEPIN_OPENCLI_ALLOWED_HOSTS = ("www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com")
+LIEPIN_RECRUITER_SEARCH_SURFACE_PATHS = ("/search/getConditionItem", "/resume/search")
+LIEPIN_RECRUITER_SEARCH_URLS = (
+    "https://h.liepin.com/search/getConditionItem#session",
+    "https://h.liepin.com/resume/search",
+)
+LIEPIN_RECRUITER_SEARCH_URL = LIEPIN_RECRUITER_SEARCH_URLS[0]
 
 OPENCLI_TO_LIEPIN_REASON = {
     OPENCLI_COMMAND_MISSING: "liepin_opencli_command_missing",
     OPENCLI_TIMEOUT: "liepin_opencli_timeout",
     OPENCLI_EXTENSION_DISCONNECTED: "liepin_opencli_extension_disconnected",
     OPENCLI_STATUS_UNAVAILABLE: "liepin_opencli_status_unavailable",
+    OPENCLI_BOOTSTRAP_FAILED: "liepin_opencli_bootstrap_failed",
     OPENCLI_DAEMON_NOT_RUNNING: "liepin_opencli_daemon_not_running",
     OPENCLI_DAEMON_STALE: "liepin_opencli_daemon_stale",
     OPENCLI_FORBIDDEN_COMMAND: "liepin_opencli_forbidden_command",

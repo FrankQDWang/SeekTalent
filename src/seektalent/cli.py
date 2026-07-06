@@ -46,6 +46,7 @@ from seektalent.resources import (
     package_spec_file,
     resolve_user_path,
 )
+from seektalent.sources.liepin.reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
 from seektalent.text_inputs import read_optional_inline_or_file_text, read_required_inline_or_file_text
 from seektalent.version import __version__
 
@@ -1933,7 +1934,7 @@ def _workbench_action_ok(payload: Mapping[str, object]) -> bool:
 
 def _workbench_action_reason(payload: Mapping[str, object]) -> str:
     reason = payload.get("safeReasonCode") or payload.get("safe_reason_code")
-    if isinstance(reason, str) and reason:
+    if isinstance(reason, str) and reason in LIEPIN_WORKER_SAFE_REASON_CODES:
         return reason
     return "liepin_opencli_status_unavailable"
 
@@ -1950,6 +1951,7 @@ def _workbench_reason_from_text(text: str) -> str:
         "liepin_opencli_login_required",
         "liepin_opencli_extension_disconnected",
         "liepin_opencli_config_invalid",
+        "liepin_opencli_removed_config",
         "liepin_opencli_helper_empty_output",
         "liepin_opencli_helper_invalid_input",
         "liepin_opencli_helper_invalid_output",
@@ -1977,6 +1979,7 @@ def _workbench_reason_message(reason: str) -> str:
         "liepin_opencli_daemon_not_running": "OpenCLI browser bridge daemon is not running.",
         "liepin_opencli_bootstrap_failed": "Managed OpenCLI/Node bootstrap failed.",
         "liepin_opencli_config_invalid": "SeekTalent OpenCLI configuration is invalid.",
+        "liepin_opencli_removed_config": "Removed Liepin OpenCLI cleanup config is still set. Remove stale tab-cleanup settings and retry.",
         "liepin_opencli_helper_empty_output": "OpenCLI browser helper returned no structured output.",
         "liepin_opencli_helper_invalid_input": "OpenCLI browser helper received invalid input.",
         "liepin_opencli_helper_invalid_output": "OpenCLI browser helper returned invalid JSON output.",
@@ -1985,6 +1988,8 @@ def _workbench_reason_message(reason: str) -> str:
         "liepin_opencli_lease_malformed": "OpenCLI browser lease state was malformed; remove the stale SeekTalent OpenCLI lease files, then retry.",
         "liepin_opencli_owned_marker_malformed": "OpenCLI browser owned-tab marker state was malformed; remove the stale SeekTalent OpenCLI lease files, then retry.",
         "liepin_opencli_tab_response_malformed": "OpenCLI browser tab command returned an unexpected response. Restart OpenCLI/Chrome and retry.",
+        "liepin_opencli_search_not_ready": "Liepin search page is not ready for browser automation.",
+        "liepin_opencli_results_not_ready": "Liepin search results are not ready for browser automation.",
         "liepin_opencli_timeout": "OpenCLI browser bridge did not respond before timeout.",
     }.get(reason, "OpenCLI/Liepin preflight failed.")
 
@@ -2458,7 +2463,7 @@ def build_exec_parser() -> argparse.ArgumentParser:
     liepin_smoke_parser.add_argument("--min-final-candidates", type=int, default=1)
     liepin_smoke_parser.add_argument(
         "--worker-mode",
-        choices=["fake_fixture", "managed_local", "external_http", "opencli"],
+        choices=["fake_fixture", "external_http", "opencli"],
     )
     liepin_smoke_parser.add_argument("--worker-base-url")
     liepin_smoke_parser.add_argument("--db-path")
