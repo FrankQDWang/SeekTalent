@@ -44,6 +44,12 @@ def test_verify_workbench_supports_python_preflight_skip_mode():
     assert "SEEKTALENT_VERIFY_SKIP_PYTHON_PREFLIGHT" in script
 
 
+def test_verify_workbench_forbids_removed_liepin_worker_mode():
+    script = (ROOT / "scripts" / "verify-dev-workbench.sh").read_text(encoding="utf-8")
+
+    assert "managed_local" in script
+
+
 def test_storybook_contract_runs_against_static_ci_build():
     script = (ROOT / "scripts" / "verify-dev-workbench.sh").read_text(encoding="utf-8")
 

@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import argparse
 from types import SimpleNamespace
 from pathlib import Path
-
-import pytest
 
 import seektalent.cli as cli
 import seektalent.liepin_smoke_cli as smoke_cli
@@ -820,23 +817,46 @@ def test_liepin_smoke_worker_base_url_implies_external_http(monkeypatch, tmp_pat
     assert built_settings[0].liepin_worker_base_url == "http://127.0.0.1:8123"
 
 
-def test_liepin_smoke_settings_rejects_stale_local_mode(monkeypatch) -> None:
-    class StaleSettings:
-        liepin_worker_mode = "managed" + "_local"
-
-        def with_overrides(self, **kwargs):
-            raise AssertionError(f"unexpected opencli fallback: {kwargs!r}")
-
-    monkeypatch.setattr(smoke_cli, "AppSettings", StaleSettings)
-    args = argparse.Namespace(
-        worker_mode=None,
-        worker_base_url=None,
-        max_detail_opens=1,
-        db_path=None,
+def test_liepin_smoke_settings_rejects_stale_env_worker_mode(
+    capsys,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    db_path, gate_ref, connection_id, _provider_account_hash = _approved_gate_and_connection(tmp_path)
+    removed_mode = "managed" + "_local"
+    built_settings: list[object] = []
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", removed_mode)
+    monkeypatch.setattr(
+        smoke_cli,
+        "build_liepin_worker_client",
+        lambda settings: built_settings.append(settings),
+        raising=False,
     )
 
-    with pytest.raises(LiepinWorkerModeError, match=StaleSettings.liepin_worker_mode):
-        smoke_cli._liepin_smoke_settings(args)
+    status = cli.main(
+        [
+            "liepin-smoke",
+            "--live",
+            "--tenant-id",
+            "tenant-a",
+            "--workspace-id",
+            "workspace-a",
+            "--actor-id",
+            "actor-a",
+            "--connection-id",
+            connection_id,
+            "--compliance-gate-ref",
+            gate_ref,
+            "--db-path",
+            str(db_path),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert status == 1
+    assert "validation error for AppSettings" in captured.err
+    assert removed_mode in captured.err
+    assert built_settings == []
 
 
 def test_liepin_smoke_rejects_removed_pi_agent_mode(capsys) -> None:
