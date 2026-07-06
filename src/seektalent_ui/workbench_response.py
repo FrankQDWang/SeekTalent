@@ -476,6 +476,8 @@ def liepin_start_probe_warning_message(reason_code: str) -> str:
         return LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE
     if reason_code == LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE:
         return LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE
+    if reason_code == "liepin_opencli_removed_config":
+        return "检测到已移除的 Liepin OpenCLI 清理配置，请删除旧的 tab cleanup 设置后重试。"
     return LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
 
 

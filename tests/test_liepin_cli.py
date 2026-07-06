@@ -18,6 +18,10 @@ def test_workbench_action_reason_preserves_liepin_opencli_reason_only() -> None:
         cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_identity_intercept"})
         == "liepin_opencli_identity_intercept"
     )
+    assert (
+        cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_removed_config"})
+        == "liepin_opencli_removed_config"
+    )
     assert cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_typo"}) == "liepin_opencli_status_unavailable"
     assert cli._workbench_action_reason({"safeReasonCode": "source_login_required"}) == "liepin_opencli_status_unavailable"
     assert cli._workbench_action_reason({"safeReasonCode": ""}) == "liepin_opencli_status_unavailable"
@@ -26,6 +30,7 @@ def test_workbench_action_reason_preserves_liepin_opencli_reason_only() -> None:
 def test_workbench_reason_message_covers_search_and_results_readiness() -> None:
     assert cli._workbench_reason_message("liepin_opencli_search_not_ready") != "OpenCLI/Liepin preflight failed."
     assert cli._workbench_reason_message("liepin_opencli_results_not_ready") != "OpenCLI/Liepin preflight failed."
+    assert cli._workbench_reason_message("liepin_opencli_removed_config") != "OpenCLI/Liepin preflight failed."
 
 
 def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> None:

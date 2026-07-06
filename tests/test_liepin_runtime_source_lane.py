@@ -1045,6 +1045,7 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
         "liepin_opencli_target_not_found",
         "liepin_opencli_daemon_not_running",
         "liepin_opencli_daemon_stale",
+        "liepin_opencli_removed_config",
     ):
         assert runtime_safe_reason_code_from_worker_failure_code(reason_code) == reason_code
 
@@ -1054,9 +1055,10 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
     [
         "liepin_opencli_search_not_ready",
         "liepin_opencli_results_not_ready",
+        "liepin_opencli_removed_config",
     ],
 )
-def test_opencli_readiness_not_ready_maps_to_source_lane_backend_unavailable(reason_code: str) -> None:
+def test_opencli_backend_unavailable_reasons_map_to_source_lane_backend_unavailable(reason_code: str) -> None:
     assert (
         LIEPIN_SOURCE_LANE_REASON_CODE_MAP[reason_code]
         == "source_browser_backend_unavailable"

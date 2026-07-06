@@ -12,6 +12,8 @@ from seektalent_ui.liepin_account_binding import (
     bind_observed_liepin_account,
     ensure_workbench_liepin_provider_connection,
 )
+from seektalent_ui.workbench_response import liepin_start_probe_warning_message
+from seektalent_ui.workbench_store import LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
 
 from tests.test_workbench_api import (
     _approve_requirement_review,
@@ -204,6 +206,13 @@ def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
     assert runtime_job is not None
     assert runtime_job["status"] in {"queued", "running"}
     assert runtime_job["sourceKinds"] == source_kinds
+
+
+def test_removed_opencli_config_has_specific_workbench_warning_message() -> None:
+    assert (
+        liepin_start_probe_warning_message("liepin_opencli_removed_config")
+        != LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
+    )
 
 
 def test_liepin_provider_connection_binding_is_idempotent_for_same_connection(tmp_path) -> None:

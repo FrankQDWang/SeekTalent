@@ -104,9 +104,10 @@ def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_una
     [
         "liepin_opencli_search_not_ready",
         "liepin_opencli_results_not_ready",
+        "liepin_opencli_removed_config",
     ],
 )
-def test_source_result_public_event_maps_liepin_readiness_not_ready(reason_code: str) -> None:
+def test_source_result_public_event_maps_liepin_opencli_backend_unavailable_reasons(reason_code: str) -> None:
     from seektalent.source_adapters import public_source_reason_code
 
     event = make_runtime_public_event(
