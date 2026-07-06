@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.providers.liepin.client import LiepinWorkerModeError
@@ -1036,6 +1038,7 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
         "liepin_opencli_detail_not_opened",
         "liepin_opencli_filter_unapplied",
         "liepin_opencli_search_not_ready",
+        "liepin_opencli_results_not_ready",
         "liepin_opencli_stale_ref",
         "liepin_opencli_selector_not_found",
         "liepin_opencli_selector_ambiguous",
@@ -1046,9 +1049,16 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
         assert runtime_safe_reason_code_from_worker_failure_code(reason_code) == reason_code
 
 
-def test_opencli_search_not_ready_maps_to_source_lane_backend_unavailable() -> None:
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "liepin_opencli_search_not_ready",
+        "liepin_opencli_results_not_ready",
+    ],
+)
+def test_opencli_readiness_not_ready_maps_to_source_lane_backend_unavailable(reason_code: str) -> None:
     assert (
-        LIEPIN_SOURCE_LANE_REASON_CODE_MAP["liepin_opencli_search_not_ready"]
+        LIEPIN_SOURCE_LANE_REASON_CODE_MAP[reason_code]
         == "source_browser_backend_unavailable"
     )
 

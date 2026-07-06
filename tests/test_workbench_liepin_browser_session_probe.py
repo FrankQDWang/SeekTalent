@@ -504,6 +504,7 @@ def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
     [
         ("missing", "liepin_opencli_filter_unapplied", "source_filter_unavailable"),
         ("missing", "liepin_opencli_search_not_ready", "source_browser_backend_unavailable"),
+        ("missing", "liepin_opencli_results_not_ready", "source_browser_backend_unavailable"),
         ("login_required", "liepin_opencli_identity_intercept", "source_risk_or_verification_required"),
     ],
 )

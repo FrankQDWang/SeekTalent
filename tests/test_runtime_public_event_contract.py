@@ -99,7 +99,14 @@ def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_una
     assert event["safeReasonCode"] == "source_browser_backend_unavailable"
 
 
-def test_source_result_public_event_maps_liepin_search_not_ready() -> None:
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "liepin_opencli_search_not_ready",
+        "liepin_opencli_results_not_ready",
+    ],
+)
+def test_source_result_public_event_maps_liepin_readiness_not_ready(reason_code: str) -> None:
     from seektalent.source_adapters import public_source_reason_code
 
     event = make_runtime_public_event(
@@ -109,7 +116,7 @@ def test_source_result_public_event_maps_liepin_search_not_ready() -> None:
         round_no=1,
         source_kind="liepin",
         status="blocked",
-        safe_reason_code=public_source_reason_code("liepin_opencli_search_not_ready"),
+        safe_reason_code=public_source_reason_code(reason_code),
     )
 
     assert event["safeReasonCode"] == "source_browser_backend_unavailable"
