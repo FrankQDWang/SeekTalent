@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Mapping, MutableMapping
 from pathlib import Path
 
@@ -68,6 +69,7 @@ def build_workbench_command_env(
     env["SEEKTALENT_PROVIDER_NAME"] = "liepin"
     env["SEEKTALENT_LIEPIN_WORKER_MODE"] = "opencli"
     env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] = "opencli"
+    env["SEEKTALENT_PYTHON"] = sys.executable
     load_product_user_env(env, env_file=env_file)
     _prune_unused_llm_credentials(env)
     env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = DEFAULT_LIEPIN_OPENCLI_COMMAND

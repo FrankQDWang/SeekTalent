@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND
@@ -95,6 +96,25 @@ def test_build_workbench_command_env_uses_managed_opencli_command(
     env = build_workbench_command_env({"SEEKTALENT_LIEPIN_OPENCLI_COMMAND": "opencli browser host-global"})
 
     assert env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] == DEFAULT_LIEPIN_OPENCLI_COMMAND
+
+
+def test_build_workbench_command_env_sets_helper_python_to_current_interpreter(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    env = build_workbench_command_env(
+        {
+            "HOME": str(home),
+            "PATH": "/usr/bin",
+            "SEEKTALENT_TEXT_LLM_API_KEY": "test-key",
+        }
+    )
+
+    assert env["SEEKTALENT_PYTHON"] == sys.executable
 
 
 def test_build_workbench_command_env_ignores_stale_seektalent_runtime_env(
