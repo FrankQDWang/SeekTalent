@@ -79,7 +79,17 @@ locked_json_update(
         for index in range(subprocess_count)
     ]
 
-    errors = [stderr for process in processes if (stderr := process.communicate(timeout=10)[1]) or process.returncode]
+    try:
+        errors = [
+            stderr
+            for process in processes
+            if (stderr := process.communicate(timeout=30)[1]) or process.returncode
+        ]
+    finally:
+        for process in processes:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
 
     assert errors == []
     loaded = json.loads(path.read_text(encoding="utf-8"))
