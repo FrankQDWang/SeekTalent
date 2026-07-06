@@ -515,6 +515,7 @@ def test_workbench_command_requires_text_llm_key_before_launch(
 
     captured = capsys.readouterr()
     assert "reason_code=seektalent_text_llm_api_key_missing" in captured.err
+    assert "未配置大模型 API Key" in captured.err
     assert "SEEKTALENT_TEXT_LLM_API_KEY" in captured.err
     assert calls == []
 
@@ -540,6 +541,7 @@ def test_workbench_command_requires_domi_jwt_for_domi_provider(
 
     captured = capsys.readouterr()
     assert "reason_code=seektalent_domi_jwt_missing" in captured.err
+    assert "未获取到 Domi 大模型授权" in captured.err
     assert "SEEKTALENT_DOMI_JWT" in captured.err
     assert "SEEKTALENT_TEXT_LLM_API_KEY" not in captured.err
     assert calls == []
@@ -692,6 +694,7 @@ def test_workbench_command_reports_opencli_extension_disconnected(
 
     captured = capsys.readouterr()
     assert "reason_code=liepin_opencli_extension_disconnected" in captured.err
+    assert "未检测到 Chrome 中的 OpenCLI 插件连接" in captured.err
     assert restart_calls
     assert launch_calls == []
 
@@ -843,6 +846,7 @@ def test_workbench_command_reports_liepin_login_required(
 
     captured = capsys.readouterr()
     assert "reason_code=liepin_opencli_login_required" in captured.err
+    assert "猎聘未登录" in captured.err
     assert "action=state" in captured.err
     assert launch_calls == []
 

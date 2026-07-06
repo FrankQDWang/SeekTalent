@@ -1777,13 +1777,13 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
         if not str(env.get("SEEKTALENT_DOMI_JWT") or "").strip():
             _print_workbench_reason(
                 "seektalent_domi_jwt_missing",
-                "SEEKTALENT_DOMI_JWT is required for Domi LLM proxy mode.",
+                "未获取到 Domi 大模型授权。请在当前终端设置 SEEKTALENT_DOMI_JWT 后重试。",
             )
             return False
     elif not str(env.get("SEEKTALENT_TEXT_LLM_API_KEY") or "").strip():
         _print_workbench_reason(
             "seektalent_text_llm_api_key_missing",
-            "SEEKTALENT_TEXT_LLM_API_KEY is required. Set it in the shell or ~/.seektalent/.env.",
+            "未配置大模型 API Key。请在当前终端或 ~/.seektalent/.env 中设置 SEEKTALENT_TEXT_LLM_API_KEY。",
         )
         return False
 
@@ -1795,7 +1795,7 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
             raise
         _print_workbench_reason(
             "liepin_opencli_bootstrap_failed",
-            f"Managed OpenCLI/Node bootstrap failed: {exc}",
+            f"OpenCLI/Node 启动失败：{exc}",
         )
         return False
 
@@ -1971,27 +1971,27 @@ def _workbench_reason_from_text(text: str) -> str:
 
 def _workbench_reason_message(reason: str) -> str:
     return {
-        "liepin_opencli_login_required": "Liepin is not logged in. Open Liepin in Chrome, finish login, then run seektalent workbench again.",
-        "liepin_opencli_identity_intercept": "Liepin requires account identity selection before search can run.",
-        "liepin_opencli_risk_page": "Liepin risk verification or captcha is blocking browser automation.",
-        "liepin_opencli_extension_disconnected": "OpenCLI browser bridge extension is not connected. Check the Chrome extension, then retry.",
-        "liepin_opencli_daemon_stale": "OpenCLI browser bridge daemon is stale.",
-        "liepin_opencli_daemon_not_running": "OpenCLI browser bridge daemon is not running.",
-        "liepin_opencli_bootstrap_failed": "Managed OpenCLI/Node bootstrap failed.",
-        "liepin_opencli_config_invalid": "SeekTalent OpenCLI configuration is invalid.",
-        "liepin_opencli_removed_config": "Removed Liepin OpenCLI cleanup config is still set. Remove stale tab-cleanup settings and retry.",
-        "liepin_opencli_helper_empty_output": "OpenCLI browser helper returned no structured output.",
-        "liepin_opencli_helper_invalid_input": "OpenCLI browser helper received invalid input.",
-        "liepin_opencli_helper_invalid_output": "OpenCLI browser helper returned invalid JSON output.",
-        "liepin_opencli_helper_output_too_large": "OpenCLI browser helper output exceeded the safe transport limit.",
-        "liepin_opencli_malformed_state": "OpenCLI browser bridge returned malformed Liepin state.",
-        "liepin_opencli_lease_malformed": "OpenCLI browser lease state was malformed; remove the stale SeekTalent OpenCLI lease files, then retry.",
-        "liepin_opencli_owned_marker_malformed": "OpenCLI browser owned-tab marker state was malformed; remove the stale SeekTalent OpenCLI lease files, then retry.",
-        "liepin_opencli_tab_response_malformed": "OpenCLI browser tab command returned an unexpected response. Restart OpenCLI/Chrome and retry.",
-        "liepin_opencli_search_not_ready": "Liepin search page is not ready for browser automation.",
-        "liepin_opencli_results_not_ready": "Liepin search results are not ready for browser automation.",
-        "liepin_opencli_timeout": "OpenCLI browser bridge did not respond before timeout.",
-    }.get(reason, "OpenCLI/Liepin preflight failed.")
+        "liepin_opencli_login_required": "猎聘未登录。请在 Chrome 中打开猎聘并完成登录后重试。",
+        "liepin_opencli_identity_intercept": "猎聘需要选择身份或企业。请在 Chrome 中处理后重试。",
+        "liepin_opencli_risk_page": "猎聘风控或验证码阻断了自动化。请人工完成验证后重试。",
+        "liepin_opencli_extension_disconnected": "未检测到 Chrome 中的 OpenCLI 插件连接。请确认 Chrome 已启动、OpenCLI 插件已安装并启用，然后重试。",
+        "liepin_opencli_daemon_stale": "OpenCLI 浏览器桥接服务状态已过期。请重启 OpenCLI 插件或 Chrome 后重试。",
+        "liepin_opencli_daemon_not_running": "OpenCLI 浏览器桥接服务未运行。请打开 Chrome，并确认 OpenCLI 插件已连接后重试。",
+        "liepin_opencli_bootstrap_failed": "OpenCLI/Node 启动失败。",
+        "liepin_opencli_config_invalid": "SeekTalent OpenCLI 配置无效。",
+        "liepin_opencli_removed_config": "检测到已移除的 Liepin OpenCLI 清理配置。请删除旧的 tab 清理设置后重试。",
+        "liepin_opencli_helper_empty_output": "OpenCLI 浏览器 helper 没有返回结构化输出。",
+        "liepin_opencli_helper_invalid_input": "OpenCLI 浏览器 helper 收到了无效输入。",
+        "liepin_opencli_helper_invalid_output": "OpenCLI 浏览器 helper 返回了无效 JSON。",
+        "liepin_opencli_helper_output_too_large": "OpenCLI 浏览器 helper 输出超过安全传输上限。",
+        "liepin_opencli_malformed_state": "OpenCLI 浏览器桥接返回了无效的猎聘页面状态。",
+        "liepin_opencli_lease_malformed": "OpenCLI 浏览器租约状态无效。请删除过期的 SeekTalent OpenCLI 租约文件后重试。",
+        "liepin_opencli_owned_marker_malformed": "OpenCLI 浏览器受控标签页标记无效。请删除过期的 SeekTalent OpenCLI 租约文件后重试。",
+        "liepin_opencli_tab_response_malformed": "OpenCLI 浏览器标签页命令返回异常。请重启 OpenCLI/Chrome 后重试。",
+        "liepin_opencli_search_not_ready": "猎聘搜索页面未就绪。请确认当前 Chrome 可以正常打开猎聘人才搜索页。",
+        "liepin_opencli_results_not_ready": "猎聘搜索结果尚未就绪。请确认页面加载完成后重试。",
+        "liepin_opencli_timeout": "OpenCLI 浏览器桥接响应超时。",
+    }.get(reason, "OpenCLI/猎聘启动前检查失败。")
 
 
 def _print_workbench_reason(reason: str, message: str, *, action: str | None = None) -> None:
