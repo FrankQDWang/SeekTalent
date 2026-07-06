@@ -18,6 +18,7 @@ def test_workbench_action_reason_preserves_liepin_opencli_reason_only() -> None:
         cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_identity_intercept"})
         == "liepin_opencli_identity_intercept"
     )
+    assert cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_typo"}) == "liepin_opencli_status_unavailable"
     assert cli._workbench_action_reason({"safeReasonCode": "source_login_required"}) == "liepin_opencli_status_unavailable"
     assert cli._workbench_action_reason({"safeReasonCode": ""}) == "liepin_opencli_status_unavailable"
 

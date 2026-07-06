@@ -46,6 +46,7 @@ from seektalent.resources import (
     package_spec_file,
     resolve_user_path,
 )
+from seektalent.sources.liepin.reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
 from seektalent.text_inputs import read_optional_inline_or_file_text, read_required_inline_or_file_text
 from seektalent.version import __version__
 
@@ -1933,7 +1934,7 @@ def _workbench_action_ok(payload: Mapping[str, object]) -> bool:
 
 def _workbench_action_reason(payload: Mapping[str, object]) -> str:
     reason = payload.get("safeReasonCode") or payload.get("safe_reason_code")
-    if isinstance(reason, str) and reason.startswith("liepin_opencli_"):
+    if isinstance(reason, str) and reason in LIEPIN_WORKER_SAFE_REASON_CODES:
         return reason
     return "liepin_opencli_status_unavailable"
 
