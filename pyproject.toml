@@ -37,6 +37,7 @@ dev = [
 
 [project.scripts]
 seektalent = "seektalent.cli:main"
+seektalent-domi = "seektalent.domi_workbench:main"
 seektalent-opencli = "seektalent.opencli_launcher:main"
 seektalent-ui-api = "seektalent_ui.server:main"
 seektalent-ui-maintenance = "seektalent_ui.maintenance:main"
