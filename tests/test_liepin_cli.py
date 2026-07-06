@@ -13,6 +13,20 @@ from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from tests.settings_factory import make_settings
 
 
+def test_workbench_action_reason_preserves_liepin_opencli_reason_only() -> None:
+    assert (
+        cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_identity_intercept"})
+        == "liepin_opencli_identity_intercept"
+    )
+    assert cli._workbench_action_reason({"safeReasonCode": "source_login_required"}) == "liepin_opencli_status_unavailable"
+    assert cli._workbench_action_reason({"safeReasonCode": ""}) == "liepin_opencli_status_unavailable"
+
+
+def test_workbench_reason_message_covers_search_and_results_readiness() -> None:
+    assert cli._workbench_reason_message("liepin_opencli_search_not_ready") != "OpenCLI/Liepin preflight failed."
+    assert cli._workbench_reason_message("liepin_opencli_results_not_ready") != "OpenCLI/Liepin preflight failed."
+
+
 def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> None:
     db_path = tmp_path / "liepin.sqlite3"
 
@@ -613,6 +627,8 @@ def test_liepin_smoke_live_verifies_connection_gate_and_uses_opencli_budget(
             connection_id,
             "--compliance-gate-ref",
             gate_ref,
+            "--worker-mode",
+            "opencli",
             "--max-detail-opens",
             "1",
             "--keyword",
@@ -1048,6 +1064,8 @@ def test_liepin_smoke_live_rejects_session_connection_mismatch(capsys, monkeypat
             connection_id,
             "--compliance-gate-ref",
             gate_ref,
+            "--worker-mode",
+            "opencli",
             "--db-path",
             str(db_path),
         ]
@@ -1134,6 +1152,8 @@ def test_liepin_smoke_live_reports_worker_failure_without_raw_streams(capsys, mo
             connection_id,
             "--compliance-gate-ref",
             gate_ref,
+            "--worker-mode",
+            "opencli",
             "--db-path",
             str(db_path),
         ]
@@ -1184,6 +1204,8 @@ def test_liepin_smoke_live_reports_unexpected_worker_failure_without_raw_excepti
             connection_id,
             "--compliance-gate-ref",
             gate_ref,
+            "--worker-mode",
+            "opencli",
             "--db-path",
             str(db_path),
         ]

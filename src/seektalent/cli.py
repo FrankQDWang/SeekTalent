@@ -1933,7 +1933,7 @@ def _workbench_action_ok(payload: Mapping[str, object]) -> bool:
 
 def _workbench_action_reason(payload: Mapping[str, object]) -> str:
     reason = payload.get("safeReasonCode") or payload.get("safe_reason_code")
-    if isinstance(reason, str) and reason:
+    if isinstance(reason, str) and reason.startswith("liepin_opencli_"):
         return reason
     return "liepin_opencli_status_unavailable"
 
@@ -1985,6 +1985,8 @@ def _workbench_reason_message(reason: str) -> str:
         "liepin_opencli_lease_malformed": "OpenCLI browser lease state was malformed; remove the stale SeekTalent OpenCLI lease files, then retry.",
         "liepin_opencli_owned_marker_malformed": "OpenCLI browser owned-tab marker state was malformed; remove the stale SeekTalent OpenCLI lease files, then retry.",
         "liepin_opencli_tab_response_malformed": "OpenCLI browser tab command returned an unexpected response. Restart OpenCLI/Chrome and retry.",
+        "liepin_opencli_search_not_ready": "Liepin search page is not ready for browser automation.",
+        "liepin_opencli_results_not_ready": "Liepin search results are not ready for browser automation.",
         "liepin_opencli_timeout": "OpenCLI browser bridge did not respond before timeout.",
     }.get(reason, "OpenCLI/Liepin preflight failed.")
 

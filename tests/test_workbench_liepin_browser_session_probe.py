@@ -500,14 +500,16 @@ def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
 
 
 @pytest.mark.parametrize(
-    ("safe_reason_code", "public_reason_code"),
+    ("status", "safe_reason_code", "public_reason_code"),
     [
-        ("liepin_opencli_filter_unapplied", "source_filter_unavailable"),
-        ("liepin_opencli_search_not_ready", "source_browser_backend_unavailable"),
+        ("missing", "liepin_opencli_filter_unapplied", "source_filter_unavailable"),
+        ("missing", "liepin_opencli_search_not_ready", "source_browser_backend_unavailable"),
+        ("login_required", "liepin_opencli_identity_intercept", "source_risk_or_verification_required"),
     ],
 )
 def test_start_session_opencli_mode_preserves_raw_status_reason_when_not_ready(
     tmp_path: Path,
+    status: str,
     safe_reason_code: str,
     public_reason_code: str,
 ) -> None:
@@ -522,7 +524,7 @@ def test_start_session_opencli_mode_preserves_raw_status_reason_when_not_ready(
             connection=connection,
         )
         worker = ProbeLiepinWorker(
-            status="missing",
+            status=status,
             provider_account_hash=None,
             safe_reason_code=safe_reason_code,
         )

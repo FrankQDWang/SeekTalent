@@ -157,7 +157,7 @@ def _opencli_browser_component(
         "liepin_opencli_browser",
         "Liepin browser channel",
         "configured",
-        reason_code="configured",
+        reason_code="liepin_opencli_preflight_required",
     )
 
 

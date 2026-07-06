@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from seektalent.dev_mode import build_dev_mode_env_diagnostics
+from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+from seektalent.opencli_browser.contracts import OpenCliBrowserConfig
+from seektalent.providers.liepin.liepin_opencli_policy import liepin_reason_from_opencli_reason
+from seektalent.source_adapters import public_source_reason_code
+
+
+class BootstrapFailedCommands:
+    def run(self, argv, *, timeout=None, env=None) -> str:
+        del timeout, env
+        raise subprocess.CalledProcessError(
+            127,
+            list(argv),
+            output="SeekTalent OpenCLI bootstrap failed: node is unavailable",
+            stderr="",
+        )
 
 
 def _write_opencli_binary(root: Path) -> Path:
@@ -33,9 +49,29 @@ def test_env_diagnostics_reports_configured_opencli_without_legacy_mcp(tmp_path:
     components = {item["name"]: item for item in public["components"]}
     assert status.overallStatus in {"ready", "warning"}
     assert components["liepin_opencli_browser"]["status"] == "configured"
+    assert components["liepin_opencli_browser"]["reasonCode"] == "liepin_opencli_preflight_required"
     assert "dokobot_mcp" not in raw
     assert "liepin_pi" not in raw
     assert str(tmp_path) not in raw
+
+
+def test_managed_opencli_bootstrap_failure_preserves_specific_reason() -> None:
+    automation = OpenCliBrowserAutomation(
+        config=OpenCliBrowserConfig(
+            command=("opencli",),
+            session="seektalent-liepin",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        commands=BootstrapFailedCommands(),
+    )
+
+    result = automation.status()
+
+    assert result.ok is False
+    assert result.safe_reason_code == "opencli_bootstrap_failed"
+    assert liepin_reason_from_opencli_reason("opencli_bootstrap_failed") == "liepin_opencli_bootstrap_failed"
+    assert public_source_reason_code("liepin_opencli_bootstrap_failed") == "source_browser_backend_unavailable"
 
 
 def test_dev_launcher_uses_liepin_opencli_helper_without_legacy_mcp_adapter() -> None:

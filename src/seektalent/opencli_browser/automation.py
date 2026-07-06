@@ -13,6 +13,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserResult,
 )
 from seektalent.opencli_browser.reason_codes import (
+    OPENCLI_BOOTSTRAP_FAILED,
     OPENCLI_COMMAND_MISSING,
     OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_DAEMON_STALE,
@@ -162,6 +163,8 @@ class OpenCliBrowserAutomation:
             raise OpenCliBrowserError(OPENCLI_TIMEOUT) from exc
         except subprocess.CalledProcessError as exc:
             output = f"{getattr(exc, 'stdout', None) or getattr(exc, 'output', '') or ''}\n{exc.stderr or ''}"
+            if exc.returncode == 127 and "SeekTalent OpenCLI bootstrap failed:" in output:
+                raise OpenCliBrowserError(OPENCLI_BOOTSTRAP_FAILED) from exc
             if "Extension" in output and ("not connected" in output or "disconnected" in output):
                 raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED) from exc
             if "Daemon:" in output:
