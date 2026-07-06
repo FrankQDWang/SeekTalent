@@ -5,6 +5,7 @@ import hashlib
 import os
 import random
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -46,6 +47,7 @@ from seektalent.providers.liepin.liepin_opencli_policy import (
     liepin_error_from_opencli_error,
     liepin_result_from_opencli_result,
 )
+from seektalent.providers.liepin.opencli_local_state import locked_json_update, opencli_state_lock
 from seektalent.providers.liepin.worker_contracts import (
     OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
     SessionStatus,
@@ -828,10 +830,7 @@ class LiepinSiteAdapter:
                 "detail_payload": detail_payload,
                 "normalized_text": structured_liepin_detail_text(payload),
             }
-            resumes = [item for item in self._read_collected_resumes(safe_run_id) if item.get("provider_rank") != rank]
-            resumes.append(resume)
-            resumes.sort(key=lambda item: _positive_int_or_none(item.get("provider_rank")) or 0)
-            self._write_collected_resumes(safe_run_id, resumes)
+            resumes = self._upsert_collected_resume(safe_run_id, rank=rank, resume=resume)
             if emit_events:
                 self._append_agent_event(
                     source_run_id,
@@ -853,12 +852,7 @@ class LiepinSiteAdapter:
         if rank < 1 or rank > 100:
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         safe_run_id = _safe_artifact_segment(source_run_id)
-        resumes = [
-            resume
-            for resume in self._read_collected_resumes(safe_run_id)
-            if _positive_int_or_none(resume.get("provider_rank")) != rank
-        ]
-        self._write_collected_resumes(safe_run_id, resumes)
+        self._delete_collected_resume(safe_run_id, rank=rank)
 
     def search_liepin_resumes(
         self,
@@ -1910,15 +1904,40 @@ class LiepinSiteAdapter:
         target.parent.mkdir(parents=True, exist_ok=True)
         return target
 
+    def _write_json_atomic(self, path: Path, payload: object) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+            tmp.replace(path)
+        finally:
+            tmp.unlink(missing_ok=True)
+
     def _append_agent_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
         safe_run_id = _safe_artifact_segment(source_run_id)
-        events = self._read_agent_events(safe_run_id)
-        events.append(dict(event))
-        self._write_pi_artifact(
-            "protected",
-            f"pi-trace/{safe_run_id}/agent-events.json",
-            {"schema_version": "seektalent.opencli_agent_events.v1", "events": events},
-        )
+        path = self._pi_artifact_path("protected", f"pi-trace/{safe_run_id}/agent-events.json")
+
+        def update(state: object) -> dict[str, object]:
+            if not isinstance(state, dict):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            raw_events = state.get("events")
+            if not isinstance(raw_events, list):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            events = [dict(item) for item in raw_events if isinstance(item, dict)]
+            events.append(dict(event))
+            return {
+                "schema_version": "seektalent.opencli_agent_events.v1",
+                "events": events,
+            }
+
+        try:
+            locked_json_update(
+                path,
+                {"schema_version": "seektalent.opencli_agent_events.v1", "events": []},
+                update,
+            )
+        except json.JSONDecodeError as exc:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
 
     def _read_agent_events(self, safe_run_id: str) -> list[dict[str, object]]:
         path = self._pi_artifact_path("protected", f"pi-trace/{safe_run_id}/agent-events.json")
@@ -1964,11 +1983,83 @@ class LiepinSiteAdapter:
         return [dict(item) for item in raw_resumes if isinstance(item, dict)]
 
     def _write_collected_resumes(self, safe_run_id: str, resumes: Sequence[Mapping[str, object]]) -> None:
-        self._write_pi_artifact(
-            "protected",
-            f"pi-detail/{safe_run_id}/collected-resumes.json",
-            {"schema_version": "seektalent.opencli_collected_resumes.v1", "resumes": [dict(item) for item in resumes]},
-        )
+        path = self._pi_artifact_path("protected", f"pi-detail/{safe_run_id}/collected-resumes.json")
+        with opencli_state_lock(path):
+            self._write_json_atomic(
+                path,
+                {
+                    "schema_version": "seektalent.opencli_collected_resumes.v1",
+                    "resumes": [dict(item) for item in resumes],
+                },
+            )
+
+    def _upsert_collected_resume(
+        self,
+        safe_run_id: str,
+        *,
+        rank: int,
+        resume: Mapping[str, object],
+    ) -> list[dict[str, object]]:
+        path = self._pi_artifact_path("protected", f"pi-detail/{safe_run_id}/collected-resumes.json")
+
+        def update(state: object) -> dict[str, object]:
+            if not isinstance(state, dict):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            raw_resumes = state.get("resumes")
+            if not isinstance(raw_resumes, list):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            resumes = [
+                dict(item)
+                for item in raw_resumes
+                if isinstance(item, dict) and _positive_int_or_none(item.get("provider_rank")) != rank
+            ]
+            resumes.append(dict(resume))
+            resumes.sort(key=lambda item: _positive_int_or_none(item.get("provider_rank")) or 0)
+            return {
+                "schema_version": "seektalent.opencli_collected_resumes.v1",
+                "resumes": resumes,
+            }
+
+        try:
+            updated = locked_json_update(
+                path,
+                {"schema_version": "seektalent.opencli_collected_resumes.v1", "resumes": []},
+                update,
+            )
+        except json.JSONDecodeError as exc:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+        raw_resumes = updated["resumes"]
+        return [dict(item) for item in raw_resumes if isinstance(item, dict)]
+
+    def _delete_collected_resume(self, safe_run_id: str, *, rank: int) -> list[dict[str, object]]:
+        path = self._pi_artifact_path("protected", f"pi-detail/{safe_run_id}/collected-resumes.json")
+
+        def update(state: object) -> dict[str, object]:
+            if not isinstance(state, dict):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            raw_resumes = state.get("resumes")
+            if not isinstance(raw_resumes, list):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            resumes = [
+                dict(item)
+                for item in raw_resumes
+                if isinstance(item, dict) and _positive_int_or_none(item.get("provider_rank")) != rank
+            ]
+            return {
+                "schema_version": "seektalent.opencli_collected_resumes.v1",
+                "resumes": resumes,
+            }
+
+        try:
+            updated = locked_json_update(
+                path,
+                {"schema_version": "seektalent.opencli_collected_resumes.v1", "resumes": []},
+                update,
+            )
+        except json.JSONDecodeError as exc:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+        raw_resumes = updated["resumes"]
+        return [dict(item) for item in raw_resumes if isinstance(item, dict)]
 
     def _find_liepin_result_card_detail_targets(
         self,
@@ -2607,8 +2698,6 @@ class LiepinSiteAdapter:
         if not _is_safe_page_id(page_id):
             raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
         now = time.time()
-        path = self._lease_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": "seektalent.opencli_lease.v1",
             "session": self._browser_config.session,
@@ -2621,24 +2710,31 @@ class LiepinSiteAdapter:
         self._write_lease_payload(payload)
 
     def _touch_lease(self) -> None:
-        lease = self._read_lease()
-        if lease is None:
-            return
-        lease["last_activity_at"] = time.time()
-        self._write_lease_payload(lease)
+        path = self._lease_path()
+        with opencli_state_lock(path):
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                return
+            except json.JSONDecodeError as exc:
+                raise OpenCliBrowserError("liepin_opencli_lease_malformed") from exc
+            if not isinstance(loaded, dict):
+                raise OpenCliBrowserError("liepin_opencli_lease_malformed")
+            loaded["last_activity_at"] = time.time()
+            self._write_json_atomic(path, loaded)
 
     def _write_lease_payload(self, payload: Mapping[str, object]) -> None:
         path = self._lease_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(dict(payload), sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
+        with opencli_state_lock(path):
+            self._write_json_atomic(path, dict(payload))
 
     def _delete_lease(self) -> None:
-        try:
-            self._lease_path().unlink()
-        except FileNotFoundError:
-            return
+        path = self._lease_path()
+        with opencli_state_lock(path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                return
 
     def _quarantine_lease_file(self) -> None:
         path = self._lease_path()
@@ -2704,34 +2800,33 @@ class LiepinSiteAdapter:
     ) -> None:
         if not _is_safe_page_id(page_id) or not self._is_owned_liepin_tab(url):
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
-        markers = self._read_owned_page_markers_for_write()
-        markers[page_id] = {
-            "schema_version": "seektalent.opencli_owned_page.v1",
-            "session": self._browser_config.session,
-            "page_id": page_id,
-            "url": url,
-            "opened_at": opened_at or time.time(),
-            "source_run_id": source_run_id,
-            "runtime_run_id": runtime_run_id,
-            "source_lane_run_id": source_lane_run_id,
-            "owner_nonce": owner_nonce,
-        }
         path = self._owned_pages_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(markers, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
+        with opencli_state_lock(path):
+            markers = self._read_owned_page_markers_for_write()
+            markers[page_id] = {
+                "schema_version": "seektalent.opencli_owned_page.v1",
+                "session": self._browser_config.session,
+                "page_id": page_id,
+                "url": url,
+                "opened_at": opened_at or time.time(),
+                "source_run_id": source_run_id,
+                "runtime_run_id": runtime_run_id,
+                "source_lane_run_id": source_lane_run_id,
+                "owner_nonce": owner_nonce,
+            }
+            self._write_json_atomic(path, markers)
 
     def _forget_owned_page_marker(self, page_id: str) -> None:
-        markers = self._read_owned_page_markers_for_write()
-        if page_id not in markers:
-            return
-        markers.pop(page_id)
         path = self._owned_pages_path()
-        if markers:
-            path.write_text(json.dumps(markers, sort_keys=True), encoding="utf-8")
-        else:
-            path.unlink(missing_ok=True)
+        with opencli_state_lock(path):
+            markers = self._read_owned_page_markers_for_write()
+            if page_id not in markers:
+                return
+            markers.pop(page_id)
+            if markers:
+                self._write_json_atomic(path, markers)
+            else:
+                path.unlink(missing_ok=True)
 
     def _lease_page_id(self, lease: Mapping[str, object]) -> str:
         page_id = str(lease.get("page_id") or "")

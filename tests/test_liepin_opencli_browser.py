@@ -2013,6 +2013,32 @@ def test_open_liepin_detail_reuses_already_opened_ref_without_duplicate_click(tm
     assert commands.calls == []
 
 
+def test_append_agent_event_preserves_agent_events_dict_schema(tmp_path: Path) -> None:
+    runner = _runner(FakeCommands(), lease_dir=tmp_path)
+    path = tmp_path / "protected" / "pi-trace" / "run-1" / "agent-events.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "seektalent.opencli_agent_events.v1",
+                "events": [{"action_kind": "open_search", "route_kind": "search"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runner._append_agent_event("run-1", {"action_kind": "open_detail", "route_kind": "detail", "rank": 1})
+
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    assert loaded == {
+        "schema_version": "seektalent.opencli_agent_events.v1",
+        "events": [
+            {"action_kind": "open_search", "route_kind": "search"},
+            {"action_kind": "open_detail", "route_kind": "detail", "rank": 1},
+        ],
+    }
+
+
 def test_failed_detail_open_does_not_mark_ref_reusable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("seektalent.opencli_browser.automation.time.sleep", lambda _: None)
     monkeypatch.setattr("seektalent.providers.liepin.liepin_site_adapter.time.sleep", lambda _: None)
@@ -3269,6 +3295,50 @@ def test_capture_liepin_detail_resume_preserves_detail_source_url(tmp_path: Path
     assert captured.ok is True
     collected = json.loads((tmp_path / "protected" / "pi-detail" / "run-1" / "collected-resumes.json").read_text())
     assert collected["resumes"][0]["detail_payload"]["sourceUrl"] == detail_url
+
+
+def test_capture_liepin_detail_resume_preserves_collected_resumes_dict_schema_under_update(tmp_path: Path) -> None:
+    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
+    path = tmp_path / "protected" / "pi-detail" / "run-1" / "collected-resumes.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "seektalent.opencli_collected_resumes.v1",
+                "resumes": [
+                    {
+                        "provider_rank": 2,
+                        "candidate_resume_id": "liepin-opencli-detail-run-1-2",
+                        "protected_snapshot_ref": "artifact://protected/pi-detail/run-1/2.json",
+                        "normalized_snapshot_ref": "artifact://protected/pi-detail/run-1/2-normalized.json",
+                        "normalized_text": "existing",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(),
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad\n"
+                "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): detail_url,
+        },
+    )
+
+    captured = _runner(commands, lease_dir=tmp_path).capture_liepin_detail_resume(source_run_id="run-1", rank=1)
+
+    assert captured.ok is True
+    assert captured.counts == {"resumes": 2, "rank": 1}
+    loaded = json.loads(path.read_text(encoding="utf-8"))
+    assert set(loaded) == {"schema_version", "resumes"}
+    assert loaded["schema_version"] == "seektalent.opencli_collected_resumes.v1"
+    assert [resume["provider_rank"] for resume in loaded["resumes"]] == [1, 2]
+    assert loaded["resumes"][0]["detail_payload"]["sourceUrl"] == detail_url
 
 
 def test_capture_liepin_detail_resume_waits_until_detail_page_is_ready(tmp_path: Path) -> None:
