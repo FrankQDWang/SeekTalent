@@ -13,10 +13,15 @@ T = TypeVar("T")
 
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _THREAD_LOCKS_GUARD = threading.Lock()
+_LOCK_DEPTHS = threading.local()
+
+
+def _lock_key(lock_path: Path) -> str:
+    return str(lock_path.resolve(strict=False))
 
 
 def _thread_lock(lock_path: Path) -> threading.RLock:
-    key = str(lock_path.resolve(strict=False))
+    key = _lock_key(lock_path)
     with _THREAD_LOCKS_GUARD:
         lock = _THREAD_LOCKS.get(key)
         if lock is None:
@@ -25,21 +30,56 @@ def _thread_lock(lock_path: Path) -> threading.RLock:
         return lock
 
 
+def _lock_depths() -> dict[str, int]:
+    depths = getattr(_LOCK_DEPTHS, "depths", None)
+    if depths is None:
+        depths = {}
+        _LOCK_DEPTHS.depths = depths
+    return depths
+
+
+def _enter_reentrant_lock(key: str) -> bool:
+    depths = _lock_depths()
+    depth = depths.get(key, 0)
+    if depth == 0:
+        return False
+    depths[key] = depth + 1
+    return True
+
+
+def _exit_reentrant_lock(key: str) -> None:
+    depths = _lock_depths()
+    depth = depths[key]
+    if depth == 1:
+        depths.pop(key)
+    else:
+        depths[key] = depth - 1
+
+
 @contextmanager
 def opencli_state_lock(path: Path) -> Iterator[None]:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(f"{path.name}.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    key = _lock_key(lock_path)
     with _thread_lock(lock_path):
+        if _enter_reentrant_lock(key):
+            try:
+                yield
+            finally:
+                _exit_reentrant_lock(key)
+            return
         if os.name == "posix":
             import fcntl
 
             with lock_path.open("a+b") as lock_file:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                _lock_depths()[key] = 1
                 try:
                     yield
                 finally:
+                    _exit_reentrant_lock(key)
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             return
         if os.name == "nt":
@@ -52,9 +92,11 @@ def opencli_state_lock(path: Path) -> Iterator[None]:
                     lock_file.flush()
                 lock_file.seek(0)
                 msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+                _lock_depths()[key] = 1
                 try:
                     yield
                 finally:
+                    _exit_reentrant_lock(key)
                     lock_file.seek(0)
                     msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
             return
