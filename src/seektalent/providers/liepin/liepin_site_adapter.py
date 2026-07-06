@@ -11,6 +11,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal, cast
 from urllib.parse import urlparse
 
 from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
@@ -134,11 +135,40 @@ _LIEPIN_SESSION_LOGIN_REQUIRED_REASONS = {
     "liepin_opencli_unknown_modal",
 }
 
+_SessionStatusValue = Literal["missing", "login_required", "ready", "revoked"]
 
-def _session_status_for_liepin_reason(reason: str) -> str:
+
+def _session_status_for_liepin_reason(reason: str) -> Literal["missing", "login_required"]:
     if reason in _LIEPIN_SESSION_LOGIN_REQUIRED_REASONS:
         return "login_required"
     return "missing"
+
+
+def _session_status(
+    *,
+    connection_id: str,
+    status: _SessionStatusValue,
+    provider_account_hash: str | None = None,
+    safe_reason_code: str | None = None,
+    current_url: str | None = None,
+    search_surface_ready: bool | None = None,
+    result_surface_ready: bool | None = None,
+) -> SessionStatus:
+    payload: dict[str, object] = {
+        "connectionId": connection_id,
+        "status": status,
+    }
+    if provider_account_hash is not None:
+        payload["providerAccountHash"] = provider_account_hash
+    if safe_reason_code is not None:
+        payload["safeReasonCode"] = safe_reason_code
+    if current_url is not None:
+        payload["currentUrl"] = current_url
+    if search_surface_ready is not None:
+        payload["searchSurfaceReady"] = search_surface_ready
+    if result_surface_ready is not None:
+        payload["resultSurfaceReady"] = result_surface_ready
+    return SessionStatus.model_validate(payload)
 
 
 def _opencli_safe_reason(reason: str | None, *, default: str) -> str:
@@ -261,70 +291,70 @@ class LiepinSiteAdapter:
         status = self.status()
         if not status.ok:
             reason = _opencli_safe_reason(status.safe_reason_code, default="liepin_opencli_status_unavailable")
-            return SessionStatus(
-                connectionId=connection_id,
+            return _session_status(
+                connection_id=connection_id,
                 status=_session_status_for_liepin_reason(reason),
-                safeReasonCode=reason,
+                safe_reason_code=reason,
             )
         try:
             opened = self.open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)
         except OpenCliBrowserError as exc:
             reason = _opencli_safe_reason(exc.safe_reason_code, default="liepin_opencli_status_unavailable")
-            return SessionStatus(
-                connectionId=connection_id,
+            return _session_status(
+                connection_id=connection_id,
                 status=_session_status_for_liepin_reason(reason),
-                safeReasonCode=reason,
+                safe_reason_code=reason,
             )
         if not opened.ok:
             reason = _opencli_safe_reason(opened.safe_reason_code, default="liepin_opencli_status_unavailable")
-            return SessionStatus(
-                connectionId=connection_id,
+            return _session_status(
+                connection_id=connection_id,
                 status=_session_status_for_liepin_reason(reason),
-                safeReasonCode=reason,
+                safe_reason_code=reason,
             )
         try:
             state = self.state()
         except OpenCliBrowserError as exc:
             reason = _opencli_safe_reason(exc.safe_reason_code, default="liepin_opencli_status_unavailable")
             current_url = self._current_url_or_none()
-            return SessionStatus(
-                connectionId=connection_id,
+            return _session_status(
+                connection_id=connection_id,
                 status=_session_status_for_liepin_reason(reason),
-                safeReasonCode=reason,
-                currentUrl=current_url,
+                safe_reason_code=reason,
+                current_url=current_url,
             )
 
         state_text = _state_text_for_probe(state)
         current_url = _state_url(state_text) or self._current_url_or_none()
         if not state.ok:
             reason = _opencli_safe_reason(state.safe_reason_code, default="liepin_opencli_status_unavailable")
-            return SessionStatus(
-                connectionId=connection_id,
+            return _session_status(
+                connection_id=connection_id,
                 status=_session_status_for_liepin_reason(reason),
-                safeReasonCode=reason,
-                currentUrl=current_url,
+                safe_reason_code=reason,
+                current_url=current_url,
             )
 
         search_ready = current_url is not None and _is_liepin_recruiter_search_surface(current_url)
         result_ready = _looks_like_liepin_search_result_surface(state_text)
         if not search_ready:
-            return SessionStatus(
-                connectionId=connection_id,
+            return _session_status(
+                connection_id=connection_id,
                 status="missing",
-                safeReasonCode="liepin_opencli_search_not_ready",
-                currentUrl=current_url,
-                searchSurfaceReady=False,
-                resultSurfaceReady=result_ready,
+                safe_reason_code="liepin_opencli_search_not_ready",
+                current_url=current_url,
+                search_surface_ready=False,
+                result_surface_ready=result_ready,
             )
 
-        return SessionStatus(
-            connectionId=connection_id,
+        return _session_status(
+            connection_id=connection_id,
             status="ready",
-            providerAccountHash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
-            safeReasonCode="configured",
-            currentUrl=current_url,
-            searchSurfaceReady=True,
-            resultSurfaceReady=result_ready,
+            provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+            safe_reason_code="configured",
+            current_url=current_url,
+            search_surface_ready=True,
+            result_surface_ready=result_ready,
         )
 
     def recover_connection(self) -> OpenCliBrowserResult:
@@ -410,12 +440,13 @@ class LiepinSiteAdapter:
         current_host = urlparse(current_url).hostname or ""
         if current_host not in LIEPIN_OPENCLI_ALLOWED_HOSTS:
             url_terminal_reason = classify_liepin_state(url=current_url, text="")
+            safe_reason = url_terminal_reason or "liepin_opencli_host_blocked"
             observation = build_observation("")
             observation["terminal"] = True
             return OpenCliBrowserResult(
                 ok=False,
                 action="state",
-                safe_reason_code=url_terminal_reason,
+                safe_reason_code=safe_reason,
                 observation=observation,
             )
         output = self._run_browser_command("state", ())
@@ -1922,7 +1953,8 @@ class LiepinSiteAdapter:
         def update(state: object) -> dict[str, object]:
             if not isinstance(state, dict):
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
-            raw_events = state.get("events")
+            state_dict = cast(dict[str, object], state)
+            raw_events = state_dict.get("events")
             if not isinstance(raw_events, list):
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
             events = [dict(item) for item in raw_events if isinstance(item, dict)]
@@ -2007,14 +2039,17 @@ class LiepinSiteAdapter:
         def update(state: object) -> dict[str, object]:
             if not isinstance(state, dict):
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
-            raw_resumes = state.get("resumes")
+            state_dict = cast(dict[str, object], state)
+            raw_resumes = state_dict.get("resumes")
             if not isinstance(raw_resumes, list):
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
-            resumes = [
-                dict(item)
-                for item in raw_resumes
-                if isinstance(item, dict) and _positive_int_or_none(item.get("provider_rank")) != rank
-            ]
+            resumes: list[dict[str, object]] = []
+            for item in raw_resumes:
+                if not isinstance(item, dict):
+                    continue
+                item_dict = cast(dict[str, object], item)
+                if _positive_int_or_none(item_dict.get("provider_rank")) != rank:
+                    resumes.append(dict(item_dict))
             resumes.append(dict(resume))
             resumes.sort(key=lambda item: _positive_int_or_none(item.get("provider_rank")) or 0)
             return {
@@ -2030,8 +2065,10 @@ class LiepinSiteAdapter:
             )
         except json.JSONDecodeError as exc:
             raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
-        raw_resumes = updated["resumes"]
-        return [dict(item) for item in raw_resumes if isinstance(item, dict)]
+        raw_resumes = updated.get("resumes")
+        if not isinstance(raw_resumes, list):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        return [dict(cast(dict[str, object], item)) for item in raw_resumes if isinstance(item, dict)]
 
     def _delete_collected_resume(self, safe_run_id: str, *, rank: int) -> list[dict[str, object]]:
         path = self._pi_artifact_path("protected", f"pi-detail/{safe_run_id}/collected-resumes.json")
@@ -2039,14 +2076,17 @@ class LiepinSiteAdapter:
         def update(state: object) -> dict[str, object]:
             if not isinstance(state, dict):
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
-            raw_resumes = state.get("resumes")
+            state_dict = cast(dict[str, object], state)
+            raw_resumes = state_dict.get("resumes")
             if not isinstance(raw_resumes, list):
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
-            resumes = [
-                dict(item)
-                for item in raw_resumes
-                if isinstance(item, dict) and _positive_int_or_none(item.get("provider_rank")) != rank
-            ]
+            resumes: list[dict[str, object]] = []
+            for item in raw_resumes:
+                if not isinstance(item, dict):
+                    continue
+                item_dict = cast(dict[str, object], item)
+                if _positive_int_or_none(item_dict.get("provider_rank")) != rank:
+                    resumes.append(dict(item_dict))
             return {
                 "schema_version": "seektalent.opencli_collected_resumes.v1",
                 "resumes": resumes,
@@ -2060,8 +2100,10 @@ class LiepinSiteAdapter:
             )
         except json.JSONDecodeError as exc:
             raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
-        raw_resumes = updated["resumes"]
-        return [dict(item) for item in raw_resumes if isinstance(item, dict)]
+        raw_resumes = updated.get("resumes")
+        if not isinstance(raw_resumes, list):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        return [dict(cast(dict[str, object], item)) for item in raw_resumes if isinstance(item, dict)]
 
     def _find_liepin_result_card_detail_targets(
         self,

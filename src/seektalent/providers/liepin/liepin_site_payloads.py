@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping, Sequence
+from typing import cast
 
 from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
 from seektalent.providers.liepin.liepin_site_parsing import _safe_artifact_segment
@@ -117,6 +118,7 @@ def _safe_card_summary_preview(
     for raw_item in value[:_CARD_SUMMARY_PREVIEW_MAX_ITEMS]:
         if not isinstance(raw_item, Mapping):
             continue
+        raw_item = cast(Mapping[str, object], raw_item)
         item: dict[str, object] = {}
         for field in text_fields:
             text = _safe_card_summary_text(raw_item.get(field))

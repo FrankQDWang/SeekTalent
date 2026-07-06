@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import cast
 import re
 
 from seektalent.core.retrieval.provider_contract import ProviderPayloadKind, ProviderSnapshot
@@ -194,7 +195,7 @@ def _append_structured_sequence(parts: list[str], seen: set[str], value: object)
 def _mapping_sequence(value: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(value, list | tuple):
         return ()
-    return tuple(item for item in value if isinstance(item, Mapping))
+    return tuple(cast(Mapping[str, object], item) for item in value if isinstance(item, Mapping))
 
 
 def _append_structured_text(parts: list[str], seen: set[str], value: object) -> None:

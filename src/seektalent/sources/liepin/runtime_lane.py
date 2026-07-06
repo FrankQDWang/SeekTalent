@@ -7,7 +7,7 @@ import math
 from collections.abc import Collection, Mapping
 from dataclasses import replace
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
@@ -932,6 +932,7 @@ def _summary_mapping_tuple(
     for item in value:
         if not isinstance(item, Mapping):
             continue
+        item = cast(Mapping[str, object], item)
         filtered: dict[str, object] = {}
         for item_key in string_keys:
             item_value = item.get(item_key)
