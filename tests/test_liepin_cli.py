@@ -28,9 +28,18 @@ def test_workbench_action_reason_preserves_liepin_opencli_reason_only() -> None:
 
 
 def test_workbench_reason_message_covers_search_and_results_readiness() -> None:
-    assert cli._workbench_reason_message("liepin_opencli_search_not_ready") != "OpenCLI/Liepin preflight failed."
-    assert cli._workbench_reason_message("liepin_opencli_results_not_ready") != "OpenCLI/Liepin preflight failed."
-    assert cli._workbench_reason_message("liepin_opencli_removed_config") != "OpenCLI/Liepin preflight failed."
+    assert (
+        cli._workbench_reason_message("liepin_opencli_search_not_ready")
+        == "猎聘搜索页面未就绪。请确认当前 Chrome 可以正常打开猎聘人才搜索页。"
+    )
+    assert (
+        cli._workbench_reason_message("liepin_opencli_results_not_ready")
+        == "猎聘搜索结果尚未就绪。请确认页面加载完成后重试。"
+    )
+    assert (
+        cli._workbench_reason_message("liepin_opencli_removed_config")
+        == "检测到已移除的 Liepin OpenCLI 清理配置。请删除旧的 tab 清理设置后重试。"
+    )
 
 
 def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> None:
