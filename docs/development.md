@@ -151,6 +151,26 @@ python scripts/build_packaged_workbench.py
 
 ## Domi Runtime Smoke
 
+### Prepared-Machine Domi Workbench
+
+Use this path when the machine already has Domi installed and the operator can provide Domi Python, Domi Node, and a manually pasted Domi JWT. It runs the packaged Workbench through the Domi launcher, which sets the Domi LLM provider and Domi Node policy before starting the server.
+
+```bash
+export DOMI_PYTHON="/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python"
+export DOMI_NODE="<path to Domi node executable or node bin directory>"
+export SEEKTALENT_DOMI_JWT="<manually pasted Domi JWT>"
+export SEEKTALENT_DOMI_LLM_CHANNEL="seek_talent"
+```
+
+Install or upgrade SeekTalent in the Domi Python environment, then launch the Workbench:
+
+```bash
+"${DOMI_PYTHON}" -m pip install -U seektalent
+"${DOMI_PYTHON}" -m seektalent.domi_workbench --port 8011
+```
+
+This path does not read Domi Electron storage and does not install a Chrome extension. The Domi JWT and Domi Node path are explicit process inputs.
+
 Use this smoke only for validating the packaged Workbench shape inside the Domi-provided runtime on a local Mac with Domi installed.
 
 Required input:

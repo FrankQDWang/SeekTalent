@@ -24,6 +24,7 @@ The local-first product has these entrypoints:
 
 - `seektalent` for CLI and terminal workflows.
 - `seektalent workbench` for installed PyPI users; it starts the backend and serves the packaged Workbench frontend.
+- `seektalent-domi` for prepared-machine Domi Workbench launches.
 - `seektalent-ui-api` for lower-level development and diagnostics.
 
 ## Commands
@@ -34,12 +35,13 @@ The local-first product has these entrypoints:
 | `seektalent benchmark` | Run benchmark JD rows from a JSONL file. |
 | `seektalent init` | Write a starter env file. |
 | `seektalent workbench` | Start the local Workbench with the packaged frontend. |
+| `seektalent-domi` | Start the Workbench with Domi LLM and Domi Node policy on a prepared machine. |
 | `seektalent doctor` | Check local configuration without network calls. |
 | `seektalent version` | Print the installed version. |
 | `seektalent update` | Print upgrade instructions. |
 | `seektalent inspect` | Print the machine-readable CLI contract when used with `--json`. |
 
-Every command above can also be invoked under `seektalent exec`, for example `seektalent exec run ...`.
+Every `seektalent <command>` row above can also be invoked under `seektalent exec`, for example `seektalent exec run ...`.
 
 ## `seektalent run`
 
@@ -164,6 +166,12 @@ seektalent workbench
 The command starts the FastAPI backend and serves the packaged React Workbench from the same loopback origin. It does not require pnpm, Node, Vite, or a repository checkout on the user's machine.
 
 On first use, `seektalent workbench` downloads and pins the managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` when needed. Users still need the OpenCLI Chrome extension connected and Liepin already logged in in their local Chrome profile. If the LLM key, OpenCLI bootstrap, daemon, extension connection, or Liepin login check fails, startup exits before launching the server and prints a `reason_code=...` diagnostic on stderr.
+
+## `seektalent-domi`
+
+`seektalent-domi` is the prepared-machine Domi launcher. It requires `SEEKTALENT_DOMI_JWT` and `SEEKTALENT_DOMI_NODE`, where `SEEKTALENT_DOMI_NODE` points to the Domi node executable or node bin directory.
+
+The launcher sets the Domi LLM provider and Domi Node policy variables, then delegates to `seektalent workbench` with the same arguments.
 
 ## Failure Behavior
 

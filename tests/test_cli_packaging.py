@@ -32,8 +32,10 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     bin_dir = _bin_dir(venv_dir)
     python = bin_dir / ("python.exe" if os.name == "nt" else "python")
     cli = bin_dir / ("seektalent.exe" if os.name == "nt" else "seektalent")
+    domi_cli = bin_dir / ("seektalent-domi.exe" if os.name == "nt" else "seektalent-domi")
 
     subprocess.run([str(python), "-m", "pip", "install", "--no-deps", str(wheel)], check=True)
+    assert domi_cli.exists()
 
     current_site_packages = site.getsitepackages()
     env = os.environ.copy()
