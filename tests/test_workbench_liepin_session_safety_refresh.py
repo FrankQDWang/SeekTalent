@@ -12,6 +12,7 @@ from seektalent.providers.liepin.connection_safety import (
     validate_provider_connection_safety,
 )
 from seektalent.providers.liepin.store import LiepinStore
+from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from tests.test_workbench_api import (
     _approve_requirement_review,
     _ensure_local_actor,
@@ -87,7 +88,11 @@ def test_start_session_opencli_mode_refreshes_provider_session_safety_metadata(
             )
         assert expired_error.value.code == "connection_safety_expired"
 
-        worker = ProbeLiepinWorker(status="ready", provider_account_hash=provider_account_hash)
+        worker = ProbeLiepinWorker(
+            status="ready",
+            provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+            echo_requested_provider_account_hash=False,
+        )
         _install_probe_worker(client, worker)
         client.app.state.settings.liepin_browser_action_backend = "opencli"
         session = _create_session(client, source_kinds=["cts", "liepin"])
