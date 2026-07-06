@@ -74,9 +74,16 @@ def test_generic_opencli_browser_contracts_do_not_expose_site_config_fields() ->
         "cleanup_" + "worker_enabled",
         "idle_" + "close_seconds",
         "close_" + "blank_window",
+        "current_tab_reuse_url_fragments",
     )
 
     assert all(item not in text for item in forbidden)
+
+
+def test_liepin_policy_does_not_reintroduce_current_tab_reuse_fragments() -> None:
+    text = _text(ROOT / "src" / "seektalent" / "providers" / "liepin" / "liepin_opencli_policy.py")
+
+    assert "LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS" not in text
 
 
 def test_generic_opencli_browser_automation_does_not_launch_provider_cleanup_worker() -> None:

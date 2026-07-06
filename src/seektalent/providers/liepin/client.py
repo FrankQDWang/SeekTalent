@@ -370,7 +370,6 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
 def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerClient:
     from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
     from seektalent.opencli_browser.contracts import OpenCliBrowserConfig
-    from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS
     from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
     from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
@@ -380,7 +379,6 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         session=settings.liepin_opencli_session,
         timeout_seconds=settings.liepin_opencli_timeout_seconds,
         window_mode=settings.liepin_opencli_window_mode,
-        current_tab_reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
         pacing_enabled=settings.liepin_opencli_pacing_enabled,
         pacing_min_ms=settings.liepin_opencli_pacing_min_ms,
         pacing_max_ms=settings.liepin_opencli_pacing_max_ms,

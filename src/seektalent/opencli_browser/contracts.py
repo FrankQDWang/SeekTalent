@@ -14,7 +14,6 @@ class OpenCliBrowserConfig:
     session: str
     timeout_seconds: int
     window_mode: OpenCliWindowMode = "background"
-    current_tab_reuse_url_fragments: tuple[str, ...] = ()
     pacing_enabled: bool = True
     pacing_min_ms: int = 700
     pacing_max_ms: int = 1800

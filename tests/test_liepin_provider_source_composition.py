@@ -36,6 +36,7 @@ def test_liepin_site_adapter_public_methods_stay_compatible() -> None:
         "scroll(self, *, direction: 'str') -> 'OpenCliBrowserResult'",
         "search_liepin_cards(self, *, source_run_id: 'str', query: 'str', max_pages: 'int', max_cards: 'int', native_filters: 'Mapping[str, object] | None' = None) -> 'dict[str, object]'",
         "search_liepin_resumes(self, *, source_run_id: 'str', query: 'str', target_resumes: 'int', max_pages: 'int', max_cards: 'int', native_filters: 'Mapping[str, object] | None' = None) -> 'dict[str, object]'",
+        "session_status_probe(self, *, connection_id: 'str', provider_account_hash: 'str | None') -> 'SessionStatus'",
         "state(self) -> 'OpenCliBrowserResult'",
         "status(self) -> 'OpenCliBrowserResult'",
         "wait_liepin_detail_ready(self, *, source_run_id: 'str', rank: 'int') -> 'OpenCliBrowserResult'",

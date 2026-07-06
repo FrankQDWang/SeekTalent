@@ -18,7 +18,6 @@ from seektalent.opencli_browser.contracts import (
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
     LIEPIN_OPENCLI_ALLOWED_HOSTS,
-    LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
     LIEPIN_RECRUITER_SEARCH_URLS,
 )
 from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
@@ -69,7 +68,6 @@ def _runner_from_env() -> LiepinSiteAdapter:
         session=os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_SESSION") or "seektalent-liepin",
         timeout_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS") or "900"),
         window_mode=window_mode,
-        current_tab_reuse_url_fragments=LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS,
         pacing_enabled=_env_bool(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED"), default=True),
         pacing_min_ms=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_MIN_MS") or "700"),
         pacing_max_ms=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_PACING_MAX_MS") or "1800"),

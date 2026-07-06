@@ -28,10 +28,6 @@ LIEPIN_RECRUITER_SEARCH_URLS = (
     "https://h.liepin.com/search/getConditionItem#session",
     "https://h.liepin.com/resume/search",
 )
-LIEPIN_RECRUITER_SEARCH_TAB_REUSE_FRAGMENTS = (
-    "h.liepin.com/search/getConditionItem",
-    "h.liepin.com/resume/search",
-)
 LIEPIN_RECRUITER_SEARCH_URL = LIEPIN_RECRUITER_SEARCH_URLS[0]
 
 OPENCLI_TO_LIEPIN_REASON = {
