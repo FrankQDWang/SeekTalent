@@ -17,7 +17,11 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserError,
     OpenCliBrowserResult,
 )
-from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_OPENCLI_ALLOWED_HOSTS,
+    LIEPIN_RECRUITER_SEARCH_URL,
+    LIEPIN_RECRUITER_SEARCH_URLS,
+)
 from seektalent.providers.liepin.liepin_site_payloads import cards_envelope
 from seektalent.providers.liepin.liepin_site_adapter import (
     LiepinOpenCliSiteConfig,
@@ -4631,6 +4635,16 @@ def test_cli_runner_uses_shell_safe_command_parsing(monkeypatch: pytest.MonkeyPa
     runner = opencli_browser_cli._runner_from_env()
 
     assert runner._browser_config.command == ("/tmp/open cli", "--profile", "qa user")
+
+
+def test_cli_runner_from_env_uses_default_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON", raising=False)
+    monkeypatch.delenv("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_START_URLS_JSON", raising=False)
+
+    runner = opencli_browser_cli._runner_from_env()
+
+    assert runner._site_config.allowed_hosts == LIEPIN_OPENCLI_ALLOWED_HOSTS
+    assert runner._site_config.allowed_start_urls == LIEPIN_RECRUITER_SEARCH_URLS
 
 
 def test_cli_runner_reads_state_derived_click_refs_from_env(monkeypatch: pytest.MonkeyPatch) -> None:

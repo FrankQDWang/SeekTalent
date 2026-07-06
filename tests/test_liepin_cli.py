@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import argparse
 from types import SimpleNamespace
 from pathlib import Path
+
+import pytest
 
 import seektalent.cli as cli
 import seektalent.liepin_smoke_cli as smoke_cli
@@ -815,6 +818,25 @@ def test_liepin_smoke_worker_base_url_implies_external_http(monkeypatch, tmp_pat
     assert status == 0
     assert built_settings[0].liepin_worker_mode == "external_http"
     assert built_settings[0].liepin_worker_base_url == "http://127.0.0.1:8123"
+
+
+def test_liepin_smoke_settings_rejects_stale_local_mode(monkeypatch) -> None:
+    class StaleSettings:
+        liepin_worker_mode = "managed" + "_local"
+
+        def with_overrides(self, **kwargs):
+            raise AssertionError(f"unexpected opencli fallback: {kwargs!r}")
+
+    monkeypatch.setattr(smoke_cli, "AppSettings", StaleSettings)
+    args = argparse.Namespace(
+        worker_mode=None,
+        worker_base_url=None,
+        max_detail_opens=1,
+        db_path=None,
+    )
+
+    with pytest.raises(LiepinWorkerModeError, match=StaleSettings.liepin_worker_mode):
+        smoke_cli._liepin_smoke_settings(args)
 
 
 def test_liepin_smoke_rejects_removed_pi_agent_mode(capsys) -> None:

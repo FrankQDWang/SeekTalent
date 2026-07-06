@@ -117,7 +117,12 @@ def liepin_smoke_command(args: argparse.Namespace) -> int:
         print(f"validation failed: {reason}", file=sys.stderr)
         return 1
 
-    settings = _liepin_smoke_settings(args)
+    try:
+        settings = _liepin_smoke_settings(args)
+    except LiepinWorkerModeError as exc:
+        setup_status = exc.setup_status or "unsupported_worker_mode"
+        print(f"validation failed: worker setup failed: {setup_status}", file=sys.stderr)
+        return 1
     if settings.liepin_worker_mode == "fake_fixture":
         print("validation failed: live smoke refuses fake fixture worker mode", file=sys.stderr)
         return 1
@@ -221,7 +226,10 @@ def _liepin_smoke_settings(args: argparse.Namespace) -> AppSettings:
     if configured_mode in {"fake_fixture", "external_http", "opencli"}:
         worker_mode = configured_mode
     else:
-        worker_mode = "opencli"
+        raise LiepinWorkerModeError(
+            f"Unsupported Liepin smoke worker mode: {configured_mode}",
+            setup_status="unsupported_worker_mode",
+        )
     settings_data: dict[str, object] = {
         "provider_name": "liepin",
         "liepin_live_enabled": True,
