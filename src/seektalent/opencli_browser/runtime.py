@@ -36,54 +36,6 @@ class SubprocessOpenCliCommandRunner:
         return completed.stdout
 
 
-@dataclass(frozen=True)
-class SubprocessCurrentChromeTabOpener:
-    reuse_url_fragments: tuple[str, ...] = ()
-
-    def open_tab(self, url: str) -> bool:
-        script = '''
-on run argv
-  set targetUrl to item 1 of argv
-  set reuseFragments to {}
-  if (count of argv) > 1 then
-    repeat with i from 2 to count of argv
-      set end of reuseFragments to item i of argv
-    end repeat
-  end if
-  tell application "Google Chrome"
-    if (count of windows) = 0 then return "no-window"
-    repeat with i from 1 to count of tabs of front window
-      set tabUrl to URL of tab i of front window
-      set shouldReuse to false
-      repeat with fragment in reuseFragments
-        if targetUrl contains fragment and tabUrl contains fragment then set shouldReuse to true
-      end repeat
-      if tabUrl is targetUrl or shouldReuse then
-        set active tab index of front window to i
-        set URL of active tab of front window to targetUrl
-        return URL of active tab of front window
-      end if
-    end repeat
-    make new tab at end of tabs of front window with properties {URL:targetUrl}
-    set active tab index of front window to (count of tabs of front window)
-    return URL of active tab of front window
-  end tell
-end run
-'''
-        try:
-            completed = subprocess.run(
-                ("osascript", "-e", script, url, *self.reuse_url_fragments),
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
-            return False
-        opened_url = completed.stdout.strip()
-        return bool(opened_url) and opened_url != "no-window"
-
-
 def strip_opencli_stdout_notice(output: str) -> str:
     return re.sub(
         r"\n\s*Update available:[^\n]*\n\s*Run: npm install -g @jackwener/opencli\s*$",

@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import io
 import json
-import re
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -365,32 +364,6 @@ class RefEvalCommands(FakeCommands):
         return super().run(argv, timeout=timeout, env=env)
 
 
-class FakeCurrentChromeTabOpener:
-    def __init__(self, result: bool = True, commands: FakeCommands | None = None) -> None:
-        self.result = result
-        self.commands = commands
-        self.calls: list[str] = []
-
-    def open_tab(self, url: str) -> bool:
-        self.calls.append(url)
-        if self.result and self.commands is not None:
-            page_id = self._page_id_for_url(url)
-            self.commands.prepend_output(("opencli", "browser", "seektalent-liepin", "get", "url"), url)
-            self.commands.prepend_output(
-                ("opencli", "browser", "seektalent-liepin", "tab", "list"),
-                _single_tab_list(page_id=page_id, url=url),
-            )
-        return self.result
-
-    def _page_id_for_url(self, url: str) -> str:
-        if "getConditionItem" in url:
-            return "page-search"
-        match = re.search(r"(?:id=|abc)(\d+)", url)
-        if match:
-            return f"page-detail-{match.group(1)}"
-        return "page-current-window"
-
-
 def _runner(
     commands: FakeCommands,
     *,
@@ -442,14 +415,16 @@ def test_recover_connection_restarts_opencli_daemon_without_current_chrome_tab_o
             ("opencli", "daemon", "restart"): "Daemon: running\nExtension: connected",
         }
     )
-    opener = FakeCurrentChromeTabOpener(commands=commands)
-
     result = _runner(commands).recover_connection()
 
     assert result.ok is True
     assert result.counts == {"restarted": 1}
-    assert ("opencli", "daemon", "restart") in commands.calls
-    assert opener.calls == []
+    assert commands.calls == [
+        ("opencli", "daemon", "status"),
+        ("opencli", "daemon", "restart"),
+        ("opencli", "daemon", "status"),
+    ]
+    assert not any(call[1:3] == ("browser", "seektalent-liepin") for call in commands.calls)
 
 
 def _current_window_open_outputs(

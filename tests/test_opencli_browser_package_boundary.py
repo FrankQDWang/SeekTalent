@@ -101,24 +101,3 @@ def test_opencli_browser_automation_uses_generic_reason_codes() -> None:
     assert OPENCLI_COMMAND_MISSING == "opencli_command_missing"
     assert OPENCLI_TIMEOUT == "opencli_timeout"
     assert OPENCLI_STALE_REF == "opencli_stale_ref"
-
-
-def test_subprocess_current_tab_opener_uses_configured_reuse_fragments(monkeypatch) -> None:
-    import subprocess
-
-    from seektalent.opencli_browser.runtime import SubprocessCurrentChromeTabOpener
-
-    captured: dict[str, tuple[str, ...]] = {}
-
-    def fake_run(argv, *, check, capture_output, text, timeout):
-        del check, capture_output, text
-        captured["argv"] = tuple(argv)
-        assert timeout == 5
-        return subprocess.CompletedProcess(argv, 0, stdout="https://example.test/search?from=redirect\n")
-
-    monkeypatch.setattr("seektalent.opencli_browser.runtime.subprocess.run", fake_run)
-
-    opener = SubprocessCurrentChromeTabOpener(reuse_url_fragments=("example.test/search",))
-
-    assert opener.open_tab("https://example.test/search#session") is True
-    assert captured["argv"][-2:] == ("https://example.test/search#session", "example.test/search")
