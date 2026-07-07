@@ -124,6 +124,8 @@ def _probe_node_version(node: Path) -> None:
             check=False,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -197,6 +199,8 @@ def _ensure_managed_opencli(runtime_root: Path, *, node: Path, opencli_version: 
         check=False,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=300,
     )
     if completed.returncode != 0:

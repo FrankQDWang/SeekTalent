@@ -148,6 +148,30 @@ def test_domi_node_policy_rejects_unusable_external_node(
     assert version_probe_calls == [(str(domi_node), "--version")]
 
 
+def test_node_version_probe_decodes_subprocess_output_as_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
+    captured_kwargs: dict[str, object] = {}
+
+    class Completed:
+        returncode = 0
+        stdout = "v22.14.0\n"
+        stderr = ""
+
+    def fake_run(_argv, **kwargs):
+        captured_kwargs.update(kwargs)
+        return Completed()
+
+    monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
+
+    opencli_launcher._probe_node_version(node)
+
+    assert captured_kwargs["encoding"] == "utf-8"
+    assert captured_kwargs["errors"] == "replace"
+
+
 def test_domi_node_policy_requires_domi_node_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -221,14 +245,16 @@ def test_opencli_install_uses_domi_bundled_npm_cli_when_npm_cmd_missing(
     node = _write_fake_node(tmp_path / "domi-node", exit_code=0)
     npm_cli = _write_domi_bundled_npm_cli(node.parent)
     captured_argv: list[str] = []
+    captured_kwargs: dict[str, object] = {}
 
     class Completed:
         returncode = 0
         stdout = ""
         stderr = ""
 
-    def fake_run(argv, **_kwargs):
+    def fake_run(argv, **kwargs):
         captured_argv.extend(str(part) for part in argv)
+        captured_kwargs.update(kwargs)
         _write_managed_opencli(tmp_path / "runtime")
         return Completed()
 
@@ -242,6 +268,8 @@ def test_opencli_install_uses_domi_bundled_npm_cli_when_npm_cmd_missing(
 
     assert captured_argv[:2] == [str(node), str(npm_cli)]
     assert "install" in captured_argv
+    assert captured_kwargs["encoding"] == "utf-8"
+    assert captured_kwargs["errors"] == "replace"
 
 
 def _write_managed_opencli(root: Path) -> Path:
