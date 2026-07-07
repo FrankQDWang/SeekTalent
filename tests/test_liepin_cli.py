@@ -73,7 +73,7 @@ def test_workbench_preflight_timeout_allows_slow_windows_opencli_recover() -> No
     assert cli._WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS >= 60
 
 
-def test_workbench_preflight_opens_tab_after_transient_extension_disconnect(
+def test_workbench_preflight_checks_opencli_connection_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     actions: list[str] = []
@@ -86,12 +86,6 @@ def test_workbench_preflight_opens_tab_after_transient_extension_disconnect(
     ) -> dict[str, object]:
         del env, payload
         actions.append(action)
-        if action == "recover_connection":
-            return {
-                "ok": False,
-                "action": action,
-                "safeReasonCode": "liepin_opencli_extension_disconnected",
-            }
         return {"ok": True, "action": action, "safeReasonCode": "configured"}
 
     monkeypatch.setattr(cli, "_run_workbench_liepin_action", fake_action)
@@ -99,7 +93,7 @@ def test_workbench_preflight_opens_tab_after_transient_extension_disconnect(
     result = cli._run_workbench_liepin_preflight_actions(env={})
 
     assert result["ok"] is True
-    assert actions == ["recover_connection", "open_liepin_tab", "state"]
+    assert actions == ["recover_connection"]
 
 
 def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> None:

@@ -148,7 +148,6 @@ _WORKBENCH_OPENCLI_RECOVERABLE_REASONS = {
 _WORKBENCH_OPENCLI_STATUS_ATTEMPTS = 15
 _WORKBENCH_OPENCLI_STATUS_POLL_SECONDS = 1.0
 _WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS = 90
-_WORKBENCH_PREFLIGHT_LIEPIN_URL = "https://h.liepin.com/search/getConditionItem#session"
 ROOT_HELP_EPILOG = """Primary workflow:
   1. seektalent doctor
   2. seektalent
@@ -1842,19 +1841,7 @@ def _run_workbench_liepin_preflight_actions(
     *,
     env: Mapping[str, str],
 ) -> dict[str, object]:
-    recovered = _run_workbench_liepin_action("recover_connection", env=env)
-    if not _workbench_action_ok(recovered) and _workbench_action_reason(recovered) not in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
-        return recovered
-
-    opened = _run_workbench_liepin_action(
-        "open_liepin_tab",
-        payload={"url": _WORKBENCH_PREFLIGHT_LIEPIN_URL},
-        env=env,
-    )
-    if not _workbench_action_ok(opened):
-        return opened
-
-    return _run_workbench_liepin_action("state", env=env)
+    return _run_workbench_liepin_action("recover_connection", env=env)
 
 
 def _run_workbench_liepin_action(

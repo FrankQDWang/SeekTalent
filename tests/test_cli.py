@@ -605,7 +605,7 @@ def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
 
     assert main(["workbench", "--port", "8123"]) == 0
 
-    assert opencli_actions == ["recover_connection", "open_liepin_tab", "state"]
+    assert opencli_actions == ["recover_connection"]
     assert opencli_envs
     assert all(env is not None for env in opencli_envs)
     for env in opencli_envs:
@@ -660,7 +660,7 @@ def test_workbench_command_runs_opencli_preflight_before_launch(
     assert main(["workbench", "--port", "8123"]) == 0
 
     assert ensured == [True]
-    assert opencli_actions == ["recover_connection", "open_liepin_tab", "state"]
+    assert opencli_actions == ["recover_connection"]
     assert launch_calls[0][0][0] == "seektalent-ui-api"
 
 
@@ -762,6 +762,8 @@ def test_workbench_command_falls_back_to_supervised_daemon_when_restart_disconne
         if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
             action = argv_list[-1]
             if action == "recover_connection":
+                if supervised_started:
+                    return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
                 return Completed(
                     stdout=json.dumps(
                         {
@@ -824,7 +826,7 @@ def test_workbench_command_falls_back_to_supervised_daemon_when_restart_disconne
     assert launch_calls[0][0] == "seektalent-ui-api"
 
 
-def test_workbench_command_starts_when_open_probe_recovers_extension_disconnect(
+def test_workbench_command_restarts_daemon_when_connection_recover_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -876,11 +878,11 @@ def test_workbench_command_starts_when_open_probe_recovers_extension_disconnect(
 
     assert main(["workbench"]) == 0
 
-    assert restart_calls == []
+    assert restart_calls
     assert launch_calls[0][0] == "seektalent-ui-api"
 
 
-def test_workbench_command_reports_malformed_opencli_state(
+def test_workbench_command_does_not_open_liepin_page_during_startup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -889,7 +891,6 @@ def test_workbench_command_reports_malformed_opencli_state(
     monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_POLL_SECONDS", 0)
     opencli_actions: list[str] = []
     launch_calls: list[list[str]] = []
-    state_calls = 0
 
     class Runtime:
         node = tmp_path / "node"
@@ -903,23 +904,10 @@ def test_workbench_command_reports_malformed_opencli_state(
             self.stderr = ""
 
     def fake_run(argv, **_kwargs):
-        nonlocal state_calls
         argv_list = list(argv)
         if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
             action = argv_list[-1]
             opencli_actions.append(action)
-            if action == "state":
-                state_calls += 1
-                if state_calls == 1:
-                    return Completed(
-                        stdout=json.dumps(
-                            {
-                                "ok": False,
-                                "action": "state",
-                                "safeReasonCode": "liepin_opencli_malformed_state",
-                            }
-                        )
-                    )
             return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
         launch_calls.append(argv_list)
         return Completed()
@@ -928,13 +916,13 @@ def test_workbench_command_reports_malformed_opencli_state(
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
-    assert main(["workbench"]) == 1
+    assert main(["workbench"]) == 0
 
-    assert opencli_actions == ["recover_connection", "open_liepin_tab", "state"]
-    assert launch_calls == []
+    assert opencli_actions == ["recover_connection"]
+    assert launch_calls[0][0] == "seektalent-ui-api"
 
 
-def test_workbench_command_reports_liepin_login_required(
+def test_workbench_command_leaves_liepin_login_check_to_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
@@ -965,15 +953,14 @@ def test_workbench_command_reports_liepin_login_required(
         return Completed()
 
     monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
-    assert main(["workbench"]) == 1
+    assert main(["workbench"]) == 0
 
     captured = capsys.readouterr()
-    assert "reason_code=liepin_opencli_login_required" in captured.err
-    assert "猎聘未登录" in captured.err
-    assert "action=state" in captured.err
-    assert launch_calls == []
+    assert "reason_code=liepin_opencli_login_required" not in captured.err
+    assert launch_calls[0][0] == "seektalent-ui-api"
 
 
 def test_inspect_json_hides_flywheel_root_in_prod(
