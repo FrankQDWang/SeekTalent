@@ -38,15 +38,32 @@ DOMI_OPENCLI_NODE_ENV_VARS = frozenset(
 
 _PASSTHROUGH_ENV_VARS = frozenset(
     {
+        "APPDATA",
+        "COMSPEC",
         "HOME",
+        "HOMEDRIVE",
+        "HOMEPATH",
         "LANG",
         "LC_ALL",
+        "LOCALAPPDATA",
+        "OPENCLI_PROFILE",
+        "OPENCLI_VERBOSE",
         "PATH",
+        "PATHEXT",
+        "ProgramData",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
         "SHELL",
+        "SystemRoot",
+        "TEMP",
+        "TMP",
         "TMPDIR",
         "USER",
+        "USERPROFILE",
+        "windir",
     }
 )
+_PASSTHROUGH_ENV_VAR_NAMES = frozenset(key.upper() for key in _PASSTHROUGH_ENV_VARS)
 
 
 def load_product_user_env(
@@ -68,7 +85,7 @@ def build_workbench_command_env(
     env_file: str | Path | None = None,
 ) -> dict[str, str]:
     source_env = os.environ if base_env is None else base_env
-    env = {key: value for key, value in source_env.items() if key in _PASSTHROUGH_ENV_VARS}
+    env = {key: value for key, value in source_env.items() if key.upper() in _PASSTHROUGH_ENV_VAR_NAMES}
     for key in PRODUCT_USER_ENV_VARS:
         value = source_env.get(key)
         if value:

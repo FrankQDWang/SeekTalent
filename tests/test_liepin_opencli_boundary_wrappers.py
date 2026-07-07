@@ -204,6 +204,26 @@ def test_opencli_browser_automation_maps_missing_command() -> None:
     assert result.safe_reason_code == "opencli_command_missing"
 
 
+def test_subprocess_opencli_runner_decodes_output_as_utf8_with_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from seektalent.opencli_browser.runtime import SubprocessOpenCliCommandRunner
+
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run(_argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(_argv, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    output = SubprocessOpenCliCommandRunner().run(("opencli", "daemon", "status"), timeout=10)
+
+    assert output == "ok"
+    assert captured_kwargs["encoding"] == "utf-8"
+    assert captured_kwargs["errors"] == "replace"
+
+
 def test_opencli_browser_automation_maps_subprocess_timeout() -> None:
     from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 

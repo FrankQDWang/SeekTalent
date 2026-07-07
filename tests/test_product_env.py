@@ -210,3 +210,62 @@ def test_build_workbench_command_env_preserves_domi_opencli_node_env(
     assert env["SEEKTALENT_OPENCLI_NODE"] == "/opt/domi/bin/node"
     assert env["SEEKTALENT_DOMI_NODE"] == "/opt/domi/current/node"
     assert env["DOMI_NODE"] == "/opt/domi/fallback/node"
+
+
+def test_build_workbench_command_env_preserves_windows_process_context_for_opencli(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    env = build_workbench_command_env(
+        {
+            "HOME": str(home),
+            "PATH": r"C:\Windows\system32",
+            "SEEKTALENT_TEXT_LLM_API_KEY": "test-key",
+            "USERPROFILE": r"C:\Users\ci39059",
+            "APPDATA": r"C:\Users\ci39059\AppData\Roaming",
+            "LOCALAPPDATA": r"C:\Users\ci39059\AppData\Local",
+            "TEMP": r"C:\Users\ci39059\AppData\Local\Temp",
+            "TMP": r"C:\Users\ci39059\AppData\Local\Temp",
+            "SystemRoot": r"C:\Windows",
+            "COMSPEC": r"C:\Windows\System32\cmd.exe",
+        }
+    )
+
+    assert env["USERPROFILE"] == r"C:\Users\ci39059"
+    assert env["APPDATA"] == r"C:\Users\ci39059\AppData\Roaming"
+    assert env["LOCALAPPDATA"] == r"C:\Users\ci39059\AppData\Local"
+    assert env["TEMP"] == r"C:\Users\ci39059\AppData\Local\Temp"
+    assert env["TMP"] == r"C:\Users\ci39059\AppData\Local\Temp"
+    assert env["SystemRoot"] == r"C:\Windows"
+    assert env["COMSPEC"] == r"C:\Windows\System32\cmd.exe"
+
+
+def test_build_workbench_command_env_preserves_platform_context_case_insensitively(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    env = build_workbench_command_env(
+        {
+            "HOME": str(home),
+            "Path": r"C:\Windows\system32",
+            "SEEKTALENT_TEXT_LLM_API_KEY": "test-key",
+            "SYSTEMROOT": r"C:\Windows",
+            "COMSPEC": r"C:\Windows\System32\cmd.exe",
+            "PROGRAMFILES": r"C:\Program Files",
+            "OPENCLI_PROFILE": "work-profile",
+        }
+    )
+
+    assert env["Path"] == r"C:\Windows\system32"
+    assert env["SYSTEMROOT"] == r"C:\Windows"
+    assert env["COMSPEC"] == r"C:\Windows\System32\cmd.exe"
+    assert env["PROGRAMFILES"] == r"C:\Program Files"
+    assert env["OPENCLI_PROFILE"] == "work-profile"

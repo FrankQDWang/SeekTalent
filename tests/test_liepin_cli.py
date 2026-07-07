@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import subprocess
 from types import SimpleNamespace
+from collections.abc import Mapping
 from pathlib import Path
+
+import pytest
 
 import seektalent.cli as cli
 import seektalent.liepin_smoke_cli as smoke_cli
@@ -40,6 +44,62 @@ def test_workbench_reason_message_covers_search_and_results_readiness() -> None:
         cli._workbench_reason_message("liepin_opencli_removed_config")
         == "检测到已移除的 Liepin OpenCLI 清理配置。请删除旧的 tab 清理设置后重试。"
     )
+
+
+def test_workbench_liepin_action_decodes_opencli_helper_output_as_utf8(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run(_argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        captured_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(
+            _argv,
+            0,
+            stdout='{"ok": true, "action": "status"}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    result = cli._run_workbench_liepin_action("status", env={"PATH": "test"})
+
+    assert result["ok"] is True
+    assert captured_kwargs["encoding"] == "utf-8"
+    assert captured_kwargs["errors"] == "replace"
+
+
+def test_workbench_preflight_timeout_allows_slow_windows_opencli_recover() -> None:
+    assert cli._WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS >= 60
+
+
+def test_workbench_preflight_opens_tab_after_transient_extension_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    actions: list[str] = []
+
+    def fake_action(
+        action: str,
+        *,
+        env: Mapping[str, str],
+        payload: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        del env, payload
+        actions.append(action)
+        if action == "recover_connection":
+            return {
+                "ok": False,
+                "action": action,
+                "safeReasonCode": "liepin_opencli_extension_disconnected",
+            }
+        return {"ok": True, "action": action, "safeReasonCode": "configured"}
+
+    monkeypatch.setattr(cli, "_run_workbench_liepin_action", fake_action)
+
+    result = cli._run_workbench_liepin_preflight_actions(env={})
+
+    assert result["ok"] is True
+    assert actions == ["recover_connection", "open_liepin_tab", "state"]
 
 
 def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> None:

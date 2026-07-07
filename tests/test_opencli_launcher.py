@@ -99,6 +99,28 @@ def test_domi_node_policy_uses_explicit_domi_node_without_downloading(
     assert runtime.opencli_main.name == "main.js"
 
 
+def test_domi_node_policy_accepts_domi_bundled_npm_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-node", exit_code=0)
+    _write_domi_bundled_npm_cli(domi_node.parent)
+    _write_managed_opencli(tmp_path / "runtime")
+    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
+    monkeypatch.setattr(
+        opencli_launcher,
+        "_ensure_managed_node",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Domi policy must not download managed Node")
+        ),
+    )
+
+    runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
+
+    assert runtime.node == domi_node
+
+
 def test_domi_node_policy_rejects_unusable_external_node(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -192,6 +214,36 @@ def test_opencli_install_env_excludes_provider_secrets(
     assert str(node.parent) in captured_env["PATH"]
 
 
+def test_opencli_install_uses_domi_bundled_npm_cli_when_npm_cmd_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    node = _write_fake_node(tmp_path / "domi-node", exit_code=0)
+    npm_cli = _write_domi_bundled_npm_cli(node.parent)
+    captured_argv: list[str] = []
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(argv, **_kwargs):
+        captured_argv.extend(str(part) for part in argv)
+        _write_managed_opencli(tmp_path / "runtime")
+        return Completed()
+
+    monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
+
+    opencli_launcher._ensure_managed_opencli(
+        tmp_path / "runtime",
+        node=node,
+        opencli_version=opencli_launcher.OPENCLI_VERSION,
+    )
+
+    assert captured_argv[:2] == [str(node), str(npm_cli)]
+    assert "install" in captured_argv
+
+
 def _write_managed_opencli(root: Path) -> Path:
     package_dir = root / "opencli" / opencli_launcher.OPENCLI_VERSION / "node_modules" / "@jackwener" / "opencli"
     main = package_dir / "dist" / "src" / "main.js"
@@ -225,3 +277,10 @@ def _write_fake_npm(bin_dir: Path) -> Path:
     npm.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     npm.chmod(0o755)
     return npm
+
+
+def _write_domi_bundled_npm_cli(node_dir: Path) -> Path:
+    npm_cli = node_dir / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
+    npm_cli.parent.mkdir(parents=True, exist_ok=True)
+    npm_cli.write_text("#!/usr/bin/env node\n", encoding="utf-8")
+    return npm_cli

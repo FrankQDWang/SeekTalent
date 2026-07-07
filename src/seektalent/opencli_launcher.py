@@ -107,7 +107,7 @@ def _ensure_external_node(node: Path) -> Path:
     if sys.platform != "win32" and not os.access(node, os.X_OK):
         raise BootstrapError(f"domi_node_missing: Node runtime is not executable: {node}")
     try:
-        _npm_for_node(node)
+        _npm_command_for_node(node)
         _probe_node_version(node)
     except BootstrapError as exc:
         message = str(exc)
@@ -179,12 +179,12 @@ def _ensure_managed_opencli(runtime_root: Path, *, node: Path, opencli_version: 
     package_json = install_dir / "node_modules" / "@jackwener" / "opencli" / "package.json"
     if main.exists() and _package_version(package_json) == opencli_version:
         return main
-    npm = _npm_for_node(node)
+    npm_command = _npm_command_for_node(node)
     install_dir.mkdir(parents=True, exist_ok=True)
     env = _opencli_subprocess_env(node_bin_dir=node.parent)
     completed = subprocess.run(
         (
-            str(npm),
+            *(str(part) for part in npm_command),
             "install",
             "--prefix",
             str(install_dir),
@@ -220,6 +220,16 @@ def _npm_for_node(node: Path) -> Path:
     if npm.exists():
         return npm
     raise BootstrapError(f"Node npm is missing beside Node runtime: {node}")
+
+
+def _npm_command_for_node(node: Path) -> tuple[Path, ...]:
+    try:
+        return (_npm_for_node(node),)
+    except BootstrapError:
+        npm_cli = node.parent / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
+        if npm_cli.exists():
+            return (node, npm_cli)
+        raise
 
 
 def _package_version(path: Path) -> str | None:

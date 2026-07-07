@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import sysconfig
 import threading
 import time
 from collections import deque
@@ -142,10 +143,11 @@ _WORKBENCH_OPENCLI_RECOVERABLE_REASONS = {
     "liepin_opencli_daemon_stale",
     "liepin_opencli_extension_disconnected",
     "liepin_opencli_status_unavailable",
+    "liepin_opencli_timeout",
 }
 _WORKBENCH_OPENCLI_STATUS_ATTEMPTS = 15
 _WORKBENCH_OPENCLI_STATUS_POLL_SECONDS = 1.0
-_WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS = 30
+_WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS = 90
 _WORKBENCH_PREFLIGHT_LIEPIN_URL = "https://h.liepin.com/search/getConditionItem#session"
 ROOT_HELP_EPILOG = """Primary workflow:
   1. seektalent doctor
@@ -1806,7 +1808,7 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
 
     reason = _workbench_action_reason(first)
     if reason in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
-        if not _restart_workbench_opencli_daemon(runtime, env=opencli_env):
+        if not _recover_workbench_opencli_daemon(runtime, env=opencli_env):
             _print_workbench_reason(
                 reason,
                 _workbench_reason_message(reason),
@@ -1841,7 +1843,7 @@ def _run_workbench_liepin_preflight_actions(
     env: Mapping[str, str],
 ) -> dict[str, object]:
     recovered = _run_workbench_liepin_action("recover_connection", env=env)
-    if not _workbench_action_ok(recovered):
+    if not _workbench_action_ok(recovered) and _workbench_action_reason(recovered) not in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
         return recovered
 
     opened = _run_workbench_liepin_action(
@@ -1867,13 +1869,15 @@ def _run_workbench_liepin_action(
             input=json.dumps(dict(payload or {}), ensure_ascii=False),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
             env=dict(env),
             timeout=_WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_timeout"}
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_status_unavailable"}
     output = (completed.stdout or "").strip()
     if not output:
@@ -1888,6 +1892,20 @@ def _run_workbench_liepin_action(
     if not isinstance(loaded, dict):
         return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_helper_invalid_output"}
     return loaded
+
+
+def _recover_workbench_opencli_daemon(runtime: object, *, env: Mapping[str, str]) -> bool:
+    if _restart_workbench_opencli_daemon(runtime, env=env):
+        status = _wait_for_workbench_opencli_status(env=env)
+        if _workbench_action_ok(status):
+            return True
+        if _workbench_action_reason(status) not in _WORKBENCH_OPENCLI_RECOVERABLE_REASONS:
+            return False
+        _stop_workbench_opencli_daemon(runtime, env=env)
+    if not _start_supervised_workbench_opencli_daemon(runtime, env=env):
+        return False
+    status = _wait_for_workbench_opencli_status(env=env)
+    return _workbench_action_ok(status)
 
 
 def _restart_workbench_opencli_daemon(runtime: object, *, env: Mapping[str, str]) -> bool:
@@ -1905,11 +1923,67 @@ def _restart_workbench_opencli_daemon(runtime: object, *, env: Mapping[str, str]
             env=restart_env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
     return completed.returncode == 0
+
+
+def _stop_workbench_opencli_daemon(runtime: object, *, env: Mapping[str, str]) -> None:
+    node = getattr(runtime, "node", None)
+    opencli_main = getattr(runtime, "opencli_main", None)
+    node_bin_dir = getattr(runtime, "node_bin_dir", None)
+    if node is None or opencli_main is None or node_bin_dir is None:
+        return
+    stop_env = dict(env)
+    stop_env["PATH"] = os.pathsep.join((str(node_bin_dir), stop_env.get("PATH", "")))
+    try:
+        subprocess.run(
+            (str(node), str(opencli_main), "daemon", "stop"),
+            check=False,
+            env=stop_env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+
+
+def _start_supervised_workbench_opencli_daemon(runtime: object, *, env: Mapping[str, str]) -> bool:
+    node = getattr(runtime, "node", None)
+    node_bin_dir = getattr(runtime, "node_bin_dir", None)
+    daemon_script = _workbench_opencli_daemon_script(runtime)
+    if node is None or node_bin_dir is None or daemon_script is None:
+        return False
+    daemon_env = dict(env)
+    daemon_env["PATH"] = os.pathsep.join((str(node_bin_dir), daemon_env.get("PATH", "")))
+    try:
+        subprocess.Popen(
+            (str(node), str(daemon_script)),
+            env=daemon_env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    return True
+
+
+def _workbench_opencli_daemon_script(runtime: object) -> Path | None:
+    opencli_main = getattr(runtime, "opencli_main", None)
+    if opencli_main is None:
+        return None
+    daemon_script = Path(opencli_main).with_name("daemon.js")
+    if daemon_script.exists():
+        return daemon_script
+    return None
 
 
 def _wait_for_workbench_opencli_status(*, env: Mapping[str, str]) -> dict[str, object]:
@@ -2039,6 +2113,11 @@ def _console_script_path(script_name: str) -> str:
     sibling = current_script.with_name(executable)
     if sibling.exists():
         return str(sibling)
+    scripts_dir = sysconfig.get_path("scripts")
+    if scripts_dir:
+        installed = Path(scripts_dir) / executable
+        if installed.exists():
+            return str(installed)
     return executable
 
 
