@@ -605,7 +605,7 @@ def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
 
     assert main(["workbench", "--port", "8123"]) == 0
 
-    assert opencli_actions == ["recover_connection"]
+    assert opencli_actions == ["status"]
     assert opencli_envs
     assert all(env is not None for env in opencli_envs)
     for env in opencli_envs:
@@ -660,19 +660,17 @@ def test_workbench_command_runs_opencli_preflight_before_launch(
     assert main(["workbench", "--port", "8123"]) == 0
 
     assert ensured == [True]
-    assert opencli_actions == ["recover_connection"]
+    assert opencli_actions == ["status"]
     assert launch_calls[0][0][0] == "seektalent-ui-api"
 
 
-def test_workbench_command_reports_opencli_extension_disconnected(
+def test_workbench_command_warns_opencli_extension_disconnected_without_restart(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_ATTEMPTS", 1)
-    monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_POLL_SECONDS", 0)
     restart_calls: list[list[str]] = []
     stop_calls: list[list[str]] = []
     launch_calls: list[list[str]] = []
@@ -695,7 +693,7 @@ def test_workbench_command_reports_opencli_extension_disconnected(
                 stdout=json.dumps(
                     {
                         "ok": False,
-                        "action": "recover_connection",
+                        "action": "status",
                         "safeReasonCode": "liepin_opencli_extension_disconnected",
                     }
                 )
@@ -712,39 +710,32 @@ def test_workbench_command_reports_opencli_extension_disconnected(
     monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
-    assert main(["workbench"]) == 1
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
+
+    assert main(["workbench"]) == 0
 
     captured = capsys.readouterr()
-    assert "reason_code=liepin_opencli_extension_disconnected" in captured.err
+    assert "warning_code=liepin_opencli_extension_disconnected" in captured.err
     assert "未检测到 Chrome 中的 OpenCLI 插件连接" in captured.err
-    assert restart_calls
-    assert stop_calls
-    assert launch_calls == []
+    assert restart_calls == []
+    assert stop_calls == []
+    assert launch_calls[0][0] == "seektalent-ui-api"
 
 
-def test_workbench_command_falls_back_to_supervised_daemon_when_restart_disconnects(
+def test_workbench_command_does_not_supervise_opencli_daemon_from_startup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_POLL_SECONDS", 0)
-    opencli_main_path = tmp_path / "opencli" / "dist" / "src" / "main.js"
-    daemon_js = opencli_main_path.with_name("daemon.js")
-    daemon_js.parent.mkdir(parents=True)
-    opencli_main_path.write_text("", encoding="utf-8")
-    daemon_js.write_text("", encoding="utf-8")
     restart_calls: list[list[str]] = []
     stop_calls: list[list[str]] = []
     popen_calls: list[list[str]] = []
     launch_calls: list[list[str]] = []
-    status_calls = 0
-    open_calls = 0
-    supervised_started = False
 
     class Runtime:
         node = tmp_path / "node"
-        opencli_main = opencli_main_path
+        opencli_main = tmp_path / "opencli-main.js"
         node_bin_dir = tmp_path
 
     class Completed:
@@ -753,51 +744,19 @@ def test_workbench_command_falls_back_to_supervised_daemon_when_restart_disconne
             self.stdout = stdout
             self.stderr = ""
 
-    class Process:
-        pid = 123
-
     def fake_run(argv, **_kwargs):
-        nonlocal open_calls, status_calls
         argv_list = list(argv)
         if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
             action = argv_list[-1]
-            if action == "recover_connection":
-                if supervised_started:
-                    return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
-                return Completed(
-                    stdout=json.dumps(
-                        {
-                            "ok": False,
-                            "action": action,
-                            "safeReasonCode": "liepin_opencli_extension_disconnected",
-                        }
-                    )
+            return Completed(
+                stdout=json.dumps(
+                    {
+                        "ok": False,
+                        "action": action,
+                        "safeReasonCode": "liepin_opencli_extension_disconnected",
+                    }
                 )
-            if action == "open_liepin_tab":
-                open_calls += 1
-                if open_calls == 1:
-                    return Completed(
-                        stdout=json.dumps(
-                            {
-                                "ok": False,
-                                "action": action,
-                                "safeReasonCode": "liepin_opencli_timeout",
-                            }
-                        )
-                    )
-            if action == "status":
-                status_calls += 1
-                if not supervised_started:
-                    return Completed(
-                        stdout=json.dumps(
-                            {
-                                "ok": False,
-                                "action": action,
-                                "safeReasonCode": "liepin_opencli_extension_disconnected",
-                            }
-                        )
-                    )
-            return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
+            )
         if argv_list[-2:] == ["daemon", "restart"]:
             restart_calls.append(argv_list)
             return Completed()
@@ -808,10 +767,8 @@ def test_workbench_command_falls_back_to_supervised_daemon_when_restart_disconne
         return Completed()
 
     def fake_popen(argv, **_kwargs):
-        nonlocal supervised_started
-        supervised_started = True
         popen_calls.append([str(part) for part in argv])
-        return Process()
+        raise AssertionError("workbench startup must not spawn OpenCLI daemon")
 
     monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
@@ -820,20 +777,18 @@ def test_workbench_command_falls_back_to_supervised_daemon_when_restart_disconne
 
     assert main(["workbench"]) == 0
 
-    assert restart_calls
-    assert stop_calls
-    assert popen_calls == [[str(tmp_path / "node"), str(daemon_js)]]
+    assert restart_calls == []
+    assert stop_calls == []
+    assert popen_calls == []
     assert launch_calls[0][0] == "seektalent-ui-api"
 
 
-def test_workbench_command_restarts_daemon_when_connection_recover_fails(
+def test_workbench_command_does_not_restart_daemon_when_status_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_POLL_SECONDS", 0)
-    status_calls = 0
     restart_calls: list[list[str]] = []
     launch_calls: list[list[str]] = []
 
@@ -849,23 +804,18 @@ def test_workbench_command_restarts_daemon_when_connection_recover_fails(
             self.stderr = ""
 
     def fake_run(argv, **_kwargs):
-        nonlocal status_calls
         argv_list = list(argv)
         if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
             action = argv_list[-1]
-            if action == "recover_connection":
-                status_calls += 1
-                if status_calls == 1:
-                    return Completed(
-                        stdout=json.dumps(
-                            {
-                                "ok": False,
-                                "action": "recover_connection",
-                                "safeReasonCode": "liepin_opencli_extension_disconnected",
-                            }
-                        )
-                    )
-            return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
+            return Completed(
+                stdout=json.dumps(
+                    {
+                        "ok": False,
+                        "action": action,
+                        "safeReasonCode": "liepin_opencli_extension_disconnected",
+                    }
+                )
+            )
         if argv_list[-2:] == ["daemon", "restart"]:
             restart_calls.append(argv_list)
             return Completed()
@@ -878,7 +828,7 @@ def test_workbench_command_restarts_daemon_when_connection_recover_fails(
 
     assert main(["workbench"]) == 0
 
-    assert restart_calls
+    assert restart_calls == []
     assert launch_calls[0][0] == "seektalent-ui-api"
 
 
@@ -888,7 +838,6 @@ def test_workbench_command_does_not_open_liepin_page_during_startup(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    monkeypatch.setattr("seektalent.cli._WORKBENCH_OPENCLI_STATUS_POLL_SECONDS", 0)
     opencli_actions: list[str] = []
     launch_calls: list[list[str]] = []
 
@@ -918,7 +867,7 @@ def test_workbench_command_does_not_open_liepin_page_during_startup(
 
     assert main(["workbench"]) == 0
 
-    assert opencli_actions == ["recover_connection"]
+    assert opencli_actions == ["status"]
     assert launch_calls[0][0] == "seektalent-ui-api"
 
 

@@ -93,7 +93,7 @@ def test_workbench_preflight_checks_opencli_connection_only(
     result = cli._run_workbench_liepin_preflight_actions(env={})
 
     assert result["ok"] is True
-    assert actions == ["recover_connection"]
+    assert actions == ["status"]
 
 
 def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> None:
