@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
+from time import perf_counter
 from typing import Literal, Protocol, cast
 from uuid import uuid4
 
@@ -62,10 +64,15 @@ REQUIREMENT_EXTRACT_FAILED_MESSAGE = "需求整理失败，请稍后重试。"
 RUNTIME_STATUS_UNAVAILABLE_MESSAGE = "暂时无法读取运行状态，请稍后重试。"
 RUNTIME_RESULTS_UNAVAILABLE_MESSAGE = "暂时无法读取运行结果，请稍后重试。"
 SERVICE_BOUNDARY_ERRORS = (RuntimeControlError, RuntimeError, ValueError, TypeError, KeyError, AttributeError)
+logger = logging.getLogger(__name__)
 
 
 class CandidateSummaryReadError(Exception):
     pass
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, int((perf_counter() - started_at) * 1000))
 
 
 class WorkbenchV2RequirementExtraction(Protocol):
@@ -374,11 +381,47 @@ class WorkbenchV2Service:
             ),
         )
         record = self.store.get_conversation(conversation_id)
-        output = await self.agent_loop.run_turn(
-            conversation_id=conversation_id,
-            context_summary=record.conversation.context_summary,
-            recent_events=record.events,
-            user_text=message,
+        logger.info(
+            "Workbench v2 user message persisted.",
+            extra={
+                "event_name": "workbench_v2_user_message_persisted",
+                "conversation_id": conversation_id,
+                "scope": scope,
+                "event_count": len(record.events),
+                "user_text_chars": len(message),
+                "context_summary_chars": len(record.conversation.context_summary or ""),
+            },
+        )
+        agent_started_at = perf_counter()
+        try:
+            output = await self.agent_loop.run_turn(
+                conversation_id=conversation_id,
+                context_summary=record.conversation.context_summary,
+                recent_events=record.events,
+                user_text=message,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Workbench v2 agent loop failed.",
+                extra={
+                    "event_name": "workbench_v2_agent_loop_failed",
+                    "conversation_id": conversation_id,
+                    "scope": scope,
+                    "duration_ms": _duration_ms(agent_started_at),
+                    "error_type": exc.__class__.__name__,
+                },
+            )
+            raise
+        logger.info(
+            "Workbench v2 agent loop completed.",
+            extra={
+                "event_name": "workbench_v2_agent_loop_completed",
+                "conversation_id": conversation_id,
+                "scope": scope,
+                "duration_ms": _duration_ms(agent_started_at),
+                "intent": output.intent,
+                "needs_clarification": output.needsClarification,
+            },
         )
         await to_thread.run_sync(
             partial(
@@ -550,9 +593,30 @@ class WorkbenchV2Service:
                 dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="status"),
             ),
         )
+        extract_started_at = perf_counter()
+        extract_log_extra = {
+            "conversation_id": conversation_id,
+            "scope": scope,
+            "job_title_chars": len(runtime_input.jobTitle),
+            "jd_chars": len(runtime_input.jd),
+            "notes_chars": len(runtime_input.notes or ""),
+        }
+        logger.info(
+            "Workbench v2 requirement extract started.",
+            extra={**extract_log_extra, "event_name": "workbench_v2_requirement_extract_started"},
+        )
         try:
             draft, requirement_sheet = self._extract_requirement_form(conversation_id, runtime_input)
-        except SERVICE_BOUNDARY_ERRORS:
+        except SERVICE_BOUNDARY_ERRORS as exc:
+            logger.warning(
+                "Workbench v2 requirement extract failed.",
+                extra={
+                    **extract_log_extra,
+                    "event_name": "workbench_v2_requirement_extract_failed",
+                    "duration_ms": _duration_ms(extract_started_at),
+                    "error_type": exc.__class__.__name__,
+                },
+            )
             self._append_service_error(
                 conversation_id,
                 code="workbench_v2_requirement_extract_failed",
@@ -561,6 +625,14 @@ class WorkbenchV2Service:
                 idempotency_key=idempotency_key,
             )
             return
+        logger.info(
+            "Workbench v2 requirement extract completed.",
+            extra={
+                **extract_log_extra,
+                "event_name": "workbench_v2_requirement_extract_completed",
+                "duration_ms": _duration_ms(extract_started_at),
+            },
+        )
         self.store.append_event(
             conversation_id,
             WorkbenchV2TranscriptEventInput(

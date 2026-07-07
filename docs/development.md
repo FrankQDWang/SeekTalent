@@ -153,7 +153,7 @@ python scripts/build_packaged_workbench.py
 
 ### Prepared-Machine Domi Workbench
 
-Use this path when the machine already has Domi installed and the operator can provide Domi Python, Domi Node, and a manually pasted Domi JWT. It runs the packaged Workbench through the Domi launcher, which sets the Domi LLM provider and Domi Node policy before starting the server.
+Use this path when the machine already has Domi installed and the operator can provide Domi Python, Domi Node, and a manually pasted Domi JWT. It runs the packaged Workbench through the Domi launcher, which sets the Domi LLM provider and normalized Domi Node path before starting the server.
 
 ```bash
 export DOMI_PYTHON="/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python"

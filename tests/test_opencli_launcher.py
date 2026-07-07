@@ -12,36 +12,35 @@ def test_managed_opencli_version_is_pinned_to_1_8_6() -> None:
     assert opencli_launcher.OPENCLI_VERSION == "1.8.6"
 
 
-def test_ensure_opencli_runtime_ignores_supported_system_node(
+def test_ensure_opencli_runtime_rejects_without_domi_node_even_if_system_node_exists(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     node = _write_fake_node(tmp_path / "bin", exit_code=0)
-    managed_node = _write_fake_node(tmp_path / "managed-bin", exit_code=0)
     _write_fake_npm(node.parent)
     _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("PATH", str(node.parent))
-    monkeypatch.setattr(opencli_launcher, "_ensure_managed_node", lambda *_args, **_kwargs: managed_node)
+    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
+    monkeypatch.delenv("DOMI_NODE", raising=False)
 
-    runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
-
-    assert runtime.node == managed_node
-    assert runtime.opencli_main.name == "main.js"
+    with pytest.raises(opencli_launcher.BootstrapError, match="domi_node_missing"):
+        opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
 
 
-def test_ensure_opencli_runtime_uses_managed_node_when_system_npm_is_missing(
+def test_ensure_opencli_runtime_does_not_download_replacement_node(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     _write_fake_node(tmp_path / "system-bin", exit_code=0)
-    managed_node = _write_fake_node(tmp_path / "managed-bin", exit_code=0)
     _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("PATH", str(tmp_path / "system-bin"))
-    monkeypatch.setattr(opencli_launcher, "_ensure_managed_node", lambda *_args, **_kwargs: managed_node)
+    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
+    monkeypatch.delenv("DOMI_NODE", raising=False)
 
-    runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
-
-    assert runtime.node == managed_node
+    with pytest.raises(opencli_launcher.BootstrapError, match="domi_node_missing"):
+        opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
 
 
 def test_launcher_delegates_to_managed_opencli(
@@ -64,7 +63,7 @@ def test_launcher_delegates_to_managed_opencli(
     assert argv[1:] == ["browser", "seektalent-liepin", "state"]
 
 
-def test_opencli_install_requires_managed_npm(
+def test_opencli_install_requires_npm_from_domi_node(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -76,22 +75,14 @@ def test_opencli_install_requires_managed_npm(
         opencli_launcher._npm_for_node(node)
 
 
-def test_domi_node_policy_uses_explicit_domi_node_without_downloading(
+def test_ensure_opencli_runtime_uses_explicit_domi_node_without_downloading(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
     _write_fake_npm(domi_node.parent)
     _write_managed_opencli(tmp_path / "runtime")
-    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
-    monkeypatch.setattr(
-        opencli_launcher,
-        "_ensure_managed_node",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Domi policy must not download managed Node")
-        ),
-    )
 
     runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
 
@@ -99,36 +90,123 @@ def test_domi_node_policy_uses_explicit_domi_node_without_downloading(
     assert runtime.opencli_main.name == "main.js"
 
 
-def test_domi_node_policy_accepts_domi_bundled_npm_cli(
+def test_existing_opencli_is_probed_with_domi_node_without_downloading(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    log_path = tmp_path / "node-argv.txt"
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0, log_path=log_path)
+    _write_fake_npm(domi_node.parent)
+    opencli_main = _write_managed_opencli(tmp_path / "runtime")
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
+
+    runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
+
+    assert runtime.node == domi_node
+    assert runtime.opencli_main == opencli_main
+    assert log_path.read_text(encoding="utf-8").splitlines() == [str(opencli_main), "--help"]
+
+
+def test_existing_opencli_does_not_require_npm_from_domi_node(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
+    opencli_main = _write_managed_opencli(tmp_path / "runtime")
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
+
+    runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
+
+    assert runtime.node == domi_node
+    assert runtime.opencli_main == opencli_main
+
+
+def test_missing_opencli_installs_pinned_cli_with_domi_node_and_probes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
+    npm = _write_fake_npm(domi_node.parent)
+    runtime_root = tmp_path / "runtime"
+    expected_main = (
+        runtime_root
+        / "opencli"
+        / opencli_launcher.OPENCLI_VERSION
+        / "node_modules"
+        / "@jackwener"
+        / "opencli"
+        / "dist"
+        / "src"
+        / "main.js"
+    )
+    calls: list[list[str]] = []
+
+    class Completed:
+        def __init__(self, *, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(argv, **_kwargs):
+        argv_list = [str(part) for part in argv]
+        calls.append(argv_list)
+        if argv_list == [str(domi_node), "--version"]:
+            return Completed(stdout="v24.16.0\n")
+        if argv_list[:2] == [str(npm), "install"]:
+            _write_managed_opencli(runtime_root)
+            return Completed()
+        if argv_list == [str(domi_node), str(expected_main), "--help"]:
+            return Completed(stdout="Usage: opencli\n")
+        raise AssertionError(f"Unexpected subprocess call: {argv_list}")
+
+    monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
+
+    runtime = opencli_launcher.ensure_opencli_runtime(
+        root=runtime_root,
+        env={"SEEKTALENT_DOMI_NODE": str(domi_node)},
+    )
+
+    assert runtime.node == domi_node
+    assert runtime.opencli_main == expected_main
+    assert any(call[:2] == [str(npm), "install"] for call in calls)
+    assert f"{opencli_launcher.OPENCLI_PACKAGE}@{opencli_launcher.OPENCLI_VERSION}" in calls[1]
+    assert calls[-1] == [str(domi_node), str(expected_main), "--help"]
+
+
+def test_existing_opencli_must_be_executable_by_domi_node(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=9)
+    _write_fake_npm(domi_node.parent)
+    _write_managed_opencli(tmp_path / "runtime")
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
+
+    with pytest.raises(opencli_launcher.BootstrapError, match="OpenCLI 1\\.8\\.6 usability probe failed"):
+        opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
+
+
+def test_ensure_opencli_runtime_accepts_domi_bundled_npm_cli(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     domi_node = _write_fake_node(tmp_path / "domi-node", exit_code=0)
     _write_domi_bundled_npm_cli(domi_node.parent)
     _write_managed_opencli(tmp_path / "runtime")
-    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
-    monkeypatch.setattr(
-        opencli_launcher,
-        "_ensure_managed_node",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Domi policy must not download managed Node")
-        ),
-    )
 
     runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
 
     assert runtime.node == domi_node
 
 
-def test_domi_node_policy_rejects_unusable_external_node(
+def test_ensure_opencli_runtime_rejects_unusable_domi_node(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
     _write_fake_npm(domi_node.parent)
     _write_managed_opencli(tmp_path / "runtime")
-    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
     version_probe_calls: list[tuple[str, ...]] = []
 
@@ -172,11 +250,10 @@ def test_node_version_probe_decodes_subprocess_output_as_utf8(
     assert captured_kwargs["errors"] == "replace"
 
 
-def test_domi_node_policy_requires_domi_node_env(
+def test_ensure_opencli_runtime_requires_domi_node_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
     monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
     monkeypatch.delenv("DOMI_NODE", raising=False)
@@ -193,7 +270,6 @@ def test_domi_node_env_accepts_node_bin_directory(
     domi_node = _write_fake_node(domi_bin, exit_code=0)
     _write_fake_npm(domi_bin)
     _write_managed_opencli(tmp_path / "runtime")
-    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
     monkeypatch.setenv("DOMI_NODE", str(domi_bin))
 
     runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")

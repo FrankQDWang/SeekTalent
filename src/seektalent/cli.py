@@ -9,7 +9,7 @@ import sys
 import sysconfig
 import threading
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping, MutableMapping, Sequence
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -1117,7 +1117,7 @@ def _inspect_payload() -> dict[str, object]:
                 "seektalent workbench --host 0.0.0.0 --lan --allowed-host recruiting.internal",
             ],
             "outputs": "Starts the local API server and serves the packaged Workbench frontend; preflight failures print reason_code diagnostics on stderr.",
-            "side_effects": "May download managed Node/OpenCLI under ~/.seektalent/opencli-runtime, open or reuse a Liepin browser tab, and create or update local Workbench data under the configured workspace root.",
+            "side_effects": "May download the pinned OpenCLI CLI package under ~/.seektalent/opencli-runtime using Domi Node, and create or update local Workbench data under the configured workspace root.",
         },
         "llm-prf-live-validate": {
             "description": "Run the manual live LLM PRF validation harness on checked input cases.",
@@ -1762,7 +1762,10 @@ def _doctor_command(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
+_WORKBENCH_DOMI_NODE_ENV_KEYS = ("SEEKTALENT_OPENCLI_NODE", "SEEKTALENT_DOMI_NODE", "DOMI_NODE")
+
+
+def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
     provider_label = str(env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL") or "bailian").strip().lower() or "bailian"
     if provider_label == "domi":
         if not str(env.get("SEEKTALENT_DOMI_JWT") or "").strip():
@@ -1777,10 +1780,12 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
             "未配置大模型 API Key。请在当前终端或 ~/.seektalent/.env 中设置 SEEKTALENT_TEXT_LLM_API_KEY。",
         )
         return False
+    if not _configure_workbench_domi_opencli_node(env):
+        return False
 
     try:
         launcher = importlib.import_module("seektalent.opencli_launcher")
-        launcher.ensure_opencli_runtime()
+        launcher.ensure_opencli_runtime(env=env)
     except Exception as exc:
         if exc.__class__.__name__ != "BootstrapError":
             raise
@@ -1790,14 +1795,27 @@ def _workbench_startup_preflight(env: Mapping[str, str]) -> bool:
         )
         return False
 
-    opencli_env = _workbench_opencli_env(env)
-    first = _run_workbench_liepin_preflight_actions(env=opencli_env)
-    if _workbench_action_ok(first):
-        return True
-
-    reason = _workbench_action_reason(first)
-    _print_workbench_warning(reason, _workbench_reason_message(reason), action=_workbench_action_name(first))
     return True
+
+
+def _configure_workbench_domi_opencli_node(env: MutableMapping[str, str]) -> bool:
+    node = _first_nonblank_env(env, _WORKBENCH_DOMI_NODE_ENV_KEYS)
+    if node is None:
+        _print_workbench_reason(
+            "domi_node_missing",
+            "未找到 Domi Node 运行时。请在当前终端设置 SEEKTALENT_DOMI_NODE 或 DOMI_NODE 后重试。",
+        )
+        return False
+    env["SEEKTALENT_OPENCLI_NODE"] = node
+    return True
+
+
+def _first_nonblank_env(env: Mapping[str, str], keys: Sequence[str]) -> str | None:
+    for key in keys:
+        value = env.get(key)
+        if value and value.strip():
+            return value.strip()
+    return None
 
 
 def _workbench_opencli_env(env: Mapping[str, str]) -> dict[str, str]:

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence, get_args
-import inspect
 
 import pytest
 from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet
@@ -422,6 +424,53 @@ def test_create_jd_conversation_appends_requirement_form(tmp_path: Path) -> None
             "runtime_input": WorkbenchV2RuntimeInput.model_validate(runtime_input),
         }
     ]
+
+
+def test_create_jd_conversation_logs_safe_timing_diagnostics(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="seektalent_workbench_v2.service")
+    store = _store(tmp_path)
+    runtime_input = {
+        "jobTitle": "AI 平台工程师",
+        "jd": "负责 Agent 工作流和 Python 后端。",
+        "notes": "杭州，5 年以上经验。",
+    }
+    agent = FakeAgentLoop(
+        _agent_output(
+            intent="extract_requirements",
+            message="我已整理需求，请确认表单。",
+            runtimeInput=runtime_input,
+        )
+    )
+    runtime = FakeRuntimeService()
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
+    user_text = "招一个 AI 平台工程师，负责 Agent 工作流和 Python 后端。"
+
+    view = asyncio.run(service.create_conversation(user_text, idempotency_key="create-jd-logs"))
+
+    event_names = [getattr(record, "event_name", None) for record in caplog.records]
+    assert "workbench_v2_user_message_persisted" in event_names
+    assert "workbench_v2_agent_loop_completed" in event_names
+    assert "workbench_v2_requirement_extract_started" in event_names
+    assert "workbench_v2_requirement_extract_completed" in event_names
+    agent_completed = next(
+        record for record in caplog.records if getattr(record, "event_name", None) == "workbench_v2_agent_loop_completed"
+    )
+    assert agent_completed.conversation_id == view.conversation.conversationId
+    assert agent_completed.intent == "extract_requirements"
+    assert agent_completed.duration_ms >= 0
+    extract_completed = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event_name", None) == "workbench_v2_requirement_extract_completed"
+    )
+    assert extract_completed.duration_ms >= 0
+    serialized_records = json.dumps([record.__dict__ for record in caplog.records], ensure_ascii=False, default=str)
+    assert user_text not in serialized_records
+    assert runtime_input["jd"] not in serialized_records
+    assert runtime_input["notes"] not in serialized_records
 
 
 def test_create_jd_with_runtime_words_still_uses_agent_intent(tmp_path: Path) -> None:

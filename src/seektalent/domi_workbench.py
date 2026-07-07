@@ -10,7 +10,6 @@ from seektalent.cli import main as seektalent_main
 DOMI_NODE_KEYS = ("SEEKTALENT_DOMI_NODE", "DOMI_NODE")
 _DOMI_ENV_KEYS = (
     "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL",
-    "SEEKTALENT_OPENCLI_NODE_POLICY",
     "SEEKTALENT_OPENCLI_NODE",
     "SEEKTALENT_DOMI_LLM_CHANNEL",
 )
@@ -44,7 +43,6 @@ def prepare_domi_env(env: MutableMapping[str, str]) -> tuple[str, str] | None:
         return "domi_node_missing", _NODE_MISSING_MESSAGE
 
     env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "domi"
-    env["SEEKTALENT_OPENCLI_NODE_POLICY"] = "domi"
     env["SEEKTALENT_OPENCLI_NODE"] = node
     env.setdefault("SEEKTALENT_DOMI_LLM_CHANNEL", "seek_talent")
     return None

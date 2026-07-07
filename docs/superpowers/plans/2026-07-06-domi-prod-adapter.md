@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the prepared-machine Domi path use Domi Python, Domi Node, and Domi JWT for PyPI Workbench startup while preserving the existing non-Domi managed runtime path.
+**Goal:** Make the prepared-machine Domi path use Domi Python, Domi Node, and Domi JWT for PyPI Workbench startup with no SeekTalent-managed replacement Node fallback.
 
-**Architecture:** Keep `seektalent workbench` as the core Workbench launch path. Add a thin `seektalent-domi` launcher that validates and normalizes Domi environment variables before delegating to Workbench. Keep OpenCLI package installation under SeekTalent's existing runtime root, but allow Node itself to come from Domi when Domi policy is selected.
+**Architecture:** Keep `seektalent workbench` as the core Workbench launch path. Add a thin `seektalent-domi` launcher that validates and normalizes Domi environment variables before delegating to Workbench. Keep OpenCLI package installation under SeekTalent's existing runtime root, but require Node itself to come from Domi.
 
 **Tech Stack:** Python 3.12+, Pydantic settings, pytest, uv build, console scripts, existing OpenCLI launcher.
 
@@ -24,7 +24,7 @@ docs/superpowers/specs/2026-07-06-domi-prod-adapter-design.md
 - Modify `tests/test_product_env.py`: prove `SEEKTALENT_PYTHON` is set to the current interpreter.
 - Modify `src/seektalent/cli.py`: keep reason codes stable and change Workbench preflight messages to Chinese.
 - Modify `tests/test_cli.py`: assert representative Chinese preflight messages.
-- Modify `src/seektalent/opencli_launcher.py`: add Domi Node policy and external Node resolution without removing managed Node.
+- Modify `src/seektalent/opencli_launcher.py`: require Domi Node for OpenCLI installation/probing and remove replacement Node fallback.
 - Modify `tests/test_opencli_launcher.py`: cover Domi Node success and missing-node failure.
 - Create `src/seektalent/domi_workbench.py`: validate Domi JWT/Node env, normalize env, and delegate to Workbench.
 - Modify `pyproject.toml`: expose `seektalent-domi`.
@@ -252,7 +252,7 @@ Expected: commit succeeds.
 
 ---
 
-### Task 3: Add Domi Node Policy To OpenCLI Launcher
+### Task 3: Hard-Cut OpenCLI Launcher To Domi Node
 
 **Files:**
 - Modify: `src/seektalent/opencli_launcher.py`
@@ -260,10 +260,10 @@ Expected: commit succeeds.
 
 - [ ] **Step 1: Write failing Domi Node tests**
 
-Add these tests after `test_ensure_opencli_runtime_uses_managed_node_when_system_npm_is_missing` in `tests/test_opencli_launcher.py`:
+Add these tests in `tests/test_opencli_launcher.py`:
 
 ```python
-def test_domi_node_policy_uses_explicit_domi_node_without_downloading(
+def test_ensure_opencli_runtime_uses_explicit_domi_node_without_downloading(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -272,12 +272,7 @@ def test_domi_node_policy_uses_explicit_domi_node_without_downloading(
     _write_fake_npm(domi_bin)
     _write_managed_opencli(tmp_path / "runtime")
 
-    def fail_managed_node(*_args, **_kwargs):
-        raise AssertionError("Domi policy must not download managed Node")
-
-    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
-    monkeypatch.setattr(opencli_launcher, "_ensure_managed_node", fail_managed_node)
 
     runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
 
@@ -285,11 +280,10 @@ def test_domi_node_policy_uses_explicit_domi_node_without_downloading(
     assert runtime.opencli_main.name == "main.js"
 
 
-def test_domi_node_policy_requires_domi_node_env(
+def test_ensure_opencli_runtime_requires_domi_node_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
     monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
     monkeypatch.delenv("DOMI_NODE", raising=False)
@@ -306,7 +300,6 @@ def test_domi_node_env_accepts_node_bin_directory(
     domi_node = _write_fake_node(domi_bin, exit_code=0)
     _write_fake_npm(domi_bin)
     _write_managed_opencli(tmp_path / "runtime")
-    monkeypatch.setenv("SEEKTALENT_OPENCLI_NODE_POLICY", "domi")
     monkeypatch.setenv("DOMI_NODE", str(domi_bin))
 
     runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
@@ -320,20 +313,19 @@ Run:
 
 ```bash
 uv run pytest \
-  tests/test_opencli_launcher.py::test_domi_node_policy_uses_explicit_domi_node_without_downloading \
-  tests/test_opencli_launcher.py::test_domi_node_policy_requires_domi_node_env \
+  tests/test_opencli_launcher.py::test_ensure_opencli_runtime_uses_explicit_domi_node_without_downloading \
+  tests/test_opencli_launcher.py::test_ensure_opencli_runtime_requires_domi_node_env \
   tests/test_opencli_launcher.py::test_domi_node_env_accepts_node_bin_directory \
   -q
 ```
 
-Expected: fail because Domi Node policy is not implemented.
+Expected: fail because Domi Node hard-cut resolution is not implemented.
 
 - [ ] **Step 3: Implement Domi Node resolution**
 
 In `src/seektalent/opencli_launcher.py`, add these constants after `PROVIDER_SECRET_ENV_VARS`:
 
 ```python
-OPENCLI_NODE_POLICY_ENV = "SEEKTALENT_OPENCLI_NODE_POLICY"
 EXPLICIT_OPENCLI_NODE_ENV = "SEEKTALENT_OPENCLI_NODE"
 DOMI_NODE_ENV_VARS = ("SEEKTALENT_DOMI_NODE", "DOMI_NODE")
 ```
@@ -344,25 +336,19 @@ Replace `ensure_opencli_runtime()` with:
 def ensure_opencli_runtime(
     *,
     root: Path | None = None,
-    node_version: str = NODE_VERSION,
     opencli_version: str = OPENCLI_VERSION,
 ) -> OpenCliRuntime:
     runtime_root = (root or RUNTIME_ROOT).expanduser()
-    runtime_root.mkdir(parents=True, exist_ok=True)
-    node_policy = (os.environ.get(OPENCLI_NODE_POLICY_ENV) or "").strip().lower()
     external_node = _configured_node_from_env()
+    if external_node is None:
+        raise BootstrapError(
+            "domi_node_missing: SEEKTALENT_OPENCLI_NODE, SEEKTALENT_DOMI_NODE, or DOMI_NODE is required"
+        )
+    runtime_root.mkdir(parents=True, exist_ok=True)
     with _runtime_lock(runtime_root):
-        if node_policy == "domi":
-            if external_node is None:
-                raise BootstrapError(
-                    "domi_node_missing: SEEKTALENT_DOMI_NODE or DOMI_NODE is required when SEEKTALENT_OPENCLI_NODE_POLICY=domi"
-                )
-            node = _ensure_external_node(external_node)
-        elif external_node is not None:
-            node = _ensure_external_node(external_node)
-        else:
-            node = _ensure_managed_node(runtime_root, node_version=node_version)
+        node = _ensure_domi_node(external_node)
         opencli_main = _ensure_managed_opencli(runtime_root, node=node, opencli_version=opencli_version)
+        _probe_opencli_cli(node=node, opencli_main=opencli_main, opencli_version=opencli_version)
     return OpenCliRuntime(node=node, opencli_main=opencli_main)
 ```
 
@@ -384,14 +370,15 @@ def _resolve_node_env_path(raw: str) -> Path:
     return path
 
 
-def _ensure_external_node(node: Path) -> Path:
-    if not node.exists():
+def _ensure_domi_node(node: Path) -> Path:
+    if not node.is_file():
         raise BootstrapError(f"domi_node_missing: Node runtime is not executable: {node}")
-    npm = _npm_for_node(node)
-    if not npm.exists():
-        raise BootstrapError(f"domi_node_missing: npm is missing beside Node runtime: {node}")
+    _probe_node_version(node)
     return node
 ```
+
+Delete the old SeekTalent-managed Node archive download path from `opencli_launcher.py`, including `NODE_VERSION`, `NODE_DIST_BASE_URL`, `_ensure_managed_node()`, archive checksum helpers, and Node archive extraction logic.
+Keep npm resolution inside the OpenCLI install branch only; an already-installed pinned OpenCLI CLI should only need Domi Node plus the `--help` usability probe.
 
 Replace `_npm_for_node()` with:
 
@@ -461,7 +448,7 @@ def test_prepare_domi_env_requires_node(monkeypatch) -> None:
     assert error == ("domi_node_missing", "未找到 Domi Node 运行时。请在当前终端设置 SEEKTALENT_DOMI_NODE 或 DOMI_NODE 后重试。")
 
 
-def test_prepare_domi_env_sets_provider_and_node_policy() -> None:
+def test_prepare_domi_env_sets_provider_and_node_path() -> None:
     env = {
         "SEEKTALENT_DOMI_JWT": "jwt",
         "DOMI_NODE": "/opt/domi/node/bin/node",
@@ -471,7 +458,6 @@ def test_prepare_domi_env_sets_provider_and_node_policy() -> None:
 
     assert error is None
     assert env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
-    assert env["SEEKTALENT_OPENCLI_NODE_POLICY"] == "domi"
     assert env["SEEKTALENT_OPENCLI_NODE"] == "/opt/domi/node/bin/node"
     assert env["SEEKTALENT_DOMI_LLM_CHANNEL"] == "seek_talent"
 
@@ -491,7 +477,7 @@ def test_domi_workbench_main_delegates_to_workbench(monkeypatch, capsys) -> None
 
     assert calls == [["workbench", "--port", "8022"]]
     assert os.environ["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
-    assert os.environ["SEEKTALENT_OPENCLI_NODE_POLICY"] == "domi"
+    assert os.environ["SEEKTALENT_OPENCLI_NODE"] == "/opt/domi/node/bin/node"
     assert capsys.readouterr().err == ""
 
 
@@ -557,7 +543,6 @@ def prepare_domi_env(env: MutableMapping[str, str]) -> tuple[str, str] | None:
         )
     env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "domi"
     env.setdefault("SEEKTALENT_DOMI_LLM_CHANNEL", "seek_talent")
-    env["SEEKTALENT_OPENCLI_NODE_POLICY"] = "domi"
     env["SEEKTALENT_OPENCLI_NODE"] = node
     return None
 
@@ -695,7 +680,7 @@ or:
 python -m seektalent.domi_workbench --port 8011
 ```
 
-This path sets `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` and `SEEKTALENT_OPENCLI_NODE_POLICY=domi` before starting Workbench. Missing Domi JWT or Domi Node fails before the server launches.
+This path sets `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` and `SEEKTALENT_OPENCLI_NODE=<resolved Domi Node path>` before starting Workbench. Missing Domi JWT or Domi Node fails before the server launches.
 ````
 
 - [ ] **Step 5: Update CLI docs**
@@ -712,7 +697,7 @@ SEEKTALENT_DOMI_JWT=<manually pasted Domi JWT>
 SEEKTALENT_DOMI_NODE=<path to Domi node executable or node bin directory>
 ```
 
-It sets Domi LLM and Domi Node policy variables, then delegates to `seektalent workbench` with the same command-line arguments.
+It sets Domi LLM and Domi Node path variables, then delegates to `seektalent workbench` with the same command-line arguments.
 ````
 
 - [ ] **Step 6: Run docs and focused packaging checks**
@@ -790,7 +775,7 @@ Windows manual verification is the same contract using `seektalent-domi.exe` or 
 
 ## Plan Self-Review
 
-- Spec coverage: the tasks cover helper Python, Chinese preflight messages, Domi Node policy, Domi launcher, packaging, docs, and Mac/Windows manual acceptance.
+- Spec coverage: the tasks cover helper Python, Chinese preflight messages, Domi Node hard-cut behavior, Domi launcher, packaging, docs, and Mac/Windows manual acceptance.
 - Scope: this stays under the prepared-machine adapter slice and does not implement Domi storage, native messaging, extension install, or `domi/` browser-backend replacement.
-- Type consistency: Domi launcher uses `prepare_domi_env()`, OpenCLI launcher uses `SEEKTALENT_OPENCLI_NODE_POLICY`, `SEEKTALENT_OPENCLI_NODE`, `SEEKTALENT_DOMI_NODE`, and `DOMI_NODE` consistently.
+- Type consistency: Domi launcher uses `prepare_domi_env()`, OpenCLI launcher uses `SEEKTALENT_OPENCLI_NODE`, `SEEKTALENT_DOMI_NODE`, and `DOMI_NODE` consistently.
 - Test coverage: automated tests cover deterministic env and packaging behavior; live browser and Windows checks remain manual by design.

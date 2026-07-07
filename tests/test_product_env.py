@@ -220,17 +220,60 @@ def test_build_workbench_command_env_preserves_domi_opencli_node_env(
             "PATH": "/usr/bin",
             "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL": "domi",
             "SEEKTALENT_DOMI_JWT": "domi-test-jwt",
-            "SEEKTALENT_OPENCLI_NODE_POLICY": "domi",
+            "SEEKTALENT_OPENCLI_NODE_POLICY": "legacy-domi-policy",
             "SEEKTALENT_OPENCLI_NODE": "/opt/domi/bin/node",
             "SEEKTALENT_DOMI_NODE": "/opt/domi/current/node",
             "DOMI_NODE": "/opt/domi/fallback/node",
         }
     )
 
-    assert env["SEEKTALENT_OPENCLI_NODE_POLICY"] == "domi"
+    assert "SEEKTALENT_OPENCLI_NODE_POLICY" not in env
     assert env["SEEKTALENT_OPENCLI_NODE"] == "/opt/domi/bin/node"
     assert env["SEEKTALENT_DOMI_NODE"] == "/opt/domi/current/node"
     assert env["DOMI_NODE"] == "/opt/domi/fallback/node"
+
+
+def test_build_workbench_command_env_preserves_domi_node_for_opencli_with_default_llm(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    env = build_workbench_command_env(
+        {
+            "HOME": str(home),
+            "PATH": "/usr/bin",
+            "SEEKTALENT_TEXT_LLM_API_KEY": "bailian-key",
+            "DOMI_NODE": "/opt/domi/fallback/node",
+        }
+    )
+
+    assert env["DOMI_NODE"] == "/opt/domi/fallback/node"
+
+
+def test_build_workbench_command_env_defaults_to_domi_provider_when_domi_jwt_is_present(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    env = build_workbench_command_env(
+        {
+            "HOME": str(home),
+            "PATH": "/usr/bin",
+            "SEEKTALENT_DOMI_JWT": "domi-test-jwt",
+            "SEEKTALENT_DOMI_NODE": "/opt/domi/current/node",
+        }
+    )
+
+    assert env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
+    assert env["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"
+    assert env["SEEKTALENT_DOMI_NODE"] == "/opt/domi/current/node"
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" not in env
 
 
 def test_build_workbench_command_env_preserves_windows_process_context_for_opencli(

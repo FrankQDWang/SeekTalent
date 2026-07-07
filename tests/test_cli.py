@@ -70,6 +70,10 @@ def _clear_cts_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SEEKTALENT_CTS_TENANT_SECRET", raising=False)
 
 
+def _set_workbench_domi_node(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(tmp_path / "domi-node"))
+
+
 def test_console_script_path_uses_python_scripts_dir(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -469,6 +473,7 @@ def test_workbench_command_runs_packaged_frontend_in_prod(
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    _set_workbench_domi_node(monkeypatch, tmp_path)
 
     class Completed:
         stdout = ""
@@ -490,7 +495,7 @@ def test_workbench_command_runs_packaged_frontend_in_prod(
         calls.append((argv, kwargs.get("env")))
         return Completed()
 
-    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda **_kwargs: Runtime())
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
@@ -573,59 +578,8 @@ def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL", "domi")
     monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(tmp_path / "domi-node"))
     monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
-    opencli_actions: list[str] = []
-    opencli_envs: list[dict[str, str] | None] = []
-    launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
-
-    class Runtime:
-        node = tmp_path / "node"
-        opencli_main = tmp_path / "opencli-main.js"
-        node_bin_dir = tmp_path
-
-    class Completed:
-        def __init__(self, *, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
-    def fake_run(argv, **kwargs):
-        argv_list = list(argv)
-        if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
-            action = argv_list[-1]
-            opencli_actions.append(action)
-            opencli_envs.append(kwargs.get("env"))
-            return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
-        launch_calls.append((argv_list, kwargs.get("env")))
-        return Completed()
-
-    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
-    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
-    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
-
-    assert main(["workbench", "--port", "8123"]) == 0
-
-    assert opencli_actions == ["status"]
-    assert opencli_envs
-    assert all(env is not None for env in opencli_envs)
-    for env in opencli_envs:
-        assert env is not None
-        assert "SEEKTALENT_DOMI_JWT" not in env
-        assert "SEEKTALENT_DOMI_LLM_BASE_URL" not in env
-        assert "SEEKTALENT_DOMI_LLM_CHANNEL" not in env
-    assert launch_calls[0][0][0] == "seektalent-ui-api"
-    assert launch_calls[0][1]["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
-    assert launch_calls[0][1]["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"
-
-
-def test_workbench_command_runs_opencli_preflight_before_launch(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    home = tmp_path / "home"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    opencli_actions: list[str] = []
     launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
     ensured: list[bool] = []
 
@@ -640,18 +594,18 @@ def test_workbench_command_runs_opencli_preflight_before_launch(
             self.stdout = stdout
             self.stderr = stderr
 
-    def ensure_runtime():
-        ensured.append(True)
-        return Runtime()
-
     def fake_run(argv, **kwargs):
         argv_list = list(argv)
         if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
-            action = argv_list[-1]
-            opencli_actions.append(action)
-            return Completed(stdout=json.dumps({"ok": True, "action": action, "safeReasonCode": "configured"}))
+            raise AssertionError("workbench startup must not run OpenCLI browser actions")
         launch_calls.append((argv_list, kwargs.get("env")))
         return Completed()
+
+    def ensure_runtime(**kwargs):
+        ensured.append(True)
+        assert "SEEKTALENT_OPENCLI_NODE_POLICY" not in kwargs["env"]
+        assert kwargs["env"]["SEEKTALENT_OPENCLI_NODE"] == str(tmp_path / "domi-node")
+        return Runtime()
 
     monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", ensure_runtime)
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
@@ -660,17 +614,110 @@ def test_workbench_command_runs_opencli_preflight_before_launch(
     assert main(["workbench", "--port", "8123"]) == 0
 
     assert ensured == [True]
-    assert opencli_actions == ["status"]
     assert launch_calls[0][0][0] == "seektalent-ui-api"
+    assert launch_calls[0][1]["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
+    assert launch_calls[0][1]["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"
+    assert "SEEKTALENT_OPENCLI_NODE_POLICY" not in launch_calls[0][1]
+    assert launch_calls[0][1]["SEEKTALENT_OPENCLI_NODE"] == str(tmp_path / "domi-node")
 
 
-def test_workbench_command_warns_opencli_extension_disconnected_without_restart(
+def test_workbench_command_requires_domi_node_for_domi_opencli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL", "domi")
+    monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
+    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
+    monkeypatch.delenv("DOMI_NODE", raising=False)
+    monkeypatch.setattr(
+        "seektalent.opencli_launcher.ensure_opencli_runtime",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("OpenCLI bootstrap must not run without Domi Node")),
+    )
+
+    assert main(["workbench", "--port", "8123"]) == 1
+
+    captured = capsys.readouterr()
+    assert "reason_code=domi_node_missing" in captured.err
+    assert "未找到 Domi Node 运行时" in captured.err
+
+
+def test_workbench_command_requires_domi_node_for_prod_opencli(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
+    monkeypatch.delenv("DOMI_NODE", raising=False)
+    monkeypatch.setattr(
+        "seektalent.opencli_launcher.ensure_opencli_runtime",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("OpenCLI bootstrap must not run without Domi Node")),
+    )
+
+    assert main(["workbench", "--port", "8123"]) == 1
+
+    captured = capsys.readouterr()
+    assert "reason_code=domi_node_missing" in captured.err
+    assert "未找到 Domi Node 运行时" in captured.err
+    assert "reason_code=liepin_opencli_bootstrap_failed" not in captured.err
+
+
+def test_workbench_command_does_not_run_opencli_preflight_before_launch(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    _set_workbench_domi_node(monkeypatch, tmp_path)
+    launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
+    ensured: list[bool] = []
+
+    class Runtime:
+        node = tmp_path / "node"
+        opencli_main = tmp_path / "opencli-main.js"
+        node_bin_dir = tmp_path
+
+    class Completed:
+        def __init__(self, *, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    def fake_run(argv, **kwargs):
+        argv_list = list(argv)
+        if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
+            raise AssertionError("workbench startup must not run OpenCLI browser actions")
+        launch_calls.append((argv_list, kwargs.get("env")))
+        return Completed()
+
+    def ensure_runtime(**_kwargs):
+        ensured.append(True)
+        return Runtime()
+
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", ensure_runtime)
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench", "--port", "8123"]) == 0
+
+    assert ensured == [True]
+    assert launch_calls[0][0][0] == "seektalent-ui-api"
+
+
+def test_workbench_command_does_not_check_opencli_extension_during_startup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    _set_workbench_domi_node(monkeypatch, tmp_path)
     restart_calls: list[list[str]] = []
     stop_calls: list[list[str]] = []
     launch_calls: list[list[str]] = []
@@ -689,15 +736,7 @@ def test_workbench_command_warns_opencli_extension_disconnected_without_restart(
     def fake_run(argv, **_kwargs):
         argv_list = list(argv)
         if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
-            return Completed(
-                stdout=json.dumps(
-                    {
-                        "ok": False,
-                        "action": "status",
-                        "safeReasonCode": "liepin_opencli_extension_disconnected",
-                    }
-                )
-            )
+            raise AssertionError("workbench startup must not run OpenCLI browser actions")
         if argv_list[-2:] == ["daemon", "restart"]:
             restart_calls.append(argv_list)
             return Completed()
@@ -707,7 +746,7 @@ def test_workbench_command_warns_opencli_extension_disconnected_without_restart(
         launch_calls.append(argv_list)
         return Completed()
 
-    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda **_kwargs: Runtime())
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
@@ -715,8 +754,7 @@ def test_workbench_command_warns_opencli_extension_disconnected_without_restart(
     assert main(["workbench"]) == 0
 
     captured = capsys.readouterr()
-    assert "warning_code=liepin_opencli_extension_disconnected" in captured.err
-    assert "未检测到 Chrome 中的 OpenCLI 插件连接" in captured.err
+    assert "warning_code=liepin_opencli_extension_disconnected" not in captured.err
     assert restart_calls == []
     assert stop_calls == []
     assert launch_calls[0][0] == "seektalent-ui-api"
@@ -728,6 +766,7 @@ def test_workbench_command_does_not_supervise_opencli_daemon_from_startup(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    _set_workbench_domi_node(monkeypatch, tmp_path)
     restart_calls: list[list[str]] = []
     stop_calls: list[list[str]] = []
     popen_calls: list[list[str]] = []
@@ -770,7 +809,7 @@ def test_workbench_command_does_not_supervise_opencli_daemon_from_startup(
         popen_calls.append([str(part) for part in argv])
         raise AssertionError("workbench startup must not spawn OpenCLI daemon")
 
-    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda **_kwargs: Runtime())
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
     monkeypatch.setattr("seektalent.cli.subprocess.Popen", fake_popen)
@@ -789,6 +828,7 @@ def test_workbench_command_does_not_restart_daemon_when_status_fails(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    _set_workbench_domi_node(monkeypatch, tmp_path)
     restart_calls: list[list[str]] = []
     launch_calls: list[list[str]] = []
 
@@ -822,7 +862,7 @@ def test_workbench_command_does_not_restart_daemon_when_status_fails(
         launch_calls.append(argv_list)
         return Completed()
 
-    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda **_kwargs: Runtime())
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
@@ -838,6 +878,7 @@ def test_workbench_command_does_not_open_liepin_page_during_startup(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    _set_workbench_domi_node(monkeypatch, tmp_path)
     opencli_actions: list[str] = []
     launch_calls: list[list[str]] = []
 
@@ -861,13 +902,13 @@ def test_workbench_command_does_not_open_liepin_page_during_startup(
         launch_calls.append(argv_list)
         return Completed()
 
-    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda **_kwargs: Runtime())
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
     assert main(["workbench"]) == 0
 
-    assert opencli_actions == ["status"]
+    assert opencli_actions == []
     assert launch_calls[0][0] == "seektalent-ui-api"
 
 
@@ -878,6 +919,7 @@ def test_workbench_command_leaves_liepin_login_check_to_runtime(
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    _set_workbench_domi_node(monkeypatch, tmp_path)
     launch_calls: list[list[str]] = []
 
     class Runtime:
@@ -901,7 +943,7 @@ def test_workbench_command_leaves_liepin_login_check_to_runtime(
         launch_calls.append(argv_list)
         return Completed()
 
-    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda: Runtime())
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", lambda **_kwargs: Runtime())
     monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 

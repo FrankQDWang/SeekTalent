@@ -27,7 +27,7 @@ Make `seektalent workbench` and the Domi-specific launcher run consistently when
 - Do not register Chrome native messaging hosts.
 - Do not install the OpenCLI Chrome extension.
 - Do not make a live Liepin recruiting run part of automated CI.
-- Do not remove the existing managed Node/OpenCLI path for normal non-Domi installs.
+- Do not download or run a SeekTalent-managed Node runtime in Prod/Domi Workbench.
 
 ## Runtime Contract
 
@@ -82,14 +82,13 @@ Reason codes remain stable for tests, support, and future integration.
 
 ## Cut 2: Domi Node And Domi Launcher
 
-`seektalent.opencli_launcher` keeps the existing managed Node/OpenCLI path unless the Domi path is explicitly selected.
+`seektalent.opencli_launcher` is hard-cut to Domi Node for the Prod/Domi Workbench path.
 
-The Domi path is selected when either of these is true:
+The Domi Node path is read from one of these variables:
 
-- `SEEKTALENT_OPENCLI_NODE_POLICY=domi`;
 - `SEEKTALENT_OPENCLI_NODE`, `SEEKTALENT_DOMI_NODE`, or `DOMI_NODE` is set.
 
-When Domi policy is active, missing Node is a hard startup failure with reason `domi_node_missing`. SeekTalent must not silently download managed Node in this mode.
+Missing Domi Node is a hard startup failure with reason `domi_node_missing`. SeekTalent must not silently download any replacement Node runtime.
 
 When a Domi Node path is supplied, OpenCLI itself can still be installed under SeekTalent's existing OpenCLI runtime root. The product premise is that Node comes from Domi; it does not require OpenCLI's npm package files to live inside the Domi application directory.
 
@@ -104,7 +103,6 @@ The launcher only normalizes the Domi environment and delegates to `seektalent w
 - require `SEEKTALENT_DOMI_JWT`;
 - require Domi Node through `SEEKTALENT_DOMI_NODE` or `DOMI_NODE`;
 - set `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi`;
-- set `SEEKTALENT_OPENCLI_NODE_POLICY=domi`;
 - set `SEEKTALENT_OPENCLI_NODE=<resolved Domi Node path>`;
 - delegate to the existing Workbench command with all CLI arguments preserved.
 
@@ -137,8 +135,8 @@ Automated tests cover the deterministic contract:
 
 - product env sets `SEEKTALENT_PYTHON` to `sys.executable`;
 - Workbench preflight emits Chinese messages while preserving reason codes;
-- Domi Node policy uses a supplied Domi Node and never calls managed Node download;
-- Domi Node policy fails with `domi_node_missing` when the Domi Node path is missing;
+- OpenCLI runtime setup requires a supplied Domi Node and never downloads a replacement Node runtime;
+- missing Domi Node fails with `domi_node_missing`;
 - `seektalent-domi` normalizes Domi env and delegates to Workbench;
 - the built wheel exposes the `seektalent-domi` console script.
 
@@ -163,7 +161,7 @@ Windows manual acceptance uses the same environment names and runs the installed
 Acceptance conditions:
 
 - missing Domi JWT fails before server launch with `reason_code=seektalent_domi_jwt_missing`;
-- missing Domi Node fails before managed Node download with `reason_code=domi_node_missing`;
+- missing Domi Node fails before server launch with `reason_code=domi_node_missing`;
 - OpenCLI helper subprocesses receive `SEEKTALENT_PYTHON=<Domi Python>`;
 - OpenCLI uses Domi Node;
 - Domi JWT is used as the LLM API key through the existing Domi LLM transport;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -348,6 +349,37 @@ def test_agents_sdk_builds_domi_workbench_agent_with_channel_query_without_netwo
     assert agent.model_settings.extra_body == {"enable_thinking": True, "reasoning_effort": "max"}
 
 
+def test_run_turn_logs_safe_latency_without_prompt_text(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger="seektalent_workbench_v2.agent_loop")
+    runner = SequencedRunner(VALID_CHAT_OUTPUT)
+    loop = BailianStrictWorkbenchV2AgentLoop(
+        settings=make_settings(text_llm_api_key="test-key"),
+        runner=runner,
+    )
+    user_text = "招 AI 平台工程师，负责 Agent 工作流和 Python 后端。"
+
+    output = asyncio.run(
+        loop.run_turn(
+            conversation_id="conversation_1",
+            context_summary=None,
+            recent_events=[],
+            user_text=user_text,
+        )
+    )
+
+    assert output.intent == "chat"
+    event_names = [getattr(record, "event_name", None) for record in caplog.records]
+    assert "workbench_v2_agent_turn_started" in event_names
+    assert "workbench_v2_agent_turn_completed" in event_names
+    completed = next(record for record in caplog.records if getattr(record, "event_name", None) == "workbench_v2_agent_turn_completed")
+    assert completed.duration_ms >= 0
+    assert completed.intent == "chat"
+    assert completed.provider_label == "bailian"
+    serialized_records = json.dumps([record.__dict__ for record in caplog.records], ensure_ascii=False, default=str)
+    assert user_text not in serialized_records
+    assert "test-key" not in serialized_records
+
+
 def test_run_turn_retries_once_after_agents_sdk_model_behavior_error() -> None:
     runner = SequencedRunner(
         ModelBehaviorError("invalid structured output"),
@@ -452,7 +484,8 @@ def test_run_turn_allows_only_one_schema_retry() -> None:
     assert len(runner.prompts) == 2
 
 
-def test_run_turn_does_not_retry_non_schema_model_behavior_error() -> None:
+def test_run_turn_does_not_retry_non_schema_model_behavior_error(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="seektalent_workbench_v2.agent_loop")
     runner = SequencedRunner(ModelBehaviorError("Invalid tool call from model"), VALID_CHAT_OUTPUT)
     loop = BailianStrictWorkbenchV2AgentLoop(
         settings=make_settings(text_llm_api_key="test-key"),
@@ -470,9 +503,12 @@ def test_run_turn_does_not_retry_non_schema_model_behavior_error() -> None:
         )
 
     assert len(runner.prompts) == 1
+    failed = next(record for record in caplog.records if getattr(record, "event_name", None) == "workbench_v2_agent_turn_failed")
+    assert failed.error_type == "ModelBehaviorError"
 
 
-def test_run_turn_does_not_retry_non_schema_runtime_errors() -> None:
+def test_run_turn_does_not_retry_non_schema_runtime_errors(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="seektalent_workbench_v2.agent_loop")
     runner = SequencedRunner(TimeoutError("request timed out"), VALID_CHAT_OUTPUT)
     loop = BailianStrictWorkbenchV2AgentLoop(
         settings=make_settings(text_llm_api_key="test-key"),
@@ -490,6 +526,8 @@ def test_run_turn_does_not_retry_non_schema_runtime_errors() -> None:
         )
 
     assert len(runner.prompts) == 1
+    failed = next(record for record in caplog.records if getattr(record, "event_name", None) == "workbench_v2_agent_turn_failed")
+    assert failed.error_type == "TimeoutError"
 
 
 def test_run_turn_does_not_retry_validation_error_raised_by_runner() -> None:

@@ -36,7 +36,7 @@ SEEKTALENT_TEXT_LLM_API_KEY=
 
 All other runtime, output, cleanup, source, OpenCLI, Liepin, and model settings use product defaults.
 
-For installed PyPI users, `seektalent workbench` also prepares the managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` when needed. The OpenCLI Chrome extension and Liepin login are still user-owned browser state; startup checks them and reports a `reason_code=...` diagnostic if either is unavailable.
+For installed PyPI users, `seektalent workbench` uses Domi Node to prepare the pinned OpenCLI CLI package under `~/.seektalent/opencli-runtime` when needed. It does not download a replacement Node runtime. The OpenCLI Chrome extension and Liepin login are still user-owned browser state; runtime source actions report stable `reason_code=...` diagnostics if either is unavailable.
 
 ## Prepared-Machine Domi Workbench
 
@@ -57,7 +57,7 @@ seektalent-domi --port 8011
 python -m seektalent.domi_workbench --port 8011
 ```
 
-The launcher sets `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` and `SEEKTALENT_OPENCLI_NODE_POLICY=domi` before delegating to the Workbench. It fails before server launch if the Domi JWT or Domi Node path is missing.
+The launcher sets `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` and `SEEKTALENT_OPENCLI_NODE=<resolved Domi Node path>` before delegating to the Workbench. It fails before server launch if the Domi JWT or Domi Node path is missing.
 
 ## Source Checkout Starter Env Snapshot
 

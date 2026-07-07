@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Literal, Protocol, Sequence
 
 from agents import Agent, AsyncOpenAI, ModelSettings, OpenAIChatCompletionsModel, Runner, Tool, function_tool
@@ -24,6 +27,8 @@ MAX_CONTEXT_SUMMARY_CHARS = 2000
 MAX_USER_TEXT_CHARS = 4000
 MAX_EVENT_PAYLOAD_JSON_CHARS = 2000
 MAX_RECENT_EVENTS = 20
+WORKBENCH_AGENT_SLOW_LOG_SECONDS = 30.0
+logger = logging.getLogger(__name__)
 
 WorkbenchV2Intent = Literal[
     "chat",
@@ -220,16 +225,68 @@ class BailianStrictWorkbenchV2AgentLoop:
             user_text=user_text,
         )
         runner = self.runner or _DefaultAgentRunner()
+        started_at = perf_counter()
+        log_extra = _agent_turn_log_extra(
+            config,
+            conversation_id=conversation_id,
+            context_summary=context_summary,
+            recent_events=recent_events,
+            user_text=user_text,
+        )
+        logger.info(
+            "Workbench v2 agent turn started.",
+            extra={**log_extra, "event_name": "workbench_v2_agent_turn_started"},
+        )
+        schema_retry_count = 0
         try:
-            result = await runner.run(agent, prompt)
+            result = await _run_agent_attempt(
+                runner=runner,
+                agent=agent,
+                prompt=prompt,
+                turn_started_at=started_at,
+                log_extra=log_extra,
+                attempt="initial",
+            )
         except ModelBehaviorError as exc:
             if not _is_schema_model_behavior_error(exc):
+                _log_agent_turn_failed(started_at, log_extra, exc, schema_retry_count=schema_retry_count)
                 raise
-            return await _run_schema_retry(runner=runner, agent=agent, original_prompt=prompt, validation_error=str(exc))
+            schema_retry_count = 1
+            try:
+                output = await _run_schema_retry(
+                    runner=runner,
+                    agent=agent,
+                    original_prompt=prompt,
+                    validation_error=str(exc),
+                    turn_started_at=started_at,
+                    log_extra=log_extra,
+                )
+            except Exception as retry_exc:
+                _log_agent_turn_failed(started_at, log_extra, retry_exc, schema_retry_count=schema_retry_count)
+                raise
+            _log_agent_turn_completed(started_at, log_extra, output, schema_retry_count=schema_retry_count)
+            return output
+        except Exception as exc:
+            _log_agent_turn_failed(started_at, log_extra, exc, schema_retry_count=schema_retry_count)
+            raise
         try:
-            return _validate_agent_result(result)
+            output = _validate_agent_result(result)
         except ValidationError as exc:
-            return await _run_schema_retry(runner=runner, agent=agent, original_prompt=prompt, validation_error=str(exc))
+            schema_retry_count = 1
+            try:
+                output = await _run_schema_retry(
+                    runner=runner,
+                    agent=agent,
+                    original_prompt=prompt,
+                    validation_error=str(exc),
+                    turn_started_at=started_at,
+                    log_extra=log_extra,
+                )
+            except Exception as retry_exc:
+                _log_agent_turn_failed(started_at, log_extra, retry_exc, schema_retry_count=schema_retry_count)
+                raise
+        _log_agent_turn_completed(started_at, log_extra, output, schema_retry_count=schema_retry_count)
+        return output
 
 
 def _build_agent(config: ResolvedTextModelConfig) -> Agent:
@@ -369,10 +426,120 @@ async def _run_schema_retry(
     agent: Agent,
     original_prompt: str,
     validation_error: str,
+    turn_started_at: float,
+    log_extra: dict[str, object],
 ) -> WorkbenchV2AgentOutput:
     retry_prompt = _render_schema_retry_prompt(original_prompt=original_prompt, validation_error=validation_error)
-    retry_result = await runner.run(agent, retry_prompt)
+    retry_result = await _run_agent_attempt(
+        runner=runner,
+        agent=agent,
+        prompt=retry_prompt,
+        turn_started_at=turn_started_at,
+        log_extra=log_extra,
+        attempt="schema_retry",
+    )
     return _validate_agent_result(retry_result)
+
+
+async def _run_agent_attempt(
+    *,
+    runner: WorkbenchV2AgentRunner,
+    agent: Agent,
+    prompt: str,
+    turn_started_at: float,
+    log_extra: dict[str, object],
+    attempt: str,
+) -> object:
+    attempt_started_at = perf_counter()
+    task = asyncio.create_task(runner.run(agent, prompt))
+    done, _ = await asyncio.wait({task}, timeout=WORKBENCH_AGENT_SLOW_LOG_SECONDS)
+    if not done:
+        logger.warning(
+            "Workbench v2 agent turn still waiting.",
+            extra={
+                **log_extra,
+                "event_name": "workbench_v2_agent_turn_still_waiting",
+                "attempt": attempt,
+                "duration_ms": _duration_ms(turn_started_at),
+                "attempt_duration_ms": _duration_ms(attempt_started_at),
+            },
+        )
+    result = await task
+    logger.info(
+        "Workbench v2 agent turn attempt completed.",
+        extra={
+            **log_extra,
+            "event_name": "workbench_v2_agent_turn_attempt_completed",
+            "attempt": attempt,
+            "duration_ms": _duration_ms(turn_started_at),
+            "attempt_duration_ms": _duration_ms(attempt_started_at),
+        },
+    )
+    return result
+
+
+def _agent_turn_log_extra(
+    config: ResolvedTextModelConfig,
+    *,
+    conversation_id: str,
+    context_summary: str | None,
+    recent_events: Sequence[WorkbenchV2TranscriptEvent],
+    user_text: str,
+) -> dict[str, object]:
+    return {
+        "conversation_id": conversation_id,
+        "provider_label": config.provider_label,
+        "endpoint_kind": config.endpoint_kind,
+        "endpoint_region": config.endpoint_region,
+        "model_id": config.model_id,
+        "domi_llm_channel": config.domi_llm_channel,
+        "context_summary_chars": len(context_summary or ""),
+        "recent_event_count": len(recent_events),
+        "user_text_chars": len(user_text),
+    }
+
+
+def _log_agent_turn_completed(
+    started_at: float,
+    log_extra: dict[str, object],
+    output: WorkbenchV2AgentOutput,
+    *,
+    schema_retry_count: int,
+) -> None:
+    logger.info(
+        "Workbench v2 agent turn completed.",
+        extra={
+            **log_extra,
+            "event_name": "workbench_v2_agent_turn_completed",
+            "duration_ms": _duration_ms(started_at),
+            "intent": output.intent,
+            "needs_clarification": output.needsClarification,
+            "schema_retry_count": schema_retry_count,
+        },
+    )
+
+
+def _log_agent_turn_failed(
+    started_at: float,
+    log_extra: dict[str, object],
+    exc: BaseException,
+    *,
+    schema_retry_count: int,
+) -> None:
+    logger.warning(
+        "Workbench v2 agent turn failed.",
+        extra={
+            **log_extra,
+            "event_name": "workbench_v2_agent_turn_failed",
+            "duration_ms": _duration_ms(started_at),
+            "error_type": exc.__class__.__name__,
+            "schema_retry_count": schema_retry_count,
+        },
+    )
+
+
+def _duration_ms(started_at: float) -> int:
+    return max(0, int((perf_counter() - started_at) * 1000))
 
 
 def _strip_string(value: object) -> object:

@@ -29,7 +29,6 @@ DOMI_LLM_ENV_VARS = frozenset(
 
 DOMI_OPENCLI_NODE_ENV_VARS = frozenset(
     {
-        "SEEKTALENT_OPENCLI_NODE_POLICY",
         "SEEKTALENT_OPENCLI_NODE",
         "SEEKTALENT_DOMI_NODE",
         "DOMI_NODE",
@@ -98,6 +97,7 @@ def build_workbench_command_env(
     env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] = "opencli"
     env["SEEKTALENT_PYTHON"] = sys.executable
     load_product_user_env(env, env_file=env_file)
+    _default_to_domi_provider_when_jwt_is_present(env)
     _preserve_domi_opencli_node_env(env, source_env)
     _prune_unused_llm_credentials(env)
     env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = DEFAULT_LIEPIN_OPENCLI_COMMAND
@@ -114,10 +114,16 @@ def _prune_unused_llm_credentials(env: MutableMapping[str, str]) -> None:
         env.pop(key, None)
 
 
-def _preserve_domi_opencli_node_env(env: MutableMapping[str, str], source_env: Mapping[str, str]) -> None:
-    provider_label = str(env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL") or "bailian").strip().lower() or "bailian"
-    if provider_label != "domi":
+def _default_to_domi_provider_when_jwt_is_present(env: MutableMapping[str, str]) -> None:
+    if env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"):
         return
+    if str(env.get("SEEKTALENT_TEXT_LLM_API_KEY") or "").strip():
+        return
+    if str(env.get("SEEKTALENT_DOMI_JWT") or "").strip():
+        env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "domi"
+
+
+def _preserve_domi_opencli_node_env(env: MutableMapping[str, str], source_env: Mapping[str, str]) -> None:
     for key in DOMI_OPENCLI_NODE_ENV_VARS:
         value = source_env.get(key)
         if value and value.strip():
