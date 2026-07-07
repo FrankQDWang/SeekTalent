@@ -9,9 +9,7 @@ from dataclasses import dataclass
 from fnmatch import fnmatch
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
-from typing import TextIO
-
-import fcntl
+from typing import BinaryIO, TextIO
 from ulid import ULID
 
 from .models import ArtifactKind, ArtifactManifest, ArtifactStatus, ChildArtifactRef, LogicalArtifactEntry
@@ -331,9 +329,43 @@ def _locked_partition_index(index_path: Path):
     lock_path = index_path.with_name(f"{index_path.name}.lock")
     with _partition_index_lock(index_path):
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        with lock_path.open("a+b") as handle:
+            _lock_file(handle)
             try:
                 yield
             finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _unlock_file(handle)
+
+
+def _lock_file(handle: BinaryIO) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    raise RuntimeError(f"unsupported OS for artifact partition index lock: {os.name}")
+
+
+def _unlock_file(handle: BinaryIO) -> None:
+    if os.name == "posix":
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    raise RuntimeError(f"unsupported OS for artifact partition index lock: {os.name}")
