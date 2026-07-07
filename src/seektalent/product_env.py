@@ -53,6 +53,7 @@ _PASSTHROUGH_ENV_VARS = frozenset(
         "ProgramData",
         "ProgramFiles",
         "ProgramFiles(x86)",
+        "PYTHONPATH",
         "SHELL",
         "SystemRoot",
         "TEMP",

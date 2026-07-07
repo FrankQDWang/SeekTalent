@@ -117,6 +117,27 @@ def test_build_workbench_command_env_sets_helper_python_to_current_interpreter(
     assert env["SEEKTALENT_PYTHON"] == sys.executable
 
 
+def test_build_workbench_command_env_preserves_pythonpath_for_prefix_installs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    env = build_workbench_command_env(
+        {
+            "HOME": str(home),
+            "PATH": "/usr/bin",
+            "PYTHONPATH": "/home/user/.seektalent/python-prefix/0.7.17/Lib/site-packages",
+            "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL": "domi",
+            "SEEKTALENT_DOMI_JWT": "domi-test-jwt",
+        }
+    )
+
+    assert env["PYTHONPATH"] == "/home/user/.seektalent/python-prefix/0.7.17/Lib/site-packages"
+
+
 def test_build_workbench_command_env_ignores_stale_seektalent_runtime_env(
     tmp_path: Path,
     monkeypatch,
