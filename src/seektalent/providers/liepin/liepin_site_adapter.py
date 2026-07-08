@@ -291,11 +291,12 @@ class LiepinSiteAdapter:
         status = self.status()
         if not status.ok:
             reason = _opencli_safe_reason(status.safe_reason_code, default="liepin_opencli_status_unavailable")
-            return _session_status(
-                connection_id=connection_id,
-                status=_session_status_for_liepin_reason(reason),
-                safe_reason_code=reason,
-            )
+            if reason not in _RECOVERABLE_CONNECTION_REASONS:
+                return _session_status(
+                    connection_id=connection_id,
+                    status=_session_status_for_liepin_reason(reason),
+                    safe_reason_code=reason,
+                )
         try:
             opened = self.open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)
         except OpenCliBrowserError as exc:
