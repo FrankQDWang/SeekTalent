@@ -20,7 +20,11 @@ from seektalent.providers.liepin.liepin_opencli_policy import (
     LIEPIN_OPENCLI_ALLOWED_HOSTS,
     LIEPIN_RECRUITER_SEARCH_URLS,
 )
-from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
+from seektalent.providers.liepin.liepin_site_adapter import (
+    LiepinOpenCliSiteConfig,
+    LiepinOpenCliTimingRecorder,
+    LiepinSiteAdapter,
+)
 
 
 _REMOVED_CLEANUP_ENV_KEYS = (
@@ -88,7 +92,13 @@ def _runner_from_env() -> LiepinSiteAdapter:
     return LiepinSiteAdapter(
         browser_config=browser_config,
         site_config=site_config,
-        automation=OpenCliBrowserAutomation(config=browser_config),
+        automation=OpenCliBrowserAutomation(
+            config=browser_config,
+            timing_recorder=LiepinOpenCliTimingRecorder(
+                artifact_root=site_config.artifact_root,
+                output_mode=os.environ.get("SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE") or "prod",
+            ),
+        ),
     )
 
 

@@ -15,6 +15,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
+    OpenCliBrowserTiming,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
     LIEPIN_OPENCLI_ALLOWED_HOSTS,
@@ -24,6 +25,7 @@ from seektalent.providers.liepin.liepin_opencli_policy import (
 from seektalent.providers.liepin.liepin_site_payloads import cards_envelope
 from seektalent.providers.liepin.liepin_site_adapter import (
     LiepinOpenCliSiteConfig,
+    LiepinOpenCliTimingRecorder,
     LiepinSiteAdapter,
     build_observation,
     bucket_text,
@@ -398,6 +400,75 @@ def _runner(
             commands=commands,
         ),
     )
+
+
+def test_liepin_opencli_timing_recorder_skips_prod_artifact(tmp_path: Path) -> None:
+    recorder = LiepinOpenCliTimingRecorder(artifact_root=tmp_path)
+
+    recorder.record(
+        OpenCliBrowserTiming(
+            command="browser.fill",
+            session="seektalent-liepin",
+            argv_len=6,
+            duration_ms=12.5,
+            ok=True,
+        )
+    )
+
+    assert not (tmp_path / "protected" / "opencli-timing").exists()
+
+
+def test_liepin_opencli_timing_recorder_writes_safe_dev_artifact(tmp_path: Path) -> None:
+    recorder = LiepinOpenCliTimingRecorder(artifact_root=tmp_path, output_mode="dev")
+
+    recorder.record(
+        OpenCliBrowserTiming(
+            command="browser.fill",
+            session="seektalent-liepin",
+            argv_len=6,
+            duration_ms=12.5,
+            ok=True,
+        )
+    )
+
+    timing_files = list((tmp_path / "protected" / "opencli-timing").glob("*.jsonl"))
+    assert len(timing_files) == 1
+    raw_log = timing_files[0].read_text(encoding="utf-8")
+    record = json.loads(raw_log)
+    assert record["command"] == "browser.fill"
+    assert record["session"] == "seektalent-liepin"
+    assert record["ok"] is True
+    assert record["argv_len"] == 6
+    assert record["duration_ms"] == 12.5
+    assert "safe_reason_code" not in record
+    assert "敏感关键词" not in raw_log
+
+
+def test_liepin_opencli_timing_recorder_persists_automation_metadata_without_argv_text(tmp_path: Path) -> None:
+    commands = FakeCommands(
+        outputs={("opencli", "browser", "seektalent-liepin", "fill", "26", "敏感关键词"): '{"filled":true}'}
+    )
+    browser_config = OpenCliBrowserConfig(
+        command=("opencli",),
+        session="seektalent-liepin",
+        timeout_seconds=10,
+        pacing_enabled=False,
+    )
+    automation = OpenCliBrowserAutomation(
+        config=browser_config,
+        commands=commands,
+        timing_recorder=LiepinOpenCliTimingRecorder(artifact_root=tmp_path, output_mode="dev"),
+    )
+
+    automation.fill(target_args=("26", "敏感关键词"), text_size=5)
+
+    raw_log = next((tmp_path / "protected" / "opencli-timing").glob("*.jsonl")).read_text(encoding="utf-8")
+    record = json.loads(raw_log)
+    assert record["command"] == "browser.fill"
+    assert record["session"] == "seektalent-liepin"
+    assert record["argv_len"] == 6
+    assert record["ok"] is True
+    assert "敏感关键词" not in raw_log
 
 
 def _single_tab_list(*, page_id: str = "page-1", url: str = LIEPIN_SEARCH_URL) -> str:
@@ -2421,7 +2492,7 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     )
     click_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "click", "29"))
     assert fill_index < click_index
-    assert ("opencli", "browser", "seektalent-liepin", "state") in commands.calls[fill_index + 1 : click_index]
+    assert ("opencli", "browser", "seektalent-liepin", "state") not in commands.calls[fill_index + 1 : click_index]
 
 
 def test_search_liepin_cards_ignores_add_resume_copy_without_closing_it(tmp_path: Path) -> None:
@@ -2518,7 +2589,11 @@ def test_search_liepin_cards_probes_around_search_and_filter_mutations(tmp_path:
     for call in mutating_calls:
         assert call in commands.calls
     assert _has_probe_between(commands.calls, 0, commands.calls.index(mutating_calls[0]))
-    for previous, current in zip(mutating_calls, mutating_calls[1:]):
+    for previous, current in (
+        (tab_new_call, fill_call),
+        (search_click_call, filter_menu_call),
+        (filter_menu_call, option_click_call),
+    ):
         previous_index = commands.calls.index(previous)
         current_index = commands.calls.index(current)
         assert _has_probe_between(commands.calls, previous_index + 1, current_index)
@@ -2586,6 +2661,160 @@ def test_search_liepin_cards_trace_uses_verified_search_filter_phase_actions(tmp
     assert any(step["step_name"] == "apply_filters" and step["status"] == "completed" for step in workflow_steps)
     assert any(step["step_name"] == "submit_search" and step["status"] == "completed" for step in workflow_steps)
     assert any(step["step_name"] == "observe_cards" and step["status"] == "completed" for step in workflow_steps)
+
+
+def test_search_liepin_cards_success_path_uses_state_conditions_not_fixed_time_waits(tmp_path: Path) -> None:
+    state_before = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = "[41]<button><span>城市</span></button>\n王** 男 34岁 工作5年 硕士 上海"
+    state_city_menu = "[41]<button><span>城市</span></button>\n[44]<label>上海</label>"
+    state_after_city = "已选 上海\nid=resultList\n王** 男 34岁 工作5年 硕士 上海"
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                state_after_search,
+                state_city_menu,
+                state_after_city,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "城市"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "44"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": "上海"},
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert [
+        call
+        for call in commands.calls
+        if len(call) >= 6 and call[:4] == ("opencli", "browser", "seektalent-liepin", "wait") and call[4] == "time"
+    ] == []
+
+
+def test_search_liepin_cards_waits_for_result_evidence_after_stale_search_form(tmp_path: Path) -> None:
+    class ResultReadyCommands(FakeCommands):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.result_ready = False
+
+        def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
+            call = tuple(argv)
+            if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]:
+                assert self.result_ready, "structured cards must not be probed from a stale search form"
+            if call == ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"):
+                self.result_ready = True
+            return super().run(argv, timeout=timeout, env=env)
+
+    state_before = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    stale_search_form = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>\n"
+        "URL: https://h.liepin.com/search/getConditionItem#session"
+    )
+    result_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "id=resultList\n"
+        "共 1 位人选\n"
+        "王** 男 40岁 工作14年 硕士 上海\n"
+        "求职期望：上海 数据开发专家"
+    )
+    commands = ResultReadyCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                stale_search_form,
+                result_state,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "succeeded"
+    wait_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"))
+    eval_index = next(index for index, call in enumerate(commands.calls) if len(call) >= 4 and call[3] == "eval")
+    assert wait_index < eval_index
+
+
+def test_search_liepin_cards_does_not_treat_filter_only_state_as_result_ready(tmp_path: Path) -> None:
+    class NoProbeCommands(FakeCommands):
+        def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
+            call = tuple(argv)
+            if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]:
+                raise AssertionError("filter-only state must not trigger card extraction")
+            return super().run(argv, timeout=timeout, env=env)
+
+    state_before = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    filter_only_state = "\n".join(
+        [
+            "URL: https://h.liepin.com/search/getConditionItem#session",
+            "[10]<label>目前城市：</label>",
+            "[20]<label>期望城市：</label>",
+            "[30]<label>教育经历：</label>",
+            "[40]<label>统招要求：</label>",
+            "[50]<label>院校要求：</label>",
+        ]
+    )
+    commands = NoProbeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                filter_only_state,
+                filter_only_state,
+                filter_only_state,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "blocked"
+    assert ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList") in commands.calls
 
 
 def test_search_liepin_filter_failure_exposes_only_safe_reason_codes(tmp_path: Path) -> None:
@@ -2710,14 +2939,14 @@ def test_search_liepin_cards_retries_transient_status_after_search_click(tmp_pat
     commands = FakeCommands(
         outputs={
             **_current_window_open_outputs(page_id="page-1"),
-            ("opencli", "browser", "seektalent-liepin", "state"): [state_before, state_before, state_after],
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                subprocess.CalledProcessError(1, ["opencli"]),
+                state_after,
+            ],
             ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
             ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
-            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): [
-                "{}",
-                subprocess.CalledProcessError(1, ["opencli"]),
-            ],
-            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
         }
     )
 
@@ -3420,7 +3649,14 @@ def test_capture_liepin_detail_resume_waits_until_detail_page_is_ready(tmp_path:
                         "URL: about:blank url: about:blank title: viewport: 1512x707 --- interactive: 0",
                         detail_state,
                     ],
-                    ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+                    (
+                        "opencli",
+                        "browser",
+                        "seektalent-liepin",
+                        "wait",
+                        "selector",
+                        "#resume-detail-basic-info",
+                    ): "{}",
                     ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
                     ),
@@ -3446,9 +3682,22 @@ def test_capture_liepin_detail_resume_waits_until_detail_page_is_ready(tmp_path:
     captured = _runner(commands, lease_dir=tmp_path).capture_liepin_detail_resume(source_run_id="run-1", rank=1)
 
     assert captured.ok is True
-    assert commands.calls.index(("opencli", "browser", "seektalent-liepin", "wait", "time", "2")) < next(
+    wait_call = (
+        "opencli",
+        "browser",
+        "seektalent-liepin",
+        "wait",
+        "selector",
+        "#resume-detail-basic-info",
+    )
+    assert commands.calls.index(wait_call) < next(
         index for index, call in enumerate(commands.calls) if len(call) >= 4 and call[3] == "eval"
     )
+    assert [
+        call
+        for call in commands.calls
+        if len(call) >= 6 and call[:4] == ("opencli", "browser", "seektalent-liepin", "wait") and call[4] == "time"
+    ] == []
 
 
 def test_capture_liepin_detail_resume_rejects_blank_detail_probe(tmp_path: Path) -> None:
@@ -3596,8 +3845,14 @@ def test_search_liepin_cards_applies_native_filters_before_reading_cards(tmp_pat
         "value": "上海",
         "ok": True,
     } in trace["events"]
-    click_search_index = commands.calls.index(
-        ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索")
+    click_search_index = next(
+        index
+        for index, call in enumerate(commands.calls)
+        if call
+        in {
+            ("opencli", "browser", "seektalent-liepin", "click", "29"),
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"),
+        }
     )
     assert click_search_index < len(commands.calls)
     filter_events = [
@@ -3742,6 +3997,7 @@ def test_search_liepin_cards_clicks_filters_in_named_sections(tmp_path: Path) ->
         "[29]<button><span>搜 索</span></button>"
     )
     state_after_search = """
+id=resultList
 [10]<label>目前城市：</label>
 [11]<label>北京</label>
 [20]<label>期望城市：</label>
@@ -4376,6 +4632,86 @@ def test_search_liepin_cards_retries_transient_native_filter_status(tmp_path: Pa
     } in trace["events"]
 
 
+def test_search_liepin_cards_waits_for_results_after_native_filter_refresh_before_probe(tmp_path: Path) -> None:
+    class ReadyAwareCommands(FakeCommands):
+        def __init__(self, **kwargs) -> None:
+            super().__init__(**kwargs)
+            self.ready_seen = False
+
+        def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
+            call = tuple(argv)
+            if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]:
+                self.calls.append(call)
+                self.envs.append(env)
+                if self.ready_seen:
+                    return _structured_cards_probe_json("70")
+                return _empty_structured_cards_probe_json()
+            if call == ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"):
+                self.ready_seen = True
+            output = super().run(argv, timeout=timeout, env=env)
+            if call == ("opencli", "browser", "seektalent-liepin", "state") and self.ready_seen:
+                return state_after_cards
+            return output
+
+    state_before = (
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = "id=resultList\n[41]<button><span>城市</span></button>"
+    state_city_menu = "[41]<button><span>城市</span></button>\n[44]<label>北京</label>"
+    state_after_filter = "已选 北京\n正在加载\n"
+    state_after_cards = "id=resultList\n共 1 位人选\n王** 男 40岁 工作14年 硕士 北京\n求职期望：北京 数据开发专家"
+    commands = ReadyAwareCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_after_search,
+                state_city_menu,
+                state_after_filter,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "搜 索"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "城市"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "44"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "text", "北京"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": "北京"},
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert envelope["cards_returned"] == 1
+    wait_selector_call = ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList")
+    assert wait_selector_call in commands.calls
+    wait_selector_index = commands.calls.index(wait_selector_call)
+    structured_probe_index = next(
+        index
+        for index, call in enumerate(commands.calls)
+        if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]
+    )
+    assert wait_selector_index < structured_probe_index
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert any(
+        event.get("action_kind") == "observe_results_after_native_filters"
+        and event.get("ready") is False
+        and event.get("ok") is True
+        for event in trace["events"]
+    )
+
+
 def test_extract_liepin_card_summaries_strips_opencli_accessibility_markup() -> None:
     text = (
         "[247]<span title=智能排序>智能排序</span>\n"
@@ -4801,3 +5137,37 @@ def test_cli_runner_reads_lease_dir_env(monkeypatch: pytest.MonkeyPatch, tmp_pat
     runner = opencli_browser_cli._runner_from_env()
 
     assert runner._site_config.lease_dir == tmp_path
+
+
+def test_cli_runner_from_env_wires_prod_timing_policy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", "opencli")
+    monkeypatch.setenv("SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE", "prod")
+    monkeypatch.setenv("SEEKTALENT_PI_ARTIFACT_ROOT", str(tmp_path))
+    commands = FakeCommands(
+        outputs={("opencli", "browser", "seektalent-liepin", "fill", "26", "敏感关键词"): '{"filled":true}'}
+    )
+    runner = opencli_browser_cli._runner_from_env()
+    runner._automation.commands = commands
+
+    result = runner.fill(target="26", text="敏感关键词")
+
+    assert result.ok is True
+    assert not (tmp_path / "protected" / "opencli-timing").exists()
+
+
+def test_cli_runner_from_env_wires_dev_timing_policy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", "opencli")
+    monkeypatch.setenv("SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE", "dev")
+    monkeypatch.setenv("SEEKTALENT_PI_ARTIFACT_ROOT", str(tmp_path))
+    commands = FakeCommands(
+        outputs={("opencli", "browser", "seektalent-liepin", "fill", "26", "敏感关键词"): '{"filled":true}'}
+    )
+    runner = opencli_browser_cli._runner_from_env()
+    runner._automation.commands = commands
+
+    result = runner.fill(target="26", text="敏感关键词")
+
+    assert result.ok is True
+    raw_log = next((tmp_path / "protected" / "opencli-timing").glob("*.jsonl")).read_text(encoding="utf-8")
+    assert "browser.fill" in raw_log
+    assert "敏感关键词" not in raw_log

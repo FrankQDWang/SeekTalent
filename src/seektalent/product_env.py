@@ -92,9 +92,11 @@ def build_workbench_command_env(
             env[key] = value
     env["SEEKTALENT_WORKSPACE_ROOT"] = str(Path.home())
     env["SEEKTALENT_RUNTIME_MODE"] = "prod"
+    env["SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE"] = "prod"
     env["SEEKTALENT_PROVIDER_NAME"] = "liepin"
     env["SEEKTALENT_LIEPIN_WORKER_MODE"] = "opencli"
     env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] = "opencli"
+    env["SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED"] = "false"
     env["SEEKTALENT_PYTHON"] = sys.executable
     load_product_user_env(env, env_file=env_file)
     _default_to_domi_provider_when_jwt_is_present(env)

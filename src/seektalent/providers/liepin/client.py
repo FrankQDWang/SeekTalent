@@ -372,7 +372,11 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
     from seektalent.opencli_browser.contracts import OpenCliBrowserConfig
     from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
-    from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
+    from seektalent.providers.liepin.liepin_site_adapter import (
+        LiepinOpenCliSiteConfig,
+        LiepinOpenCliTimingRecorder,
+        LiepinSiteAdapter,
+    )
 
     browser_config = OpenCliBrowserConfig(
         command=settings.liepin_opencli_command_argv,
@@ -396,7 +400,13 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
             runner=LiepinSiteAdapter(
                 browser_config=browser_config,
                 site_config=site_config,
-                automation=OpenCliBrowserAutomation(config=browser_config),
+                automation=OpenCliBrowserAutomation(
+                    config=browser_config,
+                    timing_recorder=LiepinOpenCliTimingRecorder(
+                        artifact_root=site_config.artifact_root,
+                        output_mode=settings.runtime_artifact_output_mode,
+                    ),
+                ),
             )
         ),
         connection_id="liepin-opencli",

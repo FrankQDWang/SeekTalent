@@ -57,6 +57,9 @@ def test_build_workbench_command_env_adds_product_keys_and_internal_liepin_secre
     env = build_workbench_command_env({}, env_file=env_file)
 
     assert env["SEEKTALENT_WORKSPACE_ROOT"] == str(home)
+    assert env["SEEKTALENT_RUNTIME_MODE"] == "prod"
+    assert env["SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE"] == "prod"
+    assert env["SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED"] == "false"
     assert env["SEEKTALENT_TEXT_LLM_API_KEY"] == "user-text-key"
     assert "SEEKTALENT_CTS_TENANT_KEY" not in env
     assert "SEEKTALENT_CTS_TENANT_SECRET" not in env

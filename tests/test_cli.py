@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import threading
 import time
 from pathlib import Path
@@ -509,6 +510,10 @@ def test_workbench_command_runs_packaged_frontend_in_prod(
     assert argv[argv.index("--liepin-worker-mode") + 1] == "opencli"
     assert argv[argv.index("--liepin-browser-action-backend") + 1] == "opencli"
     assert "--liepin-opencli-command" not in argv
+    assert shlex.split(env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"]) == [
+        str(Runtime.node),
+        str(Runtime.opencli_main),
+    ]
     for name in (
         "SEEKTALENT_LIEPIN_API_TOKEN",
         "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET",
@@ -517,6 +522,52 @@ def test_workbench_command_runs_packaged_frontend_in_prod(
         assert env[name]
         assert env[name] not in {"local-development", "local-development-liepin-api-token"}
     assert (home / ".seektalent" / "workbench-secrets.env").exists()
+
+
+def test_workbench_command_builds_windows_safe_domi_node_opencli_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    domi_node = r"C:\Users\ci39059\AppData\Roaming\Domi Runtime\node\node.exe"
+    opencli_main = r"C:\Users\ci39059\.seektalent\opencli runtime\opencli\main.js"
+    launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", domi_node)
+
+    class Completed:
+        stdout = ""
+        stderr = ""
+        returncode = 0
+
+    class Runtime:
+        node_bin_dir = tmp_path
+
+        def __init__(self) -> None:
+            self.opencli_main = opencli_main
+
+    def ensure_runtime(**kwargs):
+        assert kwargs["env"]["SEEKTALENT_OPENCLI_NODE"] == domi_node
+        return Runtime()
+
+    def fake_run(argv, **kwargs):
+        argv_list = list(argv)
+        if "seektalent.providers.liepin.opencli_browser_cli" in argv_list:
+            raise AssertionError("workbench startup must not run OpenCLI browser actions")
+        launch_calls.append((argv_list, kwargs.get("env")))
+        return Completed()
+
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", ensure_runtime)
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench", "--port", "8123"]) == 0
+
+    env = launch_calls[0][1]
+    assert env is not None
+    assert shlex.split(env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"]) == [domi_node, opencli_main]
+    assert "seektalent.opencli_launcher" not in env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"]
 
 
 def test_workbench_command_requires_text_llm_key_before_launch(

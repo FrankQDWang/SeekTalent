@@ -4,6 +4,7 @@ import json
 import hashlib
 import os
 import random
+import re
 import tempfile
 import threading
 import time
@@ -19,11 +20,13 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
+    OpenCliBrowserTiming,
 )
 from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
 )
+from seektalent_runtime_control.artifact_policy import RuntimeArtifactPolicy, normalize_artifact_output_mode
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
 from seektalent.providers.liepin.opencli_filter_planning import (
     LIEPIN_FILTER_SECTION_LABELS,
@@ -113,6 +116,39 @@ class LiepinOpenCliSiteConfig:
     lease_dir: Path | None = None
     artifact_root: Path | None = None
     detail_open_timeout_seconds: int = 90
+
+
+@dataclass(frozen=True)
+class LiepinOpenCliTimingRecorder:
+    artifact_root: Path | None = None
+    output_mode: object = "prod"
+
+    def record(self, timing: OpenCliBrowserTiming) -> None:
+        if not RuntimeArtifactPolicy(normalize_artifact_output_mode(self.output_mode)).writes_local_debug_artifacts:
+            return
+        env_root = os.environ.get("SEEKTALENT_PI_ARTIFACT_ROOT")
+        root = self.artifact_root or (Path(env_root) if env_root else None)
+        if root is None:
+            return
+        try:
+            trace_dir = root / "protected" / "opencli-timing"
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            record: dict[str, object] = {
+                "schema_version": "seektalent.opencli_timing.v1",
+                "ts": time.time(),
+                "pid": os.getpid(),
+                "command": timing.command,
+                "session": timing.session,
+                "argv_len": timing.argv_len,
+                "duration_ms": timing.duration_ms,
+                "ok": timing.ok,
+            }
+            if timing.safe_reason_code is not None:
+                record["safe_reason_code"] = timing.safe_reason_code
+            with (trace_dir / f"{os.getpid()}.jsonl").open("a", encoding="utf-8") as file:
+                file.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+        except OSError:
+            return
 
 
 _RECOVERABLE_CONNECTION_REASONS = {
@@ -242,6 +278,37 @@ def _search_url_ready(snapshot: LiepinStateSnapshot) -> bool:
 
 def _search_state_nonterminal(snapshot: LiepinStateSnapshot) -> bool:
     return bool(snapshot.text.strip())
+
+
+def _search_state_ready_for_card_extraction(snapshot: LiepinStateSnapshot) -> bool:
+    if not snapshot.ok:
+        return False
+    if not _search_state_nonterminal(snapshot):
+        return False
+    if _search_state_is_loading(snapshot.text):
+        return False
+    return _search_state_has_result_evidence(snapshot.text)
+
+
+def _search_state_has_result_evidence(text: str) -> bool:
+    return (
+        _looks_like_liepin_search_result_page(text)
+        or bool(extract_liepin_card_summaries(text, max_cards=1))
+        or bool(_rank_liepin_detail_targets(text, max_cards=1))
+        or _looks_like_liepin_candidate_result_text(text)
+    )
+
+
+def _looks_like_liepin_candidate_result_text(text: str) -> bool:
+    compact = " ".join(text.split())
+    if "求职期望" in compact and "工作" in compact:
+        return True
+    return re.search(r"(?:男|女|[\u4e00-\u9fa5*＊]{1,12}).{0,30}\d+\s*岁.{0,30}工作\s*\d+\s*年", compact) is not None
+
+
+def _search_state_is_loading(text: str) -> bool:
+    compact = "".join(text.split())
+    return any(marker in compact for marker in ("正在加载", "加载中", "请稍候", "稍后"))
 
 
 class LiepinSiteAdapter:
@@ -556,6 +623,15 @@ class LiepinSiteAdapter:
         output = self._run_browser_command("wait", ("time", str(seconds)))
         self._touch_lease()
         return OpenCliBrowserResult(ok=True, action="wait_time", private_output=output)
+
+    def _wait_for_text_condition(self, text: str) -> None:
+        _validate_native_filter_label(text)
+        self._run_browser_command("wait", ("text", text))
+        self._touch_lease()
+
+    def _wait_for_detail_resume_condition(self) -> None:
+        self._run_browser_command("wait", ("selector", "#resume-detail-basic-info"))
+        self._touch_lease()
 
     def apply_liepin_native_filters(
         self,
@@ -1017,7 +1093,6 @@ class LiepinSiteAdapter:
                             "safe_reason_code": first_state.safe_reason_code,
                         }
                     )
-                    self.wait_time(seconds=2)
                     first_state = self.state()
                     events.append(
                         {"action_kind": "observe_after_unready_retry", "route_kind": "search", "ok": first_state.ok}
@@ -1037,7 +1112,7 @@ class LiepinSiteAdapter:
                         )
                     ),
                     precondition=_search_url_ready,
-                    action=lambda: _result_from_opencli(self.wait_time(seconds=3)),
+                    action=lambda: TransitionResult(ok=True),
                     observe_post_state=observe_search_ready,
                     postcondition=_search_state_nonterminal,
                     safe_reason_code="liepin_opencli_search_not_ready",
@@ -1124,7 +1199,6 @@ class LiepinSiteAdapter:
                         if exc.safe_reason_code == "liepin_opencli_stale_ref":
                             retry_event["safe_reason_code"] = exc.safe_reason_code
                         events.append(retry_event)
-                        self.wait_time(seconds=2)
                         fill_retry_state = self.state()
                         events.append(
                             {
@@ -1144,7 +1218,7 @@ class LiepinSiteAdapter:
 
             def observe_after_fill() -> LiepinStateSnapshot:
                 nonlocal click_ready_state
-                click_ready_state = self.state()
+                click_ready_state = fill_retry_state or first_state
                 events.append(
                     {
                         "action_kind": "observe_before_click_search",
@@ -1209,7 +1283,6 @@ class LiepinSiteAdapter:
                                 "safe_reason_code": exc.safe_reason_code,
                             }
                         )
-                        self.wait_time(seconds=2)
                         click_retry_state = self.state()
                         events.append(
                             {
@@ -1255,33 +1328,12 @@ class LiepinSiteAdapter:
             final_state: OpenCliBrowserResult | None = None
 
             def observe_results_action() -> TransitionResult:
-                try:
-                    self.wait_time(seconds=3)
-                except OpenCliBrowserError as exc:
-                    events.append(
-                        {
-                            "action_kind": "observe_results_retry",
-                            "route_kind": "search",
-                            "safe_reason_code": exc.safe_reason_code,
-                        }
-                    )
-                    if exc.safe_reason_code not in {
-                        "liepin_opencli_stale_ref",
-                        "liepin_opencli_status_unavailable",
-                    }:
-                        return _result_from_error(exc)
-                    try:
-                        self.wait_time(seconds=2)
-                    except OpenCliBrowserError as retry_exc:
-                        return _result_from_error(retry_exc)
                 return TransitionResult(ok=True)
 
             def observe_results_post_state() -> LiepinStateSnapshot:
                 nonlocal final_state
                 for attempt_index in range(3):
                     try:
-                        if attempt_index > 0:
-                            self.wait_time(seconds=2)
                         observed_state = self.state()
                     except OpenCliBrowserError as exc:
                         events.append(
@@ -1309,8 +1361,42 @@ class LiepinSiteAdapter:
                         }
                     )
                     if observed_state.ok:
+                        snapshot = _snapshot_from_result(observed_state)
+                        if _search_state_ready_for_card_extraction(snapshot):
+                            final_state = observed_state
+                            return snapshot
+                        if attempt_index < 2:
+                            try:
+                                self._run_browser_command("wait", ("selector", "#resultList"))
+                                self._touch_lease()
+                                events.append(
+                                    {
+                                        "action_kind": "wait_results_condition",
+                                        "route_kind": "search",
+                                        "condition": "selector:#resultList",
+                                        "ok": True,
+                                    }
+                                )
+                            except OpenCliBrowserError as exc:
+                                events.append(
+                                    {
+                                        "action_kind": "observe_results_retry",
+                                        "route_kind": "search",
+                                        "safe_reason_code": exc.safe_reason_code,
+                                    }
+                                )
+                                if exc.safe_reason_code not in {
+                                    "liepin_opencli_stale_ref",
+                                    "liepin_opencli_status_unavailable",
+                                }:
+                                    return LiepinStateSnapshot(
+                                        ok=False,
+                                        text="",
+                                        safe_reason_code=exc.safe_reason_code,
+                                    )
+                            continue
                         final_state = observed_state
-                        return _snapshot_from_result(observed_state)
+                        return snapshot
                     if observed_state.safe_reason_code == "liepin_opencli_status_unavailable" and attempt_index < 2:
                         events.append(
                             {
@@ -1342,7 +1428,7 @@ class LiepinSiteAdapter:
                     precondition=_search_url_ready,
                     action=observe_results_action,
                     observe_post_state=observe_results_post_state,
-                    postcondition=_search_state_nonterminal,
+                    postcondition=_search_state_ready_for_card_extraction,
                     safe_reason_code="liepin_opencli_status_unavailable",
                     trace_event="liepin.search.observe_results",
                 )
@@ -1389,6 +1475,19 @@ class LiepinSiteAdapter:
                         safe_reason_code=apply_filter_result.safe_reason_code
                         or final_state.safe_reason_code
                         or "liepin_opencli_filter_unapplied",
+                        safe_run_id=safe_run_id,
+                        pages_visited=pages_visited,
+                        events=events,
+                    )
+                final_state = self._ensure_liepin_results_ready_after_native_filters(
+                    current_state=final_state,
+                    events=events,
+                )
+                if not final_state.ok:
+                    return self._blocked_cards_envelope(
+                        source_run_id=source_run_id,
+                        query=query,
+                        safe_reason_code=final_state.safe_reason_code or "liepin_opencli_results_not_ready",
                         safe_run_id=safe_run_id,
                         pages_visited=pages_visited,
                         events=events,
@@ -1470,6 +1569,100 @@ class LiepinSiteAdapter:
                 events=events,
             )
 
+    def _ensure_liepin_results_ready_after_native_filters(
+        self,
+        *,
+        current_state: OpenCliBrowserResult,
+        events: list[dict[str, object]],
+    ) -> OpenCliBrowserResult:
+        ready_state = current_state
+
+        def observe_state() -> LiepinStateSnapshot:
+            return _snapshot_from_result(ready_state)
+
+        def observe_until_ready() -> TransitionResult:
+            nonlocal ready_state
+            snapshot = observe_state()
+            if _search_state_ready_for_card_extraction(snapshot):
+                events.append(
+                    {
+                        "action_kind": "observe_results_after_native_filters",
+                        "route_kind": "search",
+                        "ok": ready_state.ok,
+                        "ready": True,
+                        "attempt": 0,
+                    }
+                )
+                return TransitionResult(ok=True)
+            events.append(
+                {
+                    "action_kind": "observe_results_after_native_filters",
+                    "route_kind": "search",
+                    "ok": ready_state.ok,
+                    "ready": False,
+                    "attempt": 1,
+                }
+            )
+            try:
+                self._run_browser_command("wait", ("selector", "#resultList"))
+                self._touch_lease()
+                events.append(
+                    {
+                        "action_kind": "wait_results_after_native_filters",
+                        "route_kind": "search",
+                        "ok": True,
+                        "condition": "selector:#resultList",
+                    }
+                )
+                ready_state = self.state()
+            except OpenCliBrowserError as exc:
+                events.append(
+                    {
+                        "action_kind": "wait_results_after_native_filters",
+                        "route_kind": "search",
+                        "ok": False,
+                        "condition": "selector:#resultList",
+                        "safe_reason_code": exc.safe_reason_code,
+                    }
+                )
+                return TransitionResult(ok=False, safe_reason_code=exc.safe_reason_code)
+            snapshot = observe_state()
+            if not snapshot.ok:
+                return _result_from_opencli(ready_state)
+            events.append(
+                {
+                    "action_kind": "observe_results_after_native_filters",
+                    "route_kind": "search",
+                    "ok": True,
+                    "ready": _search_state_ready_for_card_extraction(snapshot),
+                    "attempt": 1,
+                }
+            )
+            if _search_state_ready_for_card_extraction(snapshot):
+                return TransitionResult(ok=True)
+            return TransitionResult(ok=False, safe_reason_code="liepin_opencli_results_not_ready")
+
+        result = self._run_liepin_transition(
+            LiepinTransition(
+                name="observe_results_after_native_filters",
+                phase="search",
+                observe_pre_state=observe_state,
+                precondition=lambda snapshot: snapshot.ok,
+                action=observe_until_ready,
+                observe_post_state=observe_state,
+                postcondition=_search_state_ready_for_card_extraction,
+                safe_reason_code="liepin_opencli_results_not_ready",
+                trace_event="liepin.search.after_native_filters_ready",
+            )
+        )
+        if result.ok:
+            return ready_state
+        return OpenCliBrowserResult(
+            ok=False,
+            action="observe_results_after_native_filters",
+            safe_reason_code=result.safe_reason_code or "liepin_opencli_results_not_ready",
+        )
+
     def _clear_liepin_native_filters_if_needed(
         self,
         *,
@@ -1489,7 +1682,6 @@ class LiepinSiteAdapter:
             return current_state
         self._click_native_filter_ref(clear_ref)
         events.append({"action_kind": "clear_native_filters", "route_kind": "search", "ok": True})
-        self.wait_time(seconds=1)
         state = self.state()
         events.append({"action_kind": "observe_after_clear_native_filters", "route_kind": "search", "ok": state.ok})
         if state.ok:
@@ -1619,7 +1811,7 @@ class LiepinSiteAdapter:
                             "ok": True,
                         }
                     )
-                    self.wait_time(seconds=1)
+                    self._wait_for_text_condition(label)
                     state = self.state()
                     events.append(
                         {
@@ -1646,7 +1838,6 @@ class LiepinSiteAdapter:
                     state_text = _opencli_result_text(state)
                 self._click_native_filter_option(label, state_text=state_text, section=section)
                 clicked_option = True
-                self.wait_time(seconds=1)
                 state = self.state()
                 events.append(
                     {
@@ -1676,7 +1867,6 @@ class LiepinSiteAdapter:
                             "ok": True,
                         }
                     )
-                    self.wait_time(seconds=1)
                     state = self.state()
                     events.append(
                         {
@@ -1702,7 +1892,6 @@ class LiepinSiteAdapter:
                         }
                     )
                     if filter_name == "schoolTypes":
-                        self.wait_time(seconds=1)
                         state = self.state()
                         events.append(
                             {
@@ -1712,20 +1901,20 @@ class LiepinSiteAdapter:
                                 "ok": state.ok,
                             }
                         )
-                        if not state.ok:
-                            raise OpenCliBrowserError(state.safe_reason_code)
-                        state_text = _opencli_result_text(state)
-                        if native_filter_selection_applied(state_text, section=section, label=label):
-                            events.append(
-                                {
-                                    "action_kind": "verify_native_filter",
-                                    "filter": filter_name,
-                                    "section": section,
-                                    "value": label,
-                                    "ok": True,
-                                }
-                            )
-                            return state
+                    if not state.ok:
+                        raise OpenCliBrowserError(state.safe_reason_code)
+                    state_text = _opencli_result_text(state)
+                    if native_filter_selection_applied(state_text, section=section, label=label):
+                        events.append(
+                            {
+                                "action_kind": "verify_native_filter",
+                                "filter": filter_name,
+                                "section": section,
+                                "value": label,
+                                "ok": True,
+                            }
+                        )
+                        return state
                     raise OpenCliBrowserError("liepin_opencli_filter_unapplied")
                 events.append(
                     {
@@ -1755,7 +1944,6 @@ class LiepinSiteAdapter:
                         "safe_reason_code": exc.safe_reason_code,
                     }
                 )
-                self.wait_time(seconds=2)
                 state = self.state()
                 events.append(
                     {
@@ -1786,7 +1974,7 @@ class LiepinSiteAdapter:
             events.append(
                 {"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True}
             )
-            self.wait_time(seconds=1)
+            self._wait_for_text_condition(label)
             state = self.state()
             events.append({"action_kind": "observe_native_city_filter_search", "filter": "city", "ok": state.ok})
             if not state.ok:
@@ -1799,7 +1987,7 @@ class LiepinSiteAdapter:
             events.append(
                 {"action_kind": "open_native_city_overseas_tab", "filter": "city", "value": label, "ok": True}
             )
-            self.wait_time(seconds=1)
+            self._wait_for_text_condition(label)
             state = self.state()
             events.append({"action_kind": "observe_native_city_overseas_tab", "filter": "city", "ok": state.ok})
             if not state.ok:
@@ -2719,7 +2907,7 @@ class LiepinSiteAdapter:
             if _looks_like_liepin_detail_resume_state(output):
                 return output
             if attempt_index < attempts - 1:
-                self.wait_time(seconds=2)
+                self._wait_for_detail_resume_condition()
         raise OpenCliBrowserError("liepin_opencli_detail_not_opened")
 
     def _fill_args_for_target(self, *, target: str, text: str) -> tuple[str, ...]:

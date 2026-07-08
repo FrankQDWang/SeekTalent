@@ -4,6 +4,7 @@ import argparse
 import importlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import sysconfig
@@ -1789,7 +1790,8 @@ def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
 
     try:
         launcher = importlib.import_module("seektalent.opencli_launcher")
-        launcher.ensure_opencli_runtime(env=env)
+        runtime = launcher.ensure_opencli_runtime(env=env)
+        env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = _workbench_managed_opencli_command(runtime, env)
     except Exception as exc:
         if exc.__class__.__name__ != "BootstrapError":
             raise
@@ -1800,6 +1802,14 @@ def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
         return False
 
     return True
+
+
+def _workbench_managed_opencli_command(runtime: object, env: Mapping[str, str]) -> str:
+    node = getattr(runtime, "node", None) or env.get("SEEKTALENT_OPENCLI_NODE")
+    opencli_main = getattr(runtime, "opencli_main", None)
+    if node is None or opencli_main is None:
+        raise RuntimeError("OpenCLI runtime did not expose managed Node/main.js paths")
+    return shlex.join((str(node), str(opencli_main)))
 
 
 def _configure_workbench_domi_opencli_node(env: MutableMapping[str, str]) -> bool:

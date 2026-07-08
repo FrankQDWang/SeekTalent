@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, Protocol
 
 
 OpenCliWindowMode = Literal["foreground", "background"]
@@ -47,3 +47,17 @@ class OpenCliBrowserError(RuntimeError):
     def __init__(self, safe_reason_code: str) -> None:
         super().__init__(safe_reason_code)
         self.safe_reason_code = safe_reason_code
+
+
+@dataclass(frozen=True)
+class OpenCliBrowserTiming:
+    command: str
+    session: str | None
+    argv_len: int
+    duration_ms: float
+    ok: bool
+    safe_reason_code: str | None = None
+
+
+class OpenCliBrowserTimingRecorder(Protocol):
+    def record(self, timing: OpenCliBrowserTiming) -> None: ...

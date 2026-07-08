@@ -11,6 +11,8 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
+    OpenCliBrowserTiming,
+    OpenCliBrowserTimingRecorder,
 )
 from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BOOTSTRAP_FAILED,
@@ -41,9 +43,11 @@ class OpenCliBrowserAutomation:
         *,
         config: OpenCliBrowserConfig,
         commands: OpenCliCommandRunner | None = None,
+        timing_recorder: OpenCliBrowserTimingRecorder | None = None,
     ) -> None:
         self.config = config
         self.commands = commands or SubprocessOpenCliCommandRunner()
+        self._timing_recorder = timing_recorder
 
     def status(self) -> OpenCliBrowserResult:
         try:
@@ -149,30 +153,94 @@ class OpenCliBrowserAutomation:
         return self._run(tuple(self.config.command) + ("browser", self.config.session, command, *args_tuple))
 
     def _run(self, argv: Sequence[str]) -> str:
+        started = time.perf_counter()
+        ok = False
+        safe_reason_code: str | None = None
         try:
-            return strip_opencli_stdout_notice(
+            output = strip_opencli_stdout_notice(
                 self.commands.run(
                     tuple(argv),
                     timeout=self.config.timeout_seconds,
                     env={"OPENCLI_WINDOW": self.config.window_mode},
                 )
             )
+            ok = True
+            return output
         except FileNotFoundError as exc:
+            safe_reason_code = OPENCLI_COMMAND_MISSING
             raise OpenCliBrowserError(OPENCLI_COMMAND_MISSING) from exc
         except subprocess.TimeoutExpired as exc:
+            safe_reason_code = OPENCLI_TIMEOUT
             raise OpenCliBrowserError(OPENCLI_TIMEOUT) from exc
         except subprocess.CalledProcessError as exc:
             output = f"{getattr(exc, 'stdout', None) or getattr(exc, 'output', '') or ''}\n{exc.stderr or ''}"
             if exc.returncode == 127 and "SeekTalent OpenCLI bootstrap failed:" in output:
+                safe_reason_code = OPENCLI_BOOTSTRAP_FAILED
                 raise OpenCliBrowserError(OPENCLI_BOOTSTRAP_FAILED) from exc
             if "Extension" in output and ("not connected" in output or "disconnected" in output):
+                safe_reason_code = OPENCLI_EXTENSION_DISCONNECTED
                 raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED) from exc
             if "Daemon:" in output:
-                raise OpenCliBrowserError(_opencli_status_reason(output) or OPENCLI_STATUS_UNAVAILABLE) from exc
+                safe_reason_code = _opencli_status_reason(output) or OPENCLI_STATUS_UNAVAILABLE
+                raise OpenCliBrowserError(safe_reason_code) from exc
             reason = _safe_reason_from_opencli_error_output(output)
             if reason is not None:
+                safe_reason_code = reason
                 raise OpenCliBrowserError(reason) from exc
+            safe_reason_code = OPENCLI_STATUS_UNAVAILABLE
             raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE) from exc
+        finally:
+            self._record_timing(
+                argv=tuple(argv),
+                duration_ms=(time.perf_counter() - started) * 1000,
+                ok=ok,
+                safe_reason_code=safe_reason_code,
+            )
+
+    def _record_timing(
+        self,
+        *,
+        argv: tuple[str, ...],
+        duration_ms: float,
+        ok: bool,
+        safe_reason_code: str | None,
+    ) -> None:
+        if self._timing_recorder is None:
+            return
+        try:
+            self._timing_recorder.record(
+                OpenCliBrowserTiming(
+                    command=self._safe_command_label(argv),
+                    session=self._safe_command_session(argv),
+                    argv_len=len(argv),
+                    duration_ms=round(duration_ms, 3),
+                    ok=ok,
+                    safe_reason_code=safe_reason_code,
+                )
+            )
+        except Exception:  # noqa: BLE001 - timing metadata is best-effort and must not affect actions.
+            return
+
+    def _safe_command_label(self, argv: tuple[str, ...]) -> str:
+        action = self._opencli_action(argv)
+        if len(action) >= 2 and action[0] == "daemon":
+            return f"daemon.{action[1]}"
+        if len(action) >= 3 and action[0] == "browser":
+            return f"browser.{action[2]}"
+        return "unknown"
+
+    def _safe_command_session(self, argv: tuple[str, ...]) -> str | None:
+        action = self._opencli_action(argv)
+        if len(action) >= 2 and action[0] == "browser":
+            session = action[1]
+            return session if _is_safe_page_id(session) else None
+        return None
+
+    def _opencli_action(self, argv: tuple[str, ...]) -> tuple[str, ...]:
+        command_len = len(self.config.command)
+        if len(argv) <= command_len:
+            return ()
+        return argv[command_len:]
 
 
 def _validate_command_shape(command: str, args: tuple[str, ...]) -> None:

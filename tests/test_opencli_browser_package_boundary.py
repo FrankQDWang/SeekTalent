@@ -63,6 +63,18 @@ def test_generic_opencli_browser_has_no_liepin_literals() -> None:
     assert offenders == []
 
 
+def test_generic_opencli_browser_has_no_product_artifact_literals() -> None:
+    offenders: list[str] = []
+    forbidden = ("SEEKTALENT_PI_", "pi-trace", "opencli-timing", "artifact_root")
+    for path in _python_files(OPENCLI_BROWSER_ROOT):
+        text = _text(path)
+        for marker in forbidden:
+            if marker in text:
+                offenders.append(f"{path.relative_to(ROOT)} contains {marker!r}")
+
+    assert offenders == []
+
+
 def test_generic_opencli_browser_contracts_do_not_expose_site_config_fields() -> None:
     text = _text(OPENCLI_BROWSER_ROOT / "contracts.py")
     forbidden = (

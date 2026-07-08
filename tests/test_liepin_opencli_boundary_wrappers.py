@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserError
+from seektalent.opencli_browser.contracts import OpenCliBrowserTiming
 
 
 def test_liepin_opencli_browser_facade_is_removed() -> None:
@@ -90,6 +91,20 @@ class RecordingOpenCliCommands:
         return output
 
 
+@dataclass
+class RecordingTimingRecorder:
+    records: list[OpenCliBrowserTiming] = field(default_factory=list)
+
+    def record(self, timing: OpenCliBrowserTiming) -> None:
+        self.records.append(timing)
+
+
+class FailingTimingRecorder:
+    def record(self, timing: OpenCliBrowserTiming) -> None:
+        del timing
+        raise RuntimeError("timing sink unavailable")
+
+
 def _config() -> OpenCliBrowserConfig:
     return OpenCliBrowserConfig(
         command=("opencli",),
@@ -116,6 +131,44 @@ def test_opencli_browser_automation_runs_generic_get_url_without_liepin_semantic
     assert result.ok is True
     assert result.private_output == "https://h.liepin.com/search/getConditionItem#session"
     assert commands.calls == [("opencli", "browser", "seektalent-liepin", "get", "url")]
+
+
+def test_opencli_browser_automation_records_safe_timing_metadata() -> None:
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+
+    commands = RecordingOpenCliCommands(
+        {("opencli", "browser", "seektalent-liepin", "fill", "26", "敏感关键词"): "{}"}
+    )
+    timings = RecordingTimingRecorder()
+    automation = OpenCliBrowserAutomation(config=_config(), commands=commands, timing_recorder=timings)
+
+    automation.fill(target_args=("26", "敏感关键词"), text_size=5)
+
+    assert len(timings.records) == 1
+    record = timings.records[0]
+    assert record.command == "browser.fill"
+    assert record.session == "seektalent-liepin"
+    assert record.ok is True
+    assert record.duration_ms >= 0
+    assert "敏感关键词" not in repr(record)
+
+
+def test_opencli_browser_automation_ignores_timing_recorder_failures() -> None:
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+
+    commands = RecordingOpenCliCommands(
+        {("opencli", "browser", "seektalent-liepin", "fill", "26", "敏感关键词"): '{"filled":true}'}
+    )
+    automation = OpenCliBrowserAutomation(
+        config=_config(),
+        commands=commands,
+        timing_recorder=FailingTimingRecorder(),
+    )
+
+    result = automation.fill(target_args=("26", "敏感关键词"), text_size=5)
+
+    assert result.ok is True
+    assert commands.calls == [("opencli", "browser", "seektalent-liepin", "fill", "26", "敏感关键词")]
 
 
 def test_opencli_browser_automation_click_ref_owns_opencli_argv_shape() -> None:
