@@ -88,7 +88,7 @@ def bootstrap_domi_workbench(
             domi_node=resolved_node,
             python_paths=resolved_python_paths,
         )
-        _remove_windows_root_shims(root / ".seektalent", target_bin_dir)
+        _write_windows_root_compat_shims(root / ".seektalent", target_bin_dir)
     else:
         _write_posix_shim(
             bin_dir=target_bin_dir,
@@ -227,11 +227,14 @@ exit /b %ERRORLEVEL%
     )
 
 
-def _remove_windows_root_shims(root_dir: Path, bin_dir: Path) -> None:
-    for path in (root_dir / "seektalent.ps1", root_dir / "seektalent.cmd"):
-        if path.parent == bin_dir:
+def _write_windows_root_compat_shims(root_dir: Path, bin_dir: Path) -> None:
+    root_dir.mkdir(parents=True, exist_ok=True)
+    for filename in ("seektalent.ps1", "seektalent.cmd"):
+        source = bin_dir / filename
+        target = root_dir / filename
+        if source == target:
             continue
-        path.unlink(missing_ok=True)
+        target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def _write_posix_shim(

@@ -158,14 +158,14 @@ Use this path when the machine already has Domi installed, Chrome is logged in t
 Windows PowerShell:
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.24/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.24
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.25
 seektalent workbench
 ```
 
 macOS shell:
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.24/scripts/install-seektalent-domi.sh") 0.7.24
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.sh") 0.7.25
 seektalent workbench
 ```
 
@@ -174,11 +174,11 @@ This path does not read Domi Electron storage and does not install a Chrome exte
 When validating from a source checkout, use the checked-in scripts directly:
 
 ```powershell
-. .\scripts\install-seektalent-domi.ps1; Install-SeekTalentDomi -Version 0.7.24
+. .\scripts\install-seektalent-domi.ps1; Install-SeekTalentDomi -Version 0.7.25
 ```
 
 ```bash
-source scripts/install-seektalent-domi.sh 0.7.24
+source scripts/install-seektalent-domi.sh 0.7.25
 ```
 
 Use this smoke only for validating the packaged Workbench shape inside the Domi-provided runtime on a local Mac with Domi installed.

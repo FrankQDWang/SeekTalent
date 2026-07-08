@@ -32,13 +32,13 @@ The current product shape is local-first:
 Recommended for end users:
 
 ```bash
-pipx install seektalent==0.7.24
+pipx install seektalent==0.7.25
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install seektalent==0.7.24
+pip install seektalent==0.7.25
 ```
 
 ### Domi prepared-machine install
@@ -48,18 +48,18 @@ For the current Domi handoff mode, the user machine only needs Domi installed, C
 Windows PowerShell:
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.24/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.24
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.25
 seektalent workbench
 ```
 
 macOS shell:
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.24/scripts/install-seektalent-domi.sh") 0.7.24
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.sh") 0.7.25
 seektalent workbench
 ```
 
-The install script uses Domi Python to install the PyPI package into `~/.seektalent/python-prefix/<version>`, generates the `seektalent` command shim under `~/.seektalent/bin`, wires the shim to Domi Python plus Domi Node, and removes older root-level `~/.seektalent/seektalent.*` shims that can point at stale prefixes. It updates `PATH` only for the current terminal session and does not modify the Domi app/runtime, Chrome, or the OpenCLI Chrome extension.
+The install script uses Domi Python to install the PyPI package into `~/.seektalent/python-prefix/<version>`, generates the `seektalent` command shim under `~/.seektalent/bin`, wires the shim to Domi Python plus Domi Node, and refreshes the root-level `~/.seektalent/seektalent.*` Windows compatibility shims so existing WindowsApps launchers cannot point at stale prefixes. It updates `PATH` only for the current terminal session and does not modify the Domi app/runtime, Chrome, or the OpenCLI Chrome extension.
 
 The current starter env defaults to the canonical text-LLM surface, with `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`, the matching `SEEKTALENT_TEXT_LLM_ENDPOINT_*` values, and bare stage `*_MODEL_ID` settings. Dual-protocol support still exists through the same `SEEKTALENT_TEXT_LLM_*` surface.
 
@@ -174,7 +174,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install seektalent==0.7.24
+pipx install seektalent==0.7.25
 ```
 
 This gives you the `seektalent` command directly.
@@ -182,7 +182,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install seektalent==0.7.24
+pip install seektalent==0.7.25
 ```
 
 Then:

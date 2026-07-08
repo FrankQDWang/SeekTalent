@@ -180,18 +180,18 @@ The launcher sets the Domi LLM provider and normalized Domi Node path, then dele
 Windows:
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.24/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.24
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.25
 seektalent workbench
 ```
 
 macOS:
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.24/scripts/install-seektalent-domi.sh") 0.7.24
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.sh") 0.7.25
 seektalent workbench
 ```
 
-The bootstrap path writes only under `~/.seektalent`, removes older root-level `~/.seektalent/seektalent.*` shims that can point at stale prefixes, updates `PATH` only for the current terminal session, uses Domi Python and Domi Node, and leaves the Domi app/runtime, Chrome, and the OpenCLI Chrome extension untouched.
+The bootstrap path writes only under `~/.seektalent`, refreshes the root-level `~/.seektalent/seektalent.*` Windows compatibility shims so existing WindowsApps launchers cannot point at stale prefixes, updates `PATH` only for the current terminal session, uses Domi Python and Domi Node, and leaves the Domi app/runtime, Chrome, and the OpenCLI Chrome extension untouched.
 
 ## Failure Behavior
 
