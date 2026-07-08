@@ -45,7 +45,7 @@ On a machine where Domi is already installed, Chrome is already logged in to Lie
 Windows PowerShell:
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.23/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.23
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.24/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.24
 seektalent workbench
 ```
 
@@ -59,7 +59,7 @@ The Windows defaults are:
 macOS shell:
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.23/scripts/install-seektalent-domi.sh") 0.7.23
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.24/scripts/install-seektalent-domi.sh") 0.7.24
 seektalent workbench
 ```
 
@@ -69,7 +69,7 @@ The macOS Domi Python default is:
 /Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python
 ```
 
-If Domi Node is not present in one of SeekTalent's known Domi Node candidate paths on macOS, set `DOMI_NODE` or `SEEKTALENT_DOMI_NODE` to the Domi node executable before running the install script. The install script writes only under `~/.seektalent`: it installs the PyPI package into `~/.seektalent/python-prefix/<version>`, generates the `seektalent` command shim under `~/.seektalent/bin`, wires that shim to Domi Python plus Domi Node, and updates `PATH` only for the current terminal session. It does not modify the Domi app/runtime, Chrome, or the OpenCLI Chrome extension.
+If Domi Node is not present in one of SeekTalent's known Domi Node candidate paths on macOS, set `DOMI_NODE` or `SEEKTALENT_DOMI_NODE` to the Domi node executable before running the install script. The install script writes only under `~/.seektalent`: it installs the PyPI package into `~/.seektalent/python-prefix/<version>`, generates the `seektalent` command shim under `~/.seektalent/bin`, wires that shim to Domi Python plus Domi Node, removes older root-level `~/.seektalent/seektalent.*` shims that can point at stale prefixes, and updates `PATH` only for the current terminal session. It does not modify the Domi app/runtime, Chrome, or the OpenCLI Chrome extension.
 
 The generated shim sets `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` and `SEEKTALENT_OPENCLI_NODE=<resolved Domi Node path>` through the package's Domi launcher before delegating to the Workbench. It fails before server launch if the Domi JWT or Domi Node path is missing.
 

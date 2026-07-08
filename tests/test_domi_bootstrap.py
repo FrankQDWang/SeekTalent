@@ -24,7 +24,9 @@ def test_bootstrap_writes_windows_shims_with_domi_python_node_and_pythonpath(tmp
     home = tmp_path / "home"
     domi_python = _touch(tmp_path / "Domi" / "runtime" / "python" / "bin" / "python.exe")
     domi_node = _touch(tmp_path / "Domi" / "runtime" / "node" / "node.exe")
-    site_packages = tmp_path / "home" / ".seektalent" / "python-prefix" / "0.7.23" / "Lib" / "site-packages"
+    site_packages = tmp_path / "home" / ".seektalent" / "python-prefix" / "0.7.24" / "Lib" / "site-packages"
+    legacy_ps1 = _touch(home / ".seektalent" / "seektalent.ps1")
+    legacy_cmd = _touch(home / ".seektalent" / "seektalent.cmd")
 
     result = domi_bootstrap.bootstrap_domi_workbench(
         home=home,
@@ -32,15 +34,17 @@ def test_bootstrap_writes_windows_shims_with_domi_python_node_and_pythonpath(tmp
         domi_python=domi_python,
         domi_node=domi_node,
         python_paths=(site_packages,),
-        package_version="0.7.23",
+        package_version="0.7.24",
     )
 
     ps1 = result.bin_dir / "seektalent.ps1"
     cmd = result.bin_dir / "seektalent.cmd"
     assert ps1.exists()
     assert cmd.exists()
+    assert not legacy_ps1.exists()
+    assert not legacy_cmd.exists()
     assert result.command_name == "seektalent"
-    assert result.package_version == "0.7.23"
+    assert result.package_version == "0.7.24"
 
     ps1_text = ps1.read_text(encoding="utf-8")
     assert ps1_text.startswith('$ErrorActionPreference = "Stop"')
@@ -60,7 +64,7 @@ def test_bootstrap_writes_posix_shim_with_domi_python_node_and_pythonpath(tmp_pa
     home = tmp_path / "home"
     domi_python = _touch_executable(tmp_path / "Domi.app" / "python" / "runtime" / "bin" / "python")
     domi_node = _touch_executable(tmp_path / "Domi.app" / "node" / "runtime" / "bin" / "node")
-    site_packages = home / ".seektalent" / "python-prefix" / "0.7.23" / "site-packages"
+    site_packages = home / ".seektalent" / "python-prefix" / "0.7.24" / "site-packages"
 
     result = domi_bootstrap.bootstrap_domi_workbench(
         home=home,
@@ -68,7 +72,7 @@ def test_bootstrap_writes_posix_shim_with_domi_python_node_and_pythonpath(tmp_pa
         domi_python=domi_python,
         domi_node=domi_node,
         python_paths=(site_packages,),
-        package_version="0.7.23",
+        package_version="0.7.24",
     )
 
     shim = result.bin_dir / "seektalent"
@@ -133,7 +137,7 @@ def test_domi_bootstrap_main_writes_json_result(tmp_path: Path, capsys) -> None:
                 "--bin-dir",
                 str(bin_dir),
                 "--package-version",
-                "0.7.23",
+                "0.7.24",
                 "--print-json",
             ]
         )
@@ -209,7 +213,7 @@ export PYTHONPATH="before-pythonpath"
 before_flags="$-"
 before_pipefail="$(set -o | awk '$1 == "pipefail" {{ print $2 }}')"
 before_pythonpath="$PYTHONPATH"
-source {_bash_quote(script)} 0.7.23 >/dev/null
+source {_bash_quote(script)} 0.7.24 >/dev/null
 after_flags="$-"
 after_pipefail="$(set -o | awk '$1 == "pipefail" {{ print $2 }}')"
 if [[ "$after_flags" != "$before_flags" ]]; then
@@ -273,7 +277,7 @@ export HOME={_bash_quote(home)}
 export DOMI_PYTHON={_bash_quote(domi_python)}
 unset DOMI_NODE
 export SEEKTALENT_DOMI_NODE={_bash_quote(domi_node)}
-source {_bash_quote(script)} 0.7.23 >/dev/null
+source {_bash_quote(script)} 0.7.24 >/dev/null
 """
 
     result = subprocess.run(["bash", "-c", bash_code], capture_output=True, text=True, check=False)
