@@ -178,7 +178,7 @@ def test_build_workbench_command_env_ignores_stale_seektalent_runtime_env(
             "SEEKTALENT_RUNTIME_MODE": "dev",
             "SEEKTALENT_LIEPIN_WORKER_MODE": "disabled",
             "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "disabled",
-            "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": "apps/web-svelte/node_modules/.bin/opencli",
+            "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": "legacy-global-opencli",
             "SEEKTALENT_DOMI_JWT": "must-not-leak",
             "SEEKTALENT_DOMI_LLM_BASE_URL": "https://must-not-leak.example/v1",
             "SEEKTALENT_DOMI_LLM_CHANNEL": "must-not-leak",

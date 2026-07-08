@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from seektalent.product_env import MANAGED_OPENCLI_COMMAND_MARKER
 from seektalent.workbench_internal_secrets import INTERNAL_LIEPIN_ENV_VARS
 from seektalent_ui import server
 from seektalent_ui.resources import (
@@ -115,6 +117,7 @@ def test_dev_workbench_databases_use_workspace_root(tmp_path: Path, monkeypatch)
 
 def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatch) -> None:
     captured = []
+    managed_command = "/domi/node /home/user/.seektalent/opencli/main.js"
 
     def fake_create_app(**kwargs):
         captured.append(kwargs)
@@ -135,6 +138,8 @@ def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatc
         encoding="utf-8",
     )
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", managed_command)
+    monkeypatch.setenv(MANAGED_OPENCLI_COMMAND_MARKER, "1")
     for name in INTERNAL_LIEPIN_ENV_VARS:
         monkeypatch.setenv(name, "local-development")
     monkeypatch.setattr(server, "create_app", fake_create_app)
@@ -162,8 +167,8 @@ def test_server_main_applies_liepin_opencli_overrides(tmp_path: Path, monkeypatc
     assert settings.liepin_worker_mode == "opencli"
     assert settings.liepin_browser_action_backend == "opencli"
     assert settings.liepin_opencli_session == "seektalent-liepin"
-    assert settings.liepin_opencli_command_argv[1:] == ("-m", "seektalent.opencli_launcher")
-    assert Path(settings.liepin_opencli_command_argv[0]).exists()
+    assert shlex.split(settings.liepin_opencli_command) == shlex.split(managed_command)
+    assert "seektalent.opencli_launcher" not in settings.liepin_opencli_command
     assert settings.liepin_api_token not in {"local-development-liepin-api-token", ""}
     assert settings.liepin_account_binding_secret not in {"local-development", ""}
     assert settings.liepin_stream_token_secret not in {"local-development", ""}

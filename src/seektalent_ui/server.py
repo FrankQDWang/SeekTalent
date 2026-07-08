@@ -17,6 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from seektalent.config import AppSettings, load_process_env
 from seektalent.dev_mode import DevModeStatus, build_dev_mode_env_diagnostics
+from seektalent.product_env import MANAGED_OPENCLI_COMMAND_MARKER
 from seektalent.providers.liepin.runtime_context import local_opencli_liepin_source_context
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.source_adapters import build_source_enabled_runtime
@@ -336,7 +337,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.runtime_mode == "prod" and args.serve_frontend:
+    prod_frontend = args.runtime_mode == "prod" and args.serve_frontend
+    if prod_frontend:
         ensure_workbench_internal_liepin_env(os.environ)
     load_process_env()
     try:
@@ -344,16 +346,25 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc))
         return 2
+    try:
+        liepin_opencli_command = (
+            _managed_liepin_opencli_command_from_env(os.environ)
+            if prod_frontend
+            else args.liepin_opencli_command
+        )
+    except ValueError as exc:
+        print(f"reason_code=liepin_opencli_config_invalid {exc}")
+        return 1
     dev_mode_env_diagnostics = None
     try:
-        base_settings = AppSettings(_env_file=None) if args.runtime_mode == "prod" and args.serve_frontend else AppSettings()
+        base_settings = AppSettings(_env_file=None) if prod_frontend else AppSettings()
         settings = base_settings.with_overrides(
             mock_cts=args.mock_cts,
             runtime_mode=args.runtime_mode,
             liepin_worker_mode=args.liepin_worker_mode,
             liepin_browser_action_backend=args.liepin_browser_action_backend,
-            liepin_opencli_command="" if args.runtime_mode == "prod" and args.serve_frontend else args.liepin_opencli_command,
-            liepin_opencli_session="" if args.runtime_mode == "prod" and args.serve_frontend else None,
+            liepin_opencli_command=liepin_opencli_command,
+            liepin_opencli_session="" if prod_frontend else None,
             workbench_enabled=False if args.disable_workbench else None,
         )
     except ValidationError as exc:
@@ -365,8 +376,8 @@ def main(argv: list[str] | None = None) -> int:
             runtime_mode=args.runtime_mode,
             liepin_worker_mode=args.liepin_worker_mode,
             liepin_browser_action_backend=args.liepin_browser_action_backend,
-            liepin_opencli_command="" if args.runtime_mode == "prod" and args.serve_frontend else args.liepin_opencli_command,
-            liepin_opencli_session="" if args.runtime_mode == "prod" and args.serve_frontend else None,
+            liepin_opencli_command=liepin_opencli_command,
+            liepin_opencli_session="" if prod_frontend else None,
             workbench_enabled=False if args.disable_workbench else None,
         )
     network_guard = build_network_guard(
@@ -392,6 +403,14 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         return 0
     return 0
+
+
+def _managed_liepin_opencli_command_from_env(env: Mapping[str, str]) -> str:
+    command = str(env.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or "").strip()
+    managed = str(env.get(MANAGED_OPENCLI_COMMAND_MARKER) or "").strip()
+    if command and managed == "1":
+        return command
+    raise ValueError("managed OpenCLI command was not prepared by seektalent workbench")
 
 
 def _can_recover_with_dev_mode_env_diagnostics(exc: ValidationError, env: Mapping[str, str]) -> bool:
