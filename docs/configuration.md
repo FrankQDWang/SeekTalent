@@ -45,7 +45,7 @@ On a machine where Domi is already installed, Chrome is already logged in to Lie
 Windows PowerShell:
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.22
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.23/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.23
 seektalent workbench
 ```
 
@@ -59,7 +59,7 @@ The Windows defaults are:
 macOS shell:
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.sh") 0.7.22
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.23/scripts/install-seektalent-domi.sh") 0.7.23
 seektalent workbench
 ```
 

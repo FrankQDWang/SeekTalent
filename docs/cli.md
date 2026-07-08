@@ -180,14 +180,14 @@ The launcher sets the Domi LLM provider and normalized Domi Node path, then dele
 Windows:
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.22
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.23/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.23
 seektalent workbench
 ```
 
 macOS:
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.sh") 0.7.22
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.23/scripts/install-seektalent-domi.sh") 0.7.23
 seektalent workbench
 ```
 

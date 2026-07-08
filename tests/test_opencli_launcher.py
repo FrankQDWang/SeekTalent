@@ -119,6 +119,61 @@ def test_existing_opencli_is_probed_with_domi_node_without_downloading(
     assert log_path.read_text(encoding="utf-8").splitlines() == [str(opencli_main), "--help"]
 
 
+def test_verified_existing_opencli_is_not_reprobed_on_next_runtime_check(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
+    _write_fake_npm(domi_node.parent)
+    runtime_root = tmp_path / "runtime"
+    opencli_main = _write_managed_opencli(runtime_root)
+    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
+    calls = _patch_existing_opencli_subprocess(
+        monkeypatch,
+        node=domi_node,
+        opencli_main=opencli_main,
+    )
+
+    first_runtime = opencli_launcher.ensure_opencli_runtime(root=runtime_root)
+    second_runtime = opencli_launcher.ensure_opencli_runtime(root=runtime_root)
+
+    assert first_runtime.node == second_runtime.node == domi_node
+    assert first_runtime.opencli_main == second_runtime.opencli_main == opencli_main
+    assert calls == [[str(domi_node), "--version"], [str(domi_node), str(opencli_main), "--help"]]
+
+
+def test_verification_stamp_write_tolerates_concurrent_matching_writer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
+    runtime_root = tmp_path / "runtime"
+    opencli_main = _write_managed_opencli(runtime_root)
+    install_dir = opencli_launcher._opencli_install_dir(runtime_root, opencli_launcher.OPENCLI_VERSION)
+    package_json = opencli_launcher._opencli_package_json_path(install_dir)
+    stamp_path = opencli_launcher._verification_stamp_path(install_dir)
+    opencli_launcher._write_verification_stamp(
+        stamp_path,
+        node=domi_node,
+        opencli_main=opencli_main,
+        package_json=package_json,
+        opencli_version=opencli_launcher.OPENCLI_VERSION,
+    )
+
+    def lose_replace_race(self: Path, target: Path) -> None:
+        raise FileNotFoundError(f"concurrent replace already handled {self} -> {target}")
+
+    monkeypatch.setattr(Path, "replace", lose_replace_race)
+
+    opencli_launcher._write_verification_stamp(
+        stamp_path,
+        node=domi_node,
+        opencli_main=opencli_main,
+        package_json=package_json,
+        opencli_version=opencli_launcher.OPENCLI_VERSION,
+    )
+
+
 def test_existing_opencli_does_not_require_npm_from_domi_node(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
