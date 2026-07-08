@@ -102,7 +102,7 @@ def build_workbench_command_env(
     _default_to_domi_provider_when_jwt_is_present(env)
     _preserve_domi_opencli_node_env(env, source_env)
     _prune_unused_llm_credentials(env)
-    env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = DEFAULT_LIEPIN_OPENCLI_COMMAND
+    _preserve_liepin_opencli_command_env(env, source_env)
     ensure_workbench_internal_liepin_env(env)
     return env
 
@@ -130,6 +130,11 @@ def _preserve_domi_opencli_node_env(env: MutableMapping[str, str], source_env: M
         value = source_env.get(key)
         if value and value.strip():
             env[key] = value
+
+
+def _preserve_liepin_opencli_command_env(env: MutableMapping[str, str], source_env: Mapping[str, str]) -> None:
+    command = str(source_env.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or "").strip()
+    env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = command or DEFAULT_LIEPIN_OPENCLI_COMMAND
 
 
 def _read_product_env_file(path: Path) -> dict[str, str]:
