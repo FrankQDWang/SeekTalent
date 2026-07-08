@@ -36,6 +36,7 @@ from seektalent.config import (
     evaluate_local_data_root_policy,
     load_process_env,
 )
+from seektalent.product_env import MANAGED_OPENCLI_COMMAND_MARKER
 from seektalent.cli_basic_commands import (
     init_command as _init_command,
     update_command as _update_command,
@@ -1792,6 +1793,7 @@ def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
         launcher = importlib.import_module("seektalent.opencli_launcher")
         runtime = launcher.ensure_opencli_runtime(env=env)
         env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = _workbench_managed_opencli_command(runtime, env)
+        env[MANAGED_OPENCLI_COMMAND_MARKER] = "1"
     except Exception as exc:
         if exc.__class__.__name__ != "BootstrapError":
             raise

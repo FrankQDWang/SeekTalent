@@ -35,6 +35,8 @@ DOMI_OPENCLI_NODE_ENV_VARS = frozenset(
     }
 )
 
+MANAGED_OPENCLI_COMMAND_MARKER = "SEEKTALENT_LIEPIN_OPENCLI_COMMAND_MANAGED"
+
 _PASSTHROUGH_ENV_VARS = frozenset(
     {
         "APPDATA",
@@ -134,7 +136,13 @@ def _preserve_domi_opencli_node_env(env: MutableMapping[str, str], source_env: M
 
 def _preserve_liepin_opencli_command_env(env: MutableMapping[str, str], source_env: Mapping[str, str]) -> None:
     command = str(source_env.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or "").strip()
-    env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = command or DEFAULT_LIEPIN_OPENCLI_COMMAND
+    managed = str(source_env.get(MANAGED_OPENCLI_COMMAND_MARKER) or "").strip()
+    if command and managed == "1":
+        env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = command
+        env[MANAGED_OPENCLI_COMMAND_MARKER] = "1"
+        return
+    env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = DEFAULT_LIEPIN_OPENCLI_COMMAND
+    env.pop(MANAGED_OPENCLI_COMMAND_MARKER, None)
 
 
 def _read_product_env_file(path: Path) -> dict[str, str]:
