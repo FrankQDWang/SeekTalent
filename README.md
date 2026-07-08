@@ -32,14 +32,34 @@ The current product shape is local-first:
 Recommended for end users:
 
 ```bash
-pipx install seektalent==0.7.1
+pipx install seektalent==0.7.22
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install seektalent==0.7.1
+pip install seektalent==0.7.22
 ```
+
+### Domi prepared-machine install
+
+For the current Domi handoff mode, the user machine only needs Domi installed, Chrome already logged in to Liepin, the OpenCLI Chrome extension installed and enabled, and `SEEKTALENT_DOMI_JWT` set in the current terminal. After that, the prepared-machine path is two commands and does not require a source checkout.
+
+Windows PowerShell:
+
+```powershell
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.22
+seektalent workbench
+```
+
+macOS shell:
+
+```bash
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.sh") 0.7.22
+seektalent workbench
+```
+
+The install script uses Domi Python to install the PyPI package into `~/.seektalent/python-prefix/<version>`, generates the `seektalent` command shim under `~/.seektalent/bin`, and wires the shim to Domi Python plus Domi Node. It updates `PATH` only for the current terminal session and does not modify the Domi app/runtime, Chrome, or the OpenCLI Chrome extension.
 
 The current starter env defaults to the canonical text-LLM surface, with `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`, the matching `SEEKTALENT_TEXT_LLM_ENDPOINT_*` values, and bare stage `*_MODEL_ID` settings. Dual-protocol support still exists through the same `SEEKTALENT_TEXT_LLM_*` surface.
 
@@ -154,7 +174,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install seektalent==0.7.1
+pipx install seektalent==0.7.22
 ```
 
 This gives you the `seektalent` command directly.
@@ -162,7 +182,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install seektalent==0.7.1
+pip install seektalent==0.7.22
 ```
 
 Then:

@@ -33,9 +33,13 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     python = bin_dir / ("python.exe" if os.name == "nt" else "python")
     cli = bin_dir / ("seektalent.exe" if os.name == "nt" else "seektalent")
     domi_cli = bin_dir / ("seektalent-domi.exe" if os.name == "nt" else "seektalent-domi")
+    domi_bootstrap_cli = bin_dir / (
+        "seektalent-domi-bootstrap.exe" if os.name == "nt" else "seektalent-domi-bootstrap"
+    )
 
     subprocess.run([str(python), "-m", "pip", "install", "--no-deps", str(wheel)], check=True)
     assert domi_cli.exists()
+    assert domi_bootstrap_cli.exists()
 
     current_site_packages = site.getsitepackages()
     env = os.environ.copy()
@@ -66,6 +70,16 @@ def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
         text=True,
     )
     assert "Start the local SeekTalent Workbench" in domi_help.stdout
+
+    domi_bootstrap_help = subprocess.run(
+        [str(domi_bootstrap_cli), "--help"],
+        cwd=work_dir,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert "Install SeekTalent's Domi Workbench command shim" in domi_bootstrap_help.stdout
 
     version_result = subprocess.run(
         [str(cli), "version"],

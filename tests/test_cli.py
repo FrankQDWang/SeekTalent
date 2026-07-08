@@ -621,6 +621,52 @@ def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
     assert launch_calls[0][1]["SEEKTALENT_OPENCLI_NODE"] == str(tmp_path / "domi-node")
 
 
+def test_workbench_command_auto_selects_domi_provider_when_domi_jwt_is_present(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    node = home / "Library" / "Application Support" / "Domi" / "runtime" / "node" / "bin" / "node"
+    node.parent.mkdir(parents=True)
+    node.write_text("", encoding="utf-8")
+    node.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
+    monkeypatch.delenv("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL", raising=False)
+    monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
+    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
+    monkeypatch.delenv("DOMI_NODE", raising=False)
+    launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
+
+    class Runtime:
+        opencli_main = tmp_path / "opencli-main.js"
+        node_bin_dir = node.parent
+
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def ensure_runtime(**kwargs):
+        assert kwargs["env"]["SEEKTALENT_OPENCLI_NODE"] == str(node)
+        return Runtime()
+
+    def fake_run(argv, **kwargs):
+        launch_calls.append((list(argv), kwargs.get("env")))
+        return Completed()
+
+    monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", ensure_runtime)
+    monkeypatch.setattr("seektalent.cli._console_script_path", lambda name: name)
+    monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
+
+    assert main(["workbench", "--port", "8123"]) == 0
+
+    assert launch_calls[0][1]["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
+    assert launch_calls[0][1]["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"
+    assert launch_calls[0][1]["SEEKTALENT_OPENCLI_NODE"] == str(node)
+
+
 def test_workbench_command_requires_domi_node_for_domi_opencli(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -173,6 +173,26 @@ On first use, `seektalent workbench` uses Domi Node to install the pinned OpenCL
 
 The launcher sets the Domi LLM provider and normalized Domi Node path, then delegates to `seektalent workbench` with the same arguments.
 
+## `seektalent-domi-bootstrap`
+
+`seektalent-domi-bootstrap` writes the prepared-machine `seektalent` command shim. It is normally invoked by the platform install scripts after they use Domi Python to install the PyPI package into `~/.seektalent/python-prefix/<version>`. Target machines do not need a source checkout; the scripts can be loaded from the release tag.
+
+Windows:
+
+```powershell
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.22
+seektalent workbench
+```
+
+macOS:
+
+```bash
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.sh") 0.7.22
+seektalent workbench
+```
+
+The bootstrap path writes only under `~/.seektalent`, updates `PATH` only for the current terminal session, uses Domi Python and Domi Node, and leaves the Domi app/runtime, Chrome, and the OpenCLI Chrome extension untouched.
+
 ## Failure Behavior
 
 The CLI fails fast when:

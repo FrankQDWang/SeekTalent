@@ -153,23 +153,33 @@ python scripts/build_packaged_workbench.py
 
 ### Prepared-Machine Domi Workbench
 
-Use this path when the machine already has Domi installed and the operator can provide Domi Python, Domi Node, and a manually pasted Domi JWT. It runs the packaged Workbench through the Domi launcher, which sets the Domi LLM provider and normalized Domi Node path before starting the server.
+Use this path when the machine already has Domi installed, Chrome is logged in to Liepin, the OpenCLI Chrome extension is installed, and the operator can paste a Domi JWT into the current terminal. It runs the packaged Workbench through the generated Domi shim, which sets the Domi LLM provider and normalized Domi Node path before starting the server. Target-machine testing should use the release-tag script URL rather than requiring a source checkout.
 
-```bash
-export DOMI_PYTHON="/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python"
-export DOMI_NODE="<path to Domi node executable or node bin directory>"
-export SEEKTALENT_DOMI_JWT="<manually pasted Domi JWT>"
-export SEEKTALENT_DOMI_LLM_CHANNEL="seek_talent"
+Windows PowerShell:
+
+```powershell
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.22
+seektalent workbench
 ```
 
-Install or upgrade SeekTalent in the Domi Python environment, then launch the Workbench:
+macOS shell:
 
 ```bash
-"${DOMI_PYTHON}" -m pip install -U seektalent
-"${DOMI_PYTHON}" -m seektalent.domi_workbench --port 8011
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.sh") 0.7.22
+seektalent workbench
 ```
 
-This path does not read Domi Electron storage and does not install a Chrome extension. The Domi JWT and Domi Node path are explicit process inputs.
+This path does not read Domi Electron storage and does not install a Chrome extension. The installer writes only under `~/.seektalent`, installs the PyPI package with Domi Python, generates the `seektalent` shim, wires it to Domi Python plus Domi Node, and updates `PATH` only for the current terminal session.
+
+When validating from a source checkout, use the checked-in scripts directly:
+
+```powershell
+. .\scripts\install-seektalent-domi.ps1; Install-SeekTalentDomi -Version 0.7.22
+```
+
+```bash
+source scripts/install-seektalent-domi.sh 0.7.22
+```
 
 Use this smoke only for validating the packaged Workbench shape inside the Domi-provided runtime on a local Mac with Domi installed.
 

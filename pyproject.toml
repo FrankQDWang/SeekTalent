@@ -1,6 +1,6 @@
 [project]
 name = "seektalent"
-version = "0.7.21"
+version = "0.7.22"
 description = "Local CLI Agent for deterministic multi-round resume matching with Pydantic AI"
 readme = "README.md"
 license = { text = "GNU Affero General Public License v3.0" }
@@ -38,6 +38,7 @@ dev = [
 [project.scripts]
 seektalent = "seektalent.cli:main"
 seektalent-domi = "seektalent.domi_workbench:main"
+seektalent-domi-bootstrap = "seektalent.domi_bootstrap:main"
 seektalent-opencli = "seektalent.opencli_launcher:main"
 seektalent-ui-api = "seektalent_ui.server:main"
 seektalent-ui-maintenance = "seektalent_ui.maintenance:main"

@@ -1766,8 +1766,12 @@ _WORKBENCH_DOMI_NODE_ENV_KEYS = ("SEEKTALENT_OPENCLI_NODE", "SEEKTALENT_DOMI_NOD
 
 
 def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
-    provider_label = str(env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL") or "bailian").strip().lower() or "bailian"
+    raw_provider_label = str(env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL") or "").strip().lower()
+    provider_label = raw_provider_label or (
+        "domi" if str(env.get("SEEKTALENT_DOMI_JWT") or "").strip() else "bailian"
+    )
     if provider_label == "domi":
+        env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "domi"
         if not str(env.get("SEEKTALENT_DOMI_JWT") or "").strip():
             _print_workbench_reason(
                 "seektalent_domi_jwt_missing",
@@ -1800,6 +1804,12 @@ def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
 
 def _configure_workbench_domi_opencli_node(env: MutableMapping[str, str]) -> bool:
     node = _first_nonblank_env(env, _WORKBENCH_DOMI_NODE_ENV_KEYS)
+    if node is None:
+        from seektalent.domi_bootstrap import resolve_domi_node
+
+        resolved_node = resolve_domi_node(env=env)
+        if resolved_node.is_file() and (sys.platform == "win32" or os.access(resolved_node, os.X_OK)):
+            node = str(resolved_node)
     if node is None:
         _print_workbench_reason(
             "domi_node_missing",

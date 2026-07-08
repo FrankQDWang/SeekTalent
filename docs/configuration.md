@@ -40,24 +40,38 @@ For installed PyPI users, `seektalent workbench` uses Domi Node to prepare the p
 
 ## Prepared-Machine Domi Workbench
 
-On a machine where Domi is already installed and the operator can provide Domi credentials explicitly, run the Domi Workbench launcher with:
+On a machine where Domi is already installed, Chrome is already logged in to Liepin, and the OpenCLI Chrome extension is installed and enabled, the prepared-machine contract is two commands after `SEEKTALENT_DOMI_JWT` is present in the current terminal. The install command loads the release script remotely, so the target machine does not need a SeekTalent source checkout.
 
-```dotenv
-SEEKTALENT_DOMI_JWT=<manually pasted Domi JWT>
-SEEKTALENT_DOMI_NODE=<path to Domi node executable or node bin directory>
+Windows PowerShell:
+
+```powershell
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.22
+seektalent workbench
 ```
 
-`DOMI_NODE` is accepted as an alias for `SEEKTALENT_DOMI_NODE`.
-`SEEKTALENT_DOMI_LLM_BASE_URL` and `SEEKTALENT_DOMI_LLM_CHANNEL` are optional Domi transport overrides; defaults are documented in the text LLM table below.
+The Windows defaults are:
 
-Run either installed entrypoint from the Domi Python environment:
+```text
+%APPDATA%\Domi\runtime\python\bin\python.exe
+%APPDATA%\Domi\runtime\node\node.exe
+```
+
+macOS shell:
 
 ```bash
-seektalent-domi --port 8011
-python -m seektalent.domi_workbench --port 8011
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.22/scripts/install-seektalent-domi.sh") 0.7.22
+seektalent workbench
 ```
 
-The launcher sets `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` and `SEEKTALENT_OPENCLI_NODE=<resolved Domi Node path>` before delegating to the Workbench. It fails before server launch if the Domi JWT or Domi Node path is missing.
+The macOS Domi Python default is:
+
+```text
+/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python
+```
+
+If Domi Node is not present in one of SeekTalent's known Domi Node candidate paths on macOS, set `DOMI_NODE` or `SEEKTALENT_DOMI_NODE` to the Domi node executable before running the install script. The install script writes only under `~/.seektalent`: it installs the PyPI package into `~/.seektalent/python-prefix/<version>`, generates the `seektalent` command shim under `~/.seektalent/bin`, wires that shim to Domi Python plus Domi Node, and updates `PATH` only for the current terminal session. It does not modify the Domi app/runtime, Chrome, or the OpenCLI Chrome extension.
+
+The generated shim sets `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` and `SEEKTALENT_OPENCLI_NODE=<resolved Domi Node path>` through the package's Domi launcher before delegating to the Workbench. It fails before server launch if the Domi JWT or Domi Node path is missing.
 
 ## Source Checkout Starter Env Snapshot
 
