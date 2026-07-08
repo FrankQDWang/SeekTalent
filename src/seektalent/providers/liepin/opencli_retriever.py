@@ -65,6 +65,8 @@ class LiepinOpenCliResumeRetriever:
         if status.ok:
             return
         reason = str(status.safe_reason_code or "liepin_opencli_status_unavailable")
+        if reason == "liepin_opencli_daemon_not_running":
+            return
         if reason in _RECOVERABLE_OPENCLI_READY_REASONS and self._recover_connection():
             return
         raise RuntimeError(reason)
