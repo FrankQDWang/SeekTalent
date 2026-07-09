@@ -59,12 +59,12 @@ class WorkbenchV2RuntimeQueueRunner:
             try:
                 await worker.run_once(runtime_run_id=runtime_run_id)
             except (RuntimeControlError, RuntimeError, ValueError, TypeError, OSError) as exc:
-                logger.warning("workbench v2 runtime queue drain failed: %s", exc)
+                logger.warning("workbench v2 runtime queue drain failed: %s: %s", type(exc).__name__, exc)
             return
         while True:
             try:
                 if await worker.run_once() is None:
                     return
             except (RuntimeControlError, RuntimeError, ValueError, TypeError, OSError) as exc:
-                logger.warning("workbench v2 runtime queue drain failed: %s", exc)
+                logger.warning("workbench v2 runtime queue drain failed: %s: %s", type(exc).__name__, exc)
                 continue

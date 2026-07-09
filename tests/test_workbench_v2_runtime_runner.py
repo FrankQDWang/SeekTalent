@@ -125,4 +125,4 @@ def test_runtime_runner_logs_specific_run_failures(
     with caplog.at_level(logging.WARNING, logger="seektalent_workbench_v2.runtime_runner"):
         asyncio.run(runner._drain_queue(runtime_run_id="rtrun_1"))
 
-    assert "workbench v2 runtime queue drain failed: failed rtrun_1" in caplog.text
+    assert "workbench v2 runtime queue drain failed: RuntimeError: failed rtrun_1" in caplog.text

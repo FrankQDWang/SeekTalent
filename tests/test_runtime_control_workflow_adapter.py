@@ -233,6 +233,7 @@ def test_workflow_adapter_records_runtime_run_failed_after_start_ack(tmp_path: P
     ]
     assert events[-1].payload == {
         "reasonCode": "runtime_run_failed",
+        "exceptionType": "RuntimeError",
         "message": "runtime failed after start ack",
     }
 

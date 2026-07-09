@@ -338,7 +338,11 @@ class WorkflowRuntimeExecutor:
                     stage="runtime",
                     status="failed",
                     summary=str(exc),
-                    payload={"reasonCode": reason_code, "message": str(exc)},
+                    payload={
+                        "reasonCode": reason_code,
+                        "exceptionType": type(exc).__name__,
+                        "message": str(exc),
+                    },
                     created_at=self.now(),
                 ),
                 executor_id=executor_id,

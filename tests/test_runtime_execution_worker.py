@@ -282,6 +282,52 @@ def test_worker_claims_real_store_run_and_executes_real_executor(tmp_path) -> No
     ]
 
 
+def test_worker_preserves_executor_finalized_runtime_failure(tmp_path) -> None:
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    approved = _approved_requirement()
+    store.save_approved_requirement(approved, idempotency_key="approved-runtime-failure")
+    executor = WorkflowRuntimeExecutor(
+        store=store,
+        runtime_factory=lambda: _FailingAfterStartRuntime(RuntimeError("liepin search failed")),
+        runtime_run_id_factory=lambda: "runtime-run-runtime-failure",
+        now=lambda: _NOW,
+    )
+    queued = executor.enqueue_workflow_run(
+        conversation_id="agent-conv-runtime-failure",
+        workbench_session_id="session-runtime-failure",
+        approved_requirement=approved,
+        job_title="Backend Engineer",
+        jd_text="Build data products.",
+        notes="Remote only.",
+        source_ids=["liepin"],
+    )
+    worker = RuntimeExecutionWorker(
+        store=store,
+        executor=executor,
+        executor_id_factory=lambda: "worker-exec-runtime-failure",
+        now=lambda: _NOW,
+        lease_seconds=30,
+        heartbeat_interval_seconds=0.01,
+    )
+
+    with pytest.raises(RuntimeError, match="liepin search failed"):
+        asyncio.run(worker.run_once(runtime_run_id=queued.runtime_run_id))
+
+    run = store.get_run(queued.runtime_run_id)
+    assert run.status == "failed"
+    assert run.stop_reason_code == "runtime_run_failed"
+    assert not store.list_active_executor_leases()
+    events = store.list_events(runtime_run_id=queued.runtime_run_id, after_seq=0, limit=20).events
+    assert [event.event_type for event in events] == [
+        "runtime_run_queued",
+        "runtime_worker_claimed",
+        "runtime_executor_starting",
+        "runtime_executor_started",
+        "runtime_run_failed",
+    ]
+
+
 def test_worker_claim_is_single_winner_across_processes(tmp_path) -> None:
     store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
     store.initialize()
@@ -544,6 +590,15 @@ class _CallbackRuntime:
         self.received = dict(kwargs)
         kwargs["runtime_start_callback"]("workflow-real")
         return SimpleNamespace(run_id="workflow-real")
+
+
+class _FailingAfterStartRuntime:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    async def run_async(self, **kwargs):
+        kwargs["runtime_start_callback"]("workflow-failed")
+        raise self.error
 
 
 def _run(*, status: str = "queued", source_ids: Sequence[str] = ("cts",)) -> RuntimeRunRecord:

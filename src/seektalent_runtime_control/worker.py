@@ -117,7 +117,10 @@ class RuntimeExecutionWorker:
                 executor_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await executor_task
-            if _executor_finalized_failure(exc):
+            if _executor_finalized_failure(exc) or _executor_already_finalized_run(
+                self.store,
+                claim.runtime_run.runtime_run_id,
+            ):
                 raise
             reason_code = _worker_failure_reason(exc)
             self._record_worker_failure(
@@ -270,6 +273,20 @@ def _executor_finalized_failure(exc: Exception) -> bool:
         "runtime_resume_checkpoint_missing",
         "runtime_checkpoint_corrupt",
         "runtime_checkpoint_schema_unsupported",
+    }
+
+
+def _executor_already_finalized_run(store: RuntimeControlStore, runtime_run_id: str) -> bool:
+    get_run = getattr(store, "get_run", None)
+    if not callable(get_run):
+        return False
+    try:
+        run = get_run(runtime_run_id)
+    except (RuntimeControlError, RuntimeError, ValueError, TypeError, OSError):
+        return False
+    return run.status == "failed" and run.stop_reason_code in {
+        "runtime_run_failed",
+        "runtime_executor_start_failed",
     }
 
 
