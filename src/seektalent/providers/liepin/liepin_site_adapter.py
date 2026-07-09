@@ -380,31 +380,101 @@ class LiepinSiteAdapter:
                 status=_session_status_for_liepin_reason(reason),
                 safe_reason_code=reason,
             )
+        reset_attempted = False
         try:
             state = self.state()
         except OpenCliBrowserError as exc:
             reason = _opencli_safe_reason(exc.safe_reason_code, default="liepin_opencli_status_unavailable")
             current_url = self._current_url_or_none()
-            return _session_status(
-                connection_id=connection_id,
-                status=_session_status_for_liepin_reason(reason),
-                safe_reason_code=reason,
-                current_url=current_url,
-            )
+            if reason == "liepin_opencli_host_blocked" and self._reset_opened_search_page(opened):
+                reset_attempted = True
+                try:
+                    state = self.state()
+                except OpenCliBrowserError as reset_exc:
+                    reset_reason = _opencli_safe_reason(
+                        reset_exc.safe_reason_code,
+                        default="liepin_opencli_status_unavailable",
+                    )
+                    return _session_status(
+                        connection_id=connection_id,
+                        status=_session_status_for_liepin_reason(reset_reason),
+                        safe_reason_code=reset_reason,
+                        current_url=current_url,
+                    )
+            else:
+                return _session_status(
+                    connection_id=connection_id,
+                    status=_session_status_for_liepin_reason(reason),
+                    safe_reason_code=reason,
+                    current_url=current_url,
+                )
 
         state_text = _state_text_for_probe(state)
         current_url = _state_url(state_text) or self._current_url_or_none()
         if not state.ok:
             reason = _opencli_safe_reason(state.safe_reason_code, default="liepin_opencli_status_unavailable")
-            return _session_status(
-                connection_id=connection_id,
-                status=_session_status_for_liepin_reason(reason),
-                safe_reason_code=reason,
-                current_url=current_url,
-            )
+            if (
+                not reset_attempted
+                and reason == "liepin_opencli_host_blocked"
+                and self._reset_opened_search_page(opened)
+            ):
+                reset_attempted = True
+                try:
+                    state = self.state()
+                except OpenCliBrowserError as reset_exc:
+                    reset_reason = _opencli_safe_reason(
+                        reset_exc.safe_reason_code,
+                        default="liepin_opencli_status_unavailable",
+                    )
+                    return _session_status(
+                        connection_id=connection_id,
+                        status=_session_status_for_liepin_reason(reset_reason),
+                        safe_reason_code=reset_reason,
+                        current_url=current_url,
+                    )
+                state_text = _state_text_for_probe(state)
+                current_url = _state_url(state_text) or self._current_url_or_none()
+                reason = _opencli_safe_reason(state.safe_reason_code, default="liepin_opencli_status_unavailable")
+            if not state.ok:
+                if reason == "liepin_opencli_host_blocked":
+                    reason = "liepin_opencli_search_not_ready"
+                return _session_status(
+                    connection_id=connection_id,
+                    status=_session_status_for_liepin_reason(reason),
+                    safe_reason_code=reason,
+                    current_url=current_url,
+                )
 
         search_ready = current_url is not None and _is_liepin_recruiter_search_surface(current_url)
         result_ready = _looks_like_liepin_search_result_surface(state_text)
+        if not search_ready and not reset_attempted and self._reset_opened_search_page(opened):
+            try:
+                state = self.state()
+            except OpenCliBrowserError as reset_exc:
+                reset_reason = _opencli_safe_reason(
+                    reset_exc.safe_reason_code,
+                    default="liepin_opencli_status_unavailable",
+                )
+                return _session_status(
+                    connection_id=connection_id,
+                    status=_session_status_for_liepin_reason(reset_reason),
+                    safe_reason_code=reset_reason,
+                    current_url=current_url,
+                )
+            state_text = _state_text_for_probe(state)
+            current_url = _state_url(state_text) or self._current_url_or_none()
+            search_ready = current_url is not None and _is_liepin_recruiter_search_surface(current_url)
+            result_ready = _looks_like_liepin_search_result_surface(state_text)
+            if not state.ok:
+                reason = _opencli_safe_reason(state.safe_reason_code, default="liepin_opencli_status_unavailable")
+                if reason == "liepin_opencli_host_blocked":
+                    reason = "liepin_opencli_search_not_ready"
+                return _session_status(
+                    connection_id=connection_id,
+                    status=_session_status_for_liepin_reason(reason),
+                    safe_reason_code=reason,
+                    current_url=current_url,
+                )
         if not search_ready:
             return _session_status(
                 connection_id=connection_id,
@@ -424,6 +494,17 @@ class LiepinSiteAdapter:
             search_surface_ready=True,
             result_surface_ready=result_ready,
         )
+
+    def _reset_opened_search_page(self, opened: OpenCliBrowserResult) -> bool:
+        page_id = opened.private_output.strip()
+        if not _is_safe_page_id(page_id):
+            return False
+        try:
+            return self._try_reset_liepin_search_tab(page_id=page_id, url=LIEPIN_RECRUITER_SEARCH_URL)
+        except OpenCliBrowserError:
+            self._forget_owned_page_marker(page_id)
+            self._delete_lease()
+            return False
 
     def recover_connection(self) -> OpenCliBrowserResult:
         status = self.status()
@@ -516,6 +597,7 @@ class LiepinSiteAdapter:
                 action="state",
                 safe_reason_code=safe_reason,
                 observation=observation,
+                private_output=f"URL: {current_url}",
             )
         output = self._run_browser_command("state", ())
         observation = build_observation(output)

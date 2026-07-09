@@ -1224,6 +1224,178 @@ def test_session_status_probe_prepares_search_surface_from_non_liepin_active_tab
     assert status.model_dump(by_alias=True)["searchSurfaceReady"] is True
 
 
+def test_session_status_probe_prepares_search_surface_from_liepin_homepage(tmp_path: Path) -> None:
+    homepage_url = "https://h.liepin.com/?time=1783577138392"
+    state_text = "\n".join(
+        [
+            f"URL: {LIEPIN_SEARCH_URL}",
+            "包含全部关键词",
+            "[ref=search-input] <input id=rc_select_1 role=combobox />",
+        ]
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "daemon", "status"): "Daemon: running\nExtension: connected",
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                json.dumps([{"page": "page-home", "url": homepage_url, "active": True}]),
+                json.dumps(
+                    [
+                        {"page": "page-home", "url": homepage_url, "active": False},
+                        {"page": "page-search", "url": LIEPIN_SEARCH_URL, "active": True},
+                    ]
+                ),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): json.dumps(
+                {"page": "page-search", "url": LIEPIN_SEARCH_URL}
+            ),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): LIEPIN_SEARCH_URL,
+            ("opencli", "browser", "seektalent-liepin", "state"): state_text,
+        }
+    )
+
+    status = _runner(commands, lease_dir=tmp_path).session_status_probe(
+        connection_id="liepin-opencli",
+        provider_account_hash="caller-provider-hash",
+    )
+
+    assert status.status == "ready"
+    assert status.current_url == LIEPIN_SEARCH_URL
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL) in commands.calls
+
+
+def test_session_status_probe_prepares_search_surface_from_liepin_detail_page(tmp_path: Path) -> None:
+    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&type=normal"
+    state_text = "\n".join(
+        [
+            f"URL: {LIEPIN_SEARCH_URL}",
+            "包含全部关键词",
+            "[ref=search-input] <input id=rc_select_1 role=combobox />",
+        ]
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "daemon", "status"): "Daemon: running\nExtension: connected",
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                json.dumps([{"page": "page-detail", "url": detail_url, "active": True}]),
+                json.dumps(
+                    [
+                        {"page": "page-detail", "url": detail_url, "active": False},
+                        {"page": "page-search", "url": LIEPIN_SEARCH_URL, "active": True},
+                    ]
+                ),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): json.dumps(
+                {"page": "page-search", "url": LIEPIN_SEARCH_URL}
+            ),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): LIEPIN_SEARCH_URL,
+            ("opencli", "browser", "seektalent-liepin", "state"): state_text,
+        }
+    )
+
+    status = _runner(commands, lease_dir=tmp_path).session_status_probe(
+        connection_id="liepin-opencli",
+        provider_account_hash="caller-provider-hash",
+    )
+
+    assert status.status == "ready"
+    assert status.current_url == LIEPIN_SEARCH_URL
+    assert ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL) in commands.calls
+
+
+def test_session_status_probe_does_not_accept_blank_page_after_search_open(tmp_path: Path) -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "daemon", "status"): "Daemon: running\nExtension: connected",
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                json.dumps([{"page": "page-blank", "url": "data:text/html,<html></html>", "active": True}]),
+                json.dumps([{"page": "page-blank", "url": "data:text/html,<html></html>", "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): json.dumps(
+                {"page": "page-search", "url": LIEPIN_SEARCH_URL}
+            ),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "data:text/html,<html></html>",
+            ("opencli", "browser", "seektalent-liepin", "state"): "URL: data:text/html,<html></html>",
+        }
+    )
+
+    status = _runner(commands, lease_dir=tmp_path).session_status_probe(
+        connection_id="liepin-opencli",
+        provider_account_hash="caller-provider-hash",
+    )
+
+    assert status.status == "missing"
+    assert status.safe_reason_code == "liepin_opencli_search_not_ready"
+    assert status.current_url == "data:text/html,<html></html>"
+
+
+def test_session_status_probe_resets_opened_blank_page_to_search_surface(tmp_path: Path) -> None:
+    state_text = "\n".join(
+        [
+            f"URL: {LIEPIN_SEARCH_URL}",
+            "包含全部关键词",
+            "[ref=search-input] <input id=rc_select_1 role=combobox />",
+        ]
+    )
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "daemon", "status"): "Daemon: running\nExtension: connected",
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                json.dumps([{"page": "page-blank", "url": "data:text/html,<html></html>", "active": True}]),
+                json.dumps([{"page": "page-blank", "url": "data:text/html,<html></html>", "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): json.dumps(
+                {"page": "page-search", "url": LIEPIN_SEARCH_URL}
+            ),
+            ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-search", LIEPIN_SEARCH_URL): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [
+                "data:text/html,<html></html>",
+                LIEPIN_SEARCH_URL,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "state"): state_text,
+        }
+    )
+
+    status = _runner(commands, lease_dir=tmp_path).session_status_probe(
+        connection_id="liepin-opencli",
+        provider_account_hash="caller-provider-hash",
+    )
+
+    assert status.status == "ready"
+    assert status.current_url == LIEPIN_SEARCH_URL
+    assert ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-search", LIEPIN_SEARCH_URL) in commands.calls
+
+
+def test_session_status_probe_returns_status_when_reset_followup_state_fails(tmp_path: Path) -> None:
+    status_error = subprocess.CalledProcessError(1, ["opencli"], stderr="status unavailable")
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "daemon", "status"): "Daemon: running\nExtension: connected",
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                json.dumps([{"page": "page-blank", "url": "data:text/html,<html></html>", "active": True}]),
+                json.dumps([{"page": "page-blank", "url": "data:text/html,<html></html>", "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): json.dumps(
+                {"page": "page-search", "url": LIEPIN_SEARCH_URL}
+            ),
+            ("opencli", "browser", "seektalent-liepin", "open", "--tab", "page-search", LIEPIN_SEARCH_URL): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [
+                "data:text/html,<html></html>",
+                status_error,
+                "data:text/html,<html></html>",
+            ],
+        }
+    )
+
+    status = _runner(commands, lease_dir=tmp_path).session_status_probe(
+        connection_id="liepin-opencli",
+        provider_account_hash="caller-provider-hash",
+    )
+
+    assert status.status == "missing"
+    assert status.safe_reason_code == "liepin_opencli_status_unavailable"
+    assert status.current_url == "data:text/html,<html></html>"
+
+
 def test_session_status_probe_lets_opencli_browser_command_start_stopped_daemon(tmp_path: Path) -> None:
     state_text = "\n".join(
         [
