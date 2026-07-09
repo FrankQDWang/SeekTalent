@@ -280,6 +280,14 @@ def _search_state_nonterminal(snapshot: LiepinStateSnapshot) -> bool:
     return bool(snapshot.text.strip())
 
 
+def _search_query_matches(actual: str, expected: str) -> bool:
+    return _normalized_search_query(actual) == _normalized_search_query(expected)
+
+
+def _normalized_search_query(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
+
+
 def _search_state_ready_for_card_extraction(snapshot: LiepinStateSnapshot) -> bool:
     if not snapshot.ok:
         return False
@@ -1300,6 +1308,31 @@ class LiepinSiteAdapter:
 
             def observe_after_fill() -> LiepinStateSnapshot:
                 nonlocal click_ready_state
+                applied_query = self._liepin_search_query_value_from_dom()
+                if not _search_query_matches(applied_query, query):
+                    events.append(
+                        {
+                            "action_kind": "verify_search_input",
+                            "route_kind": "search",
+                            "ok": False,
+                            "expected_chars": len(query),
+                            "actual_chars": len(applied_query),
+                            "safe_reason_code": "liepin_opencli_search_input_unapplied",
+                        }
+                    )
+                    return LiepinStateSnapshot(
+                        ok=False,
+                        text="",
+                        safe_reason_code="liepin_opencli_search_input_unapplied",
+                    )
+                events.append(
+                    {
+                        "action_kind": "verify_search_input",
+                        "route_kind": "search",
+                        "ok": True,
+                        "chars": len(query),
+                    }
+                )
                 click_ready_state = fill_retry_state or first_state
                 events.append(
                     {
@@ -2095,6 +2128,26 @@ class LiepinSiteAdapter:
         if isinstance(parsed, str) and parsed.strip():
             return parsed.strip()
         return None
+
+    def _liepin_search_query_value_from_dom(self) -> str:
+        output = self._run_fixed_readonly_eval_probe(probe_name="liepin_search_query_value", ref="current")
+        try:
+            payload = json.loads(output)
+        except json.JSONDecodeError as exc:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state") from exc
+        if not isinstance(payload, Mapping):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        if payload.get("schema_version") != "seektalent.liepin_search_query_value.v1":
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        if payload.get("ok") is False:
+            reason = payload.get("safeReasonCode")
+            if isinstance(reason, str) and reason.startswith("liepin_opencli_"):
+                raise OpenCliBrowserError(reason)
+            raise OpenCliBrowserError("liepin_opencli_search_input_unapplied")
+        value = payload.get("value")
+        if not isinstance(value, str):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        return value
 
     def _blocked_cards_envelope(
         self,

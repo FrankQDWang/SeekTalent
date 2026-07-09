@@ -217,6 +217,13 @@ from seektalent.tracing import json_char_count, json_sha256, text_char_count, te
 
 LOGGER = logging.getLogger(__name__)
 _T = TypeVar("_T")
+_PRIOR_CANDIDATE_FINALIZABLE_SOURCE_REASONS = frozenset(
+    {
+        "source_browser_backend_unavailable",
+        "source_browser_extension_disconnected",
+        "source_browser_timeout",
+    }
+)
 
 
 def _register_artifact(
@@ -1689,6 +1696,7 @@ class WorkflowRuntime:
         not_ready_reason = self._source_round_not_ready_reason(
             coverage_summary=run_state.source_coverage_summary,
             dispatch_result=dispatch_result,
+            has_prior_candidates=bool(pre_round_seen_resume_ids),
         )
         if not_ready_reason is not None:
             raise RunStageError("source_lanes", not_ready_reason)
@@ -1856,6 +1864,7 @@ class WorkflowRuntime:
         *,
         coverage_summary: RuntimeSourceCoverageSummary,
         dispatch_result: SourceRoundDispatchResult,
+        has_prior_candidates: bool = False,
     ) -> str | None:
         if coverage_summary.status == "complete":
             return None
@@ -1868,6 +1877,11 @@ class WorkflowRuntime:
         ):
             return None
         result_by_source = {result.source: result for result in dispatch_result.source_results}
+        if has_prior_candidates and self._source_round_can_finish_with_prior_candidates(
+            coverage_summary=coverage_summary,
+            result_by_source=result_by_source,
+        ):
+            return None
         for source in coverage_summary.blocked_source_kinds:
             result = result_by_source.get(source)
             diagnostic = self._generic_provider_failure_diagnostic(result)
@@ -1888,6 +1902,28 @@ class WorkflowRuntime:
         for source in coverage_summary.missing_source_kinds:
             return f"source_{source}_missing"
         return f"source_coverage_{coverage_summary.status}"
+
+    def _source_round_can_finish_with_prior_candidates(
+        self,
+        *,
+        coverage_summary: RuntimeSourceCoverageSummary,
+        result_by_source: Mapping[str, SourceRoundAdapterResult],
+    ) -> bool:
+        unstable_sources = (
+            *coverage_summary.blocked_source_kinds,
+            *coverage_summary.failed_source_kinds,
+            *coverage_summary.partial_source_kinds,
+        )
+        if not unstable_sources or coverage_summary.missing_source_kinds:
+            return False
+        if coverage_summary.completed_source_kinds or coverage_summary.empty_source_kinds:
+            return False
+        for source in unstable_sources:
+            result = result_by_source.get(source)
+            reason = result.safe_reason_code if result is not None else None
+            if reason not in _PRIOR_CANDIDATE_FINALIZABLE_SOURCE_REASONS:
+                return False
+        return True
 
     def _generic_provider_failure_diagnostic(self, result: SourceRoundAdapterResult | None) -> str | None:
         if result is None or result.safe_reason_code not in {"failed_provider_error", "source_provider_failed"}:

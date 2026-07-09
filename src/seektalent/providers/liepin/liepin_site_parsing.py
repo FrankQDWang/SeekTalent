@@ -23,7 +23,12 @@ from seektalent.providers.liepin.opencli_card_text import (
 )
 
 FIXED_READONLY_EVAL_PROBES = frozenset(
-    {"liepin_city_choose_ref", "liepin_detail_url_for_card", "liepin_detail_resume_payload"}
+    {
+        "liepin_city_choose_ref",
+        "liepin_detail_url_for_card",
+        "liepin_detail_resume_payload",
+        "liepin_search_query_value",
+    }
 )
 LIEPIN_ALLOWED_HOSTS = frozenset(LIEPIN_OPENCLI_ALLOWED_HOSTS)
 LIEPIN_RISK_HOSTS = frozenset({"safe.liepin.com"})
@@ -1020,6 +1025,8 @@ def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
         return _liepin_detail_resume_payload_probe_script()
     if probe_name == "liepin_city_choose_ref":
         return _liepin_city_choose_ref_probe_script(section=ref)
+    if probe_name == "liepin_search_query_value":
+        return _liepin_search_query_value_probe_script()
     if probe_name != "liepin_detail_url_for_card":
         raise OpenCliBrowserError("liepin_opencli_forbidden_command")
     return (
@@ -1037,6 +1044,60 @@ def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
         "+ '&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal';"
         "})()"
     )
+
+
+def _liepin_search_query_value_probe_script() -> str:
+    return r"""
+(() => {
+  const schema = "seektalent.liepin_search_query_value.v1";
+  const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const visible = (node) => {
+    if (!node || !node.ownerDocument || !node.getBoundingClientRect) return false;
+    const style = node.ownerDocument.defaultView.getComputedStyle(node);
+    if (!style || style.display === "none" || style.visibility === "hidden") return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const read = (node) => {
+    if (!node) return "";
+    if (node.matches && node.matches("input, textarea")) {
+      return clean(node.value || node.getAttribute("value") || "");
+    }
+    return clean(node.innerText || node.textContent);
+  };
+  const controls = (root) =>
+    Array.from(root ? root.querySelectorAll("input, textarea, [contenteditable='true']") : [])
+      .filter(visible);
+  const label = Array.from(document.querySelectorAll("span,label,div,p"))
+    .find((node) => clean(node.textContent).includes("包含全部关键词"));
+  if (label) {
+    let root = label;
+    for (let i = 0; i < 5 && root; i += 1) {
+      const control = controls(root).find((item) => read(item));
+      if (control) return JSON.stringify({ ok: true, schema_version: schema, value: read(control).slice(0, 200) });
+      root = root.parentElement;
+    }
+  }
+  const queryControl = controls(document).find((item) => {
+    const marker = clean([
+      item.getAttribute("placeholder"),
+      item.getAttribute("aria-label"),
+      item.getAttribute("name"),
+      item.getAttribute("id"),
+      item.className,
+    ].join(" "));
+    return /关键词|搜索|search|keyword|rc_select/i.test(marker);
+  });
+  if (queryControl) {
+    return JSON.stringify({ ok: true, schema_version: schema, value: read(queryControl).slice(0, 200) });
+  }
+  return JSON.stringify({
+    ok: false,
+    schema_version: schema,
+    safeReasonCode: "liepin_opencli_search_input_unapplied"
+  });
+})()
+"""
 
 
 def _liepin_city_choose_ref_probe_script(*, section: str) -> str:

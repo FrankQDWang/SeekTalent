@@ -34,7 +34,7 @@ from seektalent.models import (
 )
 from seektalent.storage.json import sha256_json
 from seektalent.runtime import WorkflowRuntime
-from seektalent.runtime.orchestrator import RuntimeSourceRoundContext
+from seektalent.runtime.orchestrator import RunStageError, RuntimeSourceRoundContext
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
 from seektalent.runtime.rescue_router import RescueInputs, choose_rescue_lane
 from seektalent.runtime.retrieval_runtime import (
@@ -105,6 +105,7 @@ def test_liepin_filter_partial_reason_is_public_safe() -> None:
     assert public_source_reason_code("source_filter_unavailable") == "source_filter_unavailable"
     assert public_source_reason_code("source_browser_backend_unavailable") == "source_browser_backend_unavailable"
     assert public_source_reason_code("liepin_opencli_filter_unapplied") == "source_filter_unavailable"
+    assert public_source_reason_code("liepin_opencli_search_input_unapplied") == "source_browser_backend_unavailable"
 
 
 def test_public_runtime_filter_payload_does_not_expose_browser_terms() -> None:
@@ -759,6 +760,88 @@ def test_source_round_is_not_ready_when_selected_source_blocks_even_if_another_r
         )
         == "liepin_opencli_filter_unapplied"
     )
+
+
+def test_source_round_can_finish_when_later_browser_round_blocks_after_prior_candidates(tmp_path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
+    dispatch_result = SourceRoundDispatchResult(
+        source_results=(
+            SourceRoundAdapterResult(
+                source="liepin",
+                status="blocked",
+                safe_reason_code="source_browser_backend_unavailable",
+            ),
+        ),
+        candidates=(),
+        raw_candidate_count=0,
+    )
+    coverage = RuntimeSourceCoverageSummary(
+        status="empty",
+        selected_source_kinds=("liepin",),
+        blocked_source_kinds=("liepin",),
+        finalization_scope="available_sources_only",
+    )
+
+    assert (
+        runtime._source_round_not_ready_reason(
+            coverage_summary=coverage,
+            dispatch_result=dispatch_result,
+            has_prior_candidates=True,
+        )
+        is None
+    )
+
+
+def test_first_round_partial_browser_source_with_new_candidates_still_blocks(tmp_path) -> None:
+    candidate = _candidate("liepin-1", "liepin")
+
+    def source_round_adapters(runtime: WorkflowRuntime, context: RuntimeSourceRoundContext):
+        del runtime, context
+
+        async def adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            del request
+            return SourceRoundAdapterResult(
+                source="liepin",
+                status="partial",
+                safe_reason_code="source_browser_backend_unavailable",
+                candidates=(candidate,),
+                raw_candidate_count=1,
+            )
+
+        return {"liepin": adapter}
+
+    runtime = WorkflowRuntime(
+        make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"),
+        source_round_adapter_provider=source_round_adapters,
+    )
+    tracer = RunTracer(tmp_path / "trace")
+    try:
+        with pytest.raises(RunStageError, match="source_browser_backend_unavailable"):
+            asyncio.run(
+                runtime._execute_multi_source_round_search(
+                    round_no=1,
+                    retrieval_plan=_retrieval_plan(),
+                    proposed_filter_plan=ProposedFilterPlan(),
+                    query_states=(_query_state("exploit"),),
+                    adapter_notes=(),
+                    target_new=10,
+                    seen_resume_ids=set(),
+                    seen_dedup_keys=set(),
+                    run_state=_run_state(),
+                    source_plan=(
+                        RuntimeSourceLanePlan(
+                            source_plan_id="run-1:source:0:liepin",
+                            runtime_run_id="run-1",
+                            source="liepin",
+                            label="Liepin",
+                        ),
+                    ),
+                    source_context={"status": "ready"},
+                    tracer=tracer,
+                )
+            )
+    finally:
+        tracer.close()
 
 
 def test_dispatch_sends_same_query_bundle_to_cts_and_liepin() -> None:

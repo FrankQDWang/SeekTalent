@@ -252,6 +252,17 @@ def _empty_structured_cards_probe_json() -> str:
     )
 
 
+def _search_query_value_probe_json(value: str) -> str:
+    return json.dumps(
+        {
+            "ok": True,
+            "schema_version": "seektalent.liepin_search_query_value.v1",
+            "value": value,
+        },
+        ensure_ascii=False,
+    )
+
+
 def _has_probe_between(calls: Sequence[tuple[str, ...]], start: int, end: int) -> bool:
     return any(_is_probe_call(call) for call in calls[start:end])
 
@@ -275,6 +286,7 @@ class FakeCommands:
         self.fail = fail
         self.calls: list[tuple[str, ...]] = []
         self.envs: list[Mapping[str, str] | None] = []
+        self.search_query_value = ""
 
     def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
         del timeout
@@ -283,13 +295,18 @@ class FakeCommands:
         self.envs.append(env)
         if self.fail:
             raise subprocess.TimeoutExpired(cmd=list(argv), timeout=1)
+        if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_search_query_value.v1" in call[4]:
+            return _search_query_value_probe_json(self.search_query_value)
         if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]:
             output = self.outputs.get((ANY_STRUCTURED_CARD_PROBE,), _structured_cards_probe_json("70"))
             return self._resolve_output(output)
         output = self.outputs.get(call, "{}")
         if output == "{}" and len(call) == 6 and call[3:5] == ("tab", "new"):
             return json.dumps({"page": "page-1", "url": call[5]})
-        return self._resolve_output(output)
+        resolved = self._resolve_output(output)
+        if len(call) >= 6 and call[3] == "fill":
+            self.search_query_value = call[-1]
+        return resolved
 
     def _resolve_output(self, output: object) -> str:
         if isinstance(output, list):
@@ -321,6 +338,8 @@ class EvalCommands(FakeCommands):
         call = tuple(argv)
         if len(call) >= 4 and call[3] == "eval":
             script = call[4] if len(call) > 4 else ""
+            if "seektalent.liepin_search_query_value.v1" in script:
+                return super().run(argv, timeout=timeout, env=env)
             if "seektalent.liepin_structured_cards_probe.v1" in script:
                 return super().run(argv, timeout=timeout, env=env)
             del timeout
@@ -345,10 +364,12 @@ class RefEvalCommands(FakeCommands):
     def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
         call = tuple(argv)
         if len(call) >= 4 and call[3] == "eval":
+            script = call[4] if len(call) > 4 else ""
+            if "seektalent.liepin_search_query_value.v1" in script:
+                return super().run(argv, timeout=timeout, env=env)
             del timeout
             self.calls.append(call)
             self.envs.append(env)
-            script = call[4] if len(call) > 4 else ""
             if (
                 "seektalent.liepin_structured_cards_probe.v1" in script
                 and ANY_STRUCTURED_CARD_PROBE in self.eval_outputs_by_ref
@@ -3029,8 +3050,68 @@ def test_search_liepin_cards_waits_for_result_evidence_after_stale_search_form(t
 
     assert envelope["status"] == "succeeded"
     wait_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"))
-    eval_index = next(index for index, call in enumerate(commands.calls) if len(call) >= 4 and call[3] == "eval")
+    eval_index = next(
+        index
+        for index, call in enumerate(commands.calls)
+        if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]
+    )
     assert wait_index < eval_index
+
+
+def test_search_liepin_cards_blocks_stale_results_when_keyword_fill_is_unapplied(tmp_path: Path) -> None:
+    class UnappliedKeywordCommands(FakeCommands):
+        def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
+            call = tuple(argv)
+            if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_search_query_value.v1" in call[4]:
+                del timeout
+                self.calls.append(call)
+                self.envs.append(env)
+                return json.dumps(
+                    {
+                        "ok": True,
+                        "schema_version": "seektalent.liepin_search_query_value.v1",
+                        "value": "",
+                    },
+                    ensure_ascii=False,
+                )
+            return super().run(argv, timeout=timeout, env=env)
+
+    state_before = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    stale_results = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "id=resultList\n"
+        "王** 男 40岁 工作14年 硕士 上海\n"
+        "求职期望：上海 旧关键词"
+    )
+    commands = UnappliedKeywordCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                stale_results,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_search_input_unapplied"
+    assert not any(
+        len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]
+        for call in commands.calls
+    )
 
 
 def test_search_liepin_cards_does_not_treat_filter_only_state_as_result_ready(tmp_path: Path) -> None:
