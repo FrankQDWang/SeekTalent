@@ -25,8 +25,11 @@ def test_bootstrap_writes_windows_shims_with_domi_python_node_and_pythonpath(tmp
     domi_python = _touch(tmp_path / "Domi" / "runtime" / "python" / "bin" / "python.exe")
     domi_node = _touch(tmp_path / "Domi" / "runtime" / "node" / "node.exe")
     site_packages = tmp_path / "home" / ".seektalent" / "python-prefix" / "0.7.25" / "Lib" / "site-packages"
+    legacy_bin_ps1 = _touch(home / ".seektalent" / "bin" / "seektalent.ps1")
     legacy_ps1 = _touch(home / ".seektalent" / "seektalent.ps1")
     legacy_cmd = _touch(home / ".seektalent" / "seektalent.cmd")
+    root_runner = home / ".seektalent" / "seektalent-runner.ps1"
+    legacy_bin_ps1.write_text("old 0.7.21 bin shim", encoding="utf-8")
     legacy_ps1.write_text("old 0.7.21 root shim", encoding="utf-8")
     legacy_cmd.write_text("old root cmd", encoding="utf-8")
 
@@ -39,30 +42,34 @@ def test_bootstrap_writes_windows_shims_with_domi_python_node_and_pythonpath(tmp
         package_version="0.7.25",
     )
 
-    ps1 = result.bin_dir / "seektalent.ps1"
+    stale_ps1 = result.bin_dir / "seektalent.ps1"
+    runner = result.bin_dir / "seektalent-runner.ps1"
     cmd = result.bin_dir / "seektalent.cmd"
-    assert ps1.exists()
+    assert not stale_ps1.exists()
+    assert runner.exists()
     assert cmd.exists()
-    assert legacy_ps1.exists()
+    assert not legacy_ps1.exists()
     assert legacy_cmd.exists()
     assert result.command_name == "seektalent"
     assert result.package_version == "0.7.25"
 
-    ps1_text = ps1.read_text(encoding="utf-8")
-    assert ps1_text.startswith('$ErrorActionPreference = "Stop"')
-    assert "`$DomiPython" not in ps1_text
-    assert str(domi_python) in ps1_text
-    assert str(domi_node) in ps1_text
-    assert str(site_packages) in ps1_text
-    assert "SEEKTALENT_DOMI_NODE" in ps1_text
-    assert "-m seektalent.domi_workbench" in ps1_text
-    assert "-m seektalent @args" in ps1_text
+    runner_text = runner.read_text(encoding="utf-8")
+    assert runner_text.startswith('$ErrorActionPreference = "Stop"')
+    assert "`$DomiPython" not in runner_text
+    assert str(domi_python) in runner_text
+    assert str(domi_node) in runner_text
+    assert str(site_packages) in runner_text
+    assert "SEEKTALENT_DOMI_NODE" in runner_text
+    assert "-m seektalent.domi_workbench" in runner_text
+    assert "-m seektalent @args" in runner_text
 
     cmd_text = cmd.read_text(encoding="utf-8")
-    assert "seektalent.ps1" in cmd_text
+    assert "seektalent.ps1" not in cmd_text
+    assert "seektalent-runner.ps1" in cmd_text
+    assert "-ExecutionPolicy Bypass" in cmd_text
 
-    assert legacy_ps1.read_text(encoding="utf-8") == ps1_text
     assert legacy_cmd.read_text(encoding="utf-8") == cmd_text
+    assert root_runner.read_text(encoding="utf-8") == runner_text
 
 
 def test_bootstrap_writes_posix_shim_with_domi_python_node_and_pythonpath(tmp_path: Path) -> None:

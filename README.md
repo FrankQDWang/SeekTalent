@@ -32,13 +32,13 @@ The current product shape is local-first:
 Recommended for end users:
 
 ```bash
-pipx install seektalent==0.7.25
+pipx install seektalent==0.7.29
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install seektalent==0.7.25
+pip install seektalent==0.7.29
 ```
 
 ### Domi prepared-machine install
@@ -48,14 +48,14 @@ For the current Domi handoff mode, the user machine only needs Domi installed, C
 Windows PowerShell:
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.25
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.29/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.29
 seektalent workbench
 ```
 
 macOS shell:
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.sh") 0.7.25
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.29/scripts/install-seektalent-domi.sh") 0.7.29
 seektalent workbench
 ```
 
@@ -174,7 +174,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install seektalent==0.7.25
+pipx install seektalent==0.7.29
 ```
 
 This gives you the `seektalent` command directly.
@@ -182,7 +182,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install seektalent==0.7.25
+pip install seektalent==0.7.29
 ```
 
 Then:

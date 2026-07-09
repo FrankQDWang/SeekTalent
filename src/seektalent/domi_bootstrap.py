@@ -192,10 +192,14 @@ def _write_windows_shims(
     domi_node: Path,
     python_paths: tuple[Path, ...],
 ) -> None:
-    ps1 = bin_dir / "seektalent.ps1"
+    stale_ps1 = bin_dir / "seektalent.ps1"
+    if stale_ps1.exists():
+        stale_ps1.unlink()
+
+    runner = bin_dir / "seektalent-runner.ps1"
     cmd = bin_dir / "seektalent.cmd"
     python_path_lines = "\n".join(f'$PythonPathEntries += "{_escape_powershell(path)}"' for path in python_paths)
-    ps1.write_text(
+    runner.write_text(
         f"""$ErrorActionPreference = "Stop"
 $DomiPython = "{_escape_powershell(domi_python)}"
 $DomiNode = "{_escape_powershell(domi_node)}"
@@ -220,7 +224,7 @@ exit $LASTEXITCODE
     )
     cmd.write_text(
         """@echo off
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0seektalent.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0seektalent-runner.ps1" %*
 exit /b %ERRORLEVEL%
 """,
         encoding="utf-8",
@@ -229,7 +233,11 @@ exit /b %ERRORLEVEL%
 
 def _write_windows_root_compat_shims(root_dir: Path, bin_dir: Path) -> None:
     root_dir.mkdir(parents=True, exist_ok=True)
-    for filename in ("seektalent.ps1", "seektalent.cmd"):
+    stale_ps1 = root_dir / "seektalent.ps1"
+    if stale_ps1.exists():
+        stale_ps1.unlink()
+
+    for filename in ("seektalent-runner.ps1", "seektalent.cmd"):
         source = bin_dir / filename
         target = root_dir / filename
         if source == target:
