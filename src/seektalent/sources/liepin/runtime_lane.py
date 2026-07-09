@@ -147,6 +147,7 @@ async def run_liepin_source_lane(
             source_lane_run_id=source_lane_run_id,
             attempt=request.attempt,
             reason_code=reason_code,
+            safe_error_summary=_safe_worker_error_summary(error, reason_code=reason_code),
         )
         partial_search_result = getattr(error, "partial_search_result", None)
         if isinstance(partial_search_result, SearchResult):
@@ -603,6 +604,7 @@ def _blocked_card_result(
     source_lane_run_id: str,
     attempt: int,
     reason_code: str,
+    safe_error_summary: str | None = None,
 ) -> RuntimeSourceLaneResult:
     return RuntimeSourceLaneResult(
         runtime_run_id=runtime_run_id,
@@ -615,6 +617,7 @@ def _blocked_card_result(
         blocked_reason_code=reason_code,
         stop_reason_code=reason_code,
         retryable=reason_code in {"blocked_backend_unavailable", "failed_provider_error"},
+        safe_error_summary=safe_error_summary,
         events=(
             RuntimeSourceLaneEvent(
                 schema_version="runtime_source_lane_event_v1",
@@ -630,6 +633,14 @@ def _blocked_card_result(
             ),
         ),
     )
+
+
+def _safe_worker_error_summary(error: LiepinWorkerModeError, *, reason_code: str) -> str:
+    summary = f"{type(error).__name__}: {reason_code}"
+    message = str(error).strip()
+    if message.startswith("Liepin ") and len(message) <= 160:
+        summary = f"{summary}; {message}"
+    return summary
 
 
 def _card_lane_events(

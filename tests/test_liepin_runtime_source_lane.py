@@ -1526,6 +1526,46 @@ def test_liepin_runtime_lane_normalizes_blocked_worker_error_codes() -> None:
     assert "secret-token" not in payload
 
 
+def test_liepin_runtime_lane_records_safe_worker_exception_summary() -> None:
+    class FailedWorker(FakeWorker):
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            del request, round_no, trace_id, provider_account_hash
+            raise LiepinWorkerModeError(
+                "Liepin OpenCLI resume search blocked.",
+                code="failed_provider_error",
+            )
+
+    request = RuntimeSourceLaneRequest(
+        source="liepin",
+        lane_mode="card",
+        job_title="Backend Engineer",
+        jd="FastAPI retrieval",
+        notes=None,
+        requirement_sheet=_requirement_sheet(),
+        runtime_run_id="runtime-run-1",
+        source_lane_run_id="lane-run-1",
+        source_query_terms=("FastAPI", "ranking"),
+        source_context={"provider_account_hash": "acct_hash_123"},
+    )
+
+    result = asyncio.run(
+        run_liepin_source_lane(settings=make_settings(), request=request, worker_client=FailedWorker())
+    )
+
+    assert result.status == "blocked"
+    assert result.blocked_reason_code == "failed_provider_error"
+    assert result.safe_error_summary == (
+        "LiepinWorkerModeError: failed_provider_error; Liepin OpenCLI resume search blocked."
+    )
+
+
 def test_liepin_runtime_lane_preserves_partial_worker_cards_with_safe_reason() -> None:
     class PartialWorker(FakeWorker):
         async def search(

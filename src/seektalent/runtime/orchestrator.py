@@ -1870,9 +1870,15 @@ class WorkflowRuntime:
         result_by_source = {result.source: result for result in dispatch_result.source_results}
         for source in coverage_summary.blocked_source_kinds:
             result = result_by_source.get(source)
+            diagnostic = self._generic_provider_failure_diagnostic(result)
+            if diagnostic is not None:
+                return diagnostic
             return (result.safe_reason_code if result is not None else None) or f"source_{source}_blocked"
         for source in coverage_summary.failed_source_kinds:
             result = result_by_source.get(source)
+            diagnostic = self._generic_provider_failure_diagnostic(result)
+            if diagnostic is not None:
+                return diagnostic
             return (result.safe_reason_code if result is not None else None) or f"source_{source}_failed"
         for source in coverage_summary.partial_source_kinds:
             result = result_by_source.get(source)
@@ -1882,6 +1888,15 @@ class WorkflowRuntime:
         for source in coverage_summary.missing_source_kinds:
             return f"source_{source}_missing"
         return f"source_coverage_{coverage_summary.status}"
+
+    def _generic_provider_failure_diagnostic(self, result: SourceRoundAdapterResult | None) -> str | None:
+        if result is None or result.safe_reason_code not in {"failed_provider_error", "source_provider_failed"}:
+            return None
+        for diagnostic in result.diagnostics:
+            text = str(diagnostic).strip()
+            if text:
+                return text
+        return None
 
     async def _run_rounds(
         self,

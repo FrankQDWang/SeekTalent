@@ -183,6 +183,7 @@ async def _run_liepin_source_round(
         safe_reason_code=_public_liepin_reason_code(
             result.stop_reason_code or result.blocked_reason_code or filter_warning_reason
         ),
+        diagnostics=((result.safe_error_summary,) if result.safe_error_summary else ()),
         lane_result=result,
         executed_query_packages=result.executed_query_packages,
     )

@@ -242,6 +242,39 @@ def test_source_round_unknown_coverage_status_remains_blocking(tmp_path) -> None
     assert reason == "source_coverage_unexpected"
 
 
+def test_source_round_not_ready_uses_safe_diagnostic_for_generic_provider_failure(tmp_path) -> None:
+    settings = make_settings(runs_dir=str(tmp_path / "runs"), liepin_worker_mode="opencli")
+    runtime = _workflow_runtime(settings)
+    coverage = SimpleNamespace(
+        status="degraded",
+        blocked_source_kinds=("liepin",),
+        failed_source_kinds=(),
+        partial_source_kinds=(),
+        empty_source_kinds=(),
+        missing_source_kinds=(),
+    )
+
+    reason = runtime._source_round_not_ready_reason(
+        coverage_summary=coverage,
+        dispatch_result=SourceRoundDispatchResult(
+            source_results=(
+                SourceRoundAdapterResult(
+                    source="liepin",
+                    status="blocked",
+                    safe_reason_code="failed_provider_error",
+                    diagnostics=(
+                        "LiepinWorkerModeError: failed_provider_error; Liepin OpenCLI resume search blocked.",
+                    ),
+                ),
+            ),
+            candidates=(),
+            raw_candidate_count=0,
+        ),
+    )
+
+    assert reason == "LiepinWorkerModeError: failed_provider_error; Liepin OpenCLI resume search blocked."
+
+
 def _runtime_public_event_payloads(progress_events: list[object]) -> list[dict[str, object]]:
     return [
         event.payload
