@@ -2076,6 +2076,34 @@ def test_evaluate_run_writes_query_judge_outcomes(tmp_path: Path, monkeypatch: p
     assert (session.root / "flywheel/query_judge_outcomes.jsonl").exists()
 
 
+def test_eval_optional_dependency_error_mentions_eval_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    import seektalent.evaluation as evaluation
+
+    def fake_import_module(name: str):
+        if name == "wandb":
+            raise ModuleNotFoundError("No module named 'wandb'", name="wandb")
+        raise AssertionError(name)
+
+    monkeypatch.setattr(evaluation.importlib, "import_module", fake_import_module)
+
+    with pytest.raises(RuntimeError, match=r'pip install "seektalent\[eval\]"'):
+        evaluation._import_eval_dependency("wandb")
+
+
+def test_eval_optional_dependency_error_preserves_nested_import_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    import seektalent.evaluation as evaluation
+
+    def fake_import_module(name: str):
+        if name == "wandb":
+            raise ModuleNotFoundError("No module named 'wandb.sdk.internal'", name="wandb.sdk.internal")
+        raise AssertionError(name)
+
+    monkeypatch.setattr(evaluation.importlib, "import_module", fake_import_module)
+
+    with pytest.raises(ModuleNotFoundError, match="wandb.sdk.internal"):
+        evaluation._import_eval_dependency("wandb")
+
+
 def test_evaluate_run_logs_weave_and_wandb(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

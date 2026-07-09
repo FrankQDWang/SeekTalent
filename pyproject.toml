@@ -1,6 +1,6 @@
 [project]
 name = "seektalent"
-version = "0.7.30"
+version = "0.7.31"
 description = "Local CLI Agent for deterministic multi-round resume matching with Pydantic AI"
 readme = "README.md"
 license = { text = "GNU Affero General Public License v3.0" }
@@ -21,6 +21,10 @@ dependencies = [
     "rich>=14.2.0",
     "sse-starlette>=3.4.2",
     "uvicorn>=0.46.0",
+]
+
+[project.optional-dependencies]
+eval = [
     "wandb>=0.23.0",
     "wandb-workspaces>=0.3.9",
     "weave>=0.52.36",

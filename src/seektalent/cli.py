@@ -7,7 +7,6 @@ import os
 import shlex
 import subprocess
 import sys
-import sysconfig
 import threading
 from collections import deque
 from collections.abc import Mapping, MutableMapping, Sequence
@@ -1978,7 +1977,9 @@ def _workbench_command(args: argparse.Namespace) -> int:
     if not _workbench_startup_preflight(env):
         return 1
     argv = [
-        _console_script_path("seektalent-ui-api"),
+        sys.executable,
+        "-m",
+        "seektalent_ui.server",
         "--host",
         args.host,
         "--port",
@@ -2000,23 +2001,9 @@ def _workbench_command(args: argparse.Namespace) -> int:
     try:
         completed = subprocess.run(argv, check=False, env=env)
     except FileNotFoundError:
-        print("validation failed: seektalent-ui-api executable not found", file=sys.stderr)
+        print("validation failed: current Python executable not found", file=sys.stderr)
         return 1
     return completed.returncode
-
-
-def _console_script_path(script_name: str) -> str:
-    executable = f"{script_name}.exe" if os.name == "nt" else script_name
-    current_script = Path(sys.argv[0])
-    sibling = current_script.with_name(executable)
-    if sibling.exists():
-        return str(sibling)
-    scripts_dir = sysconfig.get_path("scripts")
-    if scripts_dir:
-        installed = Path(scripts_dir) / executable
-        if installed.exists():
-            return str(installed)
-    return executable
 
 
 def _inspect_command(args: argparse.Namespace) -> int:

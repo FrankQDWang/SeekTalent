@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import math
 import shutil
@@ -49,6 +50,20 @@ REQUIRED_WANDB_SUMMARY_KEYS = (
     "round_01_ndcg_at_10",
 )
 JUDGE_POLICY_VERSION = "resume-judge-v1"
+EVAL_EXTRA_INSTALL_COMMAND = 'pip install "seektalent[eval]"'
+
+
+def _import_eval_dependency(module_name: str) -> Any:
+    try:
+        return importlib.import_module(module_name)
+    except ModuleNotFoundError as exc:
+        missing_name = exc.name or ""
+        if missing_name == module_name or module_name.startswith(f"{missing_name}."):
+            raise RuntimeError(
+                f"Optional eval dependency '{module_name}' is not installed. "
+                f"Install remote eval logging dependencies with: {EVAL_EXTRA_INSTALL_COMMAND}"
+            ) from exc
+        raise
 
 
 JudgeScore = Literal[0, 1, 2, 3]
@@ -760,7 +775,7 @@ def _version_means_rows(runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _report_run_rows(*, entity: str, project: str) -> list[dict[str, Any]]:
-    import wandb
+    wandb = _import_eval_dependency("wandb")
 
     api = wandb.Api()
     return [
@@ -893,7 +908,7 @@ def _log_to_weave(
     if project_name is None:
         return
 
-    import weave
+    weave = _import_eval_dependency("weave")
 
     weave.init(project_name)
     seektalent_version = _app_version()
@@ -961,9 +976,18 @@ def _log_to_weave(
             auto_summarize=False,
         )
 
+
 def _wandb_report_blocks(*, entity: str, project: str, extra_rows: Sequence[dict[str, Any]] = ()) -> list[Any]:
-    from wandb_workspaces.reports.v2 import BarPlot, H1, H2, MarkdownBlock, P, PanelGrid, Runset
-    from wandb_workspaces.reports.v2.interface import expr
+    reports = _import_eval_dependency("wandb_workspaces.reports.v2")
+    interface = _import_eval_dependency("wandb_workspaces.reports.v2.interface")
+    BarPlot = reports.BarPlot
+    H1 = reports.H1
+    H2 = reports.H2
+    MarkdownBlock = reports.MarkdownBlock
+    P = reports.P
+    PanelGrid = reports.PanelGrid
+    Runset = reports.Runset
+    expr = interface.expr
 
     runset_filters = [
         expr.Metric("State") == "finished",
@@ -1028,8 +1052,8 @@ def _wandb_report_blocks(*, entity: str, project: str, extra_rows: Sequence[dict
 def _upsert_wandb_report(settings: AppSettings, extra_rows: Sequence[dict[str, Any]] = ()) -> None:
     if not settings.wandb_entity or not settings.wandb_project:
         return
-    import wandb
-    from wandb_workspaces.reports.v2 import Report
+    wandb = _import_eval_dependency("wandb")
+    Report = _import_eval_dependency("wandb_workspaces.reports.v2").Report
 
     blocks = _wandb_report_blocks(entity=settings.wandb_entity, project=settings.wandb_project, extra_rows=extra_rows)
     api = wandb.Api()
@@ -1094,7 +1118,7 @@ def _log_to_wandb(
 ) -> dict[str, Any] | None:
     if not settings.wandb_project:
         return None
-    import wandb
+    wandb = _import_eval_dependency("wandb")
 
     run = wandb.init(
         project=settings.wandb_project,

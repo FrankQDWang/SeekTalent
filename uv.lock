@@ -1787,7 +1787,7 @@ wheels = [
 
 [[package]]
 name = "seektalent"
-version = "0.7.30"
+version = "0.7.31"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -1802,6 +1802,10 @@ dependencies = [
     { name = "rich" },
     { name = "sse-starlette" },
     { name = "uvicorn" },
+]
+
+[package.optional-dependencies]
+eval = [
     { name = "wandb" },
     { name = "wandb-workspaces" },
     { name = "weave" },
@@ -1830,10 +1834,11 @@ requires-dist = [
     { name = "rich", specifier = ">=14.2.0" },
     { name = "sse-starlette", specifier = ">=3.4.2" },
     { name = "uvicorn", specifier = ">=0.46.0" },
-    { name = "wandb", specifier = ">=0.23.0" },
-    { name = "wandb-workspaces", specifier = ">=0.3.9" },
-    { name = "weave", specifier = ">=0.52.36" },
+    { name = "wandb", marker = "extra == 'eval'", specifier = ">=0.23.0" },
+    { name = "wandb-workspaces", marker = "extra == 'eval'", specifier = ">=0.3.9" },
+    { name = "weave", marker = "extra == 'eval'", specifier = ">=0.52.36" },
 ]
+provides-extras = ["eval"]
 
 [package.metadata.requires-dev]
 dev = [

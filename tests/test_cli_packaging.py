@@ -5,6 +5,7 @@ import os
 import site
 import subprocess
 import sys
+import tomllib
 import zipfile
 from pathlib import Path
 
@@ -13,6 +14,18 @@ from seektalent.resources import REQUIRED_PROMPTS
 
 def _bin_dir(venv_dir: Path) -> Path:
     return venv_dir / ("Scripts" if os.name == "nt" else "bin")
+
+
+def test_default_dependencies_exclude_remote_eval_logging_packages() -> None:
+    pyproject = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+
+    default_dependencies = [dependency.lower() for dependency in pyproject["project"]["dependencies"]]
+    for package_name in ("wandb", "wandb-workspaces", "weave"):
+        assert not any(dependency.startswith(package_name) for dependency in default_dependencies)
+
+    eval_dependencies = [dependency.lower() for dependency in pyproject["project"]["optional-dependencies"]["eval"]]
+    for package_name in ("wandb", "wandb-workspaces", "weave"):
+        assert any(dependency.startswith(package_name) for dependency in eval_dependencies)
 
 
 def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
