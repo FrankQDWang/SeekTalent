@@ -1767,22 +1767,12 @@ _WORKBENCH_DOMI_NODE_ENV_KEYS = ("SEEKTALENT_OPENCLI_NODE", "SEEKTALENT_DOMI_NOD
 
 
 def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
-    raw_provider_label = str(env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL") or "").strip().lower()
-    provider_label = raw_provider_label or (
-        "domi" if str(env.get("SEEKTALENT_DOMI_JWT") or "").strip() else "bailian"
-    )
-    if provider_label == "domi":
-        env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "domi"
-        if not str(env.get("SEEKTALENT_DOMI_JWT") or "").strip():
-            _print_workbench_reason(
-                "seektalent_domi_jwt_missing",
-                "未获取到 Domi 大模型授权。请在当前终端设置 SEEKTALENT_DOMI_JWT 后重试。",
-            )
-            return False
-    elif not str(env.get("SEEKTALENT_TEXT_LLM_API_KEY") or "").strip():
+    env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "domi"
+    env.pop("SEEKTALENT_TEXT_LLM_API_KEY", None)
+    if not str(env.get("SEEKTALENT_DOMI_JWT") or "").strip():
         _print_workbench_reason(
-            "seektalent_text_llm_api_key_missing",
-            "未配置大模型 API Key。请在当前终端或 ~/.seektalent/.env 中设置 SEEKTALENT_TEXT_LLM_API_KEY。",
+            "seektalent_domi_jwt_missing",
+            "未获取到 Domi 大模型授权。请在当前终端设置 SEEKTALENT_DOMI_JWT 后重试。",
         )
         return False
     if not _configure_workbench_domi_opencli_node(env):

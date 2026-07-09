@@ -101,7 +101,7 @@ def build_workbench_command_env(
     env["SEEKTALENT_LIEPIN_OPENCLI_PACING_ENABLED"] = "false"
     env["SEEKTALENT_PYTHON"] = sys.executable
     load_product_user_env(env, env_file=env_file)
-    _default_to_domi_provider_when_jwt_is_present(env)
+    _force_domi_provider_for_prod_workbench(env)
     _preserve_domi_opencli_node_env(env, source_env)
     _prune_unused_llm_credentials(env)
     _preserve_liepin_opencli_command_env(env, source_env)
@@ -118,13 +118,8 @@ def _prune_unused_llm_credentials(env: MutableMapping[str, str]) -> None:
         env.pop(key, None)
 
 
-def _default_to_domi_provider_when_jwt_is_present(env: MutableMapping[str, str]) -> None:
-    if env.get("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"):
-        return
-    if str(env.get("SEEKTALENT_TEXT_LLM_API_KEY") or "").strip():
-        return
-    if str(env.get("SEEKTALENT_DOMI_JWT") or "").strip():
-        env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "domi"
+def _force_domi_provider_for_prod_workbench(env: MutableMapping[str, str]) -> None:
+    env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "domi"
 
 
 def _preserve_domi_opencli_node_env(env: MutableMapping[str, str], source_env: Mapping[str, str]) -> None:

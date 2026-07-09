@@ -75,6 +75,11 @@ def _set_workbench_domi_node(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(tmp_path / "domi-node"))
 
 
+def _set_workbench_domi_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
+    _set_workbench_domi_node(monkeypatch, tmp_path)
+
+
 def _assert_workbench_server_launch(argv: list[str]) -> None:
     assert argv[:3] == [cli.sys.executable, "-m", "seektalent_ui.server"]
 
@@ -460,8 +465,8 @@ def test_workbench_command_runs_packaged_frontend_in_prod(
     calls = []
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    _set_workbench_domi_node(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    _set_workbench_domi_env(monkeypatch, tmp_path)
 
     class Completed:
         stdout = ""
@@ -516,8 +521,8 @@ def test_workbench_command_launches_ui_server_with_current_python(
 ) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    _set_workbench_domi_node(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    _set_workbench_domi_env(monkeypatch, tmp_path)
     launch_calls: list[list[str]] = []
 
     class Runtime:
@@ -551,7 +556,8 @@ def test_workbench_command_builds_windows_safe_domi_node_opencli_command(
     opencli_main = r"C:\Users\ci39059\.seektalent\opencli runtime\opencli\main.js"
     launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", domi_node)
 
     class Completed:
@@ -587,27 +593,30 @@ def test_workbench_command_builds_windows_safe_domi_node_opencli_command(
     assert "seektalent.opencli_launcher" not in env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"]
 
 
-def test_workbench_command_requires_text_llm_key_before_launch(
+def test_workbench_command_requires_domi_jwt_before_launch(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     calls = []
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL", "bailian")
+    monkeypatch.delenv("SEEKTALENT_DOMI_JWT", raising=False)
 
     def fake_run(argv, **_kwargs):
         calls.append(argv)
-        raise AssertionError("workbench server should not launch without SEEKTALENT_TEXT_LLM_API_KEY")
+        raise AssertionError("workbench server should not launch without SEEKTALENT_DOMI_JWT")
 
     monkeypatch.setattr("seektalent.cli.subprocess.run", fake_run)
 
     assert main(["workbench"]) == 1
 
     captured = capsys.readouterr()
-    assert "reason_code=seektalent_text_llm_api_key_missing" in captured.err
-    assert "未配置大模型 API Key" in captured.err
-    assert "SEEKTALENT_TEXT_LLM_API_KEY" in captured.err
+    assert "reason_code=seektalent_domi_jwt_missing" in captured.err
+    assert "未获取到 Domi 大模型授权" in captured.err
+    assert "SEEKTALENT_DOMI_JWT" in captured.err
+    assert "SEEKTALENT_TEXT_LLM_API_KEY" not in captured.err
     assert calls == []
 
 
@@ -762,7 +771,8 @@ def test_workbench_command_requires_domi_node_for_prod_opencli(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
     monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
     monkeypatch.delenv("DOMI_NODE", raising=False)
@@ -785,8 +795,8 @@ def test_workbench_command_does_not_run_opencli_preflight_before_launch(
 ) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    _set_workbench_domi_node(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    _set_workbench_domi_env(monkeypatch, tmp_path)
     launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
     ensured: list[bool] = []
 
@@ -827,8 +837,8 @@ def test_workbench_command_does_not_check_opencli_extension_during_startup(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    _set_workbench_domi_node(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    _set_workbench_domi_env(monkeypatch, tmp_path)
     restart_calls: list[list[str]] = []
     stop_calls: list[list[str]] = []
     launch_calls: list[list[str]] = []
@@ -874,8 +884,8 @@ def test_workbench_command_does_not_supervise_opencli_daemon_from_startup(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    _set_workbench_domi_node(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    _set_workbench_domi_env(monkeypatch, tmp_path)
     restart_calls: list[list[str]] = []
     stop_calls: list[list[str]] = []
     popen_calls: list[list[str]] = []
@@ -935,8 +945,8 @@ def test_workbench_command_does_not_restart_daemon_when_status_fails(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    _set_workbench_domi_node(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    _set_workbench_domi_env(monkeypatch, tmp_path)
     restart_calls: list[list[str]] = []
     launch_calls: list[list[str]] = []
 
@@ -984,8 +994,8 @@ def test_workbench_command_does_not_open_liepin_page_during_startup(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    _set_workbench_domi_node(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    _set_workbench_domi_env(monkeypatch, tmp_path)
     opencli_actions: list[str] = []
     launch_calls: list[list[str]] = []
 
@@ -1024,8 +1034,8 @@ def test_workbench_command_leaves_liepin_login_check_to_runtime(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
-    _set_workbench_domi_node(monkeypatch, tmp_path)
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
+    _set_workbench_domi_env(monkeypatch, tmp_path)
     launch_calls: list[list[str]] = []
 
     class Runtime:
