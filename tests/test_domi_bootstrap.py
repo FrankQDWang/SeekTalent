@@ -251,6 +251,52 @@ esac
     assert result.returncode == 0, result.stderr
 
 
+def test_posix_install_script_finds_user_runtime_domi_python_when_app_bundle_path_is_missing(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    domi_python = home / "Library" / "Application Support" / "Domi" / "runtime" / "python" / "bin" / "python"
+    domi_node = tmp_path / "Domi.app" / "node" / "runtime" / "bin" / "node"
+    domi_python.parent.mkdir(parents=True)
+    domi_node.parent.mkdir(parents=True)
+    python_capture = tmp_path / "python-capture.txt"
+    domi_python.write_text(
+        f"""#!/usr/bin/env bash
+printf "%s" "$0" > {_bash_quote(python_capture)}
+if [[ "${{1:-}} ${{2:-}}" == "-m pip" ]]; then
+  exit 0
+fi
+if [[ "${{1:-}} ${{2:-}}" == "-m seektalent.domi_bootstrap" ]]; then
+  echo '{{}}'
+  exit 0
+fi
+echo "unexpected fake Domi Python invocation: $*" >&2
+exit 2
+""",
+        encoding="utf-8",
+    )
+    domi_node.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    domi_python.chmod(0o755)
+    domi_node.chmod(0o755)
+    script = tmp_path / "install-seektalent-domi.sh"
+    script.write_text(
+        Path("scripts/install-seektalent-domi.sh")
+        .read_text(encoding="utf-8")
+        .replace("/Applications/Domi.app", str(tmp_path / "missing" / "Domi.app")),
+        encoding="utf-8",
+    )
+    bash_code = f"""
+set +e +u +o pipefail
+export HOME={_bash_quote(home)}
+unset DOMI_PYTHON
+export DOMI_NODE={_bash_quote(domi_node)}
+source {_bash_quote(script)} 0.7.25 >/dev/null
+"""
+
+    result = subprocess.run(["bash", "-c", bash_code], capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert python_capture.read_text(encoding="utf-8") == str(domi_python)
+
+
 def test_posix_install_script_accepts_seektalent_domi_node_alias(tmp_path: Path) -> None:
     home = tmp_path / "home"
     domi_python = tmp_path / "Domi.app" / "python" / "runtime" / "bin" / "python"

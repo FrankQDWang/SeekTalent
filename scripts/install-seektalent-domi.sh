@@ -14,10 +14,25 @@ _seektalent_domi_fail() {
 }
 
 _seektalent_domi_install() {
-  local version="${1:-0.7.29}"
-  local domi_python="${DOMI_PYTHON:-/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python}"
+  local version="${1:-0.7.30}"
+  local domi_python="${DOMI_PYTHON:-}"
   local domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
 
+  if [[ -z "${domi_python}" ]]; then
+    local python_candidate
+    for python_candidate in \
+      "/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python" \
+      "/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python3" \
+      "${HOME}/Library/Application Support/Domi/runtime/python/bin/python" \
+      "${HOME}/Library/Application Support/Domi/runtime/python/bin/python3" \
+      "${HOME}/.domi/runtime/python/bin/python" \
+      "${HOME}/.domi/runtime/python/bin/python3"; do
+      if [[ -x "${python_candidate}" ]]; then
+        domi_python="${python_candidate}"
+        break
+      fi
+    done
+  fi
   if [[ ! -x "${domi_python}" ]]; then
     _seektalent_domi_fail "domi_python_missing" "Domi Python was not found: ${domi_python}"
     return 1
