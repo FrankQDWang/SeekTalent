@@ -1533,7 +1533,7 @@ def test_open_liepin_tab_uses_current_session_when_opencli_tab_targets_are_unusa
     assert not (tmp_path / "seektalent-liepin.json").exists()
 
 
-def test_open_detail_tab_does_not_navigate_search_session_when_tab_targets_are_unusable(tmp_path: Path) -> None:
+def test_open_detail_tab_uses_current_session_when_opencli_tab_targets_are_unusable(tmp_path: Path) -> None:
     detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&type=normal"
     commands = FakeCommands(
         outputs={
@@ -1549,19 +1549,26 @@ def test_open_detail_tab_does_not_navigate_search_session_when_tab_targets_are_u
             ("opencli", "browser", "seektalent-liepin", "get", "url"): [
                 "data:text/html,<html></html>",
                 detail_url,
+                detail_url,
             ],
             ("opencli", "browser", "seektalent-liepin", "open", detail_url): json.dumps({"url": detail_url}),
         }
     )
 
-    with pytest.raises(OpenCliBrowserError) as error:
-        _runner(commands, lease_dir=tmp_path)._open_new_liepin_tab(url=detail_url, source_run_id="source-1")
+    opened = _runner(commands, lease_dir=tmp_path)._open_liepin_detail_cached_url(
+        source_run_id="source-1",
+        ref="70",
+        rank=1,
+        detail_url=detail_url,
+        emit_events=False,
+    )
 
-    assert error.value.safe_reason_code == "liepin_opencli_tab_response_malformed"
-    assert ("opencli", "browser", "seektalent-liepin", "open", detail_url) not in commands.calls
+    assert opened.ok is True
+    assert ("opencli", "browser", "seektalent-liepin", "open", detail_url) in commands.calls
+    assert not (tmp_path / "seektalent-liepin.json").exists()
 
 
-def test_open_detail_tab_does_not_use_current_session_fallback_when_bind_fails(tmp_path: Path) -> None:
+def test_open_detail_tab_uses_current_session_when_bind_fails_but_current_url_matches(tmp_path: Path) -> None:
     detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&type=normal"
     commands = FakeCommands(
         outputs={
@@ -1582,11 +1589,11 @@ def test_open_detail_tab_does_not_use_current_session_fallback_when_bind_fails(t
         }
     )
 
-    with pytest.raises(OpenCliBrowserError) as error:
-        _runner(commands, lease_dir=tmp_path)._open_new_liepin_tab(url=detail_url, source_run_id="source-1")
+    page_id = _runner(commands, lease_dir=tmp_path)._open_new_liepin_tab(url=detail_url, source_run_id="source-1")
 
-    assert error.value.safe_reason_code == "liepin_opencli_tab_response_malformed"
-    assert ("opencli", "browser", "seektalent-liepin", "open", detail_url) not in commands.calls
+    assert page_id is None
+    assert ("opencli", "browser", "seektalent-liepin", "open", detail_url) in commands.calls
+    assert not (tmp_path / "seektalent-liepin.json").exists()
 
 
 def test_open_liepin_tab_binds_new_window_before_recovering_opened_page_id(tmp_path: Path) -> None:

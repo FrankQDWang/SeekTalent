@@ -2473,7 +2473,8 @@ class LiepinSiteAdapter:
             return False
         page_id = self._open_new_liepin_tab(url=detail_url, source_run_id=source_run_id)
         if page_id is None:
-            return False
+            self._delete_lease()
+            return True
         self._wait_for_controlled_detail_navigation(page_id=page_id)
         self._touch_lease()
         return True
@@ -2821,8 +2822,9 @@ class LiepinSiteAdapter:
         return max(candidates, key=lambda item: item[0])[1]
 
     def _open_current_liepin_page(self, url: str) -> bool:
+        self._validate_start_or_detail_url(url)
         try:
-            self._run_browser_command("open", (url,))
+            self._run_opencli_call(lambda: self._automation.run_browser_command("open", (url,)))
         except OpenCliBrowserError:
             return False
         return self._current_bound_page_matches_requested_url(url)
