@@ -1503,6 +1503,92 @@ def test_open_liepin_tab_recovers_page_id_from_redirected_liepin_search_url(tmp_
     assert lease["page_id"] == "page-2"
 
 
+def test_open_liepin_tab_uses_current_session_when_opencli_tab_targets_are_unusable(tmp_path: Path) -> None:
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
+                json.dumps([{"tabId": 2018717768, "url": LIEPIN_SEARCH_URL, "active": True}]),
+                json.dumps([{"tabId": 2018717768, "url": LIEPIN_SEARCH_URL, "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", LIEPIN_SEARCH_URL): json.dumps(
+                {"url": LIEPIN_SEARCH_URL}
+            ),
+            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [
+                "data:text/html,<html></html>",
+                LIEPIN_SEARCH_URL,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "open", LIEPIN_SEARCH_URL): json.dumps(
+                {"url": LIEPIN_SEARCH_URL}
+            ),
+        }
+    )
+
+    result = _runner(commands, lease_dir=tmp_path).open_liepin_tab(LIEPIN_SEARCH_URL)
+
+    assert result.ok is True
+    assert result.counts == {"opened": 1, "unleased": 1}
+    assert ("opencli", "browser", "seektalent-liepin", "open", LIEPIN_SEARCH_URL) in commands.calls
+    assert not (tmp_path / "seektalent-liepin.json").exists()
+
+
+def test_open_detail_tab_does_not_navigate_search_session_when_tab_targets_are_unusable(tmp_path: Path) -> None:
+    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&type=normal"
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
+                json.dumps([{"tabId": 2018717768, "url": detail_url, "active": True}]),
+                json.dumps([{"tabId": 2018717768, "url": detail_url, "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", detail_url): json.dumps(
+                {"url": detail_url}
+            ),
+            ("opencli", "browser", "seektalent-liepin", "bind"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): [
+                "data:text/html,<html></html>",
+                detail_url,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "open", detail_url): json.dumps({"url": detail_url}),
+        }
+    )
+
+    with pytest.raises(OpenCliBrowserError) as error:
+        _runner(commands, lease_dir=tmp_path)._open_new_liepin_tab(url=detail_url, source_run_id="source-1")
+
+    assert error.value.safe_reason_code == "liepin_opencli_tab_response_malformed"
+    assert ("opencli", "browser", "seektalent-liepin", "open", detail_url) not in commands.calls
+
+
+def test_open_detail_tab_does_not_use_current_session_fallback_when_bind_fails(tmp_path: Path) -> None:
+    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc&type=normal"
+    commands = FakeCommands(
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "tab", "list"): [
+                "[]",
+                json.dumps([{"tabId": 2018717768, "url": detail_url, "active": True}]),
+            ],
+            ("opencli", "browser", "seektalent-liepin", "tab", "new", detail_url): json.dumps(
+                {"url": detail_url}
+            ),
+            ("opencli", "browser", "seektalent-liepin", "bind"): subprocess.CalledProcessError(
+                1,
+                ["opencli", "browser", "seektalent-liepin", "bind"],
+                stderr="bind failed",
+            ),
+            ("opencli", "browser", "seektalent-liepin", "open", detail_url): json.dumps({"url": detail_url}),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): detail_url,
+        }
+    )
+
+    with pytest.raises(OpenCliBrowserError) as error:
+        _runner(commands, lease_dir=tmp_path)._open_new_liepin_tab(url=detail_url, source_run_id="source-1")
+
+    assert error.value.safe_reason_code == "liepin_opencli_tab_response_malformed"
+    assert ("opencli", "browser", "seektalent-liepin", "open", detail_url) not in commands.calls
+
+
 def test_open_liepin_tab_binds_new_window_before_recovering_opened_page_id(tmp_path: Path) -> None:
     commands = FakeCommands(
         outputs={

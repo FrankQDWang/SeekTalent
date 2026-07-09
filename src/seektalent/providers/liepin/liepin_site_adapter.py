@@ -2751,7 +2751,14 @@ class LiepinSiteAdapter:
             else:
                 self._run_browser_command("unbind", ())
                 output = self._run_browser_command("tab", ("new", url))
-        page_id = self._parse_opened_tab_page_id(output=output, url=url, before_urls=before_urls)
+        try:
+            page_id = self._parse_opened_tab_page_id(output=output, url=url, before_urls=before_urls)
+        except OpenCliBrowserError as exc:
+            if exc.safe_reason_code != "liepin_opencli_tab_response_malformed":
+                raise
+            if self._open_current_liepin_page(url):
+                return None
+            raise
         if page_id is None:
             return None
         owner_nonce = uuid.uuid4().hex
@@ -2812,6 +2819,13 @@ class LiepinSiteAdapter:
         if not candidates:
             return None
         return max(candidates, key=lambda item: item[0])[1]
+
+    def _open_current_liepin_page(self, url: str) -> bool:
+        try:
+            self._run_browser_command("open", (url,))
+        except OpenCliBrowserError:
+            return False
+        return self._current_bound_page_matches_requested_url(url)
 
     def _opened_tab_url_matches_requested_url(self, tab_url: str, requested_url: str) -> bool:
         if _is_liepin_recruiter_search_surface(tab_url) and _is_liepin_recruiter_search_surface(requested_url):
