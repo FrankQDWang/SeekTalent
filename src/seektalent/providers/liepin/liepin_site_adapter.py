@@ -1000,16 +1000,19 @@ class LiepinSiteAdapter:
                 page_url_hash = hashlib.sha256(current_url.encode("utf-8")).hexdigest()
                 if _is_liepin_detail_url(current_url):
                     source_url = current_url
-            provider_candidate_key_hash = (
-                stable_liepin_detail_candidate_key_hash(source_url) if source_url is not None else None
-            )
-            if claim_aware and (
-                not _is_provider_candidate_key_hash(expected_provider_candidate_key_hash)
-                or provider_candidate_key_hash is None
-                or provider_candidate_key_hash != expected_provider_candidate_key_hash
-            ):
-                raise OpenCliBrowserError("liepin_opencli_candidate_identity_mismatch")
             detail_payload = dict(payload)
+            if claim_aware:
+                provider_candidate_key_hash = (
+                    stable_liepin_detail_candidate_key_hash(source_url) if source_url is not None else None
+                )
+                if (
+                    not _is_provider_candidate_key_hash(expected_provider_candidate_key_hash)
+                    or provider_candidate_key_hash is None
+                    or provider_candidate_key_hash != expected_provider_candidate_key_hash
+                ):
+                    raise OpenCliBrowserError("liepin_opencli_candidate_identity_mismatch")
+            elif source_url is not None:
+                detail_payload["sourceUrl"] = source_url
             raw_snapshot_ref = self._write_pi_artifact(
                 "protected",
                 f"liepin-opencli/raw/{safe_run_id}/{rank}.json",
@@ -1037,9 +1040,8 @@ class LiepinSiteAdapter:
                 "detail_payload": detail_payload,
                 "normalized_text": structured_liepin_detail_text(payload),
             }
-            if provider_candidate_key_hash is not None:
-                resume["provider_candidate_key_hash"] = provider_candidate_key_hash
             if claim_aware:
+                resume["provider_candidate_key_hash"] = provider_candidate_key_hash
                 resume["claim_aware"] = True
             else:
                 provider_material_ref = self._write_pi_artifact(

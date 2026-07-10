@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
 from seektalent.providers.liepin.detail_payload_text import find_liepin_whole_page_text_alias_paths
@@ -404,18 +404,26 @@ def _is_liepin_detail_url(url: str) -> bool:
 
 def stable_liepin_detail_candidate_key_hash(detail_url: str) -> str | None:
     try:
-        if not _is_liepin_detail_url(detail_url):
-            return None
         parsed = urlparse(detail_url)
         if (
             parsed.scheme != "https"
             or parsed.netloc.casefold() != "h.liepin.com"
-            or unquote(parsed.path or "").rstrip("/") != "/resume/showresumedetail"
+            or (parsed.path or "") not in {"/resume/showresumedetail", "/resume/showresumedetail/"}
+            or parsed.params
         ):
             return None
-        subject_values = parse_qs(parsed.query, keep_blank_values=True).get("res_id_encode", [])
     except ValueError:
         return None
+    subject_values: list[str] = []
+    for component in parsed.query.split("&"):
+        key, separator, value = component.partition("=")
+        if key != "res_id_encode":
+            if unquote(key) == "res_id_encode":
+                return None
+            continue
+        if separator != "=":
+            return None
+        subject_values.append(value)
     if len(subject_values) != 1 or not re.fullmatch(r"[A-Za-z0-9]+", subject_values[0]):
         return None
     material = f"liepin:res_id_encode:v1:{subject_values[0]}"

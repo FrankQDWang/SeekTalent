@@ -171,32 +171,47 @@ def _detail_from_resume_payload(
     *,
     action_trace_ref: object,
 ) -> LiepinWorkerCandidateDetail:
-    del action_trace_ref
-    payload = _public_detail_payload(resume.get("detail_payload"))
     claim_aware = resume.get("claim_aware") is True
-    provider_candidate_hash = _provider_candidate_hash(
-        resume,
-        claim_aware=claim_aware,
-    )
     if claim_aware:
+        payload = _public_detail_payload(resume.get("detail_payload"))
+        provider_candidate_hash = _provider_candidate_hash(resume, claim_aware=True)
         synthetic_candidate_fingerprint, presentation_resume_id = _claim_aware_identity_tokens(provider_candidate_hash)
-        provider_subject_id = None
-        identity_confidence = "synthetic_fingerprint"
-    else:
-        synthetic_candidate_fingerprint = hashlib.sha256(
-            f"liepin-opencli:{provider_candidate_hash}".encode("utf-8")
-        ).hexdigest()
-        presentation_resume_id = None
-        provider_subject_id = provider_candidate_hash
-        identity_confidence = "provider_subject_id"
+        detail = LiepinWorkerCandidateDetail(
+            payload=payload,
+            normalized_text=structured_liepin_detail_text(payload),
+            provider_subject_id=None,
+            provider_listing_id=None,
+            synthetic_candidate_fingerprint=synthetic_candidate_fingerprint,
+            identity_confidence="synthetic_fingerprint",
+            extraction_source="dom_fallback",
+            extractor_version="liepin-opencli-deterministic-v1",
+            pii_classification="no_direct_contact",
+            retention_policy="provider_snapshot_7d",
+            access_scope="local_run_only",
+            redaction_state="raw_provider_payload",
+        )
+        detail._opencli_private_candidate_identity = True
+        detail._opencli_claim_aware_candidate_identity = True
+        detail._opencli_presentation_resume_id = presentation_resume_id
+        return detail
+
+    provider_rank = _positive_int(resume.get("provider_rank"), default=0)
+    payload = dict(cast(Mapping[str, object], resume.get("detail_payload") or {}))
+    provider_candidate_hash = _provider_candidate_hash(resume, claim_aware=False)
+    payload["providerCandidateKeyHash"] = provider_candidate_hash
+    payload["providerRank"] = provider_rank
+    payload["protectedSnapshotRef"] = resume.get("protected_snapshot_ref")
+    payload["normalizedSnapshotRef"] = resume.get("normalized_snapshot_ref")
+    payload["actionTraceRef"] = resume.get("action_trace_ref") or action_trace_ref
     normalized_text = structured_liepin_detail_text(payload)
-    detail = LiepinWorkerCandidateDetail(
+    fingerprint = hashlib.sha256(f"liepin-opencli:{provider_candidate_hash}".encode("utf-8")).hexdigest()
+    return LiepinWorkerCandidateDetail(
         payload=payload,
         normalized_text=normalized_text,
-        provider_subject_id=provider_subject_id,
+        provider_subject_id=provider_candidate_hash,
         provider_listing_id=None,
-        synthetic_candidate_fingerprint=synthetic_candidate_fingerprint,
-        identity_confidence=identity_confidence,
+        synthetic_candidate_fingerprint=fingerprint,
+        identity_confidence="provider_subject_id",
         extraction_source="dom_fallback",
         extractor_version="liepin-opencli-deterministic-v1",
         pii_classification="no_direct_contact",
@@ -204,10 +219,6 @@ def _detail_from_resume_payload(
         access_scope="local_run_only",
         redaction_state="raw_provider_payload",
     )
-    detail._opencli_private_candidate_identity = True
-    detail._opencli_claim_aware_candidate_identity = claim_aware
-    detail._opencli_presentation_resume_id = presentation_resume_id
-    return detail
 
 
 def _positive_int(value: object, *, default: int) -> int:
@@ -223,10 +234,10 @@ def _positive_int(value: object, *, default: int) -> int:
 
 
 def _provider_candidate_hash(resume: Mapping[str, object], *, claim_aware: bool) -> str:
-    carried_key_hash = resume.get("provider_candidate_key_hash")
-    if _is_provider_candidate_key_hash(carried_key_hash):
-        return cast(str, carried_key_hash)
     if claim_aware:
+        carried_key_hash = resume.get("provider_candidate_key_hash")
+        if _is_provider_candidate_key_hash(carried_key_hash):
+            return cast(str, carried_key_hash)
         raise RuntimeError("liepin_opencli_candidate_identity_mismatch")
     material = str(
         resume.get("provider_candidate_key_material_ref")

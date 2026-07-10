@@ -115,8 +115,8 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
     assert len(response.resumes) == 2
     assert response.raw_candidate_count == 10
     assert "数据平台 Python resume 1" in response.resumes[0].normalized_text
-    assert "sourceUrl" not in response.resumes[0].payload
-    assert "normalizedSnapshotRef" not in response.resumes[0].payload
+    assert response.resumes[0].payload["sourceUrl"] == "https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-1"
+    assert response.resumes[0].payload["normalizedSnapshotRef"] == "artifact://protected/liepin-opencli/normalized/run-1/1.json"
 
 
 def test_claim_aware_detail_uses_derived_identity_without_public_carrier_leak(tmp_path: Path) -> None:
@@ -322,19 +322,27 @@ def test_legacy_detail_without_a_carried_key_keeps_existing_fallback_identity() 
     assert candidate.source_resume_id == expected_provider_subject_id
 
 
-def test_non_claim_aware_detail_with_carried_key_keeps_existing_mapping() -> None:
+def test_non_claim_aware_detail_ignores_carried_key_and_keeps_legacy_mapping() -> None:
     carried_key_hash = stable_liepin_detail_candidate_key_hash(
         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
     )
     assert carried_key_hash is not None
+    provider_material_ref = "artifact://protected/liepin-opencli/provider-key/legacy/7.txt"
+    source_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=legacySubject"
     response = _response_from_opencli_envelope(
         {
             "status": "succeeded",
             "cards_seen": 1,
+            "action_trace_ref": "artifact://protected/liepin-opencli/trace/legacy/action-trace.json",
             "resumes": [
                 {
                     "provider_candidate_key_hash": carried_key_hash,
-                    "detail_payload": {"currentTitle": "数据开发专家"},
+                    "provider_candidate_key_material_ref": provider_material_ref,
+                    "candidate_resume_id": "legacy-run-7",
+                    "provider_rank": 7,
+                    "protected_snapshot_ref": "artifact://protected/liepin-opencli/raw/legacy/7.json",
+                    "normalized_snapshot_ref": "artifact://protected/liepin-opencli/normalized/legacy/7.json",
+                    "detail_payload": {"sourceUrl": source_url, "currentTitle": "数据开发专家"},
                 }
             ],
         }
@@ -343,10 +351,19 @@ def test_non_claim_aware_detail_with_carried_key_keeps_existing_mapping() -> Non
     detail = response.resumes[0]
     candidate = liepin_resume_search_response_to_search_result(response).candidates[0]
 
-    assert detail.provider_subject_id == carried_key_hash
-    assert candidate.resume_id == carried_key_hash
-    assert candidate.source_resume_id == carried_key_hash
-    assert candidate.dedup_key == hashlib.sha256(f"liepin-opencli:{carried_key_hash}".encode("utf-8")).hexdigest()
+    expected_provider_subject_id = hashlib.sha256(provider_material_ref.encode("utf-8")).hexdigest()
+    assert detail.provider_subject_id == expected_provider_subject_id
+    assert detail._opencli_private_candidate_identity is False
+    assert detail._opencli_claim_aware_candidate_identity is False
+    assert detail._opencli_presentation_resume_id is None
+    assert detail.payload["sourceUrl"] == source_url
+    assert detail.payload["providerCandidateKeyHash"] == expected_provider_subject_id
+    assert detail.payload["providerRank"] == 7
+    assert detail.payload["protectedSnapshotRef"] == "artifact://protected/liepin-opencli/raw/legacy/7.json"
+    assert candidate.resume_id == expected_provider_subject_id
+    assert candidate.source_resume_id == expected_provider_subject_id
+    assert candidate.raw["provider_subject_id"] == expected_provider_subject_id
+    assert candidate.raw["synthetic_candidate_fingerprint"] == detail.synthetic_candidate_fingerprint
 
 
 def _scored_candidate(resume_id: str) -> ScoredCandidate:
