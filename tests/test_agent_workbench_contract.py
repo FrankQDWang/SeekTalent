@@ -45,6 +45,7 @@ from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchMessageStreamPayloadResponse,
     AgentWorkbenchItemStreamPayloadResponse,
     AgentWorkbenchPendingActionsResponse,
+    AgentWorkbenchQueryGroupResponse,
     AgentWorkbenchRunFinalizationResponse,
     AgentWorkbenchStrategyGraphResponse,
     AgentWorkbenchStreamCursorResponse,
@@ -332,7 +333,10 @@ def test_workbench_messages_route_rejects_submit_jd(tmp_path: Path) -> None:
 
 
 def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
-    from seektalent_ui.agent_workbench_rounds import AgentWorkbenchRoundSummaryProjection
+    from seektalent_ui.agent_workbench_rounds import (
+        AgentWorkbenchQueryGroupProjection,
+        AgentWorkbenchRoundSummaryProjection,
+    )
 
     thread = _thread_view()
     projection_input = AgentWorkbenchProjectionInput(
@@ -379,8 +383,19 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
             AgentWorkbenchRoundSummaryProjection(
                 round_no=1,
                 status="completed",
-                query_terms=("canonical", "LLM"),
-                keyword_query="canonical LLM query",
+                query_groups=(
+                    AgentWorkbenchQueryGroupProjection(
+                        query_instance_id="query-canonical",
+                        term_group_key="group-canonical",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=("canonical", "LLM"),
+                        keyword_query="canonical LLM query",
+                        lifecycle="planned",
+                        execution_status=None,
+                        attempted=False,
+                    ),
+                ),
                 raw_candidate_count=5,
                 unique_new_count=3,
                 newly_scored_count=2,
@@ -430,16 +445,14 @@ def test_agent_workbench_view_projects_stable_frontend_contract() -> None:
     assert last_payload.activityType == "runtime_event"
     assert last_payload.sourceRuntimeRunId == "runtime_1"
     assert response.thinkingProcess.activeRoundNo == 1
-    assert [card.title for card in response.thinkingProcess.rounds[0].cards] == [
-        "关键词",
-        "observation",
-        "反思和下一轮变更",
-    ]
-    assert response.thinkingProcess.rounds[0].cards[0].terms == ["canonical", "LLM"]
-    assert "canonical coverage summary" in response.thinkingProcess.rounds[0].cards[1].text
-    assert "canonical LangChain reflection" in response.thinkingProcess.rounds[0].cards[2].text
+    assert [group.queryInstanceId for group in response.thinkingProcess.rounds[0].queryGroups] == ["query-canonical"]
+    assert response.thinkingProcess.rounds[0].queryGroups[0].queryTerms == ["canonical", "LLM"]
+    assert [card.title for card in response.thinkingProcess.rounds[0].cards] == ["observation", "反思和下一轮变更"]
+    assert "canonical coverage summary" in response.thinkingProcess.rounds[0].cards[0].text
+    assert "canonical LangChain reflection" in response.thinkingProcess.rounds[0].cards[1].text
     assert "rawPayload" not in serialized
     assert "providerResponse" not in serialized
+    assert "AI agent LLM" not in serialized
 
 
 def test_thinking_process_is_empty_without_canonical_round_summaries() -> None:
@@ -473,7 +486,10 @@ def test_thinking_process_is_empty_without_canonical_round_summaries() -> None:
 
 
 def test_thinking_process_uses_only_canonical_round_summaries() -> None:
-    from seektalent_ui.agent_workbench_rounds import AgentWorkbenchRoundSummaryProjection
+    from seektalent_ui.agent_workbench_rounds import (
+        AgentWorkbenchQueryGroupProjection,
+        AgentWorkbenchRoundSummaryProjection,
+    )
 
     thread = _thread_view()
     response = project_agent_workbench_view(
@@ -484,8 +500,19 @@ def test_thinking_process_uses_only_canonical_round_summaries() -> None:
                 AgentWorkbenchRoundSummaryProjection(
                     round_no=2,
                     status="completed",
-                    query_terms=("canonical",),
-                    keyword_query="canonical query",
+                    query_groups=(
+                        AgentWorkbenchQueryGroupProjection(
+                            query_instance_id="query-canonical",
+                            term_group_key="group-canonical",
+                            query_role="exploit",
+                            lane_type="exploit",
+                            query_terms=("canonical",),
+                            keyword_query="canonical query",
+                            lifecycle="planned",
+                            execution_status=None,
+                            attempted=False,
+                        ),
+                    ),
                     raw_candidate_count=1,
                     unique_new_count=1,
                     newly_scored_count=1,
@@ -514,7 +541,7 @@ def test_thinking_process_uses_only_canonical_round_summaries() -> None:
 
     assert [item.roundNo for item in response.thinkingProcess.rounds] == [2]
     assert response.thinkingProcess.activeRoundNo == 2
-    assert response.thinkingProcess.rounds[0].cards[0].text == "canonical query"
+    assert response.thinkingProcess.rounds[0].queryGroups[0].keywordQuery == "canonical query"
 
 
 def test_projection_loads_round_summaries_before_runtime_event_window_bound() -> None:
@@ -525,7 +552,20 @@ def test_projection_loads_round_summaries_before_runtime_event_window_bound() ->
             runtime_run_id="runtime_1",
             stage="round_query",
             round_no=1,
-            output={"details": {"queryTerms": ["AI agent"], "keywordQuery": "AI agent"}},
+            output={
+                "details": {
+                    "queryGroups": [
+                        _v2_query_group(
+                            query_instance_id="query-1",
+                            term_group_key="group-1",
+                            query_role="exploit",
+                            lane_type="exploit",
+                            query_terms=["AI agent"],
+                            keyword_query="AI agent",
+                        )
+                    ]
+                }
+            },
         )
     ]
 
@@ -556,16 +596,15 @@ def test_strategy_graph_projects_public_round_outputs_with_swimlane_metadata() -
                     round_no=1,
                     output={
                         "details": {
-                            "queryTerms": ["AI agent"],
-                            "keywordQuery": "AI agent platform engineer",
-                            "plannedQueries": [
-                                {
-                                    "sourceKind": "liepin",
-                                    "queryRole": "exploit",
-                                    "laneType": "primary",
-                                    "queryTerms": ["AI agent"],
-                                    "keywordQuery": "AI agent platform engineer",
-                                }
+                            "queryGroups": [
+                                _v2_query_group(
+                                    query_instance_id="query-1",
+                                    term_group_key="group-1",
+                                    query_role="exploit",
+                                    lane_type="exploit",
+                                    query_terms=["AI agent"],
+                                    keyword_query="AI agent platform engineer",
+                                )
                             ],
                         }
                     },
@@ -585,14 +624,27 @@ def test_strategy_graph_projects_public_round_outputs_with_swimlane_metadata() -
                     round_no=1,
                     output={
                         "details": {
-                            "executedQueries": [
-                                {
-                                    "sourceKind": "liepin",
-                                    "queryRole": "exploit",
-                                    "laneType": "primary",
-                                    "queryTerms": ["AI agent"],
-                                    "keywordQuery": "AI agent platform engineer",
-                                }
+                            "queryGroups": [
+                                _v2_query_group(
+                                    query_instance_id="query-1",
+                                    term_group_key="group-1",
+                                    query_role="exploit",
+                                    lane_type="exploit",
+                                    query_terms=["AI agent"],
+                                    keyword_query="AI agent platform engineer",
+                                    lifecycle="executed",
+                                    execution_status="completed",
+                                    attempted=True,
+                                    executions=[
+                                        {
+                                            "sourceKind": "liepin",
+                                            "status": "completed",
+                                            "rawCandidateCount": 5,
+                                            "uniqueCandidateCount": 4,
+                                            "duplicateCandidateCount": 1,
+                                        }
+                                    ],
+                                )
                             ],
                             "resumeQualityComment": "Public BFF observation.",
                             "reflectionSummary": "Public BFF reflection.",
@@ -613,12 +665,9 @@ def test_strategy_graph_projects_public_round_outputs_with_swimlane_metadata() -
     assert {node.kind for node in nodes.values()}.isdisjoint({"round"})
     assert {node.stage for node in nodes.values()}.isdisjoint({"round_summary"})
     lane_nodes = [node for node in nodes.values() if node.kind == "lane"]
-    assert [(node.roundNo, node.laneType, node.sourceKind) for node in lane_nodes] == [(1, "primary", "liepin")]
+    assert [(node.roundNo, node.laneType, node.sourceKind) for node in lane_nodes] == [(1, "exploit", "liepin")]
     phase_nodes = [node for node in nodes.values() if node.kind == "phase"]
-    assert {
-        (node.roundNo, node.phase, node.stage, node.sourceKind, node.status)
-        for node in phase_nodes
-    } >= {
+    assert {(node.roundNo, node.phase, node.stage, node.sourceKind, node.status) for node in phase_nodes} >= {
         (1, "query", "round_query", "all", "completed"),
         (1, "source", "source_result", "liepin", "completed"),
         (1, "feedback", "feedback", "all", "completed"),
@@ -651,7 +700,7 @@ def test_strategy_graph_projects_public_round_outputs_with_swimlane_metadata() -
 
 def test_strategy_graph_edges_only_reference_returned_nodes_under_budget() -> None:
     from seektalent_ui.agent_workbench_rounds import (
-        AgentWorkbenchQueryPackageProjection,
+        AgentWorkbenchQueryGroupProjection,
         AgentWorkbenchRoundStageProjection,
         AgentWorkbenchRoundSummaryProjection,
     )
@@ -663,8 +712,18 @@ def test_strategy_graph_edges_only_reference_returned_nodes_under_budget() -> No
             AgentWorkbenchRoundSummaryProjection(
                 round_no=index,
                 status="completed",
-                planned_queries=(
-                    AgentWorkbenchQueryPackageProjection(source_kind="cts", lane_type=f"lane_{index}"),
+                query_groups=(
+                    AgentWorkbenchQueryGroupProjection(
+                        query_instance_id=f"query-{index}",
+                        term_group_key=f"group-{index}",
+                        query_role="exploit",
+                        lane_type=f"lane_{index}",
+                        query_terms=("AI agent",),
+                        keyword_query="AI agent",
+                        lifecycle="planned",
+                        execution_status=None,
+                        attempted=False,
+                    ),
                 ),
                 stage_outputs=(
                     AgentWorkbenchRoundStageProjection(stage="round_query", source_kind="cts"),
@@ -697,21 +756,23 @@ def test_strategy_graph_preserves_blocked_and_partial_phase_statuses() -> None:
                     round_no=1,
                     output={
                         "details": {
-                            "plannedQueries": [
-                                {
-                                    "sourceKind": "liepin",
-                                    "queryRole": "exploit",
-                                    "laneType": "primary",
-                                    "queryTerms": ["AI agent"],
-                                    "keywordQuery": "AI agent platform engineer",
-                                },
-                                {
-                                    "sourceKind": "cts",
-                                    "queryRole": "expand",
-                                    "laneType": "expansion",
-                                    "queryTerms": ["platform"],
-                                    "keywordQuery": "platform backend engineer",
-                                },
+                            "queryGroups": [
+                                _v2_query_group(
+                                    query_instance_id="query-primary",
+                                    term_group_key="group-primary",
+                                    query_role="exploit",
+                                    lane_type="exploit",
+                                    query_terms=["AI agent"],
+                                    keyword_query="AI agent platform engineer",
+                                ),
+                                _v2_query_group(
+                                    query_instance_id="query-explore",
+                                    term_group_key="group-explore",
+                                    query_role="explore",
+                                    lane_type="generic_explore",
+                                    query_terms=["platform"],
+                                    keyword_query="platform backend engineer",
+                                ),
                             ]
                         }
                     },
@@ -744,8 +805,8 @@ def test_strategy_graph_preserves_blocked_and_partial_phase_statuses() -> None:
     response = project_agent_workbench_view(projection_input)
     nodes = {node.nodeId: node for node in response.strategyGraph.nodes}
 
-    assert nodes["round:1:lane:liepin:primary"].status == "blocked"
-    assert nodes["round:1:lane:cts:expansion"].status == "partial"
+    assert nodes["round:1:lane:all:exploit"].status == "completed"
+    assert nodes["round:1:lane:all:generic_explore"].status == "completed"
     assert nodes["round:1:phase:source_result:liepin"].status == "blocked"
     assert nodes["round:1:phase:source_result:cts"].status == "partial"
 
@@ -786,15 +847,15 @@ def test_round_reducer_combines_public_stage_outputs_without_raw_fallback() -> N
                 round_no=1,
                 output={
                     "details": {
-                        "queryTerms": ["AI agent"],
-                        "keywordQuery": "AI agent platform engineer",
-                        "plannedQueries": [
-                            {
-                                "queryRole": "exploit",
-                                "laneType": "primary",
-                                "queryTerms": ["AI agent"],
-                                "keywordQuery": "AI agent platform engineer",
-                            }
+                        "queryGroups": [
+                            _v2_query_group(
+                                query_instance_id="query-1",
+                                term_group_key="group-1",
+                                query_role="exploit",
+                                lane_type="exploit",
+                                query_terms=["AI agent"],
+                                keyword_query="AI agent platform engineer",
+                            )
                         ],
                     }
                 },
@@ -824,13 +885,21 @@ def test_round_reducer_combines_public_stage_outputs_without_raw_fallback() -> N
                 round_no=1,
                 output={
                     "details": {
-                        "executedQueries": [
-                            {
-                                "queryRole": "exploit",
-                                "laneType": "primary",
-                                "queryTerms": ["AI agent"],
-                                "keywordQuery": "AI agent platform engineer",
-                            }
+                        "queryGroups": [
+                            _v2_query_group(
+                                query_instance_id="query-1",
+                                term_group_key="group-1",
+                                query_role="exploit",
+                                lane_type="exploit",
+                                query_terms=["AI agent"],
+                                keyword_query="AI agent platform engineer",
+                                lifecycle="executed",
+                                execution_status="completed",
+                                attempted=True,
+                                raw_candidate_count=2,
+                                unique_candidate_count=1,
+                                duplicate_candidate_count=1,
+                            )
                         ],
                         "resumeQualityComment": "本轮候选人偏平台工程。",
                         "reflectionSummary": "继续保留 agent 平台关键词。",
@@ -856,9 +925,129 @@ def test_round_reducer_combines_public_stage_outputs_without_raw_fallback() -> N
     assert summary.total_merged_identity_count == 7
     assert summary.newly_scored_count == 0
     assert summary.top_pool_count == 4
-    assert summary.planned_queries[0].keyword_query == "AI agent platform engineer"
-    assert summary.executed_queries[0].query_terms == ("AI agent",)
+    assert summary.query_groups[0].keyword_query == "AI agent platform engineer"
+    assert summary.query_groups[0].lifecycle == "executed"
+    assert summary.query_groups[0].query_terms == ("AI agent",)
     assert summary.suggested_add_filter_fields == ("location",)
+
+
+def test_round_reducer_merges_v2_query_groups_by_query_instance_id() -> None:
+    from seektalent_ui.agent_workbench_rounds import AgentWorkbenchProjectionError, round_summaries_from_stage_outputs
+
+    primary = {
+        "queryInstanceId": "query-primary",
+        "termGroupKey": "group-primary",
+        "queryRole": "exploit",
+        "laneType": "exploit",
+        "queryTerms": ["AI agent", "Python"],
+        "keywordQuery": "AI agent Python",
+        "lifecycle": "planned",
+        "executionStatus": None,
+        "attempted": False,
+        "rawCandidateCount": 0,
+        "uniqueCandidateCount": 0,
+        "duplicateCandidateCount": 0,
+        "executions": [],
+    }
+    explore = {
+        "queryInstanceId": "query-explore",
+        "termGroupKey": "group-explore",
+        "queryRole": "explore",
+        "laneType": "generic_explore",
+        "queryTerms": ["AI platform", "Rust"],
+        "keywordQuery": "AI platform Rust",
+        "lifecycle": "planned",
+        "executionStatus": None,
+        "attempted": False,
+        "rawCandidateCount": 0,
+        "uniqueCandidateCount": 0,
+        "duplicateCandidateCount": 0,
+        "executions": [],
+    }
+    planned = _public_stage_output(
+        output_id="rtout_v2_groups_planned",
+        stage="round_query",
+        round_no=2,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "details": {"queryGroups": [primary, explore]},
+        },
+    )
+    executed_primary = {
+        **primary,
+        "lifecycle": "executed",
+        "executionStatus": "completed",
+        "attempted": True,
+        "rawCandidateCount": 6,
+        "uniqueCandidateCount": 3,
+        "duplicateCandidateCount": 3,
+        "executions": [
+            {
+                "sourceKind": "cts",
+                "status": "completed",
+                "rawCandidateCount": 4,
+                "uniqueCandidateCount": 2,
+                "duplicateCandidateCount": 2,
+            },
+            {
+                "sourceKind": "liepin",
+                "status": "completed",
+                "rawCandidateCount": 2,
+                "uniqueCandidateCount": 1,
+                "duplicateCandidateCount": 1,
+            },
+        ],
+    }
+    executed_explore = {
+        **explore,
+        "lifecycle": "executed",
+        "executionStatus": "blocked",
+        "attempted": False,
+        "executions": [
+            {
+                "sourceKind": "cts",
+                "status": "blocked",
+                "rawCandidateCount": 0,
+                "uniqueCandidateCount": 0,
+                "duplicateCandidateCount": 0,
+                "safeReasonCode": "source_filter_unavailable",
+            }
+        ],
+    }
+    feedback = _public_stage_output(
+        output_id="rtout_v2_groups_feedback",
+        stage="feedback",
+        round_no=2,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "details": {"queryGroups": [executed_primary, executed_explore]},
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs([planned, feedback])
+
+    assert [group.query_instance_id for group in summary.query_groups] == ["query-primary", "query-explore"]
+    assert summary.query_groups[0].lifecycle == "executed"
+    assert summary.query_groups[0].unique_candidate_count == 3
+    assert [item.source_kind for item in summary.query_groups[0].executions] == ["cts", "liepin"]
+    assert summary.query_groups[1].execution_status == "blocked"
+
+    identity_drift = _public_stage_output(
+        output_id="rtout_v2_groups_identity_drift",
+        stage="feedback",
+        round_no=2,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "details": {"queryGroups": [{**executed_primary, "termGroupKey": "changed"}]},
+        },
+    )
+    with pytest.raises(AgentWorkbenchProjectionError) as exc_info:
+        round_summaries_from_stage_outputs([planned, identity_drift])
+
+    assert exc_info.value.reason_code == "workbench_query_group_identity_mismatch"
 
 
 def test_round_reducer_rejects_public_stage_output_metadata_mismatch() -> None:
@@ -1182,9 +1371,7 @@ def test_requirement_review_transcript_records_invalid_historical_snapshot(
         )
     )
 
-    requirement_message = next(
-        message for message in response.messages if message.messageType == "requirement_review"
-    )
+    requirement_message = next(message for message in response.messages if message.messageType == "requirement_review")
     assert requirement_message.payload.requirementDraftSnapshot is None
     assert len(calls) == 1
     assert calls[0] > 0
@@ -1271,7 +1458,9 @@ def test_workbench_view_enforces_product_payload_budgets() -> None:
     assert len(response.strategyGraph.nodes) <= 80
     assert len(response.strategyGraph.edges) <= 120
     graph_node_ids = {node.nodeId for node in response.strategyGraph.nodes}
-    assert all(edge.fromNodeId in graph_node_ids and edge.toNodeId in graph_node_ids for edge in response.strategyGraph.edges)
+    assert all(
+        edge.fromNodeId in graph_node_ids and edge.toNodeId in graph_node_ids for edge in response.strategyGraph.edges
+    )
     assert len(response.thinkingProcess.rounds) <= 50
     assert len(response.candidates) <= 10
     assert len(response.model_dump_json()) <= 750_000
@@ -1316,12 +1505,15 @@ def test_detail_approval_status_schema_uses_public_design_vocabulary() -> None:
     status_schema = AgentWorkbenchDetailApprovalResponse.model_json_schema()["properties"]["status"]
 
     assert status_schema["enum"] == ["pending", "accepted", "rejected", "applied"]
-    assert AgentWorkbenchDetailApprovalResponse(
-        approvalId="approval_1",
-        candidateId="candidate_1",
-        status="applied",
-        reason="Detail snapshot already applied.",
-    ).status == "applied"
+    assert (
+        AgentWorkbenchDetailApprovalResponse(
+            approvalId="approval_1",
+            candidateId="candidate_1",
+            status="applied",
+            reason="Detail snapshot already applied.",
+        ).status
+        == "applied"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1412,6 +1604,22 @@ def test_thinking_process_stream_event_uses_projected_canonical_round() -> None:
     assert thinking_events[0].source_seq == 2
     assert thinking_events[0].payload.itemId == "round:2"
     assert thinking_events[0].payload.summary == "canonical reflection"
+
+
+def test_thinking_process_stream_event_emits_group_only_round() -> None:
+    response = _conversation_response_with_thinking_round(
+        round_no=2,
+        keyword_text="canonical query",
+        observation_text=None,
+        reflection_text=None,
+    )
+
+    events = project_agent_workbench_stream_events(response)
+    thinking_events = [event for event in events if event.kind == "thinkingProcess.changed"]
+
+    assert len(thinking_events) == 1
+    assert thinking_events[0].source_seq == 2
+    assert thinking_events[0].payload.itemId == "round:2"
 
 
 def test_runtime_finalization_stream_event_is_separate_from_final_summary() -> None:
@@ -1607,10 +1815,7 @@ def test_stream_store_schema_has_source_refs_and_idempotency_constraints(tmp_pat
 
     with sqlite3.connect(store.path) as conn:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_workbench_stream_events)").fetchall()}
-        indexes = {
-            row[1]
-            for row in conn.execute("PRAGMA index_list(agent_workbench_stream_events)").fetchall()
-        }
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(agent_workbench_stream_events)").fetchall()}
 
     assert {"source_kind", "source_id", "source_seq", "idempotency_key"} <= columns
     assert "idx_agent_workbench_stream_events_source" in indexes
@@ -1628,7 +1833,20 @@ def test_projected_stream_events_cover_non_transcript_workbench_surfaces() -> No
                     runtime_run_id="runtime_1",
                     stage="round_query",
                     round_no=1,
-                    output={"details": {"queryTerms": ["AI agent"], "keywordQuery": "AI agent"}},
+                    output={
+                        "details": {
+                            "queryGroups": [
+                                _v2_query_group(
+                                    query_instance_id="query-1",
+                                    term_group_key="group-1",
+                                    query_role="exploit",
+                                    lane_type="exploit",
+                                    query_terms=["AI agent"],
+                                    keyword_query="AI agent",
+                                )
+                            ]
+                        }
+                    },
                 ),
                 _public_stage_output(
                     output_id="rtout_stream_feedback",
@@ -1704,10 +1922,7 @@ def test_completed_workbench_response_contains_final_transcript_item_and_summary
     assert payload["finalSummary"] == {"summaryId": "summary_1", "text": "Final shortlist ready."}
     assert payload["messages"][-1]["messageId"] == "msg_final_1"
     assert payload["messages"][-1]["messageType"] == "final_summary"
-    assert any(
-        event.itemId == "msg_final_1" and event.kind == "message.completed"
-        for event in transcript_events
-    )
+    assert any(event.itemId == "msg_final_1" and event.kind == "message.completed" for event in transcript_events)
 
 
 def test_candidate_stream_idempotency_tracks_same_status_content_changes() -> None:
@@ -1898,9 +2113,7 @@ def test_workbench_candidate_detail_route_sets_no_store_on_errors(
 
 
 def test_candidate_detail_projection_omits_sections_when_access_is_not_allowed() -> None:
-    approval_required = candidate_detail_response_from_review_item(
-        _candidate_review_item(1, evidence_level="card")
-    )
+    approval_required = candidate_detail_response_from_review_item(_candidate_review_item(1, evidence_level="card"))
     denied_candidate = _candidate_review_item(2, evidence_level="detail")
     denied_candidate.access_state = "denied"
 
@@ -2335,23 +2548,23 @@ def test_agent_workbench_routes_project_real_runtime_outputs_into_snapshot_and_e
         round_no=1,
         output={
             "details": {
-                "queryTerms": ["AI agent"],
-                "keywordQuery": "AI agent platform engineer",
-                "plannedQueries": [
-                    {
-                        "sourceKind": "liepin",
-                        "queryRole": "exploit",
-                        "laneType": "primary",
-                        "queryTerms": ["AI agent"],
-                        "keywordQuery": "AI agent platform engineer",
-                    },
-                    {
-                        "sourceKind": "cts",
-                        "queryRole": "expand",
-                        "laneType": "expansion",
-                        "queryTerms": ["platform"],
-                        "keywordQuery": "platform backend engineer",
-                    },
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-primary",
+                        term_group_key="group-primary",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["AI agent"],
+                        keyword_query="AI agent platform engineer",
+                    ),
+                    _v2_query_group(
+                        query_instance_id="query-explore",
+                        term_group_key="group-explore",
+                        query_role="explore",
+                        lane_type="generic_explore",
+                        query_terms=["platform"],
+                        keyword_query="platform backend engineer",
+                    ),
                 ],
             }
         },
@@ -2389,8 +2602,8 @@ def test_agent_workbench_routes_project_real_runtime_outputs_into_snapshot_and_e
     nodes = {node["nodeId"]: node for node in payload["strategyGraph"]["nodes"]}
     assert "round:1" not in nodes
     assert all(node["kind"] != "round" for node in nodes.values())
-    assert nodes["round:1:lane:liepin:primary"]["status"] == "blocked"
-    assert nodes["round:1:lane:cts:expansion"]["status"] == "partial"
+    assert nodes["round:1:lane:all:exploit"]["status"] == "completed"
+    assert nodes["round:1:lane:all:generic_explore"]["status"] == "completed"
     assert nodes["round:1:phase:source_result:liepin"]["status"] == "blocked"
     assert nodes["round:1:phase:source_result:cts"]["status"] == "partial"
     thinking_round = payload["thinkingProcess"]["rounds"][0]
@@ -2491,8 +2704,7 @@ def test_workbench_requirement_operations_reject_request_amplification(tmp_path:
             "draftRevisionId": draft["draftRevisionId"],
             "expectedDraftRevisionId": draft["draftRevisionId"],
             "operations": [
-                {"op": "set_selected", "itemId": first_item["itemId"], "selected": False}
-                for _ in range(51)
+                {"op": "set_selected", "itemId": first_item["itemId"], "selected": False} for _ in range(51)
             ],
             "idempotencyKey": "deselect-workbench-operation-cap-1",
         },
@@ -2769,7 +2981,9 @@ def test_agent_workbench_confirm_route_is_idempotent_across_http_keys_for_same_d
 
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
-    assert first.json()["conversation"]["workflowStartIntentId"] == second.json()["conversation"]["workflowStartIntentId"]
+    assert (
+        first.json()["conversation"]["workflowStartIntentId"] == second.json()["conversation"]["workflowStartIntentId"]
+    )
     service = client.app.state.agent_conversation_service
     assert service.workflow_start_intent_store.count_for_draft(draft_id) == 1
 
@@ -3000,9 +3214,9 @@ def test_agent_workbench_event_replay_route_returns_live_message_delta(tmp_path:
 
 def test_agent_workbench_stream_route_rejects_auth_query_without_workbench_session(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    conversation_id = client.post("/api/agent/conversations", json={"title": "Python Agent Engineer"}).json()["conversation"][
-        "conversationId"
-    ]
+    conversation_id = client.post("/api/agent/conversations", json={"title": "Python Agent Engineer"}).json()[
+        "conversation"
+    ]["conversationId"]
     token_query = client.get(f"/api/agent/workbench/conversations/{conversation_id}/events/stream?authToken=abc")
     assert token_query.status_code == 400
 
@@ -3124,12 +3338,43 @@ def test_agent_workbench_sse_generator_emits_terminal_error_on_projection_failur
     assert "correlationId" in payload
     assert second is None
     [record] = [
-        record
-        for record in caplog.records
-        if record.message == "Agent workbench SSE projection catch-up failed."
+        record for record in caplog.records if record.message == "Agent workbench SSE projection catch-up failed."
     ]
     assert record.conversation_ref == "redacted"
     assert not hasattr(record, "conversation_id")
+
+
+def _v2_query_group(
+    *,
+    query_instance_id: str,
+    term_group_key: str,
+    query_role: str,
+    lane_type: str,
+    query_terms: list[str],
+    keyword_query: str,
+    lifecycle: str = "planned",
+    execution_status: str | None = None,
+    attempted: bool = False,
+    raw_candidate_count: int = 0,
+    unique_candidate_count: int = 0,
+    duplicate_candidate_count: int = 0,
+    executions: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "queryInstanceId": query_instance_id,
+        "termGroupKey": term_group_key,
+        "queryRole": query_role,
+        "laneType": lane_type,
+        "queryTerms": query_terms,
+        "keywordQuery": keyword_query,
+        "lifecycle": lifecycle,
+        "executionStatus": execution_status,
+        "attempted": attempted,
+        "rawCandidateCount": raw_candidate_count,
+        "uniqueCandidateCount": unique_candidate_count,
+        "duplicateCandidateCount": duplicate_candidate_count,
+        "executions": executions or [],
+    }
 
 
 def _public_stage_output(
@@ -3141,10 +3386,10 @@ def _public_stage_output(
     runtime_run_id: str = "runtime_run_reducer",
     source_kind: str | None = None,
     status: str = "completed",
-    schema_version: str = "runtime-public-stage-output/v1",
+    schema_version: str = "runtime-public-stage-output/v2",
 ) -> RuntimeStageOutput:
     payload = {
-        "schemaVersion": "runtime-public-stage-output/v1",
+        "schemaVersion": schema_version,
         "publicEventSchemaVersion": "runtime_public_event_v1",
         "stage": stage,
         "roundNo": round_no,
@@ -3189,7 +3434,7 @@ def _save_public_stage_output(
     status: str = "completed",
 ) -> None:
     payload = {
-        "schemaVersion": "runtime-public-stage-output/v1",
+        "schemaVersion": "runtime-public-stage-output/v2",
         "publicEventSchemaVersion": "runtime_public_event_v1",
         "stage": stage,
         "roundNo": round_no,
@@ -3208,7 +3453,7 @@ def _save_public_stage_output(
             node_id=source_kind,
             round_no=round_no,
             output_kind=f"runtime_public_{stage}",
-            schema_version="runtime-public-stage-output/v1",
+            schema_version="runtime-public-stage-output/v2",
             output=payload,
             source_event_id=None,
             source_checkpoint_id=None,
@@ -3222,8 +3467,8 @@ def _conversation_response_with_thinking_round(
     *,
     round_no: int,
     keyword_text: str,
-    observation_text: str,
-    reflection_text: str,
+    observation_text: str | None,
+    reflection_text: str | None,
     runtime_finalization: AgentWorkbenchRunFinalizationResponse | None = None,
     final_summary: AgentWorkbenchFinalSummaryResponse | None = None,
 ) -> AgentWorkbenchConversationResponse:
@@ -3242,11 +3487,34 @@ def _conversation_response_with_thinking_round(
                 AgentWorkbenchThinkingProcessRoundResponse(
                     roundNo=round_no,
                     status="completed",
-                    cards=[
-                        AgentWorkbenchThinkingProcessCardResponse(title="关键词", text=keyword_text),
-                        AgentWorkbenchThinkingProcessCardResponse(title="observation", text=observation_text),
-                        AgentWorkbenchThinkingProcessCardResponse(title="反思和下一轮变更", text=reflection_text),
+                    queryGroups=[
+                        AgentWorkbenchQueryGroupResponse(
+                            queryInstanceId=f"query-{round_no}",
+                            termGroupKey=f"group-{round_no}",
+                            queryRole="exploit",
+                            laneType="exploit",
+                            queryTerms=[keyword_text],
+                            keywordQuery=keyword_text,
+                            lifecycle="planned",
+                        )
                     ],
+                    cards=(
+                        (
+                            [AgentWorkbenchThinkingProcessCardResponse(title="observation", text=observation_text)]
+                            if observation_text is not None
+                            else []
+                        )
+                        + (
+                            [
+                                AgentWorkbenchThinkingProcessCardResponse(
+                                    title="反思和下一轮变更",
+                                    text=reflection_text,
+                                )
+                            ]
+                            if reflection_text is not None
+                            else []
+                        )
+                    ),
                 )
             ],
         ),
@@ -3262,7 +3530,9 @@ class _FakeAgentService:
         self.thread = thread
         self.workflow_start_intent_store = _FakeWorkflowStartIntentStore()
 
-    def reopen_conversation(self, *, conversation_id: str, owner_user_id: str, workspace_id: str) -> ConversationThreadView:
+    def reopen_conversation(
+        self, *, conversation_id: str, owner_user_id: str, workspace_id: str
+    ) -> ConversationThreadView:
         assert conversation_id == "agent_conv_1"
         assert owner_user_id == "user_admin_example_com"
         assert workspace_id == "default"

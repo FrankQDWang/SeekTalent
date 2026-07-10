@@ -1555,16 +1555,8 @@ export interface components {
         | null;
       /** Roundno */
       roundNo?: number | null;
-      /** Queryterms */
-      queryTerms?: string[];
-      /** Keywordquery */
-      keywordQuery?: string | null;
-      /** Plannedqueries */
-      plannedQueries?: components["schemas"]["AgentWorkbenchQueryPackageResponse"][];
-      /** Executedqueries */
-      executedQueries?: components["schemas"]["AgentWorkbenchQueryPackageResponse"][];
-      /** Executedqueryterms */
-      executedQueryTerms?: string[][];
+      /** Querygroups */
+      queryGroups?: components["schemas"]["AgentWorkbenchQueryGroupResponse"][];
       /** Rawcandidatecount */
       rawCandidateCount?: number | null;
       /** Uniquenewcount */
@@ -2119,18 +2111,76 @@ export interface components {
        */
       pendingMemoryReviewCount: number;
     };
-    /** AgentWorkbenchQueryPackageResponse */
-    AgentWorkbenchQueryPackageResponse: {
+    /** AgentWorkbenchQueryExecutionResponse */
+    AgentWorkbenchQueryExecutionResponse: {
       /** Sourcekind */
-      sourceKind?: string | null;
+      sourceKind: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "completed" | "partial" | "blocked" | "failed";
+      /**
+       * Rawcandidatecount
+       * @default 0
+       */
+      rawCandidateCount: number;
+      /**
+       * Uniquecandidatecount
+       * @default 0
+       */
+      uniqueCandidateCount: number;
+      /**
+       * Duplicatecandidatecount
+       * @default 0
+       */
+      duplicateCandidateCount: number;
+      /** Safereasoncode */
+      safeReasonCode?: string | null;
+    };
+    /** AgentWorkbenchQueryGroupResponse */
+    AgentWorkbenchQueryGroupResponse: {
+      /** Queryinstanceid */
+      queryInstanceId: string;
+      /** Termgroupkey */
+      termGroupKey: string;
       /** Queryrole */
-      queryRole?: string | null;
+      queryRole: string;
       /** Lanetype */
-      laneType?: string | null;
+      laneType: string;
       /** Queryterms */
       queryTerms?: string[];
       /** Keywordquery */
       keywordQuery?: string | null;
+      /**
+       * Lifecycle
+       * @enum {string}
+       */
+      lifecycle: "planned" | "executed";
+      /** Executionstatus */
+      executionStatus?: ("completed" | "partial" | "blocked" | "failed") | null;
+      /**
+       * Attempted
+       * @default false
+       */
+      attempted: boolean;
+      /**
+       * Rawcandidatecount
+       * @default 0
+       */
+      rawCandidateCount: number;
+      /**
+       * Uniquecandidatecount
+       * @default 0
+       */
+      uniqueCandidateCount: number;
+      /**
+       * Duplicatecandidatecount
+       * @default 0
+       */
+      duplicateCandidateCount: number;
+      /** Executions */
+      executions?: components["schemas"]["AgentWorkbenchQueryExecutionResponse"][];
     };
     /** AgentWorkbenchRequirementDraftItemResponse */
     AgentWorkbenchRequirementDraftItemResponse: {
@@ -2396,7 +2446,7 @@ export interface components {
        * Title
        * @enum {string}
        */
-      title: "关键词" | "observation" | "反思和下一轮变更";
+      title: "observation" | "反思和下一轮变更";
       /** Text */
       text: string;
       /** Terms */
@@ -2425,6 +2475,8 @@ export interface components {
         | "blocked"
         | "failed"
         | "cancelled";
+      /** Querygroups */
+      queryGroups?: components["schemas"]["AgentWorkbenchQueryGroupResponse"][];
       /** Cards */
       cards?: components["schemas"]["AgentWorkbenchThinkingProcessCardResponse"][];
     };
@@ -4976,6 +5028,77 @@ export interface components {
       /** Idempotencykey */
       idempotencyKey?: string | null;
     };
+    /** WorkbenchV2QueryExecutionView */
+    WorkbenchV2QueryExecutionView: {
+      /** Sourcekind */
+      sourceKind: string;
+      /**
+       * Status
+       * @enum {string}
+       */
+      status: "completed" | "partial" | "blocked" | "failed";
+      /**
+       * Rawcandidatecount
+       * @default 0
+       */
+      rawCandidateCount: number;
+      /**
+       * Uniquecandidatecount
+       * @default 0
+       */
+      uniqueCandidateCount: number;
+      /**
+       * Duplicatecandidatecount
+       * @default 0
+       */
+      duplicateCandidateCount: number;
+      /** Safereasoncode */
+      safeReasonCode?: string | null;
+    };
+    /** WorkbenchV2QueryGroupView */
+    WorkbenchV2QueryGroupView: {
+      /** Queryinstanceid */
+      queryInstanceId: string;
+      /** Termgroupkey */
+      termGroupKey: string;
+      /** Queryrole */
+      queryRole: string;
+      /** Lanetype */
+      laneType: string;
+      /** Queryterms */
+      queryTerms?: string[];
+      /** Keywordquery */
+      keywordQuery?: string | null;
+      /**
+       * Lifecycle
+       * @enum {string}
+       */
+      lifecycle: "planned" | "executed";
+      /** Executionstatus */
+      executionStatus?: ("completed" | "partial" | "blocked" | "failed") | null;
+      /**
+       * Attempted
+       * @default false
+       */
+      attempted: boolean;
+      /**
+       * Rawcandidatecount
+       * @default 0
+       */
+      rawCandidateCount: number;
+      /**
+       * Uniquecandidatecount
+       * @default 0
+       */
+      uniqueCandidateCount: number;
+      /**
+       * Duplicatecandidatecount
+       * @default 0
+       */
+      duplicateCandidateCount: number;
+      /** Executions */
+      executions?: components["schemas"]["WorkbenchV2QueryExecutionView"][];
+    };
     /** WorkbenchV2RequirementActionRequest */
     WorkbenchV2RequirementActionRequest: {
       /**
@@ -5021,7 +5144,7 @@ export interface components {
        * Title
        * @enum {string}
        */
-      title: "关键词" | "observation" | "反思和下一轮变更";
+      title: "observation" | "反思和下一轮变更";
       /** Text */
       text: string;
       /** Terms */
@@ -5043,6 +5166,8 @@ export interface components {
         | "blocked"
         | "failed"
         | "cancelled";
+      /** Querygroups */
+      queryGroups?: components["schemas"]["WorkbenchV2QueryGroupView"][];
       /** Cards */
       cards?: components["schemas"]["WorkbenchV2ThinkingProcessCardView"][];
     };

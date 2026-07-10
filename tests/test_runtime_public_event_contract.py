@@ -30,7 +30,8 @@ def _workflow_runtime(*args, **kwargs) -> WorkflowRuntime:
 def test_cts_only_rounds_emit_canonical_runtime_public_events(tmp_path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=1,
     )
@@ -67,22 +68,46 @@ def test_cts_only_rounds_emit_canonical_runtime_public_events(tmp_path) -> None:
     ]
 
 
-def test_runtime_round_query_public_event_uses_source_aware_planned_queries(tmp_path) -> None:
+def test_runtime_round_query_public_event_uses_logical_planned_groups(tmp_path) -> None:
     payloads = _multi_source_runtime_public_event_payloads(tmp_path, source_kinds=("cts", "liepin"))
     round_query = next(payload for payload in payloads if payload["stage"] == "round_query")
 
-    planned_queries = round_query["details"]["plannedQueries"]
-    assert {item["sourceKind"] for item in planned_queries} >= {"cts", "liepin"}
-    assert all(item["queryTerms"] for item in planned_queries)
-    assert all("keywordQuery" in item for item in planned_queries)
+    [planned_group] = round_query["details"]["queryGroups"]
+    assert planned_group["queryTerms"]
+    assert planned_group["keywordQuery"]
+    assert planned_group["lifecycle"] == "planned"
+    assert "sourceKind" not in planned_group
 
 
-def test_runtime_feedback_public_event_includes_liepin_executed_queries(tmp_path) -> None:
+def test_runtime_feedback_public_event_includes_liepin_execution_in_logical_group(tmp_path) -> None:
     payloads = _multi_source_runtime_public_event_payloads(tmp_path, source_kinds=("cts", "liepin"))
     feedback = next(payload for payload in payloads if payload["stage"] == "feedback")
 
-    executed_queries = feedback["details"]["executedQueries"]
-    assert {item["sourceKind"] for item in executed_queries} >= {"cts", "liepin"}
+    [executed_group] = feedback["details"]["queryGroups"]
+    assert {item["sourceKind"] for item in executed_group["executions"]} >= {"cts", "liepin"}
+
+
+def test_runtime_public_events_publish_one_logical_group_with_two_source_executions(tmp_path) -> None:
+    payloads = _multi_source_runtime_public_event_payloads(tmp_path, source_kinds=("cts", "liepin"))
+    round_query = next(payload for payload in payloads if payload["stage"] == "round_query")
+    feedback = next(payload for payload in payloads if payload["stage"] == "feedback")
+
+    [planned_group] = round_query["details"]["queryGroups"]
+    assert planned_group["lifecycle"] == "planned"
+    assert planned_group["executionStatus"] is None
+    assert planned_group["attempted"] is False
+    assert planned_group["executions"] == []
+    assert "sourceKind" not in planned_group
+    assert "requestedCount" not in planned_group
+
+    [executed_group] = feedback["details"]["queryGroups"]
+    assert executed_group["queryInstanceId"] == planned_group["queryInstanceId"]
+    assert executed_group["termGroupKey"] == planned_group["termGroupKey"]
+    assert executed_group["lifecycle"] == "executed"
+    assert executed_group["executionStatus"] == "completed"
+    assert executed_group["attempted"] is True
+    assert [item["sourceKind"] for item in executed_group["executions"]] == ["cts", "liepin"]
+    assert all("safeReasonCode" not in item for item in executed_group["executions"])
 
 
 def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_unavailable() -> None:
@@ -151,9 +176,7 @@ def test_source_result_public_event_maps_liepin_extension_disconnected() -> None
         round_no=1,
         source_kind="liepin",
         status="blocked",
-        safe_reason_code=public_source_reason_code(
-            "liepin_opencli_extension_disconnected"
-        ),
+        safe_reason_code=public_source_reason_code("liepin_opencli_extension_disconnected"),
     )
 
     assert event["safeReasonCode"] == "source_browser_extension_disconnected"
@@ -163,7 +186,8 @@ def test_cts_only_run_emits_finalization_public_event(tmp_path, monkeypatch: pyt
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,

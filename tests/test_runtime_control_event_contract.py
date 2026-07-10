@@ -21,10 +21,7 @@ def test_v1_database_migrates_to_run_intent_ownership_without_dropping_rows(tmp_
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         version = conn.execute("PRAGMA user_version").fetchone()[0]
-        indexes = {
-            row["name"]
-            for row in conn.execute("PRAGMA index_list(runtime_control_runs)").fetchall()
-        }
+        indexes = {row["name"] for row in conn.execute("PRAGMA index_list(runtime_control_runs)").fetchall()}
         runnable_index_columns = [
             row["name"] for row in conn.execute("PRAGMA index_info(idx_runtime_runs_status_created)").fetchall()
         ]
@@ -525,8 +522,7 @@ def test_stage_outputs_are_canonical_and_db_idempotent_for_absent_node_and_round
             (saved.output_id,),
         ).fetchone()
         indexes = {
-            index_row[1]
-            for index_row in conn.execute("PRAGMA index_list(runtime_control_stage_outputs)").fetchall()
+            index_row[1] for index_row in conn.execute("PRAGMA index_list(runtime_control_stage_outputs)").fetchall()
         }
     assert row == (None, "", None, -1)
     assert "idx_runtime_stage_outputs_run_stage_round_kind" in indexes
@@ -609,9 +605,9 @@ def test_stage_outputs_support_round_filter_latest_schema_and_terminal_deletion(
     )
     deleted = store.delete_terminal_stage_outputs(older_than="2026-06-17T00:00:03.000000Z", batch_size=100)
     assert deleted == 2
-    assert [output.output_id for output in store.list_stage_outputs(runtime_run_id="runtime_run_stage_output_filters")] == [
-        "rtout_final_shortlist"
-    ]
+    assert [
+        output.output_id for output in store.list_stage_outputs(runtime_run_id="runtime_run_stage_output_filters")
+    ] == ["rtout_final_shortlist"]
 
 
 @pytest.mark.parametrize(
@@ -663,9 +659,9 @@ def test_stage_output_allowlists_public_output(tmp_path: Path) -> None:
             node_id="cts",
             round_no=1,
             output_kind="runtime_public_source_result",
-            schema_version="runtime-public-stage-output/v1",
+            schema_version="runtime-public-stage-output/v2",
             output={
-                "schemaVersion": "runtime-public-stage-output/v1",
+                "schemaVersion": "runtime-public-stage-output/v2",
                 "publicEventSchemaVersion": "runtime_public_event_v1",
                 "stage": "source_result",
                 "roundNo": 1,
@@ -685,7 +681,7 @@ def test_stage_output_allowlists_public_output(tmp_path: Path) -> None:
     assert "extraDebug" not in saved.output
 
 
-def test_public_stage_output_rejects_sensitive_query_package_keys(tmp_path: Path) -> None:
+def test_public_stage_output_rejects_sensitive_query_group_keys(tmp_path: Path) -> None:
     from seektalent_runtime_control.errors import RuntimeControlError
     from seektalent_runtime_control.models import RuntimeStageOutputInput
 
@@ -700,9 +696,9 @@ def test_public_stage_output_rejects_sensitive_query_package_keys(tmp_path: Path
                 stage="feedback",
                 round_no=1,
                 output_kind="runtime_public_feedback",
-                schema_version="runtime-public-stage-output/v1",
+                schema_version="runtime-public-stage-output/v2",
                 output={
-                    "schemaVersion": "runtime-public-stage-output/v1",
+                    "schemaVersion": "runtime-public-stage-output/v2",
                     "publicEventSchemaVersion": "runtime_public_event_v1",
                     "stage": "feedback",
                     "roundNo": 1,
@@ -710,13 +706,21 @@ def test_public_stage_output_rejects_sensitive_query_package_keys(tmp_path: Path
                     "status": "completed",
                     "counts": {},
                     "details": {
-                        "executedQueries": [
+                        "queryGroups": [
                             {
-                                "sourceKind": "liepin",
+                                "queryInstanceId": "query-1",
+                                "termGroupKey": "group-1",
                                 "queryRole": "exploit",
-                                "laneType": "primary",
+                                "laneType": "exploit",
                                 "queryTerms": ["AI agent"],
                                 "keywordQuery": "AI agent platform engineer",
+                                "lifecycle": "executed",
+                                "executionStatus": "completed",
+                                "attempted": True,
+                                "rawCandidateCount": 1,
+                                "uniqueCandidateCount": 1,
+                                "duplicateCandidateCount": 0,
+                                "executions": [],
                                 "providerPayload": {"secret": "reject the whole output"},
                             }
                         ]
@@ -733,7 +737,7 @@ def test_public_stage_output_rejects_sensitive_query_package_keys(tmp_path: Path
     assert exc_info.value.reason_code == "runtime_stage_output_sensitive_payload"
 
 
-def test_public_stage_output_keeps_query_packages_and_drops_unknown_public_details(tmp_path: Path) -> None:
+def test_public_stage_output_keeps_query_groups_and_drops_unknown_public_details(tmp_path: Path) -> None:
     from seektalent_runtime_control.models import RuntimeStageOutputInput
 
     store = _initialized_store(tmp_path)
@@ -746,9 +750,9 @@ def test_public_stage_output_keeps_query_packages_and_drops_unknown_public_detai
             stage="feedback",
             round_no=1,
             output_kind="runtime_public_feedback",
-            schema_version="runtime-public-stage-output/v1",
+            schema_version="runtime-public-stage-output/v2",
             output={
-                "schemaVersion": "runtime-public-stage-output/v1",
+                "schemaVersion": "runtime-public-stage-output/v2",
                 "publicEventSchemaVersion": "runtime_public_event_v1",
                 "stage": "feedback",
                 "roundNo": 1,
@@ -756,13 +760,21 @@ def test_public_stage_output_keeps_query_packages_and_drops_unknown_public_detai
                 "status": "completed",
                 "counts": {"feedbackCandidateCount": 2},
                 "details": {
-                    "executedQueries": [
+                    "queryGroups": [
                         {
-                            "source_kind": "liepin",
-                            "query_role": "exploit",
-                            "lane_type": "primary",
-                            "query_terms": ["AI agent"],
-                            "keyword_query": "AI agent platform engineer",
+                            "queryInstanceId": "query-1",
+                            "termGroupKey": "group-1",
+                            "queryRole": "exploit",
+                            "laneType": "exploit",
+                            "queryTerms": ["AI agent"],
+                            "keywordQuery": "AI agent platform engineer",
+                            "lifecycle": "executed",
+                            "executionStatus": "completed",
+                            "attempted": True,
+                            "rawCandidateCount": 1,
+                            "uniqueCandidateCount": 1,
+                            "duplicateCandidateCount": 0,
+                            "executions": [],
                             "debugNote": "drop this non-sensitive unknown key",
                         }
                     ],
@@ -780,18 +792,145 @@ def test_public_stage_output_keeps_query_packages_and_drops_unknown_public_detai
         )
     )
 
-    assert saved.output["details"]["executedQueries"] == [
+    assert saved.output["details"]["queryGroups"] == [
         {
-            "sourceKind": "liepin",
+            "queryInstanceId": "query-1",
+            "termGroupKey": "group-1",
             "queryRole": "exploit",
-            "laneType": "primary",
+            "laneType": "exploit",
             "queryTerms": ["AI agent"],
             "keywordQuery": "AI agent platform engineer",
+            "lifecycle": "executed",
+            "executionStatus": "completed",
+            "attempted": True,
+            "rawCandidateCount": 1,
+            "uniqueCandidateCount": 1,
+            "duplicateCandidateCount": 0,
+            "executions": [],
         }
     ]
     assert saved.output["details"]["suggestedKeepFilterFields"] == ["location"]
     assert saved.output["details"]["suggestedDropTerms"] == []
     assert "nonPublicDetail" not in saved.output["details"]
+
+
+def test_public_stage_output_v2_keeps_only_safe_logical_query_group_fields() -> None:
+    from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+
+    output = sanitize_stage_output_payload(
+        output_kind="runtime_public_feedback",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "publicEventSchemaVersion": "runtime_public_event_v1",
+            "stage": "feedback",
+            "roundNo": 2,
+            "sourceKind": None,
+            "status": "completed",
+            "counts": {},
+            "details": {
+                "keywordQuery": "legacy keyword must not survive v2",
+                "queryTerms": ["legacy"],
+                "plannedQueries": [{"sourceKind": "cts", "keywordQuery": "legacy"}],
+                "executedQueries": [{"sourceKind": "liepin", "keywordQuery": "legacy"}],
+                "queryGroups": [
+                    {
+                        "queryInstanceId": "explore-2",
+                        "termGroupKey": "group-2",
+                        "queryRole": "explore",
+                        "laneType": "generic_explore",
+                        "queryTerms": ["Platform", "Rust"],
+                        "keywordQuery": "Platform Rust",
+                        "lifecycle": "executed",
+                        "executionStatus": "completed",
+                        "attempted": True,
+                        "rawCandidateCount": 4,
+                        "uniqueCandidateCount": 2,
+                        "duplicateCandidateCount": 2,
+                        "executions": [
+                            {
+                                "sourceKind": "liepin",
+                                "status": "completed",
+                                "rawCandidateCount": 4,
+                                "uniqueCandidateCount": 2,
+                                "duplicateCandidateCount": 2,
+                                "safeReasonCode": "blocked_backend_unavailable",
+                                "providerUrl": "https://h.liepin.com/private",
+                            },
+                            {
+                                "sourceKind": "cts",
+                                "status": "failed",
+                                "rawCandidateCount": 0,
+                                "uniqueCandidateCount": 0,
+                                "duplicateCandidateCount": 0,
+                                "safeReasonCode": "Bearer private-token",
+                            },
+                        ],
+                        "requestedCount": 10,
+                        "exhaustedReason": "provider private detail",
+                        "queryFingerprint": "private",
+                        "providerUrl": "https://h.liepin.com/private",
+                    }
+                ],
+            },
+            "safeReasonCode": None,
+        },
+        stage="feedback",
+        round_no=2,
+        node_id=None,
+    )
+
+    assert set(output["details"]) == {"queryGroups"}
+    [group] = output["details"]["queryGroups"]
+    assert group == {
+        "queryInstanceId": "explore-2",
+        "termGroupKey": "group-2",
+        "queryRole": "explore",
+        "laneType": "generic_explore",
+        "queryTerms": ["Platform", "Rust"],
+        "keywordQuery": "Platform Rust",
+        "lifecycle": "executed",
+        "executionStatus": "completed",
+        "attempted": True,
+        "rawCandidateCount": 4,
+        "uniqueCandidateCount": 2,
+        "duplicateCandidateCount": 2,
+        "executions": [
+            {
+                "sourceKind": "liepin",
+                "status": "completed",
+                "rawCandidateCount": 4,
+                "uniqueCandidateCount": 2,
+                "duplicateCandidateCount": 2,
+                "safeReasonCode": "source_browser_backend_unavailable",
+            },
+            {
+                "sourceKind": "cts",
+                "status": "failed",
+                "rawCandidateCount": 0,
+                "uniqueCandidateCount": 0,
+                "duplicateCandidateCount": 0,
+            },
+        ],
+    }
+
+
+def test_stage_output_reason_mapping_matches_runtime_public_event_contract() -> None:
+    from seektalent.runtime import public_events as runtime_public_events
+    from seektalent_runtime_control import stage_outputs
+
+    assert stage_outputs._PUBLIC_SOURCE_REASON_CODES == runtime_public_events.PUBLIC_SOURCE_REASON_CODES
+    assert stage_outputs._PUBLIC_REASON_MAP == runtime_public_events._PUBLIC_REASON_MAP
+
+    reason_codes = [
+        None,
+        "unknown_private_reason",
+        *sorted(runtime_public_events.PUBLIC_SOURCE_REASON_CODES),
+        *sorted(runtime_public_events._PUBLIC_REASON_MAP),
+    ]
+    assert [stage_outputs._safe_reason_code(reason) for reason in reason_codes] == [
+        runtime_public_events.public_source_reason_code(reason) for reason in reason_codes
+    ]
 
 
 @pytest.mark.parametrize(
@@ -832,9 +971,9 @@ def test_public_stage_output_rejects_metadata_and_round_hierarchy_mismatch(
                 stage=stage,
                 round_no=round_no,
                 output_kind=output_kind,
-                schema_version="runtime-public-stage-output/v1",
+                schema_version="runtime-public-stage-output/v2",
                 output={
-                    "schemaVersion": "runtime-public-stage-output/v1",
+                    "schemaVersion": "runtime-public-stage-output/v2",
                     "publicEventSchemaVersion": "runtime_public_event_v1",
                     "stage": payload_stage,
                     "roundNo": payload_round_no,

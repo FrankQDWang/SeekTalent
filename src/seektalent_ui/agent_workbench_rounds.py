@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from typing import Literal, cast
 
 from seektalent_runtime_control.models import RuntimeStageOutput
 
@@ -14,8 +15,10 @@ PUBLIC_ROUND_SUMMARY_OUTPUT_KINDS = {
     "runtime_public_feedback",
 }
 PUBLIC_FINALIZATION_OUTPUT_KIND = "runtime_public_finalization"
-PUBLIC_STAGE_OUTPUT_SCHEMA = "runtime-public-stage-output/v1"
+PUBLIC_STAGE_OUTPUT_SCHEMA = "runtime-public-stage-output/v2"
 PUBLIC_EVENT_SCHEMA = "runtime_public_event_v1"
+AgentWorkbenchQueryGroupLifecycle = Literal["planned", "executed"]
+AgentWorkbenchQueryExecutionStatus = Literal["completed", "partial", "blocked", "failed"]
 
 
 class AgentWorkbenchProjectionError(RuntimeError):
@@ -26,12 +29,30 @@ class AgentWorkbenchProjectionError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class AgentWorkbenchQueryPackageProjection:
-    source_kind: str | None = None
-    query_role: str | None = None
-    lane_type: str | None = None
-    query_terms: tuple[str, ...] = ()
-    keyword_query: str | None = None
+class AgentWorkbenchQueryExecutionProjection:
+    source_kind: str
+    status: AgentWorkbenchQueryExecutionStatus
+    raw_candidate_count: int = 0
+    unique_candidate_count: int = 0
+    duplicate_candidate_count: int = 0
+    safe_reason_code: str | None = None
+
+
+@dataclass(frozen=True)
+class AgentWorkbenchQueryGroupProjection:
+    query_instance_id: str
+    term_group_key: str
+    query_role: str
+    lane_type: str
+    query_terms: tuple[str, ...]
+    keyword_query: str
+    lifecycle: AgentWorkbenchQueryGroupLifecycle
+    execution_status: AgentWorkbenchQueryExecutionStatus | None
+    attempted: bool
+    raw_candidate_count: int = 0
+    unique_candidate_count: int = 0
+    duplicate_candidate_count: int = 0
+    executions: tuple[AgentWorkbenchQueryExecutionProjection, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -46,10 +67,7 @@ class AgentWorkbenchRoundSummaryProjection:
     round_no: int
     status: str
     stage_outputs: tuple[AgentWorkbenchRoundStageProjection, ...] = ()
-    query_terms: tuple[str, ...] = ()
-    keyword_query: str | None = None
-    planned_queries: tuple[AgentWorkbenchQueryPackageProjection, ...] = ()
-    executed_queries: tuple[AgentWorkbenchQueryPackageProjection, ...] = ()
+    query_groups: tuple[AgentWorkbenchQueryGroupProjection, ...] = ()
     raw_candidate_count: int | None = None
     source_identity_count: int | None = None
     unique_new_count: int | None = None
@@ -82,10 +100,7 @@ class _RoundFacts:
     statuses: set[str] = field(default_factory=set)
     stage_outputs: list[AgentWorkbenchRoundStageProjection] = field(default_factory=list)
     failed: bool = False
-    query_terms: tuple[str, ...] = ()
-    keyword_query: str | None = None
-    planned_queries: tuple[AgentWorkbenchQueryPackageProjection, ...] = ()
-    executed_queries: tuple[AgentWorkbenchQueryPackageProjection, ...] = ()
+    query_groups: dict[str, AgentWorkbenchQueryGroupProjection] = field(default_factory=dict)
     raw_candidate_count: int | None = None
     source_identity_count: int | None = None
     unique_new_count: int | None = None
@@ -107,10 +122,7 @@ class _RoundFacts:
             round_no=self.round_no,
             status=_derive_status(self.stages, statuses=self.statuses, failed=self.failed),
             stage_outputs=tuple(self.stage_outputs),
-            query_terms=self.query_terms,
-            keyword_query=self.keyword_query,
-            planned_queries=self.planned_queries,
-            executed_queries=self.executed_queries,
+            query_groups=tuple(self.query_groups.values()),
             raw_candidate_count=self.raw_candidate_count,
             source_identity_count=self.source_identity_count,
             unique_new_count=self.unique_new_count,
@@ -163,7 +175,9 @@ def deterministic_finalization_from_stage_outputs(
     output = sorted(finalizations, key=lambda item: (item.created_at, item.output_id))[-1]
     payload = _validated_payload(output)
     if output.round_no is not None:
-        raise AgentWorkbenchProjectionError("workbench_finalization_output_must_be_run_level", output_id=output.output_id)
+        raise AgentWorkbenchProjectionError(
+            "workbench_finalization_output_must_be_run_level", output_id=output.output_id
+        )
     counts = _mapping(payload.get("counts"))
     details = _mapping(payload.get("details"))
     return AgentWorkbenchRunFinalizationProjection(
@@ -192,15 +206,7 @@ def _apply_round_output(summary: _RoundFacts, *, output: RuntimeStageOutput, pay
     counts = _mapping(payload.get("counts"))
     details = _mapping(payload.get("details"))
     if stage == "round_query":
-        terms = _string_tuple(details.get("queryTerms"))
-        if terms:
-            summary.query_terms = terms
-        keyword_query = _text(details.get("keywordQuery"))
-        if keyword_query is not None:
-            summary.keyword_query = keyword_query
-        planned = _query_packages(details.get("plannedQueries"))
-        if planned:
-            summary.planned_queries = planned
+        _merge_query_groups(summary, _query_groups(details.get("queryGroups")), output_id=output.output_id)
     elif stage == "source_result":
         raw_count = _int_or_none(counts.get("roundReturned"))
         if raw_count is not None:
@@ -223,10 +229,10 @@ def _apply_round_output(summary: _RoundFacts, *, output: RuntimeStageOutput, pay
         if top_pool is not None:
             summary.top_pool_count = top_pool
     elif stage == "feedback":
-        executed = _query_packages(details.get("executedQueries"))
-        if executed:
-            summary.executed_queries = executed
-        summary.resume_quality_comment = _replace_text(summary.resume_quality_comment, details.get("resumeQualityComment"))
+        _merge_query_groups(summary, _query_groups(details.get("queryGroups")), output_id=output.output_id)
+        summary.resume_quality_comment = _replace_text(
+            summary.resume_quality_comment, details.get("resumeQualityComment")
+        )
         summary.reflection_summary = _replace_text(summary.reflection_summary, details.get("reflectionSummary"))
         summary.suggested_activate_terms = _string_tuple(details.get("suggestedActivateTerms"))
         summary.suggested_keep_terms = _string_tuple(details.get("suggestedKeepTerms"))
@@ -281,24 +287,127 @@ def _derive_status(stages: set[str], *, statuses: set[str], failed: bool) -> str
     return "running"
 
 
-def _query_packages(value: object) -> tuple[AgentWorkbenchQueryPackageProjection, ...]:
+def _merge_query_groups(
+    summary: _RoundFacts,
+    groups: Sequence[AgentWorkbenchQueryGroupProjection],
+    *,
+    output_id: str,
+) -> None:
+    for group in groups:
+        existing = summary.query_groups.get(group.query_instance_id)
+        if existing is None:
+            summary.query_groups[group.query_instance_id] = group
+            continue
+        if _query_group_identity(existing) != _query_group_identity(group):
+            raise AgentWorkbenchProjectionError("workbench_query_group_identity_mismatch", output_id=output_id)
+        if existing.lifecycle == "executed" and group.lifecycle == "planned":
+            continue
+        summary.query_groups[group.query_instance_id] = group
+
+
+def _query_group_identity(group: AgentWorkbenchQueryGroupProjection) -> tuple[object, ...]:
+    return (
+        group.term_group_key,
+        group.query_role,
+        group.lane_type,
+        group.query_terms,
+        group.keyword_query,
+    )
+
+
+def _query_groups(value: object) -> tuple[AgentWorkbenchQueryGroupProjection, ...]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return ()
-    packages: list[AgentWorkbenchQueryPackageProjection] = []
+    groups: list[AgentWorkbenchQueryGroupProjection] = []
+    seen_query_instance_ids: set[str] = set()
     for item in value:
-        if not isinstance(item, Mapping):
-            continue
         item_mapping = _mapping(item)
-        package = AgentWorkbenchQueryPackageProjection(
-            source_kind=_text(item_mapping.get("sourceKind")),
-            query_role=_text(item_mapping.get("queryRole")),
-            lane_type=_text(item_mapping.get("laneType")),
-            query_terms=_string_tuple(item_mapping.get("queryTerms")),
-            keyword_query=_text(item_mapping.get("keywordQuery")),
+        query_instance_id = _text(item_mapping.get("queryInstanceId"))
+        term_group_key = _text(item_mapping.get("termGroupKey"))
+        query_role = _text(item_mapping.get("queryRole"))
+        lane_type = _text(item_mapping.get("laneType"))
+        query_terms = _string_tuple(item_mapping.get("queryTerms"))
+        keyword_query = _text(item_mapping.get("keywordQuery"))
+        lifecycle = _text(item_mapping.get("lifecycle"))
+        if (
+            query_instance_id is None
+            or query_instance_id in seen_query_instance_ids
+            or term_group_key is None
+            or query_role is None
+            or lane_type is None
+            or not query_terms
+            or keyword_query is None
+            or lifecycle not in {"planned", "executed"}
+        ):
+            continue
+        if lifecycle == "planned":
+            group = AgentWorkbenchQueryGroupProjection(
+                query_instance_id=query_instance_id,
+                term_group_key=term_group_key,
+                query_role=query_role,
+                lane_type=lane_type,
+                query_terms=query_terms,
+                keyword_query=keyword_query,
+                lifecycle=cast(AgentWorkbenchQueryGroupLifecycle, lifecycle),
+                execution_status=None,
+                attempted=False,
+            )
+        else:
+            execution_status = _text(item_mapping.get("executionStatus"))
+            attempted = item_mapping.get("attempted")
+            if execution_status not in {"completed", "partial", "blocked", "failed"} or not isinstance(attempted, bool):
+                continue
+            group = AgentWorkbenchQueryGroupProjection(
+                query_instance_id=query_instance_id,
+                term_group_key=term_group_key,
+                query_role=query_role,
+                lane_type=lane_type,
+                query_terms=query_terms,
+                keyword_query=keyword_query,
+                lifecycle="executed",
+                execution_status=cast(AgentWorkbenchQueryExecutionStatus, execution_status),
+                attempted=attempted,
+                raw_candidate_count=_int_or_none(item_mapping.get("rawCandidateCount")) or 0,
+                unique_candidate_count=_int_or_none(item_mapping.get("uniqueCandidateCount")) or 0,
+                duplicate_candidate_count=_int_or_none(item_mapping.get("duplicateCandidateCount")) or 0,
+                executions=_query_executions(item_mapping.get("executions")),
+            )
+        groups.append(group)
+        seen_query_instance_ids.add(query_instance_id)
+        if len(groups) >= 2:
+            break
+    return tuple(groups)
+
+
+def _query_executions(value: object) -> tuple[AgentWorkbenchQueryExecutionProjection, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return ()
+    executions: list[AgentWorkbenchQueryExecutionProjection] = []
+    seen_sources: set[str] = set()
+    for item in value:
+        item_mapping = _mapping(item)
+        source_kind = _text(item_mapping.get("sourceKind"))
+        status = _text(item_mapping.get("status"))
+        if (
+            source_kind is None
+            or source_kind in seen_sources
+            or status not in {"completed", "partial", "blocked", "failed"}
+        ):
+            continue
+        executions.append(
+            AgentWorkbenchQueryExecutionProjection(
+                source_kind=source_kind,
+                status=cast(AgentWorkbenchQueryExecutionStatus, status),
+                raw_candidate_count=_int_or_none(item_mapping.get("rawCandidateCount")) or 0,
+                unique_candidate_count=_int_or_none(item_mapping.get("uniqueCandidateCount")) or 0,
+                duplicate_candidate_count=_int_or_none(item_mapping.get("duplicateCandidateCount")) or 0,
+                safe_reason_code=_text(item_mapping.get("safeReasonCode")),
+            )
         )
-        if package.query_terms or package.keyword_query is not None:
-            packages.append(package)
-    return tuple(packages)
+        seen_sources.add(source_kind)
+        if len(executions) >= 2:
+            break
+    return tuple(executions)
 
 
 def _replace_text(current: str | None, value: object) -> str | None:

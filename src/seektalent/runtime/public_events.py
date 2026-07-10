@@ -68,7 +68,6 @@ _PUBLIC_COUNT_KEYS = {
     "feedbackCandidateCount",
 }
 _PUBLIC_DETAIL_TEXT_KEYS = {
-    "keywordQuery",
     "resumeQualityComment",
     "reflectionSummary",
     "suggestedStopReason",
@@ -79,7 +78,6 @@ _PUBLIC_DETAIL_BOOL_KEYS = {
     "suggestStop",
 }
 _PUBLIC_DETAIL_LIST_KEYS = {
-    "queryTerms",
     "suggestedActivateTerms",
     "suggestedAddFilterFields",
     "suggestedDeprioritizeTerms",
@@ -88,7 +86,9 @@ _PUBLIC_DETAIL_LIST_KEYS = {
     "suggestedKeepFilterFields",
     "suggestedKeepTerms",
 }
-_PUBLIC_DETAIL_QUERY_PACKAGE_KEYS = {"plannedQueries", "executedQueries"}
+_PUBLIC_DETAIL_QUERY_GROUP_KEYS = {"queryGroups"}
+_PUBLIC_QUERY_GROUP_LIFECYCLES = {"planned", "executed"}
+_PUBLIC_QUERY_EXECUTION_STATUSES = {"completed", "partial", "blocked", "failed"}
 
 
 class RuntimePublicEvent(TypedDict):
@@ -262,42 +262,110 @@ def _safe_public_details(value: object) -> dict[str, object]:
             values = _public_detail_list(raw_value)
             if values:
                 details[key] = values
-        elif key in _PUBLIC_DETAIL_QUERY_PACKAGE_KEYS:
-            values = _public_query_packages(raw_value)
-            if values:
-                details[key] = values
+        elif key in _PUBLIC_DETAIL_QUERY_GROUP_KEYS:
+            details[key] = _public_query_groups(raw_value)
     return details
 
 
-def _public_query_packages(value: object) -> list[dict[str, object]]:
+def _public_query_groups(value: object) -> list[dict[str, object]]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return []
-    packages: list[dict[str, object]] = []
+    groups: list[dict[str, object]] = []
+    seen_query_instance_ids: set[str] = set()
     for item in value:
-        if not isinstance(item, Mapping):
+        group = _public_query_group(item)
+        if group is None:
             continue
-        package: dict[str, object] = {}
-        item_mapping = _string_key_mapping(item)
-        source_kind = _public_detail_text(item_mapping.get("sourceKind"), max_length=80)
-        query_role = _public_detail_text(item_mapping.get("queryRole"), max_length=80)
-        lane_type = _public_detail_text(item_mapping.get("laneType"), max_length=80)
-        query_terms = _public_detail_list(item_mapping.get("queryTerms"))
-        keyword_query = _public_detail_text(item_mapping.get("keywordQuery"), max_length=2000)
-        if source_kind is not None:
-            package["sourceKind"] = source_kind
-        if query_role is not None:
-            package["queryRole"] = query_role
-        if lane_type is not None:
-            package["laneType"] = lane_type
-        if query_terms:
-            package["queryTerms"] = query_terms
-        if keyword_query is not None:
-            package["keywordQuery"] = keyword_query
-        if package:
-            packages.append(package)
-        if len(packages) >= 50:
+        query_instance_id = group.get("queryInstanceId")
+        if not isinstance(query_instance_id, str) or query_instance_id in seen_query_instance_ids:
+            continue
+        seen_query_instance_ids.add(query_instance_id)
+        groups.append(group)
+        if len(groups) >= 2:
             break
-    return packages
+    return groups
+
+
+def _public_query_group(value: object) -> dict[str, object] | None:
+    item = _string_key_mapping(value)
+    query_instance_id = _public_detail_text(item.get("queryInstanceId"), max_length=160)
+    term_group_key = _public_detail_text(item.get("termGroupKey"), max_length=160)
+    query_role = _public_detail_text(item.get("queryRole"), max_length=80)
+    lane_type = _public_detail_text(item.get("laneType"), max_length=80)
+    query_terms = _public_detail_list(item.get("queryTerms"))
+    keyword_query = _public_detail_text(item.get("keywordQuery"), max_length=2000)
+    lifecycle = _public_detail_text(item.get("lifecycle"), max_length=32)
+    if (
+        query_instance_id is None
+        or term_group_key is None
+        or query_role is None
+        or lane_type is None
+        or not query_terms
+        or keyword_query is None
+        or lifecycle not in _PUBLIC_QUERY_GROUP_LIFECYCLES
+    ):
+        return None
+    group: dict[str, object] = {
+        "queryInstanceId": query_instance_id,
+        "termGroupKey": term_group_key,
+        "queryRole": query_role,
+        "laneType": lane_type,
+        "queryTerms": query_terms,
+        "keywordQuery": keyword_query,
+        "lifecycle": lifecycle,
+    }
+    if lifecycle == "planned":
+        group.update(
+            executionStatus=None,
+            attempted=False,
+            rawCandidateCount=0,
+            uniqueCandidateCount=0,
+            duplicateCandidateCount=0,
+            executions=[],
+        )
+        return group
+
+    execution_status = _public_detail_text(item.get("executionStatus"), max_length=32)
+    attempted = item.get("attempted")
+    if execution_status not in _PUBLIC_QUERY_EXECUTION_STATUSES or not isinstance(attempted, bool):
+        return None
+    group.update(
+        executionStatus=execution_status,
+        attempted=attempted,
+        rawCandidateCount=_optional_non_negative_int(item.get("rawCandidateCount")) or 0,
+        uniqueCandidateCount=_optional_non_negative_int(item.get("uniqueCandidateCount")) or 0,
+        duplicateCandidateCount=_optional_non_negative_int(item.get("duplicateCandidateCount")) or 0,
+        executions=_public_query_executions(item.get("executions")),
+    )
+    return group
+
+
+def _public_query_executions(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    executions: list[dict[str, object]] = []
+    seen_sources: set[str] = set()
+    for item in value:
+        entry = _string_key_mapping(item)
+        source_kind = _public_detail_text(entry.get("sourceKind"), max_length=80)
+        status = _public_detail_text(entry.get("status"), max_length=32)
+        if source_kind is None or source_kind in seen_sources or status not in _PUBLIC_QUERY_EXECUTION_STATUSES:
+            continue
+        execution: dict[str, object] = {
+            "sourceKind": source_kind,
+            "status": status,
+            "rawCandidateCount": _optional_non_negative_int(entry.get("rawCandidateCount")) or 0,
+            "uniqueCandidateCount": _optional_non_negative_int(entry.get("uniqueCandidateCount")) or 0,
+            "duplicateCandidateCount": _optional_non_negative_int(entry.get("duplicateCandidateCount")) or 0,
+        }
+        safe_reason_code = public_source_reason_code(entry.get("safeReasonCode"))
+        if safe_reason_code is not None:
+            execution["safeReasonCode"] = safe_reason_code
+        executions.append(execution)
+        seen_sources.add(source_kind)
+        if len(executions) >= 2:
+            break
+    return executions
 
 
 def _string_key_mapping(value: object) -> dict[str, object]:

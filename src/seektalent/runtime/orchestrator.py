@@ -202,11 +202,8 @@ from seektalent.runtime.source_round_dispatch import (
 )
 from seektalent.runtime.source_filters import build_runtime_filter_intents, build_runtime_location_execution_intent
 from seektalent.runtime.source_query_intent import (
-    RuntimeQueryPackage,
     RuntimeSourceQueryPolicy,
-    RuntimeSourceQueryIntent,
     build_runtime_source_query_intents,
-    query_package_from_intent,
     source_requested_count,
 )
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
@@ -397,32 +394,68 @@ def _source_round_status_from_lane_status(status: str) -> SourceRoundDispatchSta
     return "partial"
 
 
-def _planned_query_packages_from_intents(
-    source_query_intents_by_source: Mapping[SourceKind, tuple[RuntimeSourceQueryIntent, ...]],
-) -> tuple[RuntimeQueryPackage, ...]:
-    packages: list[RuntimeQueryPackage] = []
-    for _source_kind, intents in sorted(source_query_intents_by_source.items(), key=lambda item: item[0]):
-        packages.extend(query_package_from_intent(intent) for intent in intents)
-    return tuple(packages)
+def _planned_public_query_groups(logical_queries: Sequence[LogicalQueryDispatch]) -> list[dict[str, object]]:
+    return [
+        {
+            "queryInstanceId": query.query_instance_id,
+            "termGroupKey": query.term_group_key,
+            "queryRole": query.query_role,
+            "laneType": query.lane_type,
+            "queryTerms": list(query.query_terms),
+            "keywordQuery": query.keyword_query,
+            "lifecycle": "planned",
+            "executionStatus": None,
+            "attempted": False,
+            "rawCandidateCount": 0,
+            "uniqueCandidateCount": 0,
+            "duplicateCandidateCount": 0,
+            "executions": [],
+        }
+        for query in logical_queries[:2]
+    ]
 
 
-def _query_package_summaries(packages: Sequence[RuntimeQueryPackage]) -> list[dict[str, object]]:
-    summaries: list[dict[str, object]] = []
-    for package in packages:
-        item: dict[str, object] = {}
-        if package.source_kind is not None:
-            item["sourceKind"] = str(package.source_kind)
-        if package.query_role is not None:
-            item["queryRole"] = package.query_role
-        if package.lane_type is not None:
-            item["laneType"] = package.lane_type
-        if package.query_terms:
-            item["queryTerms"] = list(package.query_terms)
-        if package.keyword_query is not None:
-            item["keywordQuery"] = package.keyword_query
-        if item:
-            summaries.append(item)
-    return summaries
+def _executed_public_query_groups(
+    query_outcomes: Sequence[LogicalQueryOutcome],
+    *,
+    source_order: Sequence[SourceKind],
+) -> list[dict[str, object]]:
+    source_indexes = {source: index for index, source in enumerate(source_order)}
+    groups: list[dict[str, object]] = []
+    for outcome in query_outcomes[:2]:
+        executions: list[dict[str, object]] = []
+        for receipt in sorted(
+            outcome.receipts,
+            key=lambda item: (source_indexes.get(item.source_kind, len(source_indexes)), item.source_kind),
+        ):
+            execution: dict[str, object] = {
+                "sourceKind": receipt.source_kind,
+                "status": receipt.status,
+                "rawCandidateCount": receipt.raw_candidate_count,
+                "uniqueCandidateCount": receipt.unique_candidate_count,
+                "duplicateCandidateCount": receipt.duplicate_candidate_count,
+            }
+            if receipt.safe_reason_code is not None:
+                execution["safeReasonCode"] = receipt.safe_reason_code
+            executions.append(execution)
+        groups.append(
+            {
+                "queryInstanceId": outcome.query_instance_id,
+                "termGroupKey": outcome.term_group_key,
+                "queryRole": outcome.query_role,
+                "laneType": outcome.lane_type,
+                "queryTerms": list(outcome.query_terms),
+                "keywordQuery": outcome.keyword_query,
+                "lifecycle": "executed",
+                "executionStatus": outcome.status,
+                "attempted": outcome.attempted,
+                "rawCandidateCount": outcome.raw_candidate_count,
+                "uniqueCandidateCount": outcome.unique_candidate_count,
+                "duplicateCandidateCount": outcome.duplicate_candidate_count,
+                "executions": executions,
+            }
+        )
+    return groups
 
 
 def _round_unique_identity_count(
@@ -1581,7 +1614,6 @@ class WorkflowRuntime:
             lane.source: sum(intent.requested_count for intent in source_query_intents_by_source.get(lane.source, ()))
             for lane in source_plan
         }
-        planned_query_packages = _planned_query_packages_from_intents(source_query_intents_by_source)
         self._emit_runtime_public_event(
             tracer=tracer,
             progress_callback=progress_callback,
@@ -1592,9 +1624,7 @@ class WorkflowRuntime:
                 round_no=round_no,
                 counts={"topPoolCount": len(run_state.top_pool_ids)},
                 details={
-                    "queryTerms": retrieval_plan.query_terms,
-                    "keywordQuery": retrieval_plan.keyword_query,
-                    "plannedQueries": _query_package_summaries(planned_query_packages),
+                    "queryGroups": _planned_public_query_groups(logical_queries),
                 },
             ),
         )
@@ -2215,7 +2245,6 @@ class WorkflowRuntime:
                 )
                 raise RunStageError("source_search", str(exc)) from exc
             executed_queries = retrieval_result.executed_queries
-            executed_query_packages = retrieval_result.executed_query_packages
             sent_query_records = retrieval_result.sent_query_records
             new_candidates = retrieval_result.new_candidates
             search_observation = retrieval_result.search_observation
@@ -2466,7 +2495,10 @@ class WorkflowRuntime:
                     round_no=round_no,
                     counts={"feedbackCandidateCount": len(pool_decisions)},
                     details={
-                        "executedQueries": _query_package_summaries(executed_query_packages),
+                        "queryGroups": _executed_public_query_groups(
+                            round_state.query_outcomes,
+                            source_order=[lane.source for lane in source_plan],
+                        ),
                         "resumeQualityComment": resume_quality_comment,
                         "reflectionSummary": reflection_advice.reflection_summary,
                         "suggestStop": reflection_advice.suggest_stop,
@@ -3595,10 +3627,7 @@ class WorkflowRuntime:
             return f"action=source_search; query_terms={len(output.get('proposed_query_terms') or [])}"
         if stage == "reflection":
             summary = str(output.get("reflection_summary", ""))
-            return (
-                f"suggest_stop={output.get('suggest_stop')}; "
-                f"{self._preview_text(summary, limit=140)}"
-            )
+            return f"suggest_stop={output.get('suggest_stop')}; {self._preview_text(summary, limit=140)}"
         if stage == "finalize":
             return f"candidates={len(output.get('candidates') or [])}; {self._preview_text(str(output.get('summary', '')), limit=140)}"
         if stage == "repair_requirements" and isinstance(output, dict):

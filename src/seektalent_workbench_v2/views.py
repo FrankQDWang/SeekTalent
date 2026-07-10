@@ -12,6 +12,7 @@ from seektalent_workbench_v2.models import (
     WorkbenchV2ConversationView,
     WorkbenchV2GraphEdgeView,
     WorkbenchV2GraphNodeView,
+    WorkbenchV2QueryGroupView,
     WorkbenchV2RuntimeView,
     WorkbenchV2StrategyGraphView,
     WorkbenchV2SurfaceStatus,
@@ -59,6 +60,7 @@ class _GraphNodeSpec:
 @dataclass(frozen=True)
 class _ThinkingRoundState:
     status: WorkbenchV2SurfaceStatus
+    query_groups: list[WorkbenchV2QueryGroupView]
     cards: list[WorkbenchV2ThinkingProcessCardView]
 
 
@@ -350,12 +352,13 @@ def _thinking_process(
     return WorkbenchV2ThinkingProcessView(
         activeRoundNo=active_round,
         rounds=[
-                WorkbenchV2ThinkingProcessRoundView(
-                    roundNo=round_no,
-                    status=round_state.status,
-                    cards=round_state.cards,
-                )
-                for round_no, round_state in sorted(round_states.items())
+            WorkbenchV2ThinkingProcessRoundView(
+                roundNo=round_no,
+                status=round_state.status,
+                queryGroups=round_state.query_groups,
+                cards=round_state.cards,
+            )
+            for round_no, round_state in sorted(round_states.items())
         ],
     )
 
@@ -405,6 +408,7 @@ def _runtime_thinking_round_states(
     events: list[WorkbenchV2TranscriptEvent],
 ) -> dict[int, _ThinkingRoundState]:
     statuses: dict[int, WorkbenchV2SurfaceStatus] = {}
+    query_group_states: dict[int, dict[str, WorkbenchV2QueryGroupView]] = {}
     card_states: dict[int, dict[str, WorkbenchV2ThinkingProcessCardView]] = {}
     for event in _runtime_progress_events(events):
         if event.type != "runtime_progress":
@@ -416,18 +420,14 @@ def _runtime_thinking_round_states(
         stage = _string_or_none(event.payload.get("stage"))
         status = _surface_status_from_event_payload(event.payload)
 
-        if _is_keyword_event(event_type, stage) and (keyword_query := _keyword_query_from_payload(event.payload)):
+        query_groups = _query_groups_from_payload(event.payload)
+        if query_groups:
             statuses[round_no] = status
-            cards = card_states.setdefault(round_no, {})
-            cards["keywords"] = WorkbenchV2ThinkingProcessCardView(
-                title="关键词",
-                text=keyword_query,
-                terms=_query_terms_from_payload(event.payload),
-            )
+            groups = query_group_states.setdefault(round_no, {})
+            for group in query_groups:
+                _merge_query_group(groups, group)
 
-        if _is_observation_event(event_type, stage) and (
-            observation := _observation_text_from_payload(event.payload)
-        ):
+        if _is_observation_event(event_type, stage) and (observation := _observation_text_from_payload(event.payload)):
             statuses[round_no] = status
             cards = card_states.setdefault(round_no, {})
             cards["observation"] = WorkbenchV2ThinkingProcessCardView(
@@ -446,36 +446,64 @@ def _runtime_thinking_round_states(
             )
 
     compact_states: dict[int, _ThinkingRoundState] = {}
-    for round_no, cards in card_states.items():
-        ordered_cards = [
-            card
-            for key in ("keywords", "observation", "reflection")
-            if (card := cards.get(key)) is not None
-        ]
+    for round_no in sorted(set(query_group_states) | set(card_states)):
+        cards = card_states.get(round_no, {})
+        ordered_cards = [card for key in ("observation", "reflection") if (card := cards.get(key)) is not None]
         compact_states[round_no] = _ThinkingRoundState(
             status=statuses.get(round_no, "completed"),
+            query_groups=list(query_group_states.get(round_no, {}).values()),
             cards=ordered_cards,
         )
     return compact_states
 
 
 def _keyword_query_from_payload(payload: dict[str, object]) -> str | None:
-    details = _runtime_details(payload)
-    return _string_or_none(details.get("keywordQuery")) or _string_or_none(payload.get("keywordQuery"))
+    groups = _query_groups_from_payload(payload)
+    return groups[0].keywordQuery if groups else None
 
 
-def _query_terms_from_payload(payload: dict[str, object]) -> list[str]:
-    details = _runtime_details(payload)
-    terms = _string_list(details.get("queryTerms"))
-    if terms:
-        return terms
-    planned_queries = _list_or_empty(details.get("plannedQueries"))
-    for query in planned_queries:
-        query_record = _record_or_none(query)
-        terms = _string_list((query_record or {}).get("queryTerms"))
-        if terms:
-            return terms
-    return []
+def _query_groups_from_payload(payload: dict[str, object]) -> list[WorkbenchV2QueryGroupView]:
+    raw_groups = _runtime_details(payload).get("queryGroups")
+    if not isinstance(raw_groups, list):
+        return []
+    groups: list[WorkbenchV2QueryGroupView] = []
+    seen_query_instance_ids: set[str] = set()
+    for raw_group in raw_groups:
+        if not isinstance(raw_group, dict):
+            continue
+        group = WorkbenchV2QueryGroupView.model_validate(raw_group)
+        if group.queryInstanceId in seen_query_instance_ids:
+            continue
+        seen_query_instance_ids.add(group.queryInstanceId)
+        groups.append(group)
+        if len(groups) >= 2:
+            break
+    return groups
+
+
+def _merge_query_group(
+    groups: dict[str, WorkbenchV2QueryGroupView],
+    incoming: WorkbenchV2QueryGroupView,
+) -> None:
+    existing = groups.get(incoming.queryInstanceId)
+    if existing is None:
+        groups[incoming.queryInstanceId] = incoming
+        return
+    if _query_group_identity(existing) != _query_group_identity(incoming):
+        raise ValueError("workbench_v2_query_group_identity_mismatch")
+    if existing.lifecycle == "executed" and incoming.lifecycle == "planned":
+        return
+    groups[incoming.queryInstanceId] = incoming
+
+
+def _query_group_identity(group: WorkbenchV2QueryGroupView) -> tuple[object, ...]:
+    return (
+        group.termGroupKey,
+        group.queryRole,
+        group.laneType,
+        tuple(group.queryTerms),
+        group.keywordQuery,
+    )
 
 
 def _observation_text_from_payload(payload: dict[str, object]) -> str | None:
@@ -493,10 +521,6 @@ def _is_final_event(event: WorkbenchV2TranscriptEvent, event_type: str | None) -
         "runtime_finalization_completed",
         "runtime_run_completed",
     }
-
-
-def _is_keyword_event(event_type: str | None, stage: str | None) -> bool:
-    return event_type == "runtime_round_query_ready" or stage == "round_query"
 
 
 def _is_graph_query_event(event_type: str | None, stage: str | None) -> bool:

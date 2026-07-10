@@ -18,7 +18,8 @@ from seektalent_ui.agent_workbench_models import (
     AgentWorkbenchMessagePayloadResponse,
     AgentWorkbenchMessageResponse,
     AgentWorkbenchPendingActionsResponse,
-    AgentWorkbenchQueryPackageResponse,
+    AgentWorkbenchQueryExecutionResponse,
+    AgentWorkbenchQueryGroupResponse,
     AgentWorkbenchRequirementDraftItemResponse,
     AgentWorkbenchRequirementDraftResponse,
     AgentWorkbenchRequirementDraftSectionResponse,
@@ -35,6 +36,10 @@ from seektalent_ui.agent_workbench_models import (
 from seektalent_ui.agent_workbench_projection import (
     AgentWorkbenchProjectionInput,
     AgentWorkbenchWorkflowStartIntentProjection,
+)
+from seektalent_ui.agent_workbench_rounds import (
+    AgentWorkbenchQueryGroupProjection,
+    AgentWorkbenchRoundSummaryProjection,
 )
 from seektalent_ui.agent_workbench_transcript import (
     build_transcript_groups,
@@ -71,7 +76,9 @@ def project_agent_workbench_view(input: AgentWorkbenchProjectionInput) -> AgentW
     activities = [_activity_response(activity) for activity in bounded_input.activity_items]
     reason_code = state.reason_code
     runtime_run_id = _workflow_runtime_run_id(state.runtime_run_id, input.workflow_start_intent)
-    if (input.requirement_draft_missing or (runtime_run_id is not None and input.runtime is None)) and reason_code is None:
+    if (
+        input.requirement_draft_missing or (runtime_run_id is not None and input.runtime is None)
+    ) and reason_code is None:
         reason_code = "runtime_projection_unavailable"
     response = AgentWorkbenchConversationResponse(
         conversation=AgentWorkbenchConversationSummaryResponse(
@@ -222,7 +229,9 @@ def _workflow_runtime_run_id(
     return None
 
 
-def _workflow_start_reason_code(workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None) -> str | None:
+def _workflow_start_reason_code(
+    workflow_start_intent: AgentWorkbenchWorkflowStartIntentProjection | None,
+) -> str | None:
     return workflow_start_intent.reason_code if workflow_start_intent is not None else None
 
 
@@ -307,20 +316,23 @@ def _activity_payload(activity: TranscriptActivityItem) -> AgentWorkbenchActivit
         sourceId=_str_or_none(payload.get("source_id")) or _str_or_none(payload.get("sourceId")),
         status=_status(activity.status),
         roundNo=_int_or_none(payload.get("round_no")) or _int_or_none(payload.get("roundNo")),
-        queryTerms=_string_list(payload.get("query_terms")) or _string_list(payload.get("queryTerms")),
-        keywordQuery=_str_or_none(payload.get("keyword_query")) or _str_or_none(payload.get("keywordQuery")),
-        executedQueryTerms=_executed_query_terms(payload.get("executed_queries") or payload.get("executedQueries")),
-        rawCandidateCount=_int_or_none(payload.get("raw_candidate_count")) or _int_or_none(payload.get("rawCandidateCount")),
+        rawCandidateCount=_int_or_none(payload.get("raw_candidate_count"))
+        or _int_or_none(payload.get("rawCandidateCount")),
         uniqueNewCount=_int_or_none(payload.get("unique_new_count")) or _int_or_none(payload.get("uniqueNewCount")),
-        newlyScoredCount=_int_or_none(payload.get("newly_scored_count")) or _int_or_none(payload.get("newlyScoredCount")),
-        resumeQualityComment=_str_or_none(payload.get("resume_quality_comment")) or _str_or_none(payload.get("resumeQualityComment")),
-        reflectionSummary=_str_or_none(payload.get("reflection_summary")) or _str_or_none(payload.get("reflectionSummary")),
+        newlyScoredCount=_int_or_none(payload.get("newly_scored_count"))
+        or _int_or_none(payload.get("newlyScoredCount")),
+        resumeQualityComment=_str_or_none(payload.get("resume_quality_comment"))
+        or _str_or_none(payload.get("resumeQualityComment")),
+        reflectionSummary=_str_or_none(payload.get("reflection_summary"))
+        or _str_or_none(payload.get("reflectionSummary")),
         suggestedActivateTerms=_string_list(payload.get("suggested_activate_terms"))
         or _string_list(payload.get("suggestedActivateTerms")),
-        suggestedKeepTerms=_string_list(payload.get("suggested_keep_terms")) or _string_list(payload.get("suggestedKeepTerms")),
+        suggestedKeepTerms=_string_list(payload.get("suggested_keep_terms"))
+        or _string_list(payload.get("suggestedKeepTerms")),
         suggestedDeprioritizeTerms=_string_list(payload.get("suggested_deprioritize_terms"))
         or _string_list(payload.get("suggestedDeprioritizeTerms")),
-        suggestedDropTerms=_string_list(payload.get("suggested_drop_terms")) or _string_list(payload.get("suggestedDropTerms")),
+        suggestedDropTerms=_string_list(payload.get("suggested_drop_terms"))
+        or _string_list(payload.get("suggestedDropTerms")),
     )
 
 
@@ -502,36 +514,41 @@ def _strategy_graph(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchStrat
     bounded_nodes = nodes[:MAX_WORKBENCH_GRAPH_NODES]
     bounded_node_ids = {node.nodeId for node in bounded_nodes}
     bounded_edges = [
-        edge
-        for edge in edges
-        if edge.fromNodeId in bounded_node_ids and edge.toNodeId in bounded_node_ids
+        edge for edge in edges if edge.fromNodeId in bounded_node_ids and edge.toNodeId in bounded_node_ids
     ][:MAX_WORKBENCH_GRAPH_EDGES]
     return AgentWorkbenchStrategyGraphResponse(nodes=bounded_nodes, edges=bounded_edges)
 
 
-def _strategy_lane_sources(summary: object) -> list[tuple[str, Literal["cts", "liepin", "all"]]]:
+def _strategy_lane_sources(
+    summary: AgentWorkbenchRoundSummaryProjection,
+) -> list[tuple[str, Literal["cts", "liepin", "all"]]]:
     lanes: list[tuple[str, Literal["cts", "liepin", "all"]]] = []
     seen: set[tuple[str, Literal["cts", "liepin", "all"]]] = set()
-    packages = [
-        *_sequence_or_empty(_attr(summary, "planned_queries")),
-        *_sequence_or_empty(_attr(summary, "executed_queries")),
-    ]
-    for package in packages:
-        lane_type = _str_or_none(_attr(package, "lane_type")) or "default"
-        source_kind = _graph_source_kind(_attr(package, "source_kind"))
-        key = (lane_type, source_kind)
-        if key in seen:
-            continue
-        seen.add(key)
-        lanes.append(key)
+    for group in summary.query_groups:
+        lane_type = group.lane_type
+        source_kinds: list[Literal["cts", "liepin", "all"]] = [
+            _graph_source_kind(execution.source_kind) for execution in group.executions
+        ]
+        if not source_kinds:
+            source_kinds = ["all"]
+        for source_kind in source_kinds:
+            key = (lane_type, source_kind)
+            if key in seen:
+                continue
+            seen.add(key)
+            lanes.append(key)
     return lanes
 
 
-def _round_lane_status(summary: object, *, source_kind: Literal["cts", "liepin", "all"]) -> AgentWorkbenchStatus:
+def _round_lane_status(
+    summary: AgentWorkbenchRoundSummaryProjection,
+    *,
+    source_kind: Literal["cts", "liepin", "all"],
+) -> AgentWorkbenchStatus:
     statuses = [
-        _str_or_none(_attr(stage_output, "status"))
-        for stage_output in _sequence_or_empty(_attr(summary, "stage_outputs"))
-        if _graph_source_kind(_attr(stage_output, "source_kind")) == source_kind
+        stage_output.status
+        for stage_output in summary.stage_outputs
+        if _graph_source_kind(stage_output.source_kind) == source_kind
     ]
     return _status(_aggregate_graph_status(statuses, fallback=_str_or_none(_attr(summary, "status"))))
 
@@ -579,32 +596,31 @@ def _thinking_process(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchThi
     for payload, status in _thinking_round_payloads(input):
         if payload.roundNo is None:
             continue
-        cards = [
-            AgentWorkbenchThinkingProcessCardResponse(
-                title="关键词",
-                text=payload.keywordQuery or "No query has been projected yet.",
-                terms=[*payload.queryTerms, *_query_package_terms(payload.plannedQueries)],
-            ),
-            AgentWorkbenchThinkingProcessCardResponse(
-                title="observation",
-                text=_observation_text(payload),
-                terms=_query_package_terms(payload.executedQueries),
-            ),
-            AgentWorkbenchThinkingProcessCardResponse(
-                title="反思和下一轮变更",
-                text=_reflection_text(payload),
-                terms=[
-                    *payload.suggestedActivateTerms,
-                    *payload.suggestedKeepTerms,
-                    *payload.suggestedDeprioritizeTerms,
-                    *payload.suggestedDropTerms,
-                ],
-            ),
-        ]
+        cards: list[AgentWorkbenchThinkingProcessCardResponse] = []
+        observation = _observation_text(payload)
+        if observation is not None:
+            cards.append(AgentWorkbenchThinkingProcessCardResponse(title="observation", text=observation))
+        reflection = _reflection_text(payload)
+        if reflection is not None:
+            cards.append(
+                AgentWorkbenchThinkingProcessCardResponse(
+                    title="反思和下一轮变更",
+                    text=reflection,
+                    terms=[
+                        *payload.suggestedActivateTerms,
+                        *payload.suggestedKeepTerms,
+                        *payload.suggestedDeprioritizeTerms,
+                        *payload.suggestedDropTerms,
+                    ],
+                )
+            )
+        if not payload.queryGroups and not cards:
+            continue
         rounds.append(
             AgentWorkbenchThinkingProcessRoundResponse(
                 roundNo=payload.roundNo,
                 status=_status(status),
+                queryGroups=payload.queryGroups,
                 cards=cards,
             )
         )
@@ -616,73 +632,62 @@ def _thinking_process(input: AgentWorkbenchProjectionInput) -> AgentWorkbenchThi
 def _thinking_round_payloads(
     input: AgentWorkbenchProjectionInput,
 ) -> list[tuple[AgentWorkbenchActivityPayloadResponse, str | None]]:
-    return [
-        (_runtime_round_payload(summary), _str_or_none(_attr(summary, "status")))
-        for summary in input.round_summaries
-    ]
+    return [(_runtime_round_payload(summary), summary.status) for summary in input.round_summaries]
 
 
-def _runtime_round_payload(summary: object) -> AgentWorkbenchActivityPayloadResponse:
+def _runtime_round_payload(summary: AgentWorkbenchRoundSummaryProjection) -> AgentWorkbenchActivityPayloadResponse:
     return AgentWorkbenchActivityPayloadResponse(
         kind="runtime_round",
         stage="runtime_summary",
-        status=_status(_str_or_none(_attr(summary, "status"))),
-        roundNo=_int_or_none(_attr(summary, "round_no")),
-        queryTerms=[item for item in _sequence_or_empty(_attr(summary, "query_terms")) if isinstance(item, str)],
-        keywordQuery=_str_or_none(_attr(summary, "keyword_query")),
-        plannedQueries=[_query_package_response(item) for item in _sequence_or_empty(_attr(summary, "planned_queries"))],
-        executedQueries=[_query_package_response(item) for item in _sequence_or_empty(_attr(summary, "executed_queries"))],
-        rawCandidateCount=_int_or_none(_attr(summary, "raw_candidate_count")),
-        uniqueNewCount=_int_or_none(_attr(summary, "unique_new_count")),
-        totalMergedIdentityCount=_int_or_none(_attr(summary, "total_merged_identity_count")),
-        newlyScoredCount=_int_or_none(_attr(summary, "newly_scored_count")),
-        topPoolCount=_int_or_none(_attr(summary, "top_pool_count")),
-        resumeQualityComment=_str_or_none(_attr(summary, "resume_quality_comment")),
-        reflectionSummary=_str_or_none(_attr(summary, "reflection_summary")),
-        suggestedActivateTerms=[
-            item for item in _sequence_or_empty(_attr(summary, "suggested_activate_terms")) if isinstance(item, str)
-        ],
-        suggestedKeepTerms=[
-            item for item in _sequence_or_empty(_attr(summary, "suggested_keep_terms")) if isinstance(item, str)
-        ],
-        suggestedDeprioritizeTerms=[
-            item for item in _sequence_or_empty(_attr(summary, "suggested_deprioritize_terms")) if isinstance(item, str)
-        ],
-        suggestedDropTerms=[
-            item for item in _sequence_or_empty(_attr(summary, "suggested_drop_terms")) if isinstance(item, str)
-        ],
-        suggestedAddFilterFields=[
-            item for item in _sequence_or_empty(_attr(summary, "suggested_add_filter_fields")) if isinstance(item, str)
-        ],
-        suggestedKeepFilterFields=[
-            item for item in _sequence_or_empty(_attr(summary, "suggested_keep_filter_fields")) if isinstance(item, str)
-        ],
-        suggestedDropFilterFields=[
-            item for item in _sequence_or_empty(_attr(summary, "suggested_drop_filter_fields")) if isinstance(item, str)
+        status=_status(summary.status),
+        roundNo=summary.round_no,
+        queryGroups=[_query_group_response(item) for item in summary.query_groups],
+        rawCandidateCount=summary.raw_candidate_count,
+        uniqueNewCount=summary.unique_new_count,
+        totalMergedIdentityCount=summary.total_merged_identity_count,
+        newlyScoredCount=summary.newly_scored_count,
+        topPoolCount=summary.top_pool_count,
+        resumeQualityComment=summary.resume_quality_comment,
+        reflectionSummary=summary.reflection_summary,
+        suggestedActivateTerms=list(summary.suggested_activate_terms),
+        suggestedKeepTerms=list(summary.suggested_keep_terms),
+        suggestedDeprioritizeTerms=list(summary.suggested_deprioritize_terms),
+        suggestedDropTerms=list(summary.suggested_drop_terms),
+        suggestedAddFilterFields=list(summary.suggested_add_filter_fields),
+        suggestedKeepFilterFields=list(summary.suggested_keep_filter_fields),
+        suggestedDropFilterFields=list(summary.suggested_drop_filter_fields),
+    )
+
+
+def _query_group_response(group: AgentWorkbenchQueryGroupProjection) -> AgentWorkbenchQueryGroupResponse:
+    return AgentWorkbenchQueryGroupResponse(
+        queryInstanceId=group.query_instance_id,
+        termGroupKey=group.term_group_key,
+        queryRole=group.query_role,
+        laneType=group.lane_type,
+        queryTerms=list(group.query_terms),
+        keywordQuery=group.keyword_query,
+        lifecycle=group.lifecycle,
+        executionStatus=group.execution_status,
+        attempted=group.attempted,
+        rawCandidateCount=group.raw_candidate_count,
+        uniqueCandidateCount=group.unique_candidate_count,
+        duplicateCandidateCount=group.duplicate_candidate_count,
+        executions=[
+            AgentWorkbenchQueryExecutionResponse(
+                sourceKind=execution.source_kind,
+                status=execution.status,
+                rawCandidateCount=execution.raw_candidate_count,
+                uniqueCandidateCount=execution.unique_candidate_count,
+                duplicateCandidateCount=execution.duplicate_candidate_count,
+                safeReasonCode=execution.safe_reason_code,
+            )
+            for execution in group.executions
         ],
     )
 
 
-def _query_package_response(package: object) -> AgentWorkbenchQueryPackageResponse:
-    return AgentWorkbenchQueryPackageResponse(
-        sourceKind=_str_or_none(_attr(package, "source_kind")),
-        queryRole=_str_or_none(_attr(package, "query_role")),
-        laneType=_str_or_none(_attr(package, "lane_type")),
-        queryTerms=[item for item in _sequence_or_empty(_attr(package, "query_terms")) if isinstance(item, str)],
-        keywordQuery=_str_or_none(_attr(package, "keyword_query")),
-    )
-
-
-def _query_package_terms(packages: Sequence[AgentWorkbenchQueryPackageResponse]) -> list[str]:
-    terms: list[str] = []
-    for package in packages:
-        if package.sourceKind and package.keywordQuery:
-            terms.append(f"{package.sourceKind}: {package.keywordQuery}")
-        terms.extend(package.queryTerms)
-    return terms
-
-
-def _observation_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
+def _observation_text(payload: AgentWorkbenchActivityPayloadResponse) -> str | None:
     counts = [
         _count_text("raw", payload.rawCandidateCount),
         _count_text("unique", payload.uniqueNewCount),
@@ -691,13 +696,13 @@ def _observation_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
     count_text = ", ".join(item for item in counts if item)
     if count_text and payload.resumeQualityComment:
         return f"{payload.resumeQualityComment} ({count_text})"
-    return payload.resumeQualityComment or count_text or "No observation has been projected yet."
+    return payload.resumeQualityComment or count_text
 
 
-def _reflection_text(payload: AgentWorkbenchActivityPayloadResponse) -> str:
+def _reflection_text(payload: AgentWorkbenchActivityPayloadResponse) -> str | None:
     parts = [item for item in [payload.reflectionSummary] if item]
     parts.extend(_filter_suggestion_lines(payload))
-    return " ".join(parts) if parts else "No reflection has been projected yet."
+    return " ".join(parts) if parts else None
 
 
 def _filter_suggestion_lines(payload: AgentWorkbenchActivityPayloadResponse) -> list[str]:
@@ -726,32 +731,24 @@ def _activity_payload_from_mapping(
         sourceId=_str_or_none(payload.get("source_id")) or _str_or_none(payload.get("sourceId")),
         status=_status(status),
         roundNo=_int_or_none(payload.get("round_no")) or _int_or_none(payload.get("roundNo")),
-        queryTerms=_string_list(payload.get("query_terms")) or _string_list(payload.get("queryTerms")),
-        keywordQuery=_str_or_none(payload.get("keyword_query")) or _str_or_none(payload.get("keywordQuery")),
-        executedQueryTerms=_executed_query_terms(payload.get("executed_queries") or payload.get("executedQueries")),
-        rawCandidateCount=_int_or_none(payload.get("raw_candidate_count")) or _int_or_none(payload.get("rawCandidateCount")),
+        rawCandidateCount=_int_or_none(payload.get("raw_candidate_count"))
+        or _int_or_none(payload.get("rawCandidateCount")),
         uniqueNewCount=_int_or_none(payload.get("unique_new_count")) or _int_or_none(payload.get("uniqueNewCount")),
-        newlyScoredCount=_int_or_none(payload.get("newly_scored_count")) or _int_or_none(payload.get("newlyScoredCount")),
-        resumeQualityComment=_str_or_none(payload.get("resume_quality_comment")) or _str_or_none(payload.get("resumeQualityComment")),
-        reflectionSummary=_str_or_none(payload.get("reflection_summary")) or _str_or_none(payload.get("reflectionSummary")),
+        newlyScoredCount=_int_or_none(payload.get("newly_scored_count"))
+        or _int_or_none(payload.get("newlyScoredCount")),
+        resumeQualityComment=_str_or_none(payload.get("resume_quality_comment"))
+        or _str_or_none(payload.get("resumeQualityComment")),
+        reflectionSummary=_str_or_none(payload.get("reflection_summary"))
+        or _str_or_none(payload.get("reflectionSummary")),
         suggestedActivateTerms=_string_list(payload.get("suggested_activate_terms"))
         or _string_list(payload.get("suggestedActivateTerms")),
-        suggestedKeepTerms=_string_list(payload.get("suggested_keep_terms")) or _string_list(payload.get("suggestedKeepTerms")),
+        suggestedKeepTerms=_string_list(payload.get("suggested_keep_terms"))
+        or _string_list(payload.get("suggestedKeepTerms")),
         suggestedDeprioritizeTerms=_string_list(payload.get("suggested_deprioritize_terms"))
         or _string_list(payload.get("suggestedDeprioritizeTerms")),
-        suggestedDropTerms=_string_list(payload.get("suggested_drop_terms")) or _string_list(payload.get("suggestedDropTerms")),
+        suggestedDropTerms=_string_list(payload.get("suggested_drop_terms"))
+        or _string_list(payload.get("suggestedDropTerms")),
     )
-
-
-def _executed_query_terms(value: object) -> list[list[str]]:
-    if not isinstance(value, list):
-        return []
-    result: list[list[str]] = []
-    for item in value:
-        terms = _string_list(_mapping_get(item, "query_terms")) or _string_list(_mapping_get(item, "queryTerms"))
-        if terms:
-            result.append(terms)
-    return result
 
 
 def _string_list(value: object) -> list[str]:

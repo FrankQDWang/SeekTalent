@@ -145,9 +145,38 @@ class WorkbenchV2StrategyGraphView(BaseModel):
 class WorkbenchV2ThinkingProcessCardView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: Literal["关键词", "observation", "反思和下一轮变更"]
+    title: Literal["observation", "反思和下一轮变更"]
     text: str
     terms: list[str] = Field(default_factory=list)
+
+
+class WorkbenchV2QueryExecutionView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceKind: str
+    status: Literal["completed", "partial", "blocked", "failed"]
+    rawCandidateCount: int = Field(default=0, ge=0)
+    uniqueCandidateCount: int = Field(default=0, ge=0)
+    duplicateCandidateCount: int = Field(default=0, ge=0)
+    safeReasonCode: str | None = None
+
+
+class WorkbenchV2QueryGroupView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    queryInstanceId: str
+    termGroupKey: str
+    queryRole: str
+    laneType: str
+    queryTerms: list[str] = Field(default_factory=list)
+    keywordQuery: str | None = None
+    lifecycle: Literal["planned", "executed"]
+    executionStatus: Literal["completed", "partial", "blocked", "failed"] | None = None
+    attempted: bool = False
+    rawCandidateCount: int = Field(default=0, ge=0)
+    uniqueCandidateCount: int = Field(default=0, ge=0)
+    duplicateCandidateCount: int = Field(default=0, ge=0)
+    executions: list[WorkbenchV2QueryExecutionView] = Field(default_factory=list)
 
 
 class WorkbenchV2ThinkingProcessRoundView(BaseModel):
@@ -155,6 +184,7 @@ class WorkbenchV2ThinkingProcessRoundView(BaseModel):
 
     roundNo: int
     status: WorkbenchV2SurfaceStatus
+    queryGroups: list[WorkbenchV2QueryGroupView] = Field(default_factory=list)
     cards: list[WorkbenchV2ThinkingProcessCardView] = Field(default_factory=list)
 
 
@@ -262,8 +292,12 @@ class WorkbenchV2CandidateDetailView(BaseModel):
     match: WorkbenchV2CandidateMatchView | None = Field(default=None, exclude_if=_is_none)
     jobIntention: WorkbenchV2CandidateJobIntentionView | None = Field(default=None, exclude_if=_is_none)
     workExperience: list[WorkbenchV2CandidateTimelineItemView] = Field(default_factory=list, exclude_if=_is_empty_list)
-    projectExperience: list[WorkbenchV2CandidateTimelineItemView] = Field(default_factory=list, exclude_if=_is_empty_list)
-    educationExperience: list[WorkbenchV2CandidateTimelineItemView] = Field(default_factory=list, exclude_if=_is_empty_list)
+    projectExperience: list[WorkbenchV2CandidateTimelineItemView] = Field(
+        default_factory=list, exclude_if=_is_empty_list
+    )
+    educationExperience: list[WorkbenchV2CandidateTimelineItemView] = Field(
+        default_factory=list, exclude_if=_is_empty_list
+    )
     skills: list[str] = Field(default_factory=list, exclude_if=_is_empty_list)
     sourceUrl: str | None = Field(default=None, exclude_if=_is_none)
     sections: list[WorkbenchV2CandidateDetailSectionView] = Field(default_factory=list)

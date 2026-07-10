@@ -137,14 +137,33 @@ class AgentWorkbenchMessageResponse(BaseModel):
     createdAt: str
 
 
-class AgentWorkbenchQueryPackageResponse(BaseModel):
+class AgentWorkbenchQueryExecutionResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    sourceKind: str | None = None
-    queryRole: str | None = None
-    laneType: str | None = None
+    sourceKind: str
+    status: Literal["completed", "partial", "blocked", "failed"]
+    rawCandidateCount: int = Field(default=0, ge=0)
+    uniqueCandidateCount: int = Field(default=0, ge=0)
+    duplicateCandidateCount: int = Field(default=0, ge=0)
+    safeReasonCode: str | None = None
+
+
+class AgentWorkbenchQueryGroupResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    queryInstanceId: str
+    termGroupKey: str
+    queryRole: str
+    laneType: str
     queryTerms: list[str] = Field(default_factory=list)
     keywordQuery: str | None = None
+    lifecycle: Literal["planned", "executed"]
+    executionStatus: Literal["completed", "partial", "blocked", "failed"] | None = None
+    attempted: bool = False
+    rawCandidateCount: int = Field(default=0, ge=0)
+    uniqueCandidateCount: int = Field(default=0, ge=0)
+    duplicateCandidateCount: int = Field(default=0, ge=0)
+    executions: list[AgentWorkbenchQueryExecutionResponse] = Field(default_factory=list)
 
 
 class AgentWorkbenchActivityPayloadResponse(BaseModel):
@@ -155,11 +174,7 @@ class AgentWorkbenchActivityPayloadResponse(BaseModel):
     sourceId: str | None = None
     status: AgentWorkbenchStatus | None = None
     roundNo: int | None = None
-    queryTerms: list[str] = Field(default_factory=list)
-    keywordQuery: str | None = None
-    plannedQueries: list[AgentWorkbenchQueryPackageResponse] = Field(default_factory=list)
-    executedQueries: list[AgentWorkbenchQueryPackageResponse] = Field(default_factory=list)
-    executedQueryTerms: list[list[str]] = Field(default_factory=list)
+    queryGroups: list[AgentWorkbenchQueryGroupResponse] = Field(default_factory=list)
     rawCandidateCount: int | None = None
     uniqueNewCount: int | None = None
     totalMergedIdentityCount: int | None = None
@@ -437,7 +452,9 @@ def _empty_stream_payload_for_kind(stream_kind: AgentWorkbenchStreamKind) -> Age
     )
 
 
-def _item_payload_kind_for_stream_kind(stream_kind: AgentWorkbenchStreamKind) -> Literal[
+def _item_payload_kind_for_stream_kind(
+    stream_kind: AgentWorkbenchStreamKind,
+) -> Literal[
     "operation",
     "command",
     "source_search",
@@ -593,7 +610,7 @@ class AgentWorkbenchRuntimeResponse(BaseModel):
 class AgentWorkbenchThinkingProcessCardResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    title: Literal["关键词", "observation", "反思和下一轮变更"]
+    title: Literal["observation", "反思和下一轮变更"]
     text: str
     terms: list[str] = Field(default_factory=list)
 
@@ -603,6 +620,7 @@ class AgentWorkbenchThinkingProcessRoundResponse(BaseModel):
 
     roundNo: int
     status: AgentWorkbenchStatus
+    queryGroups: list[AgentWorkbenchQueryGroupResponse] = Field(default_factory=list)
     cards: list[AgentWorkbenchThinkingProcessCardResponse] = Field(default_factory=list)
 
 

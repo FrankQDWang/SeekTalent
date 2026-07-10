@@ -325,11 +325,7 @@ def test_runtime_service_extracts_requirement_form(tmp_path: Path) -> None:
     assert draft.conversation_id == "agentv2_1"
     assert draft.draft_revision_id == "reqdraft_1"
     assert draft.status == "draft_ready"
-    item_sources = [
-        item.source
-        for section in draft.sections
-        for item in section.items
-    ]
+    item_sources = [item.source for section in draft.sections for item in section.items]
     assert item_sources
     assert set(item_sources) == {"workbench_v2_agent"}
 
@@ -500,11 +496,7 @@ def test_runtime_service_candidate_detail_projects_wts_profile_fields() -> None:
     assert detail["skills"] == ["用户研究", "交互设计"]
     assert detail["sourceUrl"].startswith("https://h.liepin.com/resume/showresumedetail/")
     assert detail["sections"][1]["title"] == "求职意向"
-    serialized_sections = "\n".join(
-        item
-        for section in detail["sections"]
-        for item in section["items"]
-    )
+    serialized_sections = "\n".join(item for section in detail["sections"] for item in section["items"])
     assert "提供 B 端及 C 端体验设计方案" in serialized_sections
     assert "h.liepin.com/resume/showresumedetail" not in serialized_sections
     assert "新手任务" not in serialized_sections
@@ -890,8 +882,25 @@ def test_runtime_service_lists_public_progress_events_as_user_readable_payloads(
             summary="round_query",
             payload={
                 "details": {
-                    "keywordQuery": "数据科学家 SQL",
-                    "queryTerms": ["数据科学家", "SQL"],
+                    "keywordQuery": "legacy keyword must not render",
+                    "queryTerms": ["legacy"],
+                    "queryGroups": [
+                        {
+                            "queryInstanceId": "query-1",
+                            "termGroupKey": "group-1",
+                            "queryRole": "exploit",
+                            "laneType": "exploit",
+                            "queryTerms": ["数据科学家", "SQL"],
+                            "keywordQuery": "数据科学家 SQL",
+                            "lifecycle": "planned",
+                            "executionStatus": "failed",
+                            "attempted": True,
+                            "rawCandidateCount": 99,
+                            "uniqueCandidateCount": 99,
+                            "duplicateCandidateCount": 99,
+                            "executions": [{"sourceKind": "cts", "status": "failed"}],
+                        }
+                    ],
                 }
             },
             visibility="public",
@@ -950,8 +959,23 @@ def test_runtime_service_lists_public_progress_events_as_user_readable_payloads(
     ]
     assert progress[0]["summary"] == "第 1 轮查询策略已生成。"
     assert progress[0]["details"] == {
-        "keywordQuery": "数据科学家 SQL",
-        "queryTerms": ["数据科学家", "SQL"],
+        "queryGroups": [
+            {
+                "queryInstanceId": "query-1",
+                "termGroupKey": "group-1",
+                "queryRole": "exploit",
+                "laneType": "exploit",
+                "queryTerms": ["数据科学家", "SQL"],
+                "keywordQuery": "数据科学家 SQL",
+                "lifecycle": "planned",
+                "executionStatus": None,
+                "attempted": False,
+                "rawCandidateCount": 0,
+                "uniqueCandidateCount": 0,
+                "duplicateCandidateCount": 0,
+                "executions": [],
+            }
+        ]
     }
     assert progress[1]["summary"] == "第 1 轮猎聘检索完成：返回 9 条，新增 3 位候选人。"
     assert progress[1]["counts"] == {"roundReturned": 9, "roundIdentities": 3}

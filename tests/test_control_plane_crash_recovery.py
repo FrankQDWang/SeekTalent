@@ -62,7 +62,7 @@ def test_stale_executor_attempt_cannot_write_event_checkpoint_stage_output_or_co
                 node_id="cts",
                 round_no=1,
                 output_kind="runtime_public_source_result",
-                schema_version="runtime-public-stage-output/v1",
+                schema_version="runtime-public-stage-output/v2",
                 output={"candidateCount": 1},
                 created_at="2026-06-17T00:00:13.000000Z",
             ),

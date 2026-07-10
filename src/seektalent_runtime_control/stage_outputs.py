@@ -5,7 +5,7 @@ from collections.abc import Mapping, Sequence
 from seektalent_runtime_control.errors import RuntimeControlError
 
 
-_PUBLIC_STAGE_OUTPUT_SCHEMA = "runtime-public-stage-output/v1"
+_PUBLIC_STAGE_OUTPUT_SCHEMA = "runtime-public-stage-output/v2"
 _PUBLIC_EVENT_SCHEMA = "runtime_public_event_v1"
 _PUBLIC_ROUND_STAGES = {"round_query", "source_result", "merge", "scoring", "feedback"}
 _PUBLIC_STAGE_OUTPUT_KINDS = {
@@ -39,7 +39,6 @@ _PUBLIC_COUNT_KEYS = {
     "feedbackCandidateCount",
 }
 _PUBLIC_DETAIL_TEXT_KEYS = {
-    "keywordQuery",
     "resumeQualityComment",
     "reflectionSummary",
     "suggestedStopReason",
@@ -50,7 +49,6 @@ _PUBLIC_DETAIL_BOOL_KEYS = {
     "suggestStop",
 }
 _PUBLIC_DETAIL_STRING_LIST_KEYS = {
-    "queryTerms",
     "suggestedActivateTerms",
     "suggestedAddFilterFields",
     "suggestedDeprioritizeTerms",
@@ -59,7 +57,47 @@ _PUBLIC_DETAIL_STRING_LIST_KEYS = {
     "suggestedKeepFilterFields",
     "suggestedKeepTerms",
 }
-_PUBLIC_DETAIL_QUERY_PACKAGE_KEYS = {"plannedQueries", "executedQueries"}
+_PUBLIC_DETAIL_QUERY_GROUP_KEYS = {"queryGroups"}
+_PUBLIC_QUERY_GROUP_LIFECYCLES = {"planned", "executed"}
+_PUBLIC_QUERY_EXECUTION_STATUSES = {"completed", "partial", "blocked", "failed"}
+_PUBLIC_SOURCE_REASON_CODES = {
+    "job_lease_expired",
+    "relay_pending_worker",
+    "runtime_failed",
+    "source_login_required",
+    "source_account_mismatch",
+    "source_browser_timeout",
+    "source_browser_backend_unavailable",
+    "source_browser_extension_disconnected",
+    "source_browser_policy_blocked",
+    "source_risk_or_verification_required",
+    "source_browser_interaction_required",
+    "source_budget_exhausted",
+    "source_filter_applied",
+    "source_filter_partial",
+    "source_filter_unavailable",
+    "source_filter_unsupported",
+    "source_filter_degraded",
+    "source_location_filter_unsupported",
+    "source_age_filter_unsupported",
+    "source_provider_failed",
+    "source_partial",
+    "source_unknown",
+}
+_PUBLIC_REASON_MAP = {
+    "blocked_backend_unavailable": "source_browser_backend_unavailable",
+    "blocked_login_required": "source_login_required",
+    "failed_provider_error": "source_provider_failed",
+    "login_required": "source_login_required",
+    "partial_timeout": "source_browser_timeout",
+    "runtime_failed": "source_provider_failed",
+    "cancelled_by_user": "source_unknown",
+    "source_location_filter_partial": "source_filter_partial",
+    "source_age_filter_unsupported": "source_filter_unavailable",
+    "source_location_filter_unsupported": "source_filter_unavailable",
+    "source_filter_unsupported": "source_filter_unavailable",
+    "source_filter_applied": "source_filter_applied",
+}
 _SENSITIVE_KEY_EXACT = {
     "provider",
     "resume",
@@ -175,8 +213,8 @@ def _safe_details(value: object) -> dict[str, object]:
     for key, item in value.items():
         if not isinstance(key, str):
             continue
-        if key in _PUBLIC_DETAIL_QUERY_PACKAGE_KEYS:
-            details[key] = _safe_query_packages(item)
+        if key in _PUBLIC_DETAIL_QUERY_GROUP_KEYS:
+            details[key] = _safe_query_groups(item)
         elif key in _PUBLIC_DETAIL_TEXT_KEYS and isinstance(item, str):
             details[key] = item[:2000]
         elif key in _PUBLIC_DETAIL_INT_KEYS and isinstance(item, int) and not isinstance(item, bool) and item >= 0:
@@ -192,33 +230,105 @@ def _safe_details(value: object) -> dict[str, object]:
     return details
 
 
-def _safe_query_packages(value: object) -> list[dict[str, object]]:
+def _safe_query_groups(value: object) -> list[dict[str, object]]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return []
-    packages: list[dict[str, object]] = []
+    groups: list[dict[str, object]] = []
+    seen_query_instance_ids: set[str] = set()
     for item in value:
-        if not isinstance(item, Mapping):
+        group = _safe_query_group(item)
+        if group is None:
             continue
-        item_mapping = _string_object_mapping(item)
-        package: dict[str, object] = {}
-        source_kind = _text(item_mapping.get("sourceKind"), item_mapping.get("source_kind"))
-        query_role = _text(item_mapping.get("queryRole"), item_mapping.get("query_role"))
-        lane_type = _text(item_mapping.get("laneType"), item_mapping.get("lane_type"))
-        query_terms = _string_list(item_mapping.get("queryTerms", item_mapping.get("query_terms")))
-        keyword_query = _text(item_mapping.get("keywordQuery"), item_mapping.get("keyword_query"))
-        if source_kind is not None:
-            package["sourceKind"] = source_kind
-        if query_role is not None:
-            package["queryRole"] = query_role
-        if lane_type is not None:
-            package["laneType"] = lane_type
-        if query_terms:
-            package["queryTerms"] = query_terms
-        if keyword_query is not None:
-            package["keywordQuery"] = keyword_query
-        if package:
-            packages.append(package)
-    return packages[:50]
+        query_instance_id = group.get("queryInstanceId")
+        if not isinstance(query_instance_id, str) or query_instance_id in seen_query_instance_ids:
+            continue
+        seen_query_instance_ids.add(query_instance_id)
+        groups.append(group)
+        if len(groups) >= 2:
+            break
+    return groups
+
+
+def _safe_query_group(value: object) -> dict[str, object] | None:
+    item = _string_object_mapping(value)
+    query_instance_id = _text(item.get("queryInstanceId"))
+    term_group_key = _text(item.get("termGroupKey"))
+    query_role = _text(item.get("queryRole"))
+    lane_type = _text(item.get("laneType"))
+    query_terms = _string_list(item.get("queryTerms"))
+    keyword_query = _text(item.get("keywordQuery"))
+    lifecycle = _text(item.get("lifecycle"))
+    if (
+        query_instance_id is None
+        or term_group_key is None
+        or query_role is None
+        or lane_type is None
+        or not query_terms
+        or keyword_query is None
+        or lifecycle not in _PUBLIC_QUERY_GROUP_LIFECYCLES
+    ):
+        return None
+    group: dict[str, object] = {
+        "queryInstanceId": query_instance_id,
+        "termGroupKey": term_group_key,
+        "queryRole": query_role,
+        "laneType": lane_type,
+        "queryTerms": query_terms,
+        "keywordQuery": keyword_query,
+        "lifecycle": lifecycle,
+    }
+    if lifecycle == "planned":
+        group.update(
+            executionStatus=None,
+            attempted=False,
+            rawCandidateCount=0,
+            uniqueCandidateCount=0,
+            duplicateCandidateCount=0,
+            executions=[],
+        )
+        return group
+
+    execution_status = _text(item.get("executionStatus"))
+    attempted = item.get("attempted")
+    if execution_status not in _PUBLIC_QUERY_EXECUTION_STATUSES or not isinstance(attempted, bool):
+        return None
+    group.update(
+        executionStatus=execution_status,
+        attempted=attempted,
+        rawCandidateCount=_non_negative_int(item.get("rawCandidateCount")) or 0,
+        uniqueCandidateCount=_non_negative_int(item.get("uniqueCandidateCount")) or 0,
+        duplicateCandidateCount=_non_negative_int(item.get("duplicateCandidateCount")) or 0,
+        executions=_safe_query_executions(item.get("executions")),
+    )
+    return group
+
+
+def _safe_query_executions(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    executions: list[dict[str, object]] = []
+    seen_sources: set[str] = set()
+    for item in value:
+        entry = _string_object_mapping(item)
+        source_kind = _text(entry.get("sourceKind"))
+        status = _text(entry.get("status"))
+        if source_kind is None or source_kind in seen_sources or status not in _PUBLIC_QUERY_EXECUTION_STATUSES:
+            continue
+        execution: dict[str, object] = {
+            "sourceKind": source_kind,
+            "status": status,
+            "rawCandidateCount": _non_negative_int(entry.get("rawCandidateCount")) or 0,
+            "uniqueCandidateCount": _non_negative_int(entry.get("uniqueCandidateCount")) or 0,
+            "duplicateCandidateCount": _non_negative_int(entry.get("duplicateCandidateCount")) or 0,
+        }
+        safe_reason_code = _safe_reason_code(entry.get("safeReasonCode"))
+        if safe_reason_code is not None:
+            execution["safeReasonCode"] = safe_reason_code
+        executions.append(execution)
+        seen_sources.add(source_kind)
+        if len(executions) >= 2:
+            break
+    return executions
 
 
 def _text(*values: object) -> str | None:
@@ -232,6 +342,24 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return []
     return [entry[:200] for entry in value if isinstance(entry, str) and entry.strip()][:50]
+
+
+def _non_negative_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int) and value >= 0:
+        return value
+    return None
+
+
+def _safe_reason_code(value: object) -> str | None:
+    text = _text(value)
+    if text is None:
+        return None
+    if text in _PUBLIC_SOURCE_REASON_CODES:
+        return text
+    mapped = _PUBLIC_REASON_MAP.get(text)
+    return mapped if mapped in _PUBLIC_SOURCE_REASON_CODES else None
 
 
 def _safe_json_object(value: Mapping[str, object]) -> dict[str, object]:

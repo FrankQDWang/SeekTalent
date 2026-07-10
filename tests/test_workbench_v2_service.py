@@ -456,7 +456,9 @@ def test_create_jd_conversation_logs_safe_timing_diagnostics(
     assert "workbench_v2_requirement_extract_started" in event_names
     assert "workbench_v2_requirement_extract_completed" in event_names
     agent_completed = next(
-        record for record in caplog.records if getattr(record, "event_name", None) == "workbench_v2_agent_loop_completed"
+        record
+        for record in caplog.records
+        if getattr(record, "event_name", None) == "workbench_v2_agent_loop_completed"
     )
     assert agent_completed.conversation_id == view.conversation.conversationId
     assert agent_completed.intent == "extract_requirements"
@@ -701,7 +703,9 @@ def test_submit_message_passes_recent_events_and_context_summary(tmp_path: Path)
     store.append_context_summary(first_view.conversation.conversationId, summary="用户正在招聘 AI 平台工程师，偏杭州。")
 
     asyncio.run(
-        service.submit_message(first_view.conversation.conversationId, "补充：需要 RAG 经验", idempotency_key="submit-1")
+        service.submit_message(
+            first_view.conversation.conversationId, "补充：需要 RAG 经验", idempotency_key="submit-1"
+        )
     )
 
     second_call = agent.calls[1]
@@ -753,8 +757,16 @@ def test_v2_strategy_graph_does_not_show_final_shortlist_before_runtime_result(t
             "roundNo": 1,
             "summary": "第 1 轮查询策略已生成。",
             "details": {
-                "keywordQuery": '数据科学家 "A/B Testing"',
-                "queryTerms": ["数据科学家", "A/B Testing"],
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["数据科学家", "A/B Testing"],
+                        keyword_query='数据科学家 "A/B Testing"',
+                    )
+                ],
             },
             "state": "running",
         },
@@ -808,18 +820,27 @@ def test_v2_strategy_graph_does_not_show_final_shortlist_before_runtime_result(t
     ]
     assert not any(node["kind"] == "final" for node in payload["strategyGraph"]["nodes"])
     assert payload["thinkingProcess"]["activeRoundNo"] == 1
-    assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
-        {
-            "title": "关键词",
-            "text": '数据科学家 "A/B Testing"',
-            "terms": ["数据科学家", "A/B Testing"],
-        },
-        {
-            "title": "observation",
-            "text": "本轮简历质量偏低，候选人缺少搜索推荐系统落地经验。",
-            "terms": [],
-        },
-    ]
+    assert payload["thinkingProcess"]["rounds"][0] == {
+        "roundNo": 1,
+        "status": "completed",
+        "queryGroups": [
+            _v2_query_group(
+                query_instance_id="query-1",
+                term_group_key="group-1",
+                query_role="exploit",
+                lane_type="exploit",
+                query_terms=["数据科学家", "A/B Testing"],
+                keyword_query='数据科学家 "A/B Testing"',
+            )
+        ],
+        "cards": [
+            {
+                "title": "observation",
+                "text": "本轮简历质量偏低，候选人缺少搜索推荐系统落地经验。",
+                "terms": [],
+            }
+        ],
+    }
     assert payload["candidates"] == []
 
 
@@ -835,8 +856,16 @@ def test_v2_strategy_graph_adds_reflection_only_after_reflection_event(tmp_path:
             "roundNo": 1,
             "summary": "第 1 轮查询策略已生成。",
             "details": {
-                "keywordQuery": "交互设计 用户研究",
-                "queryTerms": ["交互设计", "用户研究"],
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["交互设计", "用户研究"],
+                        keyword_query="交互设计 用户研究",
+                    )
+                ],
             },
             "state": "running",
         },
@@ -863,17 +892,22 @@ def test_v2_strategy_graph_adds_reflection_only_after_reflection_event(tmp_path:
         "第 1 轮 · 查询包",
         "第 1 轮 · 下一轮策略",
     ]
+    assert payload["thinkingProcess"]["rounds"][0]["queryGroups"] == [
+        _v2_query_group(
+            query_instance_id="query-1",
+            term_group_key="group-1",
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["交互设计", "用户研究"],
+            keyword_query="交互设计 用户研究",
+        )
+    ]
     assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
-        {
-            "title": "关键词",
-            "text": "交互设计 用户研究",
-            "terms": ["交互设计", "用户研究"],
-        },
         {
             "title": "反思和下一轮变更",
             "text": "下一轮降低行业限制，扩大 B 端体验关键词。",
             "terms": [],
-        },
+        }
     ]
 
 
@@ -889,8 +923,16 @@ def test_v2_feedback_observation_without_reflection_emits_only_observation(tmp_p
             "roundNo": 1,
             "summary": "第 1 轮查询策略已生成。",
             "details": {
-                "keywordQuery": "增长产品 用户研究",
-                "queryTerms": ["增长产品", "用户研究"],
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["增长产品", "用户研究"],
+                        keyword_query="增长产品 用户研究",
+                    )
+                ],
             },
             "state": "running",
         },
@@ -917,17 +959,22 @@ def test_v2_feedback_observation_without_reflection_emits_only_observation(tmp_p
         "第 1 轮 · 查询包",
         "第 1 轮 · 下一轮策略",
     ]
+    assert payload["thinkingProcess"]["rounds"][0]["queryGroups"] == [
+        _v2_query_group(
+            query_instance_id="query-1",
+            term_group_key="group-1",
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["增长产品", "用户研究"],
+            keyword_query="增长产品 用户研究",
+        )
+    ]
     assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
-        {
-            "title": "关键词",
-            "text": "增长产品 用户研究",
-            "terms": ["增长产品", "用户研究"],
-        },
         {
             "title": "observation",
             "text": "候选人简历质量较高，但增长实验经验需要继续确认。",
             "terms": [],
-        },
+        }
     ]
 
 
@@ -943,8 +990,16 @@ def test_conversation_view_does_not_show_future_graph_nodes_before_events(tmp_pa
             "roundNo": 1,
             "summary": "第 1 轮查询策略已生成。",
             "details": {
-                "keywordQuery": "数据科学家 SQL",
-                "queryTerms": ["数据科学家", "SQL"],
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["数据科学家", "SQL"],
+                        keyword_query="数据科学家 SQL",
+                    )
+                ],
             },
             "state": "running",
         }
@@ -960,13 +1015,17 @@ def test_conversation_view_does_not_show_future_graph_nodes_before_events(tmp_pa
     assert not any("猎聘检索" in node["label"] for node in payload["strategyGraph"]["nodes"])
     assert not any("Top Pool" in node["label"] for node in payload["strategyGraph"]["nodes"])
     assert not any(node["kind"] == "final" for node in payload["strategyGraph"]["nodes"])
-    assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
-        {
-            "title": "关键词",
-            "text": "数据科学家 SQL",
-            "terms": ["数据科学家", "SQL"],
-        }
+    assert payload["thinkingProcess"]["rounds"][0]["queryGroups"] == [
+        _v2_query_group(
+            query_instance_id="query-1",
+            term_group_key="group-1",
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["数据科学家", "SQL"],
+            keyword_query="数据科学家 SQL",
+        )
     ]
+    assert payload["thinkingProcess"]["rounds"][0]["cards"] == []
 
 
 def test_v2_source_result_does_not_generate_observation_card(tmp_path: Path) -> None:
@@ -981,8 +1040,16 @@ def test_v2_source_result_does_not_generate_observation_card(tmp_path: Path) -> 
             "roundNo": 1,
             "summary": "第 1 轮查询策略已生成。",
             "details": {
-                "keywordQuery": "数据科学家 SQL",
-                "queryTerms": ["数据科学家", "SQL"],
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["数据科学家", "SQL"],
+                        keyword_query="数据科学家 SQL",
+                    )
+                ],
             },
             "state": "running",
         },
@@ -1010,13 +1077,17 @@ def test_v2_source_result_does_not_generate_observation_card(tmp_path: Path) -> 
         "第 1 轮 · 查询包",
         "第 1 轮 · 猎聘检索",
     ]
-    assert payload["thinkingProcess"]["rounds"][0]["cards"] == [
-        {
-            "title": "关键词",
-            "text": "数据科学家 SQL",
-            "terms": ["数据科学家", "SQL"],
-        }
+    assert payload["thinkingProcess"]["rounds"][0]["queryGroups"] == [
+        _v2_query_group(
+            query_instance_id="query-1",
+            term_group_key="group-1",
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["数据科学家", "SQL"],
+            keyword_query="数据科学家 SQL",
+        )
     ]
+    assert payload["thinkingProcess"]["rounds"][0]["cards"] == []
 
 
 def test_v2_blocked_liepin_source_result_reports_actionable_reason(tmp_path: Path) -> None:
@@ -1065,7 +1136,9 @@ def test_v2_blocked_liepin_source_result_reports_filter_failure(tmp_path: Path) 
     view = service.get_conversation(conversation_id)
     progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
 
-    assert progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：猎聘筛选条件未成功应用，请刷新猎聘页面后重试。"
+    assert (
+        progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：猎聘筛选条件未成功应用，请刷新猎聘页面后重试。"
+    )
 
 
 def test_v2_blocked_liepin_source_result_does_not_repeat_formatted_summary(tmp_path: Path) -> None:
@@ -1452,7 +1525,9 @@ def test_confirm_requirements_starts_runtime_from_current_form(tmp_path: Path) -
     first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-confirm"))
 
     view = asyncio.run(
-        service.submit_message(first_view.conversation.conversationId, "确认需求，开始运行", idempotency_key="confirm-1")
+        service.submit_message(
+            first_view.conversation.conversationId, "确认需求，开始运行", idempotency_key="confirm-1"
+        )
     )
     payload = view.model_dump(mode="json")
 
@@ -1663,7 +1738,9 @@ def test_requirement_action_confirm_with_supplement_runs_amendment_outside_route
     )
     runtime = AsyncioRunRequirementRuntime()
     service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
-    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-confirm-threaded"))
+    first_view = asyncio.run(
+        service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-confirm-threaded")
+    )
 
     view = asyncio.run(
         service.apply_requirement_action(
@@ -1710,7 +1787,9 @@ def test_requirement_action_confirm_after_deselect_starts_runtime_from_updated_f
         )
     )
     service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=runtime)
-    first_view = asyncio.run(service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-action-confirm"))
+    first_view = asyncio.run(
+        service.create_conversation("招一个 AI 平台工程师", idempotency_key="create-action-confirm")
+    )
     item_id = first_view.requirementForm["draft"]["sections"][0]["items"][0]["item_id"]
     deselected_view = asyncio.run(
         service.apply_requirement_action(
@@ -2049,9 +2128,7 @@ def test_agent_update_requirements_needs_review_overrides_assistant_message(tmp_
         "text": "补充要求已记录，需要复核后才能在后续检索轮次生效。",
         "supplementalRequirement": "候选人必须有出海业务经验。",
     }
-    assert payload["transcriptEvents"][-1]["payload"] == {
-        "text": "补充要求已记录，需要复核后才能在后续检索轮次生效。"
-    }
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "补充要求已记录，需要复核后才能在后续检索轮次生效。"}
 
 
 def test_agent_update_requirements_after_runtime_completed_records_next_run_note(tmp_path: Path) -> None:
@@ -2100,7 +2177,11 @@ def test_agent_update_requirements_missing_draft_or_sheet_appends_error(tmp_path
 
     for missing_field, expected_code, expected_text in [
         ("draft", "workbench_v2_requirement_draft_required", "需求表单缺少 draft，无法更新需求。"),
-        ("requirementSheet", "workbench_v2_requirement_sheet_required", "需求表单缺少 requirementSheet，无法更新需求。"),
+        (
+            "requirementSheet",
+            "workbench_v2_requirement_sheet_required",
+            "需求表单缺少 requirementSheet，无法更新需求。",
+        ),
     ]:
         store = _store(tmp_path / missing_field)
         conversation = store.create_conversation(first_user_text="招一个 AI 平台工程师", idempotency_key=missing_field)
@@ -2127,7 +2208,9 @@ def test_agent_update_requirements_missing_draft_or_sheet_appends_error(tmp_path
         )
         service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=FakeRuntimeService())
 
-        view = asyncio.run(service.submit_message(conversation.id, "补充 LangGraph", idempotency_key=f"{missing_field}-patch"))
+        view = asyncio.run(
+            service.submit_message(conversation.id, "补充 LangGraph", idempotency_key=f"{missing_field}-patch")
+        )
         payload = view.model_dump(mode="json")
 
         assert payload["transcriptEvents"][-2]["type"] == "error"
@@ -2477,9 +2560,7 @@ def test_runtime_status_question_uses_agent_intent_to_read_runtime_status(tmp_pa
 
     assert [event["type"] for event in payload["transcriptEvents"][-2:]] == ["user_message", "assistant_message"]
     assert payload["transcriptEvents"][-2]["payload"] == {"text": "现在进度如何？"}
-    assert payload["transcriptEvents"][-1]["payload"] == {
-        "text": "当前招聘流程已排队等待开始，请稍后查看最新进度。"
-    }
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "当前招聘流程已排队等待开始，请稍后查看最新进度。"}
     progress_events = [event for event in payload["transcriptEvents"] if event["type"] == "runtime_progress"]
     assert [
         {"state": event["payload"].get("state"), "summary": event["payload"].get("summary")}
@@ -2554,7 +2635,9 @@ def test_get_conversation_refreshes_active_runtime_status_without_duplicate_prog
         "text": "招聘流程已完成，最终候选人列表已生成。本次最终推荐：张三、李四。你可以在右侧查看候选人详情。"
     }
     result_events = [event for event in repeated_completed_refresh.transcriptEvents if event.type == "runtime_result"]
-    assistant_events = [event for event in repeated_completed_refresh.transcriptEvents if event.type == "assistant_message"]
+    assistant_events = [
+        event for event in repeated_completed_refresh.transcriptEvents if event.type == "assistant_message"
+    ]
     assert [event.payload for event in result_events].count(completed_refresh.transcriptEvents[-2].payload) == 1
     assert [event.payload for event in assistant_events].count(completed_refresh.transcriptEvents[-1].payload) == 1
 
@@ -2716,8 +2799,16 @@ def test_get_conversation_preserves_legitimate_public_prompt_and_internal_terms(
                 "roundNo": 1,
                 "summary": "第 1 轮查询策略已生成。",
                 "details": {
-                    "keywordQuery": "Prompt Engineer internal tools",
-                    "queryTerms": ["Prompt Engineering", "internal platform"],
+                    "queryGroups": [
+                        _v2_query_group(
+                            query_instance_id="query-1",
+                            term_group_key="group-1",
+                            query_role="exploit",
+                            lane_type="exploit",
+                            query_terms=["Prompt Engineering", "internal platform"],
+                            keyword_query="Prompt Engineer internal tools",
+                        )
+                    ],
                 },
                 "state": "running",
             },
@@ -2804,9 +2895,7 @@ def test_get_conversation_does_not_duplicate_runtime_event_summary_as_status_sna
     assert first_refresh.conversation.runtimeState == "failed"
     assert second_refresh.conversation.runtimeState == "failed"
     progress_summaries = [
-        event.payload.get("summary")
-        for event in second_refresh.transcriptEvents
-        if event.type == "runtime_progress"
+        event.payload.get("summary") for event in second_refresh.transcriptEvents if event.type == "runtime_progress"
     ]
     assert progress_summaries.count(summary) == 1
 
@@ -2858,9 +2947,7 @@ def test_get_conversation_runtime_status_failure_appends_error_without_duplicate
             "message": "暂时无法读取运行状态，请稍后重试。",
         }
     ) == 1
-    assert [event.payload for event in assistant_messages].count(
-        {"text": "暂时无法读取运行状态，请稍后重试。"}
-    ) == 1
+    assert [event.payload for event in assistant_messages].count({"text": "暂时无法读取运行状态，请稍后重试。"}) == 1
 
 
 def test_runtime_status_failure_appends_error_in_transcript_instead_of_raising(tmp_path: Path) -> None:
@@ -2897,7 +2984,9 @@ def test_runtime_summary_question_uses_agent_intent_and_reads_runtime_results(tm
     service.agent_loop.outputs.append(_agent_output(intent="get_runtime_results", message="我读取了运行结果。"))
     agent_call_count = len(service.agent_loop.calls)
 
-    view = asyncio.run(service.submit_message(conversation_id, "请总结这次 run 的结果。", idempotency_key="summary-results"))
+    view = asyncio.run(
+        service.submit_message(conversation_id, "请总结这次 run 的结果。", idempotency_key="summary-results")
+    )
     payload = view.model_dump(mode="json")
 
     assert [event["type"] for event in payload["transcriptEvents"][-3:]] == [
@@ -2955,7 +3044,9 @@ def test_runtime_summary_question_reports_no_results_when_queued(tmp_path: Path)
     service.agent_loop.outputs.append(_agent_output(intent="get_runtime_results", message="我读取了运行结果。"))
     agent_call_count = len(service.agent_loop.calls)
 
-    view = asyncio.run(service.submit_message(conversation_id, "请总结这次 run 的结果。", idempotency_key="summary-guard"))
+    view = asyncio.run(
+        service.submit_message(conversation_id, "请总结这次 run 的结果。", idempotency_key="summary-guard")
+    )
     payload = view.model_dump(mode="json")
 
     assert [event["type"] for event in payload["transcriptEvents"][-2:]] == [
@@ -2992,9 +3083,7 @@ def test_get_runtime_results_intent_appends_runtime_result(tmp_path: Path) -> No
 
 def test_agent_runtime_input_after_confirm_records_next_round_requirement_without_new_form(tmp_path: Path) -> None:
     service, runtime, conversation_id, _item_id, confirmed_view = _confirmed_requirement_conversation(tmp_path)
-    confirmed_form_count = len(
-        [event for event in confirmed_view.transcriptEvents if event.type == "requirement_form"]
-    )
+    confirmed_form_count = len([event for event in confirmed_view.transcriptEvents if event.type == "requirement_form"])
     supplemental_runtime_input = {
         "jobTitle": "AI 平台工程师",
         "jd": "补充：候选人优先有天猫或淘宝业务经验。",
@@ -3048,6 +3137,170 @@ def test_agent_runtime_input_after_confirm_records_next_round_requirement_withou
         "workbench-v2-service:submit:post-confirm-runtime-input:runtime-next-round:"
     )
     assert payload["transcriptEvents"][-1]["payload"] == {"text": "已记录补充要求，将在下一轮检索时使用。"}
+
+
+def test_v2_thinking_process_merges_safe_query_groups_and_rejects_identity_drift() -> None:
+    from seektalent_workbench_v2.models import WorkbenchV2Conversation, WorkbenchV2ConversationRecord
+    from seektalent_workbench_v2.views import conversation_record_to_view
+
+    primary = {
+        "queryInstanceId": "query-primary",
+        "termGroupKey": "group-primary",
+        "queryRole": "exploit",
+        "laneType": "exploit",
+        "queryTerms": ["AI agent", "Python"],
+        "keywordQuery": "AI agent Python",
+        "lifecycle": "planned",
+        "executionStatus": None,
+        "attempted": False,
+        "rawCandidateCount": 0,
+        "uniqueCandidateCount": 0,
+        "duplicateCandidateCount": 0,
+        "executions": [],
+    }
+    explore = {
+        "queryInstanceId": "query-explore",
+        "termGroupKey": "group-explore",
+        "queryRole": "explore",
+        "laneType": "generic_explore",
+        "queryTerms": ["AI platform", "Rust"],
+        "keywordQuery": "AI platform Rust",
+        "lifecycle": "planned",
+        "executionStatus": None,
+        "attempted": False,
+        "rawCandidateCount": 0,
+        "uniqueCandidateCount": 0,
+        "duplicateCandidateCount": 0,
+        "executions": [],
+    }
+    executed_primary = {
+        **primary,
+        "lifecycle": "executed",
+        "executionStatus": "completed",
+        "attempted": True,
+        "rawCandidateCount": 6,
+        "uniqueCandidateCount": 3,
+        "duplicateCandidateCount": 3,
+        "executions": [
+            {
+                "sourceKind": "cts",
+                "status": "completed",
+                "rawCandidateCount": 4,
+                "uniqueCandidateCount": 2,
+                "duplicateCandidateCount": 2,
+            },
+            {
+                "sourceKind": "liepin",
+                "status": "completed",
+                "rawCandidateCount": 2,
+                "uniqueCandidateCount": 1,
+                "duplicateCandidateCount": 1,
+            },
+        ],
+    }
+    conversation = WorkbenchV2Conversation(
+        id="conversation-1",
+        title="Find AI platform engineers",
+        created_at="2026-07-11T00:00:00Z",
+        updated_at="2026-07-11T00:00:00Z",
+        runtime_run_id="runtime-1",
+        runtime_state="running",
+    )
+    planned_event = WorkbenchV2TranscriptEvent(
+        id="event-planned",
+        conversation_id=conversation.id,
+        step=1,
+        type="runtime_progress",
+        role="runtime",
+        payload={
+            "runtimeRunId": "runtime-1",
+            "runtimeEventSeq": 1,
+            "runtimeEventType": "runtime_round_query_ready",
+            "status": "completed",
+            "stage": "round_query",
+            "roundNo": 2,
+            "summary": "Round two query groups.",
+            "details": {"queryGroups": [primary, explore]},
+            "state": "running",
+        },
+        created_at="2026-07-11T00:00:01Z",
+    )
+    feedback_event = WorkbenchV2TranscriptEvent(
+        id="event-feedback",
+        conversation_id=conversation.id,
+        step=2,
+        type="runtime_progress",
+        role="runtime",
+        payload={
+            "runtimeRunId": "runtime-1",
+            "runtimeEventSeq": 2,
+            "runtimeEventType": "runtime_round_feedback_completed",
+            "status": "completed",
+            "stage": "feedback",
+            "roundNo": 2,
+            "summary": "Round two feedback.",
+            "details": {"queryGroups": [executed_primary]},
+            "state": "running",
+        },
+        created_at="2026-07-11T00:00:02Z",
+    )
+
+    view = conversation_record_to_view(
+        WorkbenchV2ConversationRecord(conversation=conversation, events=[planned_event, feedback_event])
+    )
+
+    [round_view] = view.thinkingProcess.rounds
+    assert [group.queryInstanceId for group in round_view.queryGroups] == ["query-primary", "query-explore"]
+    assert round_view.queryGroups[0].lifecycle == "executed"
+    assert round_view.queryGroups[0].uniqueCandidateCount == 3
+    assert [execution.sourceKind for execution in round_view.queryGroups[0].executions] == ["cts", "liepin"]
+    assert round_view.cards == []
+
+    drift_event = feedback_event.model_copy(
+        update={
+            "payload": {
+                **feedback_event.payload,
+                "details": {"queryGroups": [{**executed_primary, "termGroupKey": "changed"}]},
+            }
+        }
+    )
+    with pytest.raises(ValueError, match="workbench_v2_query_group_identity_mismatch"):
+        conversation_record_to_view(
+            WorkbenchV2ConversationRecord(conversation=conversation, events=[planned_event, drift_event])
+        )
+
+
+def _v2_query_group(
+    *,
+    query_instance_id: str,
+    term_group_key: str,
+    query_role: str,
+    lane_type: str,
+    query_terms: list[str],
+    keyword_query: str,
+    lifecycle: str = "planned",
+    execution_status: str | None = None,
+    attempted: bool = False,
+    raw_candidate_count: int = 0,
+    unique_candidate_count: int = 0,
+    duplicate_candidate_count: int = 0,
+    executions: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    return {
+        "queryInstanceId": query_instance_id,
+        "termGroupKey": term_group_key,
+        "queryRole": query_role,
+        "laneType": lane_type,
+        "queryTerms": query_terms,
+        "keywordQuery": keyword_query,
+        "lifecycle": lifecycle,
+        "executionStatus": execution_status,
+        "attempted": attempted,
+        "rawCandidateCount": raw_candidate_count,
+        "uniqueCandidateCount": unique_candidate_count,
+        "duplicateCandidateCount": duplicate_candidate_count,
+        "executions": executions or [],
+    }
 
 
 def _store(tmp_path: Path) -> WorkbenchV2Store:
