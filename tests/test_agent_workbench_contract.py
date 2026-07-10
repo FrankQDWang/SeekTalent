@@ -1050,6 +1050,76 @@ def test_round_reducer_merges_v2_query_groups_by_query_instance_id() -> None:
     assert exc_info.value.reason_code == "workbench_query_group_identity_mismatch"
 
 
+@pytest.mark.parametrize(
+    ("reason_code", "expected_reason_code"),
+    [
+        ("blocked_backend_unavailable", "source_browser_backend_unavailable"),
+        ("Bearer private-token", None),
+        ("unknown_private_reason", None),
+    ],
+)
+def test_round_reducer_allowlists_execution_reason_codes_before_public_response(
+    reason_code: str,
+    expected_reason_code: str | None,
+) -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    feedback = _public_stage_output(
+        output_id="rtout_execution_reason_boundary",
+        stage="feedback",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["AI agent"],
+                        keyword_query="AI agent",
+                        lifecycle="executed",
+                        execution_status="blocked",
+                        attempted=True,
+                        executions=[
+                            {
+                                "sourceKind": "liepin",
+                                "status": "blocked",
+                                "safeReasonCode": reason_code,
+                            }
+                        ],
+                    )
+                ]
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    [execution] = summary.query_groups[0].executions
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    assert execution.safe_reason_code == expected_reason_code
+    assert response.thinkingProcess.rounds[0].queryGroups[0].executions[0].safeReasonCode == expected_reason_code
+    assert reason_code not in response.model_dump_json()
+
+
+def test_round_reducer_query_execution_reason_taxonomy_matches_runtime_public_events() -> None:
+    from seektalent.runtime import public_events
+    from seektalent_ui import agent_workbench_rounds
+
+    assert agent_workbench_rounds._PUBLIC_QUERY_EXECUTION_REASON_CODES == public_events.PUBLIC_SOURCE_REASON_CODES
+    assert agent_workbench_rounds._QUERY_EXECUTION_REASON_ALIASES == public_events._PUBLIC_REASON_MAP
+
+
 def test_round_reducer_drops_query_groups_with_the_wrong_stage_lifecycle() -> None:
     from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
 

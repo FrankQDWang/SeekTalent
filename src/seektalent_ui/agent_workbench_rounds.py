@@ -19,6 +19,44 @@ PUBLIC_STAGE_OUTPUT_SCHEMA = "runtime-public-stage-output/v2"
 PUBLIC_EVENT_SCHEMA = "runtime_public_event_v1"
 AgentWorkbenchQueryGroupLifecycle = Literal["planned", "executed"]
 AgentWorkbenchQueryExecutionStatus = Literal["completed", "partial", "blocked", "failed"]
+_PUBLIC_QUERY_EXECUTION_REASON_CODES = {
+    "job_lease_expired",
+    "relay_pending_worker",
+    "runtime_failed",
+    "source_login_required",
+    "source_account_mismatch",
+    "source_browser_timeout",
+    "source_browser_backend_unavailable",
+    "source_browser_extension_disconnected",
+    "source_browser_policy_blocked",
+    "source_risk_or_verification_required",
+    "source_browser_interaction_required",
+    "source_budget_exhausted",
+    "source_filter_applied",
+    "source_filter_partial",
+    "source_filter_unavailable",
+    "source_filter_unsupported",
+    "source_filter_degraded",
+    "source_location_filter_unsupported",
+    "source_age_filter_unsupported",
+    "source_provider_failed",
+    "source_partial",
+    "source_unknown",
+}
+_QUERY_EXECUTION_REASON_ALIASES = {
+    "blocked_backend_unavailable": "source_browser_backend_unavailable",
+    "blocked_login_required": "source_login_required",
+    "failed_provider_error": "source_provider_failed",
+    "login_required": "source_login_required",
+    "partial_timeout": "source_browser_timeout",
+    "runtime_failed": "source_provider_failed",
+    "cancelled_by_user": "source_unknown",
+    "source_location_filter_partial": "source_filter_partial",
+    "source_age_filter_unsupported": "source_filter_unavailable",
+    "source_location_filter_unsupported": "source_filter_unavailable",
+    "source_filter_unsupported": "source_filter_unavailable",
+    "source_filter_applied": "source_filter_applied",
+}
 
 
 class AgentWorkbenchProjectionError(RuntimeError):
@@ -414,13 +452,23 @@ def _query_executions(value: object) -> tuple[AgentWorkbenchQueryExecutionProjec
                 raw_candidate_count=_int_or_none(item_mapping.get("rawCandidateCount")) or 0,
                 unique_candidate_count=_int_or_none(item_mapping.get("uniqueCandidateCount")) or 0,
                 duplicate_candidate_count=_int_or_none(item_mapping.get("duplicateCandidateCount")) or 0,
-                safe_reason_code=_text(item_mapping.get("safeReasonCode")),
+                safe_reason_code=_public_query_execution_reason_code(item_mapping.get("safeReasonCode")),
             )
         )
         seen_sources.add(source_kind)
         if len(executions) >= 2:
             break
     return tuple(executions)
+
+
+def _public_query_execution_reason_code(value: object) -> str | None:
+    text = _text(value)
+    if text is None:
+        return None
+    if text in _PUBLIC_QUERY_EXECUTION_REASON_CODES:
+        return text
+    mapped = _QUERY_EXECUTION_REASON_ALIASES.get(text)
+    return mapped if mapped in _PUBLIC_QUERY_EXECUTION_REASON_CODES else None
 
 
 def _replace_text(current: str | None, value: object) -> str | None:
