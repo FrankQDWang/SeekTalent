@@ -3529,6 +3529,22 @@ class _LiepinSearchWorkflowSite:
             emit_events=False,
         )
 
+    def _capture_liepin_detail_resume_claim_aware(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        expected_provider_candidate_key_hash: str,
+        require_ready: bool = True,
+    ) -> OpenCliBrowserResult:
+        return self.adapter._capture_liepin_detail_resume_claim_aware(
+            source_run_id=source_run_id,
+            rank=rank,
+            expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
+            require_ready=require_ready,
+            emit_events=False,
+        )
+
     def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
         self.adapter._discard_collected_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
 

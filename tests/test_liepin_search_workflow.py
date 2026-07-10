@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+import inspect
+from typing import Any, cast
+
+import pytest
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
@@ -9,6 +12,8 @@ from seektalent.providers.liepin.liepin_search_workflow import (
     LiepinSearchWorkflow,
     LiepinSearchWorkflowRequest,
 )
+from seektalent.providers.liepin.liepin_site_adapter import LiepinSiteAdapter, _LiepinSearchWorkflowSite
+from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 
 
 @dataclass
@@ -17,10 +22,13 @@ class FakeLiepinSearchWorkflowSite:
     open_safe_reason_code: str = "liepin_opencli_detail_not_opened"
     capture_ok: bool = True
     capture_safe_reason_code: str = "liepin_opencli_detail_not_opened"
+    claim_aware_capture_ok: bool = True
+    claim_aware_capture_safe_reason_code: str = "liepin_opencli_detail_not_opened"
     wait_ok: bool = True
     wait_safe_reason_code: str = "liepin_opencli_detail_not_opened"
     restore_ok: bool = True
     detail_urls_available: bool = True
+    detail_urls_by_ref: dict[str, str | None] = field(default_factory=dict)
     search_states: list[OpenCliBrowserResult] = field(
         default_factory=lambda: [
             _search_state_with_detail_targets("70", "71", "72")
@@ -33,6 +41,7 @@ class FakeLiepinSearchWorkflowSite:
     events: list[dict[str, object]] = field(default_factory=list)
     resumes: list[dict[str, object]] = field(default_factory=list)
     capture_require_ready_values: list[bool] = field(default_factory=list)
+    claim_aware_capture_expected_keys: list[str] = field(default_factory=list)
     open_results: list[OpenCliBrowserResult] = field(default_factory=list)
     structured_cards: list[list[dict[str, object]]] = field(
         default_factory=lambda: [
@@ -91,6 +100,8 @@ class FakeLiepinSearchWorkflowSite:
 
     def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
         self.calls.append("safe_liepin_detail_url_for_ref")
+        if ref in self.detail_urls_by_ref:
+            return self.detail_urls_by_ref[ref]
         if not self.detail_urls_available:
             return None
         return f"https://h.liepin.com/resume/showresumedetail/?res_id_encode={ref}"
@@ -152,6 +163,27 @@ class FakeLiepinSearchWorkflowSite:
                 ok=False,
                 action="capture_liepin_detail_resume",
                 safe_reason_code=self.capture_safe_reason_code,
+            )
+        self.resumes.append({"provider_rank": rank, "detail_payload": {"rank": rank}})
+        return OpenCliBrowserResult(ok=True, action="capture_liepin_detail_resume", counts={"rank": rank})
+
+    def _capture_liepin_detail_resume_claim_aware(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        expected_provider_candidate_key_hash: str,
+        require_ready: bool = True,
+    ) -> OpenCliBrowserResult:
+        del source_run_id
+        self.calls.append("capture_liepin_detail_resume_claim_aware")
+        self.capture_require_ready_values.append(require_ready)
+        self.claim_aware_capture_expected_keys.append(expected_provider_candidate_key_hash)
+        if not self.claim_aware_capture_ok:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="capture_liepin_detail_resume",
+                safe_reason_code=self.claim_aware_capture_safe_reason_code,
             )
         self.resumes.append({"provider_rank": rank, "detail_payload": {"rank": rank}})
         return OpenCliBrowserResult(ok=True, action="capture_liepin_detail_resume", counts={"rank": rank})
@@ -228,6 +260,48 @@ def _search_state_with_detail_targets(*refs: str, text: str = "visible cards wit
     )
 
 
+def _private_claim_context(ledger: DetailOpenClaimLedger) -> DetailOpenClaimSearchContext:
+    return DetailOpenClaimSearchContext(
+        detail_open_claim_ledger=ledger,
+        logical_round_no=4,
+        query_instance_id="logical-query-4",
+    )
+
+
+def _detail_key(subject: str) -> str:
+    key = stable_liepin_detail_candidate_key_hash(
+        f"https://h.liepin.com/resume/showresumedetail/?res_id_encode={subject}"
+    )
+    assert key is not None
+    return key
+
+
+class RecordingDetailOpenClaimLedger(DetailOpenClaimLedger):
+    def __init__(self) -> None:
+        super().__init__({})
+        self.transitions: list[tuple[str, str]] = []
+
+    def try_claim(self, provider_candidate_key_hash: str) -> bool:
+        self.transitions.append(("try_claim", provider_candidate_key_hash))
+        return super().try_claim(provider_candidate_key_hash)
+
+    def record_browser_open_attempt(self, provider_candidate_key_hash: str) -> None:
+        self.transitions.append(("record_browser_open_attempt", provider_candidate_key_hash))
+        super().record_browser_open_attempt(provider_candidate_key_hash)
+
+    def mark_opened(self, provider_candidate_key_hash: str) -> None:
+        self.transitions.append(("mark_opened", provider_candidate_key_hash))
+        super().mark_opened(provider_candidate_key_hash)
+
+    def mark_terminal_failed(self, provider_candidate_key_hash: str, *, safe_reason_code: str) -> None:
+        self.transitions.append(("mark_terminal_failed", provider_candidate_key_hash))
+        super().mark_terminal_failed(provider_candidate_key_hash, safe_reason_code=safe_reason_code)
+
+    def release_unattempted(self, provider_candidate_key_hash: str) -> None:
+        self.transitions.append(("release_unattempted", provider_candidate_key_hash))
+        super().release_unattempted(provider_candidate_key_hash)
+
+
 def test_workflow_opens_details_until_target_count() -> None:
     site = FakeLiepinSearchWorkflowSite()
 
@@ -257,6 +331,311 @@ def test_private_claim_context_route_preserves_current_detail_search_behavior() 
     assert envelope["status"] == "succeeded"
     assert envelope["resumes_returned"] == 1
     assert site.calls.count("open_liepin_detail") == 1
+    assert site.calls.count("capture_liepin_detail_resume_claim_aware") == 1
+    assert "capture_liepin_detail_resume" not in site.calls
+    key = _detail_key("70")
+    assert site.claim_aware_capture_expected_keys == [key]
+    assert ledger.snapshot()[key].status == "opened"
+    assert ledger.snapshot()[key].browser_open_attempt_count == 1
+
+
+def test_private_claim_context_skips_preclaimed_candidate_before_detail_open() -> None:
+    key = _detail_key("70")
+    ledger = DetailOpenClaimLedger({})
+    assert ledger.try_claim(key) is True
+    site = FakeLiepinSearchWorkflowSite(
+        structured_cards=[[{"ref": "70", "provider_rank": 1}]],
+        search_states=[_search_state_with_detail_targets("70") for _ in range(3)],
+    )
+
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    assert envelope["status"] == "blocked"
+    assert "open_liepin_detail" not in site.calls
+    assert "open_liepin_detail_cached_url" not in site.calls
+    assert ledger.snapshot()[key].status == "claimed"
+
+
+def test_private_claim_context_skips_opened_subject_after_rank_change() -> None:
+    ledger = DetailOpenClaimLedger({})
+    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    first_site = FakeLiepinSearchWorkflowSite(
+        structured_cards=[[{"ref": "first", "provider_rank": 1}]],
+        detail_urls_by_ref={"first": detail_url},
+        search_states=[_search_state_with_detail_targets("first") for _ in range(3)],
+    )
+
+    first = LiepinSearchWorkflow(site=first_site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    second_site = FakeLiepinSearchWorkflowSite(
+        structured_cards=[[{"ref": "later", "provider_rank": 2}]],
+        detail_urls_by_ref={"later": detail_url},
+        search_states=[_search_state_with_detail_targets("later") for _ in range(3)],
+    )
+    second = LiepinSearchWorkflow(site=second_site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    key = _detail_key("sameSubject")
+    assert first["status"] == "succeeded"
+    assert first_site.calls.count("open_liepin_detail") == 1
+    assert second["status"] == "blocked"
+    assert "open_liepin_detail" not in second_site.calls
+    assert "open_liepin_detail_cached_url" not in second_site.calls
+    assert ledger.snapshot()[key].status == "opened"
+
+
+@pytest.mark.parametrize(
+    "detail_url",
+    [
+        None,
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=%73ubject",
+    ],
+)
+def test_private_claim_context_skips_candidate_without_strict_identity(detail_url: str | None) -> None:
+    ledger = DetailOpenClaimLedger({})
+    site = FakeLiepinSearchWorkflowSite(
+        structured_cards=[[{"ref": "70", "provider_rank": 1}]],
+        detail_urls_by_ref={"70": detail_url},
+        search_states=[_search_state_with_detail_targets("70") for _ in range(3)],
+    )
+
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_candidate_identity_missing"
+    assert ledger.snapshot() == {}
+    assert "open_liepin_detail" not in site.calls
+    assert "open_liepin_detail_cached_url" not in site.calls
+
+
+@pytest.mark.parametrize(
+    ("safe_reason_code", "expected_attempts"),
+    [
+        ("liepin_opencli_forbidden_command", 1),
+        ("liepin_opencli_detail_not_opened", 2),
+    ],
+)
+def test_private_claim_context_terminalizes_attempted_open_before_later_workflow(
+    safe_reason_code: str,
+    expected_attempts: int,
+) -> None:
+    ledger = DetailOpenClaimLedger({})
+    site = FakeLiepinSearchWorkflowSite(
+        open_ok=False,
+        open_safe_reason_code=safe_reason_code,
+        structured_cards=[[{"ref": "70", "provider_rank": 1}]],
+        search_states=[_search_state_with_detail_targets("70") for _ in range(4)],
+    )
+
+    first = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    second_site = FakeLiepinSearchWorkflowSite(
+        structured_cards=[[{"ref": "70", "provider_rank": 2}]],
+        search_states=[_search_state_with_detail_targets("70") for _ in range(3)],
+    )
+    second = LiepinSearchWorkflow(site=second_site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    key = _detail_key("70")
+    claim = ledger.snapshot()[key]
+    assert first["status"] == "blocked"
+    assert site.calls.count("open_liepin_detail") == expected_attempts
+    assert claim.status == "terminal_failed"
+    assert claim.browser_open_attempt_count == expected_attempts
+    assert second["status"] == "blocked"
+    assert "open_liepin_detail" not in second_site.calls
+    assert "open_liepin_detail_cached_url" not in second_site.calls
+
+
+def test_private_claim_context_terminalizes_wait_failure_after_browser_open() -> None:
+    ledger = DetailOpenClaimLedger({})
+    site = FakeLiepinSearchWorkflowSite(
+        wait_ok=False,
+        structured_cards=[[{"ref": "70", "provider_rank": 1}]],
+        search_states=[_search_state_with_detail_targets("70") for _ in range(3)],
+    )
+
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    claim = ledger.snapshot()[_detail_key("70")]
+    assert envelope["status"] == "blocked"
+    assert claim.status == "terminal_failed"
+    assert claim.browser_open_attempt_count == 1
+
+
+def test_private_claim_context_terminalizes_capture_identity_mismatch_without_candidate() -> None:
+    ledger = DetailOpenClaimLedger({})
+    site = FakeLiepinSearchWorkflowSite(
+        claim_aware_capture_ok=False,
+        claim_aware_capture_safe_reason_code="liepin_opencli_candidate_identity_mismatch",
+        structured_cards=[[{"ref": "70", "provider_rank": 1}]],
+        search_states=[_search_state_with_detail_targets("70") for _ in range(3)],
+    )
+
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    claim = ledger.snapshot()[_detail_key("70")]
+    assert envelope["status"] == "blocked"
+    assert envelope["resumes"] == []
+    assert envelope["safe_reason_code"] == "liepin_opencli_candidate_identity_mismatch"
+    assert claim.status == "terminal_failed"
+    assert claim.browser_open_attempt_count == 1
+    assert site.claim_aware_capture_expected_keys == [_detail_key("70")]
+    assert "capture_liepin_detail_resume" not in site.calls
+
+
+def test_private_claim_context_terminalizes_escaping_open_exception() -> None:
+    class ExplodingOpenSite(FakeLiepinSearchWorkflowSite):
+        def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
+            del source_run_id, ref, rank
+            self.calls.append("open_liepin_detail")
+            raise RuntimeError("open exploded")
+
+    ledger = DetailOpenClaimLedger({})
+    site = ExplodingOpenSite(
+        structured_cards=[[{"ref": "70", "provider_rank": 1}]],
+        search_states=[_search_state_with_detail_targets("70") for _ in range(3)],
+    )
+
+    with pytest.raises(RuntimeError, match="open exploded"):
+        LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+            _request(target_resumes=1),
+            detail_open_claim_context=_private_claim_context(ledger),
+        )
+
+    claim = ledger.snapshot()[_detail_key("70")]
+    assert claim.status == "terminal_failed"
+    assert claim.browser_open_attempt_count == 1
+
+
+def test_private_claim_context_terminalizes_escaping_capture_exception() -> None:
+    class ExplodingCaptureSite(FakeLiepinSearchWorkflowSite):
+        def _capture_liepin_detail_resume_claim_aware(
+            self,
+            *,
+            source_run_id: str,
+            rank: int,
+            expected_provider_candidate_key_hash: str,
+            require_ready: bool = True,
+        ) -> OpenCliBrowserResult:
+            del source_run_id, rank, expected_provider_candidate_key_hash, require_ready
+            self.calls.append("capture_liepin_detail_resume_claim_aware")
+            raise RuntimeError("capture exploded")
+
+    ledger = DetailOpenClaimLedger({})
+    site = ExplodingCaptureSite(
+        structured_cards=[[{"ref": "70", "provider_rank": 1}]],
+        search_states=[_search_state_with_detail_targets("70") for _ in range(3)],
+    )
+
+    with pytest.raises(RuntimeError, match="capture exploded"):
+        LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+            _request(target_resumes=1),
+            detail_open_claim_context=_private_claim_context(ledger),
+        )
+
+    claim = ledger.snapshot()[_detail_key("70")]
+    assert claim.status == "terminal_failed"
+    assert claim.browser_open_attempt_count == 1
+
+
+def test_private_claim_context_releases_preopen_failure_without_browser_action() -> None:
+    ledger = RecordingDetailOpenClaimLedger()
+    site = FakeLiepinSearchWorkflowSite(
+        structured_cards=[[{"ref": "70", "provider_rank": 1}]],
+        search_states=[
+            _search_state_with_detail_targets("70"),
+            _search_state_with_detail_targets("70"),
+            _search_state_with_detail_targets("71"),
+        ],
+    )
+
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    key = _detail_key("70")
+    assert envelope["status"] == "blocked"
+    assert "open_liepin_detail" not in site.calls
+    assert ledger.transitions == [("try_claim", key), ("release_unattempted", key)]
+    assert ledger.try_claim(key) is True
+
+
+def test_private_workflow_site_forwards_claim_aware_capture_without_widening_public_signature() -> None:
+    expected_key = _detail_key("70")
+
+    class PrivateCaptureAdapter:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def _capture_liepin_detail_resume_claim_aware(
+            self,
+            *,
+            source_run_id: str,
+            rank: int,
+            expected_provider_candidate_key_hash: str,
+            require_ready: bool,
+            emit_events: bool,
+        ) -> OpenCliBrowserResult:
+            self.calls.append(
+                {
+                    "source_run_id": source_run_id,
+                    "rank": rank,
+                    "expected_provider_candidate_key_hash": expected_provider_candidate_key_hash,
+                    "require_ready": require_ready,
+                    "emit_events": emit_events,
+                }
+            )
+            return OpenCliBrowserResult(ok=True, action="capture_liepin_detail_resume")
+
+    adapter = PrivateCaptureAdapter()
+    site = _LiepinSearchWorkflowSite(adapter=cast(LiepinSiteAdapter, adapter))
+
+    result = site._capture_liepin_detail_resume_claim_aware(
+        source_run_id="run-1",
+        rank=1,
+        expected_provider_candidate_key_hash=expected_key,
+        require_ready=False,
+    )
+
+    assert result.ok is True
+    assert adapter.calls == [
+        {
+            "source_run_id": "run-1",
+            "rank": 1,
+            "expected_provider_candidate_key_hash": expected_key,
+            "require_ready": False,
+            "emit_events": False,
+        }
+    ]
+    assert tuple(inspect.signature(LiepinSiteAdapter.capture_liepin_detail_resume).parameters) == (
+        "self",
+        "source_run_id",
+        "rank",
+    )
 
 
 def test_workflow_initial_card_extraction_uses_state_probe_before_and_after() -> None:
