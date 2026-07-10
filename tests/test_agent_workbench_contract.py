@@ -1050,6 +1050,60 @@ def test_round_reducer_merges_v2_query_groups_by_query_instance_id() -> None:
     assert exc_info.value.reason_code == "workbench_query_group_identity_mismatch"
 
 
+def test_round_reducer_drops_query_groups_with_the_wrong_stage_lifecycle() -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    wrong_round_query = _public_stage_output(
+        output_id="rtout_wrong_query_lifecycle",
+        stage="round_query",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-executed-too-early",
+                        term_group_key="group-executed-too-early",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["AI agent"],
+                        keyword_query="AI agent",
+                        lifecycle="executed",
+                        execution_status="completed",
+                        attempted=True,
+                    )
+                ]
+            },
+        },
+    )
+    wrong_feedback = _public_stage_output(
+        output_id="rtout_wrong_feedback_lifecycle",
+        stage="feedback",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-planned-too-late",
+                        term_group_key="group-planned-too-late",
+                        query_role="explore",
+                        lane_type="generic_explore",
+                        query_terms=["Rust"],
+                        keyword_query="Rust",
+                    )
+                ]
+            },
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs([wrong_round_query, wrong_feedback])
+
+    assert summary.query_groups == ()
+
+
 def test_round_reducer_rejects_public_stage_output_metadata_mismatch() -> None:
     from seektalent_ui.agent_workbench_rounds import AgentWorkbenchProjectionError, round_summaries_from_stage_outputs
 

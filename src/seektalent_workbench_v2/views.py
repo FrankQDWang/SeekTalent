@@ -28,6 +28,12 @@ from seektalent_workbench_v2.runtime_display import (
 )
 
 
+_QUERY_GROUP_LIFECYCLE_BY_STAGE = {
+    "round_query": "planned",
+    "feedback": "executed",
+}
+
+
 @dataclass(frozen=True)
 class _GraphNodeSpec:
     node_id: str
@@ -420,7 +426,10 @@ def _runtime_thinking_round_states(
         stage = _string_or_none(event.payload.get("stage"))
         status = _surface_status_from_event_payload(event.payload)
 
-        query_groups = _query_groups_from_payload(event.payload)
+        query_groups = _query_groups_from_payload(
+            event.payload,
+            expected_lifecycle=_query_group_lifecycle_for_stage(stage),
+        )
         if query_groups:
             statuses[round_no] = status
             groups = query_group_states.setdefault(round_no, {})
@@ -458,11 +467,20 @@ def _runtime_thinking_round_states(
 
 
 def _keyword_query_from_payload(payload: dict[str, object]) -> str | None:
-    groups = _query_groups_from_payload(payload)
+    groups = _query_groups_from_payload(
+        payload,
+        expected_lifecycle=_query_group_lifecycle_for_stage(_string_or_none(payload.get("stage"))),
+    )
     return groups[0].keywordQuery if groups else None
 
 
-def _query_groups_from_payload(payload: dict[str, object]) -> list[WorkbenchV2QueryGroupView]:
+def _query_groups_from_payload(
+    payload: dict[str, object],
+    *,
+    expected_lifecycle: str | None,
+) -> list[WorkbenchV2QueryGroupView]:
+    if expected_lifecycle is None:
+        return []
     raw_groups = _runtime_details(payload).get("queryGroups")
     if not isinstance(raw_groups, list):
         return []
@@ -472,6 +490,8 @@ def _query_groups_from_payload(payload: dict[str, object]) -> list[WorkbenchV2Qu
         if not isinstance(raw_group, dict):
             continue
         group = WorkbenchV2QueryGroupView.model_validate(raw_group)
+        if group.lifecycle != expected_lifecycle:
+            continue
         if group.queryInstanceId in seen_query_instance_ids:
             continue
         seen_query_instance_ids.add(group.queryInstanceId)
@@ -479,6 +499,10 @@ def _query_groups_from_payload(payload: dict[str, object]) -> list[WorkbenchV2Qu
         if len(groups) >= 2:
             break
     return groups
+
+
+def _query_group_lifecycle_for_stage(stage: str | None) -> str | None:
+    return _QUERY_GROUP_LIFECYCLE_BY_STAGE.get(stage) if stage is not None else None
 
 
 def _merge_query_group(

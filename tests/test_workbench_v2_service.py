@@ -3270,6 +3270,164 @@ def test_v2_thinking_process_merges_safe_query_groups_and_rejects_identity_drift
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("queryInstanceId", {"providerUrl": "https://provider.example/private/raw-identity"}),
+        ("termGroupKey", ["https://provider.example/private/raw-identity"]),
+        ("queryRole", {"rawIdentity": "https://provider.example/private/raw-identity"}),
+        ("laneType", ["raw-identity", "https://provider.example/private"]),
+        ("keywordQuery", {"providerUrl": "https://provider.example/private/raw-identity"}),
+        ("lifecycle", ["planned", "https://provider.example/private/raw-identity"]),
+    ],
+)
+def test_v2_runtime_display_drops_non_string_query_group_scalars(field: str, bad_value: object) -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    secret = "https://provider.example/private/raw-identity"
+    group = _v2_query_group(
+        query_instance_id="query-1",
+        term_group_key="group-1",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["safe term"],
+        keyword_query="safe term",
+    )
+    group[field] = bad_value
+
+    payload = normalize_runtime_progress_payload(
+        {
+            "stage": "round_query",
+            "details": {"queryGroups": [group]},
+        }
+    )
+
+    assert "details" not in payload
+    assert secret not in repr(payload)
+
+
+def test_v2_runtime_display_drops_non_string_execution_status() -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    secret = "https://provider.example/private/raw-identity"
+    group = _v2_query_group(
+        query_instance_id="query-1",
+        term_group_key="group-1",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["safe term"],
+        keyword_query="safe term",
+        lifecycle="executed",
+        execution_status="completed",
+        attempted=True,
+    )
+    group["executionStatus"] = {"providerUrl": secret}
+
+    payload = normalize_runtime_progress_payload(
+        {
+            "stage": "feedback",
+            "details": {"queryGroups": [group]},
+        }
+    )
+
+    assert "details" not in payload
+    assert secret not in repr(payload)
+
+
+def test_v2_runtime_display_scrubs_non_string_query_terms_and_execution_scalars() -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    secret = "https://provider.example/private/raw-identity"
+    group = _v2_query_group(
+        query_instance_id="query-1",
+        term_group_key="group-1",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["safe term"],
+        keyword_query="safe term",
+        lifecycle="executed",
+        execution_status="completed",
+        attempted=True,
+        executions=[
+            {
+                "sourceKind": "cts",
+                "status": "completed",
+                "safeReasonCode": {"providerUrl": secret},
+            },
+            {
+                "sourceKind": {"providerUrl": secret},
+                "status": "completed",
+            },
+            {
+                "sourceKind": "liepin",
+                "status": ["completed", secret],
+            },
+        ],
+    )
+    group["queryTerms"] = [
+        "safe term",
+        {"providerUrl": secret},
+        ["rawIdentity", secret],
+        7,
+        True,
+    ]
+
+    payload = normalize_runtime_progress_payload(
+        {
+            "stage": "feedback",
+            "details": {"queryGroups": [group]},
+        }
+    )
+
+    [sanitized] = payload["details"]["queryGroups"]
+    assert sanitized["queryTerms"] == ["safe term"]
+    assert sanitized["executions"] == [
+        {
+            "sourceKind": "cts",
+            "status": "completed",
+            "rawCandidateCount": 0,
+            "uniqueCandidateCount": 0,
+            "duplicateCandidateCount": 0,
+        }
+    ]
+    assert secret not in repr(payload)
+
+
+@pytest.mark.parametrize(
+    ("stage", "lifecycle"),
+    [
+        ("round_query", "executed"),
+        ("feedback", "planned"),
+        ("source_result", "planned"),
+    ],
+)
+def test_v2_runtime_display_requires_query_group_stage_lifecycle(stage: str, lifecycle: str) -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    payload = normalize_runtime_progress_payload(
+        {
+            "stage": stage,
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["safe term"],
+                        keyword_query="safe term",
+                        lifecycle=lifecycle,
+                        execution_status="completed" if lifecycle == "executed" else None,
+                        attempted=lifecycle == "executed",
+                    )
+                ]
+            },
+        }
+    )
+
+    assert "details" not in payload
+
+
 def _v2_query_group(
     *,
     query_instance_id: str,

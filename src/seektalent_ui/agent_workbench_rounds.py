@@ -206,7 +206,11 @@ def _apply_round_output(summary: _RoundFacts, *, output: RuntimeStageOutput, pay
     counts = _mapping(payload.get("counts"))
     details = _mapping(payload.get("details"))
     if stage == "round_query":
-        _merge_query_groups(summary, _query_groups(details.get("queryGroups")), output_id=output.output_id)
+        _merge_query_groups(
+            summary,
+            _query_groups(details.get("queryGroups"), expected_lifecycle="planned"),
+            output_id=output.output_id,
+        )
     elif stage == "source_result":
         raw_count = _int_or_none(counts.get("roundReturned"))
         if raw_count is not None:
@@ -229,7 +233,11 @@ def _apply_round_output(summary: _RoundFacts, *, output: RuntimeStageOutput, pay
         if top_pool is not None:
             summary.top_pool_count = top_pool
     elif stage == "feedback":
-        _merge_query_groups(summary, _query_groups(details.get("queryGroups")), output_id=output.output_id)
+        _merge_query_groups(
+            summary,
+            _query_groups(details.get("queryGroups"), expected_lifecycle="executed"),
+            output_id=output.output_id,
+        )
         summary.resume_quality_comment = _replace_text(
             summary.resume_quality_comment, details.get("resumeQualityComment")
         )
@@ -315,7 +323,11 @@ def _query_group_identity(group: AgentWorkbenchQueryGroupProjection) -> tuple[ob
     )
 
 
-def _query_groups(value: object) -> tuple[AgentWorkbenchQueryGroupProjection, ...]:
+def _query_groups(
+    value: object,
+    *,
+    expected_lifecycle: AgentWorkbenchQueryGroupLifecycle,
+) -> tuple[AgentWorkbenchQueryGroupProjection, ...]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return ()
     groups: list[AgentWorkbenchQueryGroupProjection] = []
@@ -338,6 +350,7 @@ def _query_groups(value: object) -> tuple[AgentWorkbenchQueryGroupProjection, ..
             or not query_terms
             or keyword_query is None
             or lifecycle not in {"planned", "executed"}
+            or lifecycle != expected_lifecycle
         ):
             continue
         if lifecycle == "planned":

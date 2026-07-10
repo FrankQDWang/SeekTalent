@@ -29,6 +29,10 @@ _DETAIL_LIST_KEYS = {
 _DETAIL_QUERY_GROUP_KEYS = {"queryGroups"}
 _QUERY_GROUP_LIFECYCLES = {"planned", "executed"}
 _QUERY_EXECUTION_STATUSES = {"completed", "partial", "blocked", "failed"}
+_QUERY_GROUP_LIFECYCLE_BY_STAGE = {
+    "round_query": "planned",
+    "feedback": "executed",
+}
 _PUBLIC_SOURCE_REASON_CODES = {
     "job_lease_expired",
     "relay_pending_worker",
@@ -52,6 +56,20 @@ _PUBLIC_SOURCE_REASON_CODES = {
     "source_provider_failed",
     "source_partial",
     "source_unknown",
+}
+_PUBLIC_REASON_MAP = {
+    "blocked_backend_unavailable": "source_browser_backend_unavailable",
+    "blocked_login_required": "source_login_required",
+    "failed_provider_error": "source_provider_failed",
+    "login_required": "source_login_required",
+    "partial_timeout": "source_browser_timeout",
+    "runtime_failed": "source_provider_failed",
+    "cancelled_by_user": "source_unknown",
+    "source_location_filter_partial": "source_filter_partial",
+    "source_age_filter_unsupported": "source_filter_unavailable",
+    "source_location_filter_unsupported": "source_filter_unavailable",
+    "source_filter_unsupported": "source_filter_unavailable",
+    "source_filter_applied": "source_filter_applied",
 }
 _PROGRESS_PAYLOAD_KEYS = {
     "runtimeRunId",
@@ -89,8 +107,12 @@ def runtime_event_terminal_summary(event_type: object) -> str | None:
 
 
 def normalize_runtime_progress_payload(payload: Mapping[str, object]) -> dict[str, object]:
-    normalized = {key: payload[key] for key in _PROGRESS_PAYLOAD_KEYS if key in payload}
-    details = safe_runtime_progress_details(payload.get("details"))
+    normalized = {key: payload[key] for key in _PROGRESS_PAYLOAD_KEYS if key != "safeReasonCode" and key in payload}
+    if "safeReasonCode" in payload and payload.get("safeReasonCode") is None:
+        normalized["safeReasonCode"] = None
+    elif (safe_reason_code := safe_runtime_progress_reason_code(payload.get("safeReasonCode"))) is not None:
+        normalized["safeReasonCode"] = safe_reason_code
+    details = safe_runtime_progress_details(payload.get("details"), stage=payload.get("stage"))
     if details:
         normalized["details"] = details
     counts = _safe_counts(payload.get("counts"))
@@ -181,7 +203,7 @@ def _is_formatted_liepin_blocked_summary(reason: str | None) -> bool:
     return isinstance(reason, str) and "猎聘检索受阻：" in reason
 
 
-def safe_runtime_progress_details(value: object) -> dict[str, object]:
+def safe_runtime_progress_details(value: object, *, stage: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     details: dict[str, object] = {}
@@ -204,7 +226,9 @@ def safe_runtime_progress_details(value: object) -> dict[str, object]:
             if values:
                 details[key] = values
         elif key in _DETAIL_QUERY_GROUP_KEYS:
-            details[key] = _safe_query_groups(raw_value)
+            groups = _safe_query_groups(raw_value, expected_lifecycle=_query_group_lifecycle_for_stage(stage))
+            if groups:
+                details[key] = groups
     return details
 
 
@@ -228,13 +252,19 @@ def _is_internal_runtime_summary(summary: object) -> bool:
     return False
 
 
-def _safe_query_groups(value: object) -> list[dict[str, object]]:
+def _safe_query_groups(
+    value: object,
+    *,
+    expected_lifecycle: str | None,
+) -> list[dict[str, object]]:
+    if expected_lifecycle is None:
+        return []
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return []
     groups: list[dict[str, object]] = []
     seen_query_instance_ids: set[str] = set()
     for item in value:
-        group = _safe_query_group(item)
+        group = _safe_query_group(item, expected_lifecycle=expected_lifecycle)
         if group is None:
             continue
         query_instance_id = group.get("queryInstanceId")
@@ -247,17 +277,21 @@ def _safe_query_groups(value: object) -> list[dict[str, object]]:
     return groups
 
 
-def _safe_query_group(value: object) -> dict[str, object] | None:
+def _safe_query_group(
+    value: object,
+    *,
+    expected_lifecycle: str,
+) -> dict[str, object] | None:
     if not isinstance(value, Mapping):
         return None
     item = {key: raw_value for key, raw_value in value.items() if isinstance(key, str)}
-    query_instance_id = _safe_detail_text(item.get("queryInstanceId"), max_length=160)
-    term_group_key = _safe_detail_text(item.get("termGroupKey"), max_length=160)
-    query_role = _safe_detail_text(item.get("queryRole"), max_length=80)
-    lane_type = _safe_detail_text(item.get("laneType"), max_length=80)
-    query_terms = _safe_detail_list(item.get("queryTerms"))
-    keyword_query = _safe_detail_text(item.get("keywordQuery"), max_length=2000)
-    lifecycle = _safe_detail_text(item.get("lifecycle"), max_length=32)
+    query_instance_id = _safe_query_text(item.get("queryInstanceId"), max_length=160)
+    term_group_key = _safe_query_text(item.get("termGroupKey"), max_length=160)
+    query_role = _safe_query_text(item.get("queryRole"), max_length=80)
+    lane_type = _safe_query_text(item.get("laneType"), max_length=80)
+    query_terms = _safe_query_terms(item.get("queryTerms"))
+    keyword_query = _safe_query_text(item.get("keywordQuery"), max_length=2000)
+    lifecycle = _safe_query_text(item.get("lifecycle"), max_length=32)
     if (
         query_instance_id is None
         or term_group_key is None
@@ -266,6 +300,7 @@ def _safe_query_group(value: object) -> dict[str, object] | None:
         or not query_terms
         or keyword_query is None
         or lifecycle not in _QUERY_GROUP_LIFECYCLES
+        or lifecycle != expected_lifecycle
     ):
         return None
     group: dict[str, object] = {
@@ -288,7 +323,7 @@ def _safe_query_group(value: object) -> dict[str, object] | None:
         )
         return group
 
-    execution_status = _safe_detail_text(item.get("executionStatus"), max_length=32)
+    execution_status = _safe_query_text(item.get("executionStatus"), max_length=32)
     attempted = item.get("attempted")
     if execution_status not in _QUERY_EXECUTION_STATUSES or not isinstance(attempted, bool):
         return None
@@ -312,8 +347,8 @@ def _safe_query_executions(value: object) -> list[dict[str, object]]:
         if not isinstance(item, Mapping):
             continue
         entry = {key: raw_value for key, raw_value in item.items() if isinstance(key, str)}
-        source_kind = _safe_detail_text(entry.get("sourceKind"), max_length=80)
-        status = _safe_detail_text(entry.get("status"), max_length=32)
+        source_kind = _safe_query_text(entry.get("sourceKind"), max_length=80)
+        status = _safe_query_text(entry.get("status"), max_length=32)
         if source_kind is None or source_kind in seen_sources or status not in _QUERY_EXECUTION_STATUSES:
             continue
         execution: dict[str, object] = {
@@ -323,7 +358,7 @@ def _safe_query_executions(value: object) -> list[dict[str, object]]:
             "uniqueCandidateCount": _non_negative_int(entry.get("uniqueCandidateCount")) or 0,
             "duplicateCandidateCount": _non_negative_int(entry.get("duplicateCandidateCount")) or 0,
         }
-        safe_reason_code = _safe_reason_code(entry.get("safeReasonCode"))
+        safe_reason_code = safe_runtime_progress_reason_code(entry.get("safeReasonCode"))
         if safe_reason_code is not None:
             execution["safeReasonCode"] = safe_reason_code
         executions.append(execution)
@@ -331,6 +366,30 @@ def _safe_query_executions(value: object) -> list[dict[str, object]]:
         if len(executions) >= 2:
             break
     return executions
+
+
+def _query_group_lifecycle_for_stage(stage: object) -> str | None:
+    return _QUERY_GROUP_LIFECYCLE_BY_STAGE.get(stage) if isinstance(stage, str) else None
+
+
+def _safe_query_terms(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    values: list[str] = []
+    for item in value:
+        text = _safe_query_text(item, max_length=160)
+        if text is not None and text not in values:
+            values.append(text)
+        if len(values) >= 40:
+            break
+    return values
+
+
+def _safe_query_text(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text[:max_length] if text else None
 
 
 def _safe_detail_list(value: object) -> list[str]:
@@ -411,6 +470,9 @@ def _non_negative_int(value: object) -> int | None:
     return None
 
 
-def _safe_reason_code(value: object) -> str | None:
-    text = _safe_detail_text(value, max_length=120)
-    return text if text in _PUBLIC_SOURCE_REASON_CODES else None
+def safe_runtime_progress_reason_code(value: object) -> str | None:
+    text = _safe_query_text(value, max_length=120)
+    if text in _PUBLIC_SOURCE_REASON_CODES:
+        return text
+    mapped = _PUBLIC_REASON_MAP.get(text) if text is not None else None
+    return mapped if mapped in _PUBLIC_SOURCE_REASON_CODES else None

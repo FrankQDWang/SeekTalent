@@ -60,6 +60,10 @@ _PUBLIC_DETAIL_STRING_LIST_KEYS = {
 _PUBLIC_DETAIL_QUERY_GROUP_KEYS = {"queryGroups"}
 _PUBLIC_QUERY_GROUP_LIFECYCLES = {"planned", "executed"}
 _PUBLIC_QUERY_EXECUTION_STATUSES = {"completed", "partial", "blocked", "failed"}
+_PUBLIC_QUERY_GROUP_LIFECYCLE_BY_STAGE = {
+    "round_query": "planned",
+    "feedback": "executed",
+}
 _PUBLIC_SOURCE_REASON_CODES = {
     "job_lease_expired",
     "relay_pending_worker",
@@ -179,6 +183,7 @@ def _validate_public_stage_output_metadata(
 
 def _sanitize_public_stage_output(output: Mapping[str, object]) -> dict[str, object]:
     sanitized: dict[str, object] = {}
+    stage = _text(output.get("stage"))
     for key in _PUBLIC_ALLOWED_KEYS:
         if key not in output:
             continue
@@ -186,9 +191,13 @@ def _sanitize_public_stage_output(output: Mapping[str, object]) -> dict[str, obj
         if key == "counts":
             sanitized[key] = _safe_counts(value)
         elif key == "details":
-            sanitized[key] = _safe_details(value)
+            sanitized[key] = _safe_details(value, stage=stage)
         elif key == "roundNo":
             sanitized[key] = value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+        elif key == "safeReasonCode":
+            safe_reason_code = _safe_reason_code(value)
+            if safe_reason_code is not None or value is None:
+                sanitized[key] = safe_reason_code
         elif isinstance(value, str | int | bool) or value is None:
             sanitized[key] = value
     return sanitized
@@ -206,7 +215,7 @@ def _safe_counts(value: object) -> dict[str, int]:
     return counts
 
 
-def _safe_details(value: object) -> dict[str, object]:
+def _safe_details(value: object, *, stage: str | None) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     details: dict[str, object] = {}
@@ -214,7 +223,9 @@ def _safe_details(value: object) -> dict[str, object]:
         if not isinstance(key, str):
             continue
         if key in _PUBLIC_DETAIL_QUERY_GROUP_KEYS:
-            details[key] = _safe_query_groups(item)
+            groups = _safe_query_groups(item, expected_lifecycle=_query_group_lifecycle_for_stage(stage))
+            if groups:
+                details[key] = groups
         elif key in _PUBLIC_DETAIL_TEXT_KEYS and isinstance(item, str):
             details[key] = item[:2000]
         elif key in _PUBLIC_DETAIL_INT_KEYS and isinstance(item, int) and not isinstance(item, bool) and item >= 0:
@@ -230,13 +241,19 @@ def _safe_details(value: object) -> dict[str, object]:
     return details
 
 
-def _safe_query_groups(value: object) -> list[dict[str, object]]:
+def _safe_query_groups(
+    value: object,
+    *,
+    expected_lifecycle: str | None,
+) -> list[dict[str, object]]:
+    if expected_lifecycle is None:
+        return []
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return []
     groups: list[dict[str, object]] = []
     seen_query_instance_ids: set[str] = set()
     for item in value:
-        group = _safe_query_group(item)
+        group = _safe_query_group(item, expected_lifecycle=expected_lifecycle)
         if group is None:
             continue
         query_instance_id = group.get("queryInstanceId")
@@ -249,7 +266,11 @@ def _safe_query_groups(value: object) -> list[dict[str, object]]:
     return groups
 
 
-def _safe_query_group(value: object) -> dict[str, object] | None:
+def _safe_query_group(
+    value: object,
+    *,
+    expected_lifecycle: str,
+) -> dict[str, object] | None:
     item = _string_object_mapping(value)
     query_instance_id = _text(item.get("queryInstanceId"))
     term_group_key = _text(item.get("termGroupKey"))
@@ -266,6 +287,7 @@ def _safe_query_group(value: object) -> dict[str, object] | None:
         or not query_terms
         or keyword_query is None
         or lifecycle not in _PUBLIC_QUERY_GROUP_LIFECYCLES
+        or lifecycle != expected_lifecycle
     ):
         return None
     group: dict[str, object] = {
@@ -329,6 +351,10 @@ def _safe_query_executions(value: object) -> list[dict[str, object]]:
         if len(executions) >= 2:
             break
     return executions
+
+
+def _query_group_lifecycle_for_stage(stage: str | None) -> str | None:
+    return _PUBLIC_QUERY_GROUP_LIFECYCLE_BY_STAGE.get(stage) if stage is not None else None
 
 
 def _text(*values: object) -> str | None:

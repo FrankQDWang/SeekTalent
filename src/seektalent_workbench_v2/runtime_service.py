@@ -29,7 +29,11 @@ from seektalent_runtime_control.requirements import (
 )
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
-from seektalent_workbench_v2.runtime_display import runtime_event_terminal_summary, safe_runtime_progress_details
+from seektalent_workbench_v2.runtime_display import (
+    runtime_event_terminal_summary,
+    safe_runtime_progress_details,
+    safe_runtime_progress_reason_code,
+)
 
 
 REQUIREMENT_DRAFT_SOURCE = "workbench_v2_agent"
@@ -1391,10 +1395,10 @@ def _progress_payload_from_runtime_event(event: object) -> dict[str, object] | N
     if isinstance(counts, dict):
         payload["counts"] = {str(key): value for key, value in counts.items() if isinstance(value, int)}
     details = public_payload.get("details")
-    safe_details = safe_runtime_progress_details(details)
+    safe_details = safe_runtime_progress_details(details, stage=payload["stage"])
     if safe_details:
         payload["details"] = safe_details
-    safe_reason_code = _payload_text(public_payload.get("safeReasonCode"))
+    safe_reason_code = safe_runtime_progress_reason_code(public_payload.get("safeReasonCode"))
     if safe_reason_code is not None:
         payload["safeReasonCode"] = safe_reason_code
     return payload

@@ -110,6 +110,103 @@ def test_runtime_public_events_publish_one_logical_group_with_two_source_executi
     assert all("safeReasonCode" not in item for item in executed_group["executions"])
 
 
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("queryInstanceId", {"providerUrl": "https://provider.example/private/raw-identity"}),
+        ("termGroupKey", ["https://provider.example/private/raw-identity"]),
+        ("queryRole", {"rawIdentity": "https://provider.example/private/raw-identity"}),
+        ("laneType", ["raw-identity", "https://provider.example/private"]),
+        ("keywordQuery", {"providerUrl": "https://provider.example/private/raw-identity"}),
+        ("lifecycle", ["executed", "https://provider.example/private/raw-identity"]),
+        ("executionStatus", {"providerUrl": "https://provider.example/private/raw-identity"}),
+    ],
+)
+def test_runtime_public_query_group_drops_non_string_required_scalars(field: str, bad_value: object) -> None:
+    secret = "https://provider.example/private/raw-identity"
+    group = _public_query_group(lifecycle="executed")
+    group[field] = bad_value
+
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="feedback",
+        event_seq=1,
+        round_no=1,
+        details={"queryGroups": [group]},
+    )
+
+    assert "queryGroups" not in event["details"]
+    assert secret not in repr(event)
+
+
+def test_runtime_public_query_group_scrubs_non_string_terms_and_execution_scalars() -> None:
+    secret = "https://provider.example/private/raw-identity"
+    group = _public_query_group(lifecycle="executed")
+    group["queryTerms"] = [
+        "safe term",
+        {"providerUrl": secret},
+        ["rawIdentity", secret],
+        7,
+        True,
+    ]
+    group["executions"] = [
+        {
+            "sourceKind": "cts",
+            "status": "completed",
+            "safeReasonCode": {"providerUrl": secret},
+        },
+        {
+            "sourceKind": {"providerUrl": secret},
+            "status": "completed",
+        },
+        {
+            "sourceKind": "liepin",
+            "status": ["completed", secret],
+        },
+    ]
+
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="feedback",
+        event_seq=1,
+        round_no=1,
+        details={"queryGroups": [group]},
+    )
+
+    [sanitized] = event["details"]["queryGroups"]
+    assert sanitized["queryTerms"] == ["safe term"]
+    assert sanitized["executions"] == [
+        {
+            "sourceKind": "cts",
+            "status": "completed",
+            "rawCandidateCount": 0,
+            "uniqueCandidateCount": 0,
+            "duplicateCandidateCount": 0,
+        }
+    ]
+    assert secret not in repr(event)
+
+
+@pytest.mark.parametrize(
+    ("stage", "lifecycle"),
+    [
+        ("round_query", "executed"),
+        ("feedback", "planned"),
+        ("source_result", "planned"),
+    ],
+)
+def test_runtime_public_query_groups_require_the_stage_lifecycle(stage: str, lifecycle: str) -> None:
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage=stage,
+        event_seq=1,
+        round_no=1,
+        details={"queryGroups": [_public_query_group(lifecycle=lifecycle)]},
+    )
+
+    assert "queryGroups" not in event["details"]
+
+
 def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_unavailable() -> None:
     from seektalent.source_adapters import public_source_reason_code
 
@@ -307,6 +404,27 @@ def _runtime_public_event_payloads(progress_events: list[object]) -> list[dict[s
         for event in progress_events
         if event.type == "runtime_public_event" and event.payload.get("schemaVersion") == "runtime_public_event_v1"
     ]
+
+
+def _public_query_group(*, lifecycle: str) -> dict[str, object]:
+    group: dict[str, object] = {
+        "queryInstanceId": "query-1",
+        "termGroupKey": "group-1",
+        "queryRole": "exploit",
+        "laneType": "exploit",
+        "queryTerms": ["safe term"],
+        "keywordQuery": "safe term",
+        "lifecycle": lifecycle,
+        "executionStatus": None,
+        "attempted": False,
+        "rawCandidateCount": 0,
+        "uniqueCandidateCount": 0,
+        "duplicateCandidateCount": 0,
+        "executions": [],
+    }
+    if lifecycle == "executed":
+        group.update(executionStatus="completed", attempted=True)
+    return group
 
 
 def _multi_source_runtime_public_event_payloads(

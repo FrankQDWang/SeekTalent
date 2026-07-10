@@ -89,6 +89,10 @@ _PUBLIC_DETAIL_LIST_KEYS = {
 _PUBLIC_DETAIL_QUERY_GROUP_KEYS = {"queryGroups"}
 _PUBLIC_QUERY_GROUP_LIFECYCLES = {"planned", "executed"}
 _PUBLIC_QUERY_EXECUTION_STATUSES = {"completed", "partial", "blocked", "failed"}
+_PUBLIC_QUERY_GROUP_LIFECYCLE_BY_STAGE = {
+    "round_query": "planned",
+    "feedback": "executed",
+}
 
 
 class RuntimePublicEvent(TypedDict):
@@ -149,7 +153,7 @@ def normalize_runtime_public_event(payload: Mapping[str, object]) -> RuntimePubl
         sourceKind=source_kind,
         status=str(payload.get("status") or "completed"),
         counts=_safe_public_counts(payload.get("counts")),
-        details=_safe_public_details(payload.get("details")),
+        details=_safe_public_details(payload.get("details"), stage=stage),
         safeReasonCode=public_source_reason_code(payload.get("safeReasonCode")),
         createdAt=str(payload.get("createdAt")).strip() if payload.get("createdAt") is not None else None,
     )
@@ -240,7 +244,7 @@ def _safe_public_counts(value: object) -> dict[str, int]:
     return counts
 
 
-def _safe_public_details(value: object) -> dict[str, object]:
+def _safe_public_details(value: object, *, stage: str) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     details: dict[str, object] = {}
@@ -263,17 +267,25 @@ def _safe_public_details(value: object) -> dict[str, object]:
             if values:
                 details[key] = values
         elif key in _PUBLIC_DETAIL_QUERY_GROUP_KEYS:
-            details[key] = _public_query_groups(raw_value)
+            groups = _public_query_groups(raw_value, expected_lifecycle=_query_group_lifecycle_for_stage(stage))
+            if groups:
+                details[key] = groups
     return details
 
 
-def _public_query_groups(value: object) -> list[dict[str, object]]:
+def _public_query_groups(
+    value: object,
+    *,
+    expected_lifecycle: str | None,
+) -> list[dict[str, object]]:
+    if expected_lifecycle is None:
+        return []
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return []
     groups: list[dict[str, object]] = []
     seen_query_instance_ids: set[str] = set()
     for item in value:
-        group = _public_query_group(item)
+        group = _public_query_group(item, expected_lifecycle=expected_lifecycle)
         if group is None:
             continue
         query_instance_id = group.get("queryInstanceId")
@@ -286,15 +298,19 @@ def _public_query_groups(value: object) -> list[dict[str, object]]:
     return groups
 
 
-def _public_query_group(value: object) -> dict[str, object] | None:
+def _public_query_group(
+    value: object,
+    *,
+    expected_lifecycle: str,
+) -> dict[str, object] | None:
     item = _string_key_mapping(value)
-    query_instance_id = _public_detail_text(item.get("queryInstanceId"), max_length=160)
-    term_group_key = _public_detail_text(item.get("termGroupKey"), max_length=160)
-    query_role = _public_detail_text(item.get("queryRole"), max_length=80)
-    lane_type = _public_detail_text(item.get("laneType"), max_length=80)
-    query_terms = _public_detail_list(item.get("queryTerms"))
-    keyword_query = _public_detail_text(item.get("keywordQuery"), max_length=2000)
-    lifecycle = _public_detail_text(item.get("lifecycle"), max_length=32)
+    query_instance_id = _public_query_text(item.get("queryInstanceId"), max_length=160)
+    term_group_key = _public_query_text(item.get("termGroupKey"), max_length=160)
+    query_role = _public_query_text(item.get("queryRole"), max_length=80)
+    lane_type = _public_query_text(item.get("laneType"), max_length=80)
+    query_terms = _public_query_terms(item.get("queryTerms"))
+    keyword_query = _public_query_text(item.get("keywordQuery"), max_length=2000)
+    lifecycle = _public_query_text(item.get("lifecycle"), max_length=32)
     if (
         query_instance_id is None
         or term_group_key is None
@@ -303,6 +319,7 @@ def _public_query_group(value: object) -> dict[str, object] | None:
         or not query_terms
         or keyword_query is None
         or lifecycle not in _PUBLIC_QUERY_GROUP_LIFECYCLES
+        or lifecycle != expected_lifecycle
     ):
         return None
     group: dict[str, object] = {
@@ -325,7 +342,7 @@ def _public_query_group(value: object) -> dict[str, object] | None:
         )
         return group
 
-    execution_status = _public_detail_text(item.get("executionStatus"), max_length=32)
+    execution_status = _public_query_text(item.get("executionStatus"), max_length=32)
     attempted = item.get("attempted")
     if execution_status not in _PUBLIC_QUERY_EXECUTION_STATUSES or not isinstance(attempted, bool):
         return None
@@ -347,8 +364,8 @@ def _public_query_executions(value: object) -> list[dict[str, object]]:
     seen_sources: set[str] = set()
     for item in value:
         entry = _string_key_mapping(item)
-        source_kind = _public_detail_text(entry.get("sourceKind"), max_length=80)
-        status = _public_detail_text(entry.get("status"), max_length=32)
+        source_kind = _public_query_text(entry.get("sourceKind"), max_length=80)
+        status = _public_query_text(entry.get("status"), max_length=32)
         if source_kind is None or source_kind in seen_sources or status not in _PUBLIC_QUERY_EXECUTION_STATUSES:
             continue
         execution: dict[str, object] = {
@@ -358,7 +375,7 @@ def _public_query_executions(value: object) -> list[dict[str, object]]:
             "uniqueCandidateCount": _optional_non_negative_int(entry.get("uniqueCandidateCount")) or 0,
             "duplicateCandidateCount": _optional_non_negative_int(entry.get("duplicateCandidateCount")) or 0,
         }
-        safe_reason_code = public_source_reason_code(entry.get("safeReasonCode"))
+        safe_reason_code = public_source_reason_code(_public_query_text(entry.get("safeReasonCode"), max_length=120))
         if safe_reason_code is not None:
             execution["safeReasonCode"] = safe_reason_code
         executions.append(execution)
@@ -372,6 +389,30 @@ def _string_key_mapping(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     return {key: item for key, item in value.items() if isinstance(key, str)}
+
+
+def _query_group_lifecycle_for_stage(stage: str) -> str | None:
+    return _PUBLIC_QUERY_GROUP_LIFECYCLE_BY_STAGE.get(stage)
+
+
+def _public_query_terms(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return []
+    values: list[str] = []
+    for item in value:
+        text = _public_query_text(item, max_length=160)
+        if text is not None and text not in values:
+            values.append(text)
+        if len(values) >= 40:
+            break
+    return values
+
+
+def _public_query_text(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text[:max_length] if text else None
 
 
 def _public_detail_list(value: object) -> list[str]:

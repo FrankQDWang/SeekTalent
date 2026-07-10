@@ -915,12 +915,92 @@ def test_public_stage_output_v2_keeps_only_safe_logical_query_group_fields() -> 
     }
 
 
+@pytest.mark.parametrize(
+    ("stage", "lifecycle", "expected_group_count"),
+    [
+        ("round_query", "planned", 1),
+        ("feedback", "executed", 1),
+        ("round_query", "executed", 0),
+        ("feedback", "planned", 0),
+        ("source_result", "planned", 0),
+    ],
+)
+def test_public_stage_output_v2_enforces_query_group_stage_lifecycle(
+    stage: str,
+    lifecycle: str,
+    expected_group_count: int,
+) -> None:
+    from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+
+    output = sanitize_stage_output_payload(
+        output_kind=f"runtime_public_{stage}",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "publicEventSchemaVersion": "runtime_public_event_v1",
+            "stage": stage,
+            "roundNo": 1,
+            "sourceKind": None,
+            "status": "completed",
+            "counts": {},
+            "details": {"queryGroups": [_stage_query_group(lifecycle=lifecycle)]},
+            "safeReasonCode": None,
+        },
+        stage=stage,
+        round_no=1,
+        node_id=None,
+    )
+
+    assert len(output.get("details", {}).get("queryGroups", [])) == expected_group_count
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "expected_reason_code"),
+    [
+        ("blocked_backend_unavailable", "source_browser_backend_unavailable"),
+        ("Bearer private-token", None),
+        ("unknown_private_reason", None),
+    ],
+)
+def test_public_stage_output_v2_maps_or_drops_top_level_safe_reason_code(
+    reason_code: str,
+    expected_reason_code: str | None,
+) -> None:
+    from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+
+    output = sanitize_stage_output_payload(
+        output_kind="runtime_public_source_result",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "publicEventSchemaVersion": "runtime_public_event_v1",
+            "stage": "source_result",
+            "roundNo": 1,
+            "sourceKind": None,
+            "status": "blocked",
+            "counts": {},
+            "details": {},
+            "safeReasonCode": reason_code,
+        },
+        stage="source_result",
+        round_no=1,
+        node_id=None,
+    )
+
+    assert output.get("safeReasonCode") == expected_reason_code
+    assert "Bearer private-token" not in repr(output)
+    assert "unknown_private_reason" not in repr(output)
+
+
 def test_stage_output_reason_mapping_matches_runtime_public_event_contract() -> None:
     from seektalent.runtime import public_events as runtime_public_events
     from seektalent_runtime_control import stage_outputs
+    from seektalent_workbench_v2 import runtime_display
 
     assert stage_outputs._PUBLIC_SOURCE_REASON_CODES == runtime_public_events.PUBLIC_SOURCE_REASON_CODES
     assert stage_outputs._PUBLIC_REASON_MAP == runtime_public_events._PUBLIC_REASON_MAP
+    assert runtime_display._PUBLIC_SOURCE_REASON_CODES == runtime_public_events.PUBLIC_SOURCE_REASON_CODES
+    assert runtime_display._PUBLIC_REASON_MAP == runtime_public_events._PUBLIC_REASON_MAP
 
     reason_codes = [
         None,
@@ -931,6 +1011,36 @@ def test_stage_output_reason_mapping_matches_runtime_public_event_contract() -> 
     assert [stage_outputs._safe_reason_code(reason) for reason in reason_codes] == [
         runtime_public_events.public_source_reason_code(reason) for reason in reason_codes
     ]
+    assert [runtime_display.safe_runtime_progress_reason_code(reason) for reason in reason_codes] == [
+        runtime_public_events.public_source_reason_code(reason) for reason in reason_codes
+    ]
+    assert [
+        runtime_display.normalize_runtime_progress_payload({"stage": "source_result", "safeReasonCode": reason}).get(
+            "safeReasonCode"
+        )
+        for reason in reason_codes
+    ] == [runtime_public_events.public_source_reason_code(reason) for reason in reason_codes]
+
+
+def _stage_query_group(*, lifecycle: str) -> dict[str, object]:
+    group: dict[str, object] = {
+        "queryInstanceId": "query-1",
+        "termGroupKey": "group-1",
+        "queryRole": "exploit",
+        "laneType": "exploit",
+        "queryTerms": ["AI agent"],
+        "keywordQuery": "AI agent",
+        "lifecycle": lifecycle,
+        "executionStatus": None,
+        "attempted": False,
+        "rawCandidateCount": 0,
+        "uniqueCandidateCount": 0,
+        "duplicateCandidateCount": 0,
+        "executions": [],
+    }
+    if lifecycle == "executed":
+        group.update(executionStatus="completed", attempted=True)
+    return group
 
 
 @pytest.mark.parametrize(
