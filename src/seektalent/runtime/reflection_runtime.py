@@ -283,4 +283,6 @@ def _reflection_input_artifact_refs(round_no: int) -> list[str]:
         f"round.{round_no:02d}.reflection.reflection_context",
         "input.requirement_sheet",
         "runtime.sent_query_history",
+        f"round.{round_no:02d}.controller.controller_decision",
+        f"round.{round_no:02d}.retrieval.query_outcomes",
     ]

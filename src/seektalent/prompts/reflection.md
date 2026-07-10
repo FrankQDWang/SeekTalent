@@ -21,6 +21,7 @@ Review whether the next round should consider adjusted query terms or non-locati
 - `suggest_stop` is advisory only. Runtime/controller own the final stop decision.
 - Your advice does not mutate the term pool. Controller/runtime decide whether to adopt it in a subsequent step.
 - Work from full `JD`, full `notes`, `RequirementSheet`, retrieval outcome, and sent query history.
+- Evaluate the controller's rationale and response to the prior reflection against QUERY OUTCOMES. Cite only query role, lane, status, and safe aggregate counts. Do not infer facts not present in those outcomes.
 - `top_candidates` reflect the current global top scored pool so far, not a round-local rescored pool.
 - Treat `primary_role_anchor` as the fixed title direction. Do not suggest deleting, replacing, or inventing it.
 - Do not suggest activating, keeping, deprioritizing, or dropping `secondary_title_anchor`; it is a round-1-only title pairing term and reflection advice is only used by later rounds.

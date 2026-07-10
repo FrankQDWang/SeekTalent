@@ -17,6 +17,7 @@ from seektalent.models import (
     ControllerDecision,
     FinalResult,
     FinalizeContext,
+    LogicalQueryOutcome,
     LocationExecutionPhase,
     QueryOutcomeClassification,
     QueryOutcomeThresholds,
@@ -318,6 +319,10 @@ def slim_reflection_context(
         "query_term_pool": [item.model_dump(mode="json") for item in context.query_term_pool],
         "current_retrieval_plan": context.current_retrieval_plan.model_dump(mode="json"),
         "search_observation": context.search_observation.model_dump(mode="json"),
+        "controller_decision": (
+            context.controller_decision.model_dump(mode="json") if context.controller_decision is not None else None
+        ),
+        "query_outcomes": [_slim_query_outcome(item) for item in context.query_outcomes[:2]],
         "search_attempts": [slim_search_attempt(item) for item in context.search_attempts],
         "top_candidates": [
             slim_scored_candidate(candidate, rank=index)
@@ -329,6 +334,19 @@ def slim_reflection_context(
         ],
         "scoring_failures": [item.model_dump(mode="json") for item in context.scoring_failures],
         "sent_query_count": len(context.sent_query_history),
+    }
+
+
+def _slim_query_outcome(outcome: LogicalQueryOutcome) -> dict[str, object]:
+    return {
+        "query_instance_id": outcome.query_instance_id,
+        "query_role": outcome.query_role,
+        "lane_type": outcome.lane_type,
+        "status": outcome.status,
+        "attempted": outcome.attempted,
+        "raw_candidate_count": outcome.raw_candidate_count,
+        "unique_candidate_count": outcome.unique_candidate_count,
+        "duplicate_candidate_count": outcome.duplicate_candidate_count,
     }
 
 

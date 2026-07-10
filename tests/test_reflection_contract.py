@@ -141,6 +141,14 @@ def test_reflection_prompt_requires_untried_term_stop_discipline() -> None:
     assert "Do not dismiss unused concrete terms as unlikely without first trying them" in prompt
 
 
+def test_reflection_prompt_requires_query_outcome_evidence_discipline() -> None:
+    prompt = Path("src/seektalent/prompts/reflection.md").read_text(encoding="utf-8")
+
+    assert "Evaluate the controller's rationale and response to the prior reflection against QUERY OUTCOMES." in prompt
+    assert "Cite only query role, lane, status, and safe aggregate counts." in prompt
+    assert "Do not infer facts not present in those outcomes." in prompt
+
+
 def test_reflection_advice_draft_rejects_removed_rationale_field() -> None:
     with pytest.raises(ValidationError):
         ReflectionAdviceDraft.model_validate(

@@ -19,7 +19,11 @@ from seektalent.models import (
     unique_strings,
 )
 from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS, PROTECTED_ATTRIBUTE_FILTER_ADVICE_TEXT
-from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
+from seektalent.prompt_safety import (
+    render_template_version_block,
+    render_untrusted_json_block,
+    render_untrusted_text_block,
+)
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_reflection_draft, unpack_repair_result
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
@@ -154,6 +158,22 @@ def _candidate_line(candidate, rank: int) -> str:  # noqa: ANN001
     )
 
 
+def _safe_query_outcomes(context: ReflectionContext) -> list[dict[str, object]]:
+    return [
+        {
+            "query_instance_id": outcome.query_instance_id,
+            "query_role": outcome.query_role,
+            "lane_type": outcome.lane_type,
+            "status": outcome.status,
+            "attempted": outcome.attempted,
+            "raw_candidate_count": outcome.raw_candidate_count,
+            "unique_candidate_count": outcome.unique_candidate_count,
+            "duplicate_candidate_count": outcome.duplicate_candidate_count,
+        }
+        for outcome in context.query_outcomes[:2]
+    ]
+
+
 def render_reflection_prompt(context: ReflectionContext) -> str:
     plan = context.current_retrieval_plan
     observation = context.search_observation
@@ -208,6 +228,9 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
         f"- Projected provider filters: {plan.projected_provider_filters or {}}\n"
         f"- Rationale: {plan.rationale}"
     )
+    controller_decision = (
+        context.controller_decision.model_dump(mode="json") if context.controller_decision is not None else None
+    )
     return "\n\n".join(
         [
             render_template_version_block("reflection"),
@@ -220,6 +243,9 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
             "TERM BANK\n" + render_untrusted_text_block("TERM_BANK", _term_bank_rows(context)),
             "ROUND RESULT\n" + render_untrusted_text_block("ROUND_RESULT_TEXT", round_result_text),
             "CURRENT QUERY\n" + render_untrusted_text_block("CURRENT_QUERY_TEXT", current_query_text),
+            "CONTROLLER DECISION\n"
+            + render_untrusted_json_block("CONTROLLER_DECISION", controller_decision),
+            "QUERY OUTCOMES\n" + render_untrusted_json_block("QUERY_OUTCOMES", _safe_query_outcomes(context)),
             "SEARCH ATTEMPTS\n"
             + render_untrusted_text_block("SEARCH_ATTEMPTS", "\n".join(attempts) if attempts else "- (none)"),
             "SENT QUERY HISTORY\n"

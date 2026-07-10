@@ -13,10 +13,13 @@ from seektalent.models import (
     GenderRequirement,
     HardConstraintSlots,
     InputTruth,
+    LogicalQueryOutcome,
     LocationExecutionPlan,
     NormalizedExperience,
     NormalizedResume,
     PreferenceSlots,
+    ProposedFilterPlan,
+    QueryExecutionReceipt,
     QueryTermCandidate,
     ReflectionFilterAdvice,
     ReflectionKeywordAdvice,
@@ -30,6 +33,7 @@ from seektalent.models import (
     ScoringContext,
     ScoringFailure,
     ScoringPolicy,
+    SearchControllerDecision,
     SearchAttempt,
     SearchObservation,
     SearchObservationView,
@@ -319,6 +323,109 @@ def test_controller_prompt_says_few_shot_terms_are_not_reusable() -> None:
     assert "decision_rationale should be a concise audit summary within schema budget" in prompt
 
 
+def _reflection_context_for_query_evidence() -> ReflectionContext:
+    sheet = _requirement_sheet()
+    return ReflectionContext(
+        round_no=2,
+        full_jd="JD text",
+        full_notes="Notes text",
+        requirement_sheet=sheet,
+        current_retrieval_plan=RoundRetrievalPlan(
+            plan_version=2,
+            round_no=2,
+            query_terms=["python", "retrieval"],
+            keyword_query='python "retrieval"',
+            projected_provider_filters={},
+            runtime_only_constraints=[],
+            location_execution_plan=LocationExecutionPlan(
+                mode="single",
+                allowed_locations=["上海市"],
+                preferred_locations=[],
+                priority_order=[],
+                balanced_order=["上海市"],
+                rotation_offset=0,
+                target_new=10,
+            ),
+            target_new=10,
+            rationale="Search Python retrieval.",
+        ),
+        search_observation=SearchObservation(
+            round_no=2,
+            requested_count=10,
+            raw_candidate_count=3,
+            unique_new_count=2,
+            shortage_count=8,
+            fetch_attempt_count=1,
+        ),
+        query_term_pool=sheet.initial_query_term_pool,
+    )
+
+
+def test_reflection_prompt_renders_safe_controller_and_query_evidence() -> None:
+    context = _reflection_context_for_query_evidence().model_copy(
+        update={
+            "controller_decision": SearchControllerDecision(
+                thought_summary="Continue the role-focused search.",
+                action="search_cts",
+                decision_rationale="Retain the role anchor and test retrieval.",
+                response_to_reflection="Kept the role anchor; changed the support skill.",
+                proposed_query_terms=["python", "retrieval"],
+                proposed_filter_plan=ProposedFilterPlan(),
+            ),
+            "query_outcomes": [
+                LogicalQueryOutcome(
+                    query_instance_id="primary-2",
+                    term_group_key="group-primary-2",
+                    query_role="exploit",
+                    lane_type="exploit",
+                    query_terms=["python", "retrieval"],
+                    keyword_query='python "retrieval"',
+                    attempted=True,
+                    status="completed",
+                    raw_candidate_count=3,
+                    unique_candidate_count=2,
+                    duplicate_candidate_count=1,
+                    receipts=[
+                        QueryExecutionReceipt(
+                            round_no=2,
+                            source_kind="liepin",
+                            query_instance_id="primary-2",
+                            query_fingerprint="provider-fingerprint",
+                            term_group_key="group-primary-2",
+                            query_role="exploit",
+                            lane_type="exploit",
+                            query_terms=["python", "retrieval"],
+                            keyword_query='python "retrieval"',
+                            requested_count=10,
+                            source_plan_version="v2",
+                            status="completed",
+                            dispatch_started=True,
+                            safe_reason_code="provider_payload https://h.liepin.com/candidate-42",
+                        )
+                    ],
+                )
+            ],
+        }
+    )
+
+    prompt = render_reflection_prompt(context)
+    query_outcomes_start = prompt.index('UNTRUSTED DATA "QUERY_OUTCOMES"')
+    query_outcomes_end = prompt.index("END_SEEKTALENT_UNTRUSTED_QUERY_OUTCOMES", query_outcomes_start)
+    query_outcomes_block = prompt[query_outcomes_start:query_outcomes_end]
+
+    assert "CONTROLLER DECISION" in prompt
+    assert 'UNTRUSTED DATA "CONTROLLER_DECISION"' in prompt
+    assert "QUERY OUTCOMES" in prompt
+    assert 'UNTRUSTED DATA "QUERY_OUTCOMES"' in prompt
+    assert '"raw_candidate_count":3' in query_outcomes_block
+    assert "candidate-42" not in query_outcomes_block
+    assert "https://h.liepin.com" not in query_outcomes_block
+    assert "provider_payload" not in query_outcomes_block
+    assert '"receipts"' not in query_outcomes_block
+    assert '"source_kind"' not in query_outcomes_block
+    assert_prompt_snapshot_safe(prompt)
+
+
 def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     sheet = _requirement_sheet()
     runtime_term_pool = [
@@ -433,6 +540,11 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     assert 'UNTRUSTED DATA "DROPPED_CANDIDATES"' in prompt
     assert 'UNTRUSTED DATA "SCORING_FAILURES"' in prompt
     assert 'UNTRUSTED DATA "UNTRIED_ADMITTED_TERMS"' in prompt
+    assert 'UNTRUSTED DATA "CONTROLLER_DECISION"' in prompt
+    assert 'UNTRUSTED DATA "QUERY_OUTCOMES"' in prompt
+    controller_decision_start = prompt.index('UNTRUSTED DATA "CONTROLLER_DECISION"')
+    controller_decision_end = prompt.index("END_SEEKTALENT_UNTRUSTED_CONTROLLER_DECISION", controller_decision_start)
+    assert "null" in prompt[controller_decision_start:controller_decision_end]
     assert "reflection_rationale" not in prompt
     assert "ROUND RESULT" in prompt
     assert "CURRENT QUERY" in prompt

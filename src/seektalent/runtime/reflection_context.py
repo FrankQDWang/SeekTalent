@@ -26,4 +26,6 @@ def build_reflection_context(
         sent_query_history=run_state.retrieval_state.sent_query_history,
         query_term_pool=run_state.retrieval_state.query_term_pool,
         canonical_intake_summary=run_state.latest_canonical_intake_summary,
+        controller_decision=round_state.controller_decision,
+        query_outcomes=round_state.query_outcomes[:2],
     )

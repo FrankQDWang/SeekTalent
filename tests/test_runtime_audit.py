@@ -2033,6 +2033,10 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert controller_context["budget"]["is_final_allowed_round"] is True
     assert "top_candidates" in reflection_context
     assert reflection_context["query_term_pool"][0]["term"] == "python"
+    assert reflection_context["controller_decision"] == controller_decision
+    assert reflection_context["query_outcomes"]
+    assert "receipts" not in reflection_context["query_outcomes"][0]
+    assert "source_kind" not in reflection_context["query_outcomes"][0]
     assert "full_jd" not in reflection_context
     assert "full_notes" not in reflection_context
     assert all("evidence" not in item for item in reflection_context["top_candidates"])
@@ -2082,6 +2086,8 @@ def test_runtime_writes_v02_audit_outputs(tmp_path: Path, monkeypatch) -> None:
     assert "round=1" in reflection_call["input_summary"]
     assert "No reflection changes." in reflection_call["output_summary"]
     assert "round.01.reflection.reflection_context" in reflection_call["input_artifact_refs"]
+    assert "round.01.controller.controller_decision" in reflection_call["input_artifact_refs"]
+    assert "round.01.retrieval.query_outcomes" in reflection_call["input_artifact_refs"]
     assert "round.01.reflection.reflection_advice" in reflection_call["output_artifact_refs"]
     assert reflection_call["retries"] == 0
     assert reflection_call["output_retries"] == 2

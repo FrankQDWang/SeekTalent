@@ -579,6 +579,38 @@ def test_controller_prompt_uses_started_receipts_not_sent_query_history() -> Non
     assert "SENT QUERY HISTORY" not in prompt
 
 
+def test_reflection_context_keeps_current_decision_and_only_two_query_outcomes() -> None:
+    run_state = _run_state_for_stop_gate(
+        candidates=[_scored_candidate("resume-1", round_no=1)],
+        completed_rounds=1,
+        include_untried_family=True,
+    )
+    round_state = run_state.round_history[0]
+    round_state.controller_decision = round_state.controller_decision.model_copy(
+        update={"response_to_reflection": "Kept the role anchor; changed the support skill."}
+    )
+    round_state.query_outcomes = [
+        LogicalQueryOutcome(
+            query_instance_id=query_instance_id,
+            term_group_key=f"group-{index}",
+            query_role="exploit" if index == 1 else "explore",
+            lane_type="exploit" if index == 1 else "generic_explore",
+            query_terms=["python", f"support-{index}"],
+            keyword_query=f"python support-{index}",
+            attempted=True,
+            status="completed",
+            raw_candidate_count=index,
+        )
+        for index, query_instance_id in enumerate(["primary-2", "explore-2", "third-2"], start=1)
+    ]
+
+    context = build_reflection_context_direct(run_state=run_state, round_state=round_state)
+
+    assert context.controller_decision is not None
+    assert context.controller_decision.response_to_reflection == "Kept the role anchor; changed the support skill."
+    assert [outcome.query_instance_id for outcome in context.query_outcomes] == ["primary-2", "explore-2"]
+
+
 def test_split_modules_build_scoring_reflection_and_finalize_contexts() -> None:
     run_state = _run_state_for_stop_gate(
         candidates=[
