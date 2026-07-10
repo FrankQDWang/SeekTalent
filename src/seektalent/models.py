@@ -1452,6 +1452,14 @@ class RoundState(BaseModel):
         return self.executed_queries
 
 
+class RuntimeDetailOpenClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["claimed", "opened", "terminal_failed"]
+    browser_open_attempt_count: int = Field(default=0, ge=0)
+    last_safe_reason_code: str | None = None
+
+
 class RuntimeIdentitySignals(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1774,6 +1782,9 @@ class RunState(BaseModel):
     latest_canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
     finalization_revisions: list[RuntimeFinalizationRevision] = Field(default_factory=list)
     runtime_source_lane_results: list[dict[str, Any]] = Field(default_factory=list)
+    detail_open_claims_by_provider_key: dict[str, RuntimeDetailOpenClaim] = Field(
+        default_factory=dict
+    )
     scorecards_by_resume_id: dict[str, ScoredCandidate] = Field(default_factory=dict)
     top_pool_ids: list[str] = Field(default_factory=list)
     round_history: list[RoundState] = Field(default_factory=list)

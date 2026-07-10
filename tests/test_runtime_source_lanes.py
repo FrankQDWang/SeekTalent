@@ -15,6 +15,7 @@ from seektalent.models import (
     ResumeCandidate,
     RetrievalState,
     RuntimeFinalizationRevision,
+    RuntimeDetailOpenClaim,
     RuntimeIdentitySignals,
     RunState,
     RuntimeSourceCoverageSummary,
@@ -2179,3 +2180,25 @@ def test_runtime_source_lane_request_public_payload_excludes_callbacks_and_secre
     assert payload["approved_detail_lease_ref"] == "lease-1"
     assert "progress_callback" not in payload
     assert "secret-ref" not in repr(payload)
+
+
+def test_run_state_roundtrip_preserves_detail_open_claims() -> None:
+    state = _run_state()
+    state.detail_open_claims_by_provider_key["opaque-key"] = RuntimeDetailOpenClaim(
+        status="opened",
+        browser_open_attempt_count=1,
+    )
+
+    restored = RunState.model_validate_json(state.model_dump_json())
+
+    assert restored.detail_open_claims_by_provider_key["opaque-key"].status == "opened"
+    assert restored.detail_open_claims_by_provider_key["opaque-key"].browser_open_attempt_count == 1
+
+
+def test_run_state_legacy_payload_defaults_detail_open_claims() -> None:
+    payload = _run_state().model_dump(mode="json")
+    del payload["detail_open_claims_by_provider_key"]
+
+    restored = RunState.model_validate(payload)
+
+    assert restored.detail_open_claims_by_provider_key == {}
