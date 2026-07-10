@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+import textwrap
+
 from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
 
 
@@ -155,6 +160,50 @@ def test_workflow_steps_keeps_normal_finalize_count_shape_without_private_outcom
     )
 
     assert steps[-1]["safe_counts"] == {"resumes_returned": 1}
+
+
+def test_normal_workflow_safe_count_order_matches_base_allowlist_across_hash_seeds() -> None:
+    script = textwrap.dedent(
+        """
+        from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
+
+        base_safe_count_keys = {
+            "cached_detail_urls",
+            "cards_seen",
+            "resumes_returned",
+            "target_resumes",
+            "visible_cards",
+            "attempts",
+        }
+        event = {
+            "action_kind": "visible_cards_observed",
+            "cached_detail_urls": 1,
+            "cards_seen": 2,
+            "resumes_returned": 3,
+            "target_resumes": 4,
+            "visible_cards": 5,
+            "attempts": 6,
+        }
+        actual = workflow_steps_from_action_events(
+            [event],
+            final_status="succeeded",
+            resumes_returned=0,
+            action_trace_ref=None,
+        )[0]["safe_counts"]
+        expected = {key: event[key] for key in base_safe_count_keys}
+        assert tuple(actual) == tuple(expected), (tuple(actual), tuple(expected))
+        """
+    )
+
+    for hash_seed in ("0", "1"):
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            check=False,
+            capture_output=True,
+            env={**os.environ, "PYTHONHASHSEED": hash_seed},
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
 
 
 def test_workflow_steps_from_action_events_maps_native_filter_verification() -> None:
