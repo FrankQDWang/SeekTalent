@@ -143,6 +143,41 @@ class LiepinSearchWorkflow:
         if request.target_resumes < 1 or request.target_resumes > 10:
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
 
+        detail_claim_outcomes = (
+            {
+                "detail_claim_granted_count": 0,
+                "detail_opened_count": 0,
+                "detail_open_skipped_seen_count": 0,
+                "detail_open_terminal_failure_count": 0,
+            }
+            if detail_open_claim_context is not None
+            else None
+        )
+        detail_claim_outcomes_emitted = False
+
+        def emit_detail_claim_outcomes() -> None:
+            nonlocal detail_claim_outcomes_emitted
+            if detail_claim_outcomes is None or detail_claim_outcomes_emitted:
+                return
+            self._append_event(
+                request.source_run_id,
+                {"action_kind": "detail_claim_outcomes", **detail_claim_outcomes},
+            )
+            detail_claim_outcomes_emitted = True
+
+        def record_detail_open_claim_terminal_failure(
+            *,
+            provider_candidate_key_hash: str | None,
+            safe_reason_code: str,
+        ) -> None:
+            if self._finish_detail_open_claim_after_failure(
+                detail_open_claim_context=detail_open_claim_context,
+                provider_candidate_key_hash=provider_candidate_key_hash,
+                safe_reason_code=safe_reason_code,
+            ):
+                assert detail_claim_outcomes is not None
+                detail_claim_outcomes["detail_open_terminal_failure_count"] += 1
+
         self._append_event(
             request.source_run_id,
             {"action_kind": "search_cards_started", "route_kind": "search", "ok": True},
@@ -182,6 +217,7 @@ class LiepinSearchWorkflow:
                 },
             )
         if not cards_succeeded:
+            emit_detail_claim_outcomes()
             return self._site.blocked_resumes_envelope(
                 source_run_id=request.source_run_id,
                 query=request.query,
@@ -195,6 +231,7 @@ class LiepinSearchWorkflow:
             action_kind="extract_structured_cards",
         )
         if not structured_cards.ok:
+            emit_detail_claim_outcomes()
             return self._site.blocked_resumes_envelope(
                 source_run_id=request.source_run_id,
                 query=request.query,
@@ -289,7 +326,11 @@ class LiepinSearchWorkflow:
                     last_detail_safe_reason = "liepin_opencli_candidate_identity_missing"
                     continue
                 if not detail_open_claim_context.detail_open_claim_ledger.try_claim(provider_candidate_key_hash):
+                    assert detail_claim_outcomes is not None
+                    detail_claim_outcomes["detail_open_skipped_seen_count"] += 1
                     continue
+                assert detail_claim_outcomes is not None
+                detail_claim_outcomes["detail_claim_granted_count"] += 1
 
                 def record_browser_open_attempt() -> None:
                     detail_open_claim_context.detail_open_claim_ledger.record_browser_open_attempt(
@@ -309,8 +350,7 @@ class LiepinSearchWorkflow:
                 )
                 if not open_result.ok:
                     last_detail_safe_reason = open_result.safe_reason_code or "liepin_opencli_detail_not_opened"
-                    self._finish_detail_open_claim_after_failure(
-                        detail_open_claim_context=detail_open_claim_context,
+                    record_detail_open_claim_terminal_failure(
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
                     )
@@ -322,8 +362,7 @@ class LiepinSearchWorkflow:
                 )
                 if not wait_result.ok:
                     last_detail_safe_reason = wait_result.safe_reason_code or "liepin_opencli_detail_not_opened"
-                    self._finish_detail_open_claim_after_failure(
-                        detail_open_claim_context=detail_open_claim_context,
+                    record_detail_open_claim_terminal_failure(
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
                     )
@@ -337,8 +376,7 @@ class LiepinSearchWorkflow:
                 )
                 if not capture_result.ok:
                     last_detail_safe_reason = capture_result.safe_reason_code or "liepin_opencli_detail_not_opened"
-                    self._finish_detail_open_claim_after_failure(
-                        detail_open_claim_context=detail_open_claim_context,
+                    record_detail_open_claim_terminal_failure(
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
                     )
@@ -346,9 +384,10 @@ class LiepinSearchWorkflow:
                 if provider_candidate_key_hash is not None:
                     assert detail_open_claim_context is not None
                     detail_open_claim_context.detail_open_claim_ledger.mark_opened(provider_candidate_key_hash)
+                    assert detail_claim_outcomes is not None
+                    detail_claim_outcomes["detail_opened_count"] += 1
             except Exception as exc:
-                self._finish_detail_open_claim_after_failure(
-                    detail_open_claim_context=detail_open_claim_context,
+                record_detail_open_claim_terminal_failure(
                     provider_candidate_key_hash=provider_candidate_key_hash,
                     safe_reason_code=(
                         exc.safe_reason_code
@@ -408,6 +447,7 @@ class LiepinSearchWorkflow:
             )
 
         if opened == 0:
+            emit_detail_claim_outcomes()
             return self._site.blocked_resumes_envelope(
                 source_run_id=request.source_run_id,
                 query=request.query,
@@ -426,6 +466,7 @@ class LiepinSearchWorkflow:
                     "visible_cards": len(card_items),
                 },
             )
+        emit_detail_claim_outcomes()
         return self._site.finalize_liepin_resumes(
             source_run_id=request.source_run_id,
             query=request.query,
@@ -828,17 +869,18 @@ class LiepinSearchWorkflow:
         detail_open_claim_context: DetailOpenClaimSearchContext | None,
         provider_candidate_key_hash: str | None,
         safe_reason_code: str,
-    ) -> None:
+    ) -> bool:
         if detail_open_claim_context is None or provider_candidate_key_hash is None:
-            return
+            return False
         ledger = detail_open_claim_context.detail_open_claim_ledger
         if ledger.has_browser_open_attempt(provider_candidate_key_hash):
             ledger.mark_terminal_failed(
                 provider_candidate_key_hash,
                 safe_reason_code=safe_reason_code,
             )
-            return
+            return True
         ledger.release_unattempted(provider_candidate_key_hash)
+        return False
 
     def _restore_search_transition(self, *, source_run_id: str, rank: int) -> str | None:
         restored_page_id: str | None = None

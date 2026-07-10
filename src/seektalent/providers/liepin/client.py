@@ -647,6 +647,10 @@ _SAFE_WORKFLOW_STATUSES = {"running", "completed", "partial", "blocked", "failed
 _SAFE_WORKFLOW_COUNT_KEYS = {
     "cards_seen",
     "cached_detail_urls",
+    "detail_claim_granted_count",
+    "detail_open_terminal_failure_count",
+    "detail_open_skipped_seen_count",
+    "detail_opened_count",
     "details_opened",
     "resumes_returned",
     "target_resumes",

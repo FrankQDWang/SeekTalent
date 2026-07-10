@@ -43,10 +43,20 @@ _ACTION_TO_STEP_EVENT: dict[str, tuple[str, str, str]] = {
 _SAFE_COUNT_KEYS = {
     "cached_detail_urls",
     "cards_seen",
+    "detail_claim_granted_count",
+    "detail_open_terminal_failure_count",
+    "detail_open_skipped_seen_count",
+    "detail_opened_count",
     "resumes_returned",
     "target_resumes",
     "visible_cards",
     "attempts",
+}
+_DETAIL_CLAIM_OUTCOME_COUNT_KEYS = {
+    "detail_claim_granted_count",
+    "detail_open_terminal_failure_count",
+    "detail_open_skipped_seen_count",
+    "detail_opened_count",
 }
 _SAFE_METADATA_KEYS = {"rank", "open_mode", "attempt", "next_attempt"}
 _SENSITIVE_TEXT = re.compile(r"(?:cookie|secret|token|password|authorization|bearer|raw_resume|provider_id)", re.I)
@@ -86,11 +96,16 @@ def workflow_steps_from_action_events(
         steps.append(step)
 
     final_completed = final_status == "succeeded"
+    final_safe_counts = {"resumes_returned": max(0, resumes_returned)}
+    for event in reversed(events):
+        if event.get("action_kind") == "detail_claim_outcomes":
+            final_safe_counts.update(_safe_counts(event, allowed_keys=_DETAIL_CLAIM_OUTCOME_COUNT_KEYS))
+            break
     final_step: WorkflowStepPayload = {
         "event_type": "source_workflow_step_completed" if final_completed else "source_workflow_step_failed",
         "step_name": "finalize",
         "status": "completed" if final_completed else _final_failure_status(final_status),
-        "safe_counts": {"resumes_returned": max(0, resumes_returned)},
+        "safe_counts": final_safe_counts,
         "safe_metadata": {},
         "artifact_refs": [ref] if (ref := _safe_artifact_ref(action_trace_ref)) is not None else [],
     }
@@ -105,9 +120,13 @@ def _final_failure_status(final_status: str) -> str:
     return final_status if final_status in {"partial", "blocked", "failed", "cancelled"} else "failed"
 
 
-def _safe_counts(event: Mapping[str, object]) -> dict[str, int]:
+def _safe_counts(
+    event: Mapping[str, object],
+    *,
+    allowed_keys: set[str] | None = None,
+) -> dict[str, int]:
     result: dict[str, int] = {}
-    for key in _SAFE_COUNT_KEYS:
+    for key in _SAFE_COUNT_KEYS if allowed_keys is None else allowed_keys:
         value = event.get(key)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             continue

@@ -101,6 +101,62 @@ def test_workflow_steps_from_action_events_sanitizes_private_fields() -> None:
     assert "raw resume text" not in repr(steps)
 
 
+def test_workflow_steps_merges_last_private_claim_outcomes_into_finalize_counts() -> None:
+    steps = workflow_steps_from_action_events(
+        [
+            {
+                "action_kind": "detail_claim_outcomes",
+                "detail_claim_granted_count": 99,
+                "detail_opened_count": 99,
+                "detail_open_skipped_seen_count": 99,
+                "detail_open_terminal_failure_count": 99,
+            },
+            {
+                "action_kind": "detail_claim_outcomes",
+                "detail_claim_granted_count": 1,
+                "detail_opened_count": 1,
+                "detail_open_skipped_seen_count": 0,
+                "detail_open_terminal_failure_count": 0,
+                "resumes_returned": 99,
+                "cards_seen": 99,
+                "provider_candidate_key_hash": "private-key",
+                "res_id_encode": "private-subject",
+                "url": "https://h.liepin.com/resume/showresumedetail/private",
+                "ref": "private-ref",
+                "logical_round_no": 4,
+                "query_instance_id": "private-query",
+                "raw_provider_value": "raw resume text",
+            },
+        ],
+        final_status="succeeded",
+        resumes_returned=1,
+        action_trace_ref=None,
+    )
+
+    assert len(steps) == 1
+    assert steps[0]["step_name"] == "finalize"
+    assert steps[0]["safe_counts"] == {
+        "resumes_returned": 1,
+        "detail_claim_granted_count": 1,
+        "detail_opened_count": 1,
+        "detail_open_skipped_seen_count": 0,
+        "detail_open_terminal_failure_count": 0,
+    }
+    assert "private" not in repr(steps)
+    assert "raw resume text" not in repr(steps)
+
+
+def test_workflow_steps_keeps_normal_finalize_count_shape_without_private_outcomes() -> None:
+    steps = workflow_steps_from_action_events(
+        [{"action_kind": "visible_cards_observed", "visible_cards": 1}],
+        final_status="succeeded",
+        resumes_returned=1,
+        action_trace_ref=None,
+    )
+
+    assert steps[-1]["safe_counts"] == {"resumes_returned": 1}
+
+
 def test_workflow_steps_from_action_events_maps_native_filter_verification() -> None:
     steps = workflow_steps_from_action_events(
         [

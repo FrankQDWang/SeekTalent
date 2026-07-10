@@ -635,6 +635,10 @@ def test_event_public_payload_allowlists_safe_count_keys() -> None:
         safe_counts={
             "cards_seen": 4,
             "details_opened": 2,
+            "detail_claim_granted_count": 2,
+            "detail_opened_count": 1,
+            "detail_open_skipped_seen_count": 1,
+            "detail_open_terminal_failure_count": 0,
             "raw_resume_SECRET": 1,
             "cards_filtered": -1,
         },
@@ -642,8 +646,35 @@ def test_event_public_payload_allowlists_safe_count_keys() -> None:
 
     payload = event.to_public_payload()
 
-    assert payload["safe_counts"] == {"cards_seen": 4, "details_opened": 2}
+    assert payload["safe_counts"] == {
+        "cards_seen": 4,
+        "details_opened": 2,
+        "detail_claim_granted_count": 2,
+        "detail_opened_count": 1,
+        "detail_open_skipped_seen_count": 1,
+        "detail_open_terminal_failure_count": 0,
+    }
     assert "raw_resume_SECRET" not in repr(payload)
+
+
+def test_event_public_payload_drops_boolean_detail_claim_outcome_counts() -> None:
+    event = RuntimeSourceLaneEvent(
+        schema_version="runtime_source_lane_event_v1",
+        runtime_run_id="run-1",
+        source_plan_id="plan-1",
+        source_lane_run_id="lane-1",
+        source="liepin",
+        attempt=1,
+        event_seq=1,
+        event_type="source_lane_completed",
+        status="completed",
+        safe_counts={
+            "detail_claim_granted_count": True,
+            "detail_opened_count": 1,
+        },
+    )
+
+    assert event.to_public_payload()["safe_counts"] == {"detail_opened_count": 1}
 
 
 def test_runtime_source_lane_event_serializes_safe_workflow_step_metadata() -> None:

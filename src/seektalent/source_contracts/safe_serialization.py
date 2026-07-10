@@ -67,6 +67,10 @@ _SAFE_COUNT_KEYS = {
     "candidates",
     "cards_filtered",
     "cards_seen",
+    "detail_claim_granted_count",
+    "detail_open_terminal_failure_count",
+    "detail_open_skipped_seen_count",
+    "detail_opened_count",
     "detail_recommendations",
     "details_opened",
     "raw_candidates",
@@ -144,7 +148,7 @@ def sanitize_count_mapping(values: Mapping[str, int]) -> dict[str, int]:
     for key, value in values.items():
         if key not in _SAFE_COUNT_KEYS:
             continue
-        if not isinstance(value, int):
+        if isinstance(value, bool) or not isinstance(value, int):
             continue
         if value < 0:
             continue

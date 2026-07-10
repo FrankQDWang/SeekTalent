@@ -320,6 +320,7 @@ def test_workflow_opens_details_until_target_count() -> None:
     assert "search_liepin_cards" in site.calls
     assert "extract_structured_liepin_cards" in site.calls
     assert "finalize_liepin_resumes" in site.calls
+    assert not any(event.get("action_kind") == "detail_claim_outcomes" for event in site.events)
 
 
 def test_private_claim_context_route_preserves_current_detail_search_behavior() -> None:
@@ -347,6 +348,27 @@ def test_private_claim_context_route_preserves_current_detail_search_behavior() 
     assert ledger.snapshot()[key].browser_open_attempt_count == 1
 
 
+def test_private_claim_context_emits_safe_local_claim_outcomes_after_success() -> None:
+    site = FakeLiepinSearchWorkflowSite()
+    ledger = DetailOpenClaimLedger({})
+
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert [event for event in site.events if event.get("action_kind") == "detail_claim_outcomes"] == [
+        {
+            "action_kind": "detail_claim_outcomes",
+            "detail_claim_granted_count": 1,
+            "detail_opened_count": 1,
+            "detail_open_skipped_seen_count": 0,
+            "detail_open_terminal_failure_count": 0,
+        }
+    ]
+
+
 def test_private_claim_context_skips_preclaimed_candidate_before_detail_open() -> None:
     key = _detail_key("70")
     ledger = DetailOpenClaimLedger({})
@@ -365,6 +387,15 @@ def test_private_claim_context_skips_preclaimed_candidate_before_detail_open() -
     assert "open_liepin_detail" not in site.calls
     assert "open_liepin_detail_cached_url" not in site.calls
     assert ledger.snapshot()[key].status == "claimed"
+    assert [event for event in site.events if event.get("action_kind") == "detail_claim_outcomes"] == [
+        {
+            "action_kind": "detail_claim_outcomes",
+            "detail_claim_granted_count": 0,
+            "detail_opened_count": 0,
+            "detail_open_skipped_seen_count": 1,
+            "detail_open_terminal_failure_count": 0,
+        }
+    ]
 
 
 def test_private_claim_context_skips_opened_subject_after_rank_change() -> None:
@@ -551,6 +582,15 @@ def test_private_claim_context_terminalizes_attempted_open_before_later_workflow
     assert second["status"] == "blocked"
     assert "open_liepin_detail" not in second_site.calls
     assert "open_liepin_detail_cached_url" not in second_site.calls
+    assert [event for event in site.events if event.get("action_kind") == "detail_claim_outcomes"] == [
+        {
+            "action_kind": "detail_claim_outcomes",
+            "detail_claim_granted_count": 1,
+            "detail_opened_count": 0,
+            "detail_open_skipped_seen_count": 0,
+            "detail_open_terminal_failure_count": 1,
+        }
+    ]
 
 
 def test_private_claim_context_terminalizes_wait_failure_after_browser_open() -> None:
