@@ -194,13 +194,28 @@ def _is_sensitive_key(key: str) -> bool:
 
 
 def _safe_summary(message: str) -> str:
-    text = str(message or "").strip()
+    if not isinstance(message, str):
+        return _REDACTED_SUMMARY
+    text = message.strip()
     if not text:
         return _REDACTED_SUMMARY
-    lower = text.lower()
-    if any(term in lower for term in _SUMMARY_SENSITIVE_TERMS):
+    if _looks_like_unsafe_summary(text):
         return _REDACTED_SUMMARY
     return text[:300]
+
+
+def _looks_like_unsafe_summary(text: str) -> bool:
+    upper = text.strip().upper()
+    lower = text.lower()
+    if "SHOULD_NOT_RENDER" in upper or upper.startswith("INTERNAL_"):
+        return True
+    if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
+        return True
+    if "http://" in lower or "https://" in lower:
+        return True
+    if any(term in lower for term in _SUMMARY_SENSITIVE_TERMS):
+        return True
+    return any(pattern in lower for pattern in ("api_key=", "apikey=", "token=", "cookie=", "password="))
 
 
 def _progress_event_type(event_type: str) -> str:

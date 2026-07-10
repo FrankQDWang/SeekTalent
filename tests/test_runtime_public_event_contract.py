@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import fields
 from types import SimpleNamespace
 
@@ -9,7 +10,7 @@ import pytest
 from seektalent.models import ResumeCandidate
 from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 from seektalent.runtime import WorkflowRuntime
-from seektalent.runtime.public_events import make_runtime_public_event
+from seektalent.runtime.public_events import make_runtime_public_event, normalize_runtime_public_event
 from seektalent.runtime.source_lanes import SourceQueryExecutionOutcome, build_runtime_source_plan
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
 from seektalent.source_adapters import build_source_enabled_runtime
@@ -139,6 +140,27 @@ def test_runtime_public_query_group_drops_non_string_required_scalars(field: str
     assert secret not in repr(event)
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["queryInstanceId", "termGroupKey", "queryRole", "laneType", "keywordQuery"],
+)
+def test_runtime_public_query_group_drops_sensitive_required_text(field: str) -> None:
+    secret = "https://provider.example/private/raw-identity"
+    group = _public_query_group(lifecycle="executed")
+    group[field] = secret
+
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="feedback",
+        event_seq=1,
+        round_no=1,
+        details={"queryGroups": [group]},
+    )
+
+    assert "queryGroups" not in event["details"]
+    assert secret not in repr(event)
+
+
 def test_runtime_public_query_group_scrubs_non_string_terms_and_execution_scalars() -> None:
     secret = "https://provider.example/private/raw-identity"
     group = _public_query_group(lifecycle="executed")
@@ -148,6 +170,8 @@ def test_runtime_public_query_group_scrubs_non_string_terms_and_execution_scalar
         ["rawIdentity", secret],
         7,
         True,
+        secret,
+        "Bearer private-token",
     ]
     group["executions"] = [
         {
@@ -162,6 +186,10 @@ def test_runtime_public_query_group_scrubs_non_string_terms_and_execution_scalar
         {
             "sourceKind": "liepin",
             "status": ["completed", secret],
+        },
+        {
+            "sourceKind": secret,
+            "status": "completed",
         },
     ]
 
@@ -205,6 +233,126 @@ def test_runtime_public_query_groups_require_the_stage_lifecycle(stage: str, lif
     )
 
     assert "queryGroups" not in event["details"]
+
+
+def test_runtime_public_event_drops_non_scalar_or_sensitive_public_text_before_control_projection() -> None:
+    from seektalent.progress import ProgressEvent
+    from seektalent_runtime_control.events import normalize_progress_event, public_event_payload
+
+    provider_url = "https://provider.example/private/raw-identity"
+    private_token = "private-token"
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="feedback",
+        event_seq=1,
+        round_no=1,
+        status={"opaque": provider_url},
+        created_at={"opaque": provider_url},
+        details={
+            "resumeQualityComment": "Safe quality note.",
+            "reflectionSummary": {"opaque": provider_url},
+            "suggestedStopReason": f"Authorization=Bearer {private_token}",
+            "suggestedActivateTerms": [
+                "safe term",
+                {"opaque": provider_url},
+                ["nested", provider_url],
+                7,
+                True,
+                provider_url,
+                f"Authorization=Bearer {private_token}",
+            ],
+        },
+    )
+
+    assert event["status"] == "completed"
+    assert event["createdAt"] is None
+    assert event["details"] == {
+        "resumeQualityComment": "Safe quality note.",
+        "suggestedActivateTerms": ["safe term"],
+    }
+
+    control_event = normalize_progress_event(
+        ProgressEvent(
+            type="runtime_public_event",
+            message="feedback",
+            timestamp="2026-07-11T00:00:00Z",
+            round_no=1,
+            payload=dict(event),
+        ),
+        runtime_run_id="runtime-run-1",
+        now="2026-07-11T00:00:01Z",
+    )
+    projected = public_event_payload(control_event)
+
+    assert projected is not None
+    assert projected["details"] == event["details"]
+    serialized = json.dumps([event, control_event.model_dump(mode="json"), projected], ensure_ascii=False)
+    assert provider_url not in serialized
+    assert private_token not in serialized
+
+
+def test_runtime_public_event_preserves_valid_status_and_created_at() -> None:
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="source_result",
+        event_seq=1,
+        round_no=1,
+        source_kind="cts",
+        status="blocked",
+        created_at="2026-07-11T00:00:00Z",
+    )
+
+    assert event["status"] == "blocked"
+    assert event["createdAt"] == "2026-07-11T00:00:00Z"
+
+
+@pytest.mark.parametrize("field", ["runtimeRunId", "eventId"])
+def test_runtime_public_event_rejects_unsafe_public_identifiers(field: str) -> None:
+    secret = "https://example.invalid/private/raw-identity"
+    payload = dict(
+        make_runtime_public_event(
+            runtime_run_id="run-1",
+            stage="source_result",
+            event_seq=1,
+            round_no=1,
+            source_kind="cts",
+        )
+    )
+    payload[field] = secret
+
+    with pytest.raises(ValueError):
+        normalize_runtime_public_event(payload)
+
+
+@pytest.mark.parametrize(
+    "source_kind",
+    [
+        "https://provider.example/private/raw-identity",
+        "Authorization=Bearer private-token",
+        "source/with/path",
+    ],
+)
+def test_runtime_public_event_rejects_unsafe_source_kind(source_kind: str) -> None:
+    with pytest.raises(ValueError, match="runtime_public_event_source_kind_invalid"):
+        make_runtime_public_event(
+            runtime_run_id="run-1",
+            stage="source_result",
+            event_seq=1,
+            round_no=1,
+            source_kind=source_kind,
+        )
+
+
+def test_runtime_public_event_preserves_source_neutral_identifier() -> None:
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="source_result",
+        event_seq=1,
+        round_no=1,
+        source_kind="internal_referrals",
+    )
+
+    assert event["sourceKind"] == "internal_referrals"
 
 
 def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_unavailable() -> None:

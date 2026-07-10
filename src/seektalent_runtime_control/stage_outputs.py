@@ -60,6 +60,7 @@ _PUBLIC_DETAIL_STRING_LIST_KEYS = {
 _PUBLIC_DETAIL_QUERY_GROUP_KEYS = {"queryGroups"}
 _PUBLIC_QUERY_GROUP_LIFECYCLES = {"planned", "executed"}
 _PUBLIC_QUERY_EXECUTION_STATUSES = {"completed", "partial", "blocked", "failed"}
+_PUBLIC_EVENT_STATUSES = {"pending", "running", "completed", "partial", "blocked", "failed", "cancelled"}
 _PUBLIC_QUERY_GROUP_LIFECYCLE_BY_STAGE = {
     "round_query": "planned",
     "feedback": "executed",
@@ -194,6 +195,10 @@ def _sanitize_public_stage_output(output: Mapping[str, object]) -> dict[str, obj
             sanitized[key] = _safe_details(value, stage=stage)
         elif key == "roundNo":
             sanitized[key] = value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+        elif key == "sourceKind":
+            sanitized[key] = _safe_public_source_kind(value)
+        elif key == "status":
+            sanitized[key] = _safe_public_status(value)
         elif key == "safeReasonCode":
             safe_reason_code = _safe_reason_code(value)
             if safe_reason_code is not None or value is None:
@@ -226,18 +231,18 @@ def _safe_details(value: object, *, stage: str | None) -> dict[str, object]:
             groups = _safe_query_groups(item, expected_lifecycle=_query_group_lifecycle_for_stage(stage))
             if groups:
                 details[key] = groups
-        elif key in _PUBLIC_DETAIL_TEXT_KEYS and isinstance(item, str):
-            details[key] = item[:2000]
+        elif key in _PUBLIC_DETAIL_TEXT_KEYS:
+            text = _safe_public_detail_text(item, max_length=2000)
+            if text is not None:
+                details[key] = text
         elif key in _PUBLIC_DETAIL_INT_KEYS and isinstance(item, int) and not isinstance(item, bool) and item >= 0:
             details[key] = item
         elif key in _PUBLIC_DETAIL_BOOL_KEYS and isinstance(item, bool):
             details[key] = item
-        elif (
-            key in _PUBLIC_DETAIL_STRING_LIST_KEYS
-            and isinstance(item, Sequence)
-            and not isinstance(item, str | bytes | bytearray)
-        ):
-            details[key] = [entry[:200] for entry in item if isinstance(entry, str) and entry.strip()][:50]
+        elif key in _PUBLIC_DETAIL_STRING_LIST_KEYS:
+            values = _safe_public_detail_list(item)
+            if values is not None:
+                details[key] = values
     return details
 
 
@@ -272,13 +277,13 @@ def _safe_query_group(
     expected_lifecycle: str,
 ) -> dict[str, object] | None:
     item = _string_object_mapping(value)
-    query_instance_id = _text(item.get("queryInstanceId"))
-    term_group_key = _text(item.get("termGroupKey"))
-    query_role = _text(item.get("queryRole"))
-    lane_type = _text(item.get("laneType"))
-    query_terms = _string_list(item.get("queryTerms"))
-    keyword_query = _text(item.get("keywordQuery"))
-    lifecycle = _text(item.get("lifecycle"))
+    query_instance_id = _safe_public_query_text(item.get("queryInstanceId"), max_length=160)
+    term_group_key = _safe_public_query_text(item.get("termGroupKey"), max_length=160)
+    query_role = _safe_public_query_text(item.get("queryRole"), max_length=80)
+    lane_type = _safe_public_query_text(item.get("laneType"), max_length=80)
+    query_terms = _safe_public_query_terms(item.get("queryTerms"))
+    keyword_query = _safe_public_query_text(item.get("keywordQuery"), max_length=2000)
+    lifecycle = _safe_public_query_text(item.get("lifecycle"), max_length=32)
     if (
         query_instance_id is None
         or term_group_key is None
@@ -310,7 +315,7 @@ def _safe_query_group(
         )
         return group
 
-    execution_status = _text(item.get("executionStatus"))
+    execution_status = _safe_public_query_text(item.get("executionStatus"), max_length=32)
     attempted = item.get("attempted")
     if execution_status not in _PUBLIC_QUERY_EXECUTION_STATUSES or not isinstance(attempted, bool):
         return None
@@ -332,8 +337,8 @@ def _safe_query_executions(value: object) -> list[dict[str, object]]:
     seen_sources: set[str] = set()
     for item in value:
         entry = _string_object_mapping(item)
-        source_kind = _text(entry.get("sourceKind"))
-        status = _text(entry.get("status"))
+        source_kind = _safe_public_source_kind(entry.get("sourceKind"))
+        status = _safe_public_query_text(entry.get("status"), max_length=32)
         if source_kind is None or source_kind in seen_sources or status not in _PUBLIC_QUERY_EXECUTION_STATUSES:
             continue
         execution: dict[str, object] = {
@@ -364,10 +369,78 @@ def _text(*values: object) -> str | None:
     return None
 
 
-def _string_list(value: object) -> list[str]:
+def _safe_public_status(value: object) -> str:
+    if not isinstance(value, str):
+        return "completed"
+    status = value.strip()
+    return status if status in _PUBLIC_EVENT_STATUSES else "completed"
+
+
+def _safe_public_source_kind(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > 80:
+        return None
+    if any(not (character.isascii() and (character.isalnum() or character in "_-")) for character in text):
+        return None
+    return text
+
+
+def _safe_public_detail_list(value: object) -> list[str] | None:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return None
+    values: list[str] = []
+    for item in value:
+        text = _safe_public_detail_text(item, max_length=200)
+        if text is not None:
+            values.append(text)
+        if len(values) >= 50:
+            break
+    return values
+
+
+def _safe_public_detail_text(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or _looks_like_unsafe_public_text(text):
+        return None
+    return text[:max_length]
+
+
+def _safe_public_query_terms(value: object) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return []
-    return [entry[:200] for entry in value if isinstance(entry, str) and entry.strip()][:50]
+    values: list[str] = []
+    for item in value:
+        text = _safe_public_query_text(item, max_length=160)
+        if text is not None and text not in values:
+            values.append(text)
+        if len(values) >= 40:
+            break
+    return values
+
+
+def _safe_public_query_text(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or _looks_like_unsafe_public_text(text):
+        return None
+    return text[:max_length]
+
+
+def _looks_like_unsafe_public_text(text: str) -> bool:
+    upper = text.strip().upper()
+    lower = text.lower()
+    if "SHOULD_NOT_RENDER" in upper or upper.startswith("INTERNAL_"):
+        return True
+    if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
+        return True
+    if "http://" in lower or "https://" in lower:
+        return True
+    return any(pattern in lower for pattern in ("api_key=", "apikey=", "token=", "cookie=", "password="))
 
 
 def _non_negative_int(value: object) -> int | None:

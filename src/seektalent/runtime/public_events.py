@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import TypedDict
 
 PUBLIC_EVENT_SCHEMA_VERSION = "runtime_public_event_v1"
@@ -89,6 +90,7 @@ _PUBLIC_DETAIL_LIST_KEYS = {
 _PUBLIC_DETAIL_QUERY_GROUP_KEYS = {"queryGroups"}
 _PUBLIC_QUERY_GROUP_LIFECYCLES = {"planned", "executed"}
 _PUBLIC_QUERY_EXECUTION_STATUSES = {"completed", "partial", "blocked", "failed"}
+_PUBLIC_EVENT_STATUSES = {"pending", "running", "completed", "partial", "blocked", "failed", "cancelled"}
 _PUBLIC_QUERY_GROUP_LIFECYCLE_BY_STAGE = {
     "round_query": "planned",
     "feedback": "executed",
@@ -151,11 +153,11 @@ def normalize_runtime_public_event(payload: Mapping[str, object]) -> RuntimePubl
         stage=stage,
         roundNo=round_no,
         sourceKind=source_kind,
-        status=str(payload.get("status") or "completed"),
+        status=_public_event_status(payload.get("status")),
         counts=_safe_public_counts(payload.get("counts")),
         details=_safe_public_details(payload.get("details"), stage=stage),
         safeReasonCode=public_source_reason_code(payload.get("safeReasonCode")),
-        createdAt=str(payload.get("createdAt")).strip() if payload.get("createdAt") is not None else None,
+        createdAt=_public_created_at(payload.get("createdAt")),
     )
 
 
@@ -173,7 +175,8 @@ def make_runtime_public_event(
     created_at: str | None = None,
 ) -> RuntimePublicEvent:
     runtime_public_event_name(stage)
-    source_part = source_kind or "all"
+    normalized_source_kind = _source_kind_or_none(source_kind)
+    source_part = normalized_source_kind or "all"
     round_part = round_no if round_no is not None else "final"
     event_id = f"{runtime_run_id}:{round_part}:{stage}:{source_part}"
     return normalize_runtime_public_event(
@@ -184,7 +187,7 @@ def make_runtime_public_event(
             "eventSeq": event_seq,
             "stage": stage,
             "roundNo": round_no,
-            "sourceKind": source_kind,
+            "sourceKind": normalized_source_kind,
             "status": status,
             "counts": dict(counts or {}),
             "details": dict(details or {}),
@@ -195,10 +198,8 @@ def make_runtime_public_event(
 
 
 def _required_text(value: object, error_message: str) -> str:
-    if not isinstance(value, str):
-        raise ValueError(error_message)
-    text = value.strip()
-    if not text:
+    text = _safe_public_identifier(value, max_length=256)
+    if text is None:
         raise ValueError(error_message)
     return text
 
@@ -223,11 +224,29 @@ def _optional_non_negative_int(value: object) -> int | None:
 def _source_kind_or_none(value: object) -> SourceKind | None:
     if value is None:
         return None
+    text = _safe_public_source_kind(value)
+    if text is None:
+        raise ValueError("runtime_public_event_source_kind_invalid")
+    return text
+
+
+def _public_event_status(value: object) -> str:
     if not isinstance(value, str):
-        raise ValueError("runtime_public_event_source_kind_invalid")
+        return "completed"
+    status = value.strip()
+    return status if status in _PUBLIC_EVENT_STATUSES else "completed"
+
+
+def _public_created_at(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
     text = value.strip()
-    if not text:
-        raise ValueError("runtime_public_event_source_kind_invalid")
+    if not text or "T" not in text or _looks_like_unsafe_public_text(text):
+        return None
+    try:
+        datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
     return text
 
 
@@ -364,7 +383,7 @@ def _public_query_executions(value: object) -> list[dict[str, object]]:
     seen_sources: set[str] = set()
     for item in value:
         entry = _string_key_mapping(item)
-        source_kind = _public_query_text(entry.get("sourceKind"), max_length=80)
+        source_kind = _safe_public_source_kind(entry.get("sourceKind"))
         status = _public_query_text(entry.get("status"), max_length=32)
         if source_kind is None or source_kind in seen_sources or status not in _PUBLIC_QUERY_EXECUTION_STATUSES:
             continue
@@ -412,7 +431,27 @@ def _public_query_text(value: object, *, max_length: int) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
-    return text[:max_length] if text else None
+    if not text or _looks_like_unsafe_public_text(text):
+        return None
+    return text[:max_length]
+
+
+def _safe_public_source_kind(value: object) -> str | None:
+    text = _safe_public_identifier(value, max_length=80)
+    if text is None or any(character not in "_-" and not character.isalnum() for character in text):
+        return None
+    return text
+
+
+def _safe_public_identifier(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > max_length:
+        return None
+    if any(not (character.isascii() and (character.isalnum() or character in "_-:.")) for character in text):
+        return None
+    return text
 
 
 def _public_detail_list(value: object) -> list[str]:
@@ -429,7 +468,21 @@ def _public_detail_list(value: object) -> list[str]:
 
 
 def _public_detail_text(value: object, *, max_length: int) -> str | None:
-    if value is None:
+    if not isinstance(value, str):
         return None
-    text = str(value).strip()
-    return text[:max_length] if text else None
+    text = value.strip()
+    if not text or _looks_like_unsafe_public_text(text):
+        return None
+    return text[:max_length]
+
+
+def _looks_like_unsafe_public_text(text: str) -> bool:
+    upper = text.strip().upper()
+    lower = text.lower()
+    if "SHOULD_NOT_RENDER" in upper or upper.startswith("INTERNAL_"):
+        return True
+    if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
+        return True
+    if "http://" in lower or "https://" in lower:
+        return True
+    return any(pattern in lower for pattern in ("api_key=", "apikey=", "token=", "cookie=", "password="))

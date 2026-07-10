@@ -340,6 +340,34 @@ def test_public_runtime_progress_normalizes_to_public_runtime_control_event() ->
     assert "rawStructuredOutput" not in serialized
 
 
+@pytest.mark.parametrize("message", ["https://example.invalid/private/raw-identity", "Bearer private-token"])
+def test_public_runtime_progress_redacts_unsafe_progress_message(message: str) -> None:
+    from seektalent.progress import ProgressEvent
+    from seektalent.runtime.public_events import make_runtime_public_event
+    from seektalent_runtime_control.events import normalize_progress_event
+
+    event = normalize_progress_event(
+        ProgressEvent(
+            type="runtime_public_event",
+            message=message,
+            timestamp="2026-07-11T00:00:00Z",
+            round_no=1,
+            payload=make_runtime_public_event(
+                runtime_run_id="runtime-run-1",
+                stage="source_result",
+                event_seq=1,
+                round_no=1,
+                source_kind="cts",
+            ),
+        ),
+        runtime_run_id="runtime-run-1",
+        now="2026-07-11T00:00:01Z",
+    )
+
+    assert event.summary == "runtime progress"
+    assert message not in repr(event.model_dump(mode="json"))
+
+
 def test_non_public_runtime_progress_is_developer_compact_and_redacted() -> None:
     from seektalent.progress import ProgressEvent
     from seektalent_runtime_control.events import normalize_progress_event, public_event_payload
@@ -858,6 +886,13 @@ def test_public_stage_output_v2_keeps_only_safe_logical_query_group_fields() -> 
                                 "providerUrl": "https://h.liepin.com/private",
                             },
                             {
+                                "sourceKind": "https://provider.example/private/raw-identity",
+                                "status": "completed",
+                                "rawCandidateCount": 1,
+                                "uniqueCandidateCount": 1,
+                                "duplicateCandidateCount": 0,
+                            },
+                            {
                                 "sourceKind": "cts",
                                 "status": "failed",
                                 "rawCandidateCount": 0,
@@ -913,6 +948,137 @@ def test_public_stage_output_v2_keeps_only_safe_logical_query_group_fields() -> 
             },
         ],
     }
+
+
+def test_public_stage_output_v2_drops_sensitive_detail_text_and_invalid_status() -> None:
+    from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+
+    provider_url = "https://provider.example/private/raw-identity"
+    private_token = "private-token"
+    output = sanitize_stage_output_payload(
+        output_kind="runtime_public_feedback",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "publicEventSchemaVersion": "runtime_public_event_v1",
+            "stage": "feedback",
+            "roundNo": 1,
+            "sourceKind": None,
+            "status": f"Authorization=Bearer {private_token}",
+            "counts": {},
+            "details": {
+                "resumeQualityComment": "Safe quality note.",
+                "reflectionSummary": f"Authorization=Bearer {private_token}",
+                "suggestedActivateTerms": [
+                    "safe term",
+                    provider_url,
+                    f"Authorization=Bearer {private_token}",
+                ],
+            },
+            "safeReasonCode": None,
+        },
+        stage="feedback",
+        round_no=1,
+        node_id=None,
+    )
+
+    assert output["status"] == "completed"
+    assert output["details"] == {
+        "resumeQualityComment": "Safe quality note.",
+        "suggestedActivateTerms": ["safe term"],
+    }
+    assert provider_url not in repr(output)
+    assert private_token not in repr(output)
+
+
+def test_public_stage_output_v2_drops_unsafe_source_kind() -> None:
+    from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+
+    provider_url = "https://provider.example/private/raw-identity"
+    output = sanitize_stage_output_payload(
+        output_kind="runtime_public_source_result",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "publicEventSchemaVersion": "runtime_public_event_v1",
+            "stage": "source_result",
+            "roundNo": 1,
+            "sourceKind": provider_url,
+            "status": "completed",
+            "counts": {},
+            "details": {},
+            "safeReasonCode": None,
+        },
+        stage="source_result",
+        round_no=1,
+        node_id=provider_url,
+    )
+
+    assert output["sourceKind"] is None
+    assert provider_url not in repr(output)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["queryInstanceId", "termGroupKey", "queryRole", "laneType", "keywordQuery"],
+)
+def test_public_stage_output_v2_drops_sensitive_required_query_text(field: str) -> None:
+    from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+
+    secret = "https://provider.example/private/raw-identity"
+    group = _stage_query_group(lifecycle="executed")
+    group[field] = secret
+    output = sanitize_stage_output_payload(
+        output_kind="runtime_public_feedback",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "publicEventSchemaVersion": "runtime_public_event_v1",
+            "stage": "feedback",
+            "roundNo": 1,
+            "sourceKind": None,
+            "status": "completed",
+            "counts": {},
+            "details": {"queryGroups": [group]},
+            "safeReasonCode": None,
+        },
+        stage="feedback",
+        round_no=1,
+        node_id=None,
+    )
+
+    assert "queryGroups" not in output["details"]
+    assert secret not in repr(output)
+
+
+def test_public_stage_output_v2_filters_sensitive_query_terms() -> None:
+    from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+
+    secret = "https://provider.example/private/raw-identity"
+    group = _stage_query_group(lifecycle="executed")
+    group["queryTerms"] = ["safe term", secret, "Authorization=Bearer private-token"]
+    output = sanitize_stage_output_payload(
+        output_kind="runtime_public_feedback",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "publicEventSchemaVersion": "runtime_public_event_v1",
+            "stage": "feedback",
+            "roundNo": 1,
+            "sourceKind": None,
+            "status": "completed",
+            "counts": {},
+            "details": {"queryGroups": [group]},
+            "safeReasonCode": None,
+        },
+        stage="feedback",
+        round_no=1,
+        node_id=None,
+    )
+
+    [sanitized] = output["details"]["queryGroups"]
+    assert sanitized["queryTerms"] == ["safe term"]
+    assert secret not in repr(output)
 
 
 @pytest.mark.parametrize(

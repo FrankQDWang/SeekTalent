@@ -71,20 +71,22 @@ _PUBLIC_REASON_MAP = {
     "source_filter_unsupported": "source_filter_unavailable",
     "source_filter_applied": "source_filter_applied",
 }
-_PROGRESS_PAYLOAD_KEYS = {
-    "runtimeRunId",
-    "runtimeEventSeq",
-    "runtimeEventType",
-    "status",
-    "stage",
-    "summary",
-    "state",
-    "roundNo",
-    "sourceId",
-    "sourceKind",
-    "safeReasonCode",
+_RUNTIME_EVENT_STATUSES = {
+    "pending",
+    "queued",
+    "starting",
+    "running",
+    "pause_requested",
+    "paused",
+    "resume_requested",
+    "cancellation_requested",
+    "cancelled",
+    "completed",
+    "partial",
+    "blocked",
+    "failed",
 }
-_RESULT_PAYLOAD_KEYS = {"runtimeRunId", "status", "state", "summary"}
+_RUNTIME_STATES = {"idle", "queued", "running", "completed", "failed", "cancelled"}
 _COUNT_KEYS = {
     "roundReturned",
     "roundIdentities",
@@ -107,7 +109,30 @@ def runtime_event_terminal_summary(event_type: object) -> str | None:
 
 
 def normalize_runtime_progress_payload(payload: Mapping[str, object]) -> dict[str, object]:
-    normalized = {key: payload[key] for key in _PROGRESS_PAYLOAD_KEYS if key != "safeReasonCode" and key in payload}
+    normalized: dict[str, object] = {}
+    if (runtime_run_id := _safe_runtime_identifier(payload.get("runtimeRunId"))) is not None:
+        normalized["runtimeRunId"] = runtime_run_id
+    if (event_seq := _non_negative_int(payload.get("runtimeEventSeq"))) is not None:
+        normalized["runtimeEventSeq"] = event_seq
+    if (event_type := _safe_runtime_text(payload.get("runtimeEventType"), max_length=120)) is not None:
+        normalized["runtimeEventType"] = event_type
+    if (status := _safe_runtime_status(payload.get("status"))) is not None:
+        normalized["status"] = status
+    if (stage := _safe_runtime_text(payload.get("stage"), max_length=80)) is not None:
+        normalized["stage"] = stage
+    if (summary := _safe_runtime_text(payload.get("summary"), max_length=2000)) is not None:
+        normalized["summary"] = summary
+    if (state := _safe_runtime_state(payload.get("state"))) is not None:
+        normalized["state"] = state
+    if (round_no := _non_negative_int(payload.get("roundNo"))) is not None:
+        normalized["roundNo"] = round_no
+    for key in ("sourceId", "sourceKind"):
+        value = payload.get(key)
+        if value is None:
+            if key in payload:
+                normalized[key] = None
+        elif (source_kind := _safe_public_source_kind(value)) is not None:
+            normalized[key] = source_kind
     if "safeReasonCode" in payload and payload.get("safeReasonCode") is None:
         normalized["safeReasonCode"] = None
     elif (safe_reason_code := safe_runtime_progress_reason_code(payload.get("safeReasonCode"))) is not None:
@@ -137,9 +162,18 @@ def normalize_runtime_progress_payload(payload: Mapping[str, object]) -> dict[st
 
 
 def normalize_runtime_result_payload(payload: Mapping[str, object]) -> dict[str, object]:
-    normalized = {key: payload[key] for key in _RESULT_PAYLOAD_KEYS if key in payload}
-    state = str(normalized.get("state") or normalized.get("status") or "")
-    normalized["summary"] = runtime_result_summary(normalized.get("summary"), state)
+    normalized: dict[str, object] = {}
+    if (runtime_run_id := _safe_runtime_identifier(payload.get("runtimeRunId"))) is not None:
+        normalized["runtimeRunId"] = runtime_run_id
+    if (status := _safe_runtime_status(payload.get("status"))) is not None:
+        normalized["status"] = status
+    if (state := _safe_runtime_state(payload.get("state"))) is not None:
+        normalized["state"] = state
+    state = normalized.get("state") or normalized.get("status") or ""
+    if not isinstance(state, str):
+        state = ""
+    summary = _safe_runtime_text(payload.get("summary"), max_length=2000)
+    normalized["summary"] = runtime_result_summary(summary, state)
     facts = _safe_runtime_result_facts(payload.get("facts"))
     if facts:
         normalized["facts"] = facts
@@ -147,8 +181,9 @@ def normalize_runtime_result_payload(payload: Mapping[str, object]) -> dict[str,
 
 
 def runtime_result_summary(summary: object, state: str) -> str:
-    if isinstance(summary, str) and summary.strip() and not _is_internal_runtime_summary(summary):
-        return summary.strip()
+    safe_summary = _safe_runtime_text(summary, max_length=2000)
+    if safe_summary is not None and not _is_internal_runtime_summary(safe_summary):
+        return safe_summary
     if state == "completed":
         return COMPLETED_RESULT_SUMMARY
     if state == "idle":
@@ -347,7 +382,7 @@ def _safe_query_executions(value: object) -> list[dict[str, object]]:
         if not isinstance(item, Mapping):
             continue
         entry = {key: raw_value for key, raw_value in item.items() if isinstance(key, str)}
-        source_kind = _safe_query_text(entry.get("sourceKind"), max_length=80)
+        source_kind = _safe_public_source_kind(entry.get("sourceKind"))
         status = _safe_query_text(entry.get("status"), max_length=32)
         if source_kind is None or source_kind in seen_sources or status not in _QUERY_EXECUTION_STATUSES:
             continue
@@ -389,7 +424,54 @@ def _safe_query_text(value: object, *, max_length: int) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
-    return text[:max_length] if text else None
+    if not text or _looks_like_internal_marker(text):
+        return None
+    return text[:max_length]
+
+
+def _safe_runtime_identifier(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > 160:
+        return None
+    if any(not (character.isascii() and (character.isalnum() or character in "_-:.")) for character in text):
+        return None
+    return text
+
+
+def _safe_runtime_status(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    status = value.strip()
+    return status if status in _RUNTIME_EVENT_STATUSES else None
+
+
+def _safe_runtime_state(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    state = value.strip()
+    return state if state in _RUNTIME_STATES else None
+
+
+def _safe_runtime_text(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or _looks_like_internal_marker(text):
+        return None
+    return text[:max_length]
+
+
+def _safe_public_source_kind(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > 80:
+        return None
+    if any(not (character.isascii() and (character.isalnum() or character in "_-")) for character in text):
+        return None
+    return text
 
 
 def _safe_detail_list(value: object) -> list[str]:
@@ -406,9 +488,9 @@ def _safe_detail_list(value: object) -> list[str]:
 
 
 def _safe_detail_text(value: object, *, max_length: int) -> str | None:
-    if value is None:
+    if not isinstance(value, str):
         return None
-    text = str(value).strip()
+    text = value.strip()
     if not text:
         return None
     if _looks_like_internal_marker(text):
@@ -455,7 +537,9 @@ def _looks_like_internal_marker(text: str) -> bool:
         return True
     if upper.startswith("INTERNAL_"):
         return True
-    if lower.startswith(("bearer ", "authorization:")):
+    if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
+        return True
+    if "http://" in lower or "https://" in lower:
         return True
     return any(pattern in lower for pattern in ("api_key=", "apikey=", "token=", "cookie=", "password="))
 

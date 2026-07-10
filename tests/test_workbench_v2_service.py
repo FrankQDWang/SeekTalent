@@ -3306,6 +3306,35 @@ def test_v2_runtime_display_drops_non_string_query_group_scalars(field: str, bad
     assert secret not in repr(payload)
 
 
+@pytest.mark.parametrize(
+    "field",
+    ["queryInstanceId", "termGroupKey", "queryRole", "laneType", "keywordQuery"],
+)
+def test_v2_runtime_display_drops_sensitive_required_query_text(field: str) -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    secret = "https://provider.example/private/raw-identity"
+    group = _v2_query_group(
+        query_instance_id="query-1",
+        term_group_key="group-1",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["safe term"],
+        keyword_query="safe term",
+    )
+    group[field] = secret
+
+    payload = normalize_runtime_progress_payload(
+        {
+            "stage": "round_query",
+            "details": {"queryGroups": [group]},
+        }
+    )
+
+    assert "details" not in payload
+    assert secret not in repr(payload)
+
+
 def test_v2_runtime_display_drops_non_string_execution_status() -> None:
     from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
 
@@ -3362,6 +3391,10 @@ def test_v2_runtime_display_scrubs_non_string_query_terms_and_execution_scalars(
                 "sourceKind": "liepin",
                 "status": ["completed", secret],
             },
+            {
+                "sourceKind": secret,
+                "status": "completed",
+            },
         ],
     )
     group["queryTerms"] = [
@@ -3370,6 +3403,8 @@ def test_v2_runtime_display_scrubs_non_string_query_terms_and_execution_scalars(
         ["rawIdentity", secret],
         7,
         True,
+        secret,
+        "Authorization=Bearer private-token",
     ]
 
     payload = normalize_runtime_progress_payload(
@@ -3391,6 +3426,152 @@ def test_v2_runtime_display_scrubs_non_string_query_terms_and_execution_scalars(
         }
     ]
     assert secret not in repr(payload)
+
+
+def test_v2_runtime_display_drops_non_scalar_or_sensitive_detail_text() -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    provider_url = "https://provider.example/private/raw-identity"
+    private_token = "private-token"
+    payload = normalize_runtime_progress_payload(
+        {
+            "stage": "feedback",
+            "details": {
+                "resumeQualityComment": "Safe quality note.",
+                "reflectionSummary": {"opaque": provider_url},
+                "suggestedStopReason": f"Authorization=Bearer {private_token}",
+                "suggestedActivateTerms": [
+                    "safe term",
+                    {"opaque": provider_url},
+                    ["nested", provider_url],
+                    7,
+                    True,
+                    provider_url,
+                    f"Authorization=Bearer {private_token}",
+                ],
+            },
+        }
+    )
+
+    assert payload["details"] == {
+        "resumeQualityComment": "Safe quality note.",
+        "suggestedActivateTerms": ["safe term"],
+    }
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert provider_url not in serialized
+    assert private_token not in serialized
+
+
+def test_v2_runtime_display_drops_unsafe_source_identifiers() -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    provider_url = "https://provider.example/private/raw-identity"
+    payload = normalize_runtime_progress_payload(
+        {
+            "stage": "source_result",
+            "sourceId": provider_url,
+            "sourceKind": provider_url,
+        }
+    )
+
+    assert "sourceId" not in payload
+    assert "sourceKind" not in payload
+    assert provider_url not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_v2_runtime_display_drops_unsafe_top_level_progress_values() -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    provider_url = "https://provider.example/private/raw-identity"
+    private_token = "private-token"
+    payload = normalize_runtime_progress_payload(
+        {
+            "runtimeRunId": provider_url,
+            "runtimeEventSeq": {"opaque": provider_url},
+            "runtimeEventType": f"Bearer {private_token}",
+            "status": f"Bearer {private_token}",
+            "stage": "source_result",
+            "summary": provider_url,
+            "state": f"Bearer {private_token}",
+            "roundNo": [provider_url],
+            "sourceId": provider_url,
+            "sourceKind": provider_url,
+        }
+    )
+
+    assert payload == {"stage": "source_result"}
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert provider_url not in serialized
+    assert private_token not in serialized
+
+
+def test_v2_runtime_display_drops_unsafe_top_level_result_values() -> None:
+    from seektalent_workbench_v2.runtime_display import PENDING_RESULT_SUMMARY, normalize_runtime_result_payload
+
+    provider_url = "https://provider.example/private/raw-identity"
+    private_token = "private-token"
+    payload = normalize_runtime_result_payload(
+        {
+            "runtimeRunId": provider_url,
+            "status": f"Bearer {private_token}",
+            "state": provider_url,
+            "summary": provider_url,
+        }
+    )
+
+    assert payload == {"summary": PENDING_RESULT_SUMMARY}
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert provider_url not in serialized
+    assert private_token not in serialized
+
+
+def test_v2_runtime_display_preserves_safe_top_level_runtime_values() -> None:
+    from seektalent_workbench_v2.runtime_display import (
+        normalize_runtime_progress_payload,
+        normalize_runtime_result_payload,
+    )
+
+    progress = normalize_runtime_progress_payload(
+        {
+            "runtimeRunId": "rtrun_1",
+            "runtimeEventSeq": 1,
+            "runtimeEventType": "runtime_round_source_result",
+            "status": "blocked",
+            "stage": "source_result",
+            "summary": "本轮来源检索受阻。",
+            "state": "running",
+            "roundNo": 1,
+            "sourceId": "internal_referrals",
+            "sourceKind": "internal_referrals",
+        }
+    )
+    result = normalize_runtime_result_payload(
+        {
+            "runtimeRunId": "rtrun_1",
+            "status": "completed",
+            "state": "completed",
+            "summary": "最终候选人已生成。",
+        }
+    )
+
+    assert progress == {
+        "runtimeRunId": "rtrun_1",
+        "runtimeEventSeq": 1,
+        "runtimeEventType": "runtime_round_source_result",
+        "status": "blocked",
+        "stage": "source_result",
+        "summary": "第 1 轮猎聘检索受阻：本轮来源检索受阻。",
+        "state": "running",
+        "roundNo": 1,
+        "sourceId": "internal_referrals",
+        "sourceKind": "internal_referrals",
+    }
+    assert result == {
+        "runtimeRunId": "rtrun_1",
+        "status": "completed",
+        "state": "completed",
+        "summary": "最终候选人已生成。",
+    }
 
 
 @pytest.mark.parametrize(
