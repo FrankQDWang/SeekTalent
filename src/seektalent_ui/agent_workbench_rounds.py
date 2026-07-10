@@ -19,6 +19,15 @@ PUBLIC_STAGE_OUTPUT_SCHEMA = "runtime-public-stage-output/v2"
 PUBLIC_EVENT_SCHEMA = "runtime_public_event_v1"
 AgentWorkbenchQueryGroupLifecycle = Literal["planned", "executed"]
 AgentWorkbenchQueryExecutionStatus = Literal["completed", "partial", "blocked", "failed"]
+_PUBLIC_STAGE_STATUSES = {
+    "pending",
+    "running",
+    "completed",
+    "partial",
+    "blocked",
+    "failed",
+    "cancelled",
+}
 _PUBLIC_QUERY_EXECUTION_REASON_CODES = {
     "job_lease_expired",
     "relay_pending_worker",
@@ -221,24 +230,23 @@ def deterministic_finalization_from_stage_outputs(
     return AgentWorkbenchRunFinalizationProjection(
         selected_identity_count=_int_or_none(counts.get("selectedIdentityCount")),
         revision=_int_or_none(details.get("finalizationRevision")),
-        reason_code=_text(details.get("finalizationReasonCode")),
-        status=_text(payload.get("status")) or "completed",
+        reason_code=_safe_public_detail_text(details.get("finalizationReasonCode"), max_length=2000),
+        status=_safe_public_stage_status(payload.get("status")),
     )
 
 
 def _apply_round_output(summary: _RoundFacts, *, output: RuntimeStageOutput, payload: Mapping[str, object]) -> None:
     stage = str(output.stage)
-    status = _text(payload.get("status"))
+    status = _safe_public_stage_status(payload.get("status"))
     if status in {"failed", "cancelled"}:
         summary.failed = True
-    if status is not None:
-        summary.statuses.add(status)
+    summary.statuses.add(status)
     summary.stages.add(stage)
     summary.stage_outputs.append(
         AgentWorkbenchRoundStageProjection(
             stage=stage,
-            source_kind=output.node_id,
-            status=status or "completed",
+            source_kind=_safe_public_source_identifier(output.node_id),
+            status=status,
         )
     )
     counts = _mapping(payload.get("counts"))
@@ -372,12 +380,12 @@ def _query_groups(
     seen_query_instance_ids: set[str] = set()
     for item in value:
         item_mapping = _mapping(item)
-        query_instance_id = _text(item_mapping.get("queryInstanceId"))
-        term_group_key = _text(item_mapping.get("termGroupKey"))
-        query_role = _text(item_mapping.get("queryRole"))
-        lane_type = _text(item_mapping.get("laneType"))
-        query_terms = _string_tuple(item_mapping.get("queryTerms"))
-        keyword_query = _text(item_mapping.get("keywordQuery"))
+        query_instance_id = _safe_public_query_text(item_mapping.get("queryInstanceId"), max_length=160)
+        term_group_key = _safe_public_query_text(item_mapping.get("termGroupKey"), max_length=160)
+        query_role = _safe_public_query_text(item_mapping.get("queryRole"), max_length=80)
+        lane_type = _safe_public_query_text(item_mapping.get("laneType"), max_length=80)
+        query_terms = _safe_public_query_terms(item_mapping.get("queryTerms"))
+        keyword_query = _safe_public_query_text(item_mapping.get("keywordQuery"), max_length=2000)
         lifecycle = _text(item_mapping.get("lifecycle"))
         if (
             query_instance_id is None
@@ -437,7 +445,7 @@ def _query_executions(value: object) -> tuple[AgentWorkbenchQueryExecutionProjec
     seen_sources: set[str] = set()
     for item in value:
         item_mapping = _mapping(item)
-        source_kind = _text(item_mapping.get("sourceKind"))
+        source_kind = _safe_public_source_identifier(item_mapping.get("sourceKind"))
         status = _text(item_mapping.get("status"))
         if (
             source_kind is None
@@ -461,6 +469,50 @@ def _query_executions(value: object) -> tuple[AgentWorkbenchQueryExecutionProjec
     return tuple(executions)
 
 
+def _safe_public_query_text(value: object, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or _looks_like_unsafe_public_text(text):
+        return None
+    return text[:max_length]
+
+
+def _safe_public_query_terms(value: object) -> tuple[str, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return ()
+    terms: list[str] = []
+    for item in value:
+        text = _safe_public_query_text(item, max_length=160)
+        if text is not None:
+            terms.append(text)
+        if len(terms) >= 40:
+            break
+    return tuple(terms)
+
+
+def _safe_public_source_identifier(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or len(text) > 80:
+        return None
+    if any(not (character.isascii() and (character.isalnum() or character in "_-")) for character in text):
+        return None
+    return text
+
+
+def _looks_like_unsafe_public_text(text: str) -> bool:
+    lower = text.lower()
+    if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
+        return True
+    if "http://" in lower or "https://" in lower:
+        return True
+    return any(
+        pattern in lower for pattern in ("api_key=", "apikey=", "token=", "cookie=", "password=", "secret=", "secret:")
+    )
+
+
 def _public_query_execution_reason_code(value: object) -> str | None:
     text = _text(value)
     if text is None:
@@ -472,7 +524,7 @@ def _public_query_execution_reason_code(value: object) -> str | None:
 
 
 def _replace_text(current: str | None, value: object) -> str | None:
-    text = _text(value)
+    text = _safe_public_detail_text(value, max_length=2000)
     return text if text is not None else current
 
 
@@ -485,7 +537,25 @@ def _mapping(value: object) -> dict[str, object]:
 def _string_tuple(value: object) -> tuple[str, ...]:
     if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
         return ()
-    return tuple(item for item in value if isinstance(item, str) and item)
+    values: list[str] = []
+    for item in value:
+        text = _safe_public_detail_text(item, max_length=200)
+        if text is not None:
+            values.append(text)
+        if len(values) >= 50:
+            break
+    return tuple(values)
+
+
+def _safe_public_detail_text(value: object, *, max_length: int) -> str | None:
+    return _safe_public_query_text(value, max_length=max_length)
+
+
+def _safe_public_stage_status(value: object) -> str:
+    if not isinstance(value, str):
+        return "completed"
+    status = value.strip()
+    return status if status in _PUBLIC_STAGE_STATUSES else "completed"
 
 
 def _text(value: object) -> str | None:

@@ -1120,6 +1120,340 @@ def test_round_reducer_query_execution_reason_taxonomy_matches_runtime_public_ev
     assert agent_workbench_rounds._QUERY_EXECUTION_REASON_ALIASES == public_events._PUBLIC_REASON_MAP
 
 
+@pytest.mark.parametrize(
+    "unsafe_source_kind",
+    [
+        "https://provider.example/private/raw-identity",
+        "source_" + "x" * 80,
+    ],
+)
+def test_round_reducer_drops_unsafe_execution_source_identifier_before_public_response(
+    unsafe_source_kind: str,
+) -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    feedback = _public_stage_output(
+        output_id="rtout_execution_source_boundary",
+        stage="feedback",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["AI agent"],
+                        keyword_query="AI agent",
+                        lifecycle="executed",
+                        execution_status="completed",
+                        attempted=True,
+                        executions=[
+                            {"sourceKind": unsafe_source_kind, "status": "completed"},
+                            {"sourceKind": "internal_referrals", "status": "completed"},
+                        ],
+                    )
+                ]
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    assert [item.source_kind for item in summary.query_groups[0].executions] == ["internal_referrals"]
+    assert [item.sourceKind for item in response.thinkingProcess.rounds[0].queryGroups[0].executions] == [
+        "internal_referrals"
+    ]
+    assert unsafe_source_kind not in response.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("queryInstanceId", "Bearer private-token"),
+        ("termGroupKey", "Authorization: Bearer private-token"),
+        ("queryRole", "secret=private-token"),
+        ("laneType", "https://provider.example/private/raw-identity"),
+        ("keywordQuery", "https://provider.example/private/raw-identity"),
+    ],
+)
+def test_round_reducer_drops_query_groups_with_unsafe_required_text(
+    field: str,
+    unsafe_value: str,
+) -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    group = _v2_query_group(
+        query_instance_id="query-1",
+        term_group_key="group-1",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["AI agent"],
+        keyword_query="AI agent",
+        lifecycle="executed",
+        execution_status="completed",
+        attempted=True,
+    )
+    group[field] = unsafe_value
+    feedback = _public_stage_output(
+        output_id="rtout_required_query_text_boundary",
+        stage="feedback",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={"details": {"queryGroups": [group]}},
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    assert summary.query_groups == ()
+    assert unsafe_value not in response.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    ("query_terms", "expected_query_terms"),
+    [
+        (
+            ["AI agent", "Authorization: Bearer private-token", "https://provider.example/private/raw-identity"],
+            ("AI agent",),
+        ),
+        (["secret=private-token"], None),
+    ],
+)
+def test_round_reducer_filters_unsafe_query_terms_and_drops_empty_groups(
+    query_terms: list[str],
+    expected_query_terms: tuple[str, ...] | None,
+) -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    feedback = _public_stage_output(
+        output_id="rtout_query_terms_boundary",
+        stage="feedback",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=query_terms,
+                        keyword_query="AI agent",
+                        lifecycle="executed",
+                        execution_status="completed",
+                        attempted=True,
+                    )
+                ]
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    if expected_query_terms is None:
+        assert summary.query_groups == ()
+    else:
+        assert summary.query_groups[0].query_terms == expected_query_terms
+    serialized = response.model_dump_json()
+    assert "Authorization: Bearer private-token" not in serialized
+    assert "https://provider.example/private/raw-identity" not in serialized
+    assert "secret=private-token" not in serialized
+
+
+def test_round_reducer_bounds_safe_query_group_text_and_terms() -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    query_terms = [f"term-{index}-" + "x" * 200 for index in range(45)]
+    feedback = _public_stage_output(
+        output_id="rtout_query_group_bounds",
+        stage="feedback",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="i" * 161,
+                        term_group_key="g" * 161,
+                        query_role="r" * 81,
+                        lane_type="l" * 81,
+                        query_terms=query_terms,
+                        keyword_query="k" * 2001,
+                        lifecycle="executed",
+                        execution_status="completed",
+                        attempted=True,
+                    )
+                ]
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    [group] = summary.query_groups
+
+    assert group.query_instance_id == "i" * 160
+    assert group.term_group_key == "g" * 160
+    assert group.query_role == "r" * 80
+    assert group.lane_type == "l" * 80
+    assert group.keyword_query == "k" * 2000
+    assert group.query_terms == tuple(term[:160] for term in query_terms[:40])
+
+
+def test_round_reducer_sanitizes_feedback_detail_stage_source_and_status_before_public_response() -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    unsafe_source = "https://provider.example/private/raw-identity"
+    unsafe_detail = "Bearer private-token"
+    feedback = _public_stage_output(
+        output_id="rtout_feedback_public_detail_boundary",
+        stage="feedback",
+        round_no=1,
+        source_kind=unsafe_source,
+        status="Authorization: Bearer private-status",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "resumeQualityComment": "正常 observation。",
+                "reflectionSummary": unsafe_detail,
+                "suggestedActivateTerms": ["保留的建议", unsafe_detail, unsafe_source],
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    assert summary.resume_quality_comment == "正常 observation。"
+    assert summary.reflection_summary is None
+    assert summary.suggested_activate_terms == ("保留的建议",)
+    assert summary.stage_outputs[0].source_kind is None
+    assert summary.stage_outputs[0].status == "completed"
+    feedback_node = next(node for node in response.strategyGraph.nodes if node.stage == "feedback")
+    assert feedback_node.sourceKind == "all"
+    assert feedback_node.status == "completed"
+    assert response.thinkingProcess.rounds[0].cards[0].text == "正常 observation。"
+    serialized = response.model_dump_json()
+    assert unsafe_source not in serialized
+    assert unsafe_detail not in serialized
+    assert "Authorization: Bearer private-status" not in serialized
+
+
+def test_round_reducer_bounds_safe_feedback_details_before_public_response() -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    observation = "observation-" + "o" * 2000
+    suggested_terms = [f"term-{index}-" + "x" * 200 for index in range(55)]
+    feedback = _public_stage_output(
+        output_id="rtout_feedback_detail_bounds",
+        stage="feedback",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "resumeQualityComment": observation,
+                "suggestedActivateTerms": suggested_terms,
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    assert summary.resume_quality_comment == observation[:2000]
+    assert summary.suggested_activate_terms == tuple(term[:200] for term in suggested_terms[:50])
+    serialized = response.model_dump_json()
+    assert observation not in serialized
+    assert suggested_terms[-1] not in serialized
+
+
+def test_finalization_projection_drops_unsafe_reason_and_normalizes_status_before_public_response() -> None:
+    from seektalent_ui.agent_workbench_rounds import deterministic_finalization_from_stage_outputs
+
+    unsafe_reason = "https://provider.example/private/raw-finalization"
+    finalization = _public_stage_output(
+        output_id="rtout_finalization_public_boundary",
+        stage="finalization",
+        round_no=None,
+        status="Bearer private-finalization-status",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "finalizationReasonCode": unsafe_reason,
+            }
+        },
+    )
+
+    projection = deterministic_finalization_from_stage_outputs(
+        [finalization],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    assert projection is not None
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            deterministic_finalization=projection,
+        )
+    )
+
+    assert projection.reason_code is None
+    assert projection.status == "completed"
+    assert response.runtimeFinalization is not None
+    assert response.runtimeFinalization.reasonCode is None
+    assert response.runtimeFinalization.status == "completed"
+    serialized = response.model_dump_json()
+    assert unsafe_reason not in serialized
+    assert "Bearer private-finalization-status" not in serialized
+
+
 def test_round_reducer_drops_query_groups_with_the_wrong_stage_lifecycle() -> None:
     from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
 
