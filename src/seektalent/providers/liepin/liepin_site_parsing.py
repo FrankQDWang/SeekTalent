@@ -5,7 +5,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
 from seektalent.providers.liepin.detail_payload_text import find_liepin_whole_page_text_alias_paths
@@ -397,6 +397,23 @@ def _is_liepin_detail_url(url: str) -> bool:
         and (hostname == "liepin.com" or hostname.endswith(".liepin.com"))
         and (parsed.path or "").startswith("/resume/showresumedetail")
     )
+
+
+def stable_liepin_detail_candidate_key_hash(detail_url: str) -> str | None:
+    if not _is_liepin_detail_url(detail_url):
+        return None
+    parsed = urlparse(detail_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc.casefold() != "h.liepin.com"
+        or unquote(parsed.path or "").rstrip("/") != "/resume/showresumedetail"
+    ):
+        return None
+    subject_values = parse_qs(parsed.query, keep_blank_values=True).get("res_id_encode", [])
+    if len(subject_values) != 1 or not re.fullmatch(r"[A-Za-z0-9]+", subject_values[0]):
+        return None
+    material = f"liepin:res_id_encode:v1:{subject_values[0]}"
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
 def _is_blank_tab_url(url: str) -> bool:

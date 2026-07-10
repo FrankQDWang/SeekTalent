@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import PrivateAttr
 from pydantic import model_validator
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.providers.liepin.detail_payload_text import find_liepin_whole_page_text_alias_paths
@@ -279,6 +280,7 @@ class LiepinWorkerCandidateDetail(BaseModel):
     retention_policy: LiepinRetentionPolicy
     access_scope: LiepinAccessScope
     redaction_state: LiepinRedactionState
+    _opencli_private_candidate_identity: bool = PrivateAttr(default=False)
 
     @model_validator(mode="after")
     def reject_whole_page_text_payload_aliases(self) -> LiepinWorkerCandidateDetail:

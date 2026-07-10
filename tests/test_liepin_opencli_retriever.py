@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,7 +10,9 @@ from seektalent.providers.liepin.detail_payload_text import STRUCTURED_LIEPIN_DE
 from seektalent.providers.liepin.opencli_retriever import (
     LiepinOpenCliResumeRequest,
     LiepinOpenCliResumeRetriever,
+    _response_from_opencli_envelope,
 )
+from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
 from seektalent.providers.liepin.worker_contracts import LiepinResumeSearchResponse
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
@@ -104,14 +107,126 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
     assert len(response.resumes) == 2
     assert response.raw_candidate_count == 10
     assert "数据平台 Python resume 1" in response.resumes[0].normalized_text
-    assert response.resumes[0].payload["sourceUrl"] == (
-        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-1"
+    assert "sourceUrl" not in response.resumes[0].payload
+    assert "normalizedSnapshotRef" not in response.resumes[0].payload
+
+
+def test_claim_aware_detail_uses_carried_key_without_leaking_identity_transport() -> None:
+    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    candidate_key_hash = stable_liepin_detail_candidate_key_hash(detail_url)
+    assert candidate_key_hash is not None
+    resume = {
+        "claim_aware": True,
+        "provider_rank": 9,
+        "provider_candidate_key_hash": candidate_key_hash,
+        "protected_snapshot_ref": "artifact://protected/liepin-opencli/raw/run-9/9.json",
+        "normalized_snapshot_ref": "artifact://protected/liepin-opencli/normalized/run-9/9.json",
+        "detail_payload": {
+            "sourceUrl": detail_url,
+            "providerCandidateKeyHash": candidate_key_hash,
+            "providerRank": 9,
+            "protectedSnapshotRef": "artifact://protected/liepin-opencli/raw/run-9/9.json",
+            "currentTitle": "数据开发专家",
+            "currentCompany": "Example",
+            "skills": ["Python"],
+        },
+    }
+
+    response = _response_from_opencli_envelope(
+        {
+            "status": "succeeded",
+            "cards_seen": 1,
+            "action_trace_ref": "artifact://protected/liepin-opencli/trace/run-9/action-trace.json",
+            "resumes": [resume],
+        }
     )
-    assert (
-        response.resumes[0]
-        .payload["normalizedSnapshotRef"]
-        .startswith("artifact://protected/liepin-opencli/normalized/")
+    detail = response.resumes[0]
+    result = liepin_resume_search_response_to_search_result(response)
+
+    assert detail.provider_subject_id == candidate_key_hash
+    assert detail.synthetic_candidate_fingerprint != candidate_key_hash
+    assert "sourceUrl" not in detail.payload
+    assert "providerCandidateKeyHash" not in detail.payload
+    assert "providerRank" not in detail.payload
+    assert "protectedSnapshotRef" not in detail.payload
+    serialized_public_payload = json.dumps(
+        [detail.payload, result.candidates[0].raw, result.provider_snapshots[0].raw_payload],
+        ensure_ascii=False,
     )
+    assert "sameSubject" not in serialized_public_payload
+    assert candidate_key_hash not in serialized_public_payload
+    assert "run-9/9.json" not in serialized_public_payload
+
+
+@pytest.mark.parametrize("carried_key_hash", [None, "not-a-valid-carried-key"])
+def test_claim_aware_detail_without_a_valid_carried_key_fails_closed(
+    carried_key_hash: str | None,
+) -> None:
+    resume: dict[str, object] = {
+        "claim_aware": True,
+        "provider_rank": 1,
+        "detail_payload": {"currentTitle": "数据开发专家"},
+    }
+    if carried_key_hash is not None:
+        resume["provider_candidate_key_hash"] = carried_key_hash
+
+    with pytest.raises(RuntimeError, match="liepin_opencli_candidate_identity_mismatch"):
+        _response_from_opencli_envelope(
+            {
+                "status": "succeeded",
+                "cards_seen": 1,
+                "resumes": [resume],
+            }
+        )
+
+
+def test_claim_aware_detail_identity_is_stable_when_artifact_refs_and_rank_change() -> None:
+    candidate_key_hash = stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    )
+    assert candidate_key_hash is not None
+
+    def response_for(*, rank: int, artifact_run: str):
+        return _response_from_opencli_envelope(
+            {
+                "status": "succeeded",
+                "cards_seen": 1,
+                "resumes": [
+                    {
+                        "claim_aware": True,
+                        "provider_rank": rank,
+                        "provider_candidate_key_hash": candidate_key_hash,
+                        "protected_snapshot_ref": f"artifact://protected/liepin-opencli/raw/{artifact_run}/{rank}.json",
+                        "detail_payload": {"currentTitle": "数据开发专家"},
+                    }
+                ],
+            }
+        ).resumes[0]
+
+    first = response_for(rank=1, artifact_run="primary")
+    second = response_for(rank=9, artifact_run="explore")
+
+    assert first.provider_subject_id == second.provider_subject_id == candidate_key_hash
+    assert first.synthetic_candidate_fingerprint == second.synthetic_candidate_fingerprint
+
+
+def test_legacy_detail_without_a_carried_key_keeps_existing_fallback_identity() -> None:
+    response = _response_from_opencli_envelope(
+        {
+            "status": "succeeded",
+            "cards_seen": 1,
+            "resumes": [
+                {
+                    "provider_rank": 1,
+                    "candidate_resume_id": "legacy-run-1-rank-1",
+                    "provider_candidate_key_hash": "not-a-valid-carried-key",
+                    "detail_payload": {"currentTitle": "数据开发专家"},
+                }
+            ],
+        }
+    )
+
+    assert response.resumes[0].provider_subject_id is not None
 
 
 def test_opencli_retriever_structured_detail_fallback_deduplicates_and_caps_text(tmp_path: Path) -> None:

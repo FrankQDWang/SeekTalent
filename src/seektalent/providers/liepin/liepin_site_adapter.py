@@ -90,6 +90,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _safe_detail_payload_from_probe_output,
     _safe_filename,
     _safe_structured_cards_from_probe_output,
+    stable_liepin_detail_candidate_key_hash,
     _state_url as _state_url,
     _tab_page_id,
     _tab_urls_by_page_id,
@@ -105,6 +106,10 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     extract_liepin_search_button_ref,
     extract_liepin_search_input_ref,
 )
+
+
+def _is_provider_candidate_key_hash(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
 
 @dataclass(frozen=True)
@@ -973,6 +978,8 @@ class LiepinSiteAdapter:
         rank: int,
         require_ready: bool,
         emit_events: bool,
+        claim_aware: bool = False,
+        expected_provider_candidate_key_hash: str | None = None,
     ) -> OpenCliBrowserResult:
         try:
             if rank < 1 or rank > 100:
@@ -993,9 +1000,16 @@ class LiepinSiteAdapter:
                 page_url_hash = hashlib.sha256(current_url.encode("utf-8")).hexdigest()
                 if _is_liepin_detail_url(current_url):
                     source_url = current_url
+            provider_candidate_key_hash = (
+                stable_liepin_detail_candidate_key_hash(source_url) if source_url is not None else None
+            )
+            if claim_aware and (
+                not _is_provider_candidate_key_hash(expected_provider_candidate_key_hash)
+                or provider_candidate_key_hash is None
+                or provider_candidate_key_hash != expected_provider_candidate_key_hash
+            ):
+                raise OpenCliBrowserError("liepin_opencli_candidate_identity_mismatch")
             detail_payload = dict(payload)
-            if source_url is not None:
-                detail_payload["sourceUrl"] = source_url
             raw_snapshot_ref = self._write_pi_artifact(
                 "protected",
                 f"liepin-opencli/raw/{safe_run_id}/{rank}.json",
@@ -1016,20 +1030,25 @@ class LiepinSiteAdapter:
                     **payload,
                 },
             )
-            provider_material_ref = self._write_pi_artifact(
-                "protected",
-                f"liepin-opencli/provider-key/{safe_run_id}/{rank}.txt",
-                _detail_provider_key_material(safe_run_id=safe_run_id, rank=rank, payload=payload),
-            )
             resume: dict[str, object] = {
                 "provider_rank": rank,
-                "provider_candidate_key_material_ref": provider_material_ref,
-                "candidate_resume_id": f"liepin-opencli-detail-{safe_run_id}-{rank}",
                 "protected_snapshot_ref": raw_snapshot_ref,
                 "normalized_snapshot_ref": normalized_snapshot_ref,
                 "detail_payload": detail_payload,
                 "normalized_text": structured_liepin_detail_text(payload),
             }
+            if provider_candidate_key_hash is not None:
+                resume["provider_candidate_key_hash"] = provider_candidate_key_hash
+            if claim_aware:
+                resume["claim_aware"] = True
+            else:
+                provider_material_ref = self._write_pi_artifact(
+                    "protected",
+                    f"liepin-opencli/provider-key/{safe_run_id}/{rank}.txt",
+                    _detail_provider_key_material(safe_run_id=safe_run_id, rank=rank, payload=payload),
+                )
+                resume["provider_candidate_key_material_ref"] = provider_material_ref
+                resume["candidate_resume_id"] = f"liepin-opencli-detail-{safe_run_id}-{rank}"
             resumes = self._upsert_collected_resume(safe_run_id, rank=rank, resume=resume)
             if emit_events:
                 self._append_agent_event(
@@ -1047,6 +1066,24 @@ class LiepinSiteAdapter:
                 action="capture_liepin_detail_resume",
                 safe_reason_code=exc.safe_reason_code,
             )
+
+    def _capture_liepin_detail_resume_claim_aware(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        expected_provider_candidate_key_hash: str,
+        require_ready: bool = True,
+        emit_events: bool = False,
+    ) -> OpenCliBrowserResult:
+        return self._capture_liepin_detail_resume(
+            source_run_id=source_run_id,
+            rank=rank,
+            require_ready=require_ready,
+            emit_events=emit_events,
+            claim_aware=True,
+            expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
+        )
 
     def _discard_collected_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
         if rank < 1 or rank > 100:

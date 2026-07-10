@@ -40,9 +40,6 @@ def _safe_raw(
 ) -> dict[str, object]:
     raw: dict[str, object] = {
         "provider": "liepin",
-        "provider_subject_id": worker_candidate.provider_subject_id,
-        "provider_listing_id": worker_candidate.provider_listing_id,
-        "synthetic_candidate_fingerprint": worker_candidate.synthetic_candidate_fingerprint,
         "identity_confidence": worker_candidate.identity_confidence,
         "extraction_source": worker_candidate.extraction_source,
         "extractor_version": worker_candidate.extractor_version,
@@ -53,6 +50,10 @@ def _safe_raw(
         "raw_payload_artifact_ref": raw_payload_artifact_ref,
         "score_evidence_source": score_evidence_source,
     }
+    if not getattr(worker_candidate, "_opencli_private_candidate_identity", False):
+        raw["provider_subject_id"] = worker_candidate.provider_subject_id
+        raw["provider_listing_id"] = worker_candidate.provider_listing_id
+        raw["synthetic_candidate_fingerprint"] = worker_candidate.synthetic_candidate_fingerprint
     if isinstance(worker_candidate, LiepinWorkerCandidateCard):
         raw["safe_card_summary"] = _required_card_summary(worker_candidate).model_dump(mode="json")
         _copy_safe_card_payload_metadata(raw, provider_payload)

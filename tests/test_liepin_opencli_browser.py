@@ -39,6 +39,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _liepin_structured_cards_payload_probe_script,
     _safe_detail_payload_from_probe_output,
     _safe_structured_cards_from_probe_output,
+    stable_liepin_detail_candidate_key_hash,
 )
 from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
 from seektalent.providers.liepin.worker_contracts import LiepinSafeCardSummary
@@ -3915,7 +3916,39 @@ def test_finalize_liepin_resumes_marks_partial_when_target_is_not_met(tmp_path: 
     assert trace["resumes_returned"] == 1
 
 
-def test_capture_liepin_detail_resume_preserves_detail_source_url(tmp_path: Path) -> None:
+def test_stable_detail_candidate_key_hash_is_subject_stable_and_rejects_invalid_urls() -> None:
+    detail_url = (
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+        "&index=5&position=5&cur_page=0"
+    )
+
+    first = stable_liepin_detail_candidate_key_hash(detail_url)
+    second = stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?position=9&res_id_encode=sameSubject&index=9"
+    )
+
+    assert first is not None
+    assert first == second
+    assert len(first) == 64
+    assert first == hashlib.sha256("liepin:res_id_encode:v1:sameSubject".encode("utf-8")).hexdigest()
+    assert stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=one&res_id_encode=two"
+    ) is None
+    assert stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/"
+    ) is None
+    assert stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=not-valid"
+    ) is None
+    assert stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail-extra/?res_id_encode=sameSubject"
+    ) is None
+    assert stable_liepin_detail_candidate_key_hash(
+        "https://example.test/resume/showresumedetail/?res_id_encode=sameSubject"
+    ) is None
+
+
+def test_capture_liepin_detail_resume_carries_only_opaque_candidate_key(tmp_path: Path) -> None:
     detail_url = (
         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
         "&index=5&position=5&cur_page=0&pageSize=30&sfrom=RES_SEARCH&res_source=1&type=normal"
@@ -3939,7 +3972,79 @@ def test_capture_liepin_detail_resume_preserves_detail_source_url(tmp_path: Path
 
     assert captured.ok is True
     collected = json.loads((tmp_path / "protected" / "pi-detail" / "run-1" / "collected-resumes.json").read_text())
-    assert collected["resumes"][0]["detail_payload"]["sourceUrl"] == detail_url
+    candidate_key_hash = stable_liepin_detail_candidate_key_hash(detail_url)
+    assert candidate_key_hash is not None
+    assert collected["resumes"][0]["provider_candidate_key_hash"] == candidate_key_hash
+    assert "sourceUrl" not in collected["resumes"][0]["detail_payload"]
+    assert "778882227ddfWf393e2b5fdad" not in json.dumps(collected, ensure_ascii=False)
+
+
+def test_claim_aware_capture_rejects_mismatched_candidate_key_before_artifact_write(tmp_path: Path) -> None:
+    expected_key = stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=expectedSubject"
+    )
+    assert expected_key is not None
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(),
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=capturedSubject\n"
+                "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/resume/showresumedetail/?res_id_encode=capturedSubject"
+            ),
+        },
+    )
+
+    captured = _runner(commands, lease_dir=tmp_path)._capture_liepin_detail_resume(
+        source_run_id="run-1",
+        rank=1,
+        require_ready=True,
+        emit_events=False,
+        claim_aware=True,
+        expected_provider_candidate_key_hash=expected_key,
+    )
+
+    assert captured.ok is False
+    assert captured.safe_reason_code == "liepin_opencli_candidate_identity_mismatch"
+    assert not (tmp_path / "protected").exists()
+
+
+def test_claim_aware_capture_persists_only_the_matched_opaque_key(tmp_path: Path) -> None:
+    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    expected_key = stable_liepin_detail_candidate_key_hash(detail_url)
+    assert expected_key is not None
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(),
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject\n"
+                "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): detail_url,
+        },
+    )
+
+    captured = _runner(commands, lease_dir=tmp_path)._capture_liepin_detail_resume(
+        source_run_id="run-1",
+        rank=1,
+        require_ready=True,
+        emit_events=False,
+        claim_aware=True,
+        expected_provider_candidate_key_hash=expected_key,
+    )
+
+    assert captured.ok is True
+    collected = json.loads((tmp_path / "protected" / "pi-detail" / "run-1" / "collected-resumes.json").read_text())
+    resume = collected["resumes"][0]
+    assert resume["claim_aware"] is True
+    assert resume["provider_candidate_key_hash"] == expected_key
+    assert "provider_candidate_key_material_ref" not in resume
+    assert "candidate_resume_id" not in resume
+    assert "sourceUrl" not in resume["detail_payload"]
 
 
 def test_capture_liepin_detail_resume_preserves_collected_resumes_dict_schema_under_update(tmp_path: Path) -> None:
@@ -3983,7 +4088,8 @@ def test_capture_liepin_detail_resume_preserves_collected_resumes_dict_schema_un
     assert set(loaded) == {"schema_version", "resumes"}
     assert loaded["schema_version"] == "seektalent.opencli_collected_resumes.v1"
     assert [resume["provider_rank"] for resume in loaded["resumes"]] == [1, 2]
-    assert loaded["resumes"][0]["detail_payload"]["sourceUrl"] == detail_url
+    assert "sourceUrl" not in loaded["resumes"][0]["detail_payload"]
+    assert loaded["resumes"][0]["provider_candidate_key_hash"] == stable_liepin_detail_candidate_key_hash(detail_url)
 
 
 def test_capture_liepin_detail_resume_waits_until_detail_page_is_ready(tmp_path: Path) -> None:

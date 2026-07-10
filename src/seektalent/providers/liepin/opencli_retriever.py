@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
@@ -42,6 +43,23 @@ _RECOVERABLE_OPENCLI_READY_REASONS = {
     "liepin_opencli_daemon_stale",
     "liepin_opencli_status_unavailable",
 }
+_PRIVATE_DETAIL_TRANSPORT_KEYS = frozenset(
+    {
+        "actiontraceref",
+        "detailurl",
+        "normalizedsnapshotref",
+        "protectedsnapshotref",
+        "providercandidatekeyhash",
+        "provider_candidate_key_hash",
+        "provider_candidate_key_material_ref",
+        "providerrank",
+        "provider_rank",
+        "res_id_encode",
+        "source_url",
+        "sourceurl",
+        "url",
+    }
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -153,17 +171,15 @@ def _detail_from_resume_payload(
     *,
     action_trace_ref: object,
 ) -> LiepinWorkerCandidateDetail:
-    provider_rank = _positive_int(resume.get("provider_rank"), default=0)
-    payload = dict(cast(Mapping[str, object], resume.get("detail_payload") or {}))
-    provider_candidate_hash = _provider_candidate_hash(resume)
-    payload["providerCandidateKeyHash"] = provider_candidate_hash
-    payload["providerRank"] = provider_rank
-    payload["protectedSnapshotRef"] = resume.get("protected_snapshot_ref")
-    payload["normalizedSnapshotRef"] = resume.get("normalized_snapshot_ref")
-    payload["actionTraceRef"] = resume.get("action_trace_ref") or action_trace_ref
+    del action_trace_ref
+    payload = _public_detail_payload(resume.get("detail_payload"))
+    provider_candidate_hash = _provider_candidate_hash(
+        resume,
+        claim_aware=resume.get("claim_aware") is True,
+    )
     normalized_text = structured_liepin_detail_text(payload)
     fingerprint = hashlib.sha256(f"liepin-opencli:{provider_candidate_hash}".encode("utf-8")).hexdigest()
-    return LiepinWorkerCandidateDetail(
+    detail = LiepinWorkerCandidateDetail(
         payload=payload,
         normalized_text=normalized_text,
         provider_subject_id=provider_candidate_hash,
@@ -177,6 +193,8 @@ def _detail_from_resume_payload(
         access_scope="local_run_only",
         redaction_state="raw_provider_payload",
     )
+    detail._opencli_private_candidate_identity = True
+    return detail
 
 
 def _positive_int(value: object, *, default: int) -> int:
@@ -191,7 +209,12 @@ def _positive_int(value: object, *, default: int) -> int:
     return default
 
 
-def _provider_candidate_hash(resume: Mapping[str, object]) -> str:
+def _provider_candidate_hash(resume: Mapping[str, object], *, claim_aware: bool) -> str:
+    carried_key_hash = resume.get("provider_candidate_key_hash")
+    if _is_provider_candidate_key_hash(carried_key_hash):
+        return cast(str, carried_key_hash)
+    if claim_aware:
+        raise RuntimeError("liepin_opencli_candidate_identity_mismatch")
     material = str(
         resume.get("provider_candidate_key_material_ref")
         or resume.get("candidate_resume_id")
@@ -199,3 +222,37 @@ def _provider_candidate_hash(resume: Mapping[str, object]) -> str:
         or ""
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _is_provider_candidate_key_hash(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _public_detail_payload(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    return _strip_private_detail_transport(cast(Mapping[str, object], value))
+
+
+def _strip_private_detail_transport(value: Mapping[str, object]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key)
+        if key.casefold() in _PRIVATE_DETAIL_TRANSPORT_KEYS:
+            continue
+        sanitized = _strip_private_detail_value(raw_value)
+        if sanitized is not None:
+            payload[key] = sanitized
+    return payload
+
+
+def _strip_private_detail_value(value: object) -> object | None:
+    if isinstance(value, Mapping):
+        return _strip_private_detail_transport(cast(Mapping[str, object], value))
+    if isinstance(value, list | tuple):
+        return [item for raw_item in value if (item := _strip_private_detail_value(raw_item)) is not None]
+    if isinstance(value, str):
+        lower = value.casefold()
+        if value.startswith("artifact://") or "res_id_encode=" in lower or lower.startswith(("http://", "https://")):
+            return None
+    return value
