@@ -42,6 +42,8 @@ class FakeLiepinSearchWorkflowSite:
     resumes: list[dict[str, object]] = field(default_factory=list)
     capture_require_ready_values: list[bool] = field(default_factory=list)
     claim_aware_capture_expected_keys: list[str] = field(default_factory=list)
+    opened_refs: list[str] = field(default_factory=list)
+    cached_opened_refs: list[str] = field(default_factory=list)
     open_results: list[OpenCliBrowserResult] = field(default_factory=list)
     structured_cards: list[list[dict[str, object]]] = field(
         default_factory=lambda: [
@@ -107,8 +109,9 @@ class FakeLiepinSearchWorkflowSite:
         return f"https://h.liepin.com/resume/showresumedetail/?res_id_encode={ref}"
 
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
-        del source_run_id, ref
+        del source_run_id
         self.calls.append("open_liepin_detail")
+        self.opened_refs.append(ref)
         if self.open_results:
             return self.open_results.pop(0)
         if not self.open_ok:
@@ -127,8 +130,9 @@ class FakeLiepinSearchWorkflowSite:
         rank: int,
         detail_url: str,
     ) -> OpenCliBrowserResult:
-        del source_run_id, ref, detail_url
+        del source_run_id, detail_url
         self.calls.append("open_liepin_detail_cached_url")
+        self.cached_opened_refs.append(ref)
         if not self.open_ok:
             return OpenCliBrowserResult(
                 ok=False,
@@ -390,6 +394,51 @@ def test_private_claim_context_skips_opened_subject_after_rank_change() -> None:
     assert "open_liepin_detail" not in second_site.calls
     assert "open_liepin_detail_cached_url" not in second_site.calls
     assert ledger.snapshot()[key].status == "opened"
+
+
+def test_private_claim_context_drops_stale_rank_url_when_refresh_has_no_identity() -> None:
+    ledger = DetailOpenClaimLedger({})
+    first_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=firstSubject"
+    old_rank_two_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=oldRankTwoSubject"
+    site = FakeLiepinSearchWorkflowSite(
+        structured_cards=[
+            [
+                {"ref": "first", "provider_rank": 1},
+                {"ref": "old-rank-two", "provider_rank": 2},
+            ],
+            [{"ref": "new-rank-two", "provider_rank": 2}],
+        ],
+        detail_urls_by_ref={
+            "first": first_url,
+            "old-rank-two": old_rank_two_url,
+            "new-rank-two": None,
+        },
+        search_states=[
+            _search_state_with_detail_targets("first", "old-rank-two"),
+            _search_state_with_detail_targets("first", "old-rank-two"),
+            _search_state_with_detail_targets("first", "old-rank-two"),
+            _search_state_with_detail_targets("new-rank-two"),
+            _search_state_with_detail_targets("new-rank-two"),
+            _search_state_with_detail_targets("new-rank-two"),
+            _search_state_with_detail_targets("new-rank-two"),
+        ],
+    )
+
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=2),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    first_key = _detail_key("firstSubject")
+    old_rank_two_key = _detail_key("oldRankTwoSubject")
+    claims = ledger.snapshot()
+    assert envelope["status"] == "succeeded"
+    assert envelope["resumes_returned"] == 1
+    assert site.opened_refs == ["first"]
+    assert "new-rank-two" not in site.cached_opened_refs
+    assert set(claims) == {first_key}
+    assert claims[first_key].status == "opened"
+    assert old_rank_two_key not in claims
 
 
 @pytest.mark.parametrize(

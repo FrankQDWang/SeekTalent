@@ -225,8 +225,13 @@ class LiepinSearchWorkflow:
                 ref, rank = selected
                 if rank in detail_urls_by_rank and detail_open_claim_context is None:
                     continue
+                if detail_open_claim_context is not None:
+                    detail_urls_by_rank.pop(rank, None)
                 detail_url = self._site.safe_liepin_detail_url_for_ref(ref)
-                if detail_url is not None:
+                if detail_url is not None and (
+                    detail_open_claim_context is None
+                    or stable_liepin_detail_candidate_key_hash(detail_url) is not None
+                ):
                     detail_urls_by_rank[rank] = detail_url
 
         def has_cached_url_for_remaining_candidate() -> bool:
