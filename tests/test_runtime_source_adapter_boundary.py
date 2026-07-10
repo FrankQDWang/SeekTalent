@@ -29,6 +29,7 @@ from seektalent.runtime.source_query_intent import (
     RuntimeSourceQueryPolicy,
     build_runtime_source_query_intents,
     normalize_source_search_action,
+    query_package_from_intent,
 )
 from seektalent.runtime.source_round_dispatch import (
     RuntimeSourceInvariantError,
@@ -75,6 +76,7 @@ def _logical_dispatches() -> tuple[LogicalQueryDispatch, ...]:
             lane_type="exploit",
             query_instance_id="query-exploit",
             query_fingerprint="fingerprint-exploit",
+            term_group_key="term-group-exploit",
             query_terms=("data engineer", "spark"),
             keyword_query="data engineer spark",
             requested_count=7,
@@ -86,6 +88,7 @@ def _logical_dispatches() -> tuple[LogicalQueryDispatch, ...]:
             lane_type="generic_explore",
             query_instance_id="query-explore",
             query_fingerprint="fingerprint-explore",
+            term_group_key="term-group-explore",
             query_terms=("data engineer", "flink"),
             keyword_query="data engineer flink",
             requested_count=3,
@@ -135,6 +138,7 @@ def test_runtime_source_intent_preserves_query_identity_role_filters_and_budget_
     for cts_intent, liepin_intent in zip(intents_by_source["cts"], intents_by_source["liepin"], strict=True):
         assert liepin_intent.query_instance_id == cts_intent.query_instance_id
         assert liepin_intent.query_fingerprint == cts_intent.query_fingerprint
+        assert liepin_intent.term_group_key == cts_intent.term_group_key
         assert liepin_intent.query_role == cts_intent.query_role
         assert liepin_intent.lane_type == cts_intent.lane_type
         assert liepin_intent.query_terms == cts_intent.query_terms
@@ -147,6 +151,10 @@ def test_runtime_source_intent_preserves_query_identity_role_filters_and_budget_
     assert [intent.requested_count for intent in intents_by_source["cts"]] == [7, 3]
     assert [intent.requested_count for intent in intents_by_source["liepin"]] == [2, 1]
     assert [intent.provider_scan_limit for intent in intents_by_source["liepin"]] == [6, 3]
+    package = query_package_from_intent(intents_by_source["cts"][0])
+    assert package.query_instance_id == "query-exploit"
+    assert package.query_fingerprint == "fingerprint-exploit"
+    assert package.term_group_key == "term-group-exploit"
 
 
 def test_runtime_source_intent_budgeting_does_not_branch_on_concrete_source_ids() -> None:
@@ -154,6 +162,27 @@ def test_runtime_source_intent_budgeting_does_not_branch_on_concrete_source_ids(
 
     assert 'source_kind == "liepin"' not in source
     assert 'source_kind != "liepin"' not in source
+
+
+def test_runtime_source_query_intent_rejects_empty_term_group_key() -> None:
+    with pytest.raises(ValueError, match="^runtime_source_query_intent_missing_term_group_key$"):
+        RuntimeSourceQueryIntent(
+            round_no=1,
+            source_kind="cts",
+            query_role="exploit",
+            lane_type="exploit",
+            query_instance_id="query-1",
+            query_fingerprint="fingerprint-1",
+            term_group_key="",
+            query_terms=("data engineer",),
+            keyword_query="data engineer",
+            requested_count=1,
+            provider_scan_limit=1,
+            source_plan_version="test",
+            filter_intents=(),
+            location_intent=None,
+            age_intent=None,
+        )
 
 
 def test_liepin_source_compiler_preserves_runtime_role_budget_and_query_identity() -> None:
@@ -305,6 +334,7 @@ def test_liepin_supported_native_filters_do_not_emit_unsupported_warning() -> No
         lane_type="exploit",
         query_instance_id="query-1",
         query_fingerprint="fp-1",
+        term_group_key="term-group-data-etl",
         query_terms=("数据开发", "ETL"),
         keyword_query="数据开发 ETL",
         requested_count=10,
@@ -347,6 +377,7 @@ def test_liepin_supported_education_filters_do_not_emit_unsupported_warning() ->
         lane_type="exploit",
         query_instance_id="query-1",
         query_fingerprint="fp-1",
+        term_group_key="term-group-data-etl",
         query_terms=("数据开发",),
         keyword_query="数据开发 ETL",
         requested_count=10,

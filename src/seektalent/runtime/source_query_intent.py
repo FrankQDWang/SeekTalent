@@ -24,6 +24,7 @@ class RuntimeSourceQueryIntent:
     lane_type: LaneType
     query_instance_id: str
     query_fingerprint: str
+    term_group_key: str
     query_terms: tuple[str, ...]
     keyword_query: str
     requested_count: int
@@ -44,6 +45,8 @@ class RuntimeSourceQueryIntent:
             raise ValueError("runtime_source_query_intent_missing_query_instance_id")
         if not self.query_fingerprint:
             raise ValueError("runtime_source_query_intent_missing_query_fingerprint")
+        if not self.term_group_key:
+            raise ValueError("runtime_source_query_intent_missing_term_group_key")
 
 
 def query_package_from_intent(intent: RuntimeSourceQueryIntent) -> RuntimeQueryPackage:
@@ -51,6 +54,9 @@ def query_package_from_intent(intent: RuntimeSourceQueryIntent) -> RuntimeQueryP
         source_kind=intent.source_kind,
         query_role=intent.query_role,
         lane_type=intent.lane_type,
+        query_instance_id=intent.query_instance_id,
+        query_fingerprint=intent.query_fingerprint,
+        term_group_key=intent.term_group_key,
         query_terms=tuple(intent.query_terms),
         keyword_query=intent.keyword_query,
     )
@@ -130,6 +136,7 @@ def build_runtime_source_query_intents(
                     lane_type=dispatch.lane_type,
                     query_instance_id=dispatch.query_instance_id,
                     query_fingerprint=dispatch.query_fingerprint,
+                    term_group_key=dispatch.term_group_key,
                     query_terms=dispatch.query_terms,
                     keyword_query=dispatch.keyword_query,
                     requested_count=requested_count,

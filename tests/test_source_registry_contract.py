@@ -167,6 +167,7 @@ def test_fixture_source_executes_through_workflow_runtime_without_runtime_source
                     lane_type="exploit",
                     query_instance_id="fixture-query",
                     query_fingerprint="fixture-fingerprint",
+                    term_group_key="term-group-fixture-python",
                     query_terms=("fixture python",),
                     keyword_query="fixture python",
                     requested_count=1,

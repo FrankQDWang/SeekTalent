@@ -169,6 +169,7 @@ class LogicalQueryState:
     keyword_query: str
     query_instance_id: str
     query_fingerprint: str
+    term_group_key: str = ""
     next_page: int = 1
     exhausted: bool = False
     adapter_notes: list[str] = field(default_factory=list)
@@ -736,6 +737,7 @@ class RetrievalRuntime:
                     keyword_query=logical_query.keyword_query,
                     query_instance_id=logical_query.query_instance_id,
                     query_fingerprint=logical_query.query_fingerprint,
+                    term_group_key=logical_query.term_group_key,
                 )
             )
         return await self.execute_round_search(

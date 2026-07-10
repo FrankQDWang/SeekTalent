@@ -84,6 +84,7 @@ def _query_state(lane_type: str) -> LogicalQueryState:
         keyword_query=f"数据开发 {lane_type}",
         query_instance_id=f"query-{lane_type}",
         query_fingerprint=f"fingerprint-{lane_type}",
+        term_group_key=f"term-group-{lane_type}",
     )
 
 
@@ -145,6 +146,7 @@ def _dispatch(lane_type: str, requested_count: int) -> LogicalQueryDispatch:
         keyword_query=f"数据开发 {lane_type}",
         query_instance_id=f"query-{lane_type}",
         query_fingerprint=f"fingerprint-{lane_type}",
+        term_group_key=f"term-group-{lane_type}",
         requested_count=requested_count,
         source_plan_version="2",
     )
@@ -375,6 +377,10 @@ def test_logical_query_dispatch_freezes_requested_count_and_identity() -> None:
     assert [item.query_fingerprint for item in dispatches] == [
         "fingerprint-exploit",
         "fingerprint-generic_explore",
+    ]
+    assert [item.term_group_key for item in dispatches] == [
+        "term-group-exploit",
+        "term-group-generic_explore",
     ]
 
 
@@ -611,6 +617,38 @@ def test_execute_logical_dispatch_search_uses_frozen_requested_counts(tmp_path) 
         ("exploit", 6),
         ("generic_explore", 4),
     ]
+
+
+def test_execute_logical_dispatch_search_preserves_term_group_key(tmp_path) -> None:
+    captured_query_states: list[LogicalQueryState] = []
+
+    class CapturingRetrievalRuntime(RetrievalRuntime):
+        async def execute_round_search(self, **kwargs) -> RetrievalExecutionResult:
+            captured_query_states.extend(kwargs["query_states"])
+            return cast(RetrievalExecutionResult, None)
+
+    runtime = CapturingRetrievalRuntime(
+        settings=make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"),
+        retrieval_service=cast(Any, object()),
+    )
+    tracer = RunTracer(tmp_path / "trace-term-group-key")
+    try:
+        asyncio.run(
+            runtime.execute_logical_dispatch_search(
+                round_no=1,
+                retrieval_plan=_retrieval_plan(),
+                logical_queries=(_dispatch("exploit", 1),),
+                base_adapter_notes=[],
+                target_new=1,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert [item.term_group_key for item in captured_query_states] == ["term-group-exploit"]
 
 
 def test_round_search_result_from_source_dispatch_preserves_retrieval_metadata_without_source_branch(

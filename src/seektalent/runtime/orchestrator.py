@@ -175,6 +175,7 @@ from seektalent.runtime.source_lanes import (
     runtime_source_lane_result_from_source_result,
 )
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
+from seektalent.runtime.query_identity import build_term_group_key
 from seektalent.runtime.public_events import RuntimePublicEvent, make_runtime_public_event
 from seektalent.runtime.retrieval_runtime import (
     LogicalQueryState,
@@ -3947,6 +3948,11 @@ class WorkflowRuntime:
         )
         if second_lane_query_state is not None:
             query_states.append(second_lane_query_state)
+        for query_state in query_states:
+            query_state.term_group_key = build_term_group_key(
+                query_terms=query_state.query_terms,
+                query_term_pool=query_term_pool,
+            )
         return query_states, second_lane_decision
 
     async def _select_prf_backend_decision(

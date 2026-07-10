@@ -447,6 +447,49 @@ class SentQueryRecord(BaseModel):
         return self
 
 
+QueryExecutionStatus = Literal["completed", "partial", "blocked", "failed"]
+
+
+class QueryExecutionReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    round_no: int
+    source_kind: RuntimeSourceKind
+    query_instance_id: str
+    query_fingerprint: str
+    term_group_key: str
+    query_role: QueryRole
+    lane_type: LaneType
+    query_terms: list[str] = Field(default_factory=list)
+    keyword_query: str
+    requested_count: int
+    source_plan_version: str
+    status: QueryExecutionStatus
+    dispatch_started: bool
+    raw_candidate_count: int = Field(default=0, ge=0)
+    unique_candidate_count: int = Field(default=0, ge=0)
+    duplicate_candidate_count: int = Field(default=0, ge=0)
+    exhausted_reason: str | None = None
+    safe_reason_code: str | None = None
+
+
+class LogicalQueryOutcome(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query_instance_id: str
+    term_group_key: str
+    query_role: QueryRole
+    lane_type: LaneType
+    query_terms: list[str] = Field(default_factory=list)
+    keyword_query: str
+    attempted: bool
+    status: QueryExecutionStatus
+    raw_candidate_count: int = Field(default=0, ge=0)
+    unique_candidate_count: int = Field(default=0, ge=0)
+    duplicate_candidate_count: int = Field(default=0, ge=0)
+    receipts: list[QueryExecutionReceipt] = Field(default_factory=list)
+
+
 class QueryResumeHit(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -555,6 +598,7 @@ class RetrievalState(BaseModel):
     rescue_lane_history: list[dict[str, object]] = Field(default_factory=list)
     query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
+    query_execution_ledger: list[QueryExecutionReceipt] = Field(default_factory=list)
     second_lane_decision_history: list[SecondLaneDecision] = Field(default_factory=list)
     reflection_keyword_advice_history: list[ReflectionKeywordAdvice] = Field(default_factory=list)
     reflection_filter_advice_history: list[ReflectionFilterAdvice] = Field(default_factory=list)
@@ -1344,6 +1388,8 @@ class ReflectionContext(BaseModel):
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
     query_term_pool: list[QueryTermCandidate] = Field(default_factory=list)
     canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
+    controller_decision: ControllerDecision | None = None
+    query_outcomes: list[LogicalQueryOutcome] = Field(default_factory=list)
 
 
 class FinalizeContext(BaseModel):
@@ -1384,6 +1430,7 @@ class RoundState(BaseModel):
     top_pool_ids: list[str] = Field(default_factory=list)
     dropped_candidate_ids: list[str] = Field(default_factory=list)
     reflection_advice: ReflectionAdvice | None = None
+    query_outcomes: list[LogicalQueryOutcome] = Field(default_factory=list)
 
     @property
     def cts_queries(self) -> list[ProviderQuery]:

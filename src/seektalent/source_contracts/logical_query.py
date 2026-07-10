@@ -12,6 +12,7 @@ class LogicalQueryDispatch:
     lane_type: LaneType
     query_instance_id: str
     query_fingerprint: str
+    term_group_key: str
     query_terms: tuple[str, ...]
     keyword_query: str
     requested_count: int

@@ -1309,6 +1309,7 @@ def test_liepin_logical_query_bundle_records_executed_query_packages(tmp_path) -
         lane_type="exploit",
         query_instance_id="query-exploit",
         query_fingerprint="fingerprint-exploit",
+        term_group_key="term-group-fastapi-retrieval",
         query_terms=("FastAPI", "retrieval"),
         keyword_query="FastAPI retrieval",
         requested_count=3,

@@ -57,6 +57,9 @@ class RuntimeQueryPackage:
     source_kind: SourceKind | str | None = None
     query_role: str | None = None
     lane_type: str | None = None
+    query_instance_id: str | None = None
+    query_fingerprint: str | None = None
+    term_group_key: str | None = None
     query_terms: tuple[str, ...] = ()
     keyword_query: str | None = None
 
