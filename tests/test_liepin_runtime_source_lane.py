@@ -8,10 +8,14 @@ import pytest
 
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import RequirementSheet, ResumeCandidate
+from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.providers.liepin.client import LiepinWorkerModeError, liepin_resume_search_response_to_search_result
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
+from seektalent.providers.liepin.liepin_search_workflow import LiepinSearchWorkflow, LiepinSearchWorkflowRequest
+from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
 from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
+from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
 from seektalent.providers.liepin.opencli_retriever import _response_from_opencli_envelope
 import seektalent.sources.liepin.runtime_lane as runtime_lane
 from seektalent.sources.liepin.runtime_lane import (
@@ -105,6 +109,195 @@ class FakeWorker:
 
     async def open_details(self, request) -> object:
         raise AssertionError("card runtime lane must not fetch details")
+
+
+class _DeterministicPrivateClaimWorkflowSite:
+    def __init__(self, *, subject: str, opened_subjects: list[str]) -> None:
+        self._subject = subject
+        self._opened_subjects = opened_subjects
+        self.events: list[dict[str, object]] = []
+        self.resumes: list[dict[str, object]] = []
+
+    def append_agent_event(self, source_run_id: str, event: dict[str, object]) -> None:
+        del source_run_id
+        self.events.append(event)
+
+    def search_liepin_cards(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        max_pages: int,
+        max_cards: int,
+        native_filters: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del source_run_id, query, max_pages, max_cards, native_filters
+        return {"status": "succeeded", "cards_seen": 1}
+
+    def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
+        del source_run_id, max_cards
+        return OpenCliBrowserResult(
+            ok=True,
+            action="extract_structured_liepin_cards",
+            observation={"cards": [{"ref": "private-card-ref", "provider_rank": 1}]},
+        )
+
+    def observe_liepin_search_state(self) -> OpenCliBrowserResult:
+        return OpenCliBrowserResult(
+            ok=True,
+            action="observe_liepin_search_state",
+            observation={"detailTargets": [{"ref": "private-card-ref", "rank": 1}]},
+        )
+
+    def observe_liepin_detail_state(self) -> OpenCliBrowserResult:
+        return OpenCliBrowserResult(ok=True, action="observe_liepin_detail_state")
+
+    def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
+        if ref != "private-card-ref":
+            return None
+        return f"https://h.liepin.com/resume/showresumedetail/?res_id_encode={self._subject}"
+
+    def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
+        del source_run_id, ref, rank
+        raise AssertionError("private claim route must open the validated cached URL")
+
+    def open_liepin_detail_cached_url(
+        self,
+        *,
+        source_run_id: str,
+        ref: str,
+        rank: int,
+        detail_url: str,
+    ) -> OpenCliBrowserResult:
+        del source_run_id, ref, detail_url
+        self._opened_subjects.append(self._subject)
+        return OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": rank})
+
+    def wait_liepin_detail_ready(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
+        del source_run_id
+        return OpenCliBrowserResult(ok=True, action="wait_liepin_detail_ready", counts={"rank": rank})
+
+    def capture_liepin_detail_resume(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        require_ready: bool = True,
+    ) -> OpenCliBrowserResult:
+        del source_run_id, rank, require_ready
+        raise AssertionError("private claim route must use claim-aware capture")
+
+    def _capture_liepin_detail_resume_claim_aware(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        expected_provider_candidate_key_hash: str,
+        require_ready: bool = True,
+    ) -> OpenCliBrowserResult:
+        del source_run_id, require_ready
+        expected_key = stable_liepin_detail_candidate_key_hash(
+            f"https://h.liepin.com/resume/showresumedetail/?res_id_encode={self._subject}"
+        )
+        assert expected_key is not None
+        assert expected_provider_candidate_key_hash == expected_key
+        self.resumes.append(
+            {
+                "claim_aware": True,
+                "provider_candidate_key_hash": expected_provider_candidate_key_hash,
+                "detail_payload": {"currentTitle": "Data Engineer", "skills": ["Python"]},
+            }
+        )
+        return OpenCliBrowserResult(ok=True, action="capture_liepin_detail_resume", counts={"rank": rank})
+
+    def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
+        del source_run_id, rank
+        self.resumes.clear()
+
+    def restore_liepin_search_page(self) -> str | None:
+        return "private-search-page"
+
+    def finalize_liepin_resumes(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        max_pages: int,
+        max_cards: int,
+        cards_seen: int | None = None,
+        target_resumes: int | None = None,
+    ) -> dict[str, object]:
+        del source_run_id, query, max_pages, max_cards, target_resumes
+        return {
+            "status": "succeeded",
+            "stop_reason": "completed",
+            "cards_seen": cards_seen or 1,
+            "resumes": list(self.resumes),
+        }
+
+    def blocked_resumes_envelope(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        safe_reason_code: str | None,
+        cards_seen: int,
+    ) -> dict[str, object]:
+        del source_run_id, query
+        return {
+            "status": "blocked",
+            "safe_reason_code": safe_reason_code,
+            "cards_seen": cards_seen,
+            "resumes": [],
+        }
+
+
+class _DeterministicPrivateClaimWorkflowRunner:
+    def __init__(self, *, subject: str) -> None:
+        self._subject = subject
+        self.opened_subjects: list[str] = []
+        self.private_contexts: list[DetailOpenClaimSearchContext] = []
+
+    def status(self) -> OpenCliBrowserResult:
+        return OpenCliBrowserResult(ok=True, action="status")
+
+    def search_liepin_resumes(self, **kwargs: object) -> dict[str, object]:
+        del kwargs
+        raise AssertionError("concrete private chain must not use the generic runner route")
+
+    def _search_liepin_resumes_with_detail_open_claim_context(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        target_resumes: int,
+        max_pages: int,
+        max_cards: int,
+        native_filters: dict[str, object] | None,
+        detail_open_claim_context: DetailOpenClaimSearchContext,
+    ) -> dict[str, object]:
+        del native_filters
+        self.private_contexts.append(detail_open_claim_context)
+        site = _DeterministicPrivateClaimWorkflowSite(subject=self._subject, opened_subjects=self.opened_subjects)
+        envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+            LiepinSearchWorkflowRequest(
+                source_run_id=source_run_id,
+                query=query,
+                target_resumes=target_resumes,
+                max_pages=max_pages,
+                max_cards=max_cards,
+            ),
+            detail_open_claim_context=detail_open_claim_context,
+        )
+        final_reason_code = envelope.get("safe_reason_code")
+        envelope["workflow_steps"] = workflow_steps_from_action_events(
+            site.events,
+            final_status=str(envelope["status"]),
+            final_reason_code=final_reason_code if isinstance(final_reason_code, str) else None,
+            resumes_returned=len(site.resumes),
+            action_trace_ref=None,
+        )
+        return envelope
 
 
 def _requirement_sheet() -> RequirementSheet:
@@ -504,6 +697,143 @@ def test_liepin_logical_query_bundle_uses_one_private_opencli_ledger_across_logi
     assert sorted(
         (context.logical_round_no, context.query_instance_id) for context in retriever.private_contexts
     ) == [(2, "logical-query-2"), (3, "logical-query-3")]
+
+
+def test_concrete_opencli_private_chain_opens_same_subject_once_across_queries_and_rounds() -> None:
+    def logical_query(*, round_no: int, query_instance_id: str, query_role: str, lane_type: str) -> LogicalQueryDispatch:
+        return LogicalQueryDispatch(
+            round_no=round_no,
+            query_role=query_role,
+            lane_type=lane_type,
+            query_terms=("data", query_instance_id),
+            keyword_query=f"data {query_instance_id}",
+            query_instance_id=query_instance_id,
+            query_fingerprint=f"fingerprint-{query_instance_id}",
+            term_group_key=f"term-group-{query_instance_id}",
+            requested_count=1,
+            source_plan_version="detail-5",
+        )
+
+    def source_query_intents(
+        logical_queries: tuple[LogicalQueryDispatch, ...],
+    ) -> tuple[RuntimeSourceQueryIntent, ...]:
+        return tuple(
+            RuntimeSourceQueryIntent(
+                round_no=query.round_no,
+                source_kind="liepin",
+                query_role=query.query_role,
+                lane_type=query.lane_type,
+                query_instance_id=query.query_instance_id,
+                query_fingerprint=query.query_fingerprint,
+                term_group_key=query.term_group_key,
+                query_terms=query.query_terms,
+                keyword_query=query.keyword_query,
+                requested_count=query.requested_count,
+                provider_scan_limit=query.requested_count,
+                source_plan_version=query.source_plan_version,
+                filter_intents=(),
+                location_intent=None,
+                age_intent=None,
+            )
+            for query in logical_queries
+        )
+
+    subject = "sameSubject"
+    first_bundle_queries = (
+        logical_query(
+            round_no=1,
+            query_instance_id="round-1-exploit",
+            query_role="exploit",
+            lane_type="exploit",
+        ),
+        logical_query(
+            round_no=1,
+            query_instance_id="round-1-explore",
+            query_role="explore",
+            lane_type="generic_explore",
+        ),
+    )
+    second_bundle_queries = (
+        logical_query(
+            round_no=2,
+            query_instance_id="round-2-exploit",
+            query_role="exploit",
+            lane_type="exploit",
+        ),
+    )
+    runner = _DeterministicPrivateClaimWorkflowRunner(subject=subject)
+    worker_client = LiepinOpenCliWorkerClient(
+        retriever=LiepinOpenCliResumeRetriever(runner=runner),
+        connection_id="liepin-opencli",
+        provider_account_hash="local-opencli",
+    )
+    ledger = DetailOpenClaimLedger({})
+    settings = make_settings(
+        liepin_worker_mode="fake_fixture",
+        liepin_allow_fake_fixture_worker=True,
+    )
+
+    first_bundle = asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=settings,
+            runtime_run_id="runtime-run-detail-5",
+            source_plan_id="plan-liepin-detail-5",
+            job_title="Data Engineer",
+            jd="Build data systems.",
+            notes="Python",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=first_bundle_queries,
+            source_query_intents=source_query_intents(first_bundle_queries),
+            source_budget_policy=RuntimeSourceBudgetPolicy(page_size=1, max_cards=1),
+            liepin_context={"backend_mode": "opencli"},
+            detail_open_claim_ledger=ledger,
+            worker_client=worker_client,
+        )
+    )
+    second_bundle = asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=settings,
+            runtime_run_id="runtime-run-detail-5",
+            source_plan_id="plan-liepin-detail-5",
+            job_title="Data Engineer",
+            jd="Build data systems.",
+            notes="Python",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=second_bundle_queries,
+            source_query_intents=source_query_intents(second_bundle_queries),
+            source_budget_policy=RuntimeSourceBudgetPolicy(page_size=1, max_cards=1),
+            liepin_context={"backend_mode": "opencli"},
+            detail_open_claim_ledger=ledger,
+            worker_client=worker_client,
+        )
+    )
+
+    detail_key = stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    )
+    assert detail_key is not None
+    assert runner.opened_subjects == [subject]
+    assert len(runner.private_contexts) == 3
+    assert all(context.detail_open_claim_ledger is ledger for context in runner.private_contexts)
+    assert sorted(
+        (context.logical_round_no, context.query_instance_id) for context in runner.private_contexts
+    ) == [
+        (1, "round-1-exploit"),
+        (1, "round-1-explore"),
+        (2, "round-2-exploit"),
+    ]
+    assert ledger.snapshot()[detail_key].status == "opened"
+    assert ledger.snapshot()[detail_key].browser_open_attempt_count == 1
+
+    public_payload = json.dumps(
+        [first_bundle.to_public_payload(), second_bundle.to_public_payload()],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    assert detail_key not in public_payload
+    assert subject not in public_payload
+    assert "res_id_encode" not in public_payload
+    assert "private-card-ref" not in public_payload
 
 
 def test_liepin_detail_claim_route_fails_fast_without_logical_provenance() -> None:

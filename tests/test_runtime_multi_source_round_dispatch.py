@@ -411,11 +411,13 @@ def test_runtime_source_round_context_requires_explicit_detail_open_claim_ledger
         tracer.close()
 
 
-def test_runtime_checkpoint_uses_detail_claim_snapshot_without_private_ledger_payload(tmp_path) -> None:
+def test_runtime_checkpoint_persistence_rehydrates_opened_claim_without_private_ledger_payload(tmp_path) -> None:
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
     run_state = _run_state()
     ledger = DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key)
     ledger.try_claim("opaque-claim-key")
+    ledger.record_browser_open_attempt("opaque-claim-key")
+    ledger.mark_opened("opaque-claim-key")
     captured: list[object] = []
     tracer = RunTracer(tmp_path / "trace-checkpoint")
     try:
@@ -432,18 +434,23 @@ def test_runtime_checkpoint_uses_detail_claim_snapshot_without_private_ledger_pa
     checkpoint = captured[0]
     assert checkpoint.run_state is not run_state
     assert checkpoint.run_state.detail_open_claims_by_provider_key is not run_state.detail_open_claims_by_provider_key
-    assert checkpoint.run_state.detail_open_claims_by_provider_key["opaque-claim-key"].status == "claimed"
+    assert checkpoint.run_state.detail_open_claims_by_provider_key["opaque-claim-key"].status == "opened"
+    assert checkpoint.run_state.detail_open_claims_by_provider_key["opaque-claim-key"].browser_open_attempt_count == 1
     assert checkpoint.candidate_store is checkpoint.run_state.candidate_store
     assert checkpoint.normalized_store is checkpoint.run_state.normalized_store
     assert checkpoint.source_coverage_summary is checkpoint.run_state.source_coverage_summary
     assert "detail_open_claim_ledger" not in vars(checkpoint)
     assert "_lock" not in vars(checkpoint)
 
-    ledger.release_unattempted("opaque-claim-key")
+    restored_run_state = RunState.model_validate(checkpoint.run_state.model_dump(mode="json"))
+    restored_ledger = DetailOpenClaimLedger(restored_run_state.detail_open_claims_by_provider_key)
+    assert restored_ledger.try_claim("opaque-claim-key") is False
+
     ledger.try_claim("later-claim-key")
 
     assert "opaque-claim-key" in checkpoint.run_state.detail_open_claims_by_provider_key
     assert "later-claim-key" not in checkpoint.run_state.detail_open_claims_by_provider_key
+
 
 def test_logical_query_dispatch_freezes_requested_count_and_identity() -> None:
     dispatches = build_logical_query_dispatches(

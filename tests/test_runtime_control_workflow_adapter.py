@@ -68,6 +68,65 @@ def test_workflow_adapter_persists_run_and_runtime_callbacks(tmp_path: Path) -> 
     assert store.get_latest_checkpoint(runtime_run_id="runtime_run_1").run_state == {"round": 1}
 
 
+def test_workflow_adapter_persists_private_detail_claim_map_without_exposing_checkpoint_detail(tmp_path: Path) -> None:
+    from seektalent_runtime_control.detail import RuntimeDetailService
+    from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    claim_key = "a" * 64
+    claim_map = {
+        claim_key: {
+            "status": "opened",
+            "browser_open_attempt_count": 1,
+            "last_safe_reason_code": None,
+        }
+    }
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    executor = WorkflowRuntimeExecutor(
+        store=store,
+        runtime_factory=lambda: CallbackRuntime(
+            checkpoint_run_state={"detail_open_claims_by_provider_key": claim_map}
+        ),
+        runtime_run_id_factory=lambda: "runtime_run_1",
+        executor_id_factory=lambda: "executor_1",
+        checkpoint_id_factory=lambda: "rtcheckpoint_1",
+        now=_clock(
+            "2026-06-08T00:00:00.000000Z",
+            "2026-06-08T00:00:01.000000Z",
+            "2026-06-08T00:00:02.000000Z",
+            "2026-06-08T00:00:03.000000Z",
+            "2026-06-08T00:00:04.000000Z",
+            "2026-06-08T00:00:05.000000Z",
+        ),
+    )
+
+    asyncio.run(
+        executor.start_workflow(
+            conversation_id="agent_conv_1",
+            workbench_session_id="workbench_session_1",
+            approved_requirement=_approved_requirement(),
+            job_title="Senior Python Engineer",
+            jd_text="Build search systems.",
+            notes=None,
+            source_ids=["liepin"],
+        )
+    )
+
+    checkpoint = store.get_latest_checkpoint(runtime_run_id="runtime_run_1")
+    assert checkpoint is not None
+    assert checkpoint.run_state["detail_open_claims_by_provider_key"] == claim_map
+
+    detail = RuntimeDetailService(store=store).get_runtime_detail(
+        runtime_run_id="runtime_run_1",
+        kind="checkpoint",
+        checkpoint_id="rtcheckpoint_1",
+        include_artifacts=False,
+    )
+    assert claim_key not in detail.model_dump_json()
+    assert "detail_open_claims_by_provider_key" not in detail.model_dump_json()
+
+
 def test_workflow_adapter_supplies_liepin_source_context(tmp_path: Path) -> None:
     from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
     from seektalent_runtime_control.store import RuntimeControlStore
@@ -239,8 +298,9 @@ def test_workflow_adapter_records_runtime_run_failed_after_start_ack(tmp_path: P
 
 
 class CallbackRuntime:
-    def __init__(self) -> None:
+    def __init__(self, *, checkpoint_run_state: dict[str, object] | None = None) -> None:
         self.received: dict[str, object] = {}
+        self._checkpoint_run_state = checkpoint_run_state or {"round": 1}
 
     async def run_async(self, **kwargs):
         self.received = dict(kwargs)
@@ -256,7 +316,7 @@ class CallbackRuntime:
         kwargs["runtime_checkpoint_callback"](
             SimpleNamespace(
                 run_id="workflow_run_1",
-                run_state=SimpleNamespace(model_dump=lambda mode="json": {"round": 1}),
+                run_state=SimpleNamespace(model_dump=lambda mode="json": self._checkpoint_run_state),
             )
         )
         return SimpleNamespace(run_id="workflow_run_1")
