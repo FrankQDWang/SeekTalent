@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Protocol, cast
 
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.worker_contracts import (
     LiepinResumeSearchResponse,
     LiepinWorkerCandidateDetail,
@@ -101,10 +102,32 @@ class LiepinOpenCliResumeRetriever:
         )
 
     def search_resumes(self, request: LiepinOpenCliResumeRequest) -> LiepinResumeSearchResponse:
+        return self._search_resumes(request, search=self._search_liepin_resumes)
+
+    def _search_resumes_with_detail_open_claim_context(
+        self,
+        request: LiepinOpenCliResumeRequest,
+        *,
+        detail_open_claim_context: DetailOpenClaimSearchContext,
+    ) -> LiepinResumeSearchResponse:
+        return self._search_resumes(
+            request,
+            search=lambda resume_request: self._search_liepin_resumes_with_detail_open_claim_context(
+                resume_request,
+                detail_open_claim_context=detail_open_claim_context,
+            ),
+        )
+
+    def _search_resumes(
+        self,
+        request: LiepinOpenCliResumeRequest,
+        *,
+        search: Callable[[LiepinOpenCliResumeRequest], dict[str, object]],
+    ) -> LiepinResumeSearchResponse:
         self.ensure_ready()
-        envelope = self._search_liepin_resumes(request)
+        envelope = search(request)
         if _envelope_reason(envelope) in _RECOVERABLE_OPENCLI_READY_REASONS and self._recover_connection():
-            envelope = self._search_liepin_resumes(request)
+            envelope = search(request)
         return _response_from_opencli_envelope(envelope)
 
     def _search_liepin_resumes(self, request: LiepinOpenCliResumeRequest) -> dict[str, object]:
@@ -115,6 +138,25 @@ class LiepinOpenCliResumeRetriever:
             max_pages=request.max_pages,
             max_cards=request.max_cards,
             native_filters=request.native_filters,
+        )
+
+    def _search_liepin_resumes_with_detail_open_claim_context(
+        self,
+        request: LiepinOpenCliResumeRequest,
+        *,
+        detail_open_claim_context: DetailOpenClaimSearchContext,
+    ) -> dict[str, object]:
+        search = getattr(self._runner, "_search_liepin_resumes_with_detail_open_claim_context", None)
+        if not callable(search):
+            raise RuntimeError("liepin_opencli_private_detail_route_unavailable")
+        return cast(Callable[..., dict[str, object]], search)(
+            source_run_id=request.source_run_id,
+            query=request.keyword_query,
+            target_resumes=request.target_resumes,
+            max_pages=request.max_pages,
+            max_cards=request.max_cards,
+            native_filters=request.native_filters,
+            detail_open_claim_context=detail_open_claim_context,
         )
 
     def _recover_connection(self) -> bool:

@@ -13,6 +13,7 @@ from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 from seektalent.providers.liepin.card_policy import (
     LiepinCardDecisionAction,
     LiepinCardSummary,
@@ -22,6 +23,7 @@ from seektalent.providers.liepin.client import (
     LiepinWorkerClient,
     LiepinWorkerModeError,
     build_liepin_worker_client,
+    is_detail_open_claim_capable_liepin_worker,
     is_live_liepin_worker_mode,
 )
 from seektalent.providers.liepin.filter_compiler import LiepinSourceQueryIntent
@@ -68,6 +70,7 @@ async def run_liepin_source_lane(
     request: RuntimeSourceLaneRequest,
     worker_client: LiepinWorkerClient | None = None,
     compiled_search_request: SearchRequest | None = None,
+    detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
 ) -> RuntimeSourceLaneResult:
     runtime_run_id = request.runtime_run_id or f"runtime-source-lane:{request.source}"
     source_plan_id = request.source_plan_id or f"{runtime_run_id}:source:0:liepin"
@@ -126,11 +129,29 @@ async def run_liepin_source_lane(
         " ".join(query_terms).encode("utf-8")
     ).hexdigest()
     try:
-        search_result = await provider.search(
-            search_request,
-            round_no=1,
-            trace_id=source_lane_run_id,
-        )
+        if _uses_private_detail_open_claim_route(
+            worker_client=client,
+            search_request=search_request,
+            detail_open_claim_ledger=detail_open_claim_ledger,
+        ):
+            if detail_open_claim_ledger is None:
+                raise ValueError("liepin_detail_open_claim_route_missing_ledger")
+            if request.logical_round_no is None or request.logical_round_no < 1 or not request.logical_query_instance_id:
+                raise ValueError("liepin_detail_open_claim_route_missing_logical_provenance")
+            search_result = await provider.search_with_detail_open_claim_ledger(
+                search_request,
+                round_no=request.logical_round_no,
+                trace_id=source_lane_run_id,
+                detail_open_claim_ledger=detail_open_claim_ledger,
+                logical_round_no=request.logical_round_no,
+                query_instance_id=request.logical_query_instance_id,
+            )
+        else:
+            search_result = await provider.search(
+                search_request,
+                round_no=1,
+                trace_id=source_lane_run_id,
+            )
         if search_request.provider_context.get("liepin_fetch_strategy") == "detail_backed_resume_search":
             _assert_detail_backed_liepin_search_result(search_result)
     except LiepinWorkerPartialSearchError as error:
@@ -218,6 +239,7 @@ async def run_liepin_logical_query_bundle(
     liepin_context: RuntimeLiepinContextInput | None,
     source_query_intents: tuple[LiepinSourceQueryIntent, ...] | None = None,
     worker_client: LiepinWorkerClient | None = None,
+    detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
 ) -> RuntimeSourceLaneResult:
     compiled_bundle = (
         compile_liepin_source_query_intents(source_query_intents) if source_query_intents is not None else None
@@ -265,6 +287,7 @@ async def run_liepin_logical_query_bundle(
                     source_plan_id=source_plan_id,
                     source_lane_run_id=lane_run_id,
                     source_query_terms=source_query_terms,
+                    logical_round_no=logical_query.round_no,
                     logical_query_instance_id=logical_query.query_instance_id,
                     logical_query_fingerprint=logical_query.query_fingerprint,
                     logical_query_role=logical_query_role,
@@ -277,6 +300,7 @@ async def run_liepin_logical_query_bundle(
                 ),
                 worker_client=worker_client,
                 compiled_search_request=compiled_request,
+                detail_open_claim_ledger=detail_open_claim_ledger,
             )
             result = _with_liepin_executed_query_package(
                 result,
@@ -319,6 +343,19 @@ async def run_liepin_logical_query_bundle(
     if merged_result is None:
         raise ValueError("Liepin logical query bundle requires at least one logical query.")
     return merged_result
+
+
+def _uses_private_detail_open_claim_route(
+    *,
+    worker_client: LiepinWorkerClient,
+    search_request: SearchRequest,
+    detail_open_claim_ledger: DetailOpenClaimLedger | None,
+) -> bool:
+    return (
+        detail_open_claim_ledger is not None
+        and is_detail_open_claim_capable_liepin_worker(worker_client)
+        and search_request.provider_context.get("liepin_fetch_strategy") == "detail_backed_resume_search"
+    )
 
 
 def merge_liepin_card_lane_results(

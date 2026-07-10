@@ -28,6 +28,7 @@ from seektalent.opencli_browser.runtime import (
 )
 from seektalent_runtime_control.artifact_policy import RuntimeArtifactPolicy, normalize_artifact_output_mode
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.opencli_filter_planning import (
     LIEPIN_FILTER_SECTION_LABELS,
     RETRYABLE_NATIVE_FILTER_REASONS,
@@ -1117,6 +1118,34 @@ class LiepinSiteAdapter:
                 max_cards=max_cards,
                 native_filters=native_filters,
             )
+        )
+
+    def _search_liepin_resumes_with_detail_open_claim_context(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        target_resumes: int,
+        max_pages: int,
+        max_cards: int,
+        native_filters: Mapping[str, object] | None,
+        detail_open_claim_context: DetailOpenClaimSearchContext,
+    ) -> dict[str, object]:
+        from seektalent.providers.liepin.liepin_search_workflow import (
+            LiepinSearchWorkflow,
+            LiepinSearchWorkflowRequest,
+        )
+
+        return LiepinSearchWorkflow(site=_LiepinSearchWorkflowSite(self))._search_detail_backed_resumes_with_detail_open_claim_context(
+            LiepinSearchWorkflowRequest(
+                source_run_id=source_run_id,
+                query=query,
+                target_resumes=target_resumes,
+                max_pages=max_pages,
+                max_cards=max_cards,
+                native_filters=native_filters,
+            ),
+            detail_open_claim_context=detail_open_claim_context,
         )
 
     def finalize_liepin_resumes(

@@ -384,6 +384,7 @@ class RuntimeSourceLaneRequest:
     source_lane_run_id: str | None = None
     attempt: int = 1
     source_query_terms: tuple[str, ...] = ()
+    logical_round_no: int | None = None
     logical_query_instance_id: str | None = None
     logical_query_fingerprint: str | None = None
     logical_query_role: QueryRole | None = None

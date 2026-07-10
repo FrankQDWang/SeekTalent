@@ -9,7 +9,9 @@ import pytest
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.providers.liepin.client import LiepinWorkerModeError, liepin_resume_search_response_to_search_result
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
+from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 from seektalent.providers.liepin.opencli_retriever import _response_from_opencli_envelope
 import seektalent.sources.liepin.runtime_lane as runtime_lane
 from seektalent.sources.liepin.runtime_lane import (
@@ -18,7 +20,7 @@ from seektalent.sources.liepin.runtime_lane import (
     run_liepin_source_lane,
     runtime_safe_reason_code_from_worker_failure_code,
 )
-from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
+from seektalent.providers.liepin.worker_contracts import LiepinResumeSearchResponse, LiepinWorkerPartialSearchError
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.source_filters import RuntimeLocationExecutionIntent
 from seektalent.runtime.source_lanes import (
@@ -402,6 +404,215 @@ def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_c
         (package.query_instance_id, package.query_fingerprint, package.term_group_key)
         for package in result.executed_query_packages
     ] == [("runtime-query-1", "runtime-fingerprint-1", "term-group-data-platform")]
+
+
+def test_liepin_logical_query_bundle_uses_one_private_opencli_ledger_across_logical_queries() -> None:
+    class ClaimAwareOpenCliRetriever:
+        def __init__(self) -> None:
+            self.private_contexts: list[object] = []
+
+        def ensure_ready(self) -> None:
+            return None
+
+        def search_resumes(self, request):
+            raise AssertionError("claim-aware bundle must not use the generic OpenCLI retriever route")
+
+        def _search_resumes_with_detail_open_claim_context(self, request, *, detail_open_claim_context):
+            self.private_contexts.append(detail_open_claim_context)
+            return LiepinResumeSearchResponse(
+                resumes=[],
+                exhausted=True,
+                requestPayload={"backend": "opencli"},
+                rawCandidateCount=0,
+            )
+
+    logical_queries = (
+        LogicalQueryDispatch(
+            round_no=2,
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=("数据开发", "平台"),
+            keyword_query="数据开发 平台",
+            query_instance_id="logical-query-2",
+            query_fingerprint="logical-fingerprint-2",
+            term_group_key="term-group-2",
+            requested_count=2,
+            source_plan_version="7",
+        ),
+        LogicalQueryDispatch(
+            round_no=3,
+            query_role="explore",
+            lane_type="generic_explore",
+            query_terms=("数据开发", "flink"),
+            keyword_query="数据开发 flink",
+            query_instance_id="logical-query-3",
+            query_fingerprint="logical-fingerprint-3",
+            term_group_key="term-group-3",
+            requested_count=2,
+            source_plan_version="7",
+        ),
+    )
+    source_query_intents = tuple(
+        RuntimeSourceQueryIntent(
+            round_no=query.round_no,
+            source_kind="liepin",
+            query_role=query.query_role,
+            lane_type=query.lane_type,
+            query_instance_id=query.query_instance_id,
+            query_fingerprint=query.query_fingerprint,
+            term_group_key=query.term_group_key,
+            query_terms=query.query_terms,
+            keyword_query=query.keyword_query,
+            requested_count=query.requested_count,
+            provider_scan_limit=query.requested_count,
+            source_plan_version=query.source_plan_version,
+            filter_intents=(),
+            location_intent=None,
+            age_intent=None,
+        )
+        for query in logical_queries
+    )
+    retriever = ClaimAwareOpenCliRetriever()
+    client = LiepinOpenCliWorkerClient(
+        retriever=retriever,
+        connection_id="liepin-opencli",
+        provider_account_hash="local-opencli",
+    )
+    ledger = DetailOpenClaimLedger({})
+
+    result = asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=make_settings(),
+            runtime_run_id="runtime-run-claim-ledger",
+            source_plan_id="plan-liepin",
+            job_title="数据开发专家",
+            jd="负责数据平台建设",
+            notes="Python",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=logical_queries,
+            source_query_intents=source_query_intents,
+            source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
+            liepin_context=None,
+            detail_open_claim_ledger=ledger,
+            worker_client=client,
+        )
+    )
+
+    assert result.status == "completed"
+    assert len(retriever.private_contexts) == 2
+    assert all(context.detail_open_claim_ledger is ledger for context in retriever.private_contexts)
+    assert sorted(
+        (context.logical_round_no, context.query_instance_id) for context in retriever.private_contexts
+    ) == [(2, "logical-query-2"), (3, "logical-query-3")]
+
+
+def test_liepin_detail_claim_route_fails_fast_without_logical_provenance() -> None:
+    class UnreachableClaimAwareRetriever:
+        def __init__(self) -> None:
+            self.ready_calls = 0
+
+        def ensure_ready(self) -> None:
+            self.ready_calls += 1
+
+    retriever = UnreachableClaimAwareRetriever()
+    client = LiepinOpenCliWorkerClient(
+        retriever=retriever,
+        connection_id="liepin-opencli",
+        provider_account_hash="local-opencli",
+    )
+    request = RuntimeSourceLaneRequest(
+        source="liepin",
+        lane_mode="card",
+        job_title="数据开发专家",
+        jd="负责数据平台建设",
+        notes="Python",
+        requirement_sheet=_requirement_sheet(),
+        source_query_terms=("数据开发", "Python"),
+    )
+    detail_backed_request = SearchRequest(
+        query_terms=["数据开发", "Python"],
+        query_role="primary",
+        keyword_query="数据开发 Python",
+        adapter_notes=[],
+        runtime_constraints=[],
+        fetch_mode="detail",
+        page_size=2,
+        provider_context={"liepin_fetch_strategy": "detail_backed_resume_search"},
+    )
+
+    with pytest.raises(ValueError, match="liepin_detail_open_claim_route_missing_logical_provenance"):
+        asyncio.run(
+            run_liepin_source_lane(
+                settings=make_settings(),
+                request=request,
+                worker_client=client,
+                compiled_search_request=detail_backed_request,
+                detail_open_claim_ledger=DetailOpenClaimLedger({}),
+            )
+        )
+
+    assert retriever.ready_calls == 0
+
+
+def test_liepin_detail_claim_ledger_keeps_non_concrete_worker_on_generic_search() -> None:
+    class GenericDetailWorker:
+        def __init__(self) -> None:
+            self.search_round_nos: list[int] = []
+            self.provider_contexts: list[dict[str, object]] = []
+
+        async def ensure_ready(self, *, on_event=None) -> None:
+            del on_event
+
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            del trace_id, provider_account_hash
+            self.search_round_nos.append(round_no)
+            self.provider_contexts.append(dict(request.provider_context))
+            return SearchResult(candidates=[], exhausted=True, raw_candidate_count=0)
+
+    worker = GenericDetailWorker()
+    request = RuntimeSourceLaneRequest(
+        source="liepin",
+        lane_mode="card",
+        job_title="数据开发专家",
+        jd="负责数据平台建设",
+        notes="Python",
+        requirement_sheet=_requirement_sheet(),
+        source_query_terms=("数据开发", "Python"),
+        logical_round_no=4,
+        logical_query_instance_id="logical-query-4",
+    )
+    detail_backed_request = SearchRequest(
+        query_terms=["数据开发", "Python"],
+        query_role="primary",
+        keyword_query="数据开发 Python",
+        adapter_notes=[],
+        runtime_constraints=[],
+        fetch_mode="detail",
+        page_size=2,
+        provider_context={"liepin_fetch_strategy": "detail_backed_resume_search"},
+    )
+
+    result = asyncio.run(
+        run_liepin_source_lane(
+            settings=make_settings(),
+            request=request,
+            worker_client=worker,
+            compiled_search_request=detail_backed_request,
+            detail_open_claim_ledger=DetailOpenClaimLedger({}),
+        )
+    )
+
+    assert result.status == "completed"
+    assert worker.search_round_nos == [1]
+    assert "detail_open_claim_ledger" not in worker.provider_contexts[0]
+    assert "logical_round_no" not in worker.provider_contexts[0]
 
 
 async def _run_fixture_two_query_liepin_bundle():

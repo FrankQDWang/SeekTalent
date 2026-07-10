@@ -6,6 +6,7 @@ import threading
 
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.opencli_retriever import (
     LiepinOpenCliResumeRequest,
     LiepinOpenCliResumeRetriever,
@@ -54,6 +55,38 @@ class LiepinOpenCliWorkerClient:
         provider_account_hash: str | None = None,
     ) -> SearchResult:
         del round_no, provider_account_hash
+        return await self._search(request, trace_id=trace_id)
+
+    async def search_with_detail_open_claim_ledger(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+        detail_open_claim_ledger: DetailOpenClaimLedger,
+        logical_round_no: int,
+        query_instance_id: str,
+    ) -> SearchResult:
+        del round_no, provider_account_hash
+        detail_open_claim_context = DetailOpenClaimSearchContext(
+            detail_open_claim_ledger=detail_open_claim_ledger,
+            logical_round_no=logical_round_no,
+            query_instance_id=query_instance_id,
+        )
+        return await self._search(
+            request,
+            trace_id=trace_id,
+            detail_open_claim_context=detail_open_claim_context,
+        )
+
+    async def _search(
+        self,
+        request: SearchRequest,
+        *,
+        trace_id: str,
+        detail_open_claim_context: DetailOpenClaimSearchContext | None = None,
+    ) -> SearchResult:
         requirement_sheet = _json_object(request.provider_context.get("liepin_requirement_sheet_json"))
         if requirement_sheet is None:
             raise LiepinWorkerModeError(
@@ -75,6 +108,7 @@ class LiepinOpenCliWorkerClient:
                     requirement_sheet=requirement_sheet,
                     native_filters=_native_filters_from_request(request),
                 ),
+                detail_open_claim_context=detail_open_claim_context,
             )
         except RuntimeError as exc:
             raise LiepinWorkerModeError("Liepin OpenCLI resume search blocked.", code=str(exc)) from exc
@@ -95,8 +129,18 @@ class LiepinOpenCliWorkerClient:
             )
         return search_result
 
-    def _search_resumes_sync(self, request: LiepinOpenCliResumeRequest):
+    def _search_resumes_sync(
+        self,
+        request: LiepinOpenCliResumeRequest,
+        *,
+        detail_open_claim_context: DetailOpenClaimSearchContext | None = None,
+    ):
         with _OPENCLI_SEARCH_LOCK:
+            if detail_open_claim_context is not None:
+                return self._retriever._search_resumes_with_detail_open_claim_context(
+                    request,
+                    detail_open_claim_context=detail_open_claim_context,
+                )
             return self._retriever.search_resumes(request)
 
     async def session_status(

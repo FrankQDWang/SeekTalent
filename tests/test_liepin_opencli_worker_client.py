@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from seektalent.core.retrieval.provider_contract import SearchRequest
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 from seektalent.providers.liepin.worker_contracts import (
     LiepinResumeSearchResponse,
@@ -88,6 +89,61 @@ def test_opencli_worker_forwards_runtime_request_to_deterministic_retriever() ->
     assert retriever.calls[0].target_resumes == 2
     assert retriever.calls[0].max_cards == 10
     assert retriever.calls[0].requirement_sheet == {"job_title": "数据开发专家"}
+
+
+def test_opencli_worker_private_claim_route_forwards_same_ledger_and_logical_provenance() -> None:
+    class ClaimAwareRetriever(FakeRetriever):
+        def __init__(self) -> None:
+            super().__init__(calls=[])
+            self.private_contexts: list[object] = []
+
+        def search_resumes(self, request):
+            raise AssertionError("private claim route must not use the normal retriever method")
+
+        def _search_resumes_with_detail_open_claim_context(self, request, *, detail_open_claim_context):
+            self.calls.append(request)
+            self.private_contexts.append(detail_open_claim_context)
+            return LiepinResumeSearchResponse(
+                resumes=[],
+                exhausted=True,
+                requestPayload={"backend": "opencli"},
+                rawCandidateCount=3,
+            )
+
+    retriever = ClaimAwareRetriever()
+    ledger = DetailOpenClaimLedger({})
+    client = LiepinOpenCliWorkerClient(
+        retriever=retriever,
+        connection_id="liepin-opencli",
+        provider_account_hash="local-opencli",
+    )
+
+    result = asyncio.run(
+        client.search_with_detail_open_claim_ledger(
+            SearchRequest(
+                query_terms=["数据开发", "Python"],
+                query_role="primary",
+                keyword_query="数据开发 Python",
+                adapter_notes=[],
+                runtime_constraints=[],
+                fetch_mode="detail",
+                page_size=2,
+                provider_context={"liepin_requirement_sheet_json": '{"job_title":"数据开发专家"}'},
+            ),
+            round_no=5,
+            trace_id="run-claim-5",
+            detail_open_claim_ledger=ledger,
+            logical_round_no=5,
+            query_instance_id="logical-query-5",
+        )
+    )
+
+    assert result.raw_candidate_count == 3
+    assert len(retriever.private_contexts) == 1
+    context = retriever.private_contexts[0]
+    assert context.detail_open_claim_ledger is ledger
+    assert context.logical_round_no == 5
+    assert context.query_instance_id == "logical-query-5"
 
 
 def test_opencli_worker_search_does_not_block_event_loop() -> None:

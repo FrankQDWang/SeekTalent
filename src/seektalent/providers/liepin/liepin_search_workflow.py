@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_state_machine import (
     LiepinStateSnapshot,
     LiepinTransition,
@@ -105,6 +106,30 @@ class LiepinSearchWorkflow:
         self._transition_runner = LiepinTransitionRunner()
 
     def search_detail_backed_resumes(self, request: LiepinSearchWorkflowRequest) -> dict[str, object]:
+        return self._search_detail_backed_resumes(request)
+
+    def _search_detail_backed_resumes_with_detail_open_claim_context(
+        self,
+        request: LiepinSearchWorkflowRequest,
+        *,
+        detail_open_claim_context: DetailOpenClaimSearchContext,
+    ) -> dict[str, object]:
+        return self._search_detail_backed_resumes(
+            request,
+            detail_open_claim_context=detail_open_claim_context,
+        )
+
+    def _search_detail_backed_resumes(
+        self,
+        request: LiepinSearchWorkflowRequest,
+        *,
+        detail_open_claim_context: DetailOpenClaimSearchContext | None = None,
+    ) -> dict[str, object]:
+        if detail_open_claim_context is not None and (
+            detail_open_claim_context.logical_round_no < 1
+            or not detail_open_claim_context.query_instance_id.strip()
+        ):
+            raise ValueError("detail_open_claim_context_missing_logical_provenance")
         if request.target_resumes < 1 or request.target_resumes > 10:
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
 

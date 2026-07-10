@@ -1751,6 +1751,60 @@ def test_liepin_backend_blocked_stays_blocked_when_cts_is_also_selected(monkeypa
     assert result.safe_reason_code == "blocked_backend_unavailable"
 
 
+def test_liepin_source_round_passes_the_context_owned_claim_ledger_to_private_bundle(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    async def completed_liepin_bundle(**kwargs) -> RuntimeSourceLaneResult:
+        captured.update(kwargs)
+        return RuntimeSourceLaneResult(
+            runtime_run_id=kwargs["runtime_run_id"],
+            source_plan_id=kwargs["source_plan_id"],
+            source_lane_run_id=f"{kwargs['source_plan_id']}:lane-1",
+            source="liepin",
+            lane_mode="card",
+            attempt=1,
+            status="completed",
+        )
+
+    monkeypatch.setattr("seektalent.source_adapters.run_liepin_logical_query_bundle", completed_liepin_bundle)
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
+    tracer = RunTracer(tmp_path / "trace-liepin-private-ledger")
+    context = _source_round_context(
+        source_plan=RuntimeSourceLanePlan(
+            source_plan_id="plan-liepin",
+            runtime_run_id="run-1",
+            source="liepin",
+            label="Liepin",
+        ),
+        tracer=tracer,
+        source_context={"backend_mode": "opencli"},
+    )
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=(_dispatch("exploit", 2),),
+        selected_sources=("liepin",),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+    )
+
+    try:
+        result = asyncio.run(
+            _run_liepin_source_round(
+                runtime=runtime,
+                context=context,
+                request=request,
+                source_id="liepin",
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.status == "completed"
+    assert captured["detail_open_claim_ledger"] is context.detail_open_claim_ledger
+
+
 def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_source(monkeypatch, tmp_path) -> None:
     async def blocked_liepin_bundle(**kwargs) -> RuntimeSourceLaneResult:
         return RuntimeSourceLaneResult(

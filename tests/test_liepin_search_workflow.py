@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_search_workflow import (
     LiepinSearchWorkflow,
     LiepinSearchWorkflowRequest,
@@ -238,6 +239,24 @@ def test_workflow_opens_details_until_target_count() -> None:
     assert "search_liepin_cards" in site.calls
     assert "extract_structured_liepin_cards" in site.calls
     assert "finalize_liepin_resumes" in site.calls
+
+
+def test_private_claim_context_route_preserves_current_detail_search_behavior() -> None:
+    site = FakeLiepinSearchWorkflowSite()
+    ledger = DetailOpenClaimLedger({})
+
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=DetailOpenClaimSearchContext(
+            detail_open_claim_ledger=ledger,
+            logical_round_no=4,
+            query_instance_id="logical-query-4",
+        ),
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert envelope["resumes_returned"] == 1
+    assert site.calls.count("open_liepin_detail") == 1
 
 
 def test_workflow_initial_card_extraction_uses_state_probe_before_and_after() -> None:

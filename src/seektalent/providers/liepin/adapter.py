@@ -13,6 +13,7 @@ from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.providers.liepin.client import EventCallback
 from seektalent.providers.liepin.client import LiepinWorkerClient
 from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.providers.liepin.client import is_detail_open_claim_capable_liepin_worker
 from seektalent.providers.liepin.client import is_live_liepin_worker_mode
 from seektalent.providers.liepin.connection_safety import (
     DEFAULT_SENSITIVE_MATERIAL_POLICY_ID,
@@ -21,6 +22,7 @@ from seektalent.providers.liepin.connection_safety import (
     TransportMode,
     validate_provider_connection_safety,
 )
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.models import LiepinConnectionRow
 from seektalent.providers.liepin.policy import LiepinCardCandidate
 from seektalent.providers.liepin.store import LiepinStore
@@ -172,6 +174,50 @@ class LiepinProviderAdapter:
         )
 
     async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:
+        return await self._search(
+            request,
+            round_no=round_no,
+            trace_id=trace_id,
+        )
+
+    async def search_with_detail_open_claim_ledger(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        detail_open_claim_ledger: DetailOpenClaimLedger,
+        logical_round_no: int,
+        query_instance_id: str,
+    ) -> SearchResult:
+        if not is_detail_open_claim_capable_liepin_worker(self.worker_client):
+            raise ValueError("liepin_detail_open_claim_route_requires_opencli_worker")
+        if request.provider_context.get("liepin_fetch_strategy") != "detail_backed_resume_search":
+            raise ValueError("liepin_detail_open_claim_route_requires_detail_backed_strategy")
+        DetailOpenClaimSearchContext(
+            detail_open_claim_ledger=detail_open_claim_ledger,
+            logical_round_no=logical_round_no,
+            query_instance_id=query_instance_id,
+        )
+        return await self._search(
+            request,
+            round_no=round_no,
+            trace_id=trace_id,
+            detail_open_claim_ledger=detail_open_claim_ledger,
+            logical_round_no=logical_round_no,
+            query_instance_id=query_instance_id,
+        )
+
+    async def _search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
+        logical_round_no: int | None = None,
+        query_instance_id: str | None = None,
+    ) -> SearchResult:
         if self.worker_client is None:
             raise LiepinWorkerModeError("Liepin provider search requires an explicit worker client.")
         connection: LiepinConnectionRow | None = None
@@ -204,16 +250,32 @@ class LiepinProviderAdapter:
             )
         if self.worker_search_started_callback is not None:
             self.worker_search_started_callback()
-        result = await self.worker_client.search(
-            request,
-            round_no=round_no,
-            trace_id=trace_id,
-            provider_account_hash=(
-                connection.provider_account_hash
-                if connection is not None
-                else _string_context(request, "liepin_provider_account_hash")
-            ),
+        provider_account_hash = (
+            connection.provider_account_hash
+            if connection is not None
+            else _string_context(request, "liepin_provider_account_hash")
         )
+        if detail_open_claim_ledger is None:
+            result = await self.worker_client.search(
+                request,
+                round_no=round_no,
+                trace_id=trace_id,
+                provider_account_hash=provider_account_hash,
+            )
+        else:
+            if logical_round_no is None or query_instance_id is None:
+                raise ValueError("liepin_detail_open_claim_route_missing_logical_provenance")
+            if not is_detail_open_claim_capable_liepin_worker(self.worker_client):
+                raise ValueError("liepin_detail_open_claim_route_requires_opencli_worker")
+            result = await self.worker_client.search_with_detail_open_claim_ledger(
+                request,
+                round_no=round_no,
+                trace_id=trace_id,
+                provider_account_hash=provider_account_hash,
+                detail_open_claim_ledger=detail_open_claim_ledger,
+                logical_round_no=logical_round_no,
+                query_instance_id=query_instance_id,
+            )
         _validate_liepin_search_result(result)
         return result
 

@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Mapping
-from typing import Any
-from typing import Callable, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any
+from typing import Callable, Protocol, TypeGuard, runtime_checkable
 from typing import TypeVar
 from typing import cast
 from urllib.error import HTTPError
@@ -37,6 +37,9 @@ from seektalent.providers.liepin.worker_contracts import decode_login_relay_inpu
 from seektalent.providers.liepin.worker_contracts import decode_login_relay_snapshot
 from seektalent.providers.liepin.worker_contracts import decode_session_status
 from seektalent.providers.liepin.worker_contracts import decode_worker_health
+
+if TYPE_CHECKING:
+    from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 
 
 EventCallback = Callable[[str, dict[str, object]], None]
@@ -95,6 +98,28 @@ class LiepinWorkerClient(Protocol):
     ) -> LoginRelayInputResult: ...
 
     async def complete_login_relay(self, *, connection_id: str) -> LoginRelayCompleteResult: ...
+
+
+class _DetailOpenClaimCapableLiepinWorker(Protocol):
+    async def search_with_detail_open_claim_ledger(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+        detail_open_claim_ledger: DetailOpenClaimLedger,
+        logical_round_no: int,
+        query_instance_id: str,
+    ) -> SearchResult: ...
+
+
+def is_detail_open_claim_capable_liepin_worker(
+    worker: object,
+) -> TypeGuard[_DetailOpenClaimCapableLiepinWorker]:
+    from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
+
+    return isinstance(worker, LiepinOpenCliWorkerClient)
 
 
 class FakeLiepinWorkerClient:

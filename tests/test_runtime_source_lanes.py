@@ -2164,6 +2164,8 @@ def test_runtime_source_lane_request_public_payload_excludes_callbacks_and_secre
         requirement_sheet=_requirement_sheet(),
         approved_detail_lease_ref="lease-1",
         source_context={"approval_secret_ref": "secret-ref", "connection_id": "conn-1"},
+        logical_round_no=7,
+        logical_query_instance_id="private-logical-query-7",
         progress_callback=lambda event: None,
     )
 
@@ -2179,6 +2181,8 @@ def test_runtime_source_lane_request_public_payload_excludes_callbacks_and_secre
     }
     assert payload["approved_detail_lease_ref"] == "lease-1"
     assert "progress_callback" not in payload
+    assert "logical_round_no" not in payload
+    assert "private-logical-query-7" not in repr(payload)
     assert "secret-ref" not in repr(payload)
 
 

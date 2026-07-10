@@ -13,6 +13,7 @@ from seektalent.finalize.deterministic import build_deterministic_final_result
 from seektalent.models import FinalizeContext, ScoredCandidate
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.detail_payload_text import STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.opencli_retriever import (
@@ -117,6 +118,49 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
     assert "数据平台 Python resume 1" in response.resumes[0].normalized_text
     assert response.resumes[0].payload["sourceUrl"] == "https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-1"
     assert response.resumes[0].payload["normalizedSnapshotRef"] == "artifact://protected/liepin-opencli/normalized/run-1/1.json"
+
+
+def test_opencli_retriever_private_claim_route_preserves_response_conversion(tmp_path: Path) -> None:
+    class ClaimAwareRunner(FakeOpenCliRunner):
+        def __init__(self) -> None:
+            super().__init__(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+            self.private_contexts: list[object] = []
+
+        def _search_liepin_resumes_with_detail_open_claim_context(
+            self,
+            *,
+            detail_open_claim_context,
+            **kwargs: object,
+        ) -> dict[str, object]:
+            self.private_contexts.append(detail_open_claim_context)
+            return self.search_liepin_resumes(**kwargs)
+
+    runner = ClaimAwareRunner()
+    retriever = LiepinOpenCliResumeRetriever(runner=runner)
+    ledger = DetailOpenClaimLedger({})
+    context = DetailOpenClaimSearchContext(
+        detail_open_claim_ledger=ledger,
+        logical_round_no=4,
+        query_instance_id="logical-query-4",
+    )
+
+    response = retriever._search_resumes_with_detail_open_claim_context(
+        LiepinOpenCliResumeRequest(
+            source_run_id="run-claim-4",
+            keyword_query="数据开发 Python",
+            query_terms=("数据开发", "Python"),
+            target_resumes=1,
+            max_cards=10,
+            max_pages=1,
+            requirement_sheet={"job_title": "数据开发专家"},
+        ),
+        detail_open_claim_context=context,
+    )
+
+    assert runner.private_contexts == [context]
+    assert runner.private_contexts[0].detail_open_claim_ledger is ledger
+    assert response.raw_candidate_count == 10
+    assert len(response.resumes) == 1
 
 
 def test_claim_aware_detail_uses_derived_identity_without_public_carrier_leak(tmp_path: Path) -> None:

@@ -206,6 +206,7 @@ async def _run_liepin_source_round(
         source_query_intents=request.source_query_intents_by_source.get(source_id),
         source_budget_policy=source_plan.source_budget_policy,
         liepin_context=context.source_context,
+        detail_open_claim_ledger=context.detail_open_claim_ledger,
     )
     _record_source_provider_results_from_lane(
         runtime=runtime,

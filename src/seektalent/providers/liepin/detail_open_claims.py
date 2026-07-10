@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 from collections.abc import MutableMapping
+from dataclasses import dataclass
 from threading import RLock
 
 from seektalent.models import RuntimeDetailOpenClaim
+
+
+@dataclass(frozen=True, kw_only=True)
+class DetailOpenClaimSearchContext:
+    detail_open_claim_ledger: DetailOpenClaimLedger
+    logical_round_no: int
+    query_instance_id: str
+
+    def __post_init__(self) -> None:
+        if self.logical_round_no < 1:
+            raise ValueError("detail_open_claim_context_missing_logical_round_no")
+        if not self.query_instance_id.strip():
+            raise ValueError("detail_open_claim_context_missing_query_instance_id")
 
 
 class DetailOpenClaimLedger:
