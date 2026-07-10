@@ -8,6 +8,7 @@ from seektalent.models import (
     FinalizeContext,
     HardConstraintSlots,
     InputTruth,
+    LogicalQueryOutcome,
     LocationExecutionPlan,
     PreferenceSlots,
     ProposedFilterPlan,
@@ -147,6 +148,54 @@ def test_v02_run_state_models_can_be_composed() -> None:
     assert run_state.retrieval_state.query_term_pool[0].active is True
     assert run_state.retrieval_state.sent_query_history[0].keyword_query == 'python "resume matching"'
     assert run_state.model_dump(mode="json")["scoring_policy"]["job_title"] == "Senior Python Engineer"
+
+
+def test_controller_context_keeps_query_evidence_defaults_and_values() -> None:
+    context = ControllerContext(
+        full_jd="JD text",
+        full_notes="Notes text",
+        requirement_sheet=_requirement_sheet(),
+        round_no=2,
+        min_rounds=1,
+        max_rounds=4,
+        retrieval_rounds_completed=1,
+        rounds_remaining_after_current=2,
+        budget_used_ratio=0.25,
+        near_budget_limit=False,
+        is_final_allowed_round=False,
+        target_new=10,
+        stop_guidance=StopGuidance(
+            can_stop=False,
+            reason="Continue search.",
+            top_pool_strength="weak",
+        ),
+    )
+
+    assert context.used_term_group_keys == []
+    assert context.previous_query_outcomes == []
+
+    outcome = LogicalQueryOutcome(
+        query_instance_id="query-1",
+        term_group_key="term-group-python",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["python"],
+        keyword_query="python",
+        attempted=True,
+        status="completed",
+    )
+    context_with_evidence = ControllerContext(
+        **(
+            context.model_dump()
+            | {
+                "used_term_group_keys": ["term-group-python"],
+                "previous_query_outcomes": [outcome],
+            }
+        )
+    )
+
+    assert context_with_evidence.used_term_group_keys == ["term-group-python"]
+    assert context_with_evidence.previous_query_outcomes == [outcome]
 
 
 def test_v02_context_and_round_models_capture_round_truth() -> None:

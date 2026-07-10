@@ -390,6 +390,10 @@ def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_c
     assert provider_context["query_fingerprint"] == "runtime-fingerprint-1"
     assert result.source_lane_run_id == "plan-liepin:round:3:lane:1"
     assert result.source_evidence_updates[0].query_fingerprint == "runtime-fingerprint-1"
+    assert [
+        (package.query_instance_id, package.query_fingerprint, package.term_group_key)
+        for package in result.executed_query_packages
+    ] == [("runtime-query-1", "runtime-fingerprint-1", "term-group-data-platform")]
 
 
 def test_liepin_logical_query_bundle_uses_compiled_source_intent_resume_budget() -> None:
@@ -496,7 +500,7 @@ def test_liepin_logical_query_bundle_uses_compiled_source_intent_resume_budget()
         age_intent=None,
     )
 
-    asyncio.run(
+    result = asyncio.run(
         run_liepin_logical_query_bundle(
             settings=make_settings(),
             runtime_run_id="runtime-run-1",
@@ -517,6 +521,10 @@ def test_liepin_logical_query_bundle_uses_compiled_source_intent_resume_budget()
     provider_context = worker.search_calls[0]["provider_context"]
     assert provider_request.page_size == 2
     assert provider_context["liepin_max_cards"] == "6"
+    assert [
+        (package.query_instance_id, package.query_fingerprint, package.term_group_key)
+        for package in result.executed_query_packages
+    ] == [("runtime-query-1", "runtime-fingerprint-1", "term-group-data-platform")]
 
 
 def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan_limit() -> None:

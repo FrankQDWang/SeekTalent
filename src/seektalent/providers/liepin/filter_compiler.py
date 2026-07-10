@@ -150,6 +150,9 @@ class LiepinSourceQueryIntent(Protocol):
     def query_fingerprint(self) -> str: ...
 
     @property
+    def term_group_key(self) -> str: ...
+
+    @property
     def query_terms(self) -> tuple[str, ...]: ...
 
     @property

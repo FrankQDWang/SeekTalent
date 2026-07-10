@@ -517,6 +517,7 @@ class RetrievalRuntime:
                         "lane_type": query_state.lane_type,
                         "query_instance_id": query_state.query_instance_id,
                         "query_fingerprint": query_state.query_fingerprint,
+                        "term_group_key": query_state.term_group_key,
                     }
                 )
                 sent_query_record = SentQueryRecord(
@@ -1049,6 +1050,7 @@ class RetrievalRuntime:
                 "lane_type": query_state.lane_type,
                 "query_instance_id": query_state.query_instance_id,
                 "query_fingerprint": query_state.query_fingerprint,
+                "term_group_key": query_state.term_group_key,
             }
         )
         sent_query_record = SentQueryRecord(

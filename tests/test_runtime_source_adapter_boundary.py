@@ -8,6 +8,7 @@ import pytest
 
 from seektalent.models import (
     AgeRequirement,
+    CTSQuery,
     HardConstraintSlots,
     PreferenceSlots,
     ProposedFilterPlan,
@@ -30,6 +31,7 @@ from seektalent.runtime.source_query_intent import (
     build_runtime_source_query_intents,
     normalize_source_search_action,
     query_package_from_intent,
+    query_package_from_provider_query,
 )
 from seektalent.runtime.source_round_dispatch import (
     RuntimeSourceInvariantError,
@@ -162,6 +164,32 @@ def test_runtime_source_intent_budgeting_does_not_branch_on_concrete_source_ids(
 
     assert 'source_kind == "liepin"' not in source
     assert 'source_kind != "liepin"' not in source
+
+
+def test_cts_executed_query_package_preserves_logical_query_identity() -> None:
+    package = query_package_from_provider_query(
+        source_kind="cts",
+        query=CTSQuery(
+            query_role="exploit",
+            lane_type="exploit",
+            query_instance_id="query-exploit",
+            query_fingerprint="fingerprint-exploit",
+            term_group_key="term-group-exploit",
+            query_terms=["data engineer", "spark"],
+            keyword_query="data engineer spark",
+            rationale="identity propagation",
+        ),
+    )
+
+    assert (
+        package.query_instance_id,
+        package.query_fingerprint,
+        package.term_group_key,
+    ) == (
+        "query-exploit",
+        "fingerprint-exploit",
+        "term-group-exploit",
+    )
 
 
 def test_runtime_source_query_intent_rejects_empty_term_group_key() -> None:

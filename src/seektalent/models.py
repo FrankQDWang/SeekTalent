@@ -612,6 +612,7 @@ class CTSQuery(BaseModel):
     lane_type: LaneType | None = None
     query_instance_id: str | None = None
     query_fingerprint: str | None = None
+    term_group_key: str | None = None
     query_terms: list[str] = Field(default_factory=list)
     keyword_query: str
     native_filters: dict[str, ConstraintValue] = Field(default_factory=dict)
@@ -1250,6 +1251,8 @@ class ControllerContext(BaseModel):
     latest_reflection_keyword_advice: ReflectionKeywordAdvice | None = None
     latest_reflection_filter_advice: ReflectionFilterAdvice | None = None
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
+    used_term_group_keys: list[str] = Field(default_factory=list)
+    previous_query_outcomes: list[LogicalQueryOutcome] = Field(default_factory=list)
     shortage_history: list[int] = Field(default_factory=list)
     latest_canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
     budget_reminder: str = ""

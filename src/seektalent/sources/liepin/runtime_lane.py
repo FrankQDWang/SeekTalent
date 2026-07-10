@@ -362,6 +362,9 @@ def _liepin_executed_query_package(
             source_kind="liepin",
             query_role=intent.query_role,
             lane_type=intent.lane_type,
+            query_instance_id=intent.query_instance_id,
+            query_fingerprint=intent.query_fingerprint,
+            term_group_key=intent.term_group_key,
             query_terms=tuple(intent.query_terms),
             keyword_query=intent.keyword_query,
         )
@@ -369,6 +372,9 @@ def _liepin_executed_query_package(
         source_kind="liepin",
         query_role=logical_query.query_role,
         lane_type=logical_query.lane_type,
+        query_instance_id=logical_query.query_instance_id,
+        query_fingerprint=logical_query.query_fingerprint,
+        term_group_key=logical_query.term_group_key,
         query_terms=tuple(logical_query.query_terms),
         keyword_query=logical_query.keyword_query,
     )

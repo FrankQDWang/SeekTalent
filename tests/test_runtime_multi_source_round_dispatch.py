@@ -617,6 +617,59 @@ def test_execute_logical_dispatch_search_uses_frozen_requested_counts(tmp_path) 
         ("exploit", 6),
         ("generic_explore", 4),
     ]
+    assert [
+        (query.query_instance_id, query.query_fingerprint, query.term_group_key)
+        for query in result.executed_queries
+    ] == [
+        ("query-exploit", "fingerprint-exploit", "term-group-exploit"),
+        ("query-generic_explore", "fingerprint-generic_explore", "term-group-generic_explore"),
+    ]
+
+
+def test_execute_logical_dispatch_search_preserves_identity_for_city_package(tmp_path) -> None:
+    class EmptyRetrievalService:
+        async def search(self, **kwargs) -> SearchResult:
+            del kwargs
+            return SearchResult(candidates=[], diagnostics=["empty fixture"], raw_candidate_count=0, exhausted=True)
+
+    runtime = RetrievalRuntime(
+        settings=make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"),
+        retrieval_service=EmptyRetrievalService(),
+    )
+    retrieval_plan = _retrieval_plan().model_copy(
+        update={
+            "location_execution_plan": LocationExecutionPlan(
+                mode="single",
+                allowed_locations=["上海"],
+                preferred_locations=[],
+                priority_order=["上海"],
+                balanced_order=["上海"],
+                rotation_offset=0,
+                target_new=2,
+            )
+        }
+    )
+    tracer = RunTracer(tmp_path / "trace-city-query-identity")
+    try:
+        result = asyncio.run(
+            runtime.execute_logical_dispatch_search(
+                round_no=1,
+                retrieval_plan=retrieval_plan,
+                logical_queries=(_dispatch("exploit", 2),),
+                base_adapter_notes=[],
+                target_new=2,
+                seen_resume_ids=set(),
+                seen_dedup_keys=set(),
+                tracer=tracer,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert [
+        (query.query_instance_id, query.query_fingerprint, query.term_group_key)
+        for query in result.executed_queries
+    ] == [("query-exploit", "fingerprint-exploit", "term-group-exploit")]
 
 
 def test_execute_logical_dispatch_search_preserves_term_group_key(tmp_path) -> None:
