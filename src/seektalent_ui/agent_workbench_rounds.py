@@ -503,7 +503,10 @@ def _safe_public_source_identifier(value: object) -> str | None:
 
 
 def _looks_like_unsafe_public_text(text: str) -> bool:
+    upper = text.upper()
     lower = text.lower()
+    if "SHOULD_NOT_RENDER" in upper or upper.startswith("INTERNAL_"):
+        return True
     if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
         return True
     if "http://" in lower or "https://" in lower:

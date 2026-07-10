@@ -1379,6 +1379,71 @@ def test_round_reducer_sanitizes_feedback_detail_stage_source_and_status_before_
     assert "Authorization: Bearer private-status" not in serialized
 
 
+def test_round_reducer_drops_internal_markers_from_feedback_details_and_query_groups() -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    internal_marker = "INTERNAL_SHOULD_NOT_RENDER"
+    embedded_marker = "provider SHOULD_NOT_RENDER private prompt"
+    feedback = _public_stage_output(
+        output_id="rtout_feedback_internal_marker_boundary",
+        stage="feedback",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "resumeQualityComment": "正常 observation。",
+                "reflectionSummary": internal_marker,
+                "suggestedActivateTerms": ["保留的建议", embedded_marker],
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["AI agent", "internal platform", internal_marker],
+                        keyword_query="AI agent",
+                        lifecycle="executed",
+                        execution_status="completed",
+                        attempted=True,
+                    ),
+                    _v2_query_group(
+                        query_instance_id="query-2",
+                        term_group_key="group-2",
+                        query_role="explore",
+                        lane_type="generic_explore",
+                        query_terms=["Python"],
+                        keyword_query=embedded_marker,
+                        lifecycle="executed",
+                        execution_status="completed",
+                        attempted=True,
+                    ),
+                ],
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    assert summary.resume_quality_comment == "正常 observation。"
+    assert summary.reflection_summary is None
+    assert summary.suggested_activate_terms == ("保留的建议",)
+    assert [(group.query_instance_id, group.query_terms) for group in summary.query_groups] == [
+        ("query-1", ("AI agent", "internal platform")),
+    ]
+    serialized = response.model_dump_json()
+    assert internal_marker not in serialized
+    assert embedded_marker not in serialized
+
+
 def test_round_reducer_bounds_safe_feedback_details_before_public_response() -> None:
     from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
 
