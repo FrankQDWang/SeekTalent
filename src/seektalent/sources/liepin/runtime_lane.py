@@ -35,6 +35,7 @@ from seektalent.source_contracts import (
     LogicalQueryDispatch,
     RuntimeDetailRecommendation,
     RuntimeEvidenceLevel,
+    RuntimeQueryCandidateAttribution,
     RuntimeQueryPackage,
     RuntimeSourceBudgetPolicy,
     RuntimeSourceLaneEventType,
@@ -43,6 +44,7 @@ from seektalent.source_contracts import (
     RuntimeSourceLaneRequest,
     RuntimeSourceLaneResult,
     RuntimeSourceLaneStatus,
+    SourceQueryExecutionOutcome,
 )
 
 if TYPE_CHECKING:
@@ -216,6 +218,7 @@ async def run_liepin_logical_query_bundle(
         if not logical_compiled_queries:
             logical_compiled_queries = (None,)
         logical_result: RuntimeSourceLaneResult | None = None
+        target_results: list[RuntimeSourceLaneResult] = []
         for target_index, compiled_query in enumerate(logical_compiled_queries, start=1):
             source_query_terms = logical_query.query_terms
             logical_query_role = logical_query.query_role
@@ -266,6 +269,7 @@ async def run_liepin_logical_query_bundle(
                 logical_query=logical_query,
                 compiled_query=compiled_query,
             )
+            target_results.append(result)
             logical_result = (
                 result if logical_result is None else merge_liepin_card_lane_results(logical_result, result)
             )
@@ -273,7 +277,11 @@ async def run_liepin_logical_query_bundle(
                 break
         if logical_result is None:
             raise ValueError("Liepin logical query bundle requires at least one logical query.")
-        return logical_result
+        return _with_liepin_query_execution_outcome(
+            logical_result,
+            logical_query=logical_query,
+            target_results=target_results,
+        )
 
     logical_results: dict[int, RuntimeSourceLaneResult] = {}
     if settings.liepin_worker_mode == "opencli" or context.backend_mode == "opencli":
@@ -328,6 +336,8 @@ def merge_liepin_card_lane_results(
         detail_recommendations=first.detail_recommendations + second.detail_recommendations,
         events=first.events + second.events,
         executed_query_packages=first.executed_query_packages + second.executed_query_packages,
+        query_execution_outcomes=first.query_execution_outcomes + second.query_execution_outcomes,
+        candidate_query_attributions=first.candidate_query_attributions + second.candidate_query_attributions,
         blocked_reason_code=blocked_reason_code,
         stop_reason_code=stop_reason_code,
         retryable=first.retryable or second.retryable,
@@ -349,6 +359,64 @@ def _with_liepin_executed_query_package(
         executed_query_packages=result.executed_query_packages
         + (_liepin_executed_query_package(logical_query=logical_query, compiled_query=compiled_query),),
     )
+
+
+def _with_liepin_query_execution_outcome(
+    result: RuntimeSourceLaneResult,
+    *,
+    logical_query: LogicalQueryDispatch,
+    target_results: Collection[RuntimeSourceLaneResult],
+) -> RuntimeSourceLaneResult:
+    raw_candidate_count = sum(int(item.raw_candidate_count or 0) for item in target_results)
+    duplicate_candidate_count = sum(
+        max(0, int(item.raw_candidate_count or 0) - len(item.candidate_store_updates))
+        for item in target_results
+    )
+    safe_reason = _shared_safe_reason(target_results)
+    outcome = SourceQueryExecutionOutcome(
+        query_instance_id=logical_query.query_instance_id,
+        status=_outcome_status(target_results),
+        dispatch_started=bool(target_results),
+        raw_candidate_count=raw_candidate_count,
+        unique_candidate_count=len(result.candidate_store_updates),
+        duplicate_candidate_count=duplicate_candidate_count,
+        exhausted_reason=safe_reason,
+        safe_reason_code=safe_reason,
+    )
+    candidate_query_attributions = tuple(
+        RuntimeQueryCandidateAttribution(
+            source_kind="liepin",
+            query_instance_id=logical_query.query_instance_id,
+            resume_id=candidate.resume_id,
+            dedup_key=candidate.dedup_key,
+        )
+        for candidate in result.candidate_store_updates.values()
+    )
+    return replace(
+        result,
+        query_execution_outcomes=result.query_execution_outcomes + (outcome,),
+        candidate_query_attributions=result.candidate_query_attributions + candidate_query_attributions,
+    )
+
+
+def _outcome_status(target_results: Collection[RuntimeSourceLaneResult]):
+    statuses = {result.status for result in target_results}
+    if statuses == {"completed"}:
+        return "completed"
+    if statuses == {"blocked"}:
+        return "blocked"
+    if statuses <= {"failed", "cancelled"}:
+        return "failed"
+    return "partial"
+
+
+def _shared_safe_reason(target_results: Collection[RuntimeSourceLaneResult]) -> str | None:
+    reasons = {
+        reason
+        for result in target_results
+        if (reason := result.stop_reason_code or result.blocked_reason_code) is not None
+    }
+    return reasons.pop() if len(reasons) == 1 else None
 
 
 def _liepin_executed_query_package(

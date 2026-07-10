@@ -35,9 +35,14 @@ from seektalent.runtime.source_query_intent import (
 )
 from seektalent.runtime.source_round_dispatch import (
     RuntimeSourceInvariantError,
+    SourceProviderBlocked,
     SourceRoundAdapterResult,
     SourceRoundDispatchRequest,
     dispatch_source_rounds,
+)
+from seektalent.source_contracts.runtime_lanes import (
+    RuntimeQueryCandidateAttribution,
+    SourceQueryExecutionOutcome,
 )
 from seektalent.providers.liepin.source_compiler import compile_liepin_source_query_intents
 
@@ -109,6 +114,69 @@ def _source_query_policies() -> dict[str, RuntimeSourceQueryPolicy]:
     }
 
 
+def _receipt_dispatch_request(*, sources: tuple[str, ...] = ("cts", "liepin")) -> SourceRoundDispatchRequest:
+    logical_queries = (
+        LogicalQueryDispatch(
+            round_no=2,
+            query_role="exploit",
+            lane_type="exploit",
+            query_instance_id="primary-1",
+            query_fingerprint="fingerprint-primary-1",
+            term_group_key="term-group-primary-1",
+            query_terms=("data engineer", "spark"),
+            keyword_query="data engineer spark",
+            requested_count=7,
+            source_plan_version="source-plan-v3",
+        ),
+        LogicalQueryDispatch(
+            round_no=2,
+            query_role="explore",
+            lane_type="generic_explore",
+            query_instance_id="explore-1",
+            query_fingerprint="fingerprint-explore-1",
+            term_group_key="term-group-explore-1",
+            query_terms=("data engineer", "flink"),
+            keyword_query="data engineer flink",
+            requested_count=3,
+            source_plan_version="source-plan-v3",
+        ),
+    )
+    return SourceRoundDispatchRequest(
+        runtime_run_id="run-receipts",
+        round_no=2,
+        logical_queries=logical_queries,
+        selected_sources=sources,
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+        source_query_intents_by_source=build_runtime_source_query_intents(
+            source_kinds=sources,
+            logical_dispatches=logical_queries,
+            filter_intents=(),
+            location_intent=None,
+            age_intent=None,
+            source_budget_policy=RuntimeSourceBudgetPolicy(),
+        ),
+    )
+
+
+def _source_outcomes(
+    request: SourceRoundDispatchRequest,
+    source: str,
+    *,
+    status: str = "completed",
+    dispatch_started: bool = True,
+) -> tuple[SourceQueryExecutionOutcome, ...]:
+    return tuple(
+        SourceQueryExecutionOutcome(
+            query_instance_id=intent.query_instance_id,
+            status=status,
+            dispatch_started=dispatch_started,
+        )
+        for intent in request.source_query_intents_by_source[source]
+    )
+
+
 def test_runtime_source_intent_preserves_query_identity_role_filters_and_budget_for_selected_sources() -> None:
     filter_intents = build_runtime_filter_intents(
         requirement_sheet=_requirement_sheet(),
@@ -164,6 +232,147 @@ def test_runtime_source_intent_budgeting_does_not_branch_on_concrete_source_ids(
 
     assert 'source_kind == "liepin"' not in source
     assert 'source_kind != "liepin"' not in source
+
+
+def test_source_dispatch_receipt_parity_for_completed_cts_and_liepin() -> None:
+    request = _receipt_dispatch_request()
+
+    async def completed_adapter(source: str, source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        return SourceRoundAdapterResult(
+            source=source,
+            status="completed",
+            query_execution_outcomes=_source_outcomes(source_request, source),
+        )
+
+    result = asyncio.run(
+        dispatch_source_rounds(
+            request=request,
+            source_adapters={
+                "cts": lambda source_request: completed_adapter("cts", source_request),
+                "liepin": lambda source_request: completed_adapter("liepin", source_request),
+            },
+        )
+    )
+
+    assert len(result.query_execution_receipts) == 4
+    assert {(item.source_kind, item.query_instance_id) for item in result.query_execution_receipts} == {
+        ("cts", "primary-1"),
+        ("cts", "explore-1"),
+        ("liepin", "primary-1"),
+        ("liepin", "explore-1"),
+    }
+    assert all(item.status == "completed" for item in result.query_execution_receipts)
+
+
+def test_source_dispatch_rejects_outcome_without_matching_intent() -> None:
+    request = _receipt_dispatch_request(sources=("liepin",))
+
+    async def unmatched_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        del source_request
+        return SourceRoundAdapterResult(
+            source="liepin",
+            status="completed",
+            query_execution_outcomes=(
+                SourceQueryExecutionOutcome(
+                    query_instance_id="unknown-query",
+                    status="completed",
+                    dispatch_started=True,
+                ),
+            ),
+        )
+
+    with pytest.raises(RuntimeSourceInvariantError, match="unmatched_source_query_outcome"):
+        asyncio.run(dispatch_source_rounds(request=request, source_adapters={"liepin": unmatched_adapter}))
+
+
+def test_source_dispatch_rejects_duplicate_outcome_for_same_intent() -> None:
+    request = _receipt_dispatch_request(sources=("liepin",))
+
+    async def duplicate_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        outcome = _source_outcomes(source_request, "liepin")[0]
+        return SourceRoundAdapterResult(
+            source="liepin",
+            status="completed",
+            query_execution_outcomes=(outcome, outcome),
+        )
+
+    with pytest.raises(RuntimeSourceInvariantError, match="duplicate_source_query_outcome"):
+        asyncio.run(dispatch_source_rounds(request=request, source_adapters={"liepin": duplicate_adapter}))
+
+
+def test_source_dispatch_rejects_missing_outcome_after_dispatch() -> None:
+    request = _receipt_dispatch_request(sources=("cts",))
+
+    async def missing_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        del source_request
+        return SourceRoundAdapterResult(source="cts", status="completed")
+
+    with pytest.raises(RuntimeSourceInvariantError, match="missing_source_query_outcome"):
+        asyncio.run(dispatch_source_rounds(request=request, source_adapters={"cts": missing_adapter}))
+
+
+def test_post_dispatch_failure_receipt_remains_started() -> None:
+    request = _receipt_dispatch_request(sources=("liepin",))
+
+    async def failed_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        return SourceRoundAdapterResult(
+            source="liepin",
+            status="failed",
+            query_execution_outcomes=_source_outcomes(
+                source_request,
+                "liepin",
+                status="failed",
+                dispatch_started=True,
+            ),
+        )
+
+    result = asyncio.run(dispatch_source_rounds(request=request, source_adapters={"liepin": failed_adapter}))
+
+    assert [receipt.status for receipt in result.query_execution_receipts] == ["failed", "failed"]
+    assert all(receipt.dispatch_started is True for receipt in result.query_execution_receipts)
+
+
+def test_preflight_blocked_receipt_does_not_claim_dispatch_started() -> None:
+    request = _receipt_dispatch_request(sources=("liepin",))
+
+    async def blocked_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        del source_request
+        raise SourceProviderBlocked("backend unavailable")
+
+    result = asyncio.run(dispatch_source_rounds(request=request, source_adapters={"liepin": blocked_adapter}))
+
+    assert [receipt.status for receipt in result.query_execution_receipts] == ["blocked", "blocked"]
+    assert all(receipt.dispatch_started is False for receipt in result.query_execution_receipts)
+
+
+def test_source_dispatch_preserves_candidate_query_attributions() -> None:
+    request = _receipt_dispatch_request(sources=("cts",))
+
+    async def completed_adapter(source_request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+        return SourceRoundAdapterResult(
+            source="cts",
+            status="completed",
+            query_execution_outcomes=_source_outcomes(source_request, "cts"),
+            candidate_query_attributions=(
+                RuntimeQueryCandidateAttribution(
+                    source_kind="cts",
+                    query_instance_id="primary-1",
+                    resume_id="resume-1",
+                    dedup_key="dedup-1",
+                ),
+            ),
+        )
+
+    result = asyncio.run(dispatch_source_rounds(request=request, source_adapters={"cts": completed_adapter}))
+
+    assert result.candidate_query_attributions == (
+        RuntimeQueryCandidateAttribution(
+            source_kind="cts",
+            query_instance_id="primary-1",
+            resume_id="resume-1",
+            dedup_key="dedup-1",
+        ),
+    )
 
 
 def test_cts_executed_query_package_preserves_logical_query_identity() -> None:

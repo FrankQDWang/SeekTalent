@@ -396,6 +396,58 @@ def test_liepin_logical_query_bundle_uses_runtime_query_identity_and_requested_c
     ] == [("runtime-query-1", "runtime-fingerprint-1", "term-group-data-platform")]
 
 
+async def _run_fixture_two_query_liepin_bundle():
+    return await run_liepin_logical_query_bundle(
+        settings=make_settings(),
+        runtime_run_id="runtime-run-1",
+        source_plan_id="plan-liepin",
+        job_title="数据开发专家",
+        jd="负责数据平台建设",
+        notes="Python",
+        requirement_sheet=_requirement_sheet(),
+        logical_queries=(
+            LogicalQueryDispatch(
+                round_no=3,
+                query_role="exploit",
+                lane_type="exploit",
+                query_terms=("数据开发", "平台"),
+                keyword_query="数据开发 平台",
+                query_instance_id="primary-1",
+                query_fingerprint="fingerprint-primary-1",
+                term_group_key="term-group-primary-1",
+                requested_count=4,
+                source_plan_version="7",
+            ),
+            LogicalQueryDispatch(
+                round_no=3,
+                query_role="explore",
+                lane_type="generic_explore",
+                query_terms=("数据开发", "flink"),
+                keyword_query="数据开发 flink",
+                query_instance_id="explore-1",
+                query_fingerprint="fingerprint-explore-1",
+                term_group_key="term-group-explore-1",
+                requested_count=2,
+                source_plan_version="7",
+            ),
+        ),
+        source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
+        liepin_context={"provider_account_hash": "acct_hash_123"},
+        worker_client=FakeWorker(),
+    )
+
+
+def test_liepin_bundle_preserves_one_execution_outcome_per_logical_query() -> None:
+    result = asyncio.run(_run_fixture_two_query_liepin_bundle())
+
+    assert [item.query_instance_id for item in result.query_execution_outcomes] == ["primary-1", "explore-1"]
+    assert all(item.status in {"completed", "partial"} for item in result.query_execution_outcomes)
+    assert {(item.query_instance_id, item.resume_id) for item in result.candidate_query_attributions} == {
+        ("primary-1", "liepin-candidate-1"),
+        ("explore-1", "liepin-candidate-1"),
+    }
+
+
 def test_liepin_logical_query_bundle_uses_compiled_source_intent_resume_budget() -> None:
     class DetailBudgetWorker(FakeWorker):
         async def search(

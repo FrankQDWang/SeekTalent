@@ -1809,6 +1809,8 @@ class WorkflowRuntime:
             query_resume_hits=query_resume_hits,
             provider_returned_candidates=provider_returned_candidates,
             executed_query_packages=dispatch_result.executed_query_packages,
+            query_execution_receipts=list(dispatch_result.query_execution_receipts),
+            candidate_query_attributions=list(dispatch_result.candidate_query_attributions),
         )
 
     def _source_coverage_summary_from_dispatch(

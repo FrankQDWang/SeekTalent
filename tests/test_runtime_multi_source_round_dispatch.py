@@ -16,6 +16,7 @@ from seektalent.models import (
     InputTruth,
     LocationExecutionPlan,
     ProposedFilterPlan,
+    QueryExecutionReceipt,
     QueryResumeHit,
     RequirementSheet,
     ResumeCandidate,
@@ -52,7 +53,13 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchRequest,
     dispatch_source_rounds,
 )
-from seektalent.runtime.source_lanes import RuntimeSourceBudgetPolicy, RuntimeSourceLanePlan, RuntimeSourceLaneResult
+from seektalent.runtime.source_lanes import (
+    RuntimeSourceBudgetPolicy,
+    RuntimeSourceLanePlan,
+    RuntimeSourceLaneResult,
+    RuntimeQueryCandidateAttribution,
+    SourceQueryExecutionOutcome,
+)
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryPolicy, build_runtime_source_query_intents
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
@@ -259,7 +266,18 @@ def test_runtime_multi_source_round_uses_adapter_query_policy_for_liepin(tmp_pat
                     (intent.lane_type, intent.requested_count, intent.provider_scan_limit)
                     for intent in request.source_query_intents_by_source[source]
                 ]
-                return SourceRoundAdapterResult(source=source, status="completed")
+                return SourceRoundAdapterResult(
+                    source=source,
+                    status="completed",
+                    query_execution_outcomes=tuple(
+                        SourceQueryExecutionOutcome(
+                            query_instance_id=intent.query_instance_id,
+                            status="completed",
+                            dispatch_started=True,
+                        )
+                        for intent in request.source_query_intents_by_source[source]
+                    ),
+                )
 
             return adapter
 
@@ -762,6 +780,29 @@ def test_round_search_result_from_source_dispatch_preserves_retrieval_metadata_w
         was_new_to_pool=True,
         was_duplicate=False,
     )
+    receipt = QueryExecutionReceipt(
+        round_no=1,
+        source_kind="cts",
+        query_instance_id="query-exploit",
+        query_fingerprint="fingerprint-exploit",
+        term_group_key="term-group-exploit",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["数据开发"],
+        keyword_query="数据开发",
+        requested_count=6,
+        source_plan_version="2",
+        status="completed",
+        dispatch_started=True,
+        raw_candidate_count=1,
+        unique_candidate_count=1,
+    )
+    attribution = RuntimeQueryCandidateAttribution(
+        source_kind="cts",
+        query_instance_id="query-exploit",
+        resume_id="fixture-1",
+        dedup_key=candidate.dedup_key,
+    )
     cts_result = RetrievalExecutionResult(
         executed_queries=[cts_query],
         sent_query_records=[sent_query],
@@ -795,6 +836,8 @@ def test_round_search_result_from_source_dispatch_preserves_retrieval_metadata_w
         ),
         candidates=(candidate,),
         raw_candidate_count=1,
+        query_execution_receipts=(receipt,),
+        candidate_query_attributions=(attribution,),
     )
     retrieval_plan = _retrieval_plan()
 
@@ -814,6 +857,8 @@ def test_round_search_result_from_source_dispatch_preserves_retrieval_metadata_w
     assert result.search_attempts == [search_attempt]
     assert result.query_resume_hits == [query_hit]
     assert result.new_candidates == [candidate]
+    assert result.query_execution_receipts == [receipt]
+    assert result.candidate_query_attributions == [attribution]
 
 
 def test_source_round_is_not_ready_when_selected_source_blocks_even_if_another_returns_candidates(tmp_path) -> None:
@@ -890,13 +935,23 @@ def test_first_round_partial_browser_source_with_new_candidates_still_blocks(tmp
         del runtime, context
 
         async def adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-            del request
             return SourceRoundAdapterResult(
                 source="liepin",
                 status="partial",
                 safe_reason_code="source_browser_backend_unavailable",
                 candidates=(candidate,),
                 raw_candidate_count=1,
+                query_execution_outcomes=tuple(
+                    SourceQueryExecutionOutcome(
+                        query_instance_id=intent.query_instance_id,
+                        status="partial",
+                        dispatch_started=True,
+                        raw_candidate_count=1,
+                        unique_candidate_count=1,
+                        safe_reason_code="source_browser_backend_unavailable",
+                    )
+                    for intent in request.source_query_intents_by_source["liepin"]
+                ),
             )
 
         return {"liepin": adapter}
@@ -1247,6 +1302,116 @@ def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> Non
     assert result.safe_reason_code == "source_provider_failed"
     assert result.candidates == ()
     assert result.raw_candidate_count == 0
+
+
+def test_cts_adapter_derives_query_outcome_and_candidate_attribution_from_hits(tmp_path) -> None:
+    candidate = _candidate("cts-1", "cts")
+    query = CTSQuery(
+        query_role="exploit",
+        lane_type="exploit",
+        query_instance_id="query-exploit",
+        query_fingerprint="fingerprint-exploit",
+        term_group_key="term-group-exploit",
+        query_terms=["数据开发", "exploit"],
+        keyword_query="数据开发 exploit",
+        rationale="receipt fixture",
+    )
+    hit = QueryResumeHit(
+        run_id="run-1",
+        query_instance_id="query-exploit",
+        query_fingerprint="fingerprint-exploit",
+        hit_sequence_no=1,
+        resume_id=candidate.resume_id,
+        round_no=1,
+        lane_type="exploit",
+        batch_no=1,
+        rank_in_query=1,
+        provider_name="cts",
+        dedup_key=candidate.dedup_key,
+        was_new_to_pool=True,
+        was_duplicate=False,
+    )
+    retrieval_result = RetrievalExecutionResult(
+        executed_queries=[query],
+        sent_query_records=[],
+        new_candidates=[candidate],
+        search_observation=SearchObservation(
+            round_no=1,
+            requested_count=2,
+            raw_candidate_count=1,
+            unique_new_count=1,
+            shortage_count=1,
+            fetch_attempt_count=1,
+        ),
+        search_attempts=[],
+        query_resume_hits=[hit],
+    )
+
+    class CompletedRetrievalRuntime:
+        async def execute_logical_dispatch_search(self, **kwargs) -> RetrievalExecutionResult:
+            del kwargs
+            return retrieval_result
+
+    dispatches = (_dispatch("exploit", 2),)
+    request = SourceRoundDispatchRequest(
+        runtime_run_id="run-1",
+        round_no=1,
+        logical_queries=dispatches,
+        selected_sources=("cts",),
+        seen_resume_ids=frozenset(),
+        seen_dedup_keys=frozenset(),
+        requirement_sheet=_requirement_sheet(),
+        source_query_intents_by_source=build_runtime_source_query_intents(
+            source_kinds=("cts",),
+            logical_dispatches=dispatches,
+            filter_intents=(),
+            location_intent=None,
+            age_intent=None,
+            source_budget_policy=RuntimeSourceBudgetPolicy(),
+        ),
+    )
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
+    runtime.retrieval_runtime = CompletedRetrievalRuntime()  # type: ignore[assignment]
+    source_plan = RuntimeSourceLanePlan(
+        source_plan_id="plan-cts",
+        runtime_run_id="run-1",
+        source="cts",
+        label="CTS",
+    )
+    tracer = RunTracer(tmp_path / "trace-cts-outcome")
+    try:
+        result = asyncio.run(
+            _run_cts_source_round(
+                runtime=runtime,
+                context=_source_round_context(source_plan=source_plan, tracer=tracer),
+                request=request,
+                source_id="cts",
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert result.query_execution_outcomes == (
+        SourceQueryExecutionOutcome(
+            query_instance_id="query-exploit",
+            status="completed",
+            dispatch_started=True,
+            raw_candidate_count=1,
+            unique_candidate_count=1,
+            duplicate_candidate_count=0,
+        ),
+    )
+    assert result.candidate_query_attributions == (
+        RuntimeQueryCandidateAttribution(
+            source_kind="cts",
+            query_instance_id="query-exploit",
+            resume_id="cts-1",
+            dedup_key="dedup-cts-cts-1",
+        ),
+    )
+    assert result.lane_result is not None
+    assert result.lane_result.query_execution_outcomes == result.query_execution_outcomes
+    assert result.lane_result.candidate_query_attributions == result.candidate_query_attributions
 
 
 def test_cts_adapter_converts_business_error_to_failed_source_result(tmp_path) -> None:

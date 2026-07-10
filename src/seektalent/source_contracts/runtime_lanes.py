@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Literal
 
 from seektalent.models import (
     NormalizedResume,
+    QueryExecutionStatus,
     QueryRole,
     ResumeCandidate,
     RuntimeFinalizationRevision,
@@ -62,6 +63,26 @@ class RuntimeQueryPackage:
     term_group_key: str | None = None
     query_terms: tuple[str, ...] = ()
     keyword_query: str | None = None
+
+
+@dataclass(frozen=True)
+class SourceQueryExecutionOutcome:
+    query_instance_id: str
+    status: QueryExecutionStatus
+    dispatch_started: bool
+    raw_candidate_count: int = 0
+    unique_candidate_count: int = 0
+    duplicate_candidate_count: int = 0
+    exhausted_reason: str | None = None
+    safe_reason_code: str | None = None
+
+
+@dataclass(frozen=True)
+class RuntimeQueryCandidateAttribution:
+    source_kind: SourceKind
+    query_instance_id: str
+    resume_id: str
+    dedup_key: str | None
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -314,6 +335,8 @@ class RuntimeSourceLaneResult:
     detail_recommendations: tuple[RuntimeDetailRecommendation, ...] = ()
     events: tuple[RuntimeSourceLaneEvent, ...] = ()
     executed_query_packages: tuple[RuntimeQueryPackage, ...] = ()
+    query_execution_outcomes: tuple[SourceQueryExecutionOutcome, ...] = ()
+    candidate_query_attributions: tuple[RuntimeQueryCandidateAttribution, ...] = ()
     blocked_reason_code: str | None = None
     stop_reason_code: str | None = None
     retryable: bool = False

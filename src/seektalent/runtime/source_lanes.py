@@ -21,6 +21,7 @@ from seektalent.source_contracts import (
     RuntimeDetailEnrichmentResult,
     RuntimeDetailRecommendation,
     RuntimeEvidenceLevel,
+    RuntimeQueryCandidateAttribution,
     RuntimeSourceBudgetPolicy,
     RuntimeSourceLaneEvent,
     RuntimeSourceLaneEventType,
@@ -29,6 +30,7 @@ from seektalent.source_contracts import (
     RuntimeSourceLaneRequest,
     RuntimeSourceLaneResult,
     RuntimeSourceLaneStatus,
+    SourceQueryExecutionOutcome,
     SourceLaneResult,
 )
 
@@ -40,6 +42,7 @@ __all__ = [
     "RuntimeDetailEnrichmentResult",
     "RuntimeDetailRecommendation",
     "RuntimeEvidenceLevel",
+    "RuntimeQueryCandidateAttribution",
     "RuntimeSourceBudgetPolicy",
     "RuntimeSourceLaneEvent",
     "RuntimeSourceLaneEventType",
@@ -48,6 +51,7 @@ __all__ = [
     "RuntimeSourceLaneRequest",
     "RuntimeSourceLaneResult",
     "RuntimeSourceLaneStatus",
+    "SourceQueryExecutionOutcome",
     "SourceKind",
     "apply_source_lane_result",
     "append_source_evidence_once",

@@ -17,10 +17,12 @@ from seektalent.models import (
     ConstraintValue,
     CitySearchSummary,
     LaneType,
+    LogicalQueryOutcome,
     LocationExecutionPlan,
     LocationExecutionPhase,
     QueryOutcomeClassification,
     QueryOutcomeThresholds,
+    QueryExecutionReceipt,
     QueryResumeHit,
     QueryRole,
     ProviderQuery,
@@ -42,6 +44,7 @@ from seektalent.storage.json import sha256_json
 from seektalent.tracing import RunTracer
 
 if TYPE_CHECKING:
+    from seektalent.source_contracts.runtime_lanes import RuntimeQueryCandidateAttribution
     from seektalent.runtime.source_query_intent import RuntimeQueryPackage
 
 
@@ -298,6 +301,9 @@ class RetrievalExecutionResult:
     query_resume_hits: list[QueryResumeHit] = field(default_factory=list)
     provider_returned_candidates: list[ProviderReturnedCandidate] = field(default_factory=list)
     executed_query_packages: tuple[RuntimeQueryPackage, ...] = ()
+    query_execution_receipts: list[QueryExecutionReceipt] = field(default_factory=list)
+    candidate_query_attributions: list[RuntimeQueryCandidateAttribution] = field(default_factory=list)
+    query_outcomes: list[LogicalQueryOutcome] = field(default_factory=list)
 
 
 class _CityDispatchResult(TypedDict):

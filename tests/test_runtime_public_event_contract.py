@@ -9,7 +9,7 @@ import pytest
 from seektalent.models import ResumeCandidate
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.public_events import make_runtime_public_event
-from seektalent.runtime.source_lanes import build_runtime_source_plan
+from seektalent.runtime.source_lanes import SourceQueryExecutionOutcome, build_runtime_source_plan
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.tracing import RunTracer
@@ -345,6 +345,15 @@ def _completed_source_round_adapters(runtime: WorkflowRuntime, context):
                     lane_type=intent.lane_type,
                     query_terms=intent.query_terms,
                     keyword_query=intent.keyword_query,
+                )
+                for intent in request.source_query_intents_by_source.get(source_id, ())
+            )
+        if "query_execution_outcomes" in {field.name for field in fields(SourceRoundAdapterResult)}:
+            result_kwargs["query_execution_outcomes"] = tuple(
+                SourceQueryExecutionOutcome(
+                    query_instance_id=intent.query_instance_id,
+                    status="completed",
+                    dispatch_started=True,
                 )
                 for intent in request.source_query_intents_by_source.get(source_id, ())
             )
