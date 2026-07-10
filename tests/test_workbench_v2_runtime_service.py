@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import sqlite3
 from pathlib import Path
 
@@ -982,6 +983,72 @@ def test_runtime_service_lists_public_progress_events_as_user_readable_payloads(
     assert progress[2]["summary"] == "最终短名单已生成。"
     assert progress[3]["summary"] == "招聘流程已完成。"
     assert progress[0]["state"] == "completed"
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "expected_safe_reason_code", "expected_summary_reason"),
+    [
+        (
+            "blocked_backend_unavailable",
+            "source_browser_backend_unavailable",
+            "source_browser_backend_unavailable",
+        ),
+        ("Bearer private-token", None, "猎聘检索受阻，请稍后重试。"),
+        ("unknown_private_reason", None, "猎聘检索受阻，请稍后重试。"),
+    ],
+)
+def test_runtime_service_source_result_summary_uses_only_canonical_safe_reason(
+    tmp_path: Path,
+    reason_code: str,
+    expected_safe_reason_code: str | None,
+    expected_summary_reason: str,
+) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id="evt_source_result_blocked",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_round_source_result",
+            stage="source_result",
+            round_no=1,
+            source_id="liepin",
+            status="blocked",
+            summary="Bearer event-summary-private",
+            payload={
+                "schemaVersion": "runtime_public_event_v1",
+                "runtimeRunId": run.runtime_run_id,
+                "eventId": f"{run.runtime_run_id}:1:source_result:liepin",
+                "eventSeq": 1,
+                "stage": "source_result",
+                "roundNo": 1,
+                "sourceKind": "liepin",
+                "status": "blocked",
+                "counts": {"roundReturned": 0, "roundIdentities": 0},
+                "details": {},
+                "safeReasonCode": reason_code,
+                "createdAt": NOW,
+            },
+            visibility="public",
+            created_at=NOW,
+        )
+    )
+
+    [progress] = service.list_progress_events(run.runtime_run_id, after_seq=0)
+    serialized = json.dumps(progress, ensure_ascii=False)
+
+    assert progress.get("safeReasonCode") == expected_safe_reason_code
+    assert progress["summary"] == f"第 1 轮猎聘检索受阻：{expected_summary_reason}"
+    assert reason_code not in serialized
+    assert "Bearer event-summary-private" not in serialized
 
 
 def test_runtime_service_ignores_developer_visibility_events_for_progress_and_status(tmp_path: Path) -> None:
