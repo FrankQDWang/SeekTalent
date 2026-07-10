@@ -490,6 +490,16 @@ class LogicalQueryOutcome(BaseModel):
     receipts: list[QueryExecutionReceipt] = Field(default_factory=list)
 
 
+class ControllerQueryExecutionReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    round_no: int
+    query_instance_id: str
+    query_terms: list[str] = Field(default_factory=list)
+    keyword_query: str
+    status: QueryExecutionStatus
+
+
 class QueryResumeHit(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -1251,6 +1261,8 @@ class ControllerContext(BaseModel):
     latest_reflection_keyword_advice: ReflectionKeywordAdvice | None = None
     latest_reflection_filter_advice: ReflectionFilterAdvice | None = None
     sent_query_history: list[SentQueryRecord] = Field(default_factory=list)
+    tried_query_terms: list[str] = Field(default_factory=list)
+    recent_query_execution_receipts: list[ControllerQueryExecutionReceipt] = Field(default_factory=list)
     used_term_group_keys: list[str] = Field(default_factory=list)
     previous_query_outcomes: list[LogicalQueryOutcome] = Field(default_factory=list)
     shortage_history: list[int] = Field(default_factory=list)

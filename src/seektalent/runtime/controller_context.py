@@ -3,7 +3,9 @@ from __future__ import annotations
 from math import ceil
 
 from seektalent.models import (
+    ControllerQueryExecutionReceipt,
     ControllerContext,
+    QueryExecutionReceipt,
     QueryTermCandidate,
     RunState,
     ScoredCandidate,
@@ -20,7 +22,7 @@ from seektalent.runtime.context_views import (
     _top_pool_entry,
     top_candidates,
 )
-from seektalent.runtime.query_identity import used_term_group_keys
+from seektalent.runtime.query_identity import logical_outcomes_from_receipts, used_term_group_keys
 
 BUDGET_STOP_RATIO = 0.8
 STRONG_FIT_STOP_MIN = 3
@@ -44,6 +46,7 @@ def build_controller_context(
     budget_used_ratio = round_no / max_rounds
     budget_stop_round = ceil(max_rounds * BUDGET_STOP_RATIO)
     near_budget_limit = round_no >= budget_stop_round
+    query_execution_ledger = run_state.retrieval_state.query_execution_ledger
     return ControllerContext(
         full_jd=run_state.input_truth.jd,
         full_notes=run_state.input_truth.notes,
@@ -73,7 +76,12 @@ def build_controller_context(
         latest_reflection_keyword_advice=previous_reflection.keyword_advice if previous_reflection else None,
         latest_reflection_filter_advice=previous_reflection.filter_advice if previous_reflection else None,
         sent_query_history=run_state.retrieval_state.sent_query_history,
-        used_term_group_keys=sorted(used_term_group_keys(run_state.retrieval_state.query_execution_ledger)),
+        tried_query_terms=_tried_query_terms(
+            query_term_pool=run_state.retrieval_state.query_term_pool,
+            query_execution_ledger=query_execution_ledger,
+        ),
+        recent_query_execution_receipts=_recent_query_execution_receipts(query_execution_ledger),
+        used_term_group_keys=sorted(used_term_group_keys(query_execution_ledger)),
         previous_query_outcomes=last_round.query_outcomes[-2:] if last_round is not None else [],
         shortage_history=[
             round_state.search_observation.shortage_count
@@ -247,6 +255,59 @@ def _tried_families(
         for term in receipt.query_terms
         if (candidate := term_index.get(_term_key(term))) is not None
     )
+
+
+def _tried_query_terms(
+    *,
+    query_term_pool: list[QueryTermCandidate],
+    query_execution_ledger: list[QueryExecutionReceipt],
+) -> list[str]:
+    started_terms = {
+        _term_key(term)
+        for receipt in query_execution_ledger
+        if receipt.dispatch_started
+        for term in receipt.query_terms
+        if _term_key(term)
+    }
+    tried_terms: list[str] = []
+    seen_terms: set[str] = set()
+    for candidate in query_term_pool:
+        term_key = _term_key(candidate.term)
+        if term_key in started_terms and term_key not in seen_terms:
+            tried_terms.append(candidate.term)
+            seen_terms.add(term_key)
+    return tried_terms
+
+
+def _recent_query_execution_receipts(
+    query_execution_ledger: list[QueryExecutionReceipt],
+) -> list[ControllerQueryExecutionReceipt]:
+    receipts_by_query_instance_id: dict[str, list[QueryExecutionReceipt]] = {}
+    recent_query_instance_ids: list[str] = []
+    for receipt in query_execution_ledger:
+        if not receipt.dispatch_started:
+            continue
+        query_instance_id = receipt.query_instance_id
+        receipts_by_query_instance_id.setdefault(query_instance_id, []).append(receipt)
+        if query_instance_id in recent_query_instance_ids:
+            recent_query_instance_ids.remove(query_instance_id)
+        recent_query_instance_ids.append(query_instance_id)
+
+    recent_receipts: list[ControllerQueryExecutionReceipt] = []
+    for query_instance_id in recent_query_instance_ids[-6:]:
+        receipts = receipts_by_query_instance_id[query_instance_id]
+        outcome = logical_outcomes_from_receipts(receipts)[0]
+        latest_receipt = receipts[-1]
+        recent_receipts.append(
+            ControllerQueryExecutionReceipt(
+                round_no=latest_receipt.round_no,
+                query_instance_id=query_instance_id,
+                query_terms=list(outcome.query_terms),
+                keyword_query=outcome.keyword_query,
+                status=outcome.status,
+            )
+        )
+    return recent_receipts
 
 
 def _untried_admitted_families(

@@ -1678,6 +1678,25 @@ class WorkflowRuntime:
             source_adapters=source_adapters,
             result_callback=report_source_result,
         )
+        run_state.retrieval_state.query_execution_ledger.extend(dispatch_result.query_execution_receipts)
+        tracer.write_json(
+            "runtime.query_execution_ledger",
+            [item.model_dump(mode="json") for item in run_state.retrieval_state.query_execution_ledger],
+        )
+        tracer.write_json(
+            _round_artifact(
+                tracer,
+                round_no=round_no,
+                subsystem="retrieval",
+                name="query_execution_receipts",
+            ),
+            [item.model_dump(mode="json") for item in dispatch_result.query_execution_receipts],
+        )
+        self._refresh_runtime_candidate_checkpoint(
+            runtime_checkpoint_callback=runtime_checkpoint_callback,
+            tracer=tracer,
+            run_state=run_state,
+        )
         self._merge_source_round_dispatch_result(
             run_state=run_state,
             dispatch_result=dispatch_result,
@@ -2191,7 +2210,6 @@ class WorkflowRuntime:
             search_observation = retrieval_result.search_observation
             search_attempts = retrieval_result.search_attempts
             query_resume_hits = retrieval_result.query_resume_hits
-            query_execution_receipts = retrieval_result.query_execution_receipts
             query_outcomes = retrieval_result.query_outcomes
             self._emit_progress(
                 progress_callback,
@@ -2212,14 +2230,9 @@ class WorkflowRuntime:
                 },
             )
             run_state.retrieval_state.sent_query_history.extend(sent_query_records)
-            run_state.retrieval_state.query_execution_ledger.extend(query_execution_receipts)
             tracer.write_json(
                 "runtime.sent_query_history",
                 [item.model_dump(mode="json") for item in run_state.retrieval_state.sent_query_history],
-            )
-            tracer.write_json(
-                "runtime.query_execution_ledger",
-                [item.model_dump(mode="json") for item in run_state.retrieval_state.query_execution_ledger],
             )
             tracer.write_json(
                 _round_artifact(
@@ -2229,15 +2242,6 @@ class WorkflowRuntime:
                     name="sent_query_records",
                 ),
                 [item.model_dump(mode="json") for item in sent_query_records],
-            )
-            tracer.write_json(
-                _round_artifact(
-                    tracer,
-                    round_no=round_no,
-                    subsystem="retrieval",
-                    name="query_execution_receipts",
-                ),
-                [item.model_dump(mode="json") for item in query_execution_receipts],
             )
             tracer.write_json(
                 _round_artifact(

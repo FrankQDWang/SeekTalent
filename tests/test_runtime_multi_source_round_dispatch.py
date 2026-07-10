@@ -48,6 +48,7 @@ from seektalent.runtime.retrieval_runtime import (
 from seektalent.source_adapters import default_source_query_policies, _run_cts_source_round, _run_liepin_source_round
 from seektalent.runtime.source_round_dispatch import (
     RuntimeSourceInvariantError,
+    SourceProviderBlocked,
     SourceProviderFailed,
     SourceRoundAdapterResult,
     SourceRoundDispatchResult,
@@ -1081,6 +1082,83 @@ def test_first_round_partial_browser_source_with_new_candidates_still_blocks(tmp
                     tracer=tracer,
                 )
             )
+    finally:
+        tracer.close()
+
+
+def test_rejected_round_persists_terminal_receipts_before_exit(tmp_path) -> None:
+    def source_round_adapters(runtime: WorkflowRuntime, context: RuntimeSourceRoundContext):
+        del runtime, context
+
+        async def cts_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            del request
+            raise SourceProviderFailed()
+
+        async def liepin_adapter(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            del request
+            raise SourceProviderBlocked()
+
+        return {"cts": cts_adapter, "liepin": liepin_adapter}
+
+    runtime = WorkflowRuntime(
+        make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"),
+        source_round_adapter_provider=source_round_adapters,
+    )
+    run_state = _run_state()
+    checkpoint_receipts: list[list[tuple[str, str, bool]]] = []
+    tracer = RunTracer(tmp_path / "trace")
+    try:
+        with pytest.raises(RunStageError, match="blocked_backend_unavailable"):
+            asyncio.run(
+                runtime._execute_multi_source_round_search(
+                    round_no=1,
+                    retrieval_plan=_retrieval_plan(),
+                    proposed_filter_plan=ProposedFilterPlan(),
+                    query_states=(_query_state("exploit"),),
+                    adapter_notes=(),
+                    target_new=10,
+                    seen_resume_ids=set(),
+                    seen_dedup_keys=set(),
+                    run_state=run_state,
+                    source_plan=(
+                        RuntimeSourceLanePlan(
+                            source_plan_id="run-1:source:0:cts",
+                            runtime_run_id="run-1",
+                            source="cts",
+                            label="CTS",
+                        ),
+                        RuntimeSourceLanePlan(
+                            source_plan_id="run-1:source:1:liepin",
+                            runtime_run_id="run-1",
+                            source="liepin",
+                            label="Liepin",
+                        ),
+                    ),
+                    source_context={"status": "ready"},
+                    tracer=tracer,
+                    runtime_checkpoint_callback=lambda snapshot: checkpoint_receipts.append(
+                        [
+                            (receipt.source_kind, receipt.status, receipt.dispatch_started)
+                            for receipt in snapshot.run_state.retrieval_state.query_execution_ledger
+                        ]
+                    ),
+                )
+            )
+
+        assert [
+            (receipt.source_kind, receipt.status, receipt.dispatch_started)
+            for receipt in run_state.retrieval_state.query_execution_ledger
+        ] == [
+            ("cts", "failed", True),
+            ("liepin", "blocked", False),
+        ]
+        assert checkpoint_receipts[-1] == [
+            ("cts", "failed", True),
+            ("liepin", "blocked", False),
+        ]
+        assert json.loads((tracer.run_dir / "runtime" / "query_execution_ledger.json").read_text()) == [
+            receipt.model_dump(mode="json") for receipt in run_state.retrieval_state.query_execution_ledger
+        ]
     finally:
         tracer.close()
 

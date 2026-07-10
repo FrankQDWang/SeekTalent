@@ -265,7 +265,7 @@ def test_controller_prompt_contains_decision_brief_and_exact_data() -> None:
     assert 'UNTRUSTED DATA "SOURCING_NOTES"' in prompt
     assert 'UNTRUSTED DATA "TERM_BANK"' in prompt
     assert 'UNTRUSTED DATA "PREVIOUS_REFLECTION"' in prompt
-    assert 'UNTRUSTED DATA "SENT_QUERY_HISTORY"' in prompt
+    assert 'UNTRUSTED DATA "QUERY_EXECUTION_HISTORY"' in prompt
     assert 'UNTRUSTED DATA "LATEST_SEARCH_OBSERVATION"' in prompt
     assert 'UNTRUSTED DATA "CURRENT_TOP_POOL"' in prompt
     assert 'UNTRUSTED DATA "REFLECTION_ADVICE"' in prompt

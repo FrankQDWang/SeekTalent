@@ -77,7 +77,7 @@ def render_controller_prompt(context: ControllerContext) -> str:
         "| term | family | role | priority | active | tried |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
-    tried_terms = {term.casefold() for record in context.sent_query_history for term in record.query_terms}
+    tried_terms = {normalize_term(term).casefold() for term in context.tried_query_terms}
     for item in admitted_terms:
         tried = "yes" if item.term.casefold() in tried_terms else "no"
         term_rows.append(
@@ -89,8 +89,11 @@ def render_controller_prompt(context: ControllerContext) -> str:
         for item in context.current_top_pool[:8]
     ]
     query_history = [
-        f"- round {record.round_no}: {', '.join(record.query_terms)}; {record.keyword_query}"
-        for record in context.sent_query_history[-6:]
+        (
+            f"- round {receipt.round_no}: {', '.join(receipt.query_terms)}; "
+            f"{receipt.keyword_query}; status={receipt.status}"
+        )
+        for receipt in context.recent_query_execution_receipts
     ]
     latest = context.latest_search_observation
     city_search_summaries = (
@@ -161,6 +164,10 @@ def render_controller_prompt(context: ControllerContext) -> str:
         "allowed_filter_fields": _allowed_filter_fields(),
         "stop_guidance_can_stop": context.stop_guidance.can_stop,
         "quality_gate_status": context.stop_guidance.quality_gate_status,
+        "tried_query_terms": context.tried_query_terms,
+        "recent_query_execution_receipts": [
+            receipt.model_dump(mode="json") for receipt in context.recent_query_execution_receipts
+        ],
         "used_term_group_keys": context.used_term_group_keys,
         "previous_query_outcomes": [
             outcome.model_dump(mode="json") for outcome in context.previous_query_outcomes
@@ -191,8 +198,11 @@ def render_controller_prompt(context: ControllerContext) -> str:
                 f"- Notes:\n{render_untrusted_text_block('SOURCING_NOTES', context.full_notes or '(none)')}"
             ),
             "TERM BANK\n" + render_untrusted_text_block("TERM_BANK", "\n".join(term_rows)),
-            "SENT QUERY HISTORY\n"
-            + render_untrusted_text_block("SENT_QUERY_HISTORY", "\n".join(query_history) if query_history else "- (none)"),
+            "QUERY EXECUTION HISTORY\n"
+            + render_untrusted_text_block(
+                "QUERY_EXECUTION_HISTORY",
+                "\n".join(query_history) if query_history else "- (none)",
+            ),
             "LATEST SEARCH OBSERVATION\n" + render_untrusted_text_block("LATEST_SEARCH_OBSERVATION", latest_search),
             "CURRENT TOP POOL\n"
             + render_untrusted_text_block("CURRENT_TOP_POOL", "\n".join(top_pool) if top_pool else "- (empty)"),

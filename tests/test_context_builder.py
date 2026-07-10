@@ -1,5 +1,6 @@
 import pytest
 
+from seektalent.controller.react_controller import render_controller_prompt
 from seektalent.models import (
     CTSQuery,
     CitySearchSummary,
@@ -523,6 +524,59 @@ def test_controller_context_uses_receipt_ledger_and_bounds_previous_query_outcom
         receipt.term_group_key for receipt in run_state.retrieval_state.query_execution_ledger
     )
     assert [item.query_instance_id for item in context.previous_query_outcomes] == ["query-2", "query-3"]
+
+
+def test_controller_prompt_uses_started_receipts_not_sent_query_history() -> None:
+    run_state = _run_state_for_stop_gate(
+        candidates=[_scored_candidate("resume-1", round_no=1)],
+        completed_rounds=1,
+        include_untried_family=True,
+    )
+    completed_receipt = run_state.retrieval_state.query_execution_ledger[0]
+    run_state.retrieval_state.query_execution_ledger.extend(
+        [
+            completed_receipt.model_copy(
+                update={
+                    "source_kind": "liepin",
+                    "query_fingerprint": "liepin-copy",
+                    "status": "partial",
+                }
+            ),
+            completed_receipt.model_copy(
+                update={
+                    "query_instance_id": "preflight-trace",
+                    "query_fingerprint": "preflight-trace",
+                    "term_group_key": "preflight-trace",
+                    "query_terms": ["trace"],
+                    "keyword_query": "trace",
+                    "status": "blocked",
+                    "dispatch_started": False,
+                }
+            ),
+        ]
+    )
+    run_state.retrieval_state.sent_query_history = []
+
+    context = build_controller_context(
+        run_state=run_state,
+        round_no=2,
+        min_rounds=1,
+        max_rounds=3,
+        target_new=10,
+    )
+    prompt = render_controller_prompt(context)
+
+    assert context.tried_query_terms == ["python", "resume matching"]
+    assert [receipt.query_instance_id for receipt in context.recent_query_execution_receipts] == [
+        completed_receipt.query_instance_id
+    ]
+    assert context.recent_query_execution_receipts[0].status == "partial"
+    assert "| python | role.python | role_anchor | 1 | True | yes |" in prompt
+    assert "| trace | framework.trace | framework_tool | 3 | True | no |" in prompt
+    assert "QUERY EXECUTION HISTORY" in prompt
+    assert 'UNTRUSTED DATA "QUERY_EXECUTION_HISTORY"' in prompt
+    assert "status=partial" in prompt
+    assert "SENT QUERY HISTORY" not in prompt
 
 
 def test_split_modules_build_scoring_reflection_and_finalize_contexts() -> None:
