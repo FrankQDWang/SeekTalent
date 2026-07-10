@@ -44,6 +44,8 @@ class FakeLiepinSearchWorkflowSite:
     claim_aware_capture_expected_keys: list[str] = field(default_factory=list)
     opened_refs: list[str] = field(default_factory=list)
     cached_opened_refs: list[str] = field(default_factory=list)
+    cached_opened_detail_urls: list[str] = field(default_factory=list)
+    ref_probe_opened_subjects: list[str] = field(default_factory=list)
     open_results: list[OpenCliBrowserResult] = field(default_factory=list)
     structured_cards: list[list[dict[str, object]]] = field(
         default_factory=lambda: [
@@ -130,9 +132,10 @@ class FakeLiepinSearchWorkflowSite:
         rank: int,
         detail_url: str,
     ) -> OpenCliBrowserResult:
-        del source_run_id, detail_url
+        del source_run_id
         self.calls.append("open_liepin_detail_cached_url")
         self.cached_opened_refs.append(ref)
+        self.cached_opened_detail_urls.append(detail_url)
         if not self.open_ok:
             return OpenCliBrowserResult(
                 ok=False,
@@ -334,7 +337,8 @@ def test_private_claim_context_route_preserves_current_detail_search_behavior() 
 
     assert envelope["status"] == "succeeded"
     assert envelope["resumes_returned"] == 1
-    assert site.calls.count("open_liepin_detail") == 1
+    assert "open_liepin_detail" not in site.calls
+    assert site.calls.count("open_liepin_detail_cached_url") == 1
     assert site.calls.count("capture_liepin_detail_resume_claim_aware") == 1
     assert "capture_liepin_detail_resume" not in site.calls
     key = _detail_key("70")
@@ -389,7 +393,8 @@ def test_private_claim_context_skips_opened_subject_after_rank_change() -> None:
 
     key = _detail_key("sameSubject")
     assert first["status"] == "succeeded"
-    assert first_site.calls.count("open_liepin_detail") == 1
+    assert "open_liepin_detail" not in first_site.calls
+    assert first_site.calls.count("open_liepin_detail_cached_url") == 1
     assert second["status"] == "blocked"
     assert "open_liepin_detail" not in second_site.calls
     assert "open_liepin_detail_cached_url" not in second_site.calls
@@ -434,11 +439,46 @@ def test_private_claim_context_drops_stale_rank_url_when_refresh_has_no_identity
     claims = ledger.snapshot()
     assert envelope["status"] == "succeeded"
     assert envelope["resumes_returned"] == 1
-    assert site.opened_refs == ["first"]
+    assert site.opened_refs == []
+    assert site.cached_opened_refs == ["first"]
     assert "new-rank-two" not in site.cached_opened_refs
     assert set(claims) == {first_key}
     assert claims[first_key].status == "opened"
     assert old_rank_two_key not in claims
+
+
+def test_private_claim_context_opens_validated_url_without_ref_probe_drift() -> None:
+    class RefProbeDriftSite(FakeLiepinSearchWorkflowSite):
+        def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
+            del source_run_id
+            self.calls.append("open_liepin_detail")
+            self.opened_refs.append(ref)
+            self.ref_probe_opened_subjects.append("subjectB")
+            return OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": rank})
+
+    detail_url_for_subject_a = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=subjectA"
+    ledger = DetailOpenClaimLedger({})
+    site = RefProbeDriftSite(
+        structured_cards=[[{"ref": "drifting-ref", "provider_rank": 1}]],
+        detail_urls_by_ref={"drifting-ref": detail_url_for_subject_a},
+        search_states=[_search_state_with_detail_targets("drifting-ref") for _ in range(3)],
+    )
+
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(ledger),
+    )
+
+    subject_a_key = _detail_key("subjectA")
+    claims = ledger.snapshot()
+    assert envelope["status"] == "succeeded"
+    assert site.opened_refs == []
+    assert site.ref_probe_opened_subjects == []
+    assert site.cached_opened_refs == ["drifting-ref"]
+    assert site.cached_opened_detail_urls == [detail_url_for_subject_a]
+    assert site.claim_aware_capture_expected_keys == [subject_a_key]
+    assert set(claims) == {subject_a_key}
+    assert claims[subject_a_key].status == "opened"
 
 
 @pytest.mark.parametrize(
@@ -504,7 +544,8 @@ def test_private_claim_context_terminalizes_attempted_open_before_later_workflow
     key = _detail_key("70")
     claim = ledger.snapshot()[key]
     assert first["status"] == "blocked"
-    assert site.calls.count("open_liepin_detail") == expected_attempts
+    assert "open_liepin_detail" not in site.calls
+    assert site.calls.count("open_liepin_detail_cached_url") == expected_attempts
     assert claim.status == "terminal_failed"
     assert claim.browser_open_attempt_count == expected_attempts
     assert second["status"] == "blocked"
@@ -557,9 +598,16 @@ def test_private_claim_context_terminalizes_capture_identity_mismatch_without_ca
 
 def test_private_claim_context_terminalizes_escaping_open_exception() -> None:
     class ExplodingOpenSite(FakeLiepinSearchWorkflowSite):
-        def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
-            del source_run_id, ref, rank
-            self.calls.append("open_liepin_detail")
+        def open_liepin_detail_cached_url(
+            self,
+            *,
+            source_run_id: str,
+            ref: str,
+            rank: int,
+            detail_url: str,
+        ) -> OpenCliBrowserResult:
+            del source_run_id, ref, rank, detail_url
+            self.calls.append("open_liepin_detail_cached_url")
             raise RuntimeError("open exploded")
 
     ledger = DetailOpenClaimLedger({})
@@ -617,7 +665,11 @@ def test_private_claim_context_releases_preopen_failure_without_browser_action()
         search_states=[
             _search_state_with_detail_targets("70"),
             _search_state_with_detail_targets("70"),
-            _search_state_with_detail_targets("71"),
+            OpenCliBrowserResult(
+                ok=False,
+                action="state",
+                safe_reason_code="liepin_opencli_detail_not_opened",
+            ),
         ],
     )
 

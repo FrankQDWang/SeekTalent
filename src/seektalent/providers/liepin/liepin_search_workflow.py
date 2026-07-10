@@ -304,7 +304,7 @@ class LiepinSearchWorkflow:
                     ref=selected_ref,
                     rank=selected_rank,
                     cached_detail_url=cached_detail_url,
-                    use_cached=using_cached_card_items,
+                    use_cached=using_cached_card_items or provider_candidate_key_hash is not None,
                     before_browser_open_attempt=before_browser_open_attempt,
                 )
                 if not open_result.ok:
