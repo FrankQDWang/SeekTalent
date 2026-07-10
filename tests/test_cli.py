@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import shlex
 import threading
 import time
@@ -22,7 +23,7 @@ from seektalent.cli import (
 from seektalent.corpus.documents import build_jd_document_row
 from seektalent.corpus.store import CorpusStore
 from seektalent.evaluation import EvaluationResult, EvaluationStageResult
-from seektalent.models import FinalResult
+from seektalent.models import FinalCandidate, FinalResult
 from seektalent.resources import REQUIRED_PROMPTS, package_prompt_dir, read_env_example_template
 from seektalent.runtime.exact_llm_cache import get_cached_json, put_cached_json
 from tests.settings_factory import make_settings
@@ -1552,6 +1553,60 @@ def test_run_json_allows_null_evaluation_result(
 
     payload = json.loads(capsys.readouterr().out)
     assert payload["evaluation_result"] is None
+
+
+def test_run_json_exposes_claim_aware_presentation_id_not_carrier(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _set_required_env(monkeypatch)
+    carried_key_hash = hashlib.sha256(b"private-liepin-carrier").hexdigest()
+    presentation_resume_id = hashlib.sha256(
+        f"liepin:detail:presentation:v1:{carried_key_hash}".encode("utf-8")
+    ).hexdigest()
+    trace_log = tmp_path / "trace.log"
+    trace_log.write_text("", encoding="utf-8")
+    result = MatchRunResult(
+        final_result=FinalResult(
+            run_id="run-1",
+            run_dir=str(tmp_path),
+            rounds_executed=1,
+            stop_reason="controller_stop",
+            summary="done",
+            candidates=[
+                FinalCandidate(
+                    resume_id=presentation_resume_id,
+                    rank=1,
+                    final_score=95,
+                    fit_bucket="fit",
+                    source_provider="liepin",
+                    evidence_level="detail",
+                    detail_open_status="opened",
+                    match_summary="Strong role match.",
+                    strengths=[],
+                    weaknesses=[],
+                    matched_must_haves=[],
+                    matched_preferences=[],
+                    risk_flags=[],
+                    why_selected="Selected by score.",
+                    source_round=1,
+                )
+            ],
+        ),
+        final_markdown="# Final",
+        run_id="run-1",
+        run_dir=tmp_path,
+        trace_log_path=trace_log,
+        evaluation_result=None,
+    )
+    monkeypatch.setattr("seektalent.cli.run_match", lambda **kwargs: result)
+
+    assert main(["run", "--job-title", "Python Engineer", "--jd", "JD", "--json"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["final_result"]["candidates"][0]["resume_id"] == presentation_resume_id
+    assert carried_key_hash not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_run_cleans_runtime_artifacts_before_run_match(

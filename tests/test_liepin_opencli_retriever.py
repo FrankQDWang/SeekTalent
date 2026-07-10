@@ -1,21 +1,29 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import pytest
 
+from seektalent.api import MatchRunResult
+from seektalent.cli import _result_payload
+from seektalent.finalize.deterministic import build_deterministic_final_result
+from seektalent.models import FinalizeContext, ScoredCandidate
+from seektalent.opencli_browser.contracts import OpenCliBrowserResult
+from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
 from seektalent.providers.liepin.detail_payload_text import STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS
+from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.opencli_retriever import (
     LiepinOpenCliResumeRequest,
     LiepinOpenCliResumeRetriever,
     _response_from_opencli_envelope,
 )
-from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
-from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
 from seektalent.providers.liepin.worker_contracts import LiepinResumeSearchResponse
-from seektalent.opencli_browser.contracts import OpenCliBrowserResult
+from seektalent.runtime.production_contract import ProductionCandidateV1
+from seektalent.source_contracts import RuntimeSourceLanePlan
+import seektalent.sources.liepin.runtime_lane as runtime_lane
 
 
 @dataclass
@@ -111,7 +119,7 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
     assert "normalizedSnapshotRef" not in response.resumes[0].payload
 
 
-def test_claim_aware_detail_uses_carried_key_without_leaking_identity_transport() -> None:
+def test_claim_aware_detail_uses_derived_identity_without_public_carrier_leak(tmp_path: Path) -> None:
     detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
     candidate_key_hash = stable_liepin_detail_candidate_key_hash(detail_url)
     assert candidate_key_hash is not None
@@ -142,20 +150,78 @@ def test_claim_aware_detail_uses_carried_key_without_leaking_identity_transport(
     )
     detail = response.resumes[0]
     result = liepin_resume_search_response_to_search_result(response)
+    candidate = result.candidates[0]
+    snapshot = result.provider_snapshots[0]
 
-    assert detail.provider_subject_id == candidate_key_hash
+    assert detail.provider_subject_id is None
+    assert detail.identity_confidence == "synthetic_fingerprint"
     assert detail.synthetic_candidate_fingerprint != candidate_key_hash
+    assert candidate.resume_id != candidate_key_hash
+    assert candidate.source_resume_id is None
+    assert candidate.dedup_key != candidate_key_hash
+    assert candidate.resume_id != candidate.dedup_key
+    assert snapshot.provider_subject_id is None
+    assert snapshot.synthetic_candidate_fingerprint == candidate.dedup_key
     assert "sourceUrl" not in detail.payload
     assert "providerCandidateKeyHash" not in detail.payload
     assert "providerRank" not in detail.payload
     assert "protectedSnapshotRef" not in detail.payload
     serialized_public_payload = json.dumps(
-        [detail.payload, result.candidates[0].raw, result.provider_snapshots[0].raw_payload],
+        [
+            detail.model_dump(mode="json"),
+            candidate.model_dump(mode="json"),
+            asdict(snapshot),
+        ],
         ensure_ascii=False,
     )
     assert "sameSubject" not in serialized_public_payload
     assert candidate_key_hash not in serialized_public_payload
     assert "run-9/9.json" not in serialized_public_payload
+
+    final_result = build_deterministic_final_result(
+        FinalizeContext(
+            run_id="run-9",
+            run_dir=str(tmp_path),
+            rounds_executed=1,
+            stop_reason="controller_stop",
+            top_candidates=[_scored_candidate(candidate.resume_id)],
+        )
+    )
+    trace_log_path = tmp_path / "trace.log"
+    trace_log_path.write_text("", encoding="utf-8")
+    cli_payload = _result_payload(
+        MatchRunResult(
+            final_result=final_result,
+            final_markdown="# Final",
+            run_id="run-9",
+            run_dir=tmp_path,
+            trace_log_path=trace_log_path,
+            evaluation_result=None,
+        )
+    )
+    production_candidate = ProductionCandidateV1.from_final_candidate(final_result.candidates[0])
+
+    assert candidate_key_hash not in final_result.model_dump_json()
+    assert candidate_key_hash not in json.dumps(cli_payload, ensure_ascii=False)
+    assert candidate_key_hash not in production_candidate.model_dump_json()
+
+    evidence = runtime_lane._source_evidence_for_candidate(
+        source_plan=RuntimeSourceLanePlan(
+            source_plan_id="plan-liepin",
+            runtime_run_id="runtime-run-1",
+            source="liepin",
+            label="Liepin",
+        ),
+        candidate=candidate,
+        collected_at="2026-07-10T00:00:00+00:00",
+        evidence_level="detail",
+    )
+    expected_evidence_hash = hashlib.sha256(
+        f"runtime-run-1:liepin:{candidate.dedup_key}".encode("utf-8")
+    ).hexdigest()
+    assert evidence.provider_candidate_key_hash == expected_evidence_hash
+    assert candidate_key_hash not in evidence.model_dump_json()
+    assert candidate_key_hash not in json.dumps(evidence.to_public_payload(), ensure_ascii=False)
 
 
 @pytest.mark.parametrize("carried_key_hash", [None, "not-a-valid-carried-key"])
@@ -180,14 +246,19 @@ def test_claim_aware_detail_without_a_valid_carried_key_fails_closed(
         )
 
 
-def test_claim_aware_detail_identity_is_stable_when_artifact_refs_and_rank_change() -> None:
+def test_claim_aware_detail_identity_is_stable_and_distinct_across_artifact_rank_changes() -> None:
     candidate_key_hash = stable_liepin_detail_candidate_key_hash(
         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
     )
     assert candidate_key_hash is not None
 
-    def response_for(*, rank: int, artifact_run: str):
-        return _response_from_opencli_envelope(
+    different_candidate_key_hash = stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=differentSubject"
+    )
+    assert different_candidate_key_hash is not None
+
+    def result_for(*, key_hash: str, rank: int, artifact_run: str):
+        response = _response_from_opencli_envelope(
             {
                 "status": "succeeded",
                 "cards_seen": 1,
@@ -195,19 +266,33 @@ def test_claim_aware_detail_identity_is_stable_when_artifact_refs_and_rank_chang
                     {
                         "claim_aware": True,
                         "provider_rank": rank,
-                        "provider_candidate_key_hash": candidate_key_hash,
+                        "provider_candidate_key_hash": key_hash,
                         "protected_snapshot_ref": f"artifact://protected/liepin-opencli/raw/{artifact_run}/{rank}.json",
                         "detail_payload": {"currentTitle": "数据开发专家"},
                     }
                 ],
             }
-        ).resumes[0]
+        )
+        return liepin_resume_search_response_to_search_result(response)
 
-    first = response_for(rank=1, artifact_run="primary")
-    second = response_for(rank=9, artifact_run="explore")
+    first = result_for(key_hash=candidate_key_hash, rank=1, artifact_run="primary").candidates[0]
+    second = result_for(key_hash=candidate_key_hash, rank=9, artifact_run="explore").candidates[0]
+    different = result_for(key_hash=different_candidate_key_hash, rank=1, artifact_run="primary").candidates[0]
 
-    assert first.provider_subject_id == second.provider_subject_id == candidate_key_hash
-    assert first.synthetic_candidate_fingerprint == second.synthetic_candidate_fingerprint
+    assert first.source_resume_id is None
+    assert first.resume_id == second.resume_id
+    assert first.dedup_key == second.dedup_key
+    assert first.resume_id == hashlib.sha256(
+        f"liepin:detail:presentation:v1:{candidate_key_hash}".encode("utf-8")
+    ).hexdigest()
+    assert first.dedup_key == hashlib.sha256(
+        f"liepin:detail:dedup:v1:{candidate_key_hash}".encode("utf-8")
+    ).hexdigest()
+    assert first.resume_id != first.dedup_key
+    assert first.resume_id != candidate_key_hash
+    assert first.dedup_key != candidate_key_hash
+    assert different.resume_id != first.resume_id
+    assert different.dedup_key != first.dedup_key
 
 
 def test_legacy_detail_without_a_carried_key_keeps_existing_fallback_identity() -> None:
@@ -226,7 +311,58 @@ def test_legacy_detail_without_a_carried_key_keeps_existing_fallback_identity() 
         }
     )
 
-    assert response.resumes[0].provider_subject_id is not None
+    detail = response.resumes[0]
+    expected_provider_subject_id = hashlib.sha256(b"legacy-run-1-rank-1").hexdigest()
+    assert detail.provider_subject_id == expected_provider_subject_id
+    assert detail.synthetic_candidate_fingerprint == hashlib.sha256(
+        f"liepin-opencli:{expected_provider_subject_id}".encode("utf-8")
+    ).hexdigest()
+    candidate = liepin_resume_search_response_to_search_result(response).candidates[0]
+    assert candidate.resume_id == expected_provider_subject_id
+    assert candidate.source_resume_id == expected_provider_subject_id
+
+
+def test_non_claim_aware_detail_with_carried_key_keeps_existing_mapping() -> None:
+    carried_key_hash = stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    )
+    assert carried_key_hash is not None
+    response = _response_from_opencli_envelope(
+        {
+            "status": "succeeded",
+            "cards_seen": 1,
+            "resumes": [
+                {
+                    "provider_candidate_key_hash": carried_key_hash,
+                    "detail_payload": {"currentTitle": "数据开发专家"},
+                }
+            ],
+        }
+    )
+
+    detail = response.resumes[0]
+    candidate = liepin_resume_search_response_to_search_result(response).candidates[0]
+
+    assert detail.provider_subject_id == carried_key_hash
+    assert candidate.resume_id == carried_key_hash
+    assert candidate.source_resume_id == carried_key_hash
+    assert candidate.dedup_key == hashlib.sha256(f"liepin-opencli:{carried_key_hash}".encode("utf-8")).hexdigest()
+
+
+def _scored_candidate(resume_id: str) -> ScoredCandidate:
+    return ScoredCandidate(
+        resume_id=resume_id,
+        source_provider="liepin",
+        fit_bucket="fit",
+        overall_score=95,
+        must_have_match_score=95,
+        preferred_match_score=70,
+        risk_score=10,
+        reasoning_summary="Strong role match.",
+        confidence="high",
+        source_round=1,
+        score_evidence_source="detail_enriched",
+    )
 
 
 def test_opencli_retriever_structured_detail_fallback_deduplicates_and_caps_text(tmp_path: Path) -> None:

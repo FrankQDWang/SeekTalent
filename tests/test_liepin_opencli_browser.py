@@ -3946,6 +3946,7 @@ def test_stable_detail_candidate_key_hash_is_subject_stable_and_rejects_invalid_
     assert stable_liepin_detail_candidate_key_hash(
         "https://example.test/resume/showresumedetail/?res_id_encode=sameSubject"
     ) is None
+    assert stable_liepin_detail_candidate_key_hash("https://[::1") is None
 
 
 def test_capture_liepin_detail_resume_carries_only_opaque_candidate_key(tmp_path: Path) -> None:
@@ -3995,6 +3996,37 @@ def test_claim_aware_capture_rejects_mismatched_candidate_key_before_artifact_wr
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                 "https://h.liepin.com/resume/showresumedetail/?res_id_encode=capturedSubject"
             ),
+        },
+    )
+
+    captured = _runner(commands, lease_dir=tmp_path)._capture_liepin_detail_resume(
+        source_run_id="run-1",
+        rank=1,
+        require_ready=True,
+        emit_events=False,
+        claim_aware=True,
+        expected_provider_candidate_key_hash=expected_key,
+    )
+
+    assert captured.ok is False
+    assert captured.safe_reason_code == "liepin_opencli_candidate_identity_mismatch"
+    assert not (tmp_path / "protected").exists()
+
+
+def test_claim_aware_capture_rejects_malformed_url_before_artifact_write(tmp_path: Path) -> None:
+    expected_key = stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=expectedSubject"
+    )
+    assert expected_key is not None
+    commands = RefEvalCommands(
+        eval_outputs_by_ref={},
+        default_eval_output=_liepin_detail_payload_json(),
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "state"): (
+                "URL: https://h.liepin.com/resume/showresumedetail/?res_id_encode=expectedSubject\n"
+                "王** 40岁 工作14年 硕士 上海\n当前职位：数据开发专家"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): "https://[::1",
         },
     )
 

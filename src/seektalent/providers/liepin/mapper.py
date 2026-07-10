@@ -80,11 +80,16 @@ def _map_candidate(
         score_evidence_source=score_evidence_source,
     )
     provider_subject_id = worker_candidate.provider_subject_id
-    resume_id = provider_subject_id or worker_candidate.synthetic_candidate_fingerprint
+    if getattr(worker_candidate, "_opencli_claim_aware_candidate_identity", False):
+        resume_id = _claim_aware_presentation_resume_id(worker_candidate)
+        source_resume_id = None
+    else:
+        resume_id = provider_subject_id or worker_candidate.synthetic_candidate_fingerprint
+        source_resume_id = provider_subject_id
     normalized_text = _mapped_normalized_text(worker_candidate, provider_payload)
     candidate = ResumeCandidate(
         resume_id=resume_id,
-        source_resume_id=provider_subject_id,
+        source_resume_id=source_resume_id,
         snapshot_sha256=snapshot_hash,
         dedup_key=worker_candidate.synthetic_candidate_fingerprint,
         search_text=normalized_text,
@@ -108,6 +113,13 @@ def _map_candidate(
         score_evidence_source=score_evidence_source,
     )
     return LiepinMappedCandidate(candidate=candidate, provider_snapshot=snapshot)
+
+
+def _claim_aware_presentation_resume_id(worker_candidate: LiepinWorkerCandidate) -> str:
+    presentation_resume_id = getattr(worker_candidate, "_opencli_presentation_resume_id", None)
+    if isinstance(presentation_resume_id, str) and presentation_resume_id:
+        return presentation_resume_id
+    raise ValueError("Claim-aware Liepin detail missing private presentation resume ID")
 
 
 def map_liepin_worker_card(

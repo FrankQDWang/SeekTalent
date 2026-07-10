@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 
 from seektalent.finalize.finalizer import Finalizer
@@ -32,6 +33,25 @@ def test_deterministic_finalization_preserves_runtime_ranking_and_scorecard_fact
     assert result.candidates[0].final_score == 95
     assert result.candidates[0].match_summary == "Strong role match."
     assert result.candidates[0].why_selected.startswith("Ranked by runtime score 95.")
+
+
+def test_deterministic_finalization_exposes_claim_aware_presentation_id_not_carrier() -> None:
+    carried_key_hash = hashlib.sha256(b"private-liepin-carrier").hexdigest()
+    presentation_resume_id = hashlib.sha256(
+        f"liepin:detail:presentation:v1:{carried_key_hash}".encode("utf-8")
+    ).hexdigest()
+    result = build_deterministic_final_result(
+        FinalizeContext(
+            run_id="run-1",
+            run_dir="/tmp/run-1",
+            rounds_executed=1,
+            stop_reason="controller_stop",
+            top_candidates=[_scored_candidate(presentation_resume_id, source_round=1, score=95)],
+        )
+    )
+
+    assert result.candidates[0].resume_id == presentation_resume_id
+    assert carried_key_hash not in result.model_dump_json()
 
 
 def test_legacy_finalizer_adapter_uses_deterministic_runtime_result(tmp_path: Path) -> None:

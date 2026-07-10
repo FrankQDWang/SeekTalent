@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 
 import pytest
 
 from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
 from seektalent.models import RequirementSheet, ResumeCandidate
-from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.providers.liepin.client import LiepinWorkerModeError, liepin_resume_search_response_to_search_result
+from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
+from seektalent.providers.liepin.opencli_retriever import _response_from_opencli_envelope
 import seektalent.sources.liepin.runtime_lane as runtime_lane
 from seektalent.sources.liepin.runtime_lane import (
     liepin_backend_posture,
@@ -18,7 +21,12 @@ from seektalent.sources.liepin.runtime_lane import (
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.source_filters import RuntimeLocationExecutionIntent
-from seektalent.runtime.source_lanes import RuntimeApprovedDetailLease, RuntimeSourceBudgetPolicy, RuntimeSourceLaneRequest
+from seektalent.runtime.source_lanes import (
+    RuntimeApprovedDetailLease,
+    RuntimeSourceBudgetPolicy,
+    RuntimeSourceLanePlan,
+    RuntimeSourceLaneRequest,
+)
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 from seektalent.storage.json import sha256_json
 from seektalent.sources.liepin.reason_codes import LIEPIN_SOURCE_LANE_REASON_CODE_MAP
@@ -1410,6 +1418,45 @@ def test_liepin_runtime_lane_preserves_pi_provider_hash_and_artifact_refs_in_evi
     assert result.detail_recommendations[0].provider_candidate_key_hash == "stable-pi-provider-hash"
     assert result.detail_recommendations[0].provider_snapshot_ref == "artifact://protected/pi-card/run-1/1"
     assert result.detail_recommendations[0].safe_summary_ref == "artifact://public-summary/pi-card/run-1/1"
+
+
+def test_claim_aware_liepin_evidence_derives_public_hash_without_carrier() -> None:
+    carried_key_hash = stable_liepin_detail_candidate_key_hash(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    )
+    assert carried_key_hash is not None
+    response = _response_from_opencli_envelope(
+        {
+            "status": "succeeded",
+            "cards_seen": 1,
+            "resumes": [
+                {
+                    "claim_aware": True,
+                    "provider_candidate_key_hash": carried_key_hash,
+                    "detail_payload": {"currentTitle": "数据开发专家"},
+                }
+            ],
+        }
+    )
+    candidate = liepin_resume_search_response_to_search_result(response).candidates[0]
+    evidence = runtime_lane._source_evidence_for_candidate(
+        source_plan=RuntimeSourceLanePlan(
+            source_plan_id="plan-liepin",
+            runtime_run_id="runtime-run-1",
+            source="liepin",
+            label="Liepin",
+        ),
+        candidate=candidate,
+        collected_at="2026-07-10T00:00:00+00:00",
+        evidence_level="detail",
+    )
+
+    assert candidate.source_resume_id is None
+    assert evidence.provider_candidate_key_hash == hashlib.sha256(
+        f"runtime-run-1:liepin:{candidate.dedup_key}".encode("utf-8")
+    ).hexdigest()
+    assert carried_key_hash not in evidence.model_dump_json()
+    assert carried_key_hash not in json.dumps(evidence.to_public_payload(), ensure_ascii=False)
 
 
 def test_liepin_runtime_card_lane_passes_compliance_gate_to_live_adapter() -> None:

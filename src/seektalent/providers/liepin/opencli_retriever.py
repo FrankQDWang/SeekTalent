@@ -173,19 +173,30 @@ def _detail_from_resume_payload(
 ) -> LiepinWorkerCandidateDetail:
     del action_trace_ref
     payload = _public_detail_payload(resume.get("detail_payload"))
+    claim_aware = resume.get("claim_aware") is True
     provider_candidate_hash = _provider_candidate_hash(
         resume,
-        claim_aware=resume.get("claim_aware") is True,
+        claim_aware=claim_aware,
     )
+    if claim_aware:
+        synthetic_candidate_fingerprint, presentation_resume_id = _claim_aware_identity_tokens(provider_candidate_hash)
+        provider_subject_id = None
+        identity_confidence = "synthetic_fingerprint"
+    else:
+        synthetic_candidate_fingerprint = hashlib.sha256(
+            f"liepin-opencli:{provider_candidate_hash}".encode("utf-8")
+        ).hexdigest()
+        presentation_resume_id = None
+        provider_subject_id = provider_candidate_hash
+        identity_confidence = "provider_subject_id"
     normalized_text = structured_liepin_detail_text(payload)
-    fingerprint = hashlib.sha256(f"liepin-opencli:{provider_candidate_hash}".encode("utf-8")).hexdigest()
     detail = LiepinWorkerCandidateDetail(
         payload=payload,
         normalized_text=normalized_text,
-        provider_subject_id=provider_candidate_hash,
+        provider_subject_id=provider_subject_id,
         provider_listing_id=None,
-        synthetic_candidate_fingerprint=fingerprint,
-        identity_confidence="provider_subject_id",
+        synthetic_candidate_fingerprint=synthetic_candidate_fingerprint,
+        identity_confidence=identity_confidence,
         extraction_source="dom_fallback",
         extractor_version="liepin-opencli-deterministic-v1",
         pii_classification="no_direct_contact",
@@ -194,6 +205,8 @@ def _detail_from_resume_payload(
         redaction_state="raw_provider_payload",
     )
     detail._opencli_private_candidate_identity = True
+    detail._opencli_claim_aware_candidate_identity = claim_aware
+    detail._opencli_presentation_resume_id = presentation_resume_id
     return detail
 
 
@@ -222,6 +235,16 @@ def _provider_candidate_hash(resume: Mapping[str, object], *, claim_aware: bool)
         or ""
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _claim_aware_identity_tokens(carried_key_hash: str) -> tuple[str, str]:
+    internal_dedup_token = hashlib.sha256(
+        f"liepin:detail:dedup:v1:{carried_key_hash}".encode("utf-8")
+    ).hexdigest()
+    presentation_resume_id = hashlib.sha256(
+        f"liepin:detail:presentation:v1:{carried_key_hash}".encode("utf-8")
+    ).hexdigest()
+    return internal_dedup_token, presentation_resume_id
 
 
 def _is_provider_candidate_key_hash(value: object) -> bool:

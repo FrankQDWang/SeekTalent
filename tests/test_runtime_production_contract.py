@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -105,6 +106,29 @@ def test_production_projection_excludes_debug_paths_and_payloads(tmp_path: Path)
     assert "final_markdown" not in payload
     assert "candidate_store" not in payload
     assert "normalized_store" not in payload
+
+
+def test_production_projection_exposes_claim_aware_presentation_id_not_carrier(tmp_path: Path) -> None:
+    carried_key_hash = hashlib.sha256(b"private-liepin-carrier").hexdigest()
+    presentation_resume_id = hashlib.sha256(
+        f"liepin:detail:presentation:v1:{carried_key_hash}".encode("utf-8")
+    ).hexdigest()
+    debug_result = _debug_result(tmp_path)
+    final_result = debug_result.final_result.model_copy(
+        update={
+            "candidates": [
+                debug_result.final_result.candidates[0].model_copy(update={"resume_id": presentation_resume_id})
+            ]
+        }
+    )
+    result = ProductionMatchResultV1.from_debug_result(
+        replace(debug_result, final_result=final_result),
+        input_digest="input-hash",
+        source_selection=SourceSelectionV1(),
+    )
+
+    assert result.final_candidates[0].candidate_id == presentation_resume_id
+    assert carried_key_hash not in result.model_dump_json()
 
 
 def test_production_projection_rejects_missing_candidate_source_metadata(tmp_path: Path) -> None:

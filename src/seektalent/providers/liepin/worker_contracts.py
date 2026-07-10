@@ -281,6 +281,8 @@ class LiepinWorkerCandidateDetail(BaseModel):
     access_scope: LiepinAccessScope
     redaction_state: LiepinRedactionState
     _opencli_private_candidate_identity: bool = PrivateAttr(default=False)
+    _opencli_claim_aware_candidate_identity: bool = PrivateAttr(default=False)
+    _opencli_presentation_resume_id: str | None = PrivateAttr(default=None)
 
     @model_validator(mode="after")
     def reject_whole_page_text_payload_aliases(self) -> LiepinWorkerCandidateDetail:
