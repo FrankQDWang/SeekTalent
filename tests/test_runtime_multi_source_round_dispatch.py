@@ -444,6 +444,10 @@ def test_runtime_checkpoint_persistence_rehydrates_opened_claim_without_private_
 
     restored_run_state = RunState.model_validate(checkpoint.run_state.model_dump(mode="json"))
     restored_ledger = DetailOpenClaimLedger(restored_run_state.detail_open_claims_by_provider_key)
+    restored_claim = restored_run_state.detail_open_claims_by_provider_key["opaque-claim-key"]
+    assert restored_claim.status == "opened"
+    assert restored_claim.browser_open_attempt_count == 1
+    assert restored_claim.last_safe_reason_code is None
     assert restored_ledger.try_claim("opaque-claim-key") is False
 
     ledger.try_claim("later-claim-key")

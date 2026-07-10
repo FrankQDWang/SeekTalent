@@ -825,6 +825,42 @@ def test_concrete_opencli_private_chain_opens_same_subject_once_across_queries_a
     assert ledger.snapshot()[detail_key].status == "opened"
     assert ledger.snapshot()[detail_key].browser_open_attempt_count == 1
 
+    first_finalizes = {
+        event.source_lane_run_id: dict(event.safe_counts)
+        for event in first_bundle.events
+        if event.step_name == "finalize"
+    }
+    second_finalizes = {
+        event.source_lane_run_id: dict(event.safe_counts)
+        for event in second_bundle.events
+        if event.step_name == "finalize"
+    }
+    assert first_finalizes == {
+        "plan-liepin-detail-5:round:1:lane:1:target:1": {
+            "resumes_returned": 1,
+            "detail_claim_granted_count": 1,
+            "detail_opened_count": 1,
+            "detail_open_skipped_seen_count": 0,
+            "detail_open_terminal_failure_count": 0,
+        },
+        "plan-liepin-detail-5:round:1:lane:2:target:1": {
+            "resumes_returned": 0,
+            "detail_claim_granted_count": 0,
+            "detail_opened_count": 0,
+            "detail_open_skipped_seen_count": 1,
+            "detail_open_terminal_failure_count": 0,
+        },
+    }
+    assert second_finalizes == {
+        "plan-liepin-detail-5:round:2:lane:1:target:1": {
+            "resumes_returned": 0,
+            "detail_claim_granted_count": 0,
+            "detail_opened_count": 0,
+            "detail_open_skipped_seen_count": 1,
+            "detail_open_terminal_failure_count": 0,
+        }
+    }
+
     public_payload = json.dumps(
         [first_bundle.to_public_payload(), second_bundle.to_public_payload()],
         ensure_ascii=False,
