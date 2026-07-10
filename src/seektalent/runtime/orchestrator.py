@@ -109,6 +109,7 @@ from seektalent.models import (
 )
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates, select_identity_top_candidates
@@ -328,6 +329,7 @@ class RuntimeSourceRoundContext:
     source_plan_by_source: Mapping[str, RuntimeSourceLanePlan]
     source_context: Mapping[str, str | int | bool | None] | None
     tracer: RunTracer
+    detail_open_claim_ledger: DetailOpenClaimLedger
 
 
 RuntimeSourceRoundAdapterProvider = Callable[
@@ -862,8 +864,10 @@ class WorkflowRuntime:
                 requirement_cache_scope=requirement_cache_scope,
                 approved_requirement_sheet=approved_requirement_sheet,
             )
+            detail_open_claim_ledger = DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key)
             top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
                 run_state=run_state,
+                detail_open_claim_ledger=detail_open_claim_ledger,
                 tracer=tracer,
                 source_plan=source_plan,
                 source_context=source_context,
@@ -935,6 +939,7 @@ class WorkflowRuntime:
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
                 tracer=tracer,
                 run_state=run_state,
+                detail_open_claim_ledger=detail_open_claim_ledger,
             )
             self._emit_runtime_public_event(
                 tracer=tracer,
@@ -1532,6 +1537,7 @@ class WorkflowRuntime:
         seen_resume_ids: set[str],
         seen_dedup_keys: set[str],
         run_state: RunState,
+        detail_open_claim_ledger: DetailOpenClaimLedger,
         source_plan: tuple[RuntimeSourceLanePlan, ...],
         source_context: Mapping[str, str | int | bool | None] | None,
         tracer: RunTracer,
@@ -1623,6 +1629,7 @@ class WorkflowRuntime:
                     runtime_checkpoint_callback=runtime_checkpoint_callback,
                     tracer=tracer,
                     run_state=run_state,
+                    detail_open_claim_ledger=detail_open_claim_ledger,
                 )
             self._emit_runtime_public_event(
                 tracer=tracer,
@@ -1657,6 +1664,7 @@ class WorkflowRuntime:
             source_plan_by_source=source_plan_by_source,
             source_context=source_context,
             tracer=tracer,
+            detail_open_claim_ledger=detail_open_claim_ledger,
         )
         source_adapters = (
             self.source_round_adapter_provider(self, round_context)
@@ -1696,6 +1704,7 @@ class WorkflowRuntime:
             runtime_checkpoint_callback=runtime_checkpoint_callback,
             tracer=tracer,
             run_state=run_state,
+            detail_open_claim_ledger=detail_open_claim_ledger,
         )
         self._merge_source_round_dispatch_result(
             run_state=run_state,
@@ -1986,6 +1995,7 @@ class WorkflowRuntime:
         self,
         *,
         run_state: RunState,
+        detail_open_claim_ledger: DetailOpenClaimLedger,
         tracer: RunTracer,
         source_plan: tuple[RuntimeSourceLanePlan, ...] | None = None,
         source_context: Mapping[str, str | int | bool | None] | None = None,
@@ -2179,6 +2189,7 @@ class WorkflowRuntime:
                     seen_resume_ids=set(run_state.seen_resume_ids),
                     seen_dedup_keys=seen_dedup_keys,
                     run_state=run_state,
+                    detail_open_claim_ledger=detail_open_claim_ledger,
                     source_plan=source_plan,
                     source_context=source_context,
                     tracer=tracer,
@@ -2267,6 +2278,7 @@ class WorkflowRuntime:
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
                 tracer=tracer,
                 run_state=run_state,
+                detail_open_claim_ledger=detail_open_claim_ledger,
             )
 
             previous_scored_count = len(run_state.scorecards_by_resume_id)
@@ -2358,6 +2370,7 @@ class WorkflowRuntime:
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
                 tracer=tracer,
                 run_state=run_state,
+                detail_open_claim_ledger=detail_open_claim_ledger,
             )
             resume_quality_comment: str | None = None
             resume_quality_comment_error: str | None = None
@@ -2497,18 +2510,23 @@ class WorkflowRuntime:
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None,
         tracer: RunTracer,
         run_state: RunState,
+        detail_open_claim_ledger: DetailOpenClaimLedger,
     ) -> None:
         if runtime_checkpoint_callback is None:
             return
+        snapshot = detail_open_claim_ledger.snapshot()
+        checkpoint_run_state = run_state.model_copy(
+            update={"detail_open_claims_by_provider_key": snapshot},
+        )
         runtime_checkpoint_callback(
             SimpleNamespace(
                 run_id=tracer.run_id,
-                run_state=run_state,
-                candidate_store=run_state.candidate_store,
-                normalized_store=run_state.normalized_store,
+                run_state=checkpoint_run_state,
+                candidate_store=checkpoint_run_state.candidate_store,
+                normalized_store=checkpoint_run_state.normalized_store,
                 final_result=SimpleNamespace(candidates=[]),
                 finalization_revision=None,
-                source_coverage_summary=run_state.source_coverage_summary,
+                source_coverage_summary=checkpoint_run_state.source_coverage_summary,
             )
         )
 

@@ -61,11 +61,14 @@ from seektalent.runtime.runtime_reports import render_round_review as render_rou
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
 from seektalent.runtime.source_lanes import (
     RuntimeQueryCandidateAttribution,
+    SourceQueryExecutionOutcome,
     build_runtime_source_plan,
     rebuild_candidate_identities,
 )
 from seektalent.runtime import WorkflowRuntime
+from seektalent.runtime.orchestrator import RuntimeSourceRoundContext
 from seektalent.source_adapters import build_source_enabled_runtime
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 
@@ -89,6 +92,10 @@ def _cts_source_plan(runtime: WorkflowRuntime, tracer: RunTracer):
         runtime_run_id=tracer.run_id,
         source_context=None,
     )
+
+
+def _detail_open_claim_ledger(run_state: RunState) -> DetailOpenClaimLedger:
+    return DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key)
 
 
 def _round_artifact(run_dir: Path, round_no: int, subsystem: str, name: str, *, extension: str = "json") -> Path:
@@ -2475,7 +2482,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         top_candidates, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=progress_events.append)
+            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=progress_events.append)
         )
     finally:
         tracer.close()
@@ -2601,6 +2608,7 @@ def test_runtime_liepin_round_persists_two_logical_query_receipts_and_outcomes(t
         asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
                 tracer=tracer,
                 source_plan=source_plan,
                 source_context=source_context,
@@ -2636,7 +2644,7 @@ def test_round_two_serializes_exploit_and_generic_lane_types(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2683,7 +2691,7 @@ def test_round_two_uses_prf_probe_when_gate_passes(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2740,7 +2748,7 @@ def test_default_llm_prf_backend_can_drive_prf_probe(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2776,7 +2784,7 @@ def test_prf_selection_uses_llm_prf_without_backend_setting(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2799,7 +2807,7 @@ def test_default_llm_prf_backend_skips_round_one_without_artifacts(tmp_path: Pat
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2850,7 +2858,7 @@ def test_insufficient_prf_seed_support_does_not_require_prf_provider_preflight(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2894,7 +2902,7 @@ def test_llm_prf_stage_preflight_failure_falls_back_without_model_call(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2932,7 +2940,7 @@ def test_llm_prf_backend_falls_back_to_generic_on_timeout(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -2964,7 +2972,7 @@ def test_llm_prf_backend_falls_back_to_generic_on_provider_failure_without_legac
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -3019,7 +3027,7 @@ def test_llm_prf_backend_falls_back_to_generic_when_all_candidates_rejected(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -3048,7 +3056,7 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -3084,7 +3092,7 @@ def test_duplicate_hit_does_not_overwrite_first_hit_attribution(tmp_path: Path) 
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -3178,7 +3186,7 @@ def test_run_rounds_delegates_controller_stage_to_runtime_host(
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3213,7 +3221,7 @@ def test_runtime_reflection_does_not_mutate_query_term_pool(tmp_path: Path) -> N
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -3275,7 +3283,7 @@ def test_run_rounds_delegates_reflection_stage_to_runtime_host(
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3390,6 +3398,73 @@ def test_run_async_delegates_deterministic_finalization_stage_to_runtime_host(
     assert artifacts.final_markdown == "# Delegated final markdown\n"
 
 
+def test_run_async_reuses_one_detail_open_claim_ledger_across_round_contexts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        provider_name="cts",
+        min_rounds=1,
+        max_rounds=2,
+        enable_eval=False,
+    )
+    runtime = _workflow_runtime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+    observed_ledgers: list[DetailOpenClaimLedger] = []
+
+    def source_round_adapters(runtime: WorkflowRuntime, context: RuntimeSourceRoundContext):
+        del runtime
+        observed_ledgers.append(context.detail_open_claim_ledger)
+        if context.round_no == 1:
+            assert context.detail_open_claim_ledger.try_claim("opaque-run-owned-claim")
+
+        async def cts_adapter(request):
+            candidate = _make_candidate(f"ledger-round-{context.round_no}", source_round=context.round_no)
+            return SourceRoundAdapterResult(
+                source="cts",
+                status="completed",
+                candidates=(candidate,),
+                raw_candidate_count=1,
+                query_execution_outcomes=tuple(
+                    SourceQueryExecutionOutcome(
+                        query_instance_id=intent.query_instance_id,
+                        status="completed",
+                        dispatch_started=True,
+                        raw_candidate_count=1,
+                        unique_candidate_count=1,
+                    )
+                    for intent in request.source_query_intents_by_source["cts"]
+                ),
+            )
+
+        return {"cts": cts_adapter}
+
+    cast(Any, runtime).source_round_adapter_provider = source_round_adapters
+    progress_events = []
+
+    artifacts = runtime.run(
+        source_kinds=["cts"],
+        job_title="Senior Python Engineer",
+        jd="JD",
+        notes="Notes",
+        progress_callback=progress_events.append,
+    )
+
+    assert len(observed_ledgers) == 2
+    assert observed_ledgers[0] is observed_ledgers[1]
+    assert artifacts.run_state is not None
+    assert "opaque-run-owned-claim" in artifacts.run_state.detail_open_claims_by_provider_key
+    encoded_public_events = json.dumps(
+        [event.payload for event in progress_events if event.type == "runtime_public_event"],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    assert "opaque-run-owned-claim" not in encoded_public_events
+    assert "DetailOpenClaimLedger" not in encoded_public_events
+
+
 def test_runtime_builds_plan_for_reflection_backed_inactive_term(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
@@ -3406,7 +3481,7 @@ def test_runtime_builds_plan_for_reflection_backed_inactive_term(tmp_path: Path)
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -3675,7 +3750,7 @@ def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) ->
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3710,7 +3785,7 @@ def test_runtime_rejects_controller_stop_when_stop_guidance_blocks_stop(tmp_path
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
         with pytest.raises(ValueError, match="controller_stop_not_allowed"):
-            asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+            asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -3738,7 +3813,7 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3791,7 +3866,7 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
         )
     finally:
         tracer.close()
@@ -3877,7 +3952,7 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -3947,7 +4022,7 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
         }
         run_state.top_pool_ids = ["fit-1", "fit-2"]
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=progress_events.append)
+            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=progress_events.append)
         )
     finally:
         tracer.close()
@@ -4020,7 +4095,7 @@ def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: P
             ),
         }
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
     finally:
         tracer.close()
 
@@ -4048,7 +4123,7 @@ def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_wa
         run_state.retrieval_state.anchor_only_broaden_attempted = True
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 
@@ -4077,7 +4152,7 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         with pytest.raises(ValueError, match="controller_stop_not_allowed"):
-            asyncio.run(runtime._run_rounds(run_state=run_state, tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+            asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
     finally:
         tracer.close()
 

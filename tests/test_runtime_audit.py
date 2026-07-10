@@ -32,6 +32,7 @@ from seektalent.models import (
     StopControllerDecision,
 )
 from seektalent.normalization import normalize_resume
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 from seektalent.prompting import LoadedPrompt
 from seektalent.runtime.context_builder import (
     build_controller_context,
@@ -430,6 +431,7 @@ def _build_audit_fixture(
         top_scored, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
+                detail_open_claim_ledger=DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key),
                 tracer=tracer,
                 source_plan=_cts_source_plan(runtime, tracer),
             )
@@ -1746,6 +1748,7 @@ def test_query_resume_hits_are_enriched_after_scoring(tmp_path: Path) -> None:
         asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
+                detail_open_claim_ledger=DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key),
                 tracer=tracer,
                 source_plan=_cts_source_plan(runtime, tracer),
                 progress_callback=None,
@@ -1905,6 +1908,7 @@ def test_replay_snapshot_contains_provider_snapshot_and_versions(tmp_path: Path)
         asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
+                detail_open_claim_ledger=DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key),
                 tracer=tracer,
                 source_plan=_cts_source_plan(runtime, tracer),
                 progress_callback=None,

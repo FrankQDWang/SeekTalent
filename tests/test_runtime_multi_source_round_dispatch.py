@@ -34,6 +34,7 @@ from seektalent.models import (
     SentQueryRecord,
     StopGuidance,
 )
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 from seektalent.storage.json import sha256_json
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.orchestrator import RunStageError, RuntimeSourceRoundContext
@@ -293,6 +294,7 @@ def test_runtime_multi_source_round_uses_adapter_query_policy_for_liepin(tmp_pat
             source_plan=source_plan,
         ),
     )
+    run_state = _run_state()
     tracer = RunTracer(tmp_path / "trace")
     try:
         asyncio.run(
@@ -305,7 +307,8 @@ def test_runtime_multi_source_round_uses_adapter_query_policy_for_liepin(tmp_pat
                 target_new=10,
                 seen_resume_ids=set(),
                 seen_dedup_keys=set(),
-                run_state=_run_state(),
+                run_state=run_state,
+                detail_open_claim_ledger=DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key),
                 source_plan=(
                     RuntimeSourceLanePlan(
                         source_plan_id="run-1:source:0:cts",
@@ -359,6 +362,12 @@ def _source_round_context(
     tracer: RunTracer,
     source_context: dict[str, str] | None = None,
 ) -> RuntimeSourceRoundContext:
+    detail_open_claims_by_provider_key = {}
+    run_state = SimpleNamespace(
+        input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
+        requirement_sheet=_requirement_sheet(),
+        detail_open_claims_by_provider_key=detail_open_claims_by_provider_key,
+    )
     return RuntimeSourceRoundContext(
         round_no=1,
         retrieval_plan=_retrieval_plan(),
@@ -367,18 +376,74 @@ def _source_round_context(
         target_new=10,
         seen_resume_ids=frozenset(),
         seen_dedup_keys=frozenset(),
-        run_state=cast(
-            Any,
-            SimpleNamespace(
-                input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
-                requirement_sheet=_requirement_sheet(),
-            ),
-        ),
+        run_state=cast(Any, run_state),
         source_plan_by_source={source_plan.source: source_plan},
         source_context=source_context,
         tracer=tracer,
+        detail_open_claim_ledger=DetailOpenClaimLedger(detail_open_claims_by_provider_key),
     )
 
+
+def test_runtime_source_round_context_requires_explicit_detail_open_claim_ledger(tmp_path) -> None:
+    source_plan = RuntimeSourceLanePlan(
+        source_plan_id="plan-cts",
+        runtime_run_id="run-1",
+        source="cts",
+        label="CTS",
+    )
+    tracer = RunTracer(tmp_path / "trace-context")
+    try:
+        with pytest.raises(TypeError, match="detail_open_claim_ledger"):
+            RuntimeSourceRoundContext(
+                round_no=1,
+                retrieval_plan=_retrieval_plan(),
+                proposed_filter_plan=ProposedFilterPlan(),
+                adapter_notes=(),
+                target_new=10,
+                seen_resume_ids=frozenset(),
+                seen_dedup_keys=frozenset(),
+                run_state=_run_state(),
+                source_plan_by_source={"cts": source_plan},
+                source_context=None,
+                tracer=tracer,
+            )
+    finally:
+        tracer.close()
+
+
+def test_runtime_checkpoint_uses_detail_claim_snapshot_without_private_ledger_payload(tmp_path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
+    run_state = _run_state()
+    ledger = DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key)
+    ledger.try_claim("opaque-claim-key")
+    captured: list[object] = []
+    tracer = RunTracer(tmp_path / "trace-checkpoint")
+    try:
+        runtime._refresh_runtime_candidate_checkpoint(
+            runtime_checkpoint_callback=captured.append,
+            tracer=tracer,
+            run_state=run_state,
+            detail_open_claim_ledger=ledger,
+        )
+    finally:
+        tracer.close()
+
+    assert len(captured) == 1
+    checkpoint = captured[0]
+    assert checkpoint.run_state is not run_state
+    assert checkpoint.run_state.detail_open_claims_by_provider_key is not run_state.detail_open_claims_by_provider_key
+    assert checkpoint.run_state.detail_open_claims_by_provider_key["opaque-claim-key"].status == "claimed"
+    assert checkpoint.candidate_store is checkpoint.run_state.candidate_store
+    assert checkpoint.normalized_store is checkpoint.run_state.normalized_store
+    assert checkpoint.source_coverage_summary is checkpoint.run_state.source_coverage_summary
+    assert "detail_open_claim_ledger" not in vars(checkpoint)
+    assert "_lock" not in vars(checkpoint)
+
+    ledger.release_unattempted("opaque-claim-key")
+    ledger.try_claim("later-claim-key")
+
+    assert "opaque-claim-key" in checkpoint.run_state.detail_open_claims_by_provider_key
+    assert "later-claim-key" not in checkpoint.run_state.detail_open_claims_by_provider_key
 
 def test_logical_query_dispatch_freezes_requested_count_and_identity() -> None:
     dispatches = build_logical_query_dispatches(
@@ -1056,6 +1121,7 @@ def test_first_round_partial_browser_source_with_new_candidates_still_blocks(tmp
         make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"),
         source_round_adapter_provider=source_round_adapters,
     )
+    run_state = _run_state()
     tracer = RunTracer(tmp_path / "trace")
     try:
         with pytest.raises(RunStageError, match="source_browser_backend_unavailable"):
@@ -1069,7 +1135,8 @@ def test_first_round_partial_browser_source_with_new_candidates_still_blocks(tmp
                     target_new=10,
                     seen_resume_ids=set(),
                     seen_dedup_keys=set(),
-                    run_state=_run_state(),
+                    run_state=run_state,
+                    detail_open_claim_ledger=DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key),
                     source_plan=(
                         RuntimeSourceLanePlan(
                             source_plan_id="run-1:source:0:liepin",
@@ -1120,6 +1187,7 @@ def test_rejected_round_persists_terminal_receipts_before_exit(tmp_path) -> None
                     seen_resume_ids=set(),
                     seen_dedup_keys=set(),
                     run_state=run_state,
+                    detail_open_claim_ledger=DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key),
                     source_plan=(
                         RuntimeSourceLanePlan(
                             source_plan_id="run-1:source:0:cts",
@@ -1439,6 +1507,7 @@ def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> Non
         source="cts",
         label="CTS",
     )
+    context_run_state = _run_state()
 
     try:
         result = asyncio.run(
@@ -1452,16 +1521,13 @@ def test_cts_adapter_converts_provider_timeout_to_source_result(tmp_path) -> Non
                     target_new=10,
                     seen_resume_ids=frozenset(),
                     seen_dedup_keys=frozenset(),
-                    run_state=cast(
-                        Any,
-                        SimpleNamespace(
-                            input_truth=SimpleNamespace(job_title="AI Agent Engineer", jd="", notes=""),
-                            requirement_sheet=_requirement_sheet(),
-                        ),
-                    ),
+                    run_state=context_run_state,
                     source_plan_by_source={"cts": source_plan},
                     source_context=None,
                     tracer=tracer,
+                    detail_open_claim_ledger=DetailOpenClaimLedger(
+                        context_run_state.detail_open_claims_by_provider_key
+                    ),
                 ),
                 request=request,
                 source_id="cts",

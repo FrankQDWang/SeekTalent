@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from seektalent.models import ResumeCandidate
+from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.public_events import make_runtime_public_event
 from seektalent.runtime.source_lanes import SourceQueryExecutionOutcome, build_runtime_source_plan
@@ -45,6 +46,7 @@ def test_cts_only_rounds_emit_canonical_runtime_public_events(tmp_path) -> None:
         asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
+                detail_open_claim_ledger=DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key),
                 tracer=tracer,
                 source_plan=source_plan,
                 progress_callback=progress_events.append,
@@ -315,6 +317,7 @@ def _multi_source_runtime_public_event_payloads(
         asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
+                detail_open_claim_ledger=DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key),
                 tracer=tracer,
                 source_plan=source_plan,
                 source_context=source_context,
