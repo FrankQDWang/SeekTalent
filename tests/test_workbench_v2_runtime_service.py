@@ -4,6 +4,7 @@ import inspect
 import json
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1222,6 +1223,108 @@ def test_runtime_service_distinguishes_search_and_run_failure_summaries(tmp_path
         "第 1 轮检索失败：source_browser_backend_unavailable",
         "招聘流程失败：source_browser_backend_unavailable",
     ]
+
+
+@pytest.mark.parametrize(
+    ("event_type", "expected_summary"),
+    [
+        ("runtime_search_failed", "第 1 轮检索失败：运行失败，请查看详情。"),
+        ("runtime_run_failed", "招聘流程失败：运行失败，请查看详情。"),
+    ],
+)
+def test_runtime_service_failure_progress_drops_raw_event_failure_text(
+    tmp_path: Path,
+    event_type: str,
+    expected_summary: str,
+) -> None:
+    service = _service(
+        tmp_path,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+    )
+    run = service.start_run(
+        "agentv2_1",
+        WorkbenchV2RuntimeInput(jobTitle="AI 平台工程师", jd="需要 Agent 系统经验", notes=None),
+        _requirement_sheet(),
+    )
+    raw_summary = "OpenCLI CDP target 98b37a browser session failed"
+    raw_reason = "private_provider_reason"
+    raw_error = "browser_target=98b37a"
+    service.store.append_event(
+        RuntimeControlEventInput(
+            event_id=f"evt_{event_type}",
+            runtime_run_id=run.runtime_run_id,
+            event_type=event_type,
+            stage="source_lanes",
+            round_no=1,
+            status="failed",
+            summary=raw_summary,
+            payload={"reasonCode": raw_reason, "errorCode": raw_error},
+            visibility="public",
+            created_at=NOW,
+        )
+    )
+    service.store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="failed",
+        current_stage="source_lanes",
+        updated_at=NOW,
+    )
+
+    [progress] = service.list_progress_events(run.runtime_run_id, after_seq=0)
+    status = service.get_status(run.runtime_run_id)
+    serialized = json.dumps({"progress": progress, "status": status}, ensure_ascii=False)
+
+    assert progress["summary"] == expected_summary
+    assert status["summary"] == expected_summary
+    assert raw_summary not in serialized
+    assert raw_reason not in serialized
+    assert raw_error not in serialized
+
+
+@pytest.mark.parametrize(
+    ("event_type", "status", "expected_summary"),
+    [
+        ("runtime_search_started", "running", "第 1 轮开始检索候选人。"),
+        ("runtime_search_completed", "completed", "第 1 轮检索完成。"),
+        ("runtime_scoring_started", "running", "第 1 轮开始候选人评分。"),
+        ("runtime_scoring_completed", "completed", "第 1 轮候选人评分完成。"),
+        ("runtime_resume_quality_comment_completed", "completed", "第 1 轮简历质量评估完成。"),
+        ("runtime_reflection_started", "running", "第 1 轮开始复盘检索效果。"),
+        ("runtime_round_completed", "completed", "第 1 轮完成。"),
+    ],
+)
+def test_runtime_service_progress_summary_ignores_arbitrary_public_event_summary(
+    event_type: str,
+    status: str,
+    expected_summary: str,
+) -> None:
+    raw_summary = "OpenCLI CDP target 98b37a browser session failed"
+    event = SimpleNamespace(
+        event_type=event_type,
+        stage="round",
+        status=status,
+        summary=raw_summary,
+        payload={},
+        round_no=1,
+    )
+
+    summary = runtime_service_module._runtime_event_user_summary(event)
+
+    assert summary == expected_summary
+    assert raw_summary not in summary
+
+
+def test_runtime_service_status_labels_fail_closed_for_unknown_metadata() -> None:
+    raw_status = "OpenCLI browser target 98b37a"
+    raw_stage = "https://provider.example/private-stage"
+
+    assert runtime_service_module._status_summary("running", raw_stage) == "招聘流程运行中，当前阶段：未标记。"
+    assert runtime_service_module._status_summary(raw_status, raw_stage) == "招聘流程状态未知。"
+    assert runtime_service_module._status_label(raw_status) == "未知状态"
+    assert runtime_service_module._stage_label(raw_stage) == "未标记"
+    assert runtime_service_module._runtime_event_summary("running", raw_stage) == "招聘流程运行中，当前阶段：未标记。"
+    assert runtime_service_module._runtime_event_summary("failed", raw_stage) == "招聘流程失败，请查看运行详情。"
 
 
 def test_runtime_service_maps_public_browser_extension_disconnect_reason(tmp_path: Path) -> None:

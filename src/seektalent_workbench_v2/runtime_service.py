@@ -1450,7 +1450,7 @@ def _runtime_event_user_summary(event: object) -> str | None:
     if event_type == "runtime_controller_started":
         return f"{round_prefix}正在规划检索策略。"
     if event_type == "runtime_search_started":
-        return summary or f"{round_prefix}开始检索候选人。"
+        return f"{round_prefix}开始检索候选人。"
     if event_type == "runtime_round_query_ready":
         return f"{round_prefix}查询策略已生成。"
     if event_type == "runtime_round_source_dispatch":
@@ -1475,11 +1475,11 @@ def _runtime_event_user_summary(event: object) -> str | None:
             return f"{round_prefix}候选人合并完成：新增 {merged} 位候选人。"
         return f"{round_prefix}候选人合并完成。"
     if event_type == "runtime_search_completed":
-        return summary or f"{round_prefix}检索完成。"
+        return f"{round_prefix}检索完成。"
     if event_type == "runtime_scoring_started":
-        return summary or f"{round_prefix}开始候选人评分。"
+        return f"{round_prefix}开始候选人评分。"
     if event_type == "runtime_scoring_completed":
-        return summary or f"{round_prefix}候选人评分完成。"
+        return f"{round_prefix}候选人评分完成。"
     if event_type == "runtime_round_scoring_completed":
         counts = payload.get("counts")
         counts = counts if isinstance(counts, dict) else {}
@@ -1488,26 +1488,24 @@ def _runtime_event_user_summary(event: object) -> str | None:
             return f"{round_prefix}评分完成，{top_pool_count} 位候选人进入 Top Pool。"
         return f"{round_prefix}评分完成。"
     if event_type == "runtime_resume_quality_comment_completed":
-        return summary or f"{round_prefix}简历质量评估完成。"
+        return f"{round_prefix}简历质量评估完成。"
     if event_type == "runtime_reflection_started":
-        return summary or f"{round_prefix}开始复盘检索效果。"
+        return f"{round_prefix}开始复盘检索效果。"
     if event_type == "runtime_reflection_completed":
         return f"{round_prefix}复盘完成，准备调整下一轮检索策略。"
     if event_type == "runtime_round_feedback_completed":
         return f"{round_prefix}复盘完成，准备调整下一轮检索策略。"
     if event_type == "runtime_round_completed":
-        return summary or f"{round_prefix}完成。"
+        return f"{round_prefix}完成。"
     if event_type == "runtime_search_failed":
-        reason = summary or str(payload.get("reasonCode") or payload.get("errorCode") or "").strip()
-        return f"{round_prefix}检索失败：{_runtime_failure_reason(reason)}"
+        return f"{round_prefix}检索失败：{_runtime_failure_summary(payload, summary=summary)}"
     if event_type == "runtime_run_failed":
-        reason = summary or str(payload.get("reasonCode") or payload.get("errorCode") or "").strip()
-        return f"招聘流程失败：{_runtime_failure_reason(reason)}"
+        return f"招聘流程失败：{_runtime_failure_summary(payload, summary=summary)}"
     terminal_summary = runtime_event_terminal_summary(event_type)
     if terminal_summary is not None:
         return terminal_summary
     if summary and summary not in _INTERNAL_RUNTIME_EVENT_SUMMARIES:
-        return _runtime_event_summary(status, stage, summary)
+        return _runtime_event_summary(status, stage)
     return None
 
 
@@ -1518,6 +1516,14 @@ def _payload_text(value: object) -> str | None:
     return text or None
 
 
+def _runtime_failure_summary(payload: Mapping[str, object], *, summary: str) -> str:
+    for value in (payload.get("safeReasonCode"), payload.get("reasonCode"), payload.get("errorCode"), summary):
+        reason = safe_runtime_progress_reason_code(value)
+        if reason is not None:
+            return _runtime_failure_reason(reason)
+    return "运行失败，请查看详情。"
+
+
 def _runtime_failure_reason(reason: str) -> str:
     if reason == "liepin_opencli_stale_ref":
         return "猎聘页面引用已失效，需要刷新检索页面后重试。"
@@ -1525,7 +1531,7 @@ def _runtime_failure_reason(reason: str) -> str:
         return "猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
     if reason in {"liepin_opencli_filter_unapplied", "source_filter_unavailable", "source_filter_partial"}:
         return "猎聘筛选条件未成功应用，请刷新猎聘页面后重试。"
-    return reason or "运行失败，请查看详情。"
+    return reason
 
 
 def _status_summary(status: str, stage: str) -> str:
@@ -1541,7 +1547,7 @@ def _status_summary(status: str, stage: str) -> str:
         "completed": "招聘流程已完成。",
         "failed": "招聘流程失败，请查看运行详情。",
     }
-    return summaries.get(status, f"招聘流程状态：{status}。")
+    return summaries.get(status, "招聘流程状态未知。")
 
 
 def _latest_runtime_event_summary(
@@ -1589,15 +1595,15 @@ def _summary_event_statuses_for_run(run_status: str) -> set[str]:
     return set()
 
 
-def _runtime_event_summary(status: str, stage: str, summary: str) -> str:
+def _runtime_event_summary(status: str, stage: str) -> str:
     stage_label = _stage_label(stage)
     if status == "failed":
-        return f"招聘流程失败：{summary}"
+        return "招聘流程失败，请查看运行详情。"
     if status in {"blocked", "partial"}:
-        return f"招聘流程{_status_label(status)}：{summary}"
+        return f"招聘流程{_status_label(status)}。"
     if status == "running":
-        return f"招聘流程运行中，当前阶段：{stage_label}。{summary}"
-    return summary
+        return f"招聘流程运行中，当前阶段：{stage_label}。"
+    return _status_summary(status, stage)
 
 
 def _status_label(status: str) -> str:
@@ -1605,7 +1611,7 @@ def _status_label(status: str) -> str:
         "blocked": "已阻塞",
         "partial": "部分完成",
     }
-    return labels.get(status, status)
+    return labels.get(status, "未知状态")
 
 
 def _stage_label(stage: str) -> str:
@@ -1619,7 +1625,7 @@ def _stage_label(stage: str) -> str:
         "resume": "恢复运行",
         "finalization": "结果汇总",
     }
-    return labels.get(stage, stage or "未标记")
+    return labels.get(stage, "未标记")
 
 
 def _new_id(prefix: str) -> str:
