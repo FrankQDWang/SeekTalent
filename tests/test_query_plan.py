@@ -1,6 +1,6 @@
 import pytest
 
-from seektalent.models import LocationExecutionPlan, Queryability, QueryRetrievalRole, QueryTermCandidate, SentQueryRecord
+from seektalent.models import LocationExecutionPlan, Queryability, QueryRetrievalRole, QueryTermCandidate
 from seektalent.retrieval.query_plan import (
     build_round_retrieval_plan,
     canonicalize_controller_query_terms,
@@ -9,6 +9,7 @@ from seektalent.retrieval.query_plan import (
     serialize_keyword_query,
     try_project_secondary_title_anchor_after_round_one,
 )
+from seektalent.runtime.query_identity import build_term_group_key
 
 
 def test_query_plan_enforces_round_budget() -> None:
@@ -637,17 +638,9 @@ def test_query_plan_derives_distinct_explore_query_from_active_and_reserve_terms
         ["python", "resume matching", "trace"],
         title_anchor_terms=["python"],
         query_term_pool=pool,
-        sent_query_history=[
-            SentQueryRecord(
-                round_no=1,
-                query_terms=["python", "resume matching"],
-                keyword_query='python "resume matching"',
-                batch_no=1,
-                requested_count=10,
-                source_plan_version=1,
-                rationale="round 1",
-            )
-        ],
+        used_term_group_keys={
+            build_term_group_key(query_terms=["python", "resume matching"], query_term_pool=pool)
+        },
     )
 
     assert explore_terms == ["python", "ranking"]
@@ -705,17 +698,9 @@ def test_query_plan_explore_prefers_high_signal_alternatives() -> None:
         ["Backend", "业务系统"],
         title_anchor_terms=["Backend Engineer"],
         query_term_pool=pool,
-        sent_query_history=[
-            SentQueryRecord(
-                round_no=1,
-                query_terms=["Backend", "业务系统"],
-                keyword_query='Backend 业务系统',
-                batch_no=1,
-                requested_count=10,
-                source_plan_version=1,
-                rationale="round 1",
-            )
-        ],
+        used_term_group_keys={
+            build_term_group_key(query_terms=["Backend", "业务系统"], query_term_pool=pool)
+        },
     )
 
     assert explore_terms == ["Backend", "Python"]
@@ -753,17 +738,9 @@ def test_query_plan_allows_explore_query_to_shrink_when_no_new_three_term_combo_
         ["python", "resume matching", "trace"],
         title_anchor_terms=["python"],
         query_term_pool=pool,
-        sent_query_history=[
-            SentQueryRecord(
-                round_no=1,
-                query_terms=["python", "resume matching"],
-                keyword_query='python "resume matching"',
-                batch_no=1,
-                requested_count=10,
-                source_plan_version=1,
-                rationale="round 1",
-            )
-        ],
+        used_term_group_keys={
+            build_term_group_key(query_terms=["python", "resume matching"], query_term_pool=pool)
+        },
     )
 
     assert explore_terms == ["python", "trace"]
@@ -793,5 +770,54 @@ def test_query_plan_returns_none_when_no_distinct_explore_query_is_possible() ->
         ["python", "resume matching"],
         title_anchor_terms=["python"],
         query_term_pool=pool,
-        sent_query_history=[],
+        used_term_group_keys=set(),
+    ) is None
+
+
+def test_derive_explore_returns_none_when_every_semantic_group_is_used() -> None:
+    pool = [
+        QueryTermCandidate(
+            term="Platform",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="title",
+            first_added_round=0,
+            retrieval_role="primary_role_anchor",
+            queryability="admitted",
+            family="role.platform",
+        ),
+        QueryTermCandidate(
+            term="Python",
+            source="jd",
+            category="tooling",
+            priority=2,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="core_skill",
+            queryability="admitted",
+            family="skill.python",
+        ),
+        QueryTermCandidate(
+            term="Rust",
+            source="jd",
+            category="tooling",
+            priority=3,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="framework_tool",
+            queryability="admitted",
+            family="skill.rust",
+        ),
+    ]
+
+    assert derive_explore_query_terms(
+        ["Platform", "Python"],
+        title_anchor_terms=[],
+        query_term_pool=pool,
+        used_term_group_keys={
+            build_term_group_key(query_terms=["Platform", "Python"], query_term_pool=pool),
+            build_term_group_key(query_terms=["Platform", "Rust"], query_term_pool=pool),
+            build_term_group_key(query_terms=["Platform", "Python", "Rust"], query_term_pool=pool),
+        },
     ) is None

@@ -117,6 +117,15 @@ def test_export_root_registers_flywheel_dataset_artifacts(
     assert resolver.resolve("flywheel.dataset_export_manifest") == session.root / "flywheel/dataset_export_manifest.json"
 
 
+def test_query_execution_ledger_and_round_evidence_have_registered_json_descriptors() -> None:
+    assert resolve_descriptor("runtime.query_execution_ledger").path == "runtime/query_execution_ledger.json"
+    assert (
+        resolve_descriptor("round.02.retrieval.query_execution_receipts").path
+        == "rounds/02/retrieval/query_execution_receipts.json"
+    )
+    assert resolve_descriptor("round.02.retrieval.query_outcomes").path == "rounds/02/retrieval/query_outcomes.json"
+
+
 def test_corpus_ingest_root_registers_ingest_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

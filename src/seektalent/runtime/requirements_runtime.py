@@ -236,6 +236,7 @@ async def build_run_state(
     tracer.write_json("input.requirement_sheet", requirement_sheet.model_dump(mode="json"))
     tracer.write_json("input.scoring_policy", scoring_policy.model_dump(mode="json"))
     tracer.write_json("runtime.sent_query_history", [])
+    tracer.write_json("runtime.query_execution_ledger", [])
     emit_llm_event(
         tracer=tracer,
         event_type="requirements_completed",

@@ -1,9 +1,10 @@
-from seektalent.models import RoundRetrievalPlan, SecondLaneDecision
+from seektalent.models import QueryTermCandidate, RoundRetrievalPlan, SecondLaneDecision
 from seektalent.candidate_feedback.models import FeedbackCandidateExpression
 from seektalent.candidate_feedback.policy import PRFGateInput, build_prf_policy_decision
 from seektalent.retrieval import build_location_execution_plan
 from seektalent.runtime.retrieval_runtime import build_logical_query_state
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
+from seektalent.runtime.query_identity import build_term_group_key
 
 
 def _retrieval_plan(*, query_terms: list[str]) -> RoundRetrievalPlan:
@@ -28,13 +29,14 @@ def _retrieval_plan(*, query_terms: list[str]) -> RoundRetrievalPlan:
 
 
 def test_build_second_lane_decision_falls_back_to_generic_when_prf_policy_is_unavailable() -> None:
-    retrieval_plan = _retrieval_plan(query_terms=["python", "ranking"])
+    pool = _semantic_pool()
+    retrieval_plan = _retrieval_plan(query_terms=["Platform", "Python"])
 
     decision, lane = build_second_lane_decision(
         round_no=2,
         retrieval_plan=retrieval_plan,
-        query_term_pool=[],
-        sent_query_history=[],
+        query_term_pool=pool,
+        used_term_group_keys=set(),
         prf_decision=None,
         run_id="run-a",
         job_intent_fingerprint="job-1",
@@ -59,13 +61,14 @@ def test_build_second_lane_decision_falls_back_to_generic_when_prf_policy_is_una
 
 
 def test_second_lane_decision_carries_llm_prf_metadata() -> None:
-    retrieval_plan = _retrieval_plan(query_terms=["python", "ranking"])
+    pool = _semantic_pool()
+    retrieval_plan = _retrieval_plan(query_terms=["Platform", "Python"])
 
     decision, lane = build_second_lane_decision(
         round_no=2,
         retrieval_plan=retrieval_plan,
-        query_term_pool=[],
-        sent_query_history=[],
+        query_term_pool=pool,
+        used_term_group_keys=set(),
         prf_decision=None,
         run_id="run-a",
         job_intent_fingerprint="job-1",
@@ -122,7 +125,7 @@ def test_build_second_lane_decision_selects_prf_probe_when_gate_passes() -> None
         round_no=2,
         retrieval_plan=retrieval_plan,
         query_term_pool=[],
-        sent_query_history=[],
+        used_term_group_keys=set(),
         prf_decision=prf_decision,
         run_id="run-a",
         job_intent_fingerprint="job-1",
@@ -188,6 +191,65 @@ def test_build_logical_query_state_fingerprint_changes_with_filters_and_location
 
     assert changed_filters_state.query_fingerprint != base_state.query_fingerprint
     assert changed_location_state.query_fingerprint != base_state.query_fingerprint
+
+
+def _semantic_pool() -> list[QueryTermCandidate]:
+    return [
+        QueryTermCandidate(
+            term="Platform",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="title",
+            first_added_round=0,
+            retrieval_role="primary_role_anchor",
+            queryability="admitted",
+            family="role.platform",
+        ),
+        QueryTermCandidate(
+            term="Python",
+            source="jd",
+            category="tooling",
+            priority=2,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="core_skill",
+            queryability="admitted",
+            family="skill.python",
+        ),
+        QueryTermCandidate(
+            term="Rust",
+            source="jd",
+            category="tooling",
+            priority=3,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="framework_tool",
+            queryability="admitted",
+            family="skill.rust",
+        ),
+    ]
+
+
+def test_second_lane_marks_generic_exhaustion_when_every_group_was_used() -> None:
+    pool = _semantic_pool()
+    decision, lane = build_second_lane_decision(
+        round_no=2,
+        retrieval_plan=_retrieval_plan(query_terms=["Platform", "Python"]),
+        query_term_pool=pool,
+        used_term_group_keys={
+            build_term_group_key(query_terms=["Platform", "Python"], query_term_pool=pool),
+            build_term_group_key(query_terms=["Platform", "Rust"], query_term_pool=pool),
+            build_term_group_key(query_terms=["Platform", "Python", "Rust"], query_term_pool=pool),
+        },
+        prf_decision=None,
+        run_id="run-a",
+        job_intent_fingerprint="job-1",
+        source_plan_version="2",
+    )
+
+    assert lane is None
+    assert decision.no_fetch_reason == "no_novel_generic_explore_query"
 
 
 def test_build_logical_query_state_fingerprint_uses_provider_name() -> None:

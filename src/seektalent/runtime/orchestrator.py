@@ -75,6 +75,7 @@ from seektalent.models import (
     FinalizeContext,
     FinalResult,
     LocationExecutionPhase,
+    LogicalQueryOutcome,
     NormalizedResume,
     PoolDecision,
     ProviderQuery,
@@ -175,7 +176,13 @@ from seektalent.runtime.source_lanes import (
     runtime_source_lane_result_from_source_result,
 )
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
-from seektalent.runtime.query_identity import build_term_group_key
+from seektalent.runtime.query_identity import (
+    apply_post_merge_query_counts,
+    assert_novel_term_group_keys,
+    build_term_group_key,
+    logical_outcomes_from_receipts,
+    used_term_group_keys,
+)
 from seektalent.runtime.public_events import RuntimePublicEvent, make_runtime_public_event
 from seektalent.runtime.retrieval_runtime import (
     LogicalQueryState,
@@ -1531,6 +1538,10 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
     ) -> RetrievalExecutionResult:
+        assert_novel_term_group_keys(
+            term_group_keys=[query_state.term_group_key for query_state in query_states],
+            used_term_group_keys=used_term_group_keys(run_state.retrieval_state.query_execution_ledger),
+        )
         lane_requested_counts = allocate_initial_lane_targets(query_states=list(query_states), target_new=target_new)
         logical_queries = build_logical_query_dispatches(
             round_no=round_no,
@@ -1701,12 +1712,25 @@ class WorkflowRuntime:
         )
         if not_ready_reason is not None:
             raise RunStageError("source_lanes", not_ready_reason)
+        identities_seen_before_round = {
+            identity_id
+            for resume_id in pre_round_seen_resume_ids
+            if (identity_id := run_state.candidate_identity_by_resume_id.get(resume_id)) is not None
+        }
+        query_outcomes = apply_post_merge_query_counts(
+            outcomes=logical_outcomes_from_receipts(dispatch_result.query_execution_receipts),
+            candidate_attributions=dispatch_result.candidate_query_attributions,
+            candidate_identity_by_resume_id=run_state.candidate_identity_by_resume_id,
+            dispatch_order=[query.query_instance_id for query in logical_queries],
+            identities_seen_before_round=identities_seen_before_round,
+        )
         return self._round_search_result_from_source_dispatch(
             round_no=round_no,
             retrieval_plan=retrieval_plan,
             query_states=query_states,
             dispatch_result=dispatch_result,
             source_raw_targets=cast(Mapping[str, int], source_raw_targets),
+            query_outcomes=query_outcomes,
             tracer=tracer,
         )
 
@@ -1758,6 +1782,7 @@ class WorkflowRuntime:
         dispatch_result: SourceRoundDispatchResult,
         source_raw_targets: Mapping[str, int] | None = None,
         tracer: RunTracer,
+        query_outcomes: list[LogicalQueryOutcome] | None = None,
     ) -> RetrievalExecutionResult:
         del query_states
         retrieval_results = [
@@ -1811,6 +1836,7 @@ class WorkflowRuntime:
             executed_query_packages=dispatch_result.executed_query_packages,
             query_execution_receipts=list(dispatch_result.query_execution_receipts),
             candidate_query_attributions=list(dispatch_result.candidate_query_attributions),
+            query_outcomes=query_outcomes or [],
         )
 
     def _source_coverage_summary_from_dispatch(
@@ -2088,7 +2114,7 @@ class WorkflowRuntime:
                 retrieval_plan=retrieval_plan,
                 title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
                 query_term_pool=run_state.retrieval_state.query_term_pool,
-                sent_query_history=run_state.retrieval_state.sent_query_history,
+                used_term_group_keys=used_term_group_keys(run_state.retrieval_state.query_execution_ledger),
                 prf_decision=prf_selection.prf_decision,
                 run_id=tracer.run_id,
                 job_intent_fingerprint=job_intent_fingerprint,
@@ -2165,6 +2191,8 @@ class WorkflowRuntime:
             search_observation = retrieval_result.search_observation
             search_attempts = retrieval_result.search_attempts
             query_resume_hits = retrieval_result.query_resume_hits
+            query_execution_receipts = retrieval_result.query_execution_receipts
+            query_outcomes = retrieval_result.query_outcomes
             self._emit_progress(
                 progress_callback,
                 "search_completed",
@@ -2184,9 +2212,14 @@ class WorkflowRuntime:
                 },
             )
             run_state.retrieval_state.sent_query_history.extend(sent_query_records)
+            run_state.retrieval_state.query_execution_ledger.extend(query_execution_receipts)
             tracer.write_json(
                 "runtime.sent_query_history",
                 [item.model_dump(mode="json") for item in run_state.retrieval_state.sent_query_history],
+            )
+            tracer.write_json(
+                "runtime.query_execution_ledger",
+                [item.model_dump(mode="json") for item in run_state.retrieval_state.query_execution_ledger],
             )
             tracer.write_json(
                 _round_artifact(
@@ -2196,6 +2229,24 @@ class WorkflowRuntime:
                     name="sent_query_records",
                 ),
                 [item.model_dump(mode="json") for item in sent_query_records],
+            )
+            tracer.write_json(
+                _round_artifact(
+                    tracer,
+                    round_no=round_no,
+                    subsystem="retrieval",
+                    name="query_execution_receipts",
+                ),
+                [item.model_dump(mode="json") for item in query_execution_receipts],
+            )
+            tracer.write_json(
+                _round_artifact(
+                    tracer,
+                    round_no=round_no,
+                    subsystem="retrieval",
+                    name="query_outcomes",
+                ),
+                [item.model_dump(mode="json") for item in query_outcomes],
             )
             tracer.write_json(
                 _round_artifact(tracer, round_no=round_no, subsystem="retrieval", name="executed_queries"),
@@ -2364,6 +2415,7 @@ class WorkflowRuntime:
                 dropped_candidates=dropped_candidates,
                 top_pool_ids=run_state.top_pool_ids,
                 dropped_candidate_ids=[candidate.resume_id for candidate in dropped_candidates],
+                query_outcomes=query_outcomes,
             )
             run_state.round_history.append(round_state)
             reflection_advice = await reflection_runtime.run_reflection_stage(
@@ -2960,6 +3012,9 @@ class WorkflowRuntime:
                 candidate_feedback_enabled=self.settings.candidate_feedback_enabled,
                 candidate_feedback_attempted=run_state.retrieval_state.candidate_feedback_attempted,
                 anchor_only_broaden_attempted=run_state.retrieval_state.anchor_only_broaden_attempted,
+                has_novel_anchor_only_group=rescue_execution_runtime.has_novel_anchor_only_group(
+                    run_state.retrieval_state
+                ),
             )
         )
         run_state.retrieval_state.rescue_lane_history.append(
@@ -2984,6 +3039,14 @@ class WorkflowRuntime:
         ]
         if run_state.retrieval_state.anchor_only_broaden_attempted:
             skipped_lanes.append(SkippedRescueLane(lane="anchor_only", reason="already_attempted"))
+            return rescue_decision.model_copy(
+                update={
+                    "selected_lane": "allow_stop",
+                    "skipped_lanes": skipped_lanes,
+                }
+            )
+        if not rescue_execution_runtime.has_novel_anchor_only_group(run_state.retrieval_state):
+            skipped_lanes.append(SkippedRescueLane(lane="anchor_only", reason="no_novel_anchor_only_query"))
             return rescue_decision.model_copy(
                 update={
                     "selected_lane": "allow_stop",
@@ -3871,14 +3934,14 @@ class WorkflowRuntime:
         retrieval_plan,
         title_anchor_terms: list[str],
         query_term_pool: list[QueryTermCandidate],
-        sent_query_history: list[SentQueryRecord],
+        used_term_group_keys: Collection[str],
     ) -> list[LogicalQueryState]:
         query_states, _ = self._build_round_query_bundle(
             round_no=round_no,
             retrieval_plan=retrieval_plan,
             title_anchor_terms=title_anchor_terms,
             query_term_pool=query_term_pool,
-            sent_query_history=sent_query_history,
+            used_term_group_keys=used_term_group_keys,
             prf_decision=None,
             run_id="test-run",
             job_intent_fingerprint="test-job-intent",
@@ -3905,7 +3968,7 @@ class WorkflowRuntime:
         retrieval_plan,
         title_anchor_terms: list[str],
         query_term_pool: list[QueryTermCandidate],
-        sent_query_history: list[SentQueryRecord],
+        used_term_group_keys: Collection[str],
         prf_decision: PRFPolicyDecision | None,
         run_id: str,
         job_intent_fingerprint: str,
@@ -3935,7 +3998,7 @@ class WorkflowRuntime:
             round_no=round_no,
             retrieval_plan=retrieval_plan,
             query_term_pool=query_term_pool,
-            sent_query_history=sent_query_history,
+            used_term_group_keys=used_term_group_keys,
             prf_decision=prf_decision,
             run_id=run_id,
             job_intent_fingerprint=job_intent_fingerprint,
@@ -3955,6 +4018,10 @@ class WorkflowRuntime:
                 query_terms=query_state.query_terms,
                 query_term_pool=query_term_pool,
             )
+        assert_novel_term_group_keys(
+            term_group_keys=[query_state.term_group_key for query_state in query_states],
+            used_term_group_keys=used_term_group_keys,
+        )
         return query_states, second_lane_decision
 
     async def _select_prf_backend_decision(
@@ -3997,7 +4064,10 @@ class WorkflowRuntime:
             retrieval_query_terms=retrieval_plan.query_terms,
             existing_query_terms=[item.term for item in run_state.retrieval_state.query_term_pool],
             sent_query_terms=[
-                term for record in run_state.retrieval_state.sent_query_history for term in record.query_terms
+                term
+                for receipt in run_state.retrieval_state.query_execution_ledger
+                if receipt.dispatch_started
+                for term in receipt.query_terms
             ],
             tried_term_family_ids=tried_term_family_ids,
             normalized_resumes_by_id=run_state.normalized_store,
@@ -4011,7 +4081,10 @@ class WorkflowRuntime:
                 retrieval_query_terms=list(retrieval_plan.query_terms),
                 existing_query_terms=[item.term for item in run_state.retrieval_state.query_term_pool],
                 sent_query_terms=[
-                    term for record in run_state.retrieval_state.sent_query_history for term in record.query_terms
+                    term
+                    for receipt in run_state.retrieval_state.query_execution_ledger
+                    if receipt.dispatch_started
+                    for term in receipt.query_terms
                 ],
                 tried_term_family_ids=tried_term_family_ids,
                 seed_resume_ids=[item.resume_id for item in seeds],
@@ -4296,8 +4369,9 @@ class WorkflowRuntime:
         return unique_strings(
             [
                 build_term_family_id(term)
-                for record in run_state.retrieval_state.sent_query_history
-                for term in record.query_terms
+                for receipt in run_state.retrieval_state.query_execution_ledger
+                if receipt.dispatch_started
+                for term in receipt.query_terms
             ]
             + [build_term_family_id(term) for term in retrieval_plan.query_terms]
         )
@@ -4305,9 +4379,9 @@ class WorkflowRuntime:
     def _tried_query_fingerprints(self, *, run_state: RunState) -> list[str]:
         return unique_strings(
             [
-                record.query_fingerprint
-                for record in run_state.retrieval_state.sent_query_history
-                if record.query_fingerprint is not None
+                receipt.query_fingerprint
+                for receipt in run_state.retrieval_state.query_execution_ledger
+                if receipt.dispatch_started
             ]
         )
 

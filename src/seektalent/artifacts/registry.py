@@ -22,6 +22,11 @@ STATIC_ENTRIES = {
         content_type="application/json",
         schema_version="v1",
     ),
+    "runtime.query_execution_ledger": LogicalArtifactEntry(
+        path="runtime/query_execution_ledger.json",
+        content_type="application/json",
+        schema_version="v1",
+    ),
     "runtime.search_diagnostics": LogicalArtifactEntry(
         path="runtime/search_diagnostics.json",
         content_type="application/json",
@@ -193,6 +198,8 @@ ROUND_CONTENT_TYPES = {
     "repair_reflection_call": "application/json",
     "rescue_decision": "application/json",
     "retrieval_plan": "application/json",
+    "query_execution_receipts": "application/json",
+    "query_outcomes": "application/json",
     "search_attempts": "application/json",
     "search_observation": "application/json",
     "second_lane_decision": "application/json",

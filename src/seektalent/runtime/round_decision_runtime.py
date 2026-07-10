@@ -203,6 +203,14 @@ def sanitize_controller_decision(
         requirement_sheet=run_state.requirement_sheet,
         filter_plan=decision.proposed_filter_plan,
     )
+    from seektalent.runtime.query_identity import build_term_group_key, used_term_group_keys
+
+    term_group_key = build_term_group_key(
+        query_terms=query_terms,
+        query_term_pool=run_state.retrieval_state.query_term_pool,
+    )
+    if term_group_key in used_term_group_keys(run_state.retrieval_state.query_execution_ledger):
+        raise ValueError("proposed_term_group_already_executed")
     return decision.model_copy(
         update={
             "proposed_query_terms": query_terms,

@@ -112,6 +112,7 @@ TOP_LEVEL_ARTIFACT_FILES = [
     "runtime/requirement_sheet.json",
     "runtime/scoring_policy.json",
     "runtime/sent_query_history.json",
+    "runtime/query_execution_ledger.json",
     "runtime/search_diagnostics.json",
     "runtime/term_surface_audit.json",
     "runtime/finalization_context.json",

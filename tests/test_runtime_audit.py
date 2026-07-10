@@ -1103,7 +1103,7 @@ class SearchTwiceController:
             thought_summary="Continue retrieval with the current requirement truth.",
             action="search_cts",
             decision_rationale="Need another retrieval round for the audit fixture.",
-            proposed_query_terms=["python", "resume matching"],
+            proposed_query_terms=["python", "resume matching", "trace"] if self.calls == 2 else ["python", "resume matching"],
             proposed_filter_plan=proposed_filter_plan,
             response_to_reflection=response_to_reflection,
         )

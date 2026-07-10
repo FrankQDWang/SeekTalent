@@ -33,6 +33,7 @@ class RescueInputs(BaseModel):
     candidate_feedback_enabled: bool
     candidate_feedback_attempted: bool
     anchor_only_broaden_attempted: bool
+    has_novel_anchor_only_group: bool = True
 
 
 class RescueDecision(BaseModel):
@@ -65,8 +66,9 @@ def choose_rescue_lane(inputs: RescueInputs) -> RescueDecision:
         reason = "no_feedback_seed_resumes"
     skipped_lanes.append(SkippedRescueLane(lane="candidate_feedback", reason=reason))
 
-    if not inputs.anchor_only_broaden_attempted:
+    if not inputs.anchor_only_broaden_attempted and inputs.has_novel_anchor_only_group:
         return RescueDecision(selected_lane="anchor_only", skipped_lanes=skipped_lanes)
 
-    skipped_lanes.append(SkippedRescueLane(lane="anchor_only", reason="already_attempted"))
+    anchor_only_reason = "already_attempted" if inputs.anchor_only_broaden_attempted else "no_novel_anchor_only_query"
+    skipped_lanes.append(SkippedRescueLane(lane="anchor_only", reason=anchor_only_reason))
     return RescueDecision(selected_lane="allow_stop", skipped_lanes=skipped_lanes)

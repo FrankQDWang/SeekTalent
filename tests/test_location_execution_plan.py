@@ -8,10 +8,10 @@ from seektalent.models import (
     QueryTermCandidate,
     RequirementSheet,
     ResumeCandidate,
-    SentQueryRecord,
 )
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
 from seektalent.runtime import WorkflowRuntime
+from seektalent.runtime.query_identity import build_term_group_key
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 
@@ -216,7 +216,7 @@ def test_execute_location_search_plan_stops_after_priority_city_hits_target(tmp_
         retrieval_plan=retrieval_plan,
         title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
-        sent_query_history=[],
+        used_term_group_keys=set(),
     )
 
     try:
@@ -281,7 +281,7 @@ def test_execute_location_search_plan_reuses_city_after_balanced_shortage(tmp_pa
         retrieval_plan=retrieval_plan,
         title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
-        sent_query_history=[],
+        used_term_group_keys=set(),
     )
 
     try:
@@ -353,17 +353,12 @@ def test_execute_location_search_plan_merges_dual_query_challengers_into_top_10(
         retrieval_plan=retrieval_plan,
         title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
-        sent_query_history=[
-            SentQueryRecord(
-                round_no=1,
+        used_term_group_keys={
+            build_term_group_key(
                 query_terms=["python", "retrieval"],
-                keyword_query="python retrieval",
-                batch_no=1,
-                requested_count=10,
-                source_plan_version=1,
-                rationale="round 1",
+                query_term_pool=requirement_sheet.initial_query_term_pool,
             )
-        ],
+        },
     )
     tracer = RunTracer(tmp_path / "trace-dual")
 

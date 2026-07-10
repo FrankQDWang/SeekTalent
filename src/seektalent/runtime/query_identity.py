@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Collection, Mapping, Sequence
 from hashlib import sha256
 
 from seektalent.models import (
@@ -11,6 +11,7 @@ from seektalent.models import (
     QueryExecutionStatus,
     QueryTermCandidate,
 )
+from seektalent.source_contracts.runtime_lanes import RuntimeQueryCandidateAttribution
 
 
 def _term_key(value: str) -> str:
@@ -46,6 +47,18 @@ def build_term_group_key(
 
 def used_term_group_keys(receipts: Sequence[QueryExecutionReceipt]) -> set[str]:
     return {receipt.term_group_key for receipt in receipts if receipt.dispatch_started}
+
+
+def assert_novel_term_group_keys(
+    *,
+    term_group_keys: Sequence[str],
+    used_term_group_keys: Collection[str],
+) -> None:
+    seen_keys = set(used_term_group_keys)
+    for term_group_key in term_group_keys:
+        if not term_group_key or term_group_key in seen_keys:
+            raise ValueError("term_group_already_executed")
+        seen_keys.add(term_group_key)
 
 
 def _logical_identity(receipt: QueryExecutionReceipt) -> tuple[object, ...]:
@@ -97,3 +110,51 @@ def logical_outcomes_from_receipts(
             )
         )
     return outcomes
+
+
+def apply_post_merge_query_counts(
+    *,
+    outcomes: Sequence[LogicalQueryOutcome],
+    candidate_attributions: Sequence[RuntimeQueryCandidateAttribution],
+    candidate_identity_by_resume_id: Mapping[str, str],
+    dispatch_order: Sequence[str],
+    identities_seen_before_round: Collection[str],
+) -> list[LogicalQueryOutcome]:
+    outcome_by_query = {outcome.query_instance_id: outcome for outcome in outcomes}
+    if len(dispatch_order) != len(outcome_by_query) or set(dispatch_order) != set(outcome_by_query):
+        raise ValueError("query_outcome_dispatch_order_mismatch")
+
+    attributions_by_query: dict[str, list[RuntimeQueryCandidateAttribution]] = defaultdict(list)
+    for attribution in candidate_attributions:
+        if attribution.query_instance_id not in outcome_by_query:
+            raise ValueError("query_candidate_attribution_without_outcome")
+        attributions_by_query[attribution.query_instance_id].append(attribution)
+
+    allocated_identities = set(identities_seen_before_round)
+    counted: list[LogicalQueryOutcome] = []
+    for query_instance_id in dispatch_order:
+        unique_count = 0
+        duplicate_count = 0
+        identities_in_query: set[str] = set()
+        for attribution in sorted(
+            attributions_by_query[query_instance_id],
+            key=lambda item: (item.source_kind, item.resume_id, item.dedup_key or ""),
+        ):
+            identity_id = candidate_identity_by_resume_id.get(attribution.resume_id)
+            if identity_id is None:
+                raise ValueError("query_candidate_attribution_missing_identity")
+            if identity_id in allocated_identities or identity_id in identities_in_query:
+                duplicate_count += 1
+                continue
+            identities_in_query.add(identity_id)
+            unique_count += 1
+        allocated_identities.update(identities_in_query)
+        counted.append(
+            outcome_by_query[query_instance_id].model_copy(
+                update={
+                    "unique_candidate_count": unique_count,
+                    "duplicate_candidate_count": duplicate_count,
+                }
+            )
+        )
+    return counted

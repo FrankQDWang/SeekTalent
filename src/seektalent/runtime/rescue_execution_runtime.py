@@ -15,6 +15,7 @@ from seektalent.models import (
     is_title_anchor_role,
 )
 from seektalent.progress import ProgressCallback
+from seektalent.runtime.query_identity import build_term_group_key, used_term_group_keys
 from seektalent.tracing import RunTracer
 
 
@@ -50,7 +51,12 @@ def force_candidate_feedback_decision(
         for item in run_state.scorecards_by_resume_id.values()
         if item.fit_bucket == "not_fit" or item.risk_score > 60
     ]
-    sent_terms = [term for record in run_state.retrieval_state.sent_query_history for term in record.query_terms]
+    sent_terms = [
+        term
+        for receipt in run_state.retrieval_state.query_execution_ledger
+        if receipt.dispatch_started
+        for term in receipt.query_terms
+    ]
     feedback = build_feedback_decision(
         seed_resumes=seeds,
         negative_resumes=negatives,
@@ -170,24 +176,33 @@ def active_admitted_anchor(query_term_pool: list[QueryTermCandidate]) -> QueryTe
 
 def untried_admitted_non_anchor_reserve(retrieval_state: RetrievalState) -> QueryTermCandidate | None:
     tried = tried_query_families(retrieval_state)
+    anchor = active_admitted_anchor(retrieval_state.query_term_pool)
+    used_keys = used_term_group_keys(retrieval_state.query_execution_ledger)
     candidates = [
         item
         for item in retrieval_state.query_term_pool
         if item.queryability == "admitted" and not is_title_anchor_role(item.retrieval_role) and item.family not in tried
     ]
-    return min(
+    for candidate in sorted(
         candidates,
         key=lambda item: (0 if item.active else 1, item.priority, item.first_added_round, item.family),
-        default=None,
-    )
+    ):
+        term_group_key = build_term_group_key(
+            query_terms=[anchor.term, candidate.term],
+            query_term_pool=retrieval_state.query_term_pool,
+        )
+        if term_group_key not in used_keys:
+            return candidate
+    return None
 
 
 def tried_query_families(retrieval_state: RetrievalState) -> set[str]:
     term_index = {query_term_key(item.term): item for item in retrieval_state.query_term_pool}
     return {
         candidate.family
-        for record in retrieval_state.sent_query_history
-        for term in record.query_terms
+        for receipt in retrieval_state.query_execution_ledger
+        if receipt.dispatch_started
+        for term in receipt.query_terms
         if (candidate := term_index.get(query_term_key(term))) is not None
     }
 
@@ -205,3 +220,12 @@ def activate_query_term(
 
 def query_term_key(term: str) -> str:
     return " ".join(term.strip().split()).casefold()
+
+
+def has_novel_anchor_only_group(retrieval_state: RetrievalState) -> bool:
+    anchor = active_admitted_anchor(retrieval_state.query_term_pool)
+    term_group_key = build_term_group_key(
+        query_terms=[anchor.term],
+        query_term_pool=retrieval_state.query_term_pool,
+    )
+    return term_group_key not in used_term_group_keys(retrieval_state.query_execution_ledger)

@@ -161,6 +161,10 @@ def render_controller_prompt(context: ControllerContext) -> str:
         "allowed_filter_fields": _allowed_filter_fields(),
         "stop_guidance_can_stop": context.stop_guidance.can_stop,
         "quality_gate_status": context.stop_guidance.quality_gate_status,
+        "used_term_group_keys": context.used_term_group_keys,
+        "previous_query_outcomes": [
+            outcome.model_dump(mode="json") for outcome in context.previous_query_outcomes
+        ],
     }
     return "\n\n".join(
         [
@@ -213,7 +217,7 @@ def validate_controller_decision(*, context: ControllerContext, decision: Contro
                 "express role intent through proposed_query_terms instead."
             )
         try:
-            canonicalize_controller_query_terms(
+            canonical_query_terms = canonicalize_controller_query_terms(
                 decision.proposed_query_terms,
                 round_no=context.round_no,
                 title_anchor_terms=context.requirement_sheet.title_anchor_terms,
@@ -222,6 +226,14 @@ def validate_controller_decision(*, context: ControllerContext, decision: Contro
             )
         except ValueError as exc:
             return str(exc)
+        from seektalent.runtime.query_identity import build_term_group_key
+
+        term_group_key = build_term_group_key(
+            query_terms=canonical_query_terms,
+            query_term_pool=context.query_term_pool,
+        )
+        if term_group_key in context.used_term_group_keys:
+            return "proposed_term_group_already_executed"
     if context.previous_reflection is not None and not (decision.response_to_reflection or "").strip():
         return "response_to_reflection is required when previous_reflection exists."
     return None

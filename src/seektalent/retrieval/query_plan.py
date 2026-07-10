@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from itertools import combinations
 
 from seektalent.models import (
-    QueryRole,
     LocationExecutionPlan,
     QueryTermCandidate,
     RoundRetrievalPlan,
-    SentQueryRecord,
     is_primary_anchor_role,
     unique_strings,
 )
@@ -208,8 +207,10 @@ def derive_explore_query_terms(
     *,
     title_anchor_terms: list[str],
     query_term_pool: list[QueryTermCandidate],
-    sent_query_history: list[SentQueryRecord],
+    used_term_group_keys: Collection[str],
 ) -> list[str] | None:
+    from seektalent.runtime.query_identity import build_term_group_key
+
     exploit_terms = [normalize_term(item) for item in exploit_terms if normalize_term(item)]
     exploit_terms = canonicalize_controller_query_terms(
         exploit_terms,
@@ -225,20 +226,6 @@ def derive_explore_query_terms(
     if not exploit_non_anchor_terms:
         return None
 
-    unique_logical_queries: dict[tuple[int, tuple[str, ...]], QueryRole] = {}
-    for item in sent_query_history:
-        key = (item.round_no, tuple(term.casefold() for term in item.query_terms))
-        unique_logical_queries.setdefault(key, item.query_role)
-
-    term_usage: dict[str, int] = {}
-    used_queries: set[tuple[str, ...]] = set()
-    for (_, query_terms), _ in unique_logical_queries.items():
-        used_queries.add(query_terms)
-        for term in query_terms:
-            if term == anchor.term.casefold():
-                continue
-            term_usage[term] = term_usage.get(term, 0) + 1
-
     exploit_term_keys = {term.casefold() for term in exploit_non_anchor_terms}
     ordered_terms = sorted(
         [
@@ -249,7 +236,6 @@ def derive_explore_query_terms(
         key=lambda item: (
             0 if item.active and item.term.casefold() not in exploit_term_keys else 1,
             0 if not item.active and item.term.casefold() not in exploit_term_keys else 1,
-            term_usage.get(item.term.casefold(), 0),
             _signal_rank(item),
             item.priority,
             item.first_added_round,
@@ -259,18 +245,18 @@ def derive_explore_query_terms(
 
     term_rank = {item.term.casefold(): index for index, item in enumerate(ordered_terms)}
 
-    def score_combo(combo: tuple[QueryTermCandidate, ...]) -> tuple[int, int, int, int, tuple[str, ...]]:
+    def score_combo(combo: tuple[QueryTermCandidate, ...]) -> tuple[int, int, int, tuple[str, ...]]:
         combo_terms = tuple(item.term.casefold() for item in combo)
         return (
             sum(1 for term in combo_terms if term in exploit_term_keys),
-            sum(term_usage.get(term, 0) for term in combo_terms),
             sum(term_rank[term] for term in combo_terms),
             -len(combo_terms),
             combo_terms,
         )
 
-    unused_candidates: list[tuple[tuple[int, int, int, int, tuple[str, ...]], list[str]]] = []
-    used_candidates: list[tuple[tuple[int, int, int, int, tuple[str, ...]], list[str]]] = []
+    novel_candidates: list[tuple[tuple[int, int, int, tuple[str, ...]], list[str]]] = []
+    used_keys = set(used_term_group_keys)
+    exploit_group_key = build_term_group_key(query_terms=exploit_terms, query_term_pool=query_term_pool)
     for size in (1, 2):
         for combo in combinations(ordered_terms, size):
             candidates = [anchor, *combo]
@@ -285,16 +271,11 @@ def derive_explore_query_terms(
                 query_term_pool=query_term_pool,
                 allow_inactive_non_anchor_terms=True,
             )
-            signature = tuple(term.casefold() for term in candidate_terms)
-            if signature == tuple(term.casefold() for term in exploit_terms):
+            term_group_key = build_term_group_key(query_terms=candidate_terms, query_term_pool=query_term_pool)
+            if term_group_key == exploit_group_key or term_group_key in used_keys:
                 continue
-            bucket = used_candidates if signature in used_queries else unused_candidates
-            bucket.append((score_combo(combo), candidate_terms))
-    if unused_candidates:
-        return min(unused_candidates, key=lambda item: item[0])[1]
-    if used_candidates:
-        return min(used_candidates, key=lambda item: item[0])[1]
-    return None
+            novel_candidates.append((score_combo(combo), candidate_terms))
+    return min(novel_candidates, key=lambda item: item[0])[1] if novel_candidates else None
 
 
 def _query_term_index(query_term_pool: list[QueryTermCandidate]) -> dict[str, QueryTermCandidate]:

@@ -14,6 +14,7 @@ from seektalent.corpus.store import DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID, Cor
 from seektalent.models import (
     CTSQuery,
     InputTruth,
+    LogicalQueryOutcome,
     LocationExecutionPlan,
     ProposedFilterPlan,
     QueryExecutionReceipt,
@@ -543,6 +544,100 @@ def test_candidate_feedback_remains_before_generic_fallback() -> None:
     )
 
     assert decision.selected_lane == "candidate_feedback"
+
+
+def test_query_outcome_unions_cross_source_candidates_after_identity_merge() -> None:
+    from seektalent.runtime.query_identity import apply_post_merge_query_counts
+
+    outcome = LogicalQueryOutcome(
+        query_instance_id="query-1",
+        term_group_key="group-1",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["数据开发", "Python"],
+        keyword_query="数据开发 Python",
+        attempted=True,
+        status="completed",
+    )
+
+    counted = apply_post_merge_query_counts(
+        outcomes=[outcome],
+        candidate_attributions=[
+            RuntimeQueryCandidateAttribution("cts", "query-1", "cts-1", "candidate-a"),
+            RuntimeQueryCandidateAttribution("liepin", "query-1", "liepin-1", "candidate-a"),
+        ],
+        candidate_identity_by_resume_id={"cts-1": "identity-a", "liepin-1": "identity-a"},
+        dispatch_order=["query-1"],
+        identities_seen_before_round=set(),
+    )
+
+    assert counted[0].unique_candidate_count == 1
+    assert counted[0].duplicate_candidate_count == 1
+
+
+def test_query_outcome_allocates_later_lane_candidate_as_duplicate() -> None:
+    from seektalent.runtime.query_identity import apply_post_merge_query_counts
+
+    outcomes = [
+        LogicalQueryOutcome(
+            query_instance_id="query-primary",
+            term_group_key="group-primary",
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["数据开发", "Python"],
+            keyword_query="数据开发 Python",
+            attempted=True,
+            status="completed",
+        ),
+        LogicalQueryOutcome(
+            query_instance_id="query-explore",
+            term_group_key="group-explore",
+            query_role="explore",
+            lane_type="generic_explore",
+            query_terms=["数据开发", "Rust"],
+            keyword_query="数据开发 Rust",
+            attempted=True,
+            status="completed",
+        ),
+    ]
+
+    counted = apply_post_merge_query_counts(
+        outcomes=outcomes,
+        candidate_attributions=[
+            RuntimeQueryCandidateAttribution("cts", "query-primary", "candidate-1", "candidate-a"),
+            RuntimeQueryCandidateAttribution("liepin", "query-explore", "candidate-2", "candidate-a"),
+        ],
+        candidate_identity_by_resume_id={"candidate-1": "identity-a", "candidate-2": "identity-a"},
+        dispatch_order=["query-primary", "query-explore"],
+        identities_seen_before_round=set(),
+    )
+
+    assert [(item.unique_candidate_count, item.duplicate_candidate_count) for item in counted] == [(1, 0), (0, 1)]
+
+
+def test_rescue_stops_when_anchor_only_group_is_not_novel() -> None:
+    decision = choose_rescue_lane(
+        RescueInputs(
+            stop_guidance=StopGuidance(
+                quality_gate_status="low_quality_exhausted",
+                can_stop=False,
+                reason="needs more candidates",
+                top_pool_strength="weak",
+            ),
+            has_untried_reserve_family=False,
+            has_feedback_seed_resumes=False,
+            candidate_feedback_enabled=False,
+            candidate_feedback_attempted=False,
+            anchor_only_broaden_attempted=False,
+            has_novel_anchor_only_group=False,
+        )
+    )
+
+    assert decision.selected_lane == "allow_stop"
+    assert any(
+        skipped.lane == "anchor_only" and skipped.reason == "no_novel_anchor_only_query"
+        for skipped in decision.skipped_lanes
+    )
 
 
 def test_execute_logical_dispatch_search_uses_frozen_requested_counts(tmp_path) -> None:

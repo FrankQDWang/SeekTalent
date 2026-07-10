@@ -19,6 +19,7 @@ from seektalent.models import (
     LocationExecutionPlan,
     PoolDecision,
     ProposedFilterPlan,
+    QueryExecutionReceipt,
     QueryTermCandidate,
     ReflectionAdvice,
     ReflectionFilterAdvice,
@@ -58,7 +59,11 @@ from seektalent.runtime.retrieval_runtime import LogicalQueryState, allocate_ini
 from seektalent.runtime.reflection_context import build_reflection_context
 from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
-from seektalent.runtime.source_lanes import build_runtime_source_plan, rebuild_candidate_identities
+from seektalent.runtime.source_lanes import (
+    RuntimeQueryCandidateAttribution,
+    build_runtime_source_plan,
+    rebuild_candidate_identities,
+)
 from seektalent.runtime import WorkflowRuntime
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.tracing import RunTracer
@@ -1609,17 +1614,46 @@ def test_cts_only_run_can_score_without_liepin(monkeypatch, tmp_path: Path) -> N
     async def fake_dispatch_source_rounds(*, request, source_adapters=None, result_callback=None):
         del source_adapters
         assert request.selected_sources == ("cts",)
+        query = request.logical_queries[0]
+        candidate = _make_candidate("cts-1")
         result = SourceRoundDispatchResult(
             source_results=(
                 SourceRoundAdapterResult(
                     source="cts",
                     status="completed",
-                    candidates=(_make_candidate("cts-1"),),
+                    candidates=(candidate,),
                     raw_candidate_count=1,
                 ),
             ),
-            candidates=(_make_candidate("cts-1"),),
+            candidates=(candidate,),
             raw_candidate_count=1,
+            query_execution_receipts=(
+                QueryExecutionReceipt(
+                    round_no=query.round_no,
+                    source_kind="cts",
+                    query_instance_id=query.query_instance_id,
+                    query_fingerprint=query.query_fingerprint,
+                    term_group_key=query.term_group_key,
+                    query_role=query.query_role,
+                    lane_type=query.lane_type,
+                    query_terms=list(query.query_terms),
+                    keyword_query=query.keyword_query,
+                    requested_count=query.requested_count,
+                    source_plan_version=query.source_plan_version,
+                    status="completed",
+                    dispatch_started=True,
+                    raw_candidate_count=1,
+                    unique_candidate_count=1,
+                ),
+            ),
+            candidate_query_attributions=(
+                RuntimeQueryCandidateAttribution(
+                    source_kind="cts",
+                    query_instance_id=query.query_instance_id,
+                    resume_id=candidate.resume_id,
+                    dedup_key=candidate.dedup_key,
+                ),
+            ),
         )
         if result_callback is not None:
             for source_result in result.source_results:
@@ -2276,7 +2310,7 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
         retrieval_plan=retrieval_plan,
         title_anchor_terms=["python"],
         query_term_pool=[],
-        sent_query_history=[],
+        used_term_group_keys=set(),
     )
 
     try:
@@ -2346,7 +2380,7 @@ def test_runtime_city_dispatch_passes_city_to_cts_builder(tmp_path: Path, monkey
         retrieval_plan=retrieval_plan,
         title_anchor_terms=["python"],
         query_term_pool=[],
-        sent_query_history=[],
+        used_term_group_keys=set(),
     )
 
     try:
@@ -2451,6 +2485,13 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert terminal_controller_round is None
     assert len(top_candidates) > 0
     assert run_state.retrieval_state.current_plan_version == 2
+    assert len(run_state.retrieval_state.query_execution_ledger) == 3
+    assert [len(round_state.query_outcomes) for round_state in run_state.round_history] == [1, 2]
+    assert all(
+        outcome.term_group_key
+        for round_state in run_state.round_history
+        for outcome in round_state.query_outcomes
+    )
     assert [item.round_no for item in run_state.retrieval_state.sent_query_history] == [1, 2, 2]
     assert [item.city for item in run_state.retrieval_state.sent_query_history] == ["上海", "上海", "上海"]
     assert [item.query_role for item in run_state.retrieval_state.sent_query_history] == [
@@ -2534,6 +2575,46 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
             "keyword_query": "python trace",
         },
     ]
+
+
+def test_runtime_liepin_round_persists_two_logical_query_receipts_and_outcomes(tmp_path: Path) -> None:
+    settings = _liepin_fixture_settings(
+        runs_dir=str(tmp_path / "runs"),
+        provider_name="liepin",
+        min_rounds=1,
+        max_rounds=2,
+    )
+    runtime = _workflow_runtime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+    source_context = {"backend_mode": "fake_fixture", "status": "ready"}
+    source_plan = build_runtime_source_plan(
+        source_kinds=["liepin"],
+        settings=settings,
+        runtime_run_id=tracer.run_id,
+        source_context=source_context,
+    )
+
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                tracer=tracer,
+                source_plan=source_plan,
+                source_context=source_context,
+            )
+        )
+    finally:
+        tracer.close()
+
+    second_round_receipts = [
+        receipt for receipt in run_state.retrieval_state.query_execution_ledger if receipt.round_no == 2
+    ]
+    assert len(second_round_receipts) == 2
+    assert len(run_state.round_history[1].query_outcomes) == 2
+    assert {item.term_group_key for item in run_state.round_history[1].query_outcomes}
 
 
 def test_round_two_serializes_exploit_and_generic_lane_types(
@@ -4063,17 +4144,7 @@ def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(
         retrieval_plan=retrieval_plan,
         title_anchor_terms=requirement_sheet.title_anchor_terms,
         query_term_pool=requirement_sheet.initial_query_term_pool,
-        sent_query_history=[
-            SentQueryRecord(
-                round_no=1,
-                query_terms=["python", "resume matching"],
-                keyword_query='python "resume matching"',
-                batch_no=1,
-                requested_count=10,
-                source_plan_version=1,
-                rationale="round 1",
-            )
-        ],
+        used_term_group_keys=set(),
     )
 
     assert [item.query_role for item in query_states] == ["exploit"]

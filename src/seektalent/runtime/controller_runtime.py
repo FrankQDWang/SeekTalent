@@ -291,4 +291,5 @@ def _controller_input_artifact_refs(round_no: int) -> list[str]:
         f"round.{round_no:02d}.controller.controller_context",
         "input.requirement_sheet",
         "runtime.sent_query_history",
+        "runtime.query_execution_ledger",
     ]

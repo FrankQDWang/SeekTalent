@@ -20,6 +20,7 @@ from seektalent.runtime.context_views import (
     _top_pool_entry,
     top_candidates,
 )
+from seektalent.runtime.query_identity import used_term_group_keys
 
 BUDGET_STOP_RATIO = 0.8
 STRONG_FIT_STOP_MIN = 3
@@ -72,6 +73,8 @@ def build_controller_context(
         latest_reflection_keyword_advice=previous_reflection.keyword_advice if previous_reflection else None,
         latest_reflection_filter_advice=previous_reflection.filter_advice if previous_reflection else None,
         sent_query_history=run_state.retrieval_state.sent_query_history,
+        used_term_group_keys=sorted(used_term_group_keys(run_state.retrieval_state.query_execution_ledger)),
+        previous_query_outcomes=last_round.query_outcomes[-2:] if last_round is not None else [],
         shortage_history=[
             round_state.search_observation.shortage_count
             for round_state in run_state.round_history
@@ -104,16 +107,13 @@ def _build_stop_guidance(
     high_risk_fit_count = sum(1 for item in fit_candidates if item.risk_score >= HIGH_RISK_FIT_THRESHOLD)
     tried_families = _tried_families(
         run_state.retrieval_state.query_term_pool,
-        run_state.retrieval_state.sent_query_history,
+        run_state.retrieval_state.query_execution_ledger,
     )
     untried_families = _untried_admitted_families(
         run_state.retrieval_state.query_term_pool,
         tried_families,
     )
-    broadening_attempted = _broadening_attempted(
-        run_state.retrieval_state.query_term_pool,
-        run_state.retrieval_state.sent_query_history,
-    )
+    broadening_attempted = _broadening_attempted(run_state)
     productive_round_count = sum(
         1
         for round_state in run_state.round_history
@@ -237,13 +237,14 @@ def _budget_reminder(
 
 def _tried_families(
     query_term_pool: list[QueryTermCandidate],
-    sent_query_history,
+    query_execution_ledger,
 ) -> list[str]:
     term_index = {_term_key(item.term): item for item in query_term_pool}
     return unique_strings(
         candidate.family
-        for record in sent_query_history
-        for term in record.query_terms
+        for receipt in query_execution_ledger
+        if receipt.dispatch_started
+        for term in receipt.query_terms
         if (candidate := term_index.get(_term_key(term))) is not None
     )
 
@@ -269,19 +270,13 @@ def _untried_admitted_families(
     ]
 
 
-def _broadening_attempted(query_term_pool: list[QueryTermCandidate], sent_query_history) -> bool:
-    term_index = {_term_key(item.term): item for item in query_term_pool}
-    for record in sent_query_history:
-        if str(record.rationale).startswith("Runtime broaden"):
-            return True
-        candidates = [
-            candidate
-            for term in record.query_terms
-            if (candidate := term_index.get(_term_key(term))) is not None
-        ]
-        if len(candidates) == 1 and candidates[0].queryability == "admitted" and candidates[0].retrieval_role == "role_anchor":
-            return True
-    return False
+def _broadening_attempted(run_state: RunState) -> bool:
+    if run_state.retrieval_state.anchor_only_broaden_attempted:
+        return True
+    return any(
+        str(item.get("selected_lane") or "") in {"reserve_broaden", "anchor_only"}
+        for item in run_state.retrieval_state.rescue_lane_history
+    )
 
 
 def _term_key(term: str) -> str:

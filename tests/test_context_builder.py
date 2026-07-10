@@ -5,9 +5,11 @@ from seektalent.models import (
     CitySearchSummary,
     HardConstraintSlots,
     InputTruth,
+    LogicalQueryOutcome,
     LocationExecutionPlan,
     NormalizedResume,
     ProposedFilterPlan,
+    QueryExecutionReceipt,
     QueryTermCandidate,
     ReflectionAdvice,
     ReflectionFilterAdvice,
@@ -35,11 +37,39 @@ from seektalent.runtime.controller_context import build_controller_context as bu
 from seektalent.runtime.finalize_context import build_finalize_context as build_finalize_context_direct
 from seektalent.runtime.reflection_context import build_reflection_context as build_reflection_context_direct
 from seektalent.runtime.scoring_context import build_scoring_context as build_scoring_context_direct
+from seektalent.runtime.query_identity import build_term_group_key
 
 CONTROLLER_CONTEXT_BUILDERS = [
     pytest.param(build_controller_context, id="legacy"),
     pytest.param(build_controller_context_direct, id="direct"),
 ]
+
+
+def _ledger_from_records(
+    records: list[SentQueryRecord],
+    query_term_pool: list[QueryTermCandidate],
+) -> list[QueryExecutionReceipt]:
+    return [
+        QueryExecutionReceipt(
+            round_no=record.round_no,
+            source_kind="cts",
+            query_instance_id=f"fixture-query-{index}",
+            query_fingerprint=f"fixture-fingerprint-{index}",
+            term_group_key=build_term_group_key(
+                query_terms=record.query_terms,
+                query_term_pool=query_term_pool,
+            ),
+            query_role=record.query_role,
+            lane_type=record.lane_type or "exploit",
+            query_terms=record.query_terms,
+            keyword_query=record.keyword_query,
+            requested_count=record.requested_count,
+            source_plan_version=str(record.source_plan_version),
+            status="completed",
+            dispatch_started=True,
+        )
+        for index, record in enumerate(records, start=1)
+    ]
 
 
 def test_context_builder_is_a_thin_reexport_facade() -> None:
@@ -190,6 +220,16 @@ def _run_state_for_stop_gate(
             current_plan_version=1,
             query_term_pool=requirement_sheet.initial_query_term_pool,
             sent_query_history=sent_query_history,
+            query_execution_ledger=_ledger_from_records(
+                sent_query_history,
+                requirement_sheet.initial_query_term_pool,
+            ),
+            anchor_only_broaden_attempted=include_anchor_only_broaden,
+            rescue_lane_history=(
+                [{"round_no": 3, "selected_lane": "anchor_only"}]
+                if include_anchor_only_broaden
+                else []
+            ),
         ),
         scorecards_by_resume_id={candidate.resume_id: candidate for candidate in candidates},
         top_pool_ids=[candidate.resume_id for candidate in candidates],
@@ -365,6 +405,10 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
             )
         ],
     )
+    run_state.retrieval_state.query_execution_ledger = _ledger_from_records(
+        run_state.retrieval_state.sent_query_history,
+        requirement_sheet.initial_query_term_pool,
+    )
 
     controller_context = build_controller_context(
         run_state=run_state,
@@ -444,6 +488,41 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
     assert final_round_context.stop_guidance.can_stop is True
     assert "80% stop threshold starts at round 3" in final_round_context.budget_reminder
     assert list(final_round_context.model_dump(mode="json"))[-1] == "budget_reminder"
+
+
+def test_controller_context_uses_receipt_ledger_and_bounds_previous_query_outcomes() -> None:
+    run_state = _run_state_for_stop_gate(
+        candidates=[_scored_candidate("resume-1", round_no=1)],
+        completed_rounds=1,
+        include_untried_family=True,
+    )
+    run_state.retrieval_state.sent_query_history = []
+    run_state.round_history[0].query_outcomes = [
+        LogicalQueryOutcome(
+            query_instance_id=f"query-{index}",
+            term_group_key=f"group-{index}",
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["python", "resume matching"],
+            keyword_query='python "resume matching"',
+            attempted=True,
+            status="completed",
+        )
+        for index in range(1, 4)
+    ]
+
+    context = build_controller_context(
+        run_state=run_state,
+        round_no=2,
+        min_rounds=1,
+        max_rounds=3,
+        target_new=10,
+    )
+
+    assert context.used_term_group_keys == sorted(
+        receipt.term_group_key for receipt in run_state.retrieval_state.query_execution_ledger
+    )
+    assert [item.query_instance_id for item in context.previous_query_outcomes] == ["query-2", "query-3"]
 
 
 def test_split_modules_build_scoring_reflection_and_finalize_contexts() -> None:
@@ -827,6 +906,10 @@ def test_stop_guidance_excludes_secondary_title_anchor_from_untried_families(bui
                 ),
             )
         ],
+    )
+    run_state.retrieval_state.query_execution_ledger = _ledger_from_records(
+        run_state.retrieval_state.sent_query_history,
+        requirement_sheet.initial_query_term_pool,
     )
 
     context = build_context(

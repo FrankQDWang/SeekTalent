@@ -36,6 +36,7 @@ from seektalent.models import (
 )
 from seektalent.prompting import LoadedPrompt
 from seektalent.runtime import WorkflowRuntime
+from seektalent.runtime.query_identity import build_term_group_key
 from seektalent.tracing import ProviderUsageSnapshot
 from tests.settings_factory import make_settings
 
@@ -305,6 +306,7 @@ def _controller_context(
     min_rounds: int = 1,
     max_rounds: int = 3,
     previous_reflection: ReflectionSummaryView | None = None,
+    used_term_group_keys: list[str] | None = None,
 ) -> ControllerContext:
     sheet = requirement_sheet or _requirement_sheet()
     return ControllerContext(
@@ -327,6 +329,7 @@ def _controller_context(
             top_pool_strength="usable",
         ),
         previous_reflection=previous_reflection,
+        used_term_group_keys=used_term_group_keys or [],
     )
 
 
@@ -578,6 +581,28 @@ def test_validate_controller_decision_rejects_empty_query_terms() -> None:
         "proposed_query_terms must contain at least one term."
     )
 
+
+def test_controller_rejects_semantically_reordered_used_group() -> None:
+    sheet = _requirement_sheet()
+    context = _controller_context(
+        requirement_sheet=sheet,
+        round_no=2,
+        used_term_group_keys=[
+            build_term_group_key(
+                query_terms=["python", "resume matching"],
+                query_term_pool=sheet.initial_query_term_pool,
+            )
+        ],
+    )
+    decision = SearchControllerDecision(
+        thought_summary="Search with the same semantic query.",
+        action="search_cts",
+        decision_rationale="Try the reordered terms.",
+        proposed_query_terms=["resume matching", "python"],
+        proposed_filter_plan=ProposedFilterPlan(),
+    )
+
+    assert validate_controller_decision(context=context, decision=decision) == "proposed_term_group_already_executed"
 
 def test_validate_controller_decision_rejects_position_filter() -> None:
     context = _controller_context()
