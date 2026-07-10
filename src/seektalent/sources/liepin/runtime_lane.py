@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import replace
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
@@ -104,7 +104,17 @@ async def run_liepin_source_lane(
 
     context = normalize_runtime_liepin_context(request.source_context)
     client = worker_client or build_liepin_worker_client(settings)
-    provider = _build_provider(settings=settings, worker_client=client)
+    query_started = False
+
+    def mark_query_started() -> None:
+        nonlocal query_started
+        query_started = True
+
+    provider = _build_provider(
+        settings=settings,
+        worker_client=client,
+        worker_search_started_callback=mark_query_started,
+    )
     search_request = _card_search_request(
         request=request,
         context=context,
@@ -139,6 +149,7 @@ async def run_liepin_source_lane(
             query_terms=query_terms,
             query_fingerprint=query_fingerprint,
             status="partial",
+            query_started=query_started,
             stop_reason_code=stop_reason_code,
         )
     except LiepinWorkerModeError as error:
@@ -149,6 +160,7 @@ async def run_liepin_source_lane(
             source_lane_run_id=source_lane_run_id,
             attempt=request.attempt,
             reason_code=reason_code,
+            query_started=query_started,
             safe_error_summary=_safe_worker_error_summary(error, reason_code=reason_code),
         )
         partial_search_result = getattr(error, "partial_search_result", None)
@@ -172,6 +184,7 @@ async def run_liepin_source_lane(
                     attempt=blocked_result.attempt,
                     status=blocked_result.status,
                     raw_candidate_count=partial_search_result.raw_candidate_count,
+                    query_started=blocked_result.query_started,
                     events=blocked_result.events + workflow_events,
                     blocked_reason_code=blocked_result.blocked_reason_code,
                     stop_reason_code=blocked_result.stop_reason_code,
@@ -187,6 +200,7 @@ async def run_liepin_source_lane(
         query_terms=query_terms,
         query_fingerprint=query_fingerprint,
         status="completed",
+        query_started=query_started,
     )
 
 
@@ -336,6 +350,7 @@ def merge_liepin_card_lane_results(
         detail_recommendations=first.detail_recommendations + second.detail_recommendations,
         events=first.events + second.events,
         executed_query_packages=first.executed_query_packages + second.executed_query_packages,
+        query_started=first.query_started or second.query_started,
         query_execution_outcomes=first.query_execution_outcomes + second.query_execution_outcomes,
         candidate_query_attributions=first.candidate_query_attributions + second.candidate_query_attributions,
         blocked_reason_code=blocked_reason_code,
@@ -368,18 +383,27 @@ def _with_liepin_query_execution_outcome(
     target_results: Collection[RuntimeSourceLaneResult],
 ) -> RuntimeSourceLaneResult:
     raw_candidate_count = sum(int(item.raw_candidate_count or 0) for item in target_results)
-    duplicate_candidate_count = sum(
+    per_target_duplicate_candidate_count = sum(
         max(0, int(item.raw_candidate_count or 0) - len(item.candidate_store_updates))
         for item in target_results
     )
+    target_candidate_count = sum(len(item.candidate_store_updates) for item in target_results)
+    candidate_identity_keys = {
+        candidate.dedup_key or candidate.resume_id
+        for item in target_results
+        for candidate in item.candidate_store_updates.values()
+    }
+    cross_target_duplicate_candidate_count = max(0, target_candidate_count - len(candidate_identity_keys))
     safe_reason = _shared_safe_reason(target_results)
     outcome = SourceQueryExecutionOutcome(
         query_instance_id=logical_query.query_instance_id,
         status=_outcome_status(target_results),
-        dispatch_started=bool(target_results),
+        dispatch_started=any(item.query_started for item in target_results),
         raw_candidate_count=raw_candidate_count,
-        unique_candidate_count=len(result.candidate_store_updates),
-        duplicate_candidate_count=duplicate_candidate_count,
+        unique_candidate_count=len(candidate_identity_keys),
+        duplicate_candidate_count=(
+            per_target_duplicate_candidate_count + cross_target_duplicate_candidate_count
+        ),
         exhausted_reason=safe_reason,
         safe_reason_code=safe_reason,
     )
@@ -458,6 +482,7 @@ def _card_lane_result_from_search_result(
     query_terms: list[str],
     status: RuntimeSourceLaneStatus,
     query_fingerprint: str | None = None,
+    query_started: bool = False,
     stop_reason_code: str | None = None,
 ) -> RuntimeSourceLaneResult:
     budget = request.source_budget_policy
@@ -536,6 +561,7 @@ def _card_lane_result_from_search_result(
         provider_snapshots=tuple(search_result.provider_snapshots),
         raw_candidate_count=search_result.raw_candidate_count,
         events=base_events + workflow_events,
+        query_started=query_started,
         stop_reason_code=stop_reason_code,
     )
 
@@ -678,6 +704,7 @@ def _blocked_card_result(
     source_lane_run_id: str,
     attempt: int,
     reason_code: str,
+    query_started: bool = False,
     safe_error_summary: str | None = None,
 ) -> RuntimeSourceLaneResult:
     return RuntimeSourceLaneResult(
@@ -688,6 +715,7 @@ def _blocked_card_result(
         lane_mode="card",
         attempt=attempt,
         status="blocked",
+        query_started=query_started,
         blocked_reason_code=reason_code,
         stop_reason_code=reason_code,
         retryable=reason_code in {"blocked_backend_unavailable", "failed_provider_error"},
@@ -1196,11 +1224,21 @@ def _detail_lease_matches_request(
     return True
 
 
-def _build_provider(*, settings: AppSettings, worker_client: LiepinWorkerClient) -> LiepinProviderAdapter:
+def _build_provider(
+    *,
+    settings: AppSettings,
+    worker_client: LiepinWorkerClient,
+    worker_search_started_callback: Callable[[], None] | None = None,
+) -> LiepinProviderAdapter:
     store = None
     if is_live_liepin_worker_mode(settings.liepin_worker_mode):
         store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
-    return LiepinProviderAdapter(settings, worker_client=worker_client, store=store)
+    return LiepinProviderAdapter(
+        settings,
+        worker_client=worker_client,
+        worker_search_started_callback=worker_search_started_callback,
+        store=store,
+    )
 
 
 def _liepin_max_pages(budget: RuntimeSourceBudgetPolicy) -> int:

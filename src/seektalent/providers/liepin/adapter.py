@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn, Protocol, cast
@@ -145,12 +146,14 @@ class LiepinProviderAdapter:
         *,
         worker_client: LiepinWorkerClient | None = None,
         worker_event_callback: EventCallback | None = None,
+        worker_search_started_callback: Callable[[], None] | None = None,
         store: LiepinStore | None = None,
         connection_safety_resolver: ProviderConnectionSafetyResolver | None = None,
     ) -> None:
         self.settings = settings
         self.worker_client = worker_client
         self.worker_event_callback = worker_event_callback
+        self.worker_search_started_callback = worker_search_started_callback
         self.store = store
         self.connection_safety_resolver = connection_safety_resolver or (
             LiepinStoreConnectionSafetyResolver(store) if store is not None else None
@@ -199,6 +202,8 @@ class LiepinProviderAdapter:
                 round_no=round_no,
                 trace_id=trace_id,
             )
+        if self.worker_search_started_callback is not None:
+            self.worker_search_started_callback()
         result = await self.worker_client.search(
             request,
             round_no=round_no,

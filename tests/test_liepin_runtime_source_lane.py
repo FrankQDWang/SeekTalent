@@ -448,6 +448,49 @@ def test_liepin_bundle_preserves_one_execution_outcome_per_logical_query() -> No
     }
 
 
+def test_liepin_bundle_does_not_start_query_when_worker_readiness_blocks() -> None:
+    class NotReadyWorker(FakeWorker):
+        async def ensure_ready(self, *, on_event=None) -> None:
+            del on_event
+            raise LiepinWorkerModeError("worker_not_ready")
+
+    worker = NotReadyWorker()
+    result = asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=make_settings(),
+            runtime_run_id="runtime-run-1",
+            source_plan_id="plan-liepin",
+            job_title="数据开发专家",
+            jd="负责数据平台建设",
+            notes="Python",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=(
+                LogicalQueryDispatch(
+                    round_no=3,
+                    query_role="exploit",
+                    lane_type="exploit",
+                    query_terms=("数据开发", "平台"),
+                    keyword_query="数据开发 平台",
+                    query_instance_id="primary-1",
+                    query_fingerprint="fingerprint-primary-1",
+                    term_group_key="term-group-primary-1",
+                    requested_count=4,
+                    source_plan_version="7",
+                ),
+            ),
+            source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
+            liepin_context={"provider_account_hash": "acct_hash_123"},
+            worker_client=worker,
+        )
+    )
+
+    assert worker.search_calls == []
+    assert result.status == "blocked"
+    assert [(item.status, item.dispatch_started) for item in result.query_execution_outcomes] == [
+        ("blocked", False),
+    ]
+
+
 def test_liepin_logical_query_bundle_uses_compiled_source_intent_resume_budget() -> None:
     class DetailBudgetWorker(FakeWorker):
         async def search(
@@ -710,6 +753,130 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
     ]
     assert len(result.candidate_store_updates) == 4
     assert all(item.query_fingerprint == "runtime-fingerprint-1" for item in result.source_evidence_updates)
+
+
+def test_liepin_bundle_counts_dedup_key_repeated_across_filter_targets_once() -> None:
+    class RepeatedCandidateWorker(FakeWorker):
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            native_filters = json.loads(str(request.provider_context["liepin_native_filters_json"]))
+            city = str(native_filters["city"]["label"])
+            raw_payload = {"candidateId": f"listing-{city}"}
+            self.search_calls.append(
+                {
+                    "request": request,
+                    "provider_context": request.provider_context,
+                    "round_no": round_no,
+                    "trace_id": trace_id,
+                    "provider_account_hash": provider_account_hash,
+                }
+            )
+            return SearchResult(
+                candidates=[
+                    ResumeCandidate(
+                        resume_id=f"liepin-listing-{city}",
+                        source_resume_id=f"listing-{city}",
+                        snapshot_sha256=sha256_json(raw_payload),
+                        dedup_key="provider-subject-a",
+                        search_text=f"{city} 数据开发专家",
+                        raw={
+                            "score_evidence_source": "detail_enriched",
+                            "currentTitle": "数据开发专家",
+                            "currentCompany": "数据平台公司",
+                        },
+                    )
+                ],
+                provider_snapshots=[
+                    ProviderSnapshot(
+                        provider_name="liepin",
+                        payload_kind="detail",
+                        raw_payload=raw_payload,
+                        normalized_text=f"{city} 数据开发专家",
+                        provider_subject_id="provider-subject-a",
+                        provider_listing_id=f"listing-{city}",
+                        synthetic_candidate_fingerprint="provider-subject-a",
+                        identity_confidence="provider_subject_id",
+                        extraction_source="test",
+                        extractor_version="test",
+                        pii_classification="no_direct_contact",
+                        retention_policy="provider_snapshot_30d",
+                        access_scope="local_run_only",
+                        redaction_state="redacted",
+                        score_evidence_source="detail_enriched",
+                    )
+                ],
+                diagnostics=[],
+                exhausted=True,
+                raw_candidate_count=1,
+            )
+
+    worker = RepeatedCandidateWorker()
+    logical_query = LogicalQueryDispatch(
+        round_no=2,
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=("数据开发专家",),
+        keyword_query="数据开发专家",
+        query_instance_id="runtime-query-1",
+        query_fingerprint="runtime-fingerprint-1",
+        term_group_key="term-group-data-platform",
+        requested_count=2,
+        source_plan_version="7",
+    )
+    intent = RuntimeSourceQueryIntent(
+        round_no=2,
+        source_kind="liepin",
+        query_role="exploit",
+        lane_type="exploit",
+        query_instance_id="runtime-query-1",
+        query_fingerprint="runtime-fingerprint-1",
+        term_group_key="term-group-data-platform",
+        query_terms=("数据开发专家",),
+        keyword_query="数据开发专家",
+        requested_count=2,
+        provider_scan_limit=2,
+        source_plan_version="7",
+        filter_intents=(),
+        location_intent=RuntimeLocationExecutionIntent(
+            mode="priority_then_fallback",
+            allowed_locations=("上海", "北京"),
+            preferred_locations=("上海",),
+            priority_order=("上海",),
+            balanced_order=("北京",),
+            rotation_offset=0,
+            target_new=2,
+        ),
+        age_intent=None,
+    )
+
+    result = asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=make_settings(),
+            runtime_run_id="runtime-run-1",
+            source_plan_id="plan-liepin",
+            job_title="数据开发专家",
+            jd="负责数据平台建设",
+            notes="Python",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=(logical_query,),
+            source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
+            liepin_context={"provider_account_hash": "acct_hash_123"},
+            source_query_intents=(intent,),
+            worker_client=worker,
+        )
+    )
+
+    assert len(worker.search_calls) == 2
+    outcome = result.query_execution_outcomes[0]
+    assert outcome.raw_candidate_count == 2
+    assert outcome.unique_candidate_count == 1
+    assert outcome.duplicate_candidate_count == 1
 
 
 class ParallelDetailWorker(FakeWorker):
@@ -1736,8 +1903,8 @@ def test_liepin_runtime_lane_builds_live_store_for_opencli(monkeypatch, tmp_path
     captured_stores: list[object] = []
 
     class FakeProvider:
-        def __init__(self, settings, *, worker_client=None, store=None):
-            del settings, worker_client
+        def __init__(self, settings, *, worker_client=None, worker_search_started_callback=None, store=None):
+            del settings, worker_client, worker_search_started_callback
             captured_stores.append(store)
 
         async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:

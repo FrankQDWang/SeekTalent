@@ -335,6 +335,7 @@ class RuntimeSourceLaneResult:
     detail_recommendations: tuple[RuntimeDetailRecommendation, ...] = ()
     events: tuple[RuntimeSourceLaneEvent, ...] = ()
     executed_query_packages: tuple[RuntimeQueryPackage, ...] = ()
+    query_started: bool = False
     query_execution_outcomes: tuple[SourceQueryExecutionOutcome, ...] = ()
     candidate_query_attributions: tuple[RuntimeQueryCandidateAttribution, ...] = ()
     blocked_reason_code: str | None = None
