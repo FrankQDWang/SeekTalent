@@ -1443,6 +1443,189 @@ def test_source_plan_public_payload_does_not_disclose_private_continuation_capab
     assert "opaque_ref" not in serialized
 
 
+def _integrated_expansion_runtime(tmp_path: Path, *, scorer: object | None = None):
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), provider_name="liepin",
+        liepin_worker_mode="fake_fixture", liepin_allow_fake_fixture_worker=True,
+        min_rounds=1, max_rounds=1, enable_eval=False,
+    )
+    runtime = _workflow_runtime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=scorer or StubScorer())
+    runtime_any = cast(Any, runtime)
+    runtime_any._require_live_llm_config = lambda: None
+    actions: list[tuple[str, str]] = []
+
+    def adapters(_runtime: WorkflowRuntime, context: RuntimeSourceRoundContext):
+        async def liepin(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            candidates, outcomes, attributions, continuations = [], [], [], []
+            for intent in request.source_query_intents_by_source["liepin"]:
+                for index in range(intent.requested_count):
+                    candidate = _make_candidate(f"matrix-{intent.query_instance_id}-{index}", source_round=context.round_no)
+                    candidates.append(candidate)
+                    attributions.append(RuntimeQueryCandidateAttribution(
+                        source_kind="liepin", query_instance_id=intent.query_instance_id,
+                        resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
+                    ))
+                outcomes.append(SourceQueryExecutionOutcome(
+                    query_instance_id=intent.query_instance_id, status="completed", dispatch_started=True,
+                    raw_candidate_count=intent.requested_count, unique_candidate_count=intent.requested_count,
+                ))
+                continuations.append(ProviderSearchContinuation(
+                    kind="first_page_detail_expansion", continuation_id=f"matrix-{intent.query_instance_id}",
+                    opaque_ref=f"artifact://protected/{intent.query_instance_id}", source_kind="liepin",
+                    round_no=context.round_no, query_instance_id=intent.query_instance_id,
+                    visible_candidate_count=intent.requested_count + 1,
+                    eligible_candidate_count=intent.requested_count + 1,
+                    initial_opened_count=intent.requested_count,
+                ))
+            return SourceRoundAdapterResult(
+                source="liepin", status="completed", candidates=tuple(candidates), raw_candidate_count=len(candidates),
+                query_execution_outcomes=tuple(outcomes), candidate_query_attributions=tuple(attributions),
+                private_first_page_continuations=tuple(continuations),
+            )
+        return {"liepin": liepin}
+
+    async def expander(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
+        actions.append((request.continuation_id, request.action))
+        return SourceFirstPageExpansionResult(
+            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
+            continuation_id=request.continuation_id, status="completed",
+            first_page_visible_count=request.continuation.visible_candidate_count,
+            first_page_eligible_count=request.continuation.eligible_candidate_count,
+            initial_opened_count=request.continuation.initial_opened_count, continuation_deleted=True,
+        )
+    runtime_any.source_round_adapter_provider = adapters
+    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": expander}
+    return runtime, runtime_any, actions
+
+
+def _matrix_cleanup_audits(tmp_path: Path) -> list[dict[str, object]]:
+    return [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in (tmp_path / "runs").glob("**/first_page_continuation_cleanup.json")
+    ]
+
+
+def _run_integrated_round(runtime: WorkflowRuntime, tmp_path: Path) -> RunTracer:
+    tracer = RunTracer(tmp_path / "trace-runs")
+    run_state = asyncio.run(runtime._build_run_state(
+        job_title="AI Agent Engineer", jd="Build agents.", notes="", tracer=tracer,
+    ))
+    source_plan = build_runtime_source_plan(
+        source_kinds=["liepin"], settings=runtime.settings, runtime_run_id=tracer.run_id,
+    )
+    try:
+        asyncio.run(runtime._run_rounds(
+            run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+            tracer=tracer, source_plan=source_plan,
+        ))
+    except BaseException:
+        tracer.close(status="failed")
+        raise
+    tracer.close(status="completed")
+    return tracer
+
+
+def test_integrated_baseline_scoring_failure_discards_all_and_audits_once(tmp_path: Path) -> None:
+    class FailingScorer:
+        async def score_candidates_parallel(self, *, contexts, tracer):
+            del tracer
+            return [], [ScoringFailure(
+                resume_id=contexts[0].normalized_resume.resume_id, branch_id="baseline",
+                round_no=1, attempts=1, error_message="baseline failed",
+            )]
+    runtime, _runtime_any, actions = _integrated_expansion_runtime(tmp_path, scorer=FailingScorer())
+    with pytest.raises(orchestrator_module.RunStageError):
+        _run_integrated_round(runtime, tmp_path)
+    assert actions and {action for _, action in actions} == {"discard"}
+    audits = [json.loads(path.read_text()) for path in (tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json")]
+    assert audits == [{
+        "attempted_count": len(actions), "deleted_count": len(actions),
+        "failure_count": 0, "safe_reason_codes": [],
+    }]
+
+
+def test_integrated_execute_failure_cleanup(tmp_path: Path) -> None:
+    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path)
+    async def broken_execute(**_kwargs):
+        raise RuntimeError("execute seam failed")
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(orchestrator_module, "execute_first_page_decisions", broken_execute)
+    try:
+        with pytest.raises(RuntimeError, match="execute seam failed"):
+            _run_integrated_round(runtime, tmp_path)
+    finally:
+        monkeypatch.undo()
+    assert actions and {action for _, action in actions} == {"discard"}
+    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
+
+
+def test_integrated_merge_failure_cleanup(tmp_path: Path) -> None:
+    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path)
+    runtime_any._merge_expansion_candidates = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("merge seam failed"))
+    with pytest.raises(RuntimeError, match="merge seam failed"):
+        _run_integrated_round(runtime, tmp_path)
+    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
+    assert actions
+
+
+def test_integrated_finalize_failure_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime, _runtime_any, actions = _integrated_expansion_runtime(tmp_path)
+    monkeypatch.setattr(
+        orchestrator_module, "finalize_round_pool",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("finalize seam failed")),
+    )
+    with pytest.raises(RuntimeError, match="finalize seam failed"):
+        _run_integrated_round(runtime, tmp_path)
+    assert actions
+    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
+
+
+def test_integrated_runtime_cancellation_cleanup_and_reraises_cancelled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _runtime_any, actions = _integrated_expansion_runtime(tmp_path)
+    async def cancelled(**_kwargs):
+        raise asyncio.CancelledError
+    monkeypatch.setattr(orchestrator_module, "execute_first_page_decisions", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        _run_integrated_round(runtime, tmp_path)
+    assert actions and {action for _, action in actions} == {"discard"}
+    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
+
+
+def test_integrated_reflection_failure_pending_empty_and_audit_once(tmp_path: Path) -> None:
+    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path)
+    class BrokenReflection:
+        async def reflect(self, *, context):
+            del context
+            raise RuntimeError("reflection seam failed")
+    runtime_any.reflection_critic = BrokenReflection()
+    with pytest.raises(orchestrator_module.RunStageError, match="reflection seam failed"):
+        _run_integrated_round(runtime, tmp_path)
+    assert actions
+    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
+
+
+def test_integrated_cleanup_writer_failure_preserves_primary_exception(tmp_path: Path) -> None:
+    class FailingScorer:
+        async def score_candidates_parallel(self, *, contexts, tracer):
+            del tracer
+            return [], [ScoringFailure(
+                resume_id=contexts[0].normalized_resume.resume_id, branch_id="baseline",
+                round_no=1, attempts=1, error_message="primary scoring failure",
+            )]
+    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path, scorer=FailingScorer())
+    runtime_any._write_query_resume_hits = lambda **_kwargs: (_ for _ in ()).throw(
+        RuntimeError("secondary writer failure")
+    )
+    with pytest.raises(orchestrator_module.RunStageError) as caught:
+        _run_integrated_round(runtime, tmp_path)
+    assert "Scoring failed" in str(caught.value)
+    assert "secondary writer failure" not in str(caught.value)
+    assert actions and {action for _, action in actions} == {"discard"}
+
+
 def test_pending_cleanup_false_deletion_ack_is_reported_and_other_carriers_continue() -> None:
     continuations = [
         ProviderSearchContinuation(
