@@ -1327,6 +1327,68 @@ def test_runtime_service_status_labels_fail_closed_for_unknown_metadata() -> Non
     assert runtime_service_module._runtime_event_summary("failed", raw_stage) == "招聘流程失败，请查看运行详情。"
 
 
+def test_runtime_service_public_progress_payload_fail_closes_unknown_metadata_and_requirement_title() -> None:
+    internal_status = "INTERNAL_STATUS_SHOULD_NOT_RENDER"
+    internal_stage = "https://provider.example/SHOULD_NOT_RENDER"
+    internal_title = "INTERNAL_JOB_TITLE_SHOULD_NOT_RENDER"
+    progress_event = SimpleNamespace(
+        visibility="public",
+        event_type="runtime_search_started",
+        runtime_run_id="rtrun_1",
+        event_seq=1,
+        status=internal_status,
+        stage=internal_stage,
+        summary="ignored",
+        payload={},
+        round_no=1,
+        source_id=None,
+    )
+    requirements_event = SimpleNamespace(
+        event_type="runtime_requirements_completed",
+        stage="requirements",
+        status="completed",
+        summary="ignored",
+        payload={"job_title": internal_title},
+        round_no=None,
+    )
+
+    progress = runtime_service_module._progress_payload_from_runtime_event(progress_event)
+    requirements_summary = runtime_service_module._runtime_event_user_summary(requirements_event)
+    serialized = json.dumps({"progress": progress, "summary": requirements_summary}, ensure_ascii=False)
+
+    assert progress is not None
+    assert progress["status"] == "running"
+    assert progress["stage"] == "runtime"
+    assert requirements_summary == "岗位需求解析完成。"
+    assert internal_status not in serialized
+    assert internal_stage not in serialized
+    assert internal_title not in serialized
+
+
+def test_runtime_service_status_fail_closes_unknown_run_metadata() -> None:
+    internal_status = "INTERNAL_STATUS_SHOULD_NOT_RENDER"
+    internal_stage = "https://provider.example/SHOULD_NOT_RENDER"
+    service = WorkbenchV2RuntimeService(
+        store=SimpleNamespace(
+            get_run=lambda _runtime_run_id: SimpleNamespace(
+                runtime_run_id="rtrun_1",
+                status=internal_status,
+                current_stage=internal_stage,
+                latest_event_seq=0,
+            )
+        )
+    )
+
+    status = service.get_status("rtrun_1")
+    serialized = json.dumps(status, ensure_ascii=False)
+
+    assert status["status"] == "running"
+    assert status["stage"] == "runtime"
+    assert status["summary"] == "招聘流程状态未知。"
+    assert internal_status not in serialized
+    assert internal_stage not in serialized
+
+
 def test_runtime_service_maps_public_browser_extension_disconnect_reason(tmp_path: Path) -> None:
     service = _service(
         tmp_path,

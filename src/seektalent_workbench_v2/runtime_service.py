@@ -30,6 +30,7 @@ from seektalent_runtime_control.requirements import (
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
 from seektalent_workbench_v2.runtime_display import (
+    normalize_runtime_progress_payload,
     runtime_event_terminal_summary,
     safe_runtime_progress_details,
     safe_runtime_progress_reason_code,
@@ -282,7 +283,7 @@ class WorkbenchV2RuntimeService:
 
     def get_status(self, runtime_run_id: str) -> dict[str, object]:
         run = self.store.get_run(runtime_run_id)
-        stage = run.current_stage
+        status, stage = _safe_public_runtime_metadata(run.status, run.current_stage)
         event_summary = _latest_runtime_event_summary(
             self.store,
             runtime_run_id=run.runtime_run_id,
@@ -291,7 +292,7 @@ class WorkbenchV2RuntimeService:
         )
         return {
             "runtimeRunId": run.runtime_run_id,
-            "status": run.status,
+            "status": status,
             "stage": stage,
             "summary": event_summary or _status_summary(run.status, stage),
         }
@@ -1372,12 +1373,16 @@ def _progress_payload_from_runtime_event(event: object) -> dict[str, object] | N
     summary = _runtime_event_user_summary(event)
     if summary is None:
         return None
+    status, stage = _safe_public_runtime_metadata(
+        getattr(event, "status", ""),
+        getattr(event, "stage", ""),
+    )
     payload: dict[str, object] = {
         "runtimeRunId": getattr(event, "runtime_run_id"),
         "runtimeEventSeq": int(getattr(event, "event_seq")),
         "runtimeEventType": event_type,
-        "status": getattr(event, "status"),
-        "stage": getattr(event, "stage"),
+        "status": status,
+        "stage": stage,
         "summary": summary,
     }
     round_no = getattr(event, "round_no", None)
@@ -1445,8 +1450,7 @@ def _runtime_event_user_summary(event: object) -> str | None:
     if event_type == "runtime_requirements_started":
         return "正在解析确认后的岗位需求。"
     if event_type == "runtime_requirements_completed":
-        job_title = payload.get("job_title")
-        return f"岗位需求解析完成：{job_title}。" if isinstance(job_title, str) and job_title else "岗位需求解析完成。"
+        return "岗位需求解析完成。"
     if event_type == "runtime_controller_started":
         return f"{round_prefix}正在规划检索策略。"
     if event_type == "runtime_search_started":
@@ -1514,6 +1518,16 @@ def _payload_text(value: object) -> str | None:
         return None
     text = value.strip()
     return text or None
+
+
+def _safe_public_runtime_metadata(status: object, stage: object) -> tuple[str, str]:
+    normalized = normalize_runtime_progress_payload({"status": status, "stage": stage})
+    public_status = normalized.get("status")
+    public_stage = normalized.get("stage")
+    return (
+        public_status if isinstance(public_status, str) else "running",
+        public_stage if isinstance(public_stage, str) else "runtime",
+    )
 
 
 def _runtime_failure_summary(payload: Mapping[str, object], *, summary: str) -> str:
