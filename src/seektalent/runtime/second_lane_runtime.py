@@ -14,6 +14,7 @@ def _fallback_explore_terms(
     retrieval_plan: RoundRetrievalPlan,
     query_term_pool: list[QueryTermCandidate],
     used_term_group_keys: Collection[str],
+    consumed_non_anchor_family_ids: Collection[str],
 ) -> list[str] | None:
     try:
         return derive_explore_query_terms(
@@ -21,6 +22,7 @@ def _fallback_explore_terms(
             title_anchor_terms=[],
             query_term_pool=query_term_pool,
             used_term_group_keys=used_term_group_keys,
+            consumed_non_anchor_family_ids=consumed_non_anchor_family_ids,
         )
     except ValueError:
         if query_term_pool:
@@ -34,6 +36,7 @@ def build_second_lane_decision(
     retrieval_plan: RoundRetrievalPlan,
     query_term_pool: list[QueryTermCandidate],
     used_term_group_keys: Collection[str],
+    consumed_non_anchor_family_ids: Collection[str] = (),
     prf_decision: PRFPolicyDecision | None,
     run_id: str,
     job_intent_fingerprint: str,
@@ -80,7 +83,13 @@ def build_second_lane_decision(
                 accepted_expression.canonical_expression: accepted_expression.term_family_id,
             },
         )
-        if prf_identity.term_group_key not in used_keys:
+        exploit_families = set(resolve_query_identity(
+            query_terms=retrieval_plan.query_terms, query_term_pool=query_term_pool
+        ).non_anchor_term_family_ids)
+        if prf_identity.term_group_key not in used_keys and not (
+            set(prf_identity.non_anchor_term_family_ids)
+            & (set(consumed_non_anchor_family_ids) | exploit_families)
+        ):
             query_state = build_logical_query_state(
                 run_id=run_id,
                 round_no=round_no,
@@ -111,12 +120,13 @@ def build_second_lane_decision(
                 ),
                 query_state,
             )
-        prf_reject_reasons = [*prf_reject_reasons, "prf_term_group_already_executed"]
+        prf_reject_reasons = [*prf_reject_reasons, "prf_family_or_term_group_already_executed"]
 
     explore_terms = _fallback_explore_terms(
         retrieval_plan=retrieval_plan,
         query_term_pool=query_term_pool,
         used_term_group_keys=used_keys,
+        consumed_non_anchor_family_ids=consumed_non_anchor_family_ids,
     )
     prf_policy_version = prf_decision.gate_input.policy_version if prf_decision is not None else "unavailable"
     prf_seed_resume_ids = list(prf_decision.gate_input.seed_resume_ids) if prf_decision is not None else []

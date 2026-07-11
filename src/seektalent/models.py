@@ -1268,6 +1268,7 @@ class ControllerContext(BaseModel):
     tried_query_terms: list[str] = Field(default_factory=list)
     recent_query_execution_receipts: list[ControllerQueryExecutionReceipt] = Field(default_factory=list)
     used_term_group_keys: list[str] = Field(default_factory=list)
+    consumed_non_anchor_term_family_ids: list[str] = Field(default_factory=list)
     previous_query_outcomes: list[LogicalQueryOutcome] = Field(default_factory=list)
     shortage_history: list[int] = Field(default_factory=list)
     latest_canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
@@ -1409,6 +1410,7 @@ class ReflectionContext(BaseModel):
     canonical_intake_summary: RuntimeCanonicalIntakeSummary | None = None
     controller_decision: ControllerDecision | None = None
     query_outcomes: list[LogicalQueryOutcome] = Field(default_factory=list)
+    consumed_non_anchor_term_family_ids: list[str] = Field(default_factory=list)
 
 
 class FinalizeContext(BaseModel):

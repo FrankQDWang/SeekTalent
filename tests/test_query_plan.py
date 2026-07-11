@@ -706,7 +706,7 @@ def test_query_plan_explore_prefers_high_signal_alternatives() -> None:
     assert explore_terms == ["Backend", "Python"]
 
 
-def test_query_plan_allows_explore_query_to_shrink_when_no_new_three_term_combo_exists() -> None:
+def test_query_plan_does_not_reuse_exploit_family_for_explore() -> None:
     pool = [
         QueryTermCandidate(
             term="python",
@@ -743,7 +743,7 @@ def test_query_plan_allows_explore_query_to_shrink_when_no_new_three_term_combo_
         },
     )
 
-    assert explore_terms == ["python", "trace"]
+    assert explore_terms is None
 
 
 def test_query_plan_returns_none_when_no_distinct_explore_query_is_possible() -> None:
@@ -821,3 +821,21 @@ def test_derive_explore_returns_none_when_every_semantic_group_is_used() -> None
             build_term_group_key(query_terms=["Platform", "Python", "Rust"], query_term_pool=pool),
         },
     ) is None
+
+
+def test_explore_excludes_consumed_and_current_exploit_families() -> None:
+    pool = [
+        QueryTermCandidate(term="Anchor", source="job_title", category="role_anchor", priority=1, evidence="title", first_added_round=0, retrieval_role="primary_role_anchor", family="role.anchor"),
+        QueryTermCandidate(term="A", source="jd", category="domain", priority=2, evidence="jd", first_added_round=0, retrieval_role="core_skill", family="family.a"),
+        QueryTermCandidate(term="B", source="jd", category="domain", priority=3, evidence="jd", first_added_round=0, retrieval_role="core_skill", family="family.b"),
+        QueryTermCandidate(term="C", source="jd", category="domain", priority=4, evidence="jd", first_added_round=0, retrieval_role="core_skill", family="family.c"),
+        QueryTermCandidate(term="D", source="jd", category="domain", priority=5, evidence="jd", first_added_round=0, retrieval_role="core_skill", family="family.d"),
+    ]
+
+    assert derive_explore_query_terms(
+        ["Anchor", "B"],
+        title_anchor_terms=[],
+        query_term_pool=pool,
+        used_term_group_keys=set(),
+        consumed_non_anchor_family_ids={"family.a"},
+    ) == ["Anchor", "C"]

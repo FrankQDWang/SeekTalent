@@ -118,7 +118,7 @@ from seektalent.retrieval import (
     build_location_execution_plan,
     build_round_retrieval_plan,
 )
-from seektalent.retrieval.query_identity import build_job_intent_fingerprint
+from seektalent.retrieval.query_identity import build_job_intent_fingerprint, resolve_query_identity
 from seektalent.resumes.snapshots import canonical_resume_snapshot_payload
 from seektalent.runtime.context_views import top_candidates
 from seektalent.runtime import controller_runtime
@@ -179,7 +179,8 @@ from seektalent.runtime.source_lanes import (
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
 from seektalent.runtime.query_identity import (
     apply_post_merge_query_counts,
-    assert_novel_term_group_keys,
+    assert_novel_query_identities,
+    consumed_non_anchor_term_family_ids,
     logical_outcomes_from_receipts,
     used_term_group_keys,
 )
@@ -1576,9 +1577,12 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
     ) -> RetrievalExecutionResult:
-        assert_novel_term_group_keys(
-            term_group_keys=[query_state.term_group_key for query_state in query_states],
+        assert_novel_query_identities(
+            identities=[query_state.identity for query_state in query_states],
             used_term_group_keys=used_term_group_keys(run_state.retrieval_state.query_execution_ledger),
+            consumed_non_anchor_family_ids=consumed_non_anchor_term_family_ids(
+                run_state.retrieval_state.query_execution_ledger
+            ),
         )
         lane_requested_counts = allocate_initial_lane_targets(query_states=list(query_states), target_new=target_new)
         logical_queries = build_logical_query_dispatches(
@@ -2183,6 +2187,9 @@ class WorkflowRuntime:
                 llm_prf_call_artifact_ref=prf_selection.llm_prf_call_artifact_ref,
                 llm_prf_candidates_artifact_ref=prf_selection.llm_prf_candidates_artifact_ref,
                 llm_prf_grounding_artifact_ref=prf_selection.llm_prf_grounding_artifact_ref,
+                consumed_non_anchor_family_ids=consumed_non_anchor_term_family_ids(
+                    run_state.retrieval_state.query_execution_ledger
+                ),
             )
             source_raw_targets = self._source_raw_targets(
                 source_plan=source_plan,
@@ -4029,6 +4036,7 @@ class WorkflowRuntime:
         llm_prf_call_artifact_ref: str | None = None,
         llm_prf_candidates_artifact_ref: str | None = None,
         llm_prf_grounding_artifact_ref: str | None = None,
+        consumed_non_anchor_family_ids: Collection[str] = (),
     ) -> tuple[list[LogicalQueryState], SecondLaneDecision]:
         del title_anchor_terms
         provider_name = getattr(self.provider, "name", self.settings.provider_name)
@@ -4050,6 +4058,7 @@ class WorkflowRuntime:
             retrieval_plan=retrieval_plan,
             query_term_pool=query_term_pool,
             used_term_group_keys=used_term_group_keys,
+            consumed_non_anchor_family_ids=consumed_non_anchor_family_ids,
             prf_decision=prf_decision,
             run_id=run_id,
             job_intent_fingerprint=job_intent_fingerprint,
@@ -4064,9 +4073,10 @@ class WorkflowRuntime:
         )
         if second_lane_query_state is not None:
             query_states.append(second_lane_query_state)
-        assert_novel_term_group_keys(
-            term_group_keys=[query_state.term_group_key for query_state in query_states],
+        assert_novel_query_identities(
+            identities=[query_state.identity for query_state in query_states],
             used_term_group_keys=used_term_group_keys,
+            consumed_non_anchor_family_ids=consumed_non_anchor_family_ids,
         )
         return query_states, second_lane_decision
 
@@ -4413,13 +4423,11 @@ class WorkflowRuntime:
 
     def _tried_term_family_ids(self, *, run_state: RunState, retrieval_plan) -> list[str]:
         return unique_strings(
-            [
-                build_term_family_id(term)
-                for receipt in run_state.retrieval_state.query_execution_ledger
-                if receipt.dispatch_started
-                for term in receipt.query_terms
-            ]
-            + [build_term_family_id(term) for term in retrieval_plan.query_terms]
+            list(consumed_non_anchor_term_family_ids(run_state.retrieval_state.query_execution_ledger))
+            + list(resolve_query_identity(
+                query_terms=retrieval_plan.query_terms,
+                query_term_pool=run_state.retrieval_state.query_term_pool,
+            ).non_anchor_term_family_ids)
         )
 
     def _tried_query_fingerprints(self, *, run_state: RunState) -> list[str]:

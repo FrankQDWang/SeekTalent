@@ -1,6 +1,7 @@
 import pytest
 
 from seektalent.controller.react_controller import render_controller_prompt
+from seektalent.reflection.critic import _term_bank_rows, render_reflection_prompt
 from seektalent.models import (
     CTSQuery,
     CitySearchSummary,
@@ -572,6 +573,7 @@ def test_controller_prompt_uses_started_receipts_not_sent_query_history() -> Non
     prompt = render_controller_prompt(context)
 
     assert context.tried_query_terms == ["python", "resume matching"]
+    assert context.consumed_non_anchor_term_family_ids == ["domain.resumematching"]
     assert [receipt.query_instance_id for receipt in context.recent_query_execution_receipts] == [
         completed_receipt.query_instance_id
     ]
@@ -582,6 +584,23 @@ def test_controller_prompt_uses_started_receipts_not_sent_query_history() -> Non
     assert 'UNTRUSTED DATA "QUERY_EXECUTION_HISTORY"' in prompt
     assert "status=partial" in prompt
     assert "SENT QUERY HISTORY" not in prompt
+
+
+def test_reflection_marks_receipt_attempted_family_tried_when_sent_history_is_empty() -> None:
+    run_state = _run_state_for_stop_gate(
+        candidates=[_scored_candidate("resume-1", round_no=1)],
+        completed_rounds=1,
+        include_untried_family=True,
+    )
+    run_state.retrieval_state.sent_query_history = []
+
+    context = build_reflection_context_direct(run_state=run_state, round_state=run_state.round_history[0])
+    prompt = render_reflection_prompt(context)
+
+    assert context.consumed_non_anchor_term_family_ids == ["domain.resumematching"]
+    assert "resume matching" in prompt
+    assert "| resume matching | domain.resumematching |" in _term_bank_rows(context)
+    assert _term_bank_rows(context).split("resume matching", 1)[1].splitlines()[0].endswith("| yes |")
 
 
 def test_reflection_context_keeps_current_decision_and_only_two_query_outcomes() -> None:

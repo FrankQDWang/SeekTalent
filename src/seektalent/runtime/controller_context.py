@@ -22,7 +22,7 @@ from seektalent.runtime.context_views import (
     _top_pool_entry,
     top_candidates,
 )
-from seektalent.runtime.query_identity import logical_outcomes_from_receipts, used_term_group_keys
+from seektalent.runtime.query_identity import consumed_non_anchor_term_family_ids, logical_outcomes_from_receipts, used_term_group_keys
 
 BUDGET_STOP_RATIO = 0.8
 STRONG_FIT_STOP_MIN = 3
@@ -82,6 +82,7 @@ def build_controller_context(
         ),
         recent_query_execution_receipts=_recent_query_execution_receipts(query_execution_ledger),
         used_term_group_keys=sorted(used_term_group_keys(query_execution_ledger)),
+        consumed_non_anchor_term_family_ids=sorted(consumed_non_anchor_term_family_ids(query_execution_ledger)),
         previous_query_outcomes=last_round.query_outcomes[-2:] if last_round is not None else [],
         shortage_history=[
             round_state.search_observation.shortage_count

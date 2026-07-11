@@ -112,6 +112,18 @@ def test_bundle_novelty_rejects_history_and_sibling_family_reuse() -> None:
         )
 
 
+def test_same_family_alias_is_consumed_from_receipt_identity() -> None:
+    receipt = _receipt(source_kind="liepin", dispatch_started=True, non_anchor_term_family_ids=["skill.python"])
+    alias_identity = ResolvedQueryIdentity("group-py", "role.platform", ("skill.python",))
+
+    with pytest.raises(ValueError, match="non_anchor_term_family_already_executed"):
+        assert_novel_query_identities(
+            identities=[alias_identity],
+            used_term_group_keys=set(),
+            consumed_non_anchor_family_ids=consumed_non_anchor_term_family_ids([receipt]),
+        )
+
+
 def test_term_group_key_is_order_and_source_independent() -> None:
     first = build_term_group_key(query_terms=["Platform", "Python"], query_term_pool=_pool())
     second = build_term_group_key(query_terms=[" python ", "platform"], query_term_pool=_pool())

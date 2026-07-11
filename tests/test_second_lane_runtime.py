@@ -207,9 +207,9 @@ def test_prf_novelty_precheck_uses_known_family_identity_for_pool_external_expre
         source_plan_version="2",
     )
 
-    assert lane is not None
-    assert lane.lane_type == "generic_explore"
-    assert "prf_term_group_already_executed" in decision.reject_reasons
+    assert lane is None
+    assert decision.no_fetch_reason == "no_novel_generic_explore_query"
+    assert "prf_family_or_term_group_already_executed" in decision.reject_reasons
 
 
 def test_build_logical_query_state_fingerprint_changes_with_filters_and_location_plan() -> None:

@@ -2587,8 +2587,8 @@ def test_runtime_search_diagnostics_records_reflection_advice_application(tmp_pa
     assert adoption["ignored_keep_terms"] == ["django"]
     assert adoption["accepted_deprioritize_terms"] == ["legacy systems"]
     assert adoption["ignored_deprioritize_terms"] == ["python"]
-    assert adoption["accepted_drop_terms"] == ["perl"]
-    assert adoption["ignored_drop_terms"] == ["resume matching"]
+    assert adoption["accepted_drop_terms"] == ["perl", "resume matching"]
+    assert adoption["ignored_drop_terms"] == []
     assert adoption["accepted_terms"] == ["python"]
     assert adoption["ignored_terms"] == ["django"]
     assert adoption["suggested_filter_fields"] == [

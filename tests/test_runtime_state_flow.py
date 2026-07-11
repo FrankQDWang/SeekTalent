@@ -2509,22 +2509,20 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert terminal_controller_round is None
     assert len(top_candidates) > 0
     assert run_state.retrieval_state.current_plan_version == 2
-    assert len(run_state.retrieval_state.query_execution_ledger) == 3
-    assert [len(round_state.query_outcomes) for round_state in run_state.round_history] == [1, 2]
+    assert len(run_state.retrieval_state.query_execution_ledger) == 2
+    assert [len(round_state.query_outcomes) for round_state in run_state.round_history] == [1, 1]
     assert all(
         outcome.term_group_key
         for round_state in run_state.round_history
         for outcome in round_state.query_outcomes
     )
-    assert [item.round_no for item in run_state.retrieval_state.sent_query_history] == [1, 2, 2]
-    assert [item.city for item in run_state.retrieval_state.sent_query_history] == ["上海", "上海", "上海"]
+    assert [item.round_no for item in run_state.retrieval_state.sent_query_history] == [1, 2]
+    assert [item.city for item in run_state.retrieval_state.sent_query_history] == ["上海", "上海"]
     assert [item.query_role for item in run_state.retrieval_state.sent_query_history] == [
         "exploit",
         "exploit",
-        "explore",
     ]
-    assert run_state.retrieval_state.sent_query_history[1].query_terms == ["python", "resume matching", "trace"]
-    assert run_state.retrieval_state.sent_query_history[2].query_terms == ["python", "trace"]
+    assert run_state.retrieval_state.sent_query_history[1].query_terms == ["python", "trace"]
     assert all(
         sum(1 for term in item.query_terms if term == "python") == 1
         for item in run_state.retrieval_state.sent_query_history
@@ -2549,7 +2547,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
         for line in _round_artifact(tracer.run_dir, 2, "scoring", "scoring_input_refs", extension="jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    assert [item.query_role for item in round_02_queries] == ["exploit", "explore"]
+    assert [item.query_role for item in round_02_queries] == ["exploit"]
     assert run_state.round_history[1].search_observation is not None
     assert run_state.round_history[1].search_observation.unique_new_count <= 10
     assert len(run_state.round_history[1].search_observation.new_resume_ids) <= 10
@@ -2575,12 +2573,6 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
         {
             "query_role": "exploit",
             "lane_type": "exploit",
-            "query_terms": ["python", "resume matching", "trace"],
-            "keyword_query": 'python "resume matching" trace',
-        },
-        {
-            "query_role": "explore",
-            "lane_type": "generic_explore",
             "query_terms": ["python", "trace"],
             "keyword_query": "python trace",
         },
@@ -2589,12 +2581,6 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
         {
             "query_role": "exploit",
             "lane_type": "exploit",
-            "query_terms": ["python", "resume matching", "trace"],
-            "keyword_query": 'python "resume matching" trace',
-        },
-        {
-            "query_role": "explore",
-            "lane_type": "generic_explore",
             "query_terms": ["python", "trace"],
             "keyword_query": "python trace",
         },
@@ -2637,8 +2623,8 @@ def test_runtime_liepin_round_persists_two_logical_query_receipts_and_outcomes(t
     second_round_receipts = [
         receipt for receipt in run_state.retrieval_state.query_execution_ledger if receipt.round_no == 2
     ]
-    assert len(second_round_receipts) == 2
-    assert len(run_state.round_history[1].query_outcomes) == 2
+    assert len(second_round_receipts) == 1
+    assert len(run_state.round_history[1].query_outcomes) == 1
     assert {item.term_group_key for item in run_state.round_history[1].query_outcomes}
 
 
@@ -2668,24 +2654,19 @@ def test_round_two_serializes_exploit_and_generic_lane_types(
     queries = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "executed_queries").read_text())
     sent_query_records = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "sent_query_records").read_text())
     decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
-    assert [item["lane_type"] for item in queries] == ["exploit", "generic_explore"]
-    assert [item["lane_type"] for item in sent_query_records] == ["exploit", "generic_explore"]
+    assert [item["lane_type"] for item in queries] == ["exploit"]
+    assert [item["lane_type"] for item in sent_query_records] == ["exploit"]
     assert all(item["query_instance_id"] for item in queries)
     assert all(item["query_fingerprint"] for item in queries)
     assert all(item["query_instance_id"] for item in sent_query_records)
     assert all(item["query_fingerprint"] for item in sent_query_records)
     assert decision["attempted_prf"] is True
     assert decision["prf_gate_passed"] is False
-    assert decision["selected_lane_type"] == "generic_explore"
-    assert decision["fallback_lane_type"] == "generic_explore"
-    assert decision["fallback_query_fingerprint"] == decision["selected_query_fingerprint"]
+    assert decision["selected_lane_type"] is None
+    assert decision["fallback_lane_type"] is None
+    assert decision["fallback_query_fingerprint"] is None
+    assert decision["selected_query_fingerprint"] is None
     assert decision["reject_reasons"] == ["no_safe_llm_prf_expression"]
-    generic_query = queries[1]
-    generic_sent_query = sent_query_records[1]
-    assert generic_query["query_instance_id"] == decision["selected_query_instance_id"]
-    assert generic_query["query_fingerprint"] == decision["selected_query_fingerprint"]
-    assert generic_sent_query["query_instance_id"] == decision["selected_query_instance_id"]
-    assert generic_sent_query["query_fingerprint"] == decision["selected_query_fingerprint"]
 
 
 def test_round_two_uses_prf_probe_when_gate_passes(
@@ -2738,9 +2719,8 @@ def test_round_two_uses_prf_probe_when_gate_passes(
     assert prf_policy["gate_input"]["negative_resume_ids"] == []
     assert prf_policy["gate_input"]["candidate_expression_count"] == 1
     assert prf_policy["gate_input"]["tried_term_family_ids"] == [
-        "feedback.python",
-        "feedback.resume-matching",
-        "feedback.trace",
+        "domain.resumematching",
+        "framework.trace",
     ]
     assert len(prf_policy["gate_input"]["tried_query_fingerprints"]) == 1
     assert prf_policy["gate_input"]["min_seed_count"] == 2
@@ -2885,7 +2865,7 @@ def test_insufficient_prf_seed_support_does_not_require_prf_provider_preflight(
 
     assert fake_extractor.calls == 0
     assert preflight_calls == []
-    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["selected_lane_type"] is None
     assert decision["llm_prf_failure_kind"] == "insufficient_prf_seed_support"
     assert prf_policy["reject_reasons"] == ["insufficient_prf_seed_support"]
     assert call_artifact["failure_kind"] == "insufficient_prf_seed_support"
@@ -2929,7 +2909,7 @@ def test_llm_prf_stage_preflight_failure_falls_back_without_model_call(
 
     assert fake_extractor.calls == 0
     assert preflight_calls == [["prf_probe_phrase_proposal"]]
-    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["selected_lane_type"] is None
     assert decision["llm_prf_failure_kind"] == "llm_prf_unsupported_capability"
     assert prf_policy["reject_reasons"] == ["llm_prf_unsupported_capability"]
     assert call_artifact["failure_kind"] == "unsupported_capability"
@@ -2965,7 +2945,7 @@ def test_llm_prf_backend_falls_back_to_generic_on_timeout(
     call = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_call").read_text())
 
     assert fake_extractor.calls == 1
-    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["selected_lane_type"] is None
     assert decision["llm_prf_failure_kind"] == "llm_prf_timeout"
     assert decision["accepted_prf_expression"] is None
     assert call["status"] == "failed"
@@ -2996,7 +2976,7 @@ def test_llm_prf_backend_falls_back_to_generic_on_provider_failure_without_legac
     decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
 
     assert fake_extractor.calls == 1
-    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["selected_lane_type"] is None
     assert decision["llm_prf_failure_kind"] == "llm_prf_response_validation_error"
     assert decision["accepted_prf_expression"] is None
     assert not _round_artifact(tracer.run_dir, 2, "retrieval", "prf_span_candidates").exists()
@@ -3052,7 +3032,7 @@ def test_llm_prf_backend_falls_back_to_generic_when_all_candidates_rejected(
     grounding = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "llm_prf_grounding").read_text())
 
     assert fake_extractor.calls == 1
-    assert decision["selected_lane_type"] == "generic_explore"
+    assert decision["selected_lane_type"] is None
     assert decision["llm_prf_failure_kind"] == "no_safe_llm_prf_expression"
     assert grounding["records"][0]["reject_reasons"] == ["substring_not_found"]
 
@@ -3099,7 +3079,7 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
     assert snapshot["llm_prf_model_id"] == "deepseek-v4-flash"
 
 
-def test_duplicate_hit_does_not_overwrite_first_hit_attribution(tmp_path: Path) -> None:
+def test_family_novelty_avoids_duplicate_sibling_hit(tmp_path: Path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
     runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
@@ -3115,10 +3095,9 @@ def test_duplicate_hit_does_not_overwrite_first_hit_attribution(tmp_path: Path) 
 
     candidate = run_state.candidate_store["resume-1"]
     hits = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "query_resume_hits").read_text())
-    assert [item["lane_type"] for item in hits] == ["exploit", "generic_explore"]
+    assert [item["lane_type"] for item in hits] == ["exploit"]
 
     exploit_hit = hits[0]
-    duplicate_hit = hits[1]
 
     assert candidate.first_query_instance_id == exploit_hit["query_instance_id"]
     assert candidate.first_query_fingerprint == exploit_hit["query_fingerprint"]
@@ -3129,11 +3108,6 @@ def test_duplicate_hit_does_not_overwrite_first_hit_attribution(tmp_path: Path) 
     assert candidate.first_batch_no == exploit_hit["batch_no"]
     assert exploit_hit["was_new_to_pool"] is True
     assert exploit_hit["was_duplicate"] is False
-    assert duplicate_hit["resume_id"] == "resume-1"
-    assert duplicate_hit["was_new_to_pool"] is False
-    assert duplicate_hit["was_duplicate"] is True
-    assert duplicate_hit["lane_type"] == "generic_explore"
-    assert candidate.first_query_instance_id != duplicate_hit["query_instance_id"]
 
 
 def test_run_rounds_delegates_controller_stage_to_runtime_host(
@@ -3505,7 +3479,7 @@ def test_runtime_builds_plan_for_reflection_backed_inactive_term(tmp_path: Path)
     round_02_plan = json.loads(
         _round_artifact(tracer.run_dir, 2, "retrieval", "retrieval_plan").read_text(encoding="utf-8")
     )
-    assert round_02_plan["query_terms"] == ["python", "resume matching", "trace"]
+    assert round_02_plan["query_terms"] == ["python", "trace"]
     assert {item.term: item for item in run_state.retrieval_state.query_term_pool}["trace"].active is False
 
 

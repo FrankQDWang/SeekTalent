@@ -21,6 +21,7 @@ from seektalent.retrieval import (
 from seektalent.retrieval.query_plan import normalize_term
 from seektalent.retrieval.query_plan import _ROUND_SECONDARY_TITLE_ANCHOR_REASON
 from seektalent.runtime.rescue_router import RescueDecision
+from seektalent.runtime.query_identity import consumed_non_anchor_term_family_ids
 from seektalent.tracing import RunTracer
 
 
@@ -203,6 +204,11 @@ def sanitize_controller_decision(
         requirement_sheet=run_state.requirement_sheet,
         filter_plan=decision.proposed_filter_plan,
     )
+    query_terms = _repair_consumed_families(
+        query_terms=query_terms,
+        run_state=run_state,
+        allowed_inactive_terms=allowed_inactive_terms,
+    )
     from seektalent.retrieval.query_identity import build_term_group_key
     from seektalent.runtime.query_identity import used_term_group_keys
 
@@ -219,6 +225,38 @@ def sanitize_controller_decision(
             "stop_reason": None,
         }
     )
+
+
+def _repair_consumed_families(
+    *, query_terms: list[str], run_state: RunState, allowed_inactive_terms: set[str]
+) -> list[str]:
+    pool = run_state.retrieval_state.query_term_pool
+    index = {normalize_term(item.term).casefold(): item for item in pool}
+    consumed = consumed_non_anchor_term_family_ids(run_state.retrieval_state.query_execution_ledger)
+    selected = [index[normalize_term(term).casefold()] for term in query_terms]
+    anchors = [item for item in selected if item.retrieval_role in {"primary_role_anchor", "role_anchor"}]
+    fresh = [item for item in selected if item not in anchors and item.family not in consumed]
+    target = len([item for item in selected if item not in anchors])
+    seen = {item.family for item in fresh}
+    selectable = sorted(
+        (
+            item for item in pool
+            if item.queryability == "admitted"
+            and item.retrieval_role not in {"primary_role_anchor", "role_anchor", "secondary_title_anchor"}
+            and item.family not in consumed
+            and item.family not in seen
+            and (item.active or normalize_term(item.term).casefold() in allowed_inactive_terms)
+        ),
+        key=lambda item: (item.priority, item.first_added_round, item.family, item.term.casefold()),
+    )
+    for item in selectable:
+        fresh.append(item)
+        seen.add(item.family)
+        if len(fresh) >= target:
+            break
+    if target and not fresh:
+        raise ValueError("no_fresh_controller_selectable_family")
+    return [*(item.term for item in anchors[:1]), *(item.term for item in fresh[:target])]
 
 
 def reflection_backed_inactive_terms(reflection_advice: ReflectionAdvice | None) -> set[str]:

@@ -19,6 +19,7 @@ from seektalent.models import (
     InputTruth,
     LocationExecutionPlan,
     ProposedFilterPlan,
+    QueryExecutionReceipt,
     QueryTermCandidate,
     ReflectionAdvice,
     ReflectionFilterAdvice,
@@ -582,7 +583,7 @@ def test_validate_controller_decision_rejects_empty_query_terms() -> None:
     )
 
 
-def test_controller_rejects_semantically_reordered_used_group() -> None:
+def test_controller_validation_leaves_exact_novelty_to_runtime_sanitizer() -> None:
     sheet = _requirement_sheet()
     context = _controller_context(
         requirement_sheet=sheet,
@@ -602,7 +603,7 @@ def test_controller_rejects_semantically_reordered_used_group() -> None:
         proposed_filter_plan=ProposedFilterPlan(),
     )
 
-    assert validate_controller_decision(context=context, decision=decision) == "proposed_term_group_already_executed"
+    assert validate_controller_decision(context=context, decision=decision) is None
 
 def test_validate_controller_decision_rejects_position_filter() -> None:
     context = _controller_context()
@@ -1227,6 +1228,34 @@ def test_runtime_sanitizes_premature_max_round_claims_in_stop_decision() -> None
     assert "max rounds" not in sanitized.stop_reason.casefold()
     assert "diminishing returns" in sanitized.decision_rationale.casefold()
     assert "diminishing returns" in sanitized.stop_reason.casefold()
+
+
+def test_runtime_repairs_consumed_controller_family_and_retains_fresh_term() -> None:
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
+    runtime = WorkflowRuntime(settings)
+    run_state = _run_state_with_previous_reflection()
+    run_state.retrieval_state.query_term_pool.append(
+        QueryTermCandidate(term="ranking", source="jd", category="domain", priority=9, evidence="jd", first_added_round=0, retrieval_role="core_skill", family="skill.ranking")
+    )
+    run_state.retrieval_state.query_execution_ledger.append(QueryExecutionReceipt(
+        round_no=1, source_kind="liepin", query_instance_id="q1", query_fingerprint="fp1",
+        term_group_key="g1", primary_anchor_family_id="role.python",
+        non_anchor_term_family_ids=["domain.resumematching"], query_role="exploit", lane_type="exploit",
+        query_terms=["python", "resume matching"], keyword_query="python resume matching",
+        requested_count=5, source_plan_version="1", status="completed", dispatch_started=True,
+    ))
+    decision = SearchControllerDecision(
+        thought_summary="Continue.", action="source_search", decision_rationale="Expand.",
+        proposed_query_terms=["python", "resume matching", "trace"],
+        proposed_filter_plan=ProposedFilterPlan(), response_to_reflection="Use a fresh family.",
+    )
+
+    sanitized = runtime._sanitize_controller_decision(decision=decision, run_state=run_state, round_no=2)
+
+    assert isinstance(sanitized, SearchControllerDecision)
+    assert sanitized.proposed_query_terms[:2] == ["python", "trace"]
+    assert "resume matching" not in sanitized.proposed_query_terms
+    assert len(sanitized.proposed_query_terms) == 3
 
 
 def test_runtime_preserves_max_round_claims_on_final_allowed_round() -> None:

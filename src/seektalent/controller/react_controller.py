@@ -236,14 +236,7 @@ def validate_controller_decision(*, context: ControllerContext, decision: Contro
             )
         except ValueError as exc:
             return str(exc)
-        from seektalent.retrieval.query_identity import build_term_group_key
-
-        term_group_key = build_term_group_key(
-            query_terms=canonical_query_terms,
-            query_term_pool=context.query_term_pool,
-        )
-        if term_group_key in context.used_term_group_keys:
-            return "proposed_term_group_already_executed"
+        del canonical_query_terms
     if context.previous_reflection is not None and not (decision.response_to_reflection or "").strip():
         return "response_to_reflection is required when previous_reflection exists."
     return None

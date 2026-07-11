@@ -72,7 +72,7 @@ def _term_key(term: str) -> str:
 def _untried_admitted_terms(context: ReflectionContext) -> list[str]:
     term_pool = context.query_term_pool or context.requirement_sheet.initial_query_term_pool
     term_index = {_term_key(item.term): item for item in term_pool}
-    tried_families = {
+    tried_families = set(getattr(context, "consumed_non_anchor_term_family_ids", ())) | {
         candidate.family
         for record in context.sent_query_history
         for term in record.query_terms
@@ -131,7 +131,7 @@ def _term_bank_rows(context: ReflectionContext) -> str:
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for item in term_pool:
-        tried = "yes" if _term_key(item.term) in tried_terms else "no"
+        tried = "yes" if _term_key(item.term) in tried_terms or item.family in getattr(context, "consumed_non_anchor_term_family_ids", ()) else "no"
         rows.append(
             f"| {item.term} | {item.family} | {item.retrieval_role} | {item.queryability} | "
             f"{item.active} | {item.priority} | {item.source} | {tried} |"

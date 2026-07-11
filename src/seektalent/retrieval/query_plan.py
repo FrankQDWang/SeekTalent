@@ -209,6 +209,7 @@ def derive_explore_query_terms(
     title_anchor_terms: list[str],
     query_term_pool: list[QueryTermCandidate],
     used_term_group_keys: Collection[str],
+    consumed_non_anchor_family_ids: Collection[str] = (),
 ) -> list[str] | None:
     exploit_terms = [normalize_term(item) for item in exploit_terms if normalize_term(item)]
     exploit_terms = canonicalize_controller_query_terms(
@@ -226,11 +227,17 @@ def derive_explore_query_terms(
         return None
 
     exploit_term_keys = {term.casefold() for term in exploit_non_anchor_terms}
+    unavailable_families = {
+        *consumed_non_anchor_family_ids,
+        *(item.family for item in exploit_candidates if item.term.casefold() != anchor.term.casefold()),
+    }
     ordered_terms = sorted(
         [
             item
             for item in query_term_pool
-            if item.queryability == "admitted" and not _is_anchor_candidate(item)
+            if item.queryability == "admitted"
+            and not _is_anchor_candidate(item)
+            and item.family not in unavailable_families
         ],
         key=lambda item: (
             0 if item.active and item.term.casefold() not in exploit_term_keys else 1,

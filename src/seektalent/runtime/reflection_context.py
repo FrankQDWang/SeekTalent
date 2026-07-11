@@ -3,6 +3,7 @@ from __future__ import annotations
 from seektalent.models import ReflectionContext, RoundState, RunState
 
 from seektalent.runtime.context_views import dropped_candidates, top_candidates
+from seektalent.runtime.query_identity import consumed_non_anchor_term_family_ids
 
 
 def build_reflection_context(
@@ -28,4 +29,7 @@ def build_reflection_context(
         canonical_intake_summary=run_state.latest_canonical_intake_summary,
         controller_decision=round_state.controller_decision,
         query_outcomes=round_state.query_outcomes[:2],
+        consumed_non_anchor_term_family_ids=sorted(
+            consumed_non_anchor_term_family_ids(run_state.retrieval_state.query_execution_ledger)
+        ),
     )

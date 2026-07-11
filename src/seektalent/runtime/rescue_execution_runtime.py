@@ -16,7 +16,7 @@ from seektalent.models import (
 )
 from seektalent.progress import ProgressCallback
 from seektalent.retrieval.query_identity import build_term_group_key
-from seektalent.runtime.query_identity import used_term_group_keys
+from seektalent.runtime.query_identity import consumed_non_anchor_term_family_ids, used_term_group_keys
 from seektalent.tracing import RunTracer
 
 
@@ -98,7 +98,9 @@ def force_candidate_feedback_decision(
             "skipped_reason": feedback.skipped_reason,
         },
     )
-    if feedback.accepted_term is None:
+    if feedback.accepted_term is None or feedback.accepted_term.family in consumed_non_anchor_term_family_ids(
+        run_state.retrieval_state.query_execution_ledger
+    ):
         return None
     run_state.retrieval_state.query_term_pool.append(feedback.accepted_term)
     emit_progress(
@@ -198,14 +200,7 @@ def untried_admitted_non_anchor_reserve(retrieval_state: RetrievalState) -> Quer
 
 
 def tried_query_families(retrieval_state: RetrievalState) -> set[str]:
-    term_index = {query_term_key(item.term): item for item in retrieval_state.query_term_pool}
-    return {
-        candidate.family
-        for receipt in retrieval_state.query_execution_ledger
-        if receipt.dispatch_started
-        for term in receipt.query_terms
-        if (candidate := term_index.get(query_term_key(term))) is not None
-    }
+    return consumed_non_anchor_term_family_ids(retrieval_state.query_execution_ledger)
 
 
 def activate_query_term(
