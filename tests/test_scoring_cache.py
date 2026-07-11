@@ -282,9 +282,9 @@ def test_scoring_cache_miss_calls_provider_and_stores_result(
     scorer = ResumeScorer(settings, prompt)
     provider_calls = 0
 
-    async def fake_score_one_live(*, prompt: str, agent):  # noqa: ANN001
+    async def fake_score_one_live(*, prompt: str, agent, applicability):  # noqa: ANN001
         nonlocal provider_calls
-        del prompt, agent
+        del prompt, agent, applicability
         provider_calls += 1
         return _draft(), _provider_usage()
 
@@ -329,8 +329,8 @@ def test_scoring_failure_records_safe_diagnostic_category(
 ) -> None:
     scorer = ResumeScorer(_settings(tmp_path), _prompt())
 
-    async def fail_scoring(*, prompt: str, agent):  # noqa: ANN001
-        del prompt, agent
+    async def fail_scoring(*, prompt: str, agent, applicability):  # noqa: ANN001
+        del prompt, agent, applicability
         raise failure
 
     monkeypatch.setattr(scorer, "_score_one_live", fail_scoring)
@@ -382,8 +382,8 @@ def test_scoring_propagates_safe_score_metadata_from_resume_candidate_raw(
     context = _context().model_copy(update={"normalized_resume": normalize_resume(candidate), "round_no": 2})
     scorer = ResumeScorer(settings, prompt)
 
-    async def fake_score_one_live(*, prompt: str, agent):  # noqa: ANN001
-        del prompt, agent
+    async def fake_score_one_live(*, prompt: str, agent, applicability):  # noqa: ANN001
+        del prompt, agent, applicability
         return _draft(), _provider_usage()
 
     monkeypatch.setattr(scorer, "_score_one_live", fake_score_one_live)
@@ -429,8 +429,8 @@ def test_scoring_cache_hit_skips_provider_and_writes_snapshot(
         payload=_scored_candidate().model_dump(mode="json"),
     )
 
-    async def fail_if_called(*, prompt: str, agent):  # noqa: ANN001
-        del prompt, agent
+    async def fail_if_called(*, prompt: str, agent, applicability):  # noqa: ANN001
+        del prompt, agent, applicability
         raise AssertionError("provider call should be skipped on scoring cache hit")
 
     monkeypatch.setattr(scorer, "_score_one_live", fail_if_called)
@@ -501,10 +501,7 @@ def test_scoring_build_agent_uses_resolved_stage_config(
     monkeypatch.setattr("seektalent.scoring.scorer.Agent", FakeAgent)
 
     scorer = ResumeScorer(settings, _prompt())
-    scorer._build_agent(
-        applicability=ScoreDimensionApplicability(preferred=True, risk=False),
-        prompt_cache_key="prompt-cache-key",
-    )
+    scorer._build_agent(prompt_cache_key="prompt-cache-key")
 
     assert scorer._model_config is resolved_config
     assert built["model"] == ("model", resolved_config)
@@ -537,13 +534,12 @@ def test_scoring_prompt_cache_key_is_recorded_on_live_snapshot(
     context = _context()
     built_prompt_cache_keys: list[str | None] = []
 
-    def fake_build_agent(*, applicability, prompt_cache_key: str | None = None) -> object:  # noqa: ANN001
-        assert applicability == ScoreDimensionApplicability(preferred=True, risk=True)
+    def fake_build_agent(*, prompt_cache_key: str | None = None) -> object:
         built_prompt_cache_keys.append(prompt_cache_key)
         return object()
 
-    async def fake_score_one_live(*, prompt: str, agent):  # noqa: ANN001
-        del prompt, agent
+    async def fake_score_one_live(*, prompt: str, agent, applicability):  # noqa: ANN001
+        del prompt, agent, applicability
         return _draft(), _provider_usage()
 
     monkeypatch.setattr(scorer, "_build_agent", fake_build_agent)

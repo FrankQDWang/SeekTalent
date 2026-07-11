@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
 from typing import Literal, cast
 
-from pydantic_ai import Agent, ModelRetry
-from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+from pydantic_ai import Agent, ModelRetry, RunContext
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
 import httpx
 
 from seektalent.config import AppSettings
@@ -53,9 +54,21 @@ ScoringProviderFailureKind = Literal[
 ]
 
 
+@dataclass
+class _ScoringOutputValidationState:
+    applicability: ScoreDimensionApplicability
+    applicability_retry_count: int = 0
+
+
+class ScoringApplicabilityRetryExhausted(RuntimeError):
+    pass
+
+
 def _scoring_failure_category(
     exc: Exception,
 ) -> tuple[ScoringFailureKind, ScoringProviderFailureKind | None]:
+    if isinstance(exc, ScoringApplicabilityRetryExhausted):
+        return "score_applicability_error", None
     if isinstance(exc, ValueError) and str(exc) in {
         "preferred_match_score_required",
         "preferred_match_score_not_applicable",
@@ -212,14 +225,14 @@ class ResumeScorer:
     def _build_agent(
         self,
         *,
-        applicability: ScoreDimensionApplicability,
         prompt_cache_key: str | None = None,
-    ) -> Agent[None, ScoredCandidateDraft]:
+    ) -> Agent[_ScoringOutputValidationState, ScoredCandidateDraft]:
         model = build_model(self._model_config)
         agent = cast(
-            Agent[None, ScoredCandidateDraft],
+            Agent[_ScoringOutputValidationState, ScoredCandidateDraft],
             Agent(
                 model=model,
+                deps_type=_ScoringOutputValidationState,
                 output_type=build_output_spec(self._model_config, model, ScoredCandidateDraft),
                 system_prompt=self.prompt.content,
                 model_settings=build_model_settings(
@@ -232,8 +245,18 @@ class ResumeScorer:
         )
 
         @agent.output_validator
-        def validate_applicability(draft: ScoredCandidateDraft) -> ScoredCandidateDraft:
-            return _validate_scoring_draft_applicability(draft, applicability)
+        def validate_applicability(
+            context: RunContext[_ScoringOutputValidationState],
+            draft: ScoredCandidateDraft,
+        ) -> ScoredCandidateDraft:
+            try:
+                return _validate_scoring_draft_applicability(
+                    draft,
+                    context.deps.applicability,
+                )
+            except ModelRetry:
+                context.deps.applicability_retry_count += 1
+                raise
 
         return agent
 
@@ -268,18 +291,11 @@ class ResumeScorer:
     ) -> tuple[list[ScoredCandidate], list[ScoringFailure]]:
         if not contexts:
             return [], []
-        applicability = score_dimension_applicability(contexts[0].scoring_policy)
-        if any(
-            score_dimension_applicability(context.scoring_policy) != applicability
-            for context in contexts[1:]
-        ):
-            raise ValueError("mixed_scoring_dimension_applicability")
         prompt_cache_key = self._batch_prompt_cache_key(contexts=contexts)
         prompt_cache_retention = (
             self.settings.openai_prompt_cache_retention if prompt_cache_key is not None else None
         )
         agent = self._build_agent(
-            applicability=applicability,
             prompt_cache_key=prompt_cache_key,
         )
         return await self._score_candidates_parallel(
@@ -295,7 +311,7 @@ class ResumeScorer:
         *,
         contexts: list[ScoringContext],
         tracer: RunTracer,
-        agent: Agent[None, ScoredCandidateDraft],
+        agent: Agent[_ScoringOutputValidationState, ScoredCandidateDraft],
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
     ) -> tuple[list[ScoredCandidate], list[ScoringFailure]]:
@@ -344,7 +360,7 @@ class ResumeScorer:
         context: ScoringContext,
         branch_id: str,
         tracer: RunTracer,
-        agent: Agent[None, ScoredCandidateDraft],
+        agent: Agent[_ScoringOutputValidationState, ScoredCandidateDraft],
         prompt_cache_key: str | None = None,
         prompt_cache_retention: str | None = None,
     ) -> tuple[ScoredCandidate | None, ScoringFailure | None]:
@@ -442,7 +458,11 @@ class ResumeScorer:
                 return result, None
 
             draft, provider_usage = await asyncio.wait_for(
-                self._score_one_live(prompt=user_prompt, agent=agent),
+                self._score_one_live(
+                    prompt=user_prompt,
+                    agent=agent,
+                    applicability=score_dimension_applicability(context.scoring_policy),
+                ),
                 timeout=self.settings.scoring_timeout_seconds,
             )
             result = _materialize_scored_candidate(
@@ -695,9 +715,18 @@ class ResumeScorer:
         self,
         *,
         prompt: str,
-        agent: Agent[None, ScoredCandidateDraft],
+        agent: Agent[_ScoringOutputValidationState, ScoredCandidateDraft],
+        applicability: ScoreDimensionApplicability,
     ) -> tuple[ScoredCandidateDraft, ProviderUsageSnapshot | None]:
-        result = await agent.run(prompt)
+        validation_state = _ScoringOutputValidationState(applicability=applicability)
+        try:
+            result = await agent.run(prompt, deps=validation_state)
+        except UnexpectedModelBehavior as exc:
+            if validation_state.applicability_retry_count:
+                raise ScoringApplicabilityRetryExhausted(
+                    "scoring applicability output retries exhausted"
+                ) from exc
+            raise
         return result.output, provider_usage_from_result(result)
 
 
