@@ -1626,6 +1626,21 @@ def test_integrated_cleanup_writer_failure_preserves_primary_exception(tmp_path:
     assert actions and {action for _, action in actions} == {"discard"}
 
 
+def test_integrated_missing_expander_preflight_zero_provider_calls_or_files(tmp_path: Path) -> None:
+    runtime, runtime_any, _actions = _integrated_expansion_runtime(tmp_path)
+    provider_calls: list[str] = []
+    original_provider = runtime_any.source_round_adapter_provider
+    def recording_provider(*args, **kwargs):
+        provider_calls.append("provider")
+        return original_provider(*args, **kwargs)
+    runtime_any.source_round_adapter_provider = recording_provider
+    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {}
+    with pytest.raises(RuntimeSourceInvariantError, match="first_page_expander_unavailable"):
+        _run_integrated_round(runtime, tmp_path)
+    assert provider_calls == []
+    assert list(tmp_path.glob("**/*protected*")) == []
+
+
 def test_pending_cleanup_false_deletion_ack_is_reported_and_other_carriers_continue() -> None:
     continuations = [
         ProviderSearchContinuation(
