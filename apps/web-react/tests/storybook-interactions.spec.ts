@@ -107,7 +107,7 @@ test("thinking process rail story switches between candidate and thinking tabs",
   await expect(rail.getByText("反思和下一轮变更").first()).toBeVisible();
 });
 
-test("compact dual-lane thinking story keeps both query states readable on mobile", async ({
+test("compact dual-lane thinking story keeps both query paths readable on mobile", async ({
   page,
 }) => {
   await page.setViewportSize({ height: 900, width: 375 });
@@ -117,27 +117,23 @@ test("compact dual-lane thinking story keeps both query states readable on mobil
   );
 
   const rail = page.getByRole("complementary", { name: "运行右栏" });
-  const keywords = rail.getByRole("region", { name: "关键词" });
+  const paths = rail.getByRole("group", { name: "检索路径" });
+  await expect(paths.getByRole("group", { name: "主路径" })).toBeVisible();
+  await expect(paths.getByRole("group", { name: "扩展路径" })).toBeVisible();
   await expect(
-    keywords.getByRole("group", { name: /主检索，已执行/ }),
-  ).toBeVisible();
-  await expect(
-    keywords.getByRole("group", { name: /补漏检索，计划中/ }),
-  ).toBeVisible();
-  await expect(
-    keywords.getByText(
-      "Agentic retrieval orchestration AND long-form evaluation systems",
+    paths.getByText(
+      "production-grade retrieval orchestration、long-context evaluation systems",
     ),
   ).toBeVisible();
   await expect(
-    keywords.getByText("cross-functional orchestration governance"),
+    paths.getByText("cross-functional orchestration governance"),
   ).toBeVisible();
-  await expect(keywords.getByText("原始 128，新增 91，重复 37")).toBeVisible();
+  await expect(paths.getByText(/原始|新增|重复/)).toHaveCount(0);
 
   await rail.getByRole("tab", { name: "候选人" }).click();
   await expect(rail.getByRole("region", { name: "候选人队列" })).toBeVisible();
   await rail.getByRole("tab", { name: "思考过程" }).click();
-  await expect(keywords).toBeVisible();
+  await expect(paths).toBeVisible();
 });
 
 test("candidate queue loading and error stories render real states", async ({

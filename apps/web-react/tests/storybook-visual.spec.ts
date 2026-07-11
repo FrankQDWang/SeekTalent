@@ -146,22 +146,18 @@ async function expectCompactDualLaneThinkingProcess(page: Page) {
   const rail = page.getByRole("complementary", { name: "运行右栏" });
   await expect(rail).toBeVisible();
 
-  const keywords = rail.getByRole("region", { name: "关键词" });
+  const paths = rail.getByRole("group", { name: "检索路径" });
+  await expect(paths.getByRole("group", { name: "主路径" })).toBeVisible();
+  await expect(paths.getByRole("group", { name: "扩展路径" })).toBeVisible();
   await expect(
-    keywords.getByRole("group", { name: /主检索，已执行/ }),
-  ).toBeVisible();
-  await expect(
-    keywords.getByRole("group", { name: /补漏检索，计划中/ }),
-  ).toBeVisible();
-  await expect(
-    keywords.getByText(
-      "Agentic retrieval orchestration AND long-form evaluation systems",
+    paths.getByText(
+      "production-grade retrieval orchestration、long-context evaluation systems",
     ),
   ).toBeVisible();
   await expect(
-    keywords.getByText("cross-functional orchestration governance"),
+    paths.getByText("cross-functional orchestration governance"),
   ).toBeVisible();
-  await expect(keywords.getByText("原始 128，新增 91，重复 37")).toBeVisible();
+  await expect(paths.getByText(/原始|新增|重复/)).toHaveCount(0);
 
   await expect
     .poll(() =>

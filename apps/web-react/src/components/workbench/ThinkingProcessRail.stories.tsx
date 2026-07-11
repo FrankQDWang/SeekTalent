@@ -56,7 +56,7 @@ function ThinkingProcessRailStory({
 const compactDualLaneThinkingView: AgentWorkbenchConversationResponse = {
   ...agentWorkbenchMultiRoundThinkingViewFixture,
   thinkingProcess: {
-    activeRoundNo: 1,
+    activeRoundNo: 2,
     rounds: [
       {
         cards: [],
@@ -106,7 +106,7 @@ const compactDualLaneThinkingView: AgentWorkbenchConversationResponse = {
             uniqueCandidateCount: 0,
           },
         ],
-        roundNo: 1,
+        roundNo: 2,
         status: "running",
       },
     ],
