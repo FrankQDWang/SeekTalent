@@ -1258,6 +1258,84 @@ def test_runtime_repairs_consumed_controller_family_and_retains_fresh_term() -> 
     assert len(sanitized.proposed_query_terms) == 3
 
 
+def test_runtime_expands_used_anchor_only_group_with_fresh_family() -> None:
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
+    runtime = WorkflowRuntime(settings)
+    run_state = _run_state_with_previous_reflection()
+    anchor_key = build_term_group_key(
+        query_terms=["python"], query_term_pool=run_state.retrieval_state.query_term_pool
+    )
+    run_state.retrieval_state.query_execution_ledger.append(QueryExecutionReceipt(
+        round_no=1, source_kind="liepin", query_instance_id="anchor-only", query_fingerprint="anchor-fp",
+        term_group_key=anchor_key, primary_anchor_family_id="role.python",
+        non_anchor_term_family_ids=[], query_role="exploit", lane_type="exploit",
+        query_terms=["python"], keyword_query="python", requested_count=5,
+        source_plan_version="1", status="completed", dispatch_started=True,
+    ))
+    decision = SearchControllerDecision(
+        thought_summary="Broaden.", action="source_search", decision_rationale="Try anchor.",
+        proposed_query_terms=["python"], proposed_filter_plan=ProposedFilterPlan(),
+        response_to_reflection="Use deterministic novelty.",
+    )
+
+    sanitized = runtime._sanitize_controller_decision(decision=decision, run_state=run_state, round_no=2)
+
+    assert isinstance(sanitized, SearchControllerDecision)
+    assert sanitized.proposed_query_terms == ["python", "resume matching"]
+
+
+def test_novelty_conflict_uses_one_controller_call_and_runtime_sanitizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
+    controller = ReActController(
+        settings,
+        LoadedPrompt(name="controller", path=Path("controller.md"), content="controller", sha256="hash"),
+    )
+    runtime = WorkflowRuntime(settings)
+    run_state = _run_state_with_previous_reflection()
+    prior = QueryExecutionReceipt(
+        round_no=1, source_kind="liepin", query_instance_id="q1", query_fingerprint="fp1",
+        term_group_key="g1", primary_anchor_family_id="role.python",
+        non_anchor_term_family_ids=["domain.resumematching"], query_role="exploit", lane_type="exploit",
+        query_terms=["python", "resume matching"], keyword_query="python resume matching",
+        requested_count=5, source_plan_version="1", status="completed", dispatch_started=True,
+    )
+    run_state.retrieval_state.query_execution_ledger.append(prior)
+    context = _controller_context(round_no=2, previous_reflection=ReflectionSummaryView(
+        decision="continue", reflection_summary="Use fresh terms."
+    ))
+    context = context.model_copy(update={"consumed_non_anchor_term_family_ids": ["domain.resumematching"]})
+    conflicting = SearchControllerDecision(
+        thought_summary="Continue.", action="source_search", decision_rationale="Try terms.",
+        proposed_query_terms=["python", "resume matching", "trace"],
+        proposed_filter_plan=ProposedFilterPlan(), response_to_reflection="Use fresh terms.",
+    )
+    calls = {"model": 0, "repair": 0}
+
+    async def fake_decide_live(**kwargs):  # noqa: ANN003
+        del kwargs
+        calls["model"] += 1
+        return conflicting
+
+    async def fail_repair(*args, **kwargs):  # noqa: ANN002, ANN003
+        del args, kwargs
+        calls["repair"] += 1
+        raise AssertionError("novelty must not invoke structured repair")
+
+    monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
+    monkeypatch.setattr("seektalent.controller.react_controller.repair_controller_decision", fail_repair)
+
+    decided = asyncio.run(controller.decide(context=context))
+    sanitized = runtime._sanitize_controller_decision(decision=decided, run_state=run_state, round_no=2)
+
+    assert calls == {"model": 1, "repair": 0}
+    assert controller.last_full_retry_count == 0
+    assert controller.last_repair_attempt_count == 0
+    assert isinstance(sanitized, SearchControllerDecision)
+    assert sanitized.proposed_query_terms == ["python", "trace", "retrieval"]
+
+
 def test_runtime_preserves_max_round_claims_on_final_allowed_round() -> None:
     settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts", max_rounds=5)
     runtime = WorkflowRuntime(settings)

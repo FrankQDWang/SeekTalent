@@ -182,6 +182,7 @@ def sanitize_controller_decision(
             title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
             query_term_pool=run_state.retrieval_state.query_term_pool,
             allowed_inactive_non_anchor_terms=allowed_inactive_terms,
+            allow_anchor_only=True,
         )
     except ValueError as exc:
         if not str(exc).startswith(_ROUND_SECONDARY_TITLE_ANCHOR_REASON):
@@ -199,6 +200,7 @@ def sanitize_controller_decision(
             title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
             query_term_pool=run_state.retrieval_state.query_term_pool,
             allowed_inactive_non_anchor_terms=allowed_inactive_terms,
+            allow_anchor_only=True,
         )
     filter_plan = canonicalize_filter_plan(
         requirement_sheet=run_state.requirement_sheet,
@@ -237,6 +239,13 @@ def _repair_consumed_families(
     anchors = [item for item in selected if item.retrieval_role in {"primary_role_anchor", "role_anchor"}]
     fresh = [item for item in selected if item not in anchors and item.family not in consumed]
     target = len([item for item in selected if item not in anchors])
+    if target == 0:
+        from seektalent.retrieval.query_identity import build_term_group_key
+        from seektalent.runtime.query_identity import used_term_group_keys
+
+        current_key = build_term_group_key(query_terms=query_terms, query_term_pool=pool)
+        if current_key in used_term_group_keys(run_state.retrieval_state.query_execution_ledger):
+            target = 1
     seen = {item.family for item in fresh}
     selectable = sorted(
         (
