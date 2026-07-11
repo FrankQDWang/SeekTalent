@@ -2525,10 +2525,15 @@ class WorkflowRuntime:
                 final_round_new_identity_count = len(round_identity_ids - identities_seen_before_round)
                 if run_state.latest_canonical_intake_summary is not None:
                     summary = run_state.latest_canonical_intake_summary
+                    final_normalized_count = (
+                        (baseline_intake_summary.normalized_candidate_count if baseline_intake_summary else 0)
+                        + sum(len(item.candidates) for item in expansion_results)
+                    )
                     run_state.latest_canonical_intake_summary = summary.model_copy(update={
+                        "normalized_candidate_count": final_normalized_count,
                         "identity_count": len(round_identity_ids),
                         "auto_merged_duplicate_count": max(
-                            0, summary.normalized_candidate_count - len(round_identity_ids)
+                            0, final_normalized_count - len(round_identity_ids)
                         ),
                     })
                 expanded_raw_count = sum(item.expansion_opened_count for item in expansion_results)

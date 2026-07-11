@@ -1342,6 +1342,7 @@ def test_expansion_candidates_are_scored_and_visible_to_reflection_in_the_same_r
     )
     runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+    cast(Any, runtime)._require_live_llm_config = lambda: None
     runtime_any = cast(Any, runtime)
     runtime_any._require_live_llm_config = lambda: None
     reflection = RecordingExpansionReflection()
@@ -1487,6 +1488,19 @@ def _integrated_expansion_runtime(tmp_path: Path, *, scorer: object | None = Non
 
     async def expander(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
         actions.append((request.continuation_id, request.action))
+        if request.action == "expand":
+            candidate = _make_candidate(f"expanded-{request.query_instance_id}", source_round=request.round_no)
+            return SourceFirstPageExpansionResult(
+                source_kind=request.source_kind, query_instance_id=request.query_instance_id,
+                continuation_id=request.continuation_id, status="completed", candidates=(candidate,),
+                candidate_query_attributions=(RuntimeQueryCandidateAttribution(
+                    source_kind=request.source_kind, query_instance_id=request.query_instance_id,
+                    resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
+                ),), first_page_visible_count=request.continuation.visible_candidate_count,
+                first_page_eligible_count=request.continuation.eligible_candidate_count,
+                initial_opened_count=request.continuation.initial_opened_count,
+                expansion_opened_count=1, continuation_deleted=True,
+            )
         return SourceFirstPageExpansionResult(
             source_kind=request.source_kind, query_instance_id=request.query_instance_id,
             continuation_id=request.continuation_id, status="completed",
@@ -1520,8 +1534,10 @@ def _run_integrated_round(runtime: WorkflowRuntime, tmp_path: Path) -> RunTracer
             tracer=tracer, source_plan=source_plan,
         ))
     except BaseException:
+        cast(Any, runtime)._test_last_run_state = run_state
         tracer.close(status="failed")
         raise
+    cast(Any, runtime)._test_last_run_state = run_state
     tracer.close(status="completed")
     return tracer
 
@@ -1639,6 +1655,141 @@ def test_integrated_missing_expander_preflight_zero_provider_calls_or_files(tmp_
         _run_integrated_round(runtime, tmp_path)
     assert provider_calls == []
     assert list(tmp_path.glob("**/*protected*")) == []
+
+
+def test_integrated_baseline_and_expansion_scorecard_jsonl_batches(tmp_path: Path) -> None:
+    runtime, _runtime_any, actions = _integrated_expansion_runtime(tmp_path)
+    tracer = _run_integrated_round(runtime, tmp_path)
+    [path] = list(tracer.run_dir.glob("rounds/*/scoring/scorecards.jsonl"))
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    assert {row["batch_kind"] for row in rows} == {"baseline", "first_page_expansion"}
+    assert sum(row["batch_kind"] == "first_page_expansion" for row in rows) == 1
+    assert any(action == "expand" for _, action in actions)
+
+
+def test_integrated_public_events_exact_counts_no_private_sentinels(tmp_path: Path) -> None:
+    runtime, _runtime_any, _actions = _integrated_expansion_runtime(tmp_path)
+    tracer = _run_integrated_round(runtime, tmp_path)
+    [path] = list(tracer.run_dir.glob("runtime/public_events.jsonl"))
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    [event] = [row for row in rows if row.get("stage") == "first_page_expansion"]
+    assert event["counts"] == {
+        "qualifiedLaneCount": 1, "expandedCandidateCount": 1, "skippedSeenCount": 0,
+        "terminalFailureCount": 0, "scoringFailureCount": 0,
+    }
+    serialized = json.dumps(event)
+    assert "artifact://protected" not in serialized
+    assert "continuation" not in serialized.lower()
+    assert "providerCandidateId" not in serialized
+
+
+def test_integrated_non_liepin_no_expander_calls_or_files(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts",
+        min_rounds=1, max_rounds=1, enable_eval=False,
+    )
+    runtime = _workflow_runtime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+    cast(Any, runtime)._require_live_llm_config = lambda: None
+    calls: list[str] = []
+    async def forbidden_expander(_request):
+        calls.append("transport")
+        raise AssertionError("non-Liepin expansion transport must not run")
+    cast(Any, runtime).source_first_page_expander_provider = lambda _runtime, _ledger: {"cts": forbidden_expander}
+    artifacts = runtime.run(
+        source_kinds=["cts"], job_title="AI Agent Engineer", jd="Build production agents.", notes="",
+    )
+    assert artifacts.run_state is not None
+    assert calls == []
+    assert list(tmp_path.glob("**/*protected*")) == []
+
+
+def test_integrated_fail_fast_partial_success_scorecards_persist(tmp_path: Path) -> None:
+    class PartialBaselineScorer:
+        async def score_candidates_parallel(self, *, contexts, tracer):
+            del tracer
+            success_id = contexts[0].normalized_resume.resume_id
+            failed_id = contexts[1].normalized_resume.resume_id
+            return [_scored_candidate(success_id)], [ScoringFailure(
+                resume_id=failed_id, branch_id="baseline-partial", round_no=1,
+                attempts=1, error_message="second candidate failed",
+            )]
+    runtime, _runtime_any, _actions = _integrated_expansion_runtime(tmp_path, scorer=PartialBaselineScorer())
+    with pytest.raises(orchestrator_module.RunStageError):
+        _run_integrated_round(runtime, tmp_path)
+    [path] = list((tmp_path / "trace-runs").glob("**/scorecards.jsonl"))
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+    assert len(rows) == 1
+    assert rows[0]["batch_kind"] == "baseline"
+
+
+def test_integrated_dual_lane_completed_partial_receipts_observation_reflection(tmp_path: Path) -> None:
+    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path)
+    reflection = RecordingExpansionReflection()
+    runtime_any.reflection_critic = reflection
+    registry = runtime_any.source_first_page_expander_provider(runtime, None)
+    original = registry["liepin"]
+    async def partial(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
+        if request.action == "discard":
+            return await original(request)
+        actions.append((request.continuation_id, request.action))
+        return SourceFirstPageExpansionResult(
+            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
+            continuation_id=request.continuation_id, status="partial",
+            first_page_visible_count=request.continuation.visible_candidate_count,
+            first_page_eligible_count=request.continuation.eligible_candidate_count,
+            initial_opened_count=request.continuation.initial_opened_count,
+            expansion_terminal_failure_count=1, safe_reason_code="first_page_expansion_partial",
+            continuation_deleted=True,
+        )
+    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": partial}
+    tracer = _run_integrated_round(runtime, tmp_path)
+    assert reflection.contexts
+    context = reflection.contexts[0]
+    assert context.search_observation.exhausted_reason == "first_page_expansion_partial"
+    assert context.query_outcomes[0].receipts[0].first_page_expansion_status == "partial"
+    assert context.query_outcomes[0].receipts[0].expansion_terminal_failure_count == 1
+    assert tracer.run_dir.exists()
+
+
+def test_integrated_alias_bridge_final_identity_counts(tmp_path: Path) -> None:
+    runtime, runtime_any, _actions = _integrated_expansion_runtime(tmp_path)
+    async def alias_expander(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
+        if request.action == "discard":
+            return SourceFirstPageExpansionResult(
+                source_kind=request.source_kind, query_instance_id=request.query_instance_id,
+                continuation_id=request.continuation_id, status="completed",
+                first_page_visible_count=request.continuation.visible_candidate_count,
+                first_page_eligible_count=request.continuation.eligible_candidate_count,
+                initial_opened_count=request.continuation.initial_opened_count, continuation_deleted=True,
+            )
+        candidate = _make_candidate(f"alias-{request.query_instance_id}", source_round=1).model_copy(
+            update={
+                "dedup_key": f"matrix-{request.query_instance_id}-0",
+                "raw": {
+                    "resume_id": f"alias-{request.query_instance_id}",
+                    "candidate_name": f"matrix-{request.query_instance_id}-0",
+                },
+            }
+        )
+        return SourceFirstPageExpansionResult(
+            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
+            continuation_id=request.continuation_id, status="completed", candidates=(candidate,),
+            candidate_query_attributions=(RuntimeQueryCandidateAttribution(
+                source_kind=request.source_kind, query_instance_id=request.query_instance_id,
+                resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
+            ),), first_page_visible_count=request.continuation.visible_candidate_count,
+            first_page_eligible_count=request.continuation.eligible_candidate_count,
+            initial_opened_count=request.continuation.initial_opened_count,
+            expansion_opened_count=1, continuation_deleted=True,
+        )
+    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": alias_expander}
+    _run_integrated_round(runtime, tmp_path)
+    state = runtime_any._test_last_run_state
+    summary = state.latest_canonical_intake_summary
+    assert summary is not None
+    assert summary.identity_count == len(set(state.candidate_identity_by_resume_id.values()))
+    assert summary.auto_merged_duplicate_count >= 1
 
 
 def test_pending_cleanup_false_deletion_ack_is_reported_and_other_carriers_continue() -> None:
