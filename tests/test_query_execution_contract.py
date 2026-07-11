@@ -95,6 +95,26 @@ def test_query_identity_uses_explicit_prf_family_override() -> None:
     assert identity.non_anchor_term_family_ids == ("prf.memory.system",)
 
 
+def test_query_identity_rejects_distinct_alias_surfaces_for_one_semantic_family() -> None:
+    aliases = _pool()
+    aliases.append(aliases[1].model_copy(update={"term": "Py"}))
+
+    with pytest.raises(ValueError, match="query_semantic_family_repeated"):
+        resolve_query_identity(
+            query_terms=["Platform", "Python", "Py"],
+            query_term_pool=aliases,
+        )
+
+
+def test_query_identity_rejects_prf_override_that_resolves_to_anchor_family() -> None:
+    with pytest.raises(ValueError, match="query_non_anchor_surface_resolves_to_anchor_family"):
+        resolve_query_identity(
+            query_terms=["Platform", "agent"],
+            query_term_pool=_pool(),
+            explicit_family_overrides={"agent": "role.platform"},
+        )
+
+
 def test_bundle_novelty_rejects_history_and_sibling_family_reuse() -> None:
     exploit = ResolvedQueryIdentity("group-exploit", "role.aiagent", ("domain.python",))
     explore = ResolvedQueryIdentity("group-explore", "role.aiagent", ("domain.rag",))

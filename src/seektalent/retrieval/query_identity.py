@@ -34,12 +34,19 @@ class ResolvedQueryIdentity:
     non_anchor_term_family_ids: tuple[str, ...]
 
 
-def _semantic_families(
+@dataclass(frozen=True)
+class _ResolvedSemanticSurface:
+    term: str
+    family_id: str
+    candidate: QueryTermCandidate | None
+
+
+def _semantic_surfaces(
     *,
     query_terms: Sequence[str],
     query_term_pool: Sequence[QueryTermCandidate],
     explicit_family_overrides: Mapping[str, str] | None = None,
-) -> list[tuple[str, QueryTermCandidate | None]]:
+) -> list[_ResolvedSemanticSurface]:
     overrides: dict[str, str] = {}
     for term, family_id in (explicit_family_overrides or {}).items():
         term_key = normalize_term(term)
@@ -48,24 +55,42 @@ def _semantic_families(
             raise ValueError("query_family_override_invalid")
         overrides[term_key] = family_key
     candidates = {normalize_term(item.term): item for item in query_term_pool}
-    resolved: list[tuple[str, QueryTermCandidate | None]] = []
-    seen: set[str] = set()
+    resolved: list[_ResolvedSemanticSurface] = []
+    seen_terms: set[str] = set()
     for term in query_terms:
         term_key = normalize_term(term)
-        if not term_key:
+        if not term_key or term_key in seen_terms:
             continue
+        seen_terms.add(term_key)
         candidate = candidates.get(term_key)
         family_id = overrides.get(term_key) or (
             normalize_term(candidate.family) if candidate is not None else f"term:{term_key}"
         )
         if not family_id:
             raise ValueError("query_family_identity_invalid")
-        if family_id in seen:
-            continue
-        seen.add(family_id)
-        resolved.append((family_id, candidate))
+        resolved.append(_ResolvedSemanticSurface(term=term_key, family_id=family_id, candidate=candidate))
     if not resolved:
         raise ValueError("term_group_key_requires_terms")
+    return resolved
+
+
+def _semantic_families(
+    *,
+    query_terms: Sequence[str],
+    query_term_pool: Sequence[QueryTermCandidate],
+    explicit_family_overrides: Mapping[str, str] | None = None,
+) -> list[tuple[str, QueryTermCandidate | None]]:
+    resolved: list[tuple[str, QueryTermCandidate | None]] = []
+    seen_families: set[str] = set()
+    for surface in _semantic_surfaces(
+        query_terms=query_terms,
+        query_term_pool=query_term_pool,
+        explicit_family_overrides=explicit_family_overrides,
+    ):
+        if surface.family_id in seen_families:
+            continue
+        seen_families.add(surface.family_id)
+        resolved.append((surface.family_id, surface.candidate))
     return resolved
 
 
@@ -84,26 +109,37 @@ def resolve_query_identity(
     query_term_pool: Sequence[QueryTermCandidate],
     explicit_family_overrides: Mapping[str, str] | None = None,
 ) -> ResolvedQueryIdentity:
-    resolved = _semantic_families(
+    resolved = _semantic_surfaces(
         query_terms=query_terms,
         query_term_pool=query_term_pool,
         explicit_family_overrides=explicit_family_overrides,
     )
     anchor_families = {
-        family_id
-        for family_id, candidate in resolved
-        if candidate is not None and is_primary_anchor_role(candidate.retrieval_role)
+        surface.family_id
+        for surface in resolved
+        if surface.candidate is not None and is_primary_anchor_role(surface.candidate.retrieval_role)
     }
     if len(anchor_families) != 1:
         raise ValueError("query_primary_anchor_family_required")
     primary_anchor_family_id = next(iter(anchor_families))
-    non_anchor_families = tuple(
-        family_id for family_id, _candidate in resolved if family_id != primary_anchor_family_id
-    )
+    seen_families: set[str] = set()
+    non_anchor_families: list[str] = []
+    for surface in resolved:
+        is_anchor_surface = surface.candidate is not None and is_primary_anchor_role(surface.candidate.retrieval_role)
+        if surface.family_id == primary_anchor_family_id and not is_anchor_surface:
+            raise ValueError("query_non_anchor_surface_resolves_to_anchor_family")
+        if surface.family_id in seen_families:
+            raise ValueError("query_semantic_family_repeated")
+        seen_families.add(surface.family_id)
+        if is_anchor_surface:
+            continue
+        non_anchor_families.append(surface.family_id)
+    if len(resolved) > 1 and not non_anchor_families:
+        raise ValueError("query_non_anchor_family_required")
     return ResolvedQueryIdentity(
-        term_group_key=_term_group_hash([family_id for family_id, _candidate in resolved]),
+        term_group_key=_term_group_hash([surface.family_id for surface in resolved]),
         primary_anchor_family_id=primary_anchor_family_id,
-        non_anchor_term_family_ids=non_anchor_families,
+        non_anchor_term_family_ids=tuple(non_anchor_families),
     )
 
 
@@ -113,10 +149,13 @@ def build_term_group_key(
     query_term_pool: Sequence[QueryTermCandidate],
 ) -> str:
     return _term_group_hash(
-        [family_id for family_id, _candidate in _semantic_families(
-            query_terms=query_terms,
-            query_term_pool=query_term_pool,
-        )]
+        [
+            family_id
+            for family_id, _candidate in _semantic_families(
+                query_terms=query_terms,
+                query_term_pool=query_term_pool,
+            )
+        ]
     )
 
 
