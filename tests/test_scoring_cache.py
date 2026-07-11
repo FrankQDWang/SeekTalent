@@ -21,6 +21,11 @@ from seektalent.normalization import normalize_resume
 from seektalent.prompting import LoadedPrompt
 from seektalent.cache.exact_llm_cache import get_cached_json, put_cached_json
 from seektalent.scoring.scorer import ResumeScorer, scoring_cache_key
+from seektalent.scoring.weighted_score import (
+    ScoreDimensionApplicability,
+    calculate_overall_score,
+    score_dimension_applicability,
+)
 from seektalent.tracing import ProviderUsageSnapshot, RunTracer
 from tests.settings_factory import make_settings
 
@@ -120,6 +125,66 @@ def _provider_usage() -> ProviderUsageSnapshot:
         cache_write_tokens=2,
         details={"reasoning_tokens": 4},
     )
+
+
+def _policy(*, preferred: bool, risk: bool) -> ScoringPolicy:
+    return ScoringPolicy(
+        job_title="AI Agent 工程师",
+        role_summary="构建生产级 Agent 系统",
+        must_have_capabilities=["Multi-Agent 架构"],
+        preferred_capabilities=["B2B 电商"] if preferred else [],
+        exclusion_signals=["没有软件工程经验"] if risk else [],
+        preferences=PreferenceSlots(),
+        scoring_rationale="必须项优先",
+    )
+
+
+@pytest.mark.parametrize(
+    ("preferred", "risk", "expected"),
+    [
+        (True, True, ScoreDimensionApplicability(preferred=True, risk=True)),
+        (True, False, ScoreDimensionApplicability(preferred=True, risk=False)),
+        (False, True, ScoreDimensionApplicability(preferred=False, risk=True)),
+        (False, False, ScoreDimensionApplicability(preferred=False, risk=False)),
+    ],
+)
+def test_requirement_sheet_controls_dimension_applicability(preferred, risk, expected) -> None:
+    assert score_dimension_applicability(_policy(preferred=preferred, risk=risk)) == expected
+
+
+@pytest.mark.parametrize(
+    ("applicability", "preferred", "risk", "expected"),
+    [
+        (ScoreDimensionApplicability(preferred=True, risk=True), 80, 20, 77),
+        (ScoreDimensionApplicability(preferred=True, risk=False), 80, None, 76),
+        (ScoreDimensionApplicability(preferred=False, risk=True), None, 20, 76),
+        (ScoreDimensionApplicability(preferred=False, risk=False), None, None, 75),
+    ],
+)
+def test_total_score_renormalizes_only_applicable_dimensions(applicability, preferred, risk, expected) -> None:
+    assert calculate_overall_score(
+        must_have_match_score=75,
+        preferred_match_score=preferred,
+        risk_score=risk,
+        applicability=applicability,
+    ) == expected
+
+
+def test_total_score_rejects_missing_or_extra_dimension_values() -> None:
+    with pytest.raises(ValueError, match="preferred_score_required"):
+        calculate_overall_score(
+            must_have_match_score=80,
+            preferred_match_score=None,
+            risk_score=None,
+            applicability=ScoreDimensionApplicability(preferred=True, risk=False),
+        )
+    with pytest.raises(ValueError, match="risk_score_not_applicable"):
+        calculate_overall_score(
+            must_have_match_score=80,
+            preferred_match_score=None,
+            risk_score=10,
+            applicability=ScoreDimensionApplicability(preferred=False, risk=False),
+        )
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
