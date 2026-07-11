@@ -433,7 +433,9 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
                     config=browser_config,
                     timing_recorder=LiepinOpenCliTimingRecorder(
                         artifact_root=site_config.artifact_root,
-                        output_mode=settings.runtime_artifact_output_mode,
+                        writes_local_debug_artifacts=(
+                            settings.runtime_artifact_output_mode != "prod"
+                        ),
                     ),
                 ),
             )

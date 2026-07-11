@@ -2627,7 +2627,7 @@ class WorkflowRuntime:
                 def best_effort_finalization(name: str, operation: Callable[[], object]) -> None:
                     try:
                         operation()
-                    except Exception:  # noqa: BLE001 - preserve the active primary exception
+                    except (LookupError, OSError, RuntimeError, TypeError, ValueError):
                         finalization_failures.append(name)
 
                 cleanup_records = await discard_unconsumed_first_page_continuations(

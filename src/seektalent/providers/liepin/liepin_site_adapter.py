@@ -30,7 +30,6 @@ from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
 )
-from seektalent_runtime_control.artifact_policy import RuntimeArtifactPolicy, normalize_artifact_output_mode
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.opencli_filter_planning import (
@@ -131,10 +130,10 @@ class LiepinOpenCliSiteConfig:
 @dataclass(frozen=True)
 class LiepinOpenCliTimingRecorder:
     artifact_root: Path | None = None
-    output_mode: object = "prod"
+    writes_local_debug_artifacts: bool = False
 
     def record(self, timing: OpenCliBrowserTiming) -> None:
-        if not RuntimeArtifactPolicy(normalize_artifact_output_mode(self.output_mode)).writes_local_debug_artifacts:
+        if not self.writes_local_debug_artifacts:
             return
         env_root = os.environ.get("SEEKTALENT_PI_ARTIFACT_ROOT")
         root = self.artifact_root or (Path(env_root) if env_root else None)

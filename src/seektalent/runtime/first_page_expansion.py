@@ -260,7 +260,7 @@ async def discard_unconsumed_first_page_continuations(
                         exc.safe_reason_code, fallback="first_page_continuation_cleanup_failed"
                     ),
                 ))
-        except Exception:  # noqa: BLE001 - isolate one carrier without swallowing cancellation
+        except (LookupError, OSError, RuntimeError, TypeError, ValueError):
             records.append(ContinuationCleanupRecord(
                 item.continuation_id, False, "first_page_continuation_cleanup_failed"
             ))

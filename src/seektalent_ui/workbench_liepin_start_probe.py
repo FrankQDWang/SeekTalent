@@ -8,11 +8,11 @@ from seektalent.config import AppSettings
 from seektalent.dev_mode import build_dev_mode_status
 from seektalent.providers.liepin.client import build_liepin_worker_client
 from seektalent.providers.liepin.worker_contracts import (
+    LIEPIN_WORKER_SAFE_REASON_CODES,
     LiepinWorkerModeError,
     OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
     SessionStatus,
 )
-from seektalent.sources.liepin.reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
 from seektalent_ui.liepin_account_binding import (
     bind_observed_liepin_account,
     ensure_workbench_liepin_provider_connection,

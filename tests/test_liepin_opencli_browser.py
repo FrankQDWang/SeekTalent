@@ -441,7 +441,10 @@ def test_liepin_opencli_timing_recorder_skips_prod_artifact(tmp_path: Path) -> N
 
 
 def test_liepin_opencli_timing_recorder_writes_safe_dev_artifact(tmp_path: Path) -> None:
-    recorder = LiepinOpenCliTimingRecorder(artifact_root=tmp_path, output_mode="dev")
+    recorder = LiepinOpenCliTimingRecorder(
+        artifact_root=tmp_path,
+        writes_local_debug_artifacts=True,
+    )
 
     recorder.record(
         OpenCliBrowserTiming(
@@ -479,7 +482,10 @@ def test_liepin_opencli_timing_recorder_persists_automation_metadata_without_arg
     automation = OpenCliBrowserAutomation(
         config=browser_config,
         commands=commands,
-        timing_recorder=LiepinOpenCliTimingRecorder(artifact_root=tmp_path, output_mode="dev"),
+        timing_recorder=LiepinOpenCliTimingRecorder(
+            artifact_root=tmp_path,
+            writes_local_debug_artifacts=True,
+        ),
     )
 
     automation.fill(target_args=("26", "敏感关键词"), text_size=5)

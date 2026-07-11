@@ -96,7 +96,10 @@ def _runner_from_env() -> LiepinSiteAdapter:
             config=browser_config,
             timing_recorder=LiepinOpenCliTimingRecorder(
                 artifact_root=site_config.artifact_root,
-                output_mode=os.environ.get("SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE") or "prod",
+                writes_local_debug_artifacts=(
+                    os.environ.get("SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE") or "prod"
+                )
+                != "prod",
             ),
         ),
     )
