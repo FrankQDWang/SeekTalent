@@ -27,6 +27,7 @@ from seektalent.source_contracts.safe_serialization import (
 )
 
 if TYPE_CHECKING:
+    from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
     from seektalent.models import RequirementSheet
 
 
@@ -73,6 +74,7 @@ class SourceQueryExecutionOutcome:
     raw_candidate_count: int = 0
     unique_candidate_count: int = 0
     duplicate_candidate_count: int = 0
+    pre_click_skipped_seen_count: int = 0
     exhausted_reason: str | None = None
     safe_reason_code: str | None = None
 
@@ -330,6 +332,7 @@ class RuntimeSourceLaneResult:
     source_evidence_updates: tuple[RuntimeSourceEvidence, ...] = ()
     provider_snapshots: tuple[object, ...] = ()
     raw_candidate_count: int | None = None
+    private_first_page_continuations: tuple[ProviderSearchContinuation, ...] = ()
     provider_snapshot_refs: tuple[str, ...] = ()
     safe_summary_refs: tuple[str, ...] = ()
     detail_recommendations: tuple[RuntimeDetailRecommendation, ...] = ()

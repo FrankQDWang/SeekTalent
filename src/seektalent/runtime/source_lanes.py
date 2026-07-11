@@ -77,6 +77,7 @@ def runtime_source_lane_result_from_source_result(result: SourceLaneResult) -> R
         normalized_store_updates=result.normalized_store_updates,
         source_evidence_updates=result.source_evidence_updates,
         raw_candidate_count=result.raw_candidate_count,
+        private_first_page_continuations=result.private_first_page_continuations,
         provider_snapshot_refs=result.provider_snapshot_refs,
         safe_summary_refs=result.safe_summary_refs,
         blocked_reason_code=result.blocked_reason_code,

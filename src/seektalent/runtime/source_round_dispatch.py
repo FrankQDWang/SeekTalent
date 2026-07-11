@@ -204,6 +204,7 @@ def _receipts_for_source_result(
                 raw_candidate_count=outcome.raw_candidate_count,
                 unique_candidate_count=outcome.unique_candidate_count,
                 duplicate_candidate_count=outcome.duplicate_candidate_count,
+                pre_click_skipped_seen_count=outcome.pre_click_skipped_seen_count,
                 exhausted_reason=outcome.exhausted_reason,
                 safe_reason_code=outcome.safe_reason_code,
             )

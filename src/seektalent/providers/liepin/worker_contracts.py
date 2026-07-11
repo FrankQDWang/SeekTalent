@@ -9,7 +9,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import model_validator
-from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation, SearchResult
 from seektalent.providers.liepin.detail_payload_text import find_liepin_whole_page_text_alias_paths
 from seektalent.providers.liepin.models import LiepinAccessScope
 from seektalent.providers.liepin.models import LiepinExtractionSource
@@ -302,6 +302,7 @@ class LiepinResumeSearchResponse(BaseModel):
     next_cursor: str | None = Field(default=None, alias="nextCursor")
     request_payload: dict[str, Any] = Field(default_factory=dict, alias="requestPayload")
     raw_candidate_count: int | None = Field(default=None, alias="rawCandidateCount")
+    _private_first_page_continuations: tuple[ProviderSearchContinuation, ...] = PrivateAttr(default=())
 
 
 class LiepinDetailOpenRequestItem(BaseModel):

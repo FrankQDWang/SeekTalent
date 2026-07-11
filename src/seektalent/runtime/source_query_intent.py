@@ -82,6 +82,7 @@ def query_package_from_provider_query(*, source_kind: RuntimeSourceKind | str, q
 @dataclass(frozen=True)
 class RuntimeSourceQueryPolicy:
     requested_count_caps_by_lane: Mapping[LaneType, int] = field(default_factory=dict)
+    provider_scan_limits_by_lane: Mapping[LaneType, int] = field(default_factory=dict)
     provider_scan_multiplier: int = 1
     provider_scan_cap: int | None = None
 
@@ -89,7 +90,10 @@ class RuntimeSourceQueryPolicy:
         cap = self.requested_count_caps_by_lane.get(lane_type)
         return requested_count if cap is None else min(requested_count, max(0, cap))
 
-    def provider_scan_limit(self, *, requested_count: int) -> int:
+    def provider_scan_limit(self, *, lane_type: LaneType, requested_count: int) -> int:
+        fixed = self.provider_scan_limits_by_lane.get(lane_type)
+        if fixed is not None:
+            return fixed
         scan_limit = max(requested_count, requested_count * max(1, self.provider_scan_multiplier))
         if self.provider_scan_cap is not None:
             scan_limit = min(scan_limit, max(0, self.provider_scan_cap))
@@ -151,6 +155,7 @@ def build_runtime_source_query_intents(
                     requested_count=requested_count,
                     provider_scan_limit=_provider_scan_limit(
                         source_kind=source_kind,
+                        lane_type=dispatch.lane_type,
                         requested_count=requested_count,
                         source_budget_policy=budget_policy,
                         source_query_policy=query_policy,
@@ -206,10 +211,11 @@ def source_requested_count(
 def _provider_scan_limit(
     *,
     source_kind: RuntimeSourceKind,
+    lane_type: LaneType,
     requested_count: int,
     source_budget_policy: RuntimeSourceBudgetPolicy,
     source_query_policy: RuntimeSourceQueryPolicy | None = None,
 ) -> int:
     del source_kind, source_budget_policy
     policy = source_query_policy or RuntimeSourceQueryPolicy()
-    return policy.provider_scan_limit(requested_count=requested_count)
+    return policy.provider_scan_limit(lane_type=lane_type, requested_count=requested_count)

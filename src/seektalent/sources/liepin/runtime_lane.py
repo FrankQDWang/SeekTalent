@@ -255,6 +255,11 @@ async def run_liepin_logical_query_bundle(
             logical_compiled_queries = (None,)
         logical_result: RuntimeSourceLaneResult | None = None
         target_results: list[RuntimeSourceLaneResult] = []
+        logical_target_total = (
+            logical_compiled_queries[0].intent.requested_count
+            if logical_compiled_queries[0] is not None
+            else logical_query.requested_count
+        )
         for target_index, compiled_query in enumerate(logical_compiled_queries, start=1):
             source_query_terms = logical_query.query_terms
             logical_query_role = logical_query.query_role
@@ -271,6 +276,11 @@ async def run_liepin_logical_query_bundle(
                 logical_unsupported_filter_reason_codes = tuple(
                     item.safe_reason_code for item in compiled_query.unsupported_filters
                 )
+            captured_detail_count = sum(len(item.candidate_store_updates) for item in target_results)
+            remaining_target = max(0, logical_target_total - captured_detail_count)
+            if remaining_target == 0:
+                break
+            logical_requested_count = remaining_target
             lane_run_id = f"{source_plan_id}:round:{logical_query.round_no}:lane:{index}"
             if compiled_query is not None:
                 lane_run_id = f"{lane_run_id}:target:{target_index}"
@@ -311,7 +321,8 @@ async def run_liepin_logical_query_bundle(
             logical_result = (
                 result if logical_result is None else merge_liepin_card_lane_results(logical_result, result)
             )
-            if len(logical_result.candidate_store_updates) >= logical_requested_count:
+            captured_detail_count = sum(len(item.candidate_store_updates) for item in target_results)
+            if captured_detail_count >= logical_target_total:
                 break
         if logical_result is None:
             raise ValueError("Liepin logical query bundle requires at least one logical query.")
@@ -381,6 +392,7 @@ def merge_liepin_card_lane_results(
         normalized_store_updates=normalized_updates,
         source_evidence_updates=first.source_evidence_updates + second.source_evidence_updates,
         provider_snapshots=first.provider_snapshots + second.provider_snapshots,
+        private_first_page_continuations=(first.private_first_page_continuations + second.private_first_page_continuations),
         raw_candidate_count=int(first.raw_candidate_count or 0) + int(second.raw_candidate_count or 0),
         provider_snapshot_refs=first.provider_snapshot_refs + second.provider_snapshot_refs,
         safe_summary_refs=first.safe_summary_refs + second.safe_summary_refs,
@@ -420,9 +432,11 @@ def _with_liepin_query_execution_outcome(
     target_results: Collection[RuntimeSourceLaneResult],
 ) -> RuntimeSourceLaneResult:
     raw_candidate_count = sum(int(item.raw_candidate_count or 0) for item in target_results)
-    per_target_duplicate_candidate_count = sum(
-        max(0, int(item.raw_candidate_count or 0) - len(item.candidate_store_updates))
+    pre_click_duplicate_count = sum(
+        int(event.safe_counts.get("detail_open_skipped_seen_count", 0))
         for item in target_results
+        for event in item.events
+        if event.step_name == "finalize"
     )
     target_candidate_count = sum(len(item.candidate_store_updates) for item in target_results)
     candidate_identity_keys = {
@@ -439,8 +453,9 @@ def _with_liepin_query_execution_outcome(
         raw_candidate_count=raw_candidate_count,
         unique_candidate_count=len(candidate_identity_keys),
         duplicate_candidate_count=(
-            per_target_duplicate_candidate_count + cross_target_duplicate_candidate_count
+            pre_click_duplicate_count + cross_target_duplicate_candidate_count
         ),
+        pre_click_skipped_seen_count=pre_click_duplicate_count,
         exhausted_reason=safe_reason,
         safe_reason_code=safe_reason,
     )
@@ -597,6 +612,7 @@ def _card_lane_result_from_search_result(
         detail_recommendations=detail_recommendations,
         provider_snapshots=tuple(search_result.provider_snapshots),
         raw_candidate_count=search_result.raw_candidate_count,
+        private_first_page_continuations=search_result.private_continuations,
         events=base_events + workflow_events,
         query_started=query_started,
         stop_reason_code=stop_reason_code,
@@ -1167,8 +1183,12 @@ def _card_search_request(
     if compiled_search_request is not None:
         provider_context.update(compiled_search_request.provider_context)
         provider_context.update(_requirement_sheet_provider_context(request))
+        provider_context["liepin_max_cards"] = str(provider_scan_limit)
     max_cards = _positive_context_int(provider_context.get("liepin_max_cards"), default=provider_scan_limit)
-    provider_context["liepin_max_pages"] = str(_liepin_max_pages_for(max_cards=max_cards, page_size=page_size))
+    if compiled_search_request is not None and compiled_search_request.fetch_mode == "detail":
+        provider_context["liepin_max_pages"] = "1"
+    else:
+        provider_context["liepin_max_pages"] = str(_liepin_max_pages_for(max_cards=max_cards, page_size=page_size))
 
     if compiled_search_request is None:
         return SearchRequest(

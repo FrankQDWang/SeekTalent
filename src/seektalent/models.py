@@ -471,6 +471,7 @@ class QueryExecutionReceipt(BaseModel):
     raw_candidate_count: int = Field(default=0, ge=0)
     unique_candidate_count: int = Field(default=0, ge=0)
     duplicate_candidate_count: int = Field(default=0, ge=0)
+    pre_click_skipped_seen_count: int = Field(default=0, ge=0)
     exhausted_reason: str | None = None
     safe_reason_code: str | None = None
 

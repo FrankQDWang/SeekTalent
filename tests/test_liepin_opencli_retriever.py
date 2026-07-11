@@ -114,7 +114,7 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
 
     assert runner.captured_ranks == [1, 2]
     assert len(response.resumes) == 2
-    assert response.raw_candidate_count == 10
+    assert response.raw_candidate_count == 2
     assert "数据平台 Python resume 1" in response.resumes[0].normalized_text
     assert response.resumes[0].payload["sourceUrl"] == "https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-1"
     assert response.resumes[0].payload["normalizedSnapshotRef"] == "artifact://protected/liepin-opencli/normalized/run-1/1.json"
@@ -159,7 +159,7 @@ def test_opencli_retriever_private_claim_route_preserves_response_conversion(tmp
 
     assert runner.private_contexts == [context]
     assert runner.private_contexts[0].detail_open_claim_ledger is ledger
-    assert response.raw_candidate_count == 10
+    assert response.raw_candidate_count == 1
     assert len(response.resumes) == 1
 
 

@@ -5,12 +5,16 @@ from datetime import datetime, timezone
 import inspect
 import json
 import os
+import tempfile
+from pathlib import Path
+from collections.abc import Sequence
 from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
 
 from seektalent.artifacts import safe_artifact_path
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_search_workflow import (
@@ -280,6 +284,10 @@ def test_load_rejects_invalid_candidate_rank_aggregates(tmp_path, invalid_ranks:
 
 @dataclass
 class FakeLiepinSearchWorkflowSite:
+    continuation_store: LiepinFirstPageContinuationStore | None = field(
+        default_factory=lambda: LiepinFirstPageContinuationStore(Path(tempfile.mkdtemp()))
+    )
+    saved_continuations: list[ProviderSearchContinuation] = field(default_factory=list)
     open_ok: bool = True
     open_safe_reason_code: str = "liepin_opencli_detail_not_opened"
     capture_ok: bool = True
@@ -318,6 +326,28 @@ class FakeLiepinSearchWorkflowSite:
             ]
         ]
     )
+
+    def save_liepin_first_page_continuation(self, *, source_run_id: str, logical_round_no: int,
+        query_instance_id: str, keyword_query: str, visible_candidate_count: int,
+        candidates: Sequence[LiepinFirstPageCandidate]) -> ProviderSearchContinuation:
+        assert self.continuation_store is not None
+        stored_visible_count = max(visible_candidate_count, *(candidate.rank for candidate in candidates), 0)
+        saved = self.continuation_store.create(source_run_id=source_run_id,
+            logical_round_no=logical_round_no, query_instance_id=query_instance_id,
+            keyword_query=keyword_query, visible_candidate_count=stored_visible_count,
+            candidates=list(candidates))
+        carrier = ProviderSearchContinuation(kind="first_page_detail_expansion",
+            continuation_id=source_run_id, opaque_ref=saved.opaque_ref, source_kind="liepin",
+            round_no=logical_round_no, query_instance_id=query_instance_id,
+            visible_candidate_count=saved.visible_candidate_count,
+            eligible_candidate_count=len(saved.candidates), initial_opened_count=0)
+        self.saved_continuations.append(carrier)
+        return carrier
+
+    def mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
+        state: CandidateState) -> None:
+        assert self.continuation_store is not None
+        self.continuation_store.mark_candidate(opaque_ref, rank=rank, state=state)
 
     def append_agent_event(self, source_run_id: str, event: dict[str, object]) -> None:
         del source_run_id
@@ -537,6 +567,38 @@ def _private_claim_context(ledger: DetailOpenClaimLedger) -> DetailOpenClaimSear
     )
 
 
+def _first_page_site(tmp_path: Path, *, card_count: int) -> FakeLiepinSearchWorkflowSite:
+    refs = tuple(str(70 + index) for index in range(card_count))
+    return FakeLiepinSearchWorkflowSite(
+        continuation_store=LiepinFirstPageContinuationStore(tmp_path),
+        search_states=[_search_state_with_detail_targets(*refs)],
+        structured_cards=[[{"ref": ref, "provider_rank": rank} for rank, ref in enumerate(refs, start=1)]],
+    )
+
+
+def test_baseline_search_freezes_thirty_visible_cards_but_opens_only_target(tmp_path: Path) -> None:
+    site = _first_page_site(tmp_path, card_count=30)
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=3, max_cards=30),
+        detail_open_claim_context=_private_claim_context(DetailOpenClaimLedger({})),
+    )
+    assert envelope["resumes_returned"] == 3
+    assert site.saved_continuations[0].visible_candidate_count == 30
+    assert site.calls.count("open_liepin_detail_cached_url") == 3
+
+
+def test_visible_and_eligible_first_page_counts_are_distinct(tmp_path: Path) -> None:
+    site = _first_page_site(tmp_path, card_count=30)
+    site.detail_urls_by_ref["99"] = None
+    LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=3, max_cards=30),
+        detail_open_claim_context=_private_claim_context(DetailOpenClaimLedger({})),
+    )
+    continuation = site.saved_continuations[0]
+    assert continuation.visible_candidate_count == 30
+    assert continuation.eligible_candidate_count == 29
+
+
 def _detail_key(subject: str) -> str:
     key = stable_liepin_detail_candidate_key_hash(
         f"https://h.liepin.com/resume/showresumedetail/?res_id_encode={subject}"
@@ -731,13 +793,13 @@ def test_private_claim_context_drops_stale_rank_url_when_refresh_has_no_identity
     old_rank_two_key = _detail_key("oldRankTwoSubject")
     claims = ledger.snapshot()
     assert envelope["status"] == "succeeded"
-    assert envelope["resumes_returned"] == 1
+    assert envelope["resumes_returned"] == 2
     assert site.opened_refs == []
-    assert site.cached_opened_refs == ["first"]
+    assert site.cached_opened_refs == ["first", "old-rank-two"]
     assert "new-rank-two" not in site.cached_opened_refs
-    assert set(claims) == {first_key}
+    assert set(claims) == {first_key, old_rank_two_key}
     assert claims[first_key].status == "opened"
-    assert old_rank_two_key not in claims
+    assert claims[old_rank_two_key].status == "opened"
 
 
 def test_private_claim_context_opens_validated_url_without_ref_probe_drift() -> None:

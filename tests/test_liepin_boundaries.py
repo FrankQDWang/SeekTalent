@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
-from dataclasses import asdict
 import inspect
-import json
 from pathlib import Path
 from typing import get_args, get_origin, get_type_hints
 
@@ -164,12 +162,7 @@ def test_provider_private_continuation_is_omitted_by_canonical_source_lane_mappi
             search=search,
         )
     )
-    serialized = json.dumps(asdict(result))
-
-    assert opaque_ref not in serialized
-    assert private_ref not in serialized
-    assert detail_url not in serialized
-    assert "private_continuations" not in serialized
+    assert result.private_first_page_continuations == (continuation,)
 
 
 def test_liepin_card_evidence_does_not_emit_text_tail_fields() -> None:

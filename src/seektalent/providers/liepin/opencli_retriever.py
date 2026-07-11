@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.worker_contracts import (
     LiepinResumeSearchResponse,
@@ -177,6 +178,11 @@ def _envelope_reason(envelope: Mapping[str, object]) -> str | None:
 
 
 def _response_from_opencli_envelope(envelope: Mapping[str, object]) -> LiepinResumeSearchResponse:
+    private_items = envelope.get("_private_first_page_continuations", ())
+    if not isinstance(private_items, (tuple, list)) or not all(
+        isinstance(item, ProviderSearchContinuation) for item in private_items
+    ):
+        raise RuntimeError("liepin_opencli_malformed_private_continuation")
     status = envelope.get("status")
     if status not in {"succeeded", "partial", "blocked", "failed"}:
         reason = envelope.get("safe_reason_code") or envelope.get("stop_reason") or "failed_provider_error"
@@ -200,12 +206,16 @@ def _response_from_opencli_envelope(envelope: Mapping[str, object]) -> LiepinRes
     workflow_steps = envelope.get("workflow_steps")
     if isinstance(workflow_steps, list):
         request_payload["workflowSteps"] = workflow_steps
-    return LiepinResumeSearchResponse(
+    response = LiepinResumeSearchResponse(
         resumes=resumes,
         exhausted=status == "succeeded",
         requestPayload=request_payload,
-        raw_candidate_count=_positive_int(envelope.get("cards_seen"), default=len(resumes)),
+        raw_candidate_count=len(resumes),
     )
+    response._private_first_page_continuations = tuple(
+        cast(Sequence[ProviderSearchContinuation], private_items)
+    )
+    return response
 
 
 def _detail_from_resume_payload(

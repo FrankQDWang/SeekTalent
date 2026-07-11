@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol, cast
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
+from seektalent.providers.liepin.first_page_continuation import CandidateState, LiepinFirstPageCandidate
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.liepin_state_machine import (
@@ -35,6 +37,12 @@ class LiepinSearchWorkflowRequest:
 
 
 class LiepinSearchWorkflowSite(Protocol):
+    def save_liepin_first_page_continuation(self, *, source_run_id: str, logical_round_no: int,
+        query_instance_id: str, keyword_query: str, visible_candidate_count: int,
+        candidates: Sequence[LiepinFirstPageCandidate]) -> ProviderSearchContinuation: ...
+
+    def mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
+        state: CandidateState) -> None: ...
     def append_agent_event(self, source_run_id: str, event: Mapping[str, object]) -> None: ...
 
     def search_liepin_cards(
@@ -292,10 +300,51 @@ class LiepinSearchWorkflow:
             },
         )
 
+        private_continuation: ProviderSearchContinuation | None = None
+        baseline_candidates: tuple[LiepinFirstPageCandidate, ...] = ()
+        last_detail_safe_reason = "liepin_opencli_detail_not_opened"
+        if detail_open_claim_context is not None:
+            baseline_candidates = tuple(
+                LiepinFirstPageCandidate(
+                    rank=rank,
+                    ref=ref,
+                    detail_url=detail_url,
+                    provider_candidate_key_hash=provider_candidate_key_hash,
+                )
+                for card in card_items
+                if (selected := _card_ref_and_rank(card)) is not None
+                for ref, rank in (selected,)
+                if (detail_url := detail_urls_by_rank.get(rank)) is not None
+                if (provider_candidate_key_hash := stable_liepin_detail_candidate_key_hash(detail_url)) is not None
+            )
+            save_continuation = getattr(self._site, "save_liepin_first_page_continuation", None)
+            if callable(save_continuation):
+                private_continuation = save_continuation(
+                    source_run_id=request.source_run_id,
+                    logical_round_no=detail_open_claim_context.logical_round_no,
+                    query_instance_id=detail_open_claim_context.query_instance_id,
+                    keyword_query=request.query,
+                    visible_candidate_count=len(card_items),
+                    candidates=baseline_candidates,
+                )
+            card_items = tuple(
+                {"ref": candidate.ref, "provider_rank": candidate.rank}
+                for candidate in baseline_candidates
+            )
+            if not baseline_candidates:
+                last_detail_safe_reason = "liepin_opencli_candidate_identity_missing"
+
+        def mark_candidate(rank: int, state: CandidateState) -> None:
+            if private_continuation is not None:
+                mark = getattr(self._site, "mark_liepin_first_page_candidate", None)
+                if callable(mark):
+                    mark(
+                        opaque_ref=private_continuation.opaque_ref, rank=rank, state=state
+                    )
+
         opened = 0
         attempted_ranks: set[int] = set()
         using_cached_card_items = False
-        last_detail_safe_reason = "liepin_opencli_detail_not_opened"
         while opened < request.target_resumes:
             selected = _next_unattempted_card(card_items, attempted_ranks)
             if selected is None:
@@ -328,6 +377,7 @@ class LiepinSearchWorkflow:
                 if not detail_open_claim_context.detail_open_claim_ledger.try_claim(provider_candidate_key_hash):
                     assert detail_claim_outcomes is not None
                     detail_claim_outcomes["detail_open_skipped_seen_count"] += 1
+                    mark_candidate(selected_rank, "skipped_seen")
                     continue
                 assert detail_claim_outcomes is not None
                 detail_claim_outcomes["detail_claim_granted_count"] += 1
@@ -354,6 +404,7 @@ class LiepinSearchWorkflow:
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
                     )
+                    mark_candidate(selected_rank, "terminal_failed")
                     continue
 
                 wait_result = self._wait_detail_ready_transition(
@@ -366,6 +417,7 @@ class LiepinSearchWorkflow:
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
                     )
+                    mark_candidate(selected_rank, "terminal_failed")
                     continue
 
                 capture_result = self._capture_detail_transition(
@@ -380,12 +432,14 @@ class LiepinSearchWorkflow:
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
                     )
+                    mark_candidate(selected_rank, "terminal_failed")
                     continue
                 if provider_candidate_key_hash is not None:
                     assert detail_open_claim_context is not None
                     detail_open_claim_context.detail_open_claim_ledger.mark_opened(provider_candidate_key_hash)
                     assert detail_claim_outcomes is not None
                     detail_claim_outcomes["detail_opened_count"] += 1
+                    mark_candidate(selected_rank, "opened")
             except Exception as exc:
                 record_detail_open_claim_terminal_failure(
                     provider_candidate_key_hash=provider_candidate_key_hash,
@@ -428,7 +482,7 @@ class LiepinSearchWorkflow:
                 )
                 break
             refreshed_card_items = _structured_card_items(refreshed)
-            if refreshed_card_items:
+            if refreshed_card_items and detail_open_claim_context is None:
                 card_items = refreshed_card_items
                 using_cached_card_items = False
                 remember_detail_urls(card_items)
@@ -448,12 +502,17 @@ class LiepinSearchWorkflow:
 
         if opened == 0:
             emit_detail_claim_outcomes()
-            return self._site.blocked_resumes_envelope(
+            envelope = self._site.blocked_resumes_envelope(
                 source_run_id=request.source_run_id,
                 query=request.query,
                 safe_reason_code=last_detail_safe_reason,
                 cards_seen=cards_seen_for_resume,
             )
+            envelope["_private_first_page_continuations"] = (
+                (replace(private_continuation, initial_opened_count=0),)
+                if private_continuation is not None else ()
+            )
+            return envelope
         if opened < request.target_resumes:
             self._append_event(
                 request.source_run_id,
@@ -467,7 +526,7 @@ class LiepinSearchWorkflow:
                 },
             )
         emit_detail_claim_outcomes()
-        return self._site.finalize_liepin_resumes(
+        envelope = self._site.finalize_liepin_resumes(
             source_run_id=request.source_run_id,
             query=request.query,
             max_pages=request.max_pages,
@@ -475,6 +534,11 @@ class LiepinSearchWorkflow:
             cards_seen=cards_seen_for_resume,
             target_resumes=request.target_resumes,
         )
+        envelope["_private_first_page_continuations"] = (
+            (replace(private_continuation, initial_opened_count=opened),)
+            if private_continuation is not None else ()
+        )
+        return envelope
 
     def _append_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
         self._site.append_agent_event(source_run_id, event)

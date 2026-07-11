@@ -593,6 +593,7 @@ def liepin_resume_search_response_to_search_result(response: LiepinResumeSearchR
         raw_candidate_count=response.raw_candidate_count
         if response.raw_candidate_count is not None
         else len(response.resumes),
+        private_continuations=response._private_first_page_continuations,
     )
 
 

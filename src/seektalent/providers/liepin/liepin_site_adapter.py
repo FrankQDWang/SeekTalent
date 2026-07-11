@@ -14,6 +14,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import urlparse
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
+from seektalent.providers.liepin.first_page_continuation import (
+    CandidateState, LiepinFirstPageCandidate, LiepinFirstPageContinuationStore,
+)
 
 from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 from seektalent.opencli_browser.contracts import (
@@ -337,6 +341,34 @@ class LiepinSiteAdapter:
         self._site_config = site_config
         self._automation = automation
         self._native_filter_clear_signatures_by_scope: dict[str, str] = {}
+        self._continuation_store: LiepinFirstPageContinuationStore | None = None
+
+    def _first_page_continuation_store(self) -> LiepinFirstPageContinuationStore:
+        root = self._site_config.artifact_root
+        if root is None:
+            raise OpenCliBrowserError("liepin_protected_artifact_root_missing")
+        if self._continuation_store is None:
+            self._continuation_store = LiepinFirstPageContinuationStore(root / "protected")
+            self._continuation_store.delete_expired()
+        return self._continuation_store
+
+    def save_liepin_first_page_continuation(self, *, source_run_id: str, logical_round_no: int,
+        query_instance_id: str, keyword_query: str, visible_candidate_count: int,
+        candidates: Sequence[LiepinFirstPageCandidate]) -> ProviderSearchContinuation:
+        saved = self._first_page_continuation_store().create(
+            source_run_id=source_run_id, logical_round_no=logical_round_no,
+            query_instance_id=query_instance_id, keyword_query=keyword_query,
+            visible_candidate_count=visible_candidate_count, candidates=list(candidates),
+        )
+        return ProviderSearchContinuation(kind="first_page_detail_expansion",
+            continuation_id=source_run_id, opaque_ref=saved.opaque_ref, source_kind="liepin",
+            round_no=logical_round_no, query_instance_id=query_instance_id,
+            visible_candidate_count=saved.visible_candidate_count,
+            eligible_candidate_count=len(saved.candidates), initial_opened_count=0)
+
+    def mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
+        state: CandidateState) -> None:
+        self._first_page_continuation_store().mark_candidate(opaque_ref, rank=rank, state=state)
 
     @property
     def _commands(self):
@@ -3453,6 +3485,13 @@ class LiepinSiteAdapter:
 @dataclass(frozen=True)
 class _LiepinSearchWorkflowSite:
     adapter: LiepinSiteAdapter
+
+    def save_liepin_first_page_continuation(self, **kwargs: object) -> ProviderSearchContinuation:
+        return self.adapter.save_liepin_first_page_continuation(**cast(dict, kwargs))
+
+    def mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
+        state: CandidateState) -> None:
+        self.adapter.mark_liepin_first_page_candidate(opaque_ref=opaque_ref, rank=rank, state=state)
 
     def append_agent_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
         self.adapter._append_agent_event(source_run_id, event)

@@ -25,6 +25,7 @@ def _liepin_source_query_policy(settings: AppSettings) -> RuntimeSourceQueryPoli
             "generic_explore": settings.liepin_explore_detail_target,
             "prf_probe": settings.liepin_explore_detail_target,
         },
+        provider_scan_limits_by_lane={"exploit": 30, "generic_explore": 30, "prf_probe": 30},
         provider_scan_multiplier=3,
         provider_scan_cap=settings.liepin_opencli_max_cards_per_task,
     )

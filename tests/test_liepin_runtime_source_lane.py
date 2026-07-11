@@ -1285,7 +1285,7 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
             )
             candidates: list[ResumeCandidate] = []
             snapshots: list[ProviderSnapshot] = []
-            for offset in range(2):
+            for offset in range(min(2, request.page_size)):
                 provider_key = f"{city}-{offset}"
                 raw_payload = {"candidateId": provider_key}
                 candidates.append(
@@ -1337,7 +1337,7 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
         term_group_key="term-group-data-platform",
         primary_anchor_family_id="role.data-engineer",
         non_anchor_term_family_ids=("skill.python",),
-        requested_count=4,
+        requested_count=3,
         source_plan_version="7",
     )
     intent = RuntimeSourceQueryIntent(
@@ -1352,8 +1352,8 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
         non_anchor_term_family_ids=("skill.python",),
         query_terms=("数据开发专家",),
         keyword_query="数据开发专家",
-        requested_count=4,
-        provider_scan_limit=4,
+        requested_count=3,
+        provider_scan_limit=30,
         source_plan_version="7",
         filter_intents=(),
         location_intent=RuntimeLocationExecutionIntent(
@@ -1363,7 +1363,7 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
             priority_order=("上海",),
             balanced_order=("北京", "深圳"),
             rotation_offset=0,
-            target_new=4,
+            target_new=3,
         ),
         age_intent=None,
     )
@@ -1393,7 +1393,10 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
         {"section": "expected", "label": "上海"},
         {"section": "expected", "label": "北京"},
     ]
-    assert len(result.candidate_store_updates) == 4
+    assert [call["request"].page_size for call in worker.search_calls] == [3, 1]
+    assert all(call["provider_context"]["liepin_max_cards"] == "30" for call in worker.search_calls)
+    assert all(call["provider_context"]["liepin_max_pages"] == "1" for call in worker.search_calls)
+    assert len(result.candidate_store_updates) == 3
     assert all(item.query_fingerprint == "runtime-fingerprint-1" for item in result.source_evidence_updates)
 
 

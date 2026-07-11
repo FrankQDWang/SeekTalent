@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, field
 import hashlib
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from seektalent.models import NormalizedResume, RequirementSheet, ResumeCandidate, RuntimeSourceEvidence
 from seektalent.progress import ProgressCallback
+if TYPE_CHECKING:
+    from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 
 
 SourceId = str
@@ -103,6 +105,7 @@ class SourceLaneResult:
     normalized_store_updates: dict[str, NormalizedResume] = field(default_factory=dict)
     source_evidence_updates: tuple[RuntimeSourceEvidence, ...] = ()
     raw_candidate_count: int | None = None
+    private_first_page_continuations: tuple[ProviderSearchContinuation, ...] = ()
     provider_snapshot_refs: tuple[str, ...] = ()
     safe_summary_refs: tuple[str, ...] = ()
     blocked_reason_code: str | None = None

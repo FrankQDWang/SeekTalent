@@ -71,6 +71,7 @@ async def run_provider_card_lane(
         status="completed",
         candidate_store_updates={candidate.resume_id: candidate for candidate in candidates},
         raw_candidate_count=search_result.raw_candidate_count,
+        private_first_page_continuations=search_result.private_continuations,
         source_evidence_updates=tuple(
             _source_evidence_for_candidate(
                 request=request,
