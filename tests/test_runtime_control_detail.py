@@ -3,23 +3,33 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_runtime_detail_reflection_cites_event_and_redacts_unsafe_artifacts(tmp_path: Path) -> None:
+def test_runtime_detail_uses_normalized_public_payload_instead_of_stored_event_text(tmp_path: Path) -> None:
     from seektalent_runtime_control.detail import RuntimeDetailService
     from seektalent_runtime_control.models import RuntimeControlEventInput
+    from seektalent.runtime.public_events import make_runtime_public_event
 
     store = _store_with_run(tmp_path, status="running")
-    event = store.append_event(
+    store.append_event(
         RuntimeControlEventInput(
-            event_id="rtevt_reflection_1",
+            event_id="rtevt_public_feedback_1",
             runtime_run_id="runtime_run_1",
-            event_type="runtime_reflection_completed",
-            stage="reflection",
+            event_type="runtime_internal_wrong_event_type",
+            stage="internal",
             round_no=2,
             source_id=None,
             status="completed",
-            summary="Narrow keywords toward distributed systems.",
+            summary="OpenCLI CDP target 98b37a browser session failed",
             payload={
-                "facts": [{"label": "Reflection", "value": "Focus on distributed systems."}],
+                **make_runtime_public_event(
+                    runtime_run_id="runtime_run_1",
+                    stage="feedback",
+                    event_seq=1,
+                    round_no=2,
+                    status="completed",
+                    details={"reflectionSummary": "Focus on distributed systems."},
+                    created_at="2026-06-08T00:00:01.000000Z",
+                ),
+                "facts": [{"label": "Internal", "value": "SHOULD_NOT_RENDER raw provider details"}],
                 "artifactRefs": [
                     {"artifactRefId": "artifact_safe_1", "visibility": "safe", "safeUri": "artifact://safe/1"},
                     {
@@ -29,6 +39,7 @@ def test_runtime_detail_reflection_cites_event_and_redacts_unsafe_artifacts(tmp_
                     },
                 ],
             },
+            visibility="public",
             workbench_event_global_seq=None,
             created_at="2026-06-08T00:00:01.000000Z",
         )
@@ -42,17 +53,20 @@ def test_runtime_detail_reflection_cites_event_and_redacts_unsafe_artifacts(tmp_
     )
 
     assert detail.reason_code is None
-    assert detail.source_event_ids == [event.event_id]
+    assert detail.source_event_ids == ["runtime_run_1:2:feedback:all"]
+    assert detail.summary == "第 2 轮检索复盘已完成。"
     assert detail.facts == [
         {
             "label": "Reflection",
             "value": "Focus on distributed systems.",
-            "sourceEventId": "rtevt_reflection_1",
+            "sourceEventId": "runtime_run_1:2:feedback:all",
         }
     ]
-    assert detail.artifact_refs == [
-        {"artifactRefId": "artifact_safe_1", "safeUri": "artifact://safe/1", "visibility": "safe"}
-    ]
+    assert detail.artifact_refs == []
+    serialized = str(detail.model_dump(mode="json"))
+    assert "OpenCLI" not in serialized
+    assert "SHOULD_NOT_RENDER" not in serialized
+    assert "rawProviderPayload" not in serialized
 
     detail_without_artifacts = RuntimeDetailService(store=store).get_runtime_detail(
         runtime_run_id="runtime_run_1",
@@ -62,6 +76,45 @@ def test_runtime_detail_reflection_cites_event_and_redacts_unsafe_artifacts(tmp_
     )
 
     assert detail_without_artifacts.artifact_refs == []
+
+
+def test_runtime_detail_never_selects_internal_event_by_id_or_kind(tmp_path: Path) -> None:
+    from seektalent_runtime_control.detail import RuntimeDetailService
+    from seektalent_runtime_control.models import RuntimeControlEventInput
+
+    store = _store_with_run(tmp_path, status="running")
+    store.append_event(
+        RuntimeControlEventInput(
+            event_id="rtevt_internal_browser_failure",
+            runtime_run_id="runtime_run_1",
+            event_type="runtime_round_source_result",
+            stage="source_result",
+            round_no=2,
+            source_id="liepin",
+            status="failed",
+            summary="OpenCLI CDP target 98b37a browser session failed",
+            payload={"facts": [{"label": "Raw", "value": "Bearer private-token"}]},
+            workbench_event_global_seq=None,
+            created_at="2026-06-08T00:00:01.000000Z",
+        )
+    )
+
+    service = RuntimeDetailService(store=store)
+    by_kind = service.get_runtime_detail(
+        runtime_run_id="runtime_run_1",
+        kind="source_result",
+        round_no=2,
+    )
+    by_id = service.get_runtime_detail(
+        runtime_run_id="runtime_run_1",
+        kind="source_result",
+        event_id="rtevt_internal_browser_failure",
+    )
+
+    assert by_kind.reason_code == "runtime_event_not_found"
+    assert by_id.reason_code == "runtime_event_not_found"
+    assert "OpenCLI" not in str(by_kind.model_dump(mode="json"))
+    assert "Bearer" not in str(by_id.model_dump(mode="json"))
 
 
 def test_runtime_detail_checkpoint_cites_checkpoint_and_returns_missing_reason(tmp_path: Path) -> None:

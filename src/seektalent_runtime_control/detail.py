@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from seektalent_runtime_control.events import public_event_payload
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.models import RuntimeControlEvent, RuntimeDetailResponse, RuntimeFinalSummary
 from seektalent_runtime_control.store import RuntimeControlStore
@@ -11,6 +12,50 @@ from seektalent_runtime_control.store import RuntimeControlStore
 
 _TERMINAL_RUN_STATUSES = {"cancelled", "completed", "failed"}
 _SAFE_ARTIFACT_VISIBILITIES = {"public", "safe", "workbench_visible"}
+_PUBLIC_DETAIL_STAGE_LABELS = {
+    "round_query": "查询策略",
+    "source_dispatch": "候选人检索",
+    "source_result": "候选人检索结果",
+    "merge": "候选人合并",
+    "scoring": "候选人评分",
+    "feedback": "检索复盘",
+    "finalization": "最终候选人",
+}
+_PUBLIC_DETAIL_STATUS_LABELS = {
+    "pending": "待处理",
+    "running": "进行中",
+    "completed": "已完成",
+    "partial": "部分完成",
+    "blocked": "受阻",
+    "failed": "未完成",
+    "cancelled": "已取消",
+}
+_PUBLIC_DETAIL_COUNT_LABELS = {
+    "roundReturned": "本轮返回简历",
+    "roundIdentities": "本轮新增候选人",
+    "sourceCumulativeReturned": "来源累计返回简历",
+    "sourceCumulativeIdentities": "来源累计候选人",
+    "roundUniqueIdentities": "本轮去重候选人",
+    "mergedIdentities": "合并候选人",
+    "topPoolCount": "Top Pool 候选人",
+    "selectedIdentityCount": "最终入选候选人",
+    "feedbackCandidateCount": "复盘候选人",
+}
+_PUBLIC_DETAIL_TEXT_LABELS = {
+    "resumeQualityComment": "简历质量",
+    "reflectionSummary": "Reflection",
+    "suggestedStopReason": "建议停止原因",
+    "finalizationReasonCode": "最终候选人原因",
+}
+_PUBLIC_DETAIL_LIST_LABELS = {
+    "suggestedActivateTerms": "建议激活关键词",
+    "suggestedAddFilterFields": "建议添加筛选条件",
+    "suggestedDeprioritizeTerms": "建议降低优先级关键词",
+    "suggestedDropFilterFields": "建议移除筛选条件",
+    "suggestedDropTerms": "建议移除关键词",
+    "suggestedKeepFilterFields": "建议保留筛选条件",
+    "suggestedKeepTerms": "建议保留关键词",
+}
 
 
 class RuntimeDetailService:
@@ -42,9 +87,15 @@ class RuntimeDetailService:
                 checkpoint_id=checkpoint_id,
                 include_artifacts=include_artifacts,
             )
-        events = self.store.list_events(runtime_run_id=runtime_run_id, after_seq=0, limit=500).events
-        event = _select_event(events, kind=kind, round_no=round_no, event_id=event_id, command_id=command_id)
-        if event is None:
+        events = self.store.list_public_events(runtime_run_id=runtime_run_id, after_seq=0, limit=500).events
+        selected = _select_public_event(
+            events,
+            kind=kind,
+            round_no=round_no,
+            event_id=event_id,
+            command_id=command_id,
+        )
+        if selected is None:
             return RuntimeDetailResponse(
                 kind=kind,
                 runtime_run_id=runtime_run_id,
@@ -52,15 +103,24 @@ class RuntimeDetailService:
                 summary="No persisted runtime event matched the detail request.",
                 reason_code="runtime_event_not_found",
             )
-        facts = _event_facts(event)
+        _, public_payload = selected
+        source_event_id = _public_text(public_payload, "eventId")
+        if source_event_id is None:
+            return RuntimeDetailResponse(
+                kind=kind,
+                runtime_run_id=runtime_run_id,
+                title="Detail unavailable",
+                summary="No persisted runtime event matched the detail request.",
+                reason_code="runtime_event_not_found",
+            )
         return RuntimeDetailResponse(
             kind=kind,
             runtime_run_id=runtime_run_id,
-            title=_detail_title(kind, event),
-            summary=event.summary,
-            facts=facts,
-            source_event_ids=[event.event_id],
-            artifact_refs=_safe_artifact_refs(event.payload, include_artifacts=include_artifacts),
+            title=_public_detail_title(public_payload),
+            summary=_public_detail_summary(public_payload),
+            facts=_public_detail_facts(public_payload, source_event_id=source_event_id),
+            source_event_ids=[source_event_id],
+            artifact_refs=_safe_artifact_refs(public_payload, include_artifacts=include_artifacts),
         )
 
     def prepare_final_summary(
@@ -154,58 +214,99 @@ class RuntimeDetailService:
         )
 
 
-def _select_event(
+def _select_public_event(
     events: list[RuntimeControlEvent],
     *,
     kind: str,
     round_no: int | None,
     event_id: str | None,
     command_id: str | None,
-) -> RuntimeControlEvent | None:
+) -> tuple[RuntimeControlEvent, dict[str, object]] | None:
+    public_events = [
+        (event, payload)
+        for event in events
+        if (payload := public_event_payload(event)) is not None
+    ]
     if event_id is not None:
-        return next((event for event in events if event.event_id == event_id), None)
-    candidates = [event for event in events if _event_matches_kind(event, kind)]
+        return next(((event, payload) for event, payload in public_events if event.event_id == event_id), None)
+    candidates = [(event, payload) for event, payload in public_events if _public_event_matches_kind(payload, kind)]
     if round_no is not None:
-        candidates = [event for event in candidates if event.round_no == round_no]
+        candidates = [
+            (event, payload)
+            for event, payload in candidates
+            if payload.get("roundNo") == round_no
+        ]
     if command_id is not None:
-        candidates = [event for event in candidates if event.payload.get("commandId") == command_id]
+        candidates = []
     return candidates[-1] if candidates else None
 
 
-def _event_matches_kind(event: RuntimeControlEvent, kind: str) -> bool:
+def _public_event_matches_kind(payload: dict[str, object], kind: str) -> bool:
+    stage = payload.get("stage")
     if kind == "reflection":
-        return "reflection" in event.event_type
+        return stage == "feedback"
     if kind == "command":
-        return event.event_type.startswith("runtime_command_")
+        return False
     if kind == "round_query":
-        return "query" in event.event_type or event.event_type == "runtime_round_input_locked"
+        return stage == "round_query"
     if kind == "source_result":
-        return "source" in event.event_type
+        return stage == "source_result"
     if kind == "candidate_score":
-        return "score" in event.event_type or "scoring" in event.event_type
+        return stage == "scoring"
     if kind == "final_candidate":
-        return "final" in event.event_type and "candidate" in event.event_type
-    return event.event_type == kind
+        return stage == "finalization"
+    return stage == kind
 
 
-def _event_facts(event: RuntimeControlEvent) -> list[dict[str, object]]:
-    facts = event.payload.get("facts")
-    if isinstance(facts, list) and facts:
-        result: list[dict[str, object]] = []
-        for raw_fact in facts:
-            fact = _string_key_dict(raw_fact)
-            if not fact:
-                continue
-            result.append(
-                {
-                    "label": str(fact.get("label") or "Fact"),
-                    "value": str(fact.get("value") or ""),
-                    "sourceEventId": event.event_id,
-                }
-            )
-        if result:
-            return result
-    return [{"label": "Summary", "value": event.summary, "sourceEventId": event.event_id}]
+def _public_detail_title(payload: dict[str, object]) -> str:
+    stage = _public_text(payload, "stage")
+    label = _PUBLIC_DETAIL_STAGE_LABELS.get(stage, "运行详情") if stage is not None else "运行详情"
+    round_no = payload.get("roundNo")
+    if isinstance(round_no, int) and not isinstance(round_no, bool):
+        return f"{label}（第 {round_no} 轮）"
+    return label
+
+
+def _public_detail_summary(payload: dict[str, object]) -> str:
+    stage = _public_text(payload, "stage")
+    status = _public_text(payload, "status")
+    label = _PUBLIC_DETAIL_STAGE_LABELS.get(stage, "招聘流程状态") if stage is not None else "招聘流程状态"
+    status_label = _PUBLIC_DETAIL_STATUS_LABELS.get(status, "已更新") if status is not None else "已更新"
+    round_no = payload.get("roundNo")
+    round_prefix = f"第 {round_no} 轮" if isinstance(round_no, int) and not isinstance(round_no, bool) else "本轮"
+    return f"{round_prefix}{label}{status_label}。"
+
+
+def _public_detail_facts(payload: dict[str, object], *, source_event_id: str) -> list[dict[str, object]]:
+    facts: list[dict[str, object]] = []
+    counts = payload.get("counts")
+    if isinstance(counts, dict):
+        for key, label in _PUBLIC_DETAIL_COUNT_LABELS.items():
+            value = counts.get(key)
+            if isinstance(value, int) and not isinstance(value, bool):
+                facts.append({"label": label, "value": value, "sourceEventId": source_event_id})
+
+    details = payload.get("details")
+    if not isinstance(details, dict):
+        return facts
+    for key, label in _PUBLIC_DETAIL_TEXT_LABELS.items():
+        value = details.get(key)
+        if isinstance(value, str):
+            facts.append({"label": label, "value": value, "sourceEventId": source_event_id})
+    for key, label in _PUBLIC_DETAIL_LIST_LABELS.items():
+        values = details.get(key)
+        if isinstance(values, list) and all(isinstance(value, str) for value in values):
+            facts.append({"label": label, "value": "、".join(values), "sourceEventId": source_event_id})
+    suggest_stop = details.get("suggestStop")
+    if isinstance(suggest_stop, bool):
+        facts.append({"label": "建议停止", "value": "是" if suggest_stop else "否", "sourceEventId": source_event_id})
+    finalization_revision = details.get("finalizationRevision")
+    if isinstance(finalization_revision, int) and not isinstance(finalization_revision, bool):
+        facts.append({"label": "最终候选人版本", "value": finalization_revision, "sourceEventId": source_event_id})
+    query_groups = details.get("queryGroups")
+    if isinstance(query_groups, list):
+        facts.append({"label": "关键词组", "value": len(query_groups), "sourceEventId": source_event_id})
+    return facts
 
 
 def _safe_artifact_refs(payload: dict[str, object], *, include_artifacts: bool) -> list[dict[str, object]]:
@@ -220,9 +321,9 @@ def _safe_artifact_refs(payload: dict[str, object], *, include_artifacts: bool) 
         if ref.get("visibility") not in _SAFE_ARTIFACT_VISIBILITIES:
             continue
         safe_ref: dict[str, object] = {
-            key: ref[key]
+            key: value
             for key in ("artifactRefId", "safeUri", "visibility", "artifactKind")
-            if key in ref
+            if isinstance(value := ref.get(key), str)
         }
         if safe_ref:
             safe_refs.append(safe_ref)
@@ -293,3 +394,8 @@ def _string_key_dict(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
     return {key: item for key, item in value.items() if isinstance(key, str)}
+
+
+def _public_text(payload: dict[str, object], key: str) -> str | None:
+    value = payload.get(key)
+    return value if isinstance(value, str) else None
