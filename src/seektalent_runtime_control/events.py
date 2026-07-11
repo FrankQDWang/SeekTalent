@@ -162,8 +162,7 @@ def _public_runtime_event_summary(event: Mapping[str, object]) -> str:
     status = event["status"]
     round_prefix = _round_prefix(event.get("roundNo"))
     source_label = _public_source_label(event.get("sourceKind"))
-    counts = event.get("counts")
-    counts = counts if isinstance(counts, Mapping) else {}
+    counts = _string_object_mapping(event.get("counts"))
     reason = event.get("safeReasonCode")
     reason = reason if isinstance(reason, str) else None
 

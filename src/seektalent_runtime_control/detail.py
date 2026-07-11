@@ -279,24 +279,23 @@ def _public_detail_summary(payload: dict[str, object]) -> str:
 
 def _public_detail_facts(payload: dict[str, object], *, source_event_id: str) -> list[dict[str, object]]:
     facts: list[dict[str, object]] = []
-    counts = payload.get("counts")
-    if isinstance(counts, dict):
-        for key, label in _PUBLIC_DETAIL_COUNT_LABELS.items():
-            value = counts.get(key)
-            if isinstance(value, int) and not isinstance(value, bool):
-                facts.append({"label": label, "value": value, "sourceEventId": source_event_id})
+    counts = _string_key_dict(payload.get("counts"))
+    for key, label in _PUBLIC_DETAIL_COUNT_LABELS.items():
+        value = counts.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            facts.append({"label": label, "value": value, "sourceEventId": source_event_id})
 
-    details = payload.get("details")
-    if not isinstance(details, dict):
-        return facts
+    details = _string_key_dict(payload.get("details"))
     for key, label in _PUBLIC_DETAIL_TEXT_LABELS.items():
         value = details.get(key)
         if isinstance(value, str):
             facts.append({"label": label, "value": value, "sourceEventId": source_event_id})
     for key, label in _PUBLIC_DETAIL_LIST_LABELS.items():
         values = details.get(key)
-        if isinstance(values, list) and all(isinstance(value, str) for value in values):
-            facts.append({"label": label, "value": "、".join(values), "sourceEventId": source_event_id})
+        if isinstance(values, list):
+            text_values = [value for value in values if isinstance(value, str)]
+            if len(text_values) == len(values):
+                facts.append({"label": label, "value": "、".join(text_values), "sourceEventId": source_event_id})
     suggest_stop = details.get("suggestStop")
     if isinstance(suggest_stop, bool):
         facts.append({"label": "建议停止", "value": "是" if suggest_stop else "否", "sourceEventId": source_event_id})
