@@ -51,14 +51,24 @@ _SAFE_FIRST_PAGE_REASON_CODES = frozenset({
     "baseline_query_not_completed", "first_page_continuation_discard_partial",
     "first_page_continuation_discard_blocked", "first_page_continuation_discard_failed",
     "first_page_continuation_cleanup_failed", "first_page_continuation_cleanup_unacknowledged",
-    "first_page_expansion_partial", "first_page_expansion_blocked",
+    "first_page_expansion_partial", "first_page_expansion_blocked", "first_page_expansion_failed",
     "liepin_first_page_expansion_partial", "liepin_first_page_expansion_blocked",
     "liepin_first_page_continuation_cleanup_failed",
 })
 
 
-def safe_first_page_reason_code(value: object, *, fallback: str) -> str:
-    return value if isinstance(value, str) and value in _SAFE_FIRST_PAGE_REASON_CODES else fallback
+def safe_first_page_reason_code(
+    value: object, *, fallback: str | None = None, status: str | None = None
+) -> str:
+    if isinstance(value, str) and value in _SAFE_FIRST_PAGE_REASON_CODES:
+        return value
+    if fallback is not None:
+        return fallback
+    return {
+        "blocked": "first_page_expansion_blocked",
+        "partial": "first_page_expansion_partial",
+        "failed": "first_page_expansion_failed",
+    }.get(status or "", "first_page_expansion_failed")
 
 
 def assert_first_page_expanders_registered(
@@ -204,7 +214,7 @@ async def execute_first_page_decisions(
                     first_page_eligible_count=continuation.eligible_candidate_count,
                     initial_opened_count=continuation.initial_opened_count,
                     safe_reason_code=safe_first_page_reason_code(
-                        exc.safe_reason_code, fallback="first_page_expansion_blocked"
+                        exc.safe_reason_code, status=exc.status
                     ),
                     continuation_deleted=exc.continuation_deleted,
                 )
@@ -220,7 +230,11 @@ async def discard_unconsumed_first_page_continuations(
     expanders: Mapping[str, SourceFirstPageExpander],
 ) -> list[ContinuationCleanupRecord]:
     records: list[ContinuationCleanupRecord] = []
-    unique = {item.continuation_id: item for item in continuations}
+    unique: dict[str, ProviderSearchContinuation] = {}
+    for item in continuations:
+        if item.continuation_id in unique:
+            raise RuntimeSourceInvariantError("duplicate_first_page_continuation_cleanup_carrier")
+        unique[item.continuation_id] = item
     for item in unique.values():
         expander = expanders.get(item.source_kind)
         if expander is None:

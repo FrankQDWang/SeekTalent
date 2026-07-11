@@ -2610,6 +2610,14 @@ class WorkflowRuntime:
                 del baseline_scoring_result
             finally:
                 primary_active = sys.exc_info()[0] is not None
+                finalization_failures: list[str] = []
+
+                def best_effort_finalization(name: str, operation: Callable[[], object]) -> None:
+                    try:
+                        operation()
+                    except Exception:  # noqa: BLE001 - preserve the active primary exception
+                        finalization_failures.append(name)
+
                 cleanup_records = await discard_unconsumed_first_page_continuations(
                     runtime_run_id=tracer.run_id,
                     round_no=round_no,
@@ -2624,50 +2632,57 @@ class WorkflowRuntime:
                     for record in cleanup_records
                     if not record.deleted
                 ]
-                tracer.write_json(
-                    _round_artifact(
-                        tracer, round_no=round_no, subsystem="retrieval",
-                        name="first_page_continuation_cleanup",
+                best_effort_finalization(
+                    "cleanup_audit_write_failed",
+                    lambda: tracer.write_json(
+                        _round_artifact(
+                            tracer, round_no=round_no, subsystem="retrieval",
+                            name="first_page_continuation_cleanup",
+                        ),
+                        {
+                            "attempted_count": len(cleanup_records),
+                            "deleted_count": sum(record.deleted for record in cleanup_records),
+                            "failure_count": len(cleanup_failures),
+                            "safe_reason_codes": sorted(set(cleanup_failures)),
+                        },
                     ),
-                    {
-                        "attempted_count": len(cleanup_records),
-                        "deleted_count": sum(record.deleted for record in cleanup_records),
-                        "failure_count": len(cleanup_failures),
-                        "safe_reason_codes": sorted(set(cleanup_failures)),
-                    },
                 )
-                self._write_query_resume_hits(
-                    tracer=tracer,
-                    round_no=round_no,
-                    query_resume_hits=query_resume_hits,
-                    scorecards_by_resume_id=run_state.scorecards_by_resume_id,
+                best_effort_finalization(
+                    "query_resume_hits_write_failed",
+                    lambda: self._write_query_resume_hits(
+                        tracer=tracer, round_no=round_no, query_resume_hits=query_resume_hits,
+                        scorecards_by_resume_id=run_state.scorecards_by_resume_id,
+                    ),
                 )
-                self._record_flywheel_retrieval_rows(
-                    tracer=tracer,
-                    run_state=run_state,
-                    executed_queries=executed_queries,
-                    sent_query_records=sent_query_records,
-                    query_resume_hits=query_resume_hits,
-                    job_intent_fingerprint=job_intent_fingerprint,
-                    prf_selection=prf_selection,
+                best_effort_finalization(
+                    "flywheel_write_failed",
+                    lambda: self._record_flywheel_retrieval_rows(
+                        tracer=tracer, run_state=run_state, executed_queries=executed_queries,
+                        sent_query_records=sent_query_records, query_resume_hits=query_resume_hits,
+                        job_intent_fingerprint=job_intent_fingerprint, prf_selection=prf_selection,
+                    ),
                 )
-                replay_snapshot = build_replay_snapshot_direct(
-                    run_id=tracer.run_id,
-                    round_no=round_no,
-                    second_lane_decision=second_lane_decision,
-                    search_attempts=search_attempts,
-                    query_resume_hits=query_resume_hits,
-                    search_observation=search_observation,
-                    scoring_model_version=self.settings.scoring_model_id,
-                    query_plan_version=str(retrieval_plan.plan_version),
-                    llm_prf_snapshot_metadata=prf_selection.llm_prf_snapshot_metadata,
-                )
-                tracer.write_json(
-                    f"round.{round_no:02d}.retrieval.replay_snapshot",
-                    replay_snapshot.model_dump(mode="json"),
-                )
+                def write_replay_snapshot() -> None:
+                    replay_snapshot = build_replay_snapshot_direct(
+                        run_id=tracer.run_id, round_no=round_no,
+                        second_lane_decision=second_lane_decision, search_attempts=search_attempts,
+                        query_resume_hits=query_resume_hits, search_observation=search_observation,
+                        scoring_model_version=self.settings.scoring_model_id,
+                        query_plan_version=str(retrieval_plan.plan_version),
+                        llm_prf_snapshot_metadata=prf_selection.llm_prf_snapshot_metadata,
+                    )
+                    tracer.write_json(
+                        f"round.{round_no:02d}.retrieval.replay_snapshot",
+                        replay_snapshot.model_dump(mode="json"),
+                    )
+
+                best_effort_finalization("replay_snapshot_write_failed", write_replay_snapshot)
                 if cleanup_failures and not primary_active:
                     raise RunStageError("first_page_expansion_cleanup", cleanup_failures[0])
+                if finalization_failures and not primary_active:
+                    raise RunStageError("round_audit", finalization_failures[0])
+            if pending_continuations:
+                raise RunStageError("first_page_expansion_cleanup", "pending_continuation_invariant_failed")
             newly_scored_count = len(run_state.scorecards_by_resume_id) - previous_scored_count
             scored_this_round = [
                 candidate
