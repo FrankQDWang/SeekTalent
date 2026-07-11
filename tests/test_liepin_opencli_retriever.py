@@ -55,12 +55,24 @@ def test_discard_readback_failure_returns_typed_cleanup_result() -> None:
         def discard_liepin_first_page_continuation(self, opaque_ref): del opaque_ref
         def liepin_first_page_continuation_exists(self, opaque_ref):
             del opaque_ref
-            raise RuntimeError("readback failed")
+            raise OSError("readback failed")
     result = LiepinOpenCliResumeRetriever(runner=Runner()).handle_first_page_continuation_with_detail_open_claim_ledger(
         action="discard", continuation=_continuation(), detail_open_claim_ledger=DetailOpenClaimLedger({}),
         logical_round_no=1, query_instance_id="q1")
     assert result.continuation_deleted is False
     assert result.safe_reason_code == "liepin_first_page_continuation_cleanup_failed"
+
+
+def test_discard_readback_programmer_runtime_error_propagates() -> None:
+    class Runner:
+        def discard_liepin_first_page_continuation(self, opaque_ref): del opaque_ref
+        def liepin_first_page_continuation_exists(self, opaque_ref):
+            del opaque_ref
+            raise RuntimeError("readback invariant violated")
+    with pytest.raises(RuntimeError, match="readback invariant violated"):
+        LiepinOpenCliResumeRetriever(runner=Runner()).handle_first_page_continuation_with_detail_open_claim_ledger(
+            action="discard", continuation=_continuation(), detail_open_claim_ledger=DetailOpenClaimLedger({}),
+            logical_round_no=1, query_instance_id="q1")
 
 
 def test_expansion_rejects_coroutine_from_synchronous_runner_seam() -> None:

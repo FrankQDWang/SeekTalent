@@ -122,7 +122,7 @@ class LiepinOpenCliResumeRetriever:
             try:
                 discard(continuation.opaque_ref)
                 deleted = not exists(continuation.opaque_ref)
-            except (OSError, RuntimeError):
+            except OSError:
                 deleted = False
             from seektalent.core.retrieval.provider_contract import SearchResult
             return ProviderFirstPageExpansionResult(search_result=SearchResult(),
