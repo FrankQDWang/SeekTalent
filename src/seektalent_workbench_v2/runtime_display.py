@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from seektalent.public_payload_safety import public_source_identifier, public_text
+
 
 COMPLETED_PROGRESS_SUMMARY = "招聘流程已完成。"
 COMPLETED_RESULT_SUMMARY = "招聘流程已完成，最终候选人列表已生成。"
@@ -647,12 +649,7 @@ def _safe_query_terms(value: object) -> list[str]:
 
 
 def _safe_query_text(value: object, *, max_length: int) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or _looks_like_internal_marker(text):
-        return None
-    return text[:max_length]
+    return public_text(value, max_length=max_length)
 
 
 def _safe_runtime_identifier(value: object) -> str | None:
@@ -695,14 +692,7 @@ def _safe_runtime_stage(value: object) -> str | None:
 
 
 def _safe_public_source_kind(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or len(text) > 80:
-        return None
-    if any(not (character.isascii() and (character.isalnum() or character in "_-")) for character in text):
-        return None
-    return text
+    return public_source_identifier(value)
 
 
 def _safe_detail_list(value: object) -> list[str]:
@@ -719,14 +709,7 @@ def _safe_detail_list(value: object) -> list[str]:
 
 
 def _safe_detail_text(value: object, *, max_length: int) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    if _looks_like_internal_marker(text):
-        return None
-    return text[:max_length]
+    return public_text(value, max_length=max_length)
 
 
 def _safe_runtime_result_facts(value: object) -> list[dict[str, str]]:

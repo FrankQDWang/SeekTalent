@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 
+from seektalent.public_payload_safety import public_source_identifier, public_text
 from seektalent_runtime_control.errors import RuntimeControlError
 
 
@@ -377,14 +378,7 @@ def _safe_public_status(value: object) -> str:
 
 
 def _safe_public_source_kind(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or len(text) > 80:
-        return None
-    if any(not (character.isascii() and (character.isalnum() or character in "_-")) for character in text):
-        return None
-    return text
+    return public_source_identifier(value)
 
 
 def _safe_public_detail_list(value: object) -> list[str] | None:
@@ -401,12 +395,7 @@ def _safe_public_detail_list(value: object) -> list[str] | None:
 
 
 def _safe_public_detail_text(value: object, *, max_length: int) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or _looks_like_unsafe_public_text(text):
-        return None
-    return text[:max_length]
+    return public_text(value, max_length=max_length)
 
 
 def _safe_public_query_terms(value: object) -> list[str]:
@@ -423,24 +412,7 @@ def _safe_public_query_terms(value: object) -> list[str]:
 
 
 def _safe_public_query_text(value: object, *, max_length: int) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or _looks_like_unsafe_public_text(text):
-        return None
-    return text[:max_length]
-
-
-def _looks_like_unsafe_public_text(text: str) -> bool:
-    upper = text.strip().upper()
-    lower = text.lower()
-    if "SHOULD_NOT_RENDER" in upper or upper.startswith("INTERNAL_"):
-        return True
-    if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
-        return True
-    if "http://" in lower or "https://" in lower:
-        return True
-    return any(pattern in lower for pattern in ("api_key=", "apikey=", "token=", "cookie=", "password="))
+    return public_text(value, max_length=max_length)
 
 
 def _non_negative_int(value: object) -> int | None:

@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, cast
 
+from seektalent.public_payload_safety import public_source_identifier, public_text
 from seektalent_runtime_control.models import RuntimeStageOutput
 
 
@@ -470,12 +471,7 @@ def _query_executions(value: object) -> tuple[AgentWorkbenchQueryExecutionProjec
 
 
 def _safe_public_query_text(value: object, *, max_length: int) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or _looks_like_unsafe_public_text(text):
-        return None
-    return text[:max_length]
+    return public_text(value, max_length=max_length)
 
 
 def _safe_public_query_terms(value: object) -> tuple[str, ...]:
@@ -492,32 +488,7 @@ def _safe_public_query_terms(value: object) -> tuple[str, ...]:
 
 
 def _safe_public_source_identifier(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or len(text) > 80 or _looks_like_unsafe_public_source_identifier(text):
-        return None
-    if any(not (character.isascii() and (character.isalnum() or character in "_-")) for character in text):
-        return None
-    return text
-
-
-def _looks_like_unsafe_public_source_identifier(text: str) -> bool:
-    return text != "internal_referrals" and _looks_like_unsafe_public_text(text)
-
-
-def _looks_like_unsafe_public_text(text: str) -> bool:
-    upper = text.upper()
-    lower = text.lower()
-    if "SHOULD_NOT_RENDER" in upper or upper.startswith("INTERNAL_"):
-        return True
-    if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
-        return True
-    if "http://" in lower or "https://" in lower:
-        return True
-    return any(
-        pattern in lower for pattern in ("api_key=", "apikey=", "token=", "cookie=", "password=", "secret=", "secret:")
-    )
+    return public_source_identifier(value)
 
 
 def _public_query_execution_reason_code(value: object) -> str | None:

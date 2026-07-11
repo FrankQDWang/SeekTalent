@@ -1020,10 +1020,19 @@ def test_public_stage_output_v2_drops_sensitive_detail_text_and_invalid_status()
     assert private_token not in repr(output)
 
 
-def test_public_stage_output_v2_drops_unsafe_source_kind() -> None:
+@pytest.mark.parametrize(
+    "source_kind",
+    [
+        "https://provider.example/private/raw-identity",
+        "note: Authorization: Bearer private-token",
+        "debug secret=private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_public_stage_output_v2_drops_unsafe_source_kind(source_kind: str) -> None:
     from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
-    provider_url = "https://provider.example/private/raw-identity"
     output = sanitize_stage_output_payload(
         output_kind="runtime_public_source_result",
         schema_version="runtime-public-stage-output/v2",
@@ -1032,7 +1041,7 @@ def test_public_stage_output_v2_drops_unsafe_source_kind() -> None:
             "publicEventSchemaVersion": "runtime_public_event_v1",
             "stage": "source_result",
             "roundNo": 1,
-            "sourceKind": provider_url,
+            "sourceKind": source_kind,
             "status": "completed",
             "counts": {},
             "details": {},
@@ -1040,11 +1049,11 @@ def test_public_stage_output_v2_drops_unsafe_source_kind() -> None:
         },
         stage="source_result",
         round_no=1,
-        node_id=provider_url,
+        node_id=source_kind,
     )
 
     assert output["sourceKind"] is None
-    assert provider_url not in repr(output)
+    assert source_kind not in repr(output)
 
 
 @pytest.mark.parametrize(
@@ -1108,6 +1117,111 @@ def test_public_stage_output_v2_filters_sensitive_query_terms() -> None:
     [sanitized] = output["details"]["queryGroups"]
     assert sanitized["queryTerms"] == ["safe term"]
     assert secret not in repr(output)
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "note: Authorization: Bearer private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_public_stage_output_v2_drops_shared_unsafe_query_text(unsafe_text: str) -> None:
+    from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+
+    group = _stage_query_group(lifecycle="executed")
+    group["queryTerms"] = ["safe term", unsafe_text]
+    output = sanitize_stage_output_payload(
+        output_kind="runtime_public_feedback",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "publicEventSchemaVersion": "runtime_public_event_v1",
+            "stage": "feedback",
+            "roundNo": 1,
+            "sourceKind": None,
+            "status": "completed",
+            "counts": {},
+            "details": {"queryGroups": [group]},
+            "safeReasonCode": None,
+        },
+        stage="feedback",
+        round_no=1,
+        node_id=None,
+    )
+
+    [sanitized] = output["details"]["queryGroups"]
+    assert sanitized["queryTerms"] == ["safe term"]
+    assert unsafe_text not in repr(output)
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "note: Authorization: Bearer private-token",
+        "debug secret=private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_public_stage_output_v2_drops_shared_unsafe_text_from_all_public_query_fields(unsafe_text: str) -> None:
+    from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+
+    group = _stage_query_group(lifecycle="executed")
+    group["queryTerms"] = ["safe term", unsafe_text]
+    group["executions"] = [
+        {"sourceKind": "cts", "status": "completed"},
+        {"sourceKind": unsafe_text, "status": "completed"},
+    ]
+    unsafe_keyword_group = _stage_query_group(lifecycle="executed")
+    unsafe_keyword_group["queryInstanceId"] = "query-unsafe-keyword"
+    unsafe_keyword_group["keywordQuery"] = unsafe_text
+
+    output = sanitize_stage_output_payload(
+        output_kind="runtime_public_feedback",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "schemaVersion": "runtime-public-stage-output/v2",
+            "publicEventSchemaVersion": "runtime_public_event_v1",
+            "stage": "feedback",
+            "roundNo": 1,
+            "sourceKind": "internal_referrals",
+            "status": "completed",
+            "counts": {},
+            "details": {
+                "queryGroups": [group, unsafe_keyword_group],
+                "resumeQualityComment": unsafe_text,
+                "reflectionSummary": unsafe_text,
+                "suggestedActivateTerms": ["safe detail", unsafe_text],
+            },
+            "safeReasonCode": None,
+        },
+        stage="feedback",
+        round_no=1,
+        node_id="internal_referrals",
+    )
+
+    [sanitized] = output["details"]["queryGroups"]
+    assert sanitized["queryInstanceId"] == "query-1"
+    assert sanitized["termGroupKey"] == "group-1"
+    assert sanitized["queryTerms"] == ["safe term"]
+    assert sanitized["keywordQuery"] == "AI agent"
+    assert sanitized["executions"] == [
+        {
+            "sourceKind": "cts",
+            "status": "completed",
+            "rawCandidateCount": 0,
+            "uniqueCandidateCount": 0,
+            "duplicateCandidateCount": 0,
+        }
+    ]
+    assert output["sourceKind"] == "internal_referrals"
+    assert output["details"] == {
+        "queryGroups": [sanitized],
+        "suggestedActivateTerms": ["safe detail"],
+    }
+    assert unsafe_text not in repr(output)
 
 
 @pytest.mark.parametrize(

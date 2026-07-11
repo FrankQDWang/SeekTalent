@@ -3431,6 +3431,114 @@ def test_v2_runtime_display_scrubs_non_string_query_terms_and_execution_scalars(
     assert secret not in repr(payload)
 
 
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "note: Authorization: Bearer private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_v2_runtime_display_drops_shared_unsafe_query_text(unsafe_text: str) -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    group = _v2_query_group(
+        query_instance_id="query-1",
+        term_group_key="group-1",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["safe term", unsafe_text],
+        keyword_query="safe term",
+        lifecycle="executed",
+        execution_status="completed",
+        attempted=True,
+    )
+    payload = normalize_runtime_progress_payload(
+        {
+            "stage": "feedback",
+            "details": {"queryGroups": [group]},
+        }
+    )
+
+    [sanitized] = payload["details"]["queryGroups"]
+    assert sanitized["queryTerms"] == ["safe term"]
+    assert unsafe_text not in json.dumps(payload, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "note: Authorization: Bearer private-token",
+        "debug secret=private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_v2_runtime_display_drops_shared_unsafe_text_from_all_public_query_fields(unsafe_text: str) -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    group = _v2_query_group(
+        query_instance_id="query-1",
+        term_group_key="group-1",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["safe term", unsafe_text],
+        keyword_query="safe term",
+        lifecycle="executed",
+        execution_status="completed",
+        attempted=True,
+        executions=[
+            {"sourceKind": "cts", "status": "completed"},
+            {"sourceKind": unsafe_text, "status": "completed"},
+        ],
+    )
+    unsafe_keyword_group = _v2_query_group(
+        query_instance_id="query-unsafe-keyword",
+        term_group_key="group-unsafe-keyword",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["safe term"],
+        keyword_query=unsafe_text,
+        lifecycle="executed",
+        execution_status="completed",
+        attempted=True,
+    )
+
+    payload = normalize_runtime_progress_payload(
+        {
+            "stage": "feedback",
+            "sourceKind": "internal_referrals",
+            "details": {
+                "queryGroups": [group, unsafe_keyword_group],
+                "resumeQualityComment": unsafe_text,
+                "reflectionSummary": unsafe_text,
+                "suggestedActivateTerms": ["safe detail", unsafe_text],
+            },
+        }
+    )
+
+    [sanitized] = payload["details"]["queryGroups"]
+    assert sanitized["queryInstanceId"] == "query-1"
+    assert sanitized["termGroupKey"] == "group-1"
+    assert sanitized["queryTerms"] == ["safe term"]
+    assert sanitized["keywordQuery"] == "safe term"
+    assert sanitized["executions"] == [
+        {
+            "sourceKind": "cts",
+            "status": "completed",
+            "rawCandidateCount": 0,
+            "uniqueCandidateCount": 0,
+            "duplicateCandidateCount": 0,
+        }
+    ]
+    assert payload["sourceKind"] == "internal_referrals"
+    assert payload["details"] == {
+        "queryGroups": [sanitized],
+        "suggestedActivateTerms": ["safe detail"],
+    }
+    assert unsafe_text not in json.dumps(payload, ensure_ascii=False)
+
+
 def test_v2_runtime_display_drops_non_scalar_or_sensitive_detail_text() -> None:
     from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
 
@@ -3465,21 +3573,30 @@ def test_v2_runtime_display_drops_non_scalar_or_sensitive_detail_text() -> None:
     assert private_token not in serialized
 
 
-def test_v2_runtime_display_drops_unsafe_source_identifiers() -> None:
+@pytest.mark.parametrize(
+    "source_kind",
+    [
+        "https://provider.example/private/raw-identity",
+        "note: Authorization: Bearer private-token",
+        "debug secret=private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_v2_runtime_display_drops_unsafe_source_identifiers(source_kind: str) -> None:
     from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
 
-    provider_url = "https://provider.example/private/raw-identity"
     payload = normalize_runtime_progress_payload(
         {
             "stage": "source_result",
-            "sourceId": provider_url,
-            "sourceKind": provider_url,
+            "sourceId": source_kind,
+            "sourceKind": source_kind,
         }
     )
 
     assert "sourceId" not in payload
     assert "sourceKind" not in payload
-    assert provider_url not in json.dumps(payload, ensure_ascii=False)
+    assert source_kind not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_v2_runtime_display_drops_unsafe_top_level_progress_values() -> None:

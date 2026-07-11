@@ -1290,6 +1290,187 @@ def test_round_reducer_filters_unsafe_query_terms_and_drops_empty_groups(
     assert "secret=private-token" not in serialized
 
 
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "note: Authorization: Bearer private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_round_reducer_drops_shared_unsafe_query_text(unsafe_text: str) -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    feedback = _public_stage_output(
+        output_id="rtout_shared_public_text_boundary",
+        stage="feedback",
+        round_no=1,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["AI agent", unsafe_text],
+                        keyword_query="AI agent",
+                        lifecycle="executed",
+                        execution_status="completed",
+                        attempted=True,
+                    )
+                ]
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    assert summary.query_groups[0].query_terms == ("AI agent",)
+    assert unsafe_text not in response.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "note: Authorization: Bearer private-token",
+        "debug secret=private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_round_reducer_drops_shared_unsafe_text_from_all_public_query_fields(unsafe_text: str) -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    group = _v2_query_group(
+        query_instance_id="query-1",
+        term_group_key="group-1",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["safe term", unsafe_text],
+        keyword_query="safe term",
+        lifecycle="executed",
+        execution_status="completed",
+        attempted=True,
+        executions=[
+            {"sourceKind": "cts", "status": "completed"},
+            {"sourceKind": unsafe_text, "status": "completed"},
+        ],
+    )
+    unsafe_keyword_group = _v2_query_group(
+        query_instance_id="query-unsafe-keyword",
+        term_group_key="group-unsafe-keyword",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["safe term"],
+        keyword_query=unsafe_text,
+        lifecycle="executed",
+        execution_status="completed",
+        attempted=True,
+    )
+    feedback = _public_stage_output(
+        output_id="rtout_shared_public_fields",
+        stage="feedback",
+        round_no=1,
+        source_kind="internal_referrals",
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "queryGroups": [group, unsafe_keyword_group],
+                "resumeQualityComment": unsafe_text,
+                "reflectionSummary": unsafe_text,
+                "suggestedActivateTerms": ["safe detail", unsafe_text],
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    [sanitized] = summary.query_groups
+    assert sanitized.query_instance_id == "query-1"
+    assert sanitized.term_group_key == "group-1"
+    assert sanitized.query_terms == ("safe term",)
+    assert sanitized.keyword_query == "safe term"
+    assert tuple(execution.source_kind for execution in sanitized.executions) == ("cts",)
+    assert summary.resume_quality_comment is None
+    assert summary.reflection_summary is None
+    assert summary.suggested_activate_terms == ("safe detail",)
+    assert summary.stage_outputs[0].source_kind == "internal_referrals"
+    assert unsafe_text not in response.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "source_kind",
+    [
+        "https://provider.example/private/raw-identity",
+        "note: Authorization: Bearer private-token",
+        "debug secret=private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_round_reducer_drops_unsafe_source_kind_from_public_stage(source_kind: str) -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    feedback = _public_stage_output(
+        output_id="rtout_unsafe_public_source",
+        stage="feedback",
+        round_no=1,
+        source_kind=source_kind,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["safe term"],
+                        keyword_query="safe term",
+                        lifecycle="executed",
+                        execution_status="completed",
+                        attempted=True,
+                    )
+                ]
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    assert summary.stage_outputs[0].source_kind is None
+    assert source_kind not in response.model_dump_json()
+
+
 def test_round_reducer_bounds_safe_query_group_text_and_terms() -> None:
     from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
 

@@ -216,6 +216,87 @@ def test_runtime_public_query_group_scrubs_non_string_terms_and_execution_scalar
 
 
 @pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "note: Authorization: Bearer private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_runtime_public_query_group_drops_shared_unsafe_text(unsafe_text: str) -> None:
+    group = _public_query_group(lifecycle="executed")
+    group["queryTerms"] = ["safe term", unsafe_text]
+
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="feedback",
+        event_seq=1,
+        round_no=1,
+        details={"queryGroups": [group]},
+    )
+
+    [sanitized] = event["details"]["queryGroups"]
+    assert sanitized["queryTerms"] == ["safe term"]
+    assert unsafe_text not in json.dumps(event, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "note: Authorization: Bearer private-token",
+        "debug secret=private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
+    ],
+)
+def test_runtime_public_event_drops_shared_unsafe_text_from_all_public_query_fields(unsafe_text: str) -> None:
+    group = _public_query_group(lifecycle="executed")
+    group["queryTerms"] = ["safe term", unsafe_text]
+    group["executions"] = [
+        {"sourceKind": "cts", "status": "completed"},
+        {"sourceKind": unsafe_text, "status": "completed"},
+    ]
+    unsafe_keyword_group = _public_query_group(lifecycle="executed")
+    unsafe_keyword_group["queryInstanceId"] = "query-unsafe-keyword"
+    unsafe_keyword_group["keywordQuery"] = unsafe_text
+
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="feedback",
+        event_seq=1,
+        round_no=1,
+        source_kind="internal_referrals",
+        details={
+            "queryGroups": [group, unsafe_keyword_group],
+            "resumeQualityComment": unsafe_text,
+            "reflectionSummary": unsafe_text,
+            "suggestedActivateTerms": ["safe detail", unsafe_text],
+        },
+    )
+
+    [sanitized] = event["details"]["queryGroups"]
+    assert sanitized["queryInstanceId"] == "query-1"
+    assert sanitized["termGroupKey"] == "group-1"
+    assert sanitized["queryTerms"] == ["safe term"]
+    assert sanitized["keywordQuery"] == "safe term"
+    assert sanitized["executions"] == [
+        {
+            "sourceKind": "cts",
+            "status": "completed",
+            "rawCandidateCount": 0,
+            "uniqueCandidateCount": 0,
+            "duplicateCandidateCount": 0,
+        }
+    ]
+    assert event["sourceKind"] == "internal_referrals"
+    assert event["details"] == {
+        "queryGroups": [sanitized],
+        "suggestedActivateTerms": ["safe detail"],
+    }
+    assert unsafe_text not in json.dumps(event, ensure_ascii=False)
+
+
+@pytest.mark.parametrize(
     ("stage", "lifecycle"),
     [
         ("round_query", "executed"),
@@ -329,6 +410,9 @@ def test_runtime_public_event_rejects_unsafe_public_identifiers(field: str) -> N
     [
         "https://provider.example/private/raw-identity",
         "Authorization=Bearer private-token",
+        "debug secret=private-token",
+        "OpenCLI CDP target 98b37a browser session failed",
+        "INTERNAL_PROVIDER_REFERENCE",
         "source/with/path",
     ],
 )

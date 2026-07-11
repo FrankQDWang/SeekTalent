@@ -4,6 +4,8 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TypedDict
 
+from seektalent.public_payload_safety import public_source_identifier, public_text
+
 PUBLIC_EVENT_SCHEMA_VERSION = "runtime_public_event_v1"
 SourceKind = str
 
@@ -238,10 +240,8 @@ def _public_event_status(value: object) -> str:
 
 
 def _public_created_at(value: object) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or "T" not in text or _looks_like_unsafe_public_text(text):
+    text = public_text(value, max_length=256)
+    if text is None or "T" not in text:
         return None
     try:
         datetime.fromisoformat(text.replace("Z", "+00:00"))
@@ -428,19 +428,11 @@ def _public_query_terms(value: object) -> list[str]:
 
 
 def _public_query_text(value: object, *, max_length: int) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or _looks_like_unsafe_public_text(text):
-        return None
-    return text[:max_length]
+    return public_text(value, max_length=max_length)
 
 
 def _safe_public_source_kind(value: object) -> str | None:
-    text = _safe_public_identifier(value, max_length=80)
-    if text is None or any(character not in "_-" and not character.isalnum() for character in text):
-        return None
-    return text
+    return public_source_identifier(value)
 
 
 def _safe_public_identifier(value: object, *, max_length: int) -> str | None:
@@ -468,21 +460,4 @@ def _public_detail_list(value: object) -> list[str]:
 
 
 def _public_detail_text(value: object, *, max_length: int) -> str | None:
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    if not text or _looks_like_unsafe_public_text(text):
-        return None
-    return text[:max_length]
-
-
-def _looks_like_unsafe_public_text(text: str) -> bool:
-    upper = text.strip().upper()
-    lower = text.lower()
-    if "SHOULD_NOT_RENDER" in upper or upper.startswith("INTERNAL_"):
-        return True
-    if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
-        return True
-    if "http://" in lower or "https://" in lower:
-        return True
-    return any(pattern in lower for pattern in ("api_key=", "apikey=", "token=", "cookie=", "password="))
+    return public_text(value, max_length=max_length)
