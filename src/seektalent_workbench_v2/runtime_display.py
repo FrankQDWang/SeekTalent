@@ -743,21 +743,6 @@ def _safe_counts(value: object) -> dict[str, int]:
     return counts
 
 
-def _looks_like_internal_marker(text: str) -> bool:
-    stripped = text.strip()
-    upper = stripped.upper()
-    lower = stripped.lower()
-    if "SHOULD_NOT_RENDER" in upper:
-        return True
-    if upper.startswith("INTERNAL_"):
-        return True
-    if lower.startswith(("bearer ", "authorization:", "authorization=")) or "authorization=" in lower:
-        return True
-    if "http://" in lower or "https://" in lower:
-        return True
-    return any(pattern in lower for pattern in ("api_key=", "apikey=", "token=", "cookie=", "password="))
-
-
 def _non_negative_int(value: object) -> int | None:
     if isinstance(value, bool):
         return None
