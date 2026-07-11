@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import inspect
+import json
 import os
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 from seektalent.artifacts import safe_artifact_path
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
@@ -18,6 +20,7 @@ from seektalent.providers.liepin.liepin_search_workflow import (
 from seektalent.providers.liepin.liepin_site_adapter import LiepinSiteAdapter, _LiepinSearchWorkflowSite
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.first_page_continuation import (
+    CandidateState,
     LiepinFirstPageCandidate,
     LiepinFirstPageContinuation,
     LiepinFirstPageContinuationStore,
@@ -104,6 +107,175 @@ def test_continuation_delete_and_fixed_orphan_cleanup(tmp_path) -> None:
     store.delete(fresh.opaque_ref)
     with pytest.raises(FileNotFoundError):
         store.load(fresh.opaque_ref)
+
+
+@pytest.mark.parametrize(
+    "opaque_ref",
+    [
+        "artifact://public/pi-detail/run/first-page-continuations/query-aaaaaaaaaaaaaaaa.json",
+        "artifact://protected/sibling/run/first-page-continuations/query-aaaaaaaaaaaaaaaa.json",
+        "artifact://protected/pi-detail/run/other/query-aaaaaaaaaaaaaaaa.json",
+        "artifact://protected/pi-detail/run/first-page-continuations/not-owned.json",
+        "artifact://protected/pi-detail/../first-page-continuations/query-aaaaaaaaaaaaaaaa.json",
+        "artifact://protected//absolute.json",
+    ],
+)
+def test_continuation_rejects_refs_outside_store_namespace_without_mutation(
+    tmp_path, opaque_ref: str
+) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+    sibling = tmp_path / "sibling.json"
+    sibling.write_bytes(b"sentinel")
+
+    with pytest.raises(ValueError, match="first_page_continuation_ref_invalid"):
+        store.load(opaque_ref)
+    with pytest.raises(ValueError, match="first_page_continuation_ref_invalid"):
+        store.delete(opaque_ref)
+
+    assert sibling.read_bytes() == b"sentinel"
+
+
+def test_continuation_rejects_symlink_escape_without_mutation(tmp_path) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    sentinel = outside / "query-aaaaaaaaaaaaaaaa.json"
+    sentinel.write_bytes(b"sentinel")
+    run_root = tmp_path / "pi-detail" / "run"
+    run_root.mkdir(parents=True)
+    (run_root / "first-page-continuations").symlink_to(outside, target_is_directory=True)
+    opaque_ref = (
+        "artifact://protected/pi-detail/run/first-page-continuations/"
+        "query-aaaaaaaaaaaaaaaa.json"
+    )
+
+    with pytest.raises(ValueError, match="first_page_continuation_ref_invalid"):
+        store.load(opaque_ref)
+    with pytest.raises(ValueError, match="first_page_continuation_ref_invalid"):
+        store.delete(opaque_ref)
+    with pytest.raises(ValueError):
+        store.create(
+            source_run_id="run",
+            logical_round_no=1,
+            query_instance_id="write-escape",
+            keyword_query="AI Engineer",
+            visible_candidate_count=0,
+            candidates=[],
+        )
+
+    assert sentinel.read_bytes() == b"sentinel"
+    assert sorted(path.name for path in outside.iterdir()) == [sentinel.name]
+
+
+def test_invalid_candidate_state_leaves_continuation_unchanged(tmp_path) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+    continuation = _stored_continuation(store, query_instance_id="state-validation")
+    path = safe_artifact_path(tmp_path.resolve(), store._relative_path(continuation.opaque_ref).as_posix())
+    before = path.read_bytes()
+
+    with pytest.raises(ValidationError):
+        store.mark_candidate(
+            continuation.opaque_ref,
+            rank=1,
+            state=cast(CandidateState, "invalid"),
+        )
+
+    assert path.read_bytes() == before
+
+
+def test_missing_candidate_rank_leaves_continuation_unchanged(tmp_path) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+    continuation = _stored_continuation(store, query_instance_id="missing-rank")
+    path = safe_artifact_path(tmp_path.resolve(), store._relative_path(continuation.opaque_ref).as_posix())
+    before = path.read_bytes()
+
+    with pytest.raises(ValueError, match="first_page_continuation_rank_missing"):
+        store.mark_candidate(continuation.opaque_ref, rank=2, state="opened")
+
+    assert path.read_bytes() == before
+
+
+def test_create_rejects_duplicate_candidate_ranks(tmp_path) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+    candidates = [
+        LiepinFirstPageCandidate(
+            rank=1,
+            ref=f"private-ref-{index}",
+            detail_url=f"https://h.liepin.com/resume/showresumedetail/?res_id_encode=subject{index}",
+            provider_candidate_key_hash=f"{index}" * 64,
+        )
+        for index in (1, 2)
+    ]
+
+    with pytest.raises(ValidationError):
+        store.create(
+            source_run_id="source-run-1",
+            logical_round_no=2,
+            query_instance_id="duplicate-ranks",
+            keyword_query="AI Agent Python",
+            visible_candidate_count=2,
+            candidates=candidates,
+        )
+
+
+@pytest.mark.parametrize("visible_count, rank", [(0, 1), (1, 2)])
+def test_create_rejects_candidates_outside_visible_first_page(
+    tmp_path, visible_count: int, rank: int
+) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+
+    with pytest.raises(ValidationError):
+        store.create(
+            source_run_id="source-run-1",
+            logical_round_no=2,
+            query_instance_id=f"invalid-count-{visible_count}-{rank}",
+            keyword_query="AI Agent Python",
+            visible_candidate_count=visible_count,
+            candidates=[
+                LiepinFirstPageCandidate(
+                    rank=rank,
+                    ref="private-ref",
+                    detail_url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=subject",
+                    provider_candidate_key_hash="a" * 64,
+                )
+            ],
+        )
+
+
+@pytest.mark.parametrize("invalid_ranks", [[2, 1], [1, 1], [1, 3]])
+def test_load_rejects_invalid_candidate_rank_aggregates(tmp_path, invalid_ranks: list[int]) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+    continuation = store.create(
+        source_run_id="source-run-1",
+        logical_round_no=2,
+        query_instance_id="invalid-recovery-order",
+        keyword_query="AI Agent Python",
+        visible_candidate_count=2,
+        candidates=[
+            LiepinFirstPageCandidate(
+                rank=1,
+                ref="private-ref-1",
+                detail_url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=subject1",
+                provider_candidate_key_hash="a" * 64,
+            ),
+            LiepinFirstPageCandidate(
+                rank=2,
+                ref="private-ref-2",
+                detail_url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=subject2",
+                provider_candidate_key_hash="b" * 64,
+            ),
+        ],
+    )
+    path = safe_artifact_path(tmp_path.resolve(), store._relative_path(continuation.opaque_ref).as_posix())
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["candidates"] = [
+        {**candidate, "rank": rank}
+        for candidate, rank in zip(payload["candidates"], invalid_ranks, strict=True)
+    ]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValidationError):
+        store.load(continuation.opaque_ref)
 
 
 @dataclass

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import ast
+import asyncio
+from dataclasses import asdict
 import inspect
+import json
 from pathlib import Path
 from typing import get_args, get_origin, get_type_hints
 
@@ -12,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from seektalent.flywheel.outcomes import build_runtime_query_outcome_rows_from_hits
 from seektalent.flywheel.runtime import query_hit_rows_from_hits
-from seektalent.models import QueryResumeHit
+from seektalent.models import QueryResumeHit, RequirementSheet
 from seektalent.core.retrieval.provider_contract import (
     ProviderFirstPageExpansionResult,
     ProviderSearchContinuation,
@@ -23,6 +26,8 @@ from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepi
 from seektalent.providers.liepin.security import issue_stream_token
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerCandidateCard, LiepinWorkerCandidateDetail
+from seektalent.source_contracts import SourceBudget, SourceLaneRequest
+from seektalent.sources.provider_card_lane import run_provider_card_lane
 from seektalent_ui import models as ui_models
 from seektalent_ui.liepin_routes import (
     LIEPIN_EVENT_BATCH_LIMIT,
@@ -110,6 +115,61 @@ def test_provider_private_continuation_contract_stays_out_of_public_payloads() -
     assert not hasattr(result, "to_public_payload")
     assert not hasattr(continuation, "to_public_payload")
     assert not hasattr(ProviderFirstPageExpansionResult, "to_public_payload")
+
+
+def test_provider_private_continuation_is_omitted_by_canonical_source_lane_mapping() -> None:
+    private_ref = "SENTINEL-PRIVATE-REF"
+    detail_url = "https://h.liepin.com/SENTINEL-DETAIL-URL"
+    opaque_ref = f"artifact://protected/pi-detail/SENTINEL-OPAQUE?ref={private_ref}&url={detail_url}"
+    continuation = ProviderSearchContinuation(
+        kind="first_page_detail_expansion",
+        continuation_id="continuation-1",
+        opaque_ref=opaque_ref,
+        source_kind="liepin",
+        round_no=2,
+        query_instance_id="query-2-exploit",
+        visible_candidate_count=1,
+        eligible_candidate_count=1,
+        initial_opened_count=0,
+    )
+
+    async def search(**kwargs: object) -> SearchResult:
+        del kwargs
+        return SearchResult(
+            request_payload={"safe": "value"},
+            private_continuations=(continuation,),
+        )
+
+    result = asyncio.run(
+        run_provider_card_lane(
+            request=SourceLaneRequest(
+                source_id="liepin",
+                lane_mode="card",
+                runtime_run_id="run-1",
+                source_plan_id="plan-1",
+                source_lane_run_id="lane-1",
+                job_title="AI Engineer",
+                jd="Build AI systems.",
+                notes="",
+                requirement_sheet=RequirementSheet(
+                    job_title="AI Engineer",
+                    title_anchor_terms=["AI Engineer"],
+                    title_anchor_rationale="Job title.",
+                    role_summary="Build AI systems.",
+                    scoring_rationale="Score relevant experience.",
+                ),
+                source_query_terms=("AI Engineer",),
+                budget=SourceBudget(card_target=1, detail_target=0, scan_limit=1),
+            ),
+            search=search,
+        )
+    )
+    serialized = json.dumps(asdict(result))
+
+    assert opaque_ref not in serialized
+    assert private_ref not in serialized
+    assert detail_url not in serialized
+    assert "private_continuations" not in serialized
 
 
 def test_liepin_card_evidence_does_not_emit_text_tail_fields() -> None:

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from hashlib import sha256
 from pathlib import Path
+import re
 from threading import RLock
 from time import time
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from seektalent.artifacts import atomic_write_text, safe_artifact_path
 from seektalent.providers.liepin.liepin_site_parsing import _safe_artifact_segment
@@ -14,6 +15,10 @@ from seektalent.providers.liepin.liepin_site_parsing import _safe_artifact_segme
 
 CandidateState = Literal["remaining", "opened", "skipped_seen", "terminal_failed"]
 ORPHAN_RETENTION_SECONDS = 7 * 24 * 60 * 60
+_RUN_COMPONENT_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+_CONTINUATION_FILENAME_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]{0,47}-[a-f0-9]{16}\.json$"
+)
 
 
 class LiepinFirstPageCandidate(BaseModel):
@@ -39,6 +44,19 @@ class LiepinFirstPageContinuation(BaseModel):
     visible_candidate_count: int = Field(ge=0, le=30)
     candidates: list[LiepinFirstPageCandidate] = Field(max_length=30)
     opaque_ref: str
+
+    @model_validator(mode="after")
+    def validate_candidate_ranks(self) -> LiepinFirstPageContinuation:
+        ranks = [candidate.rank for candidate in self.candidates]
+        if len(ranks) != len(set(ranks)):
+            raise ValueError("first_page_continuation_candidate_ranks_duplicate")
+        if ranks != sorted(ranks):
+            raise ValueError("first_page_continuation_candidate_ranks_out_of_order")
+        if len(ranks) > self.visible_candidate_count or any(
+            rank > self.visible_candidate_count for rank in ranks
+        ):
+            raise ValueError("first_page_continuation_candidate_count_invalid")
+        return self
 
 
 class LiepinFirstPageContinuationStore:
@@ -83,23 +101,41 @@ class LiepinFirstPageContinuationStore:
     def load(self, opaque_ref: str) -> LiepinFirstPageContinuation:
         with self._lock:
             relative = self._relative_path(opaque_ref)
-            return LiepinFirstPageContinuation.model_validate_json(
+            continuation = LiepinFirstPageContinuation.model_validate_json(
                 safe_artifact_path(self._protected_root, relative.as_posix()).read_text(
                     encoding="utf-8"
                 )
             )
+            if continuation.opaque_ref != opaque_ref:
+                raise ValueError("first_page_continuation_ref_invalid")
+            if self._relative_for_ids(
+                source_run_id=continuation.source_run_id,
+                query_instance_id=continuation.query_instance_id,
+            ) != relative:
+                raise ValueError("first_page_continuation_ref_invalid")
+            return continuation
 
     def mark_candidate(self, opaque_ref: str, *, rank: int, state: CandidateState) -> None:
         with self._lock:
             continuation = self.load(opaque_ref)
+            matches = [item for item in continuation.candidates if item.rank == rank]
+            if len(matches) != 1:
+                raise ValueError("first_page_continuation_rank_missing")
             updated = [
-                item.model_copy(update={"state": state}) if item.rank == rank else item
+                LiepinFirstPageCandidate.model_validate(
+                    {**item.model_dump(), "state": state}
+                )
+                if item.rank == rank
+                else item
                 for item in continuation.candidates
             ]
-            if not any(item.rank == rank for item in continuation.candidates):
-                raise ValueError("first_page_continuation_rank_missing")
             relative = self._relative_path(opaque_ref)
-            self._write(relative, continuation.model_copy(update={"candidates": updated}))
+            self._write(
+                relative,
+                LiepinFirstPageContinuation.model_validate(
+                    {**continuation.model_dump(), "candidates": updated}
+                ),
+            )
 
     def delete(self, opaque_ref: str) -> None:
         with self._lock:
@@ -128,6 +164,7 @@ class LiepinFirstPageContinuationStore:
         if not opaque_ref.startswith(prefix):
             raise ValueError("first_page_continuation_ref_invalid")
         relative = Path(opaque_ref.removeprefix(prefix))
+        self._validate_relative_path(relative)
         try:
             safe_artifact_path(self._protected_root, relative.as_posix())
         except ValueError as exc:
@@ -135,6 +172,33 @@ class LiepinFirstPageContinuationStore:
         return relative
 
     def _write(self, relative: Path, continuation: LiepinFirstPageContinuation) -> None:
+        self._validate_relative_path(relative)
         path = safe_artifact_path(self._protected_root, relative.as_posix())
         atomic_write_text(path, continuation.model_dump_json())
         path.chmod(0o600)
+
+    @staticmethod
+    def _validate_relative_path(relative: Path) -> None:
+        parts = relative.parts
+        if (
+            len(parts) != 4
+            or parts[0] != "pi-detail"
+            or not _RUN_COMPONENT_PATTERN.fullmatch(parts[1])
+            or parts[2] != "first-page-continuations"
+            or not _CONTINUATION_FILENAME_PATTERN.fullmatch(parts[3])
+        ):
+            raise ValueError("first_page_continuation_ref_invalid")
+
+    @staticmethod
+    def _relative_for_ids(*, source_run_id: str, query_instance_id: str) -> Path:
+        safe_run_id = _safe_artifact_segment(source_run_id)
+        safe_query_id = (
+            f"{_safe_artifact_segment(query_instance_id)[:48]}-"
+            f"{sha256(query_instance_id.encode('utf-8')).hexdigest()[:16]}"
+        )
+        return (
+            Path("pi-detail")
+            / safe_run_id
+            / "first-page-continuations"
+            / f"{safe_query_id}.json"
+        )
