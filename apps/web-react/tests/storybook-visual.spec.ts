@@ -39,6 +39,11 @@ const visualStories = [
     url: "/iframe.html?id=workbench-thinkingprocessrail--round-timeline",
   },
   {
+    name: "workbench-thinking-process-dual-lane-mobile",
+    url: "/iframe.html?id=workbench-thinkingprocessrail--dual-lane-compact-mobile",
+    viewport: { height: 900, width: 375 },
+  },
+  {
     name: "workbench-candidates-empty",
     url: "/iframe.html?id=workbench-candidatequeue--empty",
   },
@@ -116,6 +121,9 @@ for (const story of visualStories) {
   test(`${story.name} matches the Storybook visual baseline`, async ({
     page,
   }) => {
+    if ("viewport" in story) {
+      await page.setViewportSize(story.viewport);
+    }
     await page.goto(story.url);
     await page.waitForSelector("#storybook-root");
     await waitForStoryRendered(page);
@@ -124,11 +132,53 @@ for (const story of visualStories) {
     if (story.name === "workbench-resizable-layout") {
       await expectResizableLayoutFillsVisibleWorkspace(page);
     }
+    if (story.name === "workbench-thinking-process-dual-lane-mobile") {
+      await expectCompactDualLaneThinkingProcess(page);
+    }
 
     await expect(page.locator("#storybook-root")).toHaveScreenshot(
       `${story.name}.png`,
     );
   });
+}
+
+async function expectCompactDualLaneThinkingProcess(page: Page) {
+  const rail = page.getByRole("complementary", { name: "运行右栏" });
+  await expect(rail).toBeVisible();
+
+  const keywords = rail.getByRole("region", { name: "关键词" });
+  await expect(
+    keywords.getByRole("group", { name: /主检索，已执行/ }),
+  ).toBeVisible();
+  await expect(
+    keywords.getByRole("group", { name: /补漏检索，计划中/ }),
+  ).toBeVisible();
+  await expect(
+    keywords.getByText(
+      "Agentic retrieval orchestration AND long-form evaluation systems",
+    ),
+  ).toBeVisible();
+  await expect(
+    keywords.getByText("cross-functional orchestration governance"),
+  ).toBeVisible();
+  await expect(keywords.getByText("原始 128，新增 91，重复 37")).toBeVisible();
+
+  await expect
+    .poll(() =>
+      page.evaluate(() => ({
+        documentFits: document.documentElement.scrollWidth <= window.innerWidth,
+        railFits: (() => {
+          const railElement = document.querySelector<HTMLElement>(
+            ".thinking-process-rail",
+          );
+          return (
+            railElement !== null &&
+            railElement.scrollWidth <= railElement.clientWidth
+          );
+        })(),
+      })),
+    )
+    .toEqual({ documentFits: true, railFits: true });
 }
 
 async function waitForStoryRendered(page: Page) {

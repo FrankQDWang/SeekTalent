@@ -107,6 +107,39 @@ test("thinking process rail story switches between candidate and thinking tabs",
   await expect(rail.getByText("反思和下一轮变更").first()).toBeVisible();
 });
 
+test("compact dual-lane thinking story keeps both query states readable on mobile", async ({
+  page,
+}) => {
+  await page.setViewportSize({ height: 900, width: 375 });
+  await openStory(
+    page,
+    "/iframe.html?id=workbench-thinkingprocessrail--dual-lane-compact-mobile",
+  );
+
+  const rail = page.getByRole("complementary", { name: "运行右栏" });
+  const keywords = rail.getByRole("region", { name: "关键词" });
+  await expect(
+    keywords.getByRole("group", { name: /主检索，已执行/ }),
+  ).toBeVisible();
+  await expect(
+    keywords.getByRole("group", { name: /补漏检索，计划中/ }),
+  ).toBeVisible();
+  await expect(
+    keywords.getByText(
+      "Agentic retrieval orchestration AND long-form evaluation systems",
+    ),
+  ).toBeVisible();
+  await expect(
+    keywords.getByText("cross-functional orchestration governance"),
+  ).toBeVisible();
+  await expect(keywords.getByText("原始 128，新增 91，重复 37")).toBeVisible();
+
+  await rail.getByRole("tab", { name: "候选人" }).click();
+  await expect(rail.getByRole("region", { name: "候选人队列" })).toBeVisible();
+  await rail.getByRole("tab", { name: "思考过程" }).click();
+  await expect(keywords).toBeVisible();
+});
+
 test("candidate queue loading and error stories render real states", async ({
   page,
 }) => {
