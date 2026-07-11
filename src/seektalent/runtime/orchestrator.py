@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import sys
 from datetime import datetime
 from collections import Counter
 from collections.abc import Awaitable, Collection, Mapping, Sequence
@@ -2331,6 +2332,14 @@ class WorkflowRuntime:
                     payload={"stage": "search", "error_type": type(exc).__name__},
                 )
                 raise RunStageError("source_search", str(exc)) from exc
+            pending_continuations = {
+                item.continuation_id: item
+                for item in retrieval_result.private_first_page_continuations
+            }
+
+            def mark_continuation_deleted(result: SourceFirstPageExpansionResult) -> None:
+                if result.continuation_deleted:
+                    pending_continuations.pop(result.continuation_id, None)
             executed_queries = retrieval_result.executed_queries
             sent_query_records = retrieval_result.sent_query_records
             new_candidates = retrieval_result.new_candidates
@@ -2406,8 +2415,7 @@ class WorkflowRuntime:
                 payload={"stage": "scoring", "candidate_count": len(new_candidates)},
             )
             try:
-                try:
-                    baseline_scoring_result = await self._score_round(
+                baseline_scoring_result = await self._score_round(
                         round_no=round_no,
                         new_candidates=new_candidates,
                         run_state=run_state,
@@ -2418,15 +2426,7 @@ class WorkflowRuntime:
                         batch_kind="baseline",
                         fail_on_scoring_error=True,
                         finalize_pool=False,
-                    )
-                except Exception:
-                    await discard_unconsumed_first_page_continuations(
-                        runtime_run_id=tracer.run_id,
-                        round_no=round_no,
-                        continuations=retrieval_result.private_first_page_continuations,
-                        expanders=source_expanders,
-                    )
-                    raise
+                )
                 baseline_intake_summary = run_state.latest_canonical_intake_summary
                 expansion_decisions = select_qualified_first_page_expansions(
                     continuations=retrieval_result.private_first_page_continuations,
@@ -2444,6 +2444,7 @@ class WorkflowRuntime:
                     round_no=round_no,
                     decisions=expansion_decisions,
                     expanders=source_expanders,
+                    terminal_callback=mark_continuation_deleted,
                 )
                 expansion_candidates, expansion_attributions, expansion_merge_counts = (
                     self._merge_expansion_candidates(
@@ -2531,6 +2532,21 @@ class WorkflowRuntime:
                         ),
                     })
                 expanded_raw_count = sum(item.expansion_opened_count for item in expansion_results)
+                qualified_keys = {
+                    (item.source_kind, item.query_instance_id)
+                    for item in expansion_decisions
+                    if item.expand
+                }
+                qualified_results = [
+                    item for item in expansion_results
+                    if (item.source_kind, item.query_instance_id) in qualified_keys
+                ]
+                if any(item.status != "completed" for item in qualified_results):
+                    expansion_exhausted_reason = "first_page_expansion_partial"
+                elif qualified_results:
+                    expansion_exhausted_reason = "first_page_expansion_completed"
+                else:
+                    expansion_exhausted_reason = search_observation.exhausted_reason
                 search_observation = search_observation.model_copy(
                     update={
                         "raw_candidate_count": search_observation.raw_candidate_count + expanded_raw_count,
@@ -2538,11 +2554,7 @@ class WorkflowRuntime:
                         "shortage_count": max(0, search_observation.requested_count - final_round_new_identity_count),
                         "new_resume_ids": [*search_observation.new_resume_ids, *(item.resume_id for item in expansion_candidates)],
                         "new_candidate_summaries": [*search_observation.new_candidate_summaries, *(item.compact_summary() for item in expansion_candidates)],
-                        "exhausted_reason": (
-                            "first_page_expansion_completed"
-                            if any(decision.expand for decision in expansion_decisions)
-                            else search_observation.exhausted_reason
-                        ),
+                        "exhausted_reason": expansion_exhausted_reason,
                     }
                 )
                 retrieval_result = replace(
@@ -2597,6 +2609,32 @@ class WorkflowRuntime:
                 )
                 del baseline_scoring_result
             finally:
+                primary_active = sys.exc_info()[0] is not None
+                cleanup_outcomes, cleanup_failures = await discard_unconsumed_first_page_continuations(
+                    runtime_run_id=tracer.run_id,
+                    round_no=round_no,
+                    continuations=list(pending_continuations.values()),
+                    expanders=source_expanders,
+                )
+                for outcome in cleanup_outcomes:
+                    if outcome.continuation_deleted:
+                        pending_continuations.pop(outcome.continuation_id, None)
+                cleanup_failures.extend(
+                    "first_page_continuation_cleanup_unacknowledged"
+                    for _item in pending_continuations.values()
+                )
+                tracer.write_json(
+                    _round_artifact(
+                        tracer, round_no=round_no, subsystem="retrieval",
+                        name="first_page_continuation_cleanup",
+                    ),
+                    {
+                        "attempted_count": len(cleanup_outcomes) + len(cleanup_failures),
+                        "deleted_count": len(cleanup_outcomes),
+                        "failure_count": len(cleanup_failures),
+                        "safe_reason_codes": sorted(set(cleanup_failures)),
+                    },
+                )
                 self._write_query_resume_hits(
                     tracer=tracer,
                     round_no=round_no,
@@ -2627,6 +2665,8 @@ class WorkflowRuntime:
                     f"round.{round_no:02d}.retrieval.replay_snapshot",
                     replay_snapshot.model_dump(mode="json"),
                 )
+                if cleanup_failures and not primary_active:
+                    raise RunStageError("first_page_expansion_cleanup", cleanup_failures[0])
             newly_scored_count = len(run_state.scorecards_by_resume_id) - previous_scored_count
             scored_this_round = [
                 candidate

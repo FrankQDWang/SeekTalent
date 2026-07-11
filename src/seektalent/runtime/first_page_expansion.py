@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Mapping, Sequence
 
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
@@ -148,6 +149,7 @@ async def execute_first_page_decisions(
     round_no: int,
     decisions: Sequence[FirstPageExpansionDecision],
     expanders: Mapping[str, SourceFirstPageExpander],
+    terminal_callback: Callable[[SourceFirstPageExpansionResult], None] | None = None,
 ) -> list[SourceFirstPageExpansionResult]:
     results = []
     for decision in decisions:
@@ -181,6 +183,8 @@ async def execute_first_page_decisions(
                     safe_reason_code=exc.safe_reason_code,
                     continuation_deleted=exc.continuation_deleted,
                 )
+            if result.continuation_deleted and terminal_callback is not None:
+                terminal_callback(result)
             results.append(result)
     return results
 
@@ -189,23 +193,37 @@ async def discard_unconsumed_first_page_continuations(
     *, runtime_run_id: str, round_no: int,
     continuations: Sequence[ProviderSearchContinuation],
     expanders: Mapping[str, SourceFirstPageExpander],
-) -> list[SourceFirstPageExpansionResult]:
-    decisions = [
-        FirstPageExpansionDecision(
-            source_kind=item.source_kind,
-            query_instance_id=item.query_instance_id,
-            expand=False,
-            reason_code="first_page_continuation_cleanup",
-            continuations=(item,),
-        )
-        for item in continuations
-    ]
-    return await execute_first_page_decisions(
-        runtime_run_id=runtime_run_id,
-        round_no=round_no,
-        decisions=decisions,
-        expanders=expanders,
-    )
+) -> tuple[list[SourceFirstPageExpansionResult], list[str]]:
+    outcomes: list[SourceFirstPageExpansionResult] = []
+    failures: list[str] = []
+    for item in continuations:
+        expander = expanders.get(item.source_kind)
+        if expander is None:
+            failures.append("first_page_expander_unavailable")
+            continue
+        try:
+            result = await expander(SourceFirstPageExpansionRequest(
+                runtime_run_id=runtime_run_id, round_no=round_no,
+                source_kind=item.source_kind, query_instance_id=item.query_instance_id,
+                continuation_id=item.continuation_id, continuation=item, action="discard",
+            ))
+            _validate_expansion_result(result=result, continuation=item, action="discard")
+            outcomes.append(result)
+        except SourceFirstPageExpansionError as exc:
+            if exc.continuation_deleted:
+                outcomes.append(SourceFirstPageExpansionResult(
+                    source_kind=item.source_kind, query_instance_id=item.query_instance_id,
+                    continuation_id=item.continuation_id, status=exc.status,
+                    first_page_visible_count=item.visible_candidate_count,
+                    first_page_eligible_count=item.eligible_candidate_count,
+                    initial_opened_count=item.initial_opened_count,
+                    safe_reason_code=exc.safe_reason_code, continuation_deleted=True,
+                ))
+            else:
+                failures.append(exc.safe_reason_code or "first_page_continuation_cleanup_failed")
+        except BaseException:  # noqa: BLE001 - cleanup isolates carriers and preserves a primary exception
+            failures.append("first_page_continuation_cleanup_failed")
+    return outcomes, failures
 
 
 def _validate_expansion_result(

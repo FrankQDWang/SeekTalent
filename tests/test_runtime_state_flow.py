@@ -62,12 +62,14 @@ from seektalent.runtime.first_page_expansion import (
     apply_first_page_expansion_to_receipts,
     canonical_scorecards_by_identity_id,
     decide_first_page_expansion,
+    discard_unconsumed_first_page_continuations,
     execute_first_page_decisions,
     select_qualified_first_page_expansions,
 )
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, allocate_initial_lane_targets
 from seektalent.runtime.reflection_context import build_reflection_context
+from seektalent.reflection.critic import render_reflection_prompt
 from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
 from seektalent.runtime.source_round_dispatch import (
     SourceRoundAdapterResult,
@@ -1412,6 +1414,44 @@ def test_expansion_candidates_are_scored_and_visible_to_reflection_in_the_same_r
     assert all(context.search_observation.raw_candidate_count > 0 for context in reflection.contexts)
 
 
+def test_source_plan_public_payload_does_not_disclose_private_continuation_capability() -> None:
+    plan = build_runtime_source_plan(source_kinds=["liepin"], settings=object(), runtime_run_id="run")[0]
+    serialized = json.dumps(plan.to_public_payload(), ensure_ascii=False)
+    assert "produces_private_first_page_continuations" not in serialized
+    assert "continuation" not in serialized
+    assert "opaque_ref" not in serialized
+
+
+def test_pending_cleanup_false_deletion_ack_is_reported_and_other_carriers_continue() -> None:
+    continuations = [
+        ProviderSearchContinuation(
+            kind="first_page_detail_expansion", continuation_id=f"c{index}", opaque_ref=f"artifact://private/{index}",
+            source_kind="liepin", round_no=1, query_instance_id=f"q{index}",
+            visible_candidate_count=2, eligible_candidate_count=2, initial_opened_count=1,
+        )
+        for index in (1, 2)
+    ]
+    calls: list[str] = []
+
+    async def expander(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
+        calls.append(request.continuation_id)
+        return SourceFirstPageExpansionResult(
+            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
+            continuation_id=request.continuation_id, status="completed",
+            first_page_visible_count=request.continuation.visible_candidate_count,
+            first_page_eligible_count=request.continuation.eligible_candidate_count,
+            initial_opened_count=request.continuation.initial_opened_count,
+            continuation_deleted=request.continuation_id == "c2",
+        )
+
+    outcomes, failures = asyncio.run(discard_unconsumed_first_page_continuations(
+        runtime_run_id="run", round_no=1, continuations=continuations, expanders={"liepin": expander},
+    ))
+    assert calls == ["c1", "c2"]
+    assert [item.continuation_id for item in outcomes] == ["c2"]
+    assert failures == ["first_page_continuation_cleanup_failed"]
+
+
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         job_title="AI Agent Engineer",
@@ -1853,6 +1893,25 @@ def test_reflection_context_includes_latest_canonical_intake_summary() -> None:
     assert context.canonical_intake_summary.auto_merged_duplicate_count == 3
     assert context.canonical_intake_summary.source_raw_targets == {"cts": 10, "liepin": 10}
     assert context.canonical_intake_summary.per_source_raw_counts == {"cts": 10, "liepin": 10}
+
+
+def test_reflection_prompt_bounds_and_sanitizes_expansion_scoring_failures() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    marker = "artifact://protected/private-resume?providerCandidateId=secret"
+    round_state = _round_state_for_reflection_tests(round_no=2).model_copy(update={
+        "scoring_failures": [
+            ScoringFailure(
+                resume_id=marker, branch_id="private-branch", round_no=2,
+                attempts=1, error_message=f"raw error {marker}",
+            )
+            for _ in range(9)
+        ]
+    })
+    prompt = render_reflection_prompt(build_reflection_context(run_state=run_state, round_state=round_state))
+    assert "expansion_scoring_failure_count=5" in prompt
+    assert marker not in prompt
+    assert "private-branch" not in prompt
+    assert "raw error" not in prompt
 
 
 def test_controller_context_includes_latest_canonical_intake_summary() -> None:

@@ -205,10 +205,11 @@ def render_reflection_prompt(context: ReflectionContext) -> str:
     dropped_candidates = [
         _candidate_line(candidate, index) for index, candidate in enumerate(context.dropped_candidates[:5], start=1)
     ]
-    failures = [
-        f"- {item.resume_id}: {item.error_message}"
-        for item in context.scoring_failures[:5]
-    ]
+    failures = (
+        [f"- expansion_scoring_failure_count={min(len(context.scoring_failures), 5)}"]
+        if context.scoring_failures
+        else []
+    )
     sent_queries = [
         f"- round {record.round_no}: {', '.join(record.query_terms)}; {record.keyword_query}"
         for record in context.sent_query_history[-8:]

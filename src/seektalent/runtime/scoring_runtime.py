@@ -119,15 +119,15 @@ async def score_round(
         for candidate in scored_candidates:
             if candidate.resume_id not in run_state.scorecards_by_resume_id:
                 run_state.scorecards_by_resume_id[candidate.resume_id] = candidate
+        for item in scored_candidates:
+            tracer.append_jsonl(
+                f"round.{round_no:02d}.scoring.scorecards",
+                {**item.model_dump(mode="json"), "batch_kind": batch_kind},
+            )
         if scoring_failures and fail_on_scoring_error:
             raise run_stage_error("scoring", format_scoring_failure_message(scoring_failures))
     else:
         scored_candidates = []
-    for item in scored_candidates:
-        tracer.append_jsonl(
-            f"round.{round_no:02d}.scoring.scorecards",
-            {**item.model_dump(mode="json"), "batch_kind": batch_kind},
-        )
     if not finalize_pool:
         return ScoringRoundResult(select_identity_top_candidates(run_state), [], [], scoring_failures)
     current_top_candidates, pool_decisions, dropped_candidates = finalize_round_pool(
