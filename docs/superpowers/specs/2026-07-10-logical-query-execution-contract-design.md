@@ -1,7 +1,7 @@
 # Logical Query Execution Contract Design
 
 > **Date:** 2026-07-10
-> **Status:** Approved design, implemented and verified on 2026-07-11
+> **Status:** Implemented for the v0.7.40 candidate; deterministic and package verification complete on 2026-07-12, with the real Domi production acceptance still blocked because the isolated execution process did not receive the user JWT environment variable
 > **Owner:** SeekTalent runtime and Workbench
 
 ## Summary
@@ -13,7 +13,7 @@ SeekTalent currently treats a source query as two different facts:
 
 The second path does not enter `sent_query_history`. As a result, the default Liepin/OpenCLI product path can execute a logical query that the controller, reflection, stop guidance, diagnostics, and Workbench history do not regard as executed. The same contract loss also causes the ThinkingProcess UI to collapse actual lanes into one keyword card.
 
-This design makes one source-neutral logical-query receipt the authoritative execution fact. It also adds a semantic term-group identity, uses that identity as a no-replay invariant, gives reflection bounded query-level evidence, and exposes actual query groups through both live Workbench projections.
+This design makes one source-neutral logical-query receipt the authoritative execution fact. The 2026-07-11 amendment strengthens novelty from exact-group uniqueness to run-wide, non-anchor family at-most-once execution. It also reduces the Workbench keyword section to the only information users asked for: the main path keywords and, when present, the expansion path keywords.
 
 ## Confirmed Decisions
 
@@ -21,9 +21,11 @@ This design makes one source-neutral logical-query receipt the authoritative exe
 - A **source execution receipt** is one terminal result for one `RuntimeSourceQueryIntent`.
 - A logical query becomes **used for novelty** only when at least one receipt says that external execution started. A preflight-blocked query is observable but is not marked used.
 - `SentQueryRecord` remains a CTS/city physical-attempt audit record. It is not renamed, overloaded, or made to impersonate the logical-query ledger.
-- `term_group_key` represents the unordered semantic term-family set. It is independent of source, round, lane, order, and execution fingerprint.
+- `term_group_key` represents the unordered semantic term-family set. It remains useful for exact-group identity, but it is not sufficient for run-wide family novelty.
+- The compiler primary-anchor family may repeat. Every non-anchor family becomes consumed when its logical query has any `dispatch_started=True` receipt; a consumed family cannot appear in any later round or sibling lane.
 - Automatic replay is not part of this product slice. When no unseen valid group exists, runtime chooses existing rescue/stop behavior rather than silently resending a group.
-- The Workbench must display the actual number of logical query groups. Round one and anchor-only rounds may correctly have one group; later rounds may have one or two groups. The product must never invent a second lane for presentation.
+- The Workbench must display the actual number of logical query paths. Round one and anchor-only rounds may correctly show only `主路径`; later rounds may show `主路径` and `扩展路径`. The product must never invent a second path for presentation.
+- The keyword section displays only the path label and its deduplicated `queryTerms`. It does not display lifecycle badges, provider/source status, keyword-query prose, raw/new/duplicate counts, or source execution rows.
 - This is a breaking pre-1.0 public-stage/BFF contract change. New runs use the new contract; there is no historical backfill or heuristic reconstruction of old query groups.
 - Both V2 and legacy conversation projections must consume the new contract while both routes remain live.
 
@@ -31,16 +33,16 @@ This design makes one source-neutral logical-query receipt the authoritative exe
 
 1. Every `RuntimeSourceQueryIntent` produces exactly one terminal `QueryExecutionReceipt`.
 2. A completed or partially completed Liepin logical query becomes visible in the authoritative execution ledger.
-3. Semantically identical term groups cannot execute twice in one run merely because terms are reordered or a source changes.
+3. The primary anchor is the only family allowed to repeat; every attempted non-anchor family is globally unique across rounds and sibling lanes.
 4. Controller, reflection, stop guidance, and Workbench use the same receipt-derived facts.
-5. ThinkingProcess preserves query-instance identity, lane identity, source execution status, and bounded counts without exposing provider payloads.
+5. ThinkingProcess preserves query-instance and lane identity internally while rendering only one deduplicated keyword list for each visible path.
 6. Reflection evaluates the current controller decision against current per-query evidence.
 
 ## Non-Goals
 
 - Do not move all agent behavior into a new `agent_core/` package.
 - Do not split `models.py` as part of this correctness slice.
-- Do not change how PRF is proposed or scored beyond preventing automatic replay of an already-used group.
+- Do not change how PRF is proposed or scored; this amendment changes only explicit PRF family-identity persistence and consumed-family rejection/fallback before dispatch.
 - Do not make raw provider requests, filters, URLs, candidate identifiers, or browser payloads visible to React.
 - Do not retain the old ThinkingProcess card schema as a compatibility path.
 - Do not backfill historic stage outputs or historic conversations.
@@ -75,6 +77,7 @@ class QueryExecutionReceipt(BaseModel):
     query_instance_id: str
     query_fingerprint: str
     term_group_key: str
+    non_anchor_term_family_ids: list[str]
     query_role: QueryRole
     lane_type: LaneType
     query_terms: list[str] = Field(default_factory=list)
@@ -98,7 +101,7 @@ Rules:
 - A source must not emit two receipts for the same `(round_no, source_kind, query_instance_id)` within a run.
 - All receipts are terminal. Streaming provider details stay in existing source events rather than extending this DTO.
 
-`RuntimeSourceQueryIntent` remains the complete plan input. Add `term_group_key` to it, then preserve both `query_instance_id` and `term_group_key` in `RuntimeQueryPackage`. The package remains a small summary transport, but it is no longer anonymous.
+`RuntimeSourceQueryIntent` remains the complete plan input. Preserve `query_instance_id`, `term_group_key`, and `non_anchor_term_family_ids` through `LogicalQueryState -> LogicalQueryDispatch -> RuntimeSourceQueryIntent -> QueryExecutionReceipt -> LogicalQueryOutcome`. The package remains a small summary transport, but it is no longer anonymous. Family identity is resolved during planning and persisted; later code must not reconstruct it from a mutable term pool.
 
 ### 2. Adapter and Dispatch Contract
 
@@ -133,6 +136,7 @@ Persist receipts in `RetrievalState.query_execution_ledger`. Add a derived runti
 class LogicalQueryOutcome(BaseModel):
     query_instance_id: str
     term_group_key: str
+    non_anchor_term_family_ids: list[str]
     query_role: QueryRole
     lane_type: LaneType
     query_terms: list[str] = Field(default_factory=list)
@@ -160,48 +164,73 @@ Logical status is deterministic:
 | all `failed` | `failed` |
 | any `partial`, or any mixed terminal statuses | `partial` |
 
-Runtime appends all receipts for observability. It derives the used term groups only from attempted logical outcomes. Existing `sent_query_history` remains available for city-level diagnostics until those callers have a precise reason to use physical attempts.
+Runtime appends all receipts for observability. It derives used exact groups and consumed non-anchor families only from attempted logical outcomes. Existing `sent_query_history` remains available for city-level diagnostics until those callers have a precise reason to use physical attempts.
 
 Replace novelty consumers in controller context, second-lane selection, feedback/rescue logic, and stop guidance with the receipt-derived attempted logical ledger. Preserve `sent_query_history` only where city or batch detail is the actual requirement.
 
-### 4. Semantic `term_group_key` and No-Replay Policy
+### 4. Exact-Group Identity And Run-Wide Family Novelty
 
-Add a pure helper beside query identity code:
+`term_group_key` remains the exact unordered group identity. Add one shared resolver that returns the semantic members used both for that key and for family consumption:
 
 ```python
-def build_term_group_key(
+@dataclass(frozen=True)
+class ResolvedQueryIdentity:
+    term_group_key: str
+    primary_anchor_family_id: str
+    non_anchor_term_family_ids: tuple[str, ...]
+
+
+def resolve_query_identity(
     *,
     query_terms: Sequence[str],
     query_term_pool: Sequence[QueryTermCandidate],
-) -> str: ...
+    explicit_family_overrides: Mapping[str, str] | None = None,
+) -> ResolvedQueryIdentity: ...
 ```
 
-The helper:
+The resolver canonicalizes surface terms, resolves compiler families, uses a normalized `term:<value>` fallback only when no family exists, rejects two surfaces from the same family inside one query, and produces a stable ordered tuple. Every supplied override key and value must normalize to a non-empty value or resolution fails. A PRF expression must pass its `accepted_prf_term_family_id` as an explicit override; a pool-external PRF term must not silently fall back to surface identity when a stable family ID is already known.
 
-1. canonicalizes terms with the existing query-term normalization;
-2. resolves each term to its compiler family;
-3. uses a normalized term only when a family is unavailable;
-4. deduplicates and sorts those semantic identifiers;
-5. hashes a stable JSON payload to a fixed opaque key.
-
-This key is deliberately different from `query_fingerprint`:
+The identities have distinct purposes:
 
 | Identity | Purpose | Includes source/filters/round? |
 | --- | --- | --- |
-| `term_group_key` | semantic novelty | no |
+| `term_group_key` | exact unordered group identity | no |
+| `non_anchor_term_family_ids` | run-wide family consumption | no |
 | `query_fingerprint` | provider execution identity | yes |
 | `query_instance_id` | one run/round execution instance | yes |
 
-After controller canonicalization and before source dispatch, runtime checks every logical query group against attempted prior groups and against other current-round logical queries. A duplicate cannot reach a source.
+Runtime derives consumed families from attempted logical outcomes:
 
-For an invalid duplicate:
+```text
+consumed_non_anchor_families = union(
+  outcome.non_anchor_term_family_ids
+  for outcome in logical_history
+  if outcome.attempted
+)
+```
 
-- primary/exploit queries use the deterministic unseen-group selector;
-- second lanes use an unseen generic/PRF candidate only;
-- rescue may use anchor-only only when it creates an unseen group;
-- if none is available, runtime follows the existing rescue/stop policy without dispatching a replay.
+The hard invariant is:
 
-This slice has no `replay_reason_code`. Adding strategic replay later requires a separate product decision, explicit user-visible reason, and a new spec.
+```text
+candidate non-anchor families
+∩ (consumed prior families ∪ sibling-lane families already selected this round)
+= empty
+```
+
+Only the compiler primary-anchor family may repeat automatically. A preflight-blocked logical query with no started receipt consumes nothing. Completed, partial, and failed-after-start outcomes all consume their non-anchor families. One logical query executed by several sources consumes its family set once.
+
+Novelty is enforced at every decision boundary and once more immediately before dispatch:
+
+- controller validation and runtime sanitization reject or deterministically repair proposals containing consumed families;
+- the exploit selector preserves still-fresh proposed families, then fills from the deterministic fresh-family order;
+- generic explore excludes prior consumed families and every family already selected by the current exploit lane;
+- PRF falls back to fresh generic explore when its explicit family conflicts with history or the current exploit lane;
+- reserve and candidate-feedback terms must introduce a fresh family;
+- anchor-only rescue is allowed only when its exact anchor-only group remains unused;
+- before the controller LLM runs, runtime returns to normal planning only when a fresh active/controller-selectable family exists; otherwise it deterministically tries a fresh inactive reserve, enabled/unattempted candidate feedback, unused anchor-only, then the canonical `query_family_exhausted` stop;
+- `query_family_exhausted` is a correctness terminal and remains legal when ordinary stop guidance or minimum-round policy says stop is not yet allowed, because no legal query remains; the terminal path invokes neither the controller nor a source adapter and preserves that public stop reason unchanged.
+
+The dispatch gate checks both exact group keys and family-set disjointness. This slice has no `replay_reason_code`. Strategic replay requires a separate product decision, explicit user-visible reason, and a new spec.
 
 ### 5. Controller and Reflection Evidence
 
@@ -250,18 +279,36 @@ safeReasonCode
 
 Do not publish provider URLs, raw filters, browser refs, candidate IDs, or error references.
 
-Replace the fixed `cards: [关键词, observation, 反思和下一轮变更]` model with a typed round shape:
+The runtime public stage and BFF retain those safe fields for control-plane evidence and typed identity merging. The React keyword section deliberately derives a minimal visible model:
 
 ```text
 ThinkingProcessRound
-  queryGroups[]
+  queryGroups[]                 # rich typed data, not rendered directly
+  visibleKeywordPaths[]         # derived in the React component
+    pathId                      # queryInstanceId
+    pathType: main | expansion
+    keywords[]                  # canonical queryTerms only
   observation
   reflection
 ```
 
-Each query group contains its logical ID and a list of source executions. The React rail renders a `关键词` section containing one card per group and uses `queryInstanceId` as the React key. `observation` and `reflection` remain distinct cards.
+The projection maps `exploit -> main` and both `generic_explore` and `prf_probe -> expansion`. It preserves runtime order and emits at most one main path and one expansion path. `pathId` is the logical query instance ID and is used only as the stable React key.
 
-The round reducer keys by `queryInstanceId`: it first renders a planned group if that is the only event, then replaces its lifecycle/count/status fields when its executed group arrives. It rejects an executed group that changes logical identity fields.
+`keywords` comes only from canonical `queryTerms`. The projection removes empty values and deduplicates normalized terms while preserving their first display spelling and order. React renders each keyword exactly once. It must not also render `keywordQuery`, because doing so repeats every visible keyword as prose plus the plain keyword line.
+
+The visible query-path block contains only:
+
+```text
+主路径
+关键词一、关键词二
+
+扩展路径                    # only when a second lane actually exists
+关键词三、关键词四
+```
+
+There is no visible `关键词` subheading, card shell, border, background panel, pill/chip border, status badge, provider name, source execution row, raw/new/duplicate count, keyword-query sentence, query ID, term-group key, or secondary microcopy. Path labels and keyword text use the normal product text scale; keywords are plain inline text joined with `、`. `observation` and `reflection` remain separate cards below this block.
+
+The round reducer still keys source-stage groups by `queryInstanceId`: it first accepts the planned group, then replaces it with the matching executed truth without creating a second path. React derives the minimal visible paths only after this identity merge. Rich counts/status/source fields remain available to diagnostics and tests but are not rendered in the keyword section.
 
 V2 and legacy projection builders must both consume the canonical v2 public stage output. Neither path parses raw runtime events, provider payloads, or localized strings.
 
@@ -278,13 +325,15 @@ V2 and legacy projection builders must both consume the canonical v2 public stag
 2. For every selected source, every query intent has exactly one terminal receipt.
 3. A blocked preflight receipt is visible but does not mark the group used.
 4. Reordered terms with the same families produce the same `term_group_key`.
-5. Query-group exhaustion produces rescue/stop, never automatic replay.
-6. A controller-generated duplicate primary group is repaired deterministically or rejected before dispatch.
-7. Round one displays one actual query group; a later two-lane round displays two actual groups.
-8. One logical query executed by two sources renders one group with two source executions.
-9. Reflection receives the controller decision, response to reflection, and safe per-query current-round outcomes.
-10. No public Workbench payload contains provider URL, browser ref, raw filter, or candidate ID.
-11. A planned-only group transitions to its matching executed group without creating a second UI group or inventing a terminal status.
+5. Except for the primary anchor, attempted non-anchor family IDs are globally unique across all rounds and sibling lanes.
+6. A controller proposal, generic explore candidate, or PRF expression containing a consumed family is repaired or replaced deterministically before dispatch.
+7. Final family exhaustion produces canonical public reason `query_family_exhausted` with zero controller/source calls, even when ordinary stop guidance is false; it never replays or raises an ordinary run failure.
+8. Round one displays only `主路径`; a later two-lane round displays `主路径` and `扩展路径` once each.
+9. Each visible keyword appears exactly once in its path; keyword-query prose, counts, statuses, and source rows are absent.
+10. One logical query executed by two sources still renders one keyword path and does not expose two source rows.
+11. Reflection receives the controller decision, response to reflection, receipt-derived consumed-family truth, and safe per-query current-round outcomes.
+12. No public Workbench payload contains provider URL, browser ref, raw filter, or candidate ID.
+13. A planned-only group transitions to its matching executed group without creating a second UI path.
 
 ## Test Strategy
 
@@ -294,19 +343,27 @@ Add focused tests before implementation for:
 - receipt aggregation and attempted ledger semantics;
 - blocked-before-start versus failed-after-start novelty behavior;
 - same-family reordered term groups;
-- no-replay behavior after group exhaustion;
-- controller duplicate primary group rejection/repair;
+- `[anchor,A]` followed by `[anchor,A,B]` family-conflict repair;
+- history/exploit/explore sibling-family disjointness;
+- PRF family conflict fallback and explicit PRF family persistence;
+- alias terms resolving to one consumed family;
+- no-replay behavior after family exhaustion;
+- controller duplicate-family primary-group rejection/repair;
+- four-round AI Agent regression where only the primary anchor repeats;
 - V2 and legacy public projection of one and two query groups;
-- React rendering keys and accessible lane/source status;
+- minimal Workbench keyword-path projection;
+- React assertions that each term renders once and hidden keyword-query/count/status/source text is absent;
 - reflection context inclusion of decision and bounded outcomes;
 - public-stage v2 sanitization and rejection of raw provider fields.
 
 Run the focused Python and frontend suites, then repository contract/boundary checks before merge.
 
-## Implementation Verification (2026-07-11)
+## Implementation Status And Reopened Evidence (2026-07-11)
 
-This approved design is implemented on `main` at `cee9c7cc`. The detailed, task-by-task completion record is in the [logical-query implementation plan](../plans/2026-07-10-logical-query-execution-contract.md).
+The original exact-group design shipped on `main` beginning at `cee9c7cc`; its task-by-task completion record remains in the [logical-query implementation plan](../plans/2026-07-10-logical-query-execution-contract.md). Receipt parity, exact unordered group keys, controller/reflection query evidence, and typed Workbench groups are implemented.
 
-Current evidence verifies receipt parity across CTS/Liepin, term-group no-replay, controller/reflection query evidence, safe V2 and legacy Workbench groups, and typed React rendering. The combined focused Python suite passed 824 tests; the full Python suite passed 3476 tests; `apps/web-react` passed 170 tests, type check, and lint; the compact dual-lane 375px interaction and visual checks each passed.
+The clean v0.7.39 production run `rtrun_928387d3d87d4263890b8b3a2247c257` proves the remaining family-level defect. Its seven attempted groups have seven unique `term_group_key` values, but non-anchor families repeat: `Multi-Agent` three times, `记忆系统` twice, and `Python` twice. The ledger is complete and every receipt is attempted; the defect is novelty granularity, not another Liepin receipt loss.
 
-The pure term-group helper was placed in `src/seektalent/retrieval/query_identity.py` during the final boundary review, while runtime aggregation remains in `src/seektalent/runtime/query_identity.py`. This is a dependency-direction correction, not a change to the approved contract.
+The current React rail also renders `keywordQuery` prose and the same `queryTerms` chips, so each keyword appears twice. It additionally renders lifecycle, raw/new/duplicate counts, and source execution rows that are not part of the requested keyword view. The screenshot-confirmed `原始 6 / 3` values are provider scan caps under the old `2/1 × 3` policy, not unique candidates or opened details.
+
+The family-novelty and minimal-UI amendment is implemented in the v0.7.40 candidate together with deterministic scoring, the `3/2` Liepin baseline, the Workbench 60-point projection threshold, and fixed first-page expansion. The execution record belongs to the [candidate quality and first-page expansion plan](../plans/2026-07-11-candidate-quality-first-page-expansion.md). Exact-group tests remain required, but the release gate now also proves family consumption, sibling disjointness, deterministic exhaustion, click-before-dedup prevention, and private continuation boundaries.
