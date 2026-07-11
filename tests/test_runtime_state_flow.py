@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError, replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, Callable, cast
 
 import pytest
 
@@ -1520,11 +1520,16 @@ def _matrix_cleanup_audits(tmp_path: Path) -> list[dict[str, object]]:
     ]
 
 
-def _run_integrated_round(runtime: WorkflowRuntime, tmp_path: Path) -> RunTracer:
+def _run_integrated_round(
+    runtime: WorkflowRuntime, tmp_path: Path,
+    *, prepare_run_state: Callable[[RunState], None] | None = None,
+) -> RunTracer:
     tracer = RunTracer(tmp_path / "trace-runs")
     run_state = asyncio.run(runtime._build_run_state(
         job_title="AI Agent Engineer", jd="Build agents.", notes="", tracer=tracer,
     ))
+    if prepare_run_state is not None:
+        prepare_run_state(run_state)
     source_plan = build_runtime_source_plan(
         source_kinds=["liepin"], settings=runtime.settings, runtime_run_id=tracer.run_id,
     )
@@ -1825,6 +1830,53 @@ def test_integrated_dual_lane_completed_partial_receipts_observation_reflection(
 
 def test_integrated_alias_bridge_final_identity_counts(tmp_path: Path) -> None:
     runtime, runtime_any, _actions = _integrated_expansion_runtime(tmp_path)
+    captured_decisions: list[PoolDecision] = []
+    original_selector = orchestrator_module.select_qualified_first_page_expansions
+    original_rebuild = orchestrator_module.rebuild_candidate_identities
+    def bridge_rebuild(run_state, *, source_order):
+        original_rebuild(run_state, source_order=source_order)
+        winner = next((item for item in run_state.seen_resume_ids if item.startswith("z-winner-")), None)
+        if winner is None or "prior-top" not in run_state.candidate_identity_by_resume_id:
+            return
+        identity_id = run_state.candidate_identity_by_resume_id["prior-top"]
+        bridged_resumes = [
+            item for item in run_state.seen_resume_ids if item.startswith("matrix-")
+        ][:2]
+        for resume_id in (*bridged_resumes, winner):
+            run_state.candidate_identity_by_resume_id[resume_id] = identity_id
+        identity = run_state.candidate_identities[identity_id]
+        run_state.candidate_identities[identity_id] = identity.model_copy(
+            update={"resume_ids": sorted(set((*identity.resume_ids, *bridged_resumes, winner)))}
+        )
+        run_state.canonical_resume_by_identity_id[identity_id] = (
+            run_state.canonical_resume_by_identity_id[identity_id].model_copy(
+                update={"canonical_resume_id": winner}
+            )
+        )
+        if "prior-top" in run_state.scorecards_by_resume_id:
+            run_state.scorecards_by_resume_id[winner] = run_state.scorecards_by_resume_id[
+                "prior-top"
+            ].model_copy(update={"resume_id": winner})
+    orchestrator_module.rebuild_candidate_identities = bridge_rebuild
+    def force_expansion(**kwargs):
+        return [replace(item, expand=True, reason_code="baseline_quality_gate_passed")
+                for item in original_selector(**kwargs)]
+    orchestrator_module.select_qualified_first_page_expansions = force_expansion
+    original_reflection_stage = orchestrator_module.reflection_runtime.run_reflection_stage
+    async def capture_reflection(**kwargs):
+        captured_decisions.extend(kwargs["pool_decisions"])
+        return await original_reflection_stage(**kwargs)
+    orchestrator_module.reflection_runtime.run_reflection_stage = capture_reflection
+    def seed_prior(run_state: RunState) -> None:
+        prior = _make_candidate("prior-top", source_round=0, raw={
+            "resume_id": "prior-top", "candidate_name": "Prior Person",
+        }).model_copy(update={"work_experience_summaries": ["Prior Unique Co | Architect | 2012-2020"]})
+        run_state.candidate_store[prior.resume_id] = prior
+        run_state.seen_resume_ids.append(prior.resume_id)
+        normalize_runtime_candidates(run_state=run_state, candidates=[prior], round_no=0, tracer=None)
+        rebuild_candidate_identities(run_state, source_order={"liepin": 0})
+        run_state.scorecards_by_resume_id[prior.resume_id] = _scored_candidate(prior.resume_id, source_round=0)
+        run_state.top_pool_ids = [prior.resume_id]
     async def alias_expander(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
         if request.action == "discard":
             return SourceFirstPageExpansionResult(
@@ -1834,13 +1886,14 @@ def test_integrated_alias_bridge_final_identity_counts(tmp_path: Path) -> None:
                 first_page_eligible_count=request.continuation.eligible_candidate_count,
                 initial_opened_count=request.continuation.initial_opened_count, continuation_deleted=True,
             )
-        candidate = _make_candidate(f"alias-{request.query_instance_id}", source_round=1).model_copy(
+        candidate = _make_candidate(f"z-winner-{request.query_instance_id}", source_round=1).model_copy(
             update={
                 "dedup_key": f"matrix-{request.query_instance_id}-0",
                 "raw": {
-                    "resume_id": f"alias-{request.query_instance_id}",
-                    "candidate_name": f"matrix-{request.query_instance_id}-0",
+                    "resume_id": f"z-winner-{request.query_instance_id}",
+                    "candidate_name": "Prior Person",
                 },
+                "work_experience_summaries": ["Prior Unique Co | Architect | 2012-2020"],
             }
         )
         return SourceFirstPageExpansionResult(
@@ -1855,12 +1908,24 @@ def test_integrated_alias_bridge_final_identity_counts(tmp_path: Path) -> None:
             expansion_opened_count=1, continuation_deleted=True,
         )
     runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": alias_expander}
-    _run_integrated_round(runtime, tmp_path)
+    try:
+        _run_integrated_round(runtime, tmp_path, prepare_run_state=seed_prior)
+    finally:
+        orchestrator_module.reflection_runtime.run_reflection_stage = original_reflection_stage
+        orchestrator_module.select_qualified_first_page_expansions = original_selector
+        orchestrator_module.rebuild_candidate_identities = original_rebuild
     state = runtime_any._test_last_run_state
     summary = state.latest_canonical_intake_summary
     assert summary is not None
     assert summary.identity_count == len(set(state.candidate_identity_by_resume_id.values()))
     assert summary.auto_merged_duplicate_count >= 1
+    prior_identity = state.candidate_identity_by_resume_id["prior-top"]
+    winner = state.canonical_resume_by_identity_id[prior_identity].canonical_resume_id
+    assert winner.startswith("z-winner-")
+    assert state.top_pool_ids.count(winner) == 1
+    winner_decision = next(item for item in captured_decisions if item.resume_id == winner)
+    assert winner_decision.decision == "retained"
+    assert not any(item.resume_id == "prior-top" and item.decision == "dropped" for item in captured_decisions)
 
 
 def test_pending_cleanup_false_deletion_ack_is_reported_and_other_carriers_continue() -> None:
