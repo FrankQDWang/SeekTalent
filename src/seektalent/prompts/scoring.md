@@ -24,7 +24,7 @@ Judge whether this resume should stay in the pool for this role. This is a role-
 - Do not use age, gender, or school names as scoring, filtering, ranking, or exclusion criteria unless runtime supplies an explicit deterministic policy decision.
 - Do not upgrade a resume to `fit` just because the background looks strong.
 - Output `must_have_match_score` against the supplied must-have capabilities and hard constraints.
-- Output `preferred_match_score` only when the scoring policy contains preferred capabilities or structured preferences; otherwise output null.
+- Output `preferred_match_score` only when the scoring policy contains preferred capabilities, preferred locations, preferred companies, preferred domains, or preferred backgrounds; otherwise output null. `preferred_query_terms` are retrieval vocabulary and do not enable preferred scoring.
 - Output `risk_score` only when the scoring policy contains explicit exclusion signals; otherwise output null.
 - Do not output `overall_score`; runtime computes it deterministically.
 - Evidence incompleteness affects fit confidence and reasoning, but does not create an exclusion standard that is absent from the scoring policy.

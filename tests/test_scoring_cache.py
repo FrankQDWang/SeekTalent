@@ -176,6 +176,14 @@ def test_each_preference_source_independently_enables_preferred_dimension(
     assert score_dimension_applicability(policy).preferred is True
 
 
+def test_preferred_query_terms_do_not_enable_preferred_dimension() -> None:
+    policy = _policy(preferred=False, risk=False).model_copy(
+        update={"preferences": PreferenceSlots(preferred_query_terms=["AI Agent"])}
+    )
+
+    assert score_dimension_applicability(policy).preferred is False
+
+
 @pytest.mark.parametrize(
     ("applicability", "preferred", "risk", "expected"),
     [

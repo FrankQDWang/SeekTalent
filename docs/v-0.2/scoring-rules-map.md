@@ -87,7 +87,7 @@
 - `preferred_match_score`: 加分项匹配得怎么样
 - `risk_score`: 当前判断还有多大风险，越高风险越大
 
-`must_have_match_score` 始终存在。岗位没有加分项时，`preferred_match_score` 为 null；岗位没有排除信号时，`risk_score` 为 null。
+`must_have_match_score` 始终存在。只有岗位包含 preferred capability、preferred location、preferred company、preferred domain 或 preferred background 时，`preferred_match_score` 才适用；`preferred_query_terms` 只是检索词，不启用 preferred 评分。岗位没有排除信号时，`risk_score` 为 null。
 
 ### 第 5 步：runtime 计算 `overall_score`
 
@@ -164,7 +164,7 @@
 The scoring model outputs `must_have_match_score`, `preferred_match_score`, and `risk_score`; it never outputs `overall_score`.
 
 - Must-have is always applicable.
-- Preferred is null when the approved Requirement Sheet contains no preferred capability or structured preference.
+- Preferred is null when the approved Requirement Sheet contains no preferred capability, preferred location, preferred company, preferred domain, or preferred background. `preferred_query_terms` are retrieval vocabulary and do not enable preferred scoring.
 - Risk is null when the approved Requirement Sheet contains no exclusion signal.
 - Runtime computes `overall_score` from must-have `60`, preferred `25`, and inverted risk (`100 - risk`) `15`.
 - Runtime removes null dimensions, renormalizes the remaining weights to 100, and rounds half up to an integer in `0..100`.

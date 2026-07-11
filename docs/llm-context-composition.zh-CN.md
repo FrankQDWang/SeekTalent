@@ -109,7 +109,7 @@ flowchart TD
 The scoring model outputs `must_have_match_score`, `preferred_match_score`, and `risk_score`; it never outputs `overall_score`.
 
 - Must-have is always applicable.
-- Preferred is null when the approved Requirement Sheet contains no preferred capability or structured preference.
+- Preferred is null when the approved Requirement Sheet contains no preferred capability, preferred location, preferred company, preferred domain, or preferred background. `preferred_query_terms` are retrieval vocabulary and do not enable preferred scoring.
 - Risk is null when the approved Requirement Sheet contains no exclusion signal.
 - Runtime computes `overall_score` from must-have `60`, preferred `25`, and inverted risk (`100 - risk`) `15`.
 - Runtime removes null dimensions, renormalizes the remaining weights to 100, and rounds half up to an integer in `0..100`.
