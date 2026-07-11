@@ -1,7 +1,7 @@
 # Logical Query Execution Contract Design
 
 > **Date:** 2026-07-10
-> **Status:** Implemented for the v0.7.40 candidate; deterministic and package verification complete on 2026-07-12, with the real Domi production acceptance still blocked because the isolated execution process did not receive the user JWT environment variable
+> **Status:** Implemented for the v0.7.40 candidate; deterministic and package verification complete on 2026-07-12, with the real Domi production acceptance still blocked because the isolated execution process did not receive the user JWT environment variable and a pre-existing Domi-owned listener occupies port 8011
 > **Owner:** SeekTalent runtime and Workbench
 
 ## Summary
