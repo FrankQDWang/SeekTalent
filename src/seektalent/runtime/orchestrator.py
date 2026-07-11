@@ -2601,11 +2601,17 @@ class WorkflowRuntime:
                     _round_artifact(tracer, round_no=round_no, subsystem="retrieval", name="query_outcomes"),
                     [item.model_dump(mode="json") for item in query_outcomes],
                 )
+                remapped_pre_round_top_ids = {
+                    run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id
+                    for resume_id in pre_round_top_ids
+                    if (identity_id := run_state.candidate_identity_by_resume_id.get(resume_id))
+                    in run_state.canonical_resume_by_identity_id
+                }
                 current_top_candidates, pool_decisions, dropped_candidates = finalize_round_pool(
                     round_no=round_no,
                     run_state=run_state,
                     tracer=tracer,
-                    previous_top_ids=pre_round_top_ids,
+                    previous_top_ids=remapped_pre_round_top_ids,
                 )
                 del baseline_scoring_result
             finally:

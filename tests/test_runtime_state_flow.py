@@ -1420,6 +1420,19 @@ def test_expansion_candidates_are_scored_and_visible_to_reflection_in_the_same_r
         "failure_count": 0,
         "safe_reason_codes": [],
     }
+    [events_path] = list(artifacts.run_dir.glob("**/events.jsonl"))
+    trace_events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+    scoring_batches = [
+        (item["event_type"], item.get("payload", {}).get("batch_kind"))
+        for item in trace_events
+        if item["event_type"].startswith("scoring_batch_")
+    ]
+    assert scoring_batches == [
+        ("scoring_batch_started", "baseline"),
+        ("scoring_batch_completed", "baseline"),
+        ("scoring_batch_started", "first_page_expansion"),
+        ("scoring_batch_completed", "first_page_expansion"),
+    ]
 
 
 def test_source_plan_public_payload_does_not_disclose_private_continuation_capability() -> None:

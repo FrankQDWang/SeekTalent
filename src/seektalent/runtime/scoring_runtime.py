@@ -111,6 +111,12 @@ async def score_round(
     ]
     previous_top_ids = set(run_state.top_pool_ids)
     scoring_failures: list[ScoringFailure] = []
+    tracer.emit(
+        "scoring_batch_started",
+        round_no=round_no,
+        status="started",
+        payload={"batch_kind": batch_kind, "candidate_count": len(scoring_contexts)},
+    )
     if scoring_contexts:
         scored_candidates, scoring_failures = await resume_scorer.score_candidates_parallel(
             contexts=scoring_contexts,
@@ -125,9 +131,23 @@ async def score_round(
                 {**item.model_dump(mode="json"), "batch_kind": batch_kind},
             )
         if scoring_failures and fail_on_scoring_error:
+            tracer.emit(
+                "scoring_batch_failed",
+                round_no=round_no,
+                status="failed",
+                payload={"batch_kind": batch_kind, "scored_candidate_count": len(scored_candidates),
+                         "scoring_failure_count": len(scoring_failures)},
+            )
             raise run_stage_error("scoring", format_scoring_failure_message(scoring_failures))
     else:
         scored_candidates = []
+    tracer.emit(
+        "scoring_batch_completed",
+        round_no=round_no,
+        status="succeeded",
+        payload={"batch_kind": batch_kind, "scored_candidate_count": len(scored_candidates),
+                 "scoring_failure_count": len(scoring_failures)},
+    )
     if not finalize_pool:
         return ScoringRoundResult(select_identity_top_candidates(run_state), [], [], scoring_failures)
     current_top_candidates, pool_decisions, dropped_candidates = finalize_round_pool(
