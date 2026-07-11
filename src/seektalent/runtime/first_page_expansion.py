@@ -38,6 +38,29 @@ class ExpansionQueryMergeCounts:
     duplicate_candidate_count: int
 
 
+@dataclass(frozen=True)
+class ContinuationCleanupRecord:
+    continuation_id: str
+    deleted: bool
+    safe_reason_code: str | None = None
+
+
+_SAFE_FIRST_PAGE_REASON_CODES = frozenset({
+    "baseline_quality_gate_passed", "baseline_target_not_met", "baseline_scoring_incomplete",
+    "baseline_not_fit", "baseline_quality_below_threshold", "baseline_risk_above_threshold",
+    "baseline_query_not_completed", "first_page_continuation_discard_partial",
+    "first_page_continuation_discard_blocked", "first_page_continuation_discard_failed",
+    "first_page_continuation_cleanup_failed", "first_page_continuation_cleanup_unacknowledged",
+    "first_page_expansion_partial", "first_page_expansion_blocked",
+    "liepin_first_page_expansion_partial", "liepin_first_page_expansion_blocked",
+    "liepin_first_page_continuation_cleanup_failed",
+})
+
+
+def safe_first_page_reason_code(value: object, *, fallback: str) -> str:
+    return value if isinstance(value, str) and value in _SAFE_FIRST_PAGE_REASON_CODES else fallback
+
+
 def assert_first_page_expanders_registered(
     *, source_plan: Sequence[RuntimeSourceLanePlan], expanders: Mapping[str, SourceFirstPageExpander]
 ) -> None:
@@ -180,7 +203,9 @@ async def execute_first_page_decisions(
                     first_page_visible_count=continuation.visible_candidate_count,
                     first_page_eligible_count=continuation.eligible_candidate_count,
                     initial_opened_count=continuation.initial_opened_count,
-                    safe_reason_code=exc.safe_reason_code,
+                    safe_reason_code=safe_first_page_reason_code(
+                        exc.safe_reason_code, fallback="first_page_expansion_blocked"
+                    ),
                     continuation_deleted=exc.continuation_deleted,
                 )
             if result.continuation_deleted and terminal_callback is not None:
@@ -193,13 +218,15 @@ async def discard_unconsumed_first_page_continuations(
     *, runtime_run_id: str, round_no: int,
     continuations: Sequence[ProviderSearchContinuation],
     expanders: Mapping[str, SourceFirstPageExpander],
-) -> tuple[list[SourceFirstPageExpansionResult], list[str]]:
-    outcomes: list[SourceFirstPageExpansionResult] = []
-    failures: list[str] = []
-    for item in continuations:
+) -> list[ContinuationCleanupRecord]:
+    records: list[ContinuationCleanupRecord] = []
+    unique = {item.continuation_id: item for item in continuations}
+    for item in unique.values():
         expander = expanders.get(item.source_kind)
         if expander is None:
-            failures.append("first_page_expander_unavailable")
+            records.append(ContinuationCleanupRecord(
+                item.continuation_id, False, "first_page_continuation_cleanup_failed"
+            ))
             continue
         try:
             result = await expander(SourceFirstPageExpansionRequest(
@@ -208,22 +235,22 @@ async def discard_unconsumed_first_page_continuations(
                 continuation_id=item.continuation_id, continuation=item, action="discard",
             ))
             _validate_expansion_result(result=result, continuation=item, action="discard")
-            outcomes.append(result)
+            records.append(ContinuationCleanupRecord(item.continuation_id, True))
         except SourceFirstPageExpansionError as exc:
             if exc.continuation_deleted:
-                outcomes.append(SourceFirstPageExpansionResult(
-                    source_kind=item.source_kind, query_instance_id=item.query_instance_id,
-                    continuation_id=item.continuation_id, status=exc.status,
-                    first_page_visible_count=item.visible_candidate_count,
-                    first_page_eligible_count=item.eligible_candidate_count,
-                    initial_opened_count=item.initial_opened_count,
-                    safe_reason_code=exc.safe_reason_code, continuation_deleted=True,
-                ))
+                records.append(ContinuationCleanupRecord(item.continuation_id, True))
             else:
-                failures.append(exc.safe_reason_code or "first_page_continuation_cleanup_failed")
-        except BaseException:  # noqa: BLE001 - cleanup isolates carriers and preserves a primary exception
-            failures.append("first_page_continuation_cleanup_failed")
-    return outcomes, failures
+                records.append(ContinuationCleanupRecord(
+                    item.continuation_id, False,
+                    safe_first_page_reason_code(
+                        exc.safe_reason_code, fallback="first_page_continuation_cleanup_failed"
+                    ),
+                ))
+        except Exception:  # noqa: BLE001 - isolate one carrier without swallowing cancellation
+            records.append(ContinuationCleanupRecord(
+                item.continuation_id, False, "first_page_continuation_cleanup_failed"
+            ))
+    return records
 
 
 def _validate_expansion_result(
@@ -383,8 +410,9 @@ def apply_first_page_expansion_to_receipts(
             "expansion_terminal_failure_count": terminal,
             "expansion_scoring_failure_count": scoring,
             "first_page_expansion_status": status,
-            "first_page_expansion_reason_code": next(
-                (i.safe_reason_code for i in query_outcomes if i.safe_reason_code), decision.reason_code
+            "first_page_expansion_reason_code": safe_first_page_reason_code(
+                next((i.safe_reason_code for i in query_outcomes if i.safe_reason_code), decision.reason_code),
+                fallback="first_page_expansion_partial",
             ),
         }
         # Provider outcomes are authoritative when present (including multiple targets).

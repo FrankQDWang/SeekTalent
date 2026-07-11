@@ -2610,27 +2610,28 @@ class WorkflowRuntime:
                 del baseline_scoring_result
             finally:
                 primary_active = sys.exc_info()[0] is not None
-                cleanup_outcomes, cleanup_failures = await discard_unconsumed_first_page_continuations(
+                cleanup_records = await discard_unconsumed_first_page_continuations(
                     runtime_run_id=tracer.run_id,
                     round_no=round_no,
                     continuations=list(pending_continuations.values()),
                     expanders=source_expanders,
                 )
-                for outcome in cleanup_outcomes:
-                    if outcome.continuation_deleted:
-                        pending_continuations.pop(outcome.continuation_id, None)
-                cleanup_failures.extend(
-                    "first_page_continuation_cleanup_unacknowledged"
-                    for _item in pending_continuations.values()
-                )
+                for record in cleanup_records:
+                    if record.deleted:
+                        pending_continuations.pop(record.continuation_id, None)
+                cleanup_failures = [
+                    record.safe_reason_code or "first_page_continuation_cleanup_failed"
+                    for record in cleanup_records
+                    if not record.deleted
+                ]
                 tracer.write_json(
                     _round_artifact(
                         tracer, round_no=round_no, subsystem="retrieval",
                         name="first_page_continuation_cleanup",
                     ),
                     {
-                        "attempted_count": len(cleanup_outcomes) + len(cleanup_failures),
-                        "deleted_count": len(cleanup_outcomes),
+                        "attempted_count": len(cleanup_records),
+                        "deleted_count": sum(record.deleted for record in cleanup_records),
                         "failure_count": len(cleanup_failures),
                         "safe_reason_codes": sorted(set(cleanup_failures)),
                     },
