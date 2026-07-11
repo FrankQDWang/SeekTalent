@@ -338,6 +338,28 @@ def test_first_page_executor_rejects_each_malformed_attribution_case(case: str) 
             runtime_run_id="run", round_no=2, decisions=[decision], expanders={"liepin": malformed}))
 
 
+@pytest.mark.parametrize("dedup_key", ["different-person", None])
+def test_first_page_executor_rejects_mismatched_attribution_dedup_key(
+    dedup_key: str | None,
+) -> None:
+    decision = decide_first_page_expansion(
+        continuations=[_task7_continuation()], requested_count=1,
+        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
+    candidate = _make_candidate("r-new", source_round=2)
+    async def malformed(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
+        return SourceFirstPageExpansionResult(
+            source_kind="liepin", query_instance_id="q1", continuation_id="c1",
+            status="completed", candidates=(candidate,),
+            candidate_query_attributions=(RuntimeQueryCandidateAttribution(
+                source_kind="liepin", query_instance_id="q1", resume_id="r-new",
+                dedup_key=dedup_key),),
+            first_page_visible_count=3, first_page_eligible_count=3,
+            initial_opened_count=1, expansion_opened_count=1, continuation_deleted=True)
+    with pytest.raises(RuntimeSourceInvariantError, match="dedup_mismatch"):
+        asyncio.run(execute_first_page_decisions(
+            runtime_run_id="run", round_no=2, decisions=[decision], expanders={"liepin": malformed}))
+
+
 @pytest.mark.parametrize("case", ["cleanup", "negative_provider", "excessive_provider"])
 def test_first_page_executor_rejects_each_cleanup_and_provider_counter_invariant(case: str) -> None:
     decision = decide_first_page_expansion(
@@ -369,6 +391,27 @@ def test_first_page_receipt_rejects_each_counter_invariant(case: str) -> None:
         apply_first_page_expansion_to_receipts(
             receipts=[_task7_receipt()], decisions=[decision], outcomes=[outcome],
             merge_counts=[merge], scoring_failure_counts={("liepin", "q1"): scoring})
+
+
+@pytest.mark.parametrize(
+    ("counter", "value"),
+    [("merge", True), ("merge", 1.5), ("scoring", False), ("scoring", "1")],
+)
+def test_first_page_receipt_rejects_non_integer_counter_types(counter: str, value: object) -> None:
+    decision = decide_first_page_expansion(
+        continuations=[_task7_continuation()], requested_count=1,
+        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
+    outcome = SourceFirstPageExpansionResult(
+        source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
+        first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
+        expansion_opened_count=1, continuation_deleted=True)
+    merge_value = cast(int, value) if counter == "merge" else 1
+    scoring_value = cast(int, value) if counter == "scoring" else 0
+    with pytest.raises(RuntimeSourceInvariantError, match=f"invalid_{counter}_counter"):
+        apply_first_page_expansion_to_receipts(
+            receipts=[_task7_receipt()], decisions=[decision], outcomes=[outcome],
+            merge_counts=[ExpansionQueryMergeCounts("liepin", "q1", merge_value, 0)],
+            scoring_failure_counts={("liepin", "q1"): scoring_value})
 
 
 @pytest.mark.parametrize("case", ["foreign_decision", "foreign_merge", "foreign_scoring", "duplicate_receipt"])

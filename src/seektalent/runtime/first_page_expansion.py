@@ -185,8 +185,8 @@ def _validate_expansion_result(
         result.initial_opened_count, result.expansion_opened_count,
         result.expansion_skipped_seen_count, result.expansion_terminal_failure_count,
     )
-    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts):
-        raise RuntimeSourceInvariantError("first_page_expansion_invalid_count")
+    for value in counts:
+        _strict_nonnegative_count(value, reason="first_page_expansion_invalid_count")
     if result.first_page_visible_count != continuation.visible_candidate_count:
         raise RuntimeSourceInvariantError("first_page_expansion_visible_count_mismatch")
     if result.first_page_eligible_count != continuation.eligible_candidate_count:
@@ -202,6 +202,7 @@ def _validate_expansion_result(
         raise RuntimeSourceInvariantError("first_page_continuation_not_deleted")
     if action == "discard" and (consumed or result.candidates or result.candidate_query_attributions):
         raise RuntimeSourceInvariantError("first_page_discard_returned_candidates")
+    candidates_by_id = {item.resume_id: item for item in result.candidates}
     candidate_ids = [item.resume_id for item in result.candidates]
     attribution_ids = [item.resume_id for item in result.candidate_query_attributions]
     if len(set(candidate_ids)) != len(candidate_ids) or len(set(attribution_ids)) != len(attribution_ids):
@@ -212,6 +213,15 @@ def _validate_expansion_result(
            or item.query_instance_id != result.query_instance_id
            for item in result.candidate_query_attributions):
         raise RuntimeSourceInvariantError("first_page_expansion_attribution_mismatch")
+    if any(item.dedup_key != candidates_by_id[item.resume_id].dedup_key
+           for item in result.candidate_query_attributions):
+        raise RuntimeSourceInvariantError("first_page_expansion_attribution_dedup_mismatch")
+
+
+def _strict_nonnegative_count(value: object, *, reason: str) -> int:
+    if type(value) is not int or value < 0:
+        raise RuntimeSourceInvariantError(reason)
+    return value
 
 
 def apply_first_page_expansion_to_receipts(
@@ -287,8 +297,13 @@ def apply_first_page_expansion_to_receipts(
             continue
         merge = merges.get(key, ExpansionQueryMergeCounts(*key, 0, 0))
         scoring = scoring_failure_counts.get(key, 0)
-        if merge.unique_candidate_count < 0 or merge.duplicate_candidate_count < 0 or scoring < 0:
-            raise RuntimeSourceInvariantError("first_page_expansion_negative_counter")
+        _strict_nonnegative_count(
+            merge.unique_candidate_count, reason="first_page_expansion_invalid_merge_counter"
+        )
+        _strict_nonnegative_count(
+            merge.duplicate_candidate_count, reason="first_page_expansion_invalid_merge_counter"
+        )
+        _strict_nonnegative_count(scoring, reason="first_page_expansion_invalid_scoring_counter")
         opened = sum(i.expansion_opened_count for i in query_outcomes)
         skipped = sum(i.expansion_skipped_seen_count for i in query_outcomes)
         terminal = sum(i.expansion_terminal_failure_count for i in query_outcomes)
