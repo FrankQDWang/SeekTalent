@@ -364,8 +364,37 @@ def test_public_runtime_progress_redacts_unsafe_progress_message(message: str) -
         now="2026-07-11T00:00:01Z",
     )
 
-    assert event.summary == "runtime progress"
+    assert event.summary == "第 1 轮CTS检索结果已更新。"
     assert message not in repr(event.model_dump(mode="json"))
+
+
+def test_public_runtime_progress_uses_canonical_summary_for_safe_looking_runtime_message() -> None:
+    from seektalent.progress import ProgressEvent
+    from seektalent.runtime.public_events import make_runtime_public_event
+    from seektalent_runtime_control.events import normalize_progress_event
+
+    raw_message = "OpenCLI CDP target 98b37a browser session failed"
+    event = normalize_progress_event(
+        ProgressEvent(
+            type="runtime_public_event",
+            message=raw_message,
+            timestamp="2026-07-11T00:00:00Z",
+            round_no=1,
+            payload=make_runtime_public_event(
+                runtime_run_id="runtime-run-1",
+                stage="source_result",
+                event_seq=1,
+                round_no=1,
+                source_kind="liepin",
+                status="blocked",
+            ),
+        ),
+        runtime_run_id="runtime-run-1",
+        now="2026-07-11T00:00:01Z",
+    )
+
+    assert event.summary == "第 1 轮猎聘检索受阻：猎聘检索受阻，请稍后重试。"
+    assert raw_message not in repr(event.model_dump(mode="json"))
 
 
 def test_non_public_runtime_progress_is_developer_compact_and_redacted() -> None:

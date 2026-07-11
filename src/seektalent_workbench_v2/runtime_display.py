@@ -6,8 +6,12 @@ from collections.abc import Mapping, Sequence
 COMPLETED_PROGRESS_SUMMARY = "招聘流程已完成。"
 COMPLETED_RESULT_SUMMARY = "招聘流程已完成，最终候选人列表已生成。"
 FINALIZATION_SUMMARY = "最终短名单已生成。"
+IDLE_PROGRESS_SUMMARY = "当前还没有开始运行。"
+QUEUED_PROGRESS_SUMMARY = "招聘流程已排队，等待开始。"
 IDLE_RESULT_SUMMARY = "当前还没有运行结果。"
 PENDING_RESULT_SUMMARY = "当前招聘流程尚未完成，还没有最终结果可供总结。"
+FAILED_RESULT_SUMMARY = "招聘流程失败，请查看运行详情。"
+CANCELLED_RESULT_SUMMARY = "招聘流程已取消。"
 
 _DETAIL_TEXT_KEYS = {
     "resumeQualityComment",
@@ -87,6 +91,59 @@ _RUNTIME_EVENT_STATUSES = {
     "failed",
 }
 _RUNTIME_STATES = {"idle", "queued", "running", "completed", "failed", "cancelled"}
+_PUBLIC_RUNTIME_EVENT_TYPES = {
+    "runtime_run_started",
+    "runtime_requirements_started",
+    "runtime_requirements_completed",
+    "runtime_controller_started",
+    "runtime_search_started",
+    "runtime_round_query_ready",
+    "runtime_round_source_dispatch",
+    "runtime_round_source_result",
+    "runtime_round_merge_completed",
+    "runtime_search_completed",
+    "runtime_scoring_started",
+    "runtime_scoring_completed",
+    "runtime_round_scoring_completed",
+    "runtime_resume_quality_comment_completed",
+    "runtime_reflection_started",
+    "runtime_reflection_completed",
+    "runtime_round_feedback_completed",
+    "runtime_round_completed",
+    "runtime_search_failed",
+    "runtime_run_failed",
+    "runtime_run_completed",
+    "runtime_finalization_completed",
+}
+_PUBLIC_RUNTIME_STAGE_LABELS = {
+    "queued": "排队中",
+    "starting": "启动中",
+    "startup": "启动中",
+    "requirements": "岗位需求解析",
+    "controller": "检索策略规划",
+    "runtime": "运行中",
+    "round": "检索轮次",
+    "round_query": "查询策略",
+    "source_dispatch": "发起来源检索",
+    "source_result": "来源检索",
+    "source_lanes": "来源检索",
+    "source_search": "候选人检索",
+    "source": "来源检索",
+    "search": "候选人检索",
+    "merge": "候选人合并",
+    "scoring": "候选人评分",
+    "resume_quality": "简历质量评估",
+    "reflection": "检索复盘",
+    "feedback": "检索复盘",
+    "finalization": "结果汇总",
+    "resume": "恢复运行",
+    "command": "指令处理",
+    "worker": "任务执行",
+    "rescue": "检索恢复",
+    "corpus_ingest": "语料准备",
+    "completed": "已完成",
+}
+_PUBLIC_SOURCE_LABELS = {"cts": "CTS", "liepin": "猎聘"}
 _COUNT_KEYS = {
     "roundReturned",
     "roundIdentities",
@@ -114,14 +171,12 @@ def normalize_runtime_progress_payload(payload: Mapping[str, object]) -> dict[st
         normalized["runtimeRunId"] = runtime_run_id
     if (event_seq := _non_negative_int(payload.get("runtimeEventSeq"))) is not None:
         normalized["runtimeEventSeq"] = event_seq
-    if (event_type := _safe_runtime_text(payload.get("runtimeEventType"), max_length=120)) is not None:
+    if (event_type := _safe_runtime_event_type(payload.get("runtimeEventType"))) is not None:
         normalized["runtimeEventType"] = event_type
     if (status := _safe_runtime_status(payload.get("status"))) is not None:
         normalized["status"] = status
-    if (stage := _safe_runtime_text(payload.get("stage"), max_length=80)) is not None:
+    if (stage := _safe_runtime_stage(payload.get("stage"))) is not None:
         normalized["stage"] = stage
-    if (summary := _safe_runtime_text(payload.get("summary"), max_length=2000)) is not None:
-        normalized["summary"] = summary
     if (state := _safe_runtime_state(payload.get("state"))) is not None:
         normalized["state"] = state
     if (round_no := _non_negative_int(payload.get("roundNo"))) is not None:
@@ -137,27 +192,15 @@ def normalize_runtime_progress_payload(payload: Mapping[str, object]) -> dict[st
         normalized["safeReasonCode"] = None
     elif (safe_reason_code := safe_runtime_progress_reason_code(payload.get("safeReasonCode"))) is not None:
         normalized["safeReasonCode"] = safe_reason_code
-    details = safe_runtime_progress_details(payload.get("details"), stage=payload.get("stage"))
+    details = safe_runtime_progress_details(payload.get("details"), stage=normalized.get("stage"))
     if details:
         normalized["details"] = details
     counts = _safe_counts(payload.get("counts"))
     if counts:
         normalized["counts"] = counts
-    blocked_source_result_summary = _blocked_source_result_summary(normalized)
-    if blocked_source_result_summary is not None:
-        normalized["summary"] = blocked_source_result_summary
-        return normalized
-    terminal_summary = runtime_event_terminal_summary(normalized.get("runtimeEventType"))
-    if terminal_summary is not None:
-        normalized["summary"] = terminal_summary
-        return normalized
-    summary = normalized.get("summary")
-    if not _is_internal_runtime_summary(summary):
-        return normalized
-    if normalized.get("stage") == "finalization":
-        normalized["summary"] = FINALIZATION_SUMMARY
-    elif normalized.get("state") == "completed" or normalized.get("status") == "completed":
-        normalized["summary"] = COMPLETED_PROGRESS_SUMMARY
+    summary = runtime_progress_summary(normalized)
+    if summary is not None:
+        normalized["summary"] = summary
     return normalized
 
 
@@ -172,8 +215,7 @@ def normalize_runtime_result_payload(payload: Mapping[str, object]) -> dict[str,
     state = normalized.get("state") or normalized.get("status") or ""
     if not isinstance(state, str):
         state = ""
-    summary = _safe_runtime_text(payload.get("summary"), max_length=2000)
-    normalized["summary"] = runtime_result_summary(summary, state)
+    normalized["summary"] = runtime_result_summary(None, state)
     facts = _safe_runtime_result_facts(payload.get("facts"))
     if facts:
         normalized["facts"] = facts
@@ -181,13 +223,15 @@ def normalize_runtime_result_payload(payload: Mapping[str, object]) -> dict[str,
 
 
 def runtime_result_summary(summary: object, state: str) -> str:
-    safe_summary = _safe_runtime_text(summary, max_length=2000)
-    if safe_summary is not None and not _is_internal_runtime_summary(safe_summary):
-        return safe_summary
+    del summary
     if state == "completed":
         return COMPLETED_RESULT_SUMMARY
     if state == "idle":
         return IDLE_RESULT_SUMMARY
+    if state == "failed":
+        return FAILED_RESULT_SUMMARY
+    if state == "cancelled":
+        return CANCELLED_RESULT_SUMMARY
     return PENDING_RESULT_SUMMARY
 
 
@@ -201,41 +245,243 @@ def runtime_progress_visible_summary(payload: Mapping[str, object] | None) -> st
     return stripped or None
 
 
-def _blocked_source_result_summary(payload: Mapping[str, object]) -> str | None:
-    if payload.get("runtimeEventType") != "runtime_round_source_result":
-        return None
-    if str(payload.get("status") or "") != "blocked":
-        return None
-    round_no = payload.get("roundNo")
-    round_prefix = f"第 {round_no} 轮" if isinstance(round_no, int) else "本轮"
-    reason = _safe_detail_text(
-        payload.get("safeReasonCode") or payload.get("summary"),
-        max_length=500,
+def runtime_progress_summary(payload: Mapping[str, object]) -> str | None:
+    event_type = _safe_runtime_event_type(payload.get("runtimeEventType"))
+    stage = _safe_runtime_stage(payload.get("stage"))
+    status = _safe_runtime_status(payload.get("status"))
+    state = _safe_runtime_state(payload.get("state"))
+    effective_status = status or state
+    round_prefix = _round_prefix(payload.get("roundNo"))
+    source_label = _source_label(payload.get("sourceKind"))
+    reason = safe_runtime_progress_reason_code(payload.get("safeReasonCode"))
+    counts = _safe_counts(payload.get("counts"))
+
+    if event_type is not None:
+        event_summary = _runtime_event_progress_summary(
+            event_type=event_type,
+            stage=stage,
+            status=effective_status,
+            round_prefix=round_prefix,
+            source_label=source_label,
+            reason=reason,
+            counts=counts,
+        )
+        if event_summary is not None:
+            return event_summary
+    return _runtime_stage_progress_summary(
+        stage=stage,
+        status=effective_status,
+        round_prefix=round_prefix,
+        source_label=source_label,
+        reason=reason,
+        counts=counts,
     )
-    if _is_formatted_liepin_blocked_summary(reason):
-        return reason
-    return f"{round_prefix}猎聘检索受阻：{_runtime_failure_reason(reason)}"
 
 
-def _runtime_failure_reason(reason: str | None) -> str:
-    if reason == "liepin_opencli_stale_ref":
-        return "猎聘页面引用已失效，需要刷新检索页面后重试。"
-    if reason in {"liepin_opencli_extension_disconnected", "source_browser_extension_disconnected"}:
-        return "猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
-    if reason in {
-        "liepin_opencli_daemon_not_running",
-        "liepin_opencli_daemon_stale",
-        "liepin_opencli_status_unavailable",
-        "source_browser_backend_unavailable",
-    }:
-        return "猎聘浏览器桥暂不可用，系统会先尝试恢复连接；如果仍失败，请稍后重试。"
-    if reason in {"liepin_opencli_filter_unapplied", "source_filter_unavailable", "source_filter_partial"}:
-        return "猎聘筛选条件未成功应用，请刷新猎聘页面后重试。"
-    return reason or "猎聘检索受阻，请稍后重试。"
+def _runtime_event_progress_summary(
+    *,
+    event_type: str,
+    stage: str | None,
+    status: str | None,
+    round_prefix: str,
+    source_label: str,
+    reason: str | None,
+    counts: Mapping[str, int],
+) -> str | None:
+    terminal_summary = runtime_event_terminal_summary(event_type)
+    if terminal_summary is not None:
+        return terminal_summary
+    if event_type == "runtime_run_started":
+        return "招聘流程已开始。"
+    if event_type == "runtime_requirements_started":
+        return "正在解析确认后的岗位需求。"
+    if event_type == "runtime_requirements_completed":
+        return "岗位需求解析完成。"
+    if event_type == "runtime_controller_started":
+        return f"{round_prefix}正在规划检索策略。"
+    if event_type == "runtime_search_started":
+        return f"{round_prefix}开始检索候选人。"
+    if event_type == "runtime_round_query_ready":
+        return f"{round_prefix}查询策略已生成。"
+    if event_type == "runtime_round_source_dispatch":
+        if source_label == "来源":
+            return "已发起候选人检索。"
+        return f"已向{source_label}发起候选人检索。"
+    if event_type == "runtime_round_source_result":
+        return _source_result_summary(
+            status=status,
+            round_prefix=round_prefix,
+            source_label=source_label,
+            reason=reason,
+            counts=counts,
+        )
+    if event_type == "runtime_round_merge_completed":
+        merged = counts.get("mergedIdentities")
+        if merged is not None:
+            return f"{round_prefix}候选人合并完成：新增 {merged} 位候选人。"
+        return f"{round_prefix}候选人合并完成。"
+    if event_type == "runtime_search_completed":
+        return f"{round_prefix}检索完成。"
+    if event_type == "runtime_scoring_started":
+        return f"{round_prefix}开始候选人评分。"
+    if event_type == "runtime_scoring_completed":
+        return f"{round_prefix}候选人评分完成。"
+    if event_type == "runtime_round_scoring_completed":
+        top_pool_count = counts.get("topPoolCount")
+        if top_pool_count is not None:
+            return f"{round_prefix}评分完成，{top_pool_count} 位候选人进入 Top Pool。"
+        return f"{round_prefix}评分完成。"
+    if event_type == "runtime_resume_quality_comment_completed":
+        return f"{round_prefix}简历质量评估完成。"
+    if event_type == "runtime_reflection_started":
+        return f"{round_prefix}开始复盘检索效果。"
+    if event_type in {"runtime_reflection_completed", "runtime_round_feedback_completed"}:
+        return f"{round_prefix}复盘完成，准备调整下一轮检索策略。"
+    if event_type == "runtime_round_completed":
+        return f"{round_prefix}完成。"
+    if event_type == "runtime_search_failed":
+        return f"{round_prefix}检索失败：{_search_failure_reason(reason, source_label=source_label)}"
+    if event_type == "runtime_run_failed":
+        return FAILED_RESULT_SUMMARY
+    return _runtime_stage_progress_summary(
+        stage=stage,
+        status=status,
+        round_prefix=round_prefix,
+        source_label=source_label,
+        reason=reason,
+        counts=counts,
+    )
 
 
-def _is_formatted_liepin_blocked_summary(reason: str | None) -> bool:
-    return isinstance(reason, str) and "猎聘检索受阻：" in reason
+def _runtime_stage_progress_summary(
+    *,
+    stage: str | None,
+    status: str | None,
+    round_prefix: str,
+    source_label: str,
+    reason: str | None,
+    counts: Mapping[str, int],
+) -> str | None:
+    if stage == "source_result":
+        return _source_result_summary(
+            status=status,
+            round_prefix=round_prefix,
+            source_label=source_label,
+            reason=reason,
+            counts=counts,
+        )
+    if stage == "round_query":
+        if status in {"blocked", "failed"}:
+            return f"{round_prefix}查询策略未能生成。"
+        if status == "completed":
+            return f"{round_prefix}查询策略已生成。"
+        return f"{round_prefix}正在生成查询策略。"
+    if stage == "source_dispatch":
+        if source_label == "来源":
+            return "已发起候选人检索。"
+        return f"已向{source_label}发起候选人检索。"
+    if status == "idle":
+        return IDLE_PROGRESS_SUMMARY
+    if status == "queued":
+        return QUEUED_PROGRESS_SUMMARY
+    if status == "starting":
+        if stage is None:
+            return "招聘流程正在启动。"
+        return f"招聘流程正在启动，当前阶段：{_PUBLIC_RUNTIME_STAGE_LABELS[stage]}。"
+    if status == "completed":
+        if stage == "finalization":
+            return FINALIZATION_SUMMARY
+        return COMPLETED_PROGRESS_SUMMARY
+    if status == "failed":
+        return FAILED_RESULT_SUMMARY
+    if status == "cancelled":
+        return CANCELLED_RESULT_SUMMARY
+    if status == "blocked":
+        return "招聘流程已阻塞，请查看运行详情。"
+    if status == "paused":
+        return "招聘流程已暂停。"
+    if status == "pause_requested":
+        return "招聘流程正在暂停。"
+    if status == "resume_requested":
+        return "招聘流程正在恢复。"
+    if status == "cancellation_requested":
+        return "招聘流程正在取消。"
+    if stage is not None:
+        return f"招聘流程运行中，当前阶段：{_PUBLIC_RUNTIME_STAGE_LABELS[stage]}。"
+    if status in {"pending", "queued", "starting", "running", "partial"}:
+        return "招聘流程运行中。"
+    return None
+
+
+def _source_result_summary(
+    *,
+    status: str | None,
+    round_prefix: str,
+    source_label: str,
+    reason: str | None,
+    counts: Mapping[str, int],
+) -> str:
+    if status == "blocked":
+        failure_reason = _failure_reason(reason, source_label=source_label, blocked=True)
+        return f"{round_prefix}{source_label}检索受阻：{failure_reason}"
+    if status == "failed":
+        failure_reason = _failure_reason(reason, source_label=source_label, blocked=False)
+        return f"{round_prefix}{source_label}检索失败：{failure_reason}"
+    returned = counts.get("roundReturned")
+    identities = counts.get("roundIdentities")
+    if returned is not None and identities is not None:
+        if status == "partial":
+            return f"{round_prefix}{source_label}检索部分完成：返回 {returned} 条，新增 {identities} 位候选人。"
+        return f"{round_prefix}{source_label}检索完成：返回 {returned} 条，新增 {identities} 位候选人。"
+    if status == "partial":
+        return f"{round_prefix}{source_label}检索部分完成。"
+    return f"{round_prefix}{source_label}检索结果已更新。"
+
+
+def _failure_reason(reason: str | None, *, source_label: str, blocked: bool) -> str:
+    if reason == "source_browser_extension_disconnected":
+        return f"{source_label}浏览器桥扩展未连接，请确认扩展已连接后重试。"
+    if reason == "source_browser_backend_unavailable":
+        return f"{source_label}浏览器桥暂不可用，系统会先尝试恢复连接；如果仍失败，请稍后重试。"
+    if reason in {"source_filter_unavailable", "source_filter_partial", "source_filter_unsupported"}:
+        return f"{source_label}筛选条件未成功应用，请刷新页面后重试。"
+    if reason == "source_browser_timeout":
+        return f"{source_label}检索超时，请稍后重试。"
+    if reason == "source_login_required":
+        return f"{source_label}账号需要登录后才能继续检索。"
+    if reason == "source_account_mismatch":
+        return f"{source_label}账号与当前检索任务不匹配，请确认账号后重试。"
+    if reason in {"source_browser_policy_blocked", "source_risk_or_verification_required"}:
+        return f"{source_label}需要完成页面验证后才能继续检索。"
+    if reason == "source_browser_interaction_required":
+        return f"{source_label}需要人工完成页面操作后才能继续检索。"
+    if reason == "source_budget_exhausted":
+        return f"{source_label}本轮检索额度已用尽。"
+    if reason in {"source_filter_applied", "source_filter_degraded"}:
+        return f"{source_label}筛选条件已降级处理。"
+    if reason in {"source_location_filter_unsupported", "source_age_filter_unsupported"}:
+        return f"{source_label}暂不支持部分筛选条件。"
+    if blocked:
+        return f"{source_label}检索受阻，请稍后重试。"
+    return "运行失败，请查看详情。"
+
+
+def _search_failure_reason(reason: str | None, *, source_label: str) -> str:
+    if reason is None:
+        return "检索失败，请稍后重试。"
+    return _failure_reason(reason, source_label=source_label, blocked=False)
+
+
+def _round_prefix(value: object) -> str:
+    round_no = _non_negative_int(value)
+    return f"第 {round_no} 轮" if round_no is not None else "本轮"
+
+
+def _source_label(value: object) -> str:
+    source_kind = _safe_public_source_kind(value)
+    if source_kind is None:
+        return "来源"
+    return _PUBLIC_SOURCE_LABELS.get(source_kind, "来源")
 
 
 def safe_runtime_progress_details(value: object, *, stage: object) -> dict[str, object]:
@@ -265,26 +511,6 @@ def safe_runtime_progress_details(value: object, *, stage: object) -> dict[str, 
             if groups:
                 details[key] = groups
     return details
-
-
-def _is_internal_runtime_summary(summary: object) -> bool:
-    if not isinstance(summary, str):
-        return True
-    value = summary.strip()
-    if not value:
-        return True
-    lowered = value.lower()
-    if lowered in {"completed", "finalization", "run completed"}:
-        return True
-    if lowered.startswith("run status:"):
-        return True
-    if lowered.startswith("run completed after "):
-        return True
-    if "deterministic runtime ranking" in lowered:
-        return True
-    if lowered.startswith("selected ") and " final candidates" in lowered:
-        return True
-    return False
 
 
 def _safe_query_groups(
@@ -454,13 +680,18 @@ def _safe_runtime_state(value: object) -> str | None:
     return state if state in _RUNTIME_STATES else None
 
 
-def _safe_runtime_text(value: object, *, max_length: int) -> str | None:
+def _safe_runtime_event_type(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
-    if not text or _looks_like_internal_marker(text):
+    return text if text in _PUBLIC_RUNTIME_EVENT_TYPES else None
+
+
+def _safe_runtime_stage(value: object) -> str | None:
+    if not isinstance(value, str):
         return None
-    return text[:max_length]
+    stage = value.strip()
+    return stage if stage in _PUBLIC_RUNTIME_STAGE_LABELS else None
 
 
 def _safe_public_source_kind(value: object) -> str | None:

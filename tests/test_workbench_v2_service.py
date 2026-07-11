@@ -1100,6 +1100,7 @@ def test_v2_blocked_liepin_source_result_reports_actionable_reason(tmp_path: Pat
             "status": "blocked",
             "stage": "source_result",
             "roundNo": 1,
+            "sourceKind": "liepin",
             "summary": "source_result",
             "counts": {"roundReturned": 0, "roundIdentities": 0},
             "safeReasonCode": "source_browser_extension_disconnected",
@@ -1126,6 +1127,7 @@ def test_v2_blocked_liepin_source_result_reports_filter_failure(tmp_path: Path) 
             "status": "blocked",
             "stage": "source_result",
             "roundNo": 1,
+            "sourceKind": "liepin",
             "summary": "source_result",
             "counts": {"roundReturned": 0, "roundIdentities": 0},
             "safeReasonCode": "source_filter_unavailable",
@@ -1137,11 +1139,11 @@ def test_v2_blocked_liepin_source_result_reports_filter_failure(tmp_path: Path) 
     progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
 
     assert (
-        progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：猎聘筛选条件未成功应用，请刷新猎聘页面后重试。"
+        progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：猎聘筛选条件未成功应用，请刷新页面后重试。"
     )
 
 
-def test_v2_blocked_liepin_source_result_does_not_repeat_formatted_summary(tmp_path: Path) -> None:
+def test_v2_blocked_liepin_source_result_uses_canonical_summary_instead_of_raw_summary(tmp_path: Path) -> None:
     service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
     runtime.progress_payloads["rtrun_1"] = [
         {
@@ -1161,7 +1163,7 @@ def test_v2_blocked_liepin_source_result_does_not_repeat_formatted_summary(tmp_p
     view = service.get_conversation(conversation_id)
     progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
 
-    assert progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：source_result"
+    assert progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：猎聘检索受阻，请稍后重试。"
 
 
 def test_list_events_returns_incremental_visible_events_and_refreshes_runtime(tmp_path: Path) -> None:
@@ -1189,7 +1191,7 @@ def test_list_events_returns_incremental_visible_events_and_refreshes_runtime(tm
         "runtimeRunId": "rtrun_1",
         "status": "running",
         "stage": "source_search",
-        "summary": "正在检索候选人，进度 25%。",
+        "summary": "招聘流程运行中，当前阶段：候选人检索。",
         "state": "running",
     }
 
@@ -2515,7 +2517,7 @@ def test_get_runtime_status_updates_top_level_state_to_match_progress(tmp_path: 
         "runtimeRunId": "rtrun_1",
         "status": status,
         "stage": "finalization",
-        "summary": f"status is {status}",
+        "summary": "最终短名单已生成。" if status == "completed" else "招聘流程失败，请查看运行详情。",
     }
 
     view = asyncio.run(
@@ -2534,7 +2536,7 @@ def test_get_runtime_status_updates_top_level_state_to_match_progress(tmp_path: 
         "runtimeRunId": "rtrun_1",
         "status": status,
         "stage": "finalization",
-        "summary": f"status is {status}",
+        "summary": "最终短名单已生成。" if status == "completed" else "招聘流程失败，请查看运行详情。",
         "state": status,
     }
 
@@ -2588,7 +2590,7 @@ def test_get_conversation_refreshes_active_runtime_status_without_duplicate_prog
         "runtimeRunId": "rtrun_1",
         "status": "running",
         "stage": "source_search",
-        "summary": "正在检索候选人，进度 25%。",
+        "summary": "招聘流程运行中，当前阶段：候选人检索。",
         "state": "running",
     }
     assert [event.payload for event in progress_events].count(progress_events[-1].payload) == 1
@@ -2621,13 +2623,13 @@ def test_get_conversation_refreshes_active_runtime_status_without_duplicate_prog
         "runtimeRunId": "rtrun_1",
         "status": "completed",
         "stage": "completed",
-        "summary": "本次运行完成，筛选出 2 位候选人。",
+        "summary": "招聘流程已完成。",
         "state": "completed",
     }
     assert completed_refresh.transcriptEvents[-2].payload == {
         "runtimeRunId": "rtrun_1",
         "status": "completed",
-        "summary": "最终推荐 2 位候选人。",
+        "summary": "招聘流程已完成，最终候选人列表已生成。",
         "facts": [{"label": "候选人", "value": "张三、李四"}],
         "state": "completed",
     }
@@ -2868,9 +2870,9 @@ def test_get_conversation_does_not_duplicate_same_visible_queued_progress(tmp_pa
     assert visible_payloads.count({"state": "queued", "summary": "招聘流程已排队，等待开始。"}) == 1
 
 
-def test_get_conversation_does_not_duplicate_runtime_event_summary_as_status_snapshot(tmp_path: Path) -> None:
+def test_get_conversation_does_not_duplicate_canonical_runtime_failure_as_status_snapshot(tmp_path: Path) -> None:
     service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
-    summary = "招聘流程失败：猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
+    raw_summary = "招聘流程失败：猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
     runtime.progress_payloads["rtrun_1"] = [
         {
             "runtimeRunId": "rtrun_1",
@@ -2879,14 +2881,14 @@ def test_get_conversation_does_not_duplicate_runtime_event_summary_as_status_sna
             "status": "completed",
             "stage": "source_lanes",
             "state": "completed",
-            "summary": summary,
+            "summary": raw_summary,
         },
     ]
     runtime.status_payloads["rtrun_1"] = {
         "runtimeRunId": "rtrun_1",
         "status": "failed",
         "stage": "runtime",
-        "summary": summary,
+        "summary": raw_summary,
     }
 
     first_refresh = service.get_conversation(conversation_id)
@@ -2897,10 +2899,11 @@ def test_get_conversation_does_not_duplicate_runtime_event_summary_as_status_sna
     progress_summaries = [
         event.payload.get("summary") for event in second_refresh.transcriptEvents if event.type == "runtime_progress"
     ]
-    assert progress_summaries.count(summary) == 1
+    assert progress_summaries.count("招聘流程失败，请查看运行详情。") == 1
+    assert raw_summary not in progress_summaries
 
 
-def test_get_conversation_refreshes_terminal_runtime_when_summary_changes(tmp_path: Path) -> None:
+def test_get_conversation_ignores_raw_terminal_summary_changes(tmp_path: Path) -> None:
     service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
     runtime.status_payloads["rtrun_1"] = {
         "runtimeRunId": "rtrun_1",
@@ -2925,8 +2928,8 @@ def test_get_conversation_refreshes_terminal_runtime_when_summary_changes(tmp_pa
     assert progress_events[-1].payload == {
         "runtimeRunId": "rtrun_1",
         "status": "failed",
-        "stage": "source",
-        "summary": "招聘流程失败：source_browser_backend_unavailable",
+        "stage": "runtime",
+        "summary": "招聘流程失败，请查看运行详情。",
         "state": "failed",
     }
 
@@ -2978,7 +2981,7 @@ def test_runtime_summary_question_uses_agent_intent_and_reads_runtime_results(tm
         "runtimeRunId": "rtrun_1",
         "status": "completed",
         "state": "completed",
-        "summary": "本次运行完成，筛选出 2 位候选人。",
+        "summary": "招聘流程已完成，最终候选人列表已生成。",
         "facts": [{"label": "Candidate", "value": "张三：匹配 Python 和 Agent 经验"}],
     }
     service.agent_loop.outputs.append(_agent_output(intent="get_runtime_results", message="我读取了运行结果。"))
@@ -2998,7 +3001,7 @@ def test_runtime_summary_question_uses_agent_intent_and_reads_runtime_results(tm
         "runtimeRunId": "rtrun_1",
         "status": "completed",
         "state": "completed",
-        "summary": "本次运行完成，筛选出 2 位候选人。",
+        "summary": "招聘流程已完成，最终候选人列表已生成。",
         "facts": [{"label": "Candidate", "value": "张三：匹配 Python 和 Agent 经验"}],
     }
     assert payload["transcriptEvents"][-1]["payload"] == {
@@ -3027,7 +3030,7 @@ def test_get_runtime_results_does_not_duplicate_existing_completed_result(tmp_pa
     stored_record = service.store.get_conversation(conversation_id)
 
     assert [event.type for event in view.transcriptEvents[-2:]] == ["user_message", "assistant_message"]
-    assert view.transcriptEvents[-1].payload == {"text": "最终推荐 2 位候选人。"}
+    assert view.transcriptEvents[-1].payload == {"text": "招聘流程已完成，最终候选人列表已生成。"}
     assert len([event for event in stored_record.events if event.type == "runtime_result"]) == 1
     assert len([event for event in view.transcriptEvents if event.type == "runtime_result"]) == 1
 
@@ -3076,9 +3079,9 @@ def test_get_runtime_results_intent_appends_runtime_result(tmp_path: Path) -> No
         "runtime_result",
         "assistant_message",
     ]
-    assert payload["transcriptEvents"][-2]["payload"]["summary"] == "本次运行完成，筛选出 1 位候选人。"
+    assert payload["transcriptEvents"][-2]["payload"]["summary"] == "招聘流程已完成，最终候选人列表已生成。"
     assert payload["transcriptEvents"][-2]["payload"]["state"] == "completed"
-    assert payload["transcriptEvents"][-1]["payload"] == {"text": "本次运行完成，筛选出 1 位候选人。"}
+    assert payload["transcriptEvents"][-1]["payload"] == {"text": "招聘流程已完成，最终候选人列表已生成。"}
 
 
 def test_agent_runtime_input_after_confirm_records_next_round_requirement_without_new_form(tmp_path: Path) -> None:
@@ -3499,7 +3502,10 @@ def test_v2_runtime_display_drops_unsafe_top_level_progress_values() -> None:
         }
     )
 
-    assert payload == {"stage": "source_result"}
+    assert payload == {
+        "stage": "source_result",
+        "summary": "本轮来源检索结果已更新。",
+    }
     serialized = json.dumps(payload, ensure_ascii=False)
     assert provider_url not in serialized
     assert private_token not in serialized
@@ -3523,6 +3529,83 @@ def test_v2_runtime_display_drops_unsafe_top_level_result_values() -> None:
     serialized = json.dumps(payload, ensure_ascii=False)
     assert provider_url not in serialized
     assert private_token not in serialized
+
+
+def test_v2_runtime_display_uses_canonical_progress_summary_for_safe_looking_runtime_failure() -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    raw_summary = "OpenCLI CDP target 98b37a browser session failed"
+    payload = normalize_runtime_progress_payload(
+        {
+            "runtimeEventType": "runtime_round_source_result",
+            "status": "blocked",
+            "stage": "source_result",
+            "roundNo": 1,
+            "sourceKind": "liepin",
+            "summary": raw_summary,
+        }
+    )
+
+    assert payload["summary"] == "第 1 轮猎聘检索受阻：猎聘检索受阻，请稍后重试。"
+    assert raw_summary not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_v2_runtime_display_drops_safe_looking_unknown_event_and_stage_values() -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    raw_summary = "OpenCLI CDP target 98b37a browser session failed"
+    payload = normalize_runtime_progress_payload(
+        {
+            "runtimeEventType": "OpenCLI_internal_phase",
+            "status": "running",
+            "stage": "OpenCLI_internal_phase",
+            "summary": raw_summary,
+        }
+    )
+
+    assert payload == {
+        "status": "running",
+        "summary": "招聘流程运行中。",
+    }
+    serialized = json.dumps(payload, ensure_ascii=False)
+    assert "OpenCLI_internal_phase" not in serialized
+    assert raw_summary not in serialized
+
+
+def test_v2_runtime_display_uses_state_summary_instead_of_arbitrary_result_summary() -> None:
+    from seektalent_workbench_v2.runtime_display import FAILED_RESULT_SUMMARY, normalize_runtime_result_payload
+
+    raw_summary = "OpenCLI CDP target 98b37a browser session failed"
+    payload = normalize_runtime_result_payload(
+        {
+            "status": "failed",
+            "summary": raw_summary,
+        }
+    )
+
+    assert payload == {
+        "status": "failed",
+        "summary": FAILED_RESULT_SUMMARY,
+    }
+    assert raw_summary not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_v2_runtime_display_uses_canonical_reason_for_search_failure() -> None:
+    from seektalent_workbench_v2.runtime_display import normalize_runtime_progress_payload
+
+    raw_summary = "OpenCLI CDP target 98b37a browser session failed"
+    payload = normalize_runtime_progress_payload(
+        {
+            "runtimeEventType": "runtime_search_failed",
+            "status": "failed",
+            "stage": "search",
+            "roundNo": 1,
+            "summary": raw_summary,
+        }
+    )
+
+    assert payload["summary"] == "第 1 轮检索失败：检索失败，请稍后重试。"
+    assert raw_summary not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_v2_runtime_display_preserves_safe_top_level_runtime_values() -> None:
@@ -3560,7 +3643,7 @@ def test_v2_runtime_display_preserves_safe_top_level_runtime_values() -> None:
         "runtimeEventType": "runtime_round_source_result",
         "status": "blocked",
         "stage": "source_result",
-        "summary": "第 1 轮猎聘检索受阻：本轮来源检索受阻。",
+        "summary": "第 1 轮来源检索受阻：来源检索受阻，请稍后重试。",
         "state": "running",
         "roundNo": 1,
         "sourceId": "internal_referrals",
@@ -3570,7 +3653,7 @@ def test_v2_runtime_display_preserves_safe_top_level_runtime_values() -> None:
         "runtimeRunId": "rtrun_1",
         "status": "completed",
         "state": "completed",
-        "summary": "最终候选人已生成。",
+        "summary": "招聘流程已完成，最终候选人列表已生成。",
     }
 
 

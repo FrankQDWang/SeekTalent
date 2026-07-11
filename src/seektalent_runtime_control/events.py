@@ -40,6 +40,7 @@ _SUMMARY_SENSITIVE_TERMS = (
     "provider",
     "resume",
 )
+_PUBLIC_SOURCE_LABELS = {"cts": "CTS", "liepin": "猎聘"}
 
 
 def normalize_progress_event(progress: ProgressEvent, runtime_run_id: str, now: str) -> RuntimeControlEventInput:
@@ -86,7 +87,7 @@ def _normalize_public_progress_event(
         round_no=public_event["roundNo"],
         source_id=public_event["sourceKind"],
         status=public_event["status"],
-        summary=_safe_summary(progress.message),
+        summary=_public_runtime_event_summary(public_event),
         payload=payload,
         schema_version=RUNTIME_CONTROL_EVENT_SCHEMA_VERSION,
         visibility="public",
@@ -154,6 +155,113 @@ def _runtime_public_event_payload(event: Mapping[str, object], *, runtime_run_id
         "safeReasonCode": event["safeReasonCode"],
         "createdAt": event["createdAt"],
     }
+
+
+def _public_runtime_event_summary(event: Mapping[str, object]) -> str:
+    stage = event["stage"]
+    status = event["status"]
+    round_prefix = _round_prefix(event.get("roundNo"))
+    source_label = _public_source_label(event.get("sourceKind"))
+    counts = event.get("counts")
+    counts = counts if isinstance(counts, Mapping) else {}
+    reason = event.get("safeReasonCode")
+    reason = reason if isinstance(reason, str) else None
+
+    if stage == "round_query":
+        if status in {"blocked", "failed"}:
+            return f"{round_prefix}查询策略未能生成。"
+        if status == "completed":
+            return f"{round_prefix}查询策略已生成。"
+        return f"{round_prefix}正在生成查询策略。"
+    if stage == "source_dispatch":
+        if source_label == "来源":
+            return "已发起候选人检索。"
+        return f"已向{source_label}发起候选人检索。"
+    if stage == "source_result":
+        return _public_source_result_summary(
+            status=status,
+            round_prefix=round_prefix,
+            source_label=source_label,
+            reason=reason,
+            counts=counts,
+        )
+    if stage == "merge":
+        merged = _non_negative_int(counts.get("mergedIdentities"))
+        if merged is not None:
+            return f"{round_prefix}候选人合并完成：新增 {merged} 位候选人。"
+        return f"{round_prefix}候选人合并完成。"
+    if stage == "scoring":
+        top_pool_count = _non_negative_int(counts.get("topPoolCount"))
+        if top_pool_count is not None:
+            return f"{round_prefix}评分完成，{top_pool_count} 位候选人进入 Top Pool。"
+        return f"{round_prefix}评分完成。"
+    if stage == "feedback":
+        return f"{round_prefix}复盘完成，准备调整下一轮检索策略。"
+    if stage == "finalization":
+        return "最终短名单已生成。" if status == "completed" else "正在汇总最终候选人。"
+    return "招聘流程状态已更新。"
+
+
+def _public_source_result_summary(
+    *,
+    status: object,
+    round_prefix: str,
+    source_label: str,
+    reason: str | None,
+    counts: Mapping[str, object],
+) -> str:
+    if status == "blocked":
+        return f"{round_prefix}{source_label}检索受阻：{_public_failure_reason(reason, source_label=source_label, blocked=True)}"
+    if status == "failed":
+        return f"{round_prefix}{source_label}检索失败：{_public_failure_reason(reason, source_label=source_label, blocked=False)}"
+    returned = _non_negative_int(counts.get("roundReturned"))
+    identities = _non_negative_int(counts.get("roundIdentities"))
+    if returned is not None and identities is not None:
+        if status == "partial":
+            return f"{round_prefix}{source_label}检索部分完成：返回 {returned} 条，新增 {identities} 位候选人。"
+        return f"{round_prefix}{source_label}检索完成：返回 {returned} 条，新增 {identities} 位候选人。"
+    if status == "partial":
+        return f"{round_prefix}{source_label}检索部分完成。"
+    return f"{round_prefix}{source_label}检索结果已更新。"
+
+
+def _public_failure_reason(reason: str | None, *, source_label: str, blocked: bool) -> str:
+    if reason == "source_browser_extension_disconnected":
+        return f"{source_label}浏览器桥扩展未连接，请确认扩展已连接后重试。"
+    if reason == "source_browser_backend_unavailable":
+        return f"{source_label}浏览器桥暂不可用，系统会先尝试恢复连接；如果仍失败，请稍后重试。"
+    if reason in {"source_filter_unavailable", "source_filter_partial", "source_filter_unsupported"}:
+        return f"{source_label}筛选条件未成功应用，请刷新页面后重试。"
+    if reason == "source_browser_timeout":
+        return f"{source_label}检索超时，请稍后重试。"
+    if reason == "source_login_required":
+        return f"{source_label}账号需要登录后才能继续检索。"
+    if reason == "source_account_mismatch":
+        return f"{source_label}账号与当前检索任务不匹配，请确认账号后重试。"
+    if reason in {"source_browser_policy_blocked", "source_risk_or_verification_required"}:
+        return f"{source_label}需要完成页面验证后才能继续检索。"
+    if reason == "source_browser_interaction_required":
+        return f"{source_label}需要人工完成页面操作后才能继续检索。"
+    if reason == "source_budget_exhausted":
+        return f"{source_label}本轮检索额度已用尽。"
+    if reason in {"source_filter_applied", "source_filter_degraded"}:
+        return f"{source_label}筛选条件已降级处理。"
+    if reason in {"source_location_filter_unsupported", "source_age_filter_unsupported"}:
+        return f"{source_label}暂不支持部分筛选条件。"
+    if blocked:
+        return f"{source_label}检索受阻，请稍后重试。"
+    return "运行失败，请查看详情。"
+
+
+def _round_prefix(value: object) -> str:
+    round_no = _non_negative_int(value)
+    return f"第 {round_no} 轮" if round_no is not None else "本轮"
+
+
+def _public_source_label(value: object) -> str:
+    if not isinstance(value, str):
+        return "来源"
+    return _PUBLIC_SOURCE_LABELS.get(value, "来源")
 
 
 def _runtime_public_event_id(event: Mapping[str, object], *, runtime_run_id: str) -> str:
