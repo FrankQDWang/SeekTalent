@@ -15,10 +15,13 @@ from seektalent.flywheel.outcomes import build_runtime_query_outcome_rows_from_h
 from seektalent.flywheel.runtime import query_hit_rows_from_hits
 from seektalent.models import QueryResumeHit, RequirementSheet
 from seektalent.core.retrieval.provider_contract import (
+    ProviderFirstPageExpansionError,
     ProviderFirstPageExpansionResult,
     ProviderSearchContinuation,
     SearchResult,
 )
+from seektalent.providers.liepin.adapter import LiepinProviderAdapter
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.providers.liepin.client import LiepinWorkerModeError, build_liepin_worker_client
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
 from seektalent.providers.liepin.security import issue_stream_token
@@ -39,6 +42,76 @@ from tests.settings_factory import make_settings
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_provider_preserves_terminal_result_when_cleanup_fails() -> None:
+    continuation = ProviderSearchContinuation(kind="first_page_detail_expansion",
+        continuation_id="c", opaque_ref="artifact://protected/c", source_kind="liepin", round_no=1,
+        query_instance_id="q", visible_candidate_count=1, eligible_candidate_count=1,
+        initial_opened_count=0)
+    class Worker:
+        async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action, **kwargs):
+            del kwargs
+            if action == "discard":
+                raise RuntimeError("cleanup exploded")
+            return ProviderFirstPageExpansionResult(search_result=SearchResult(),
+                first_page_visible_count=1, first_page_eligible_count=1, initial_opened_count=0,
+                expansion_opened_count=0, expansion_skipped_seen_count=0,
+                expansion_terminal_failure_count=0, status="partial",
+                safe_reason_code="original_partial")
+    result = asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
+        action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
+        logical_round_no=1, query_instance_id="q"))
+    assert result.status == "partial"
+    assert result.continuation_deleted is False
+    assert result.safe_reason_code == "liepin_first_page_continuation_cleanup_failed"
+
+
+def test_provider_preserves_expected_error_and_attaches_cleanup_ack() -> None:
+    continuation = ProviderSearchContinuation(kind="first_page_detail_expansion",
+        continuation_id="c", opaque_ref="artifact://protected/c", source_kind="liepin", round_no=1,
+        query_instance_id="q", visible_candidate_count=1, eligible_candidate_count=1,
+        initial_opened_count=0)
+    class Worker:
+        async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action, **kwargs):
+            del kwargs
+            if action == "expand":
+                raise LiepinWorkerModeError("blocked", code="original_blocked")
+            return ProviderFirstPageExpansionResult(search_result=SearchResult(),
+                first_page_visible_count=1, first_page_eligible_count=1, initial_opened_count=0,
+                expansion_opened_count=0, expansion_skipped_seen_count=0,
+                expansion_terminal_failure_count=0, status="completed", continuation_deleted=True)
+    with pytest.raises(ProviderFirstPageExpansionError) as captured:
+        asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
+            action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
+            logical_round_no=1, query_instance_id="q"))
+    assert captured.value.safe_reason_code == "original_blocked"
+    assert captured.value.continuation_deleted is True
+
+
+@pytest.mark.parametrize("status", ["completed", "partial", "failed"])
+def test_provider_deletes_every_terminal_expansion_result(status: str) -> None:
+    continuation = ProviderSearchContinuation(kind="first_page_detail_expansion",
+        continuation_id="c", opaque_ref="artifact://protected/c", source_kind="liepin", round_no=1,
+        query_instance_id="q", visible_candidate_count=1, eligible_candidate_count=1,
+        initial_opened_count=0)
+    class Worker:
+        actions: list[str] = []
+        async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action, **kwargs):
+            del kwargs
+            self.actions.append(action)
+            return ProviderFirstPageExpansionResult(search_result=SearchResult(),
+                first_page_visible_count=1, first_page_eligible_count=1, initial_opened_count=0,
+                expansion_opened_count=0, expansion_skipped_seen_count=0,
+                expansion_terminal_failure_count=0, status=status,
+                continuation_deleted=action == "discard")
+    worker = Worker()
+    result = asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=worker).handle_first_page_continuation_with_detail_open_claim_ledger(
+        action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
+        logical_round_no=1, query_instance_id="q"))
+    assert worker.actions == ["expand", "discard"]
+    assert result.status == status
+    assert result.continuation_deleted is True
 SRC = ROOT / "src"
 OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/opencli_browser/__init__.py",

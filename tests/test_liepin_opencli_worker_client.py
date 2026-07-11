@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from seektalent.core.retrieval.provider_contract import SearchRequest
+from seektalent.core.retrieval.provider_contract import ProviderFirstPageExpansionResult, ProviderSearchContinuation, SearchRequest, SearchResult
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 from seektalent.providers.liepin.worker_contracts import (
@@ -144,6 +144,43 @@ def test_opencli_worker_private_claim_route_forwards_same_ledger_and_logical_pro
     assert context.detail_open_claim_ledger is ledger
     assert context.logical_round_no == 5
     assert context.query_instance_id == "logical-query-5"
+
+
+def test_search_and_expansion_share_single_opencli_lock() -> None:
+    class RecordingRetriever(FakeRetriever):
+        active = 0
+        max_active = 0
+        def _enter(self):
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            time.sleep(0.05)
+            self.active -= 1
+        def search_resumes(self, request):
+            self._enter()
+            return super().search_resumes(request)
+        def handle_first_page_continuation_with_detail_open_claim_ledger(self, **kwargs):
+            del kwargs
+            self._enter()
+            return ProviderFirstPageExpansionResult(search_result=SearchResult(),
+                first_page_visible_count=1, first_page_eligible_count=1, initial_opened_count=0,
+                expansion_opened_count=0, expansion_skipped_seen_count=0,
+                expansion_terminal_failure_count=0, status="completed")
+    retriever = RecordingRetriever(calls=[])
+    client = LiepinOpenCliWorkerClient(retriever=retriever, connection_id="c", provider_account_hash="h")
+    continuation = ProviderSearchContinuation(kind="first_page_detail_expansion",
+        continuation_id="c", opaque_ref="artifact://protected/c", source_kind="liepin", round_no=1,
+        query_instance_id="q", visible_candidate_count=1, eligible_candidate_count=1,
+        initial_opened_count=0)
+    request = SearchRequest(query_terms=["Python"], query_role="primary", keyword_query="Python",
+        adapter_notes=[], runtime_constraints=[], fetch_mode="detail", page_size=1,
+        provider_context={"liepin_requirement_sheet_json": "{}"})
+    async def run_both():
+        await asyncio.gather(client.search(request, round_no=1, trace_id="r"),
+            client.handle_first_page_continuation_with_detail_open_claim_ledger(action="expand",
+                continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
+                logical_round_no=1, query_instance_id="q"))
+    asyncio.run(run_both())
+    assert retriever.max_active == 1
 
 
 def test_opencli_worker_search_does_not_block_event_loop() -> None:

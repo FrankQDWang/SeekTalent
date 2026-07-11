@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -65,6 +66,10 @@ _PRIVATE_DETAIL_TRANSPORT_KEYS = frozenset(
 )
 
 
+class LiepinFirstPageExpansionBoundaryError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, kw_only=True)
 class LiepinOpenCliResumeRequest:
     source_run_id: str
@@ -111,25 +116,37 @@ class LiepinOpenCliResumeRetriever:
             logical_round_no: int, query_instance_id: str) -> ProviderFirstPageExpansionResult:
         if action == "discard":
             discard = getattr(self._runner, "discard_liepin_first_page_continuation", None)
-            if not callable(discard):
-                raise RuntimeError("liepin_opencli_private_expansion_route_unavailable")
-            discard(continuation.opaque_ref)
+            exists = getattr(self._runner, "liepin_first_page_continuation_exists", None)
+            if not callable(discard) or not callable(exists):
+                return _cleanup_failure_result(continuation)
+            try:
+                discard(continuation.opaque_ref)
+                deleted = not exists(continuation.opaque_ref)
+            except (OSError, RuntimeError):
+                deleted = False
             from seektalent.core.retrieval.provider_contract import SearchResult
             return ProviderFirstPageExpansionResult(search_result=SearchResult(),
                 first_page_visible_count=continuation.visible_candidate_count,
                 first_page_eligible_count=continuation.eligible_candidate_count,
                 initial_opened_count=continuation.initial_opened_count, expansion_opened_count=0,
                 expansion_skipped_seen_count=0, expansion_terminal_failure_count=0,
-                status="completed", continuation_deleted=True)
+                status="completed" if deleted else "failed",
+                safe_reason_code=None if deleted else "liepin_first_page_continuation_cleanup_failed",
+                continuation_deleted=deleted)
         if action != "expand":
             raise ValueError("liepin_expansion_action_invalid")
         handler = getattr(self._runner, "handle_liepin_first_page_continuation", None)
         if not callable(handler):
-            raise RuntimeError("liepin_opencli_private_expansion_route_unavailable")
+            raise LiepinFirstPageExpansionBoundaryError("liepin_opencli_private_expansion_route_unavailable")
         envelope = handler(continuation_ref=continuation.opaque_ref,
             detail_open_claim_context=DetailOpenClaimSearchContext(
                 detail_open_claim_ledger=detail_open_claim_ledger,
                 logical_round_no=logical_round_no, query_instance_id=query_instance_id))
+        if inspect.isawaitable(envelope):
+            close = getattr(envelope, "close", None)
+            if callable(close):
+                close()
+            raise LiepinFirstPageExpansionBoundaryError("liepin_opencli_private_expansion_route_must_be_synchronous")
         response = _response_from_opencli_envelope(cast(Mapping[str, object], envelope))
         from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
         return ProviderFirstPageExpansionResult(
@@ -204,6 +221,17 @@ class LiepinOpenCliResumeRetriever:
             return False
         result = recover()
         return bool(getattr(result, "ok", False))
+
+
+def _cleanup_failure_result(continuation: ProviderSearchContinuation) -> ProviderFirstPageExpansionResult:
+    from seektalent.core.retrieval.provider_contract import SearchResult
+    return ProviderFirstPageExpansionResult(search_result=SearchResult(),
+        first_page_visible_count=continuation.visible_candidate_count,
+        first_page_eligible_count=continuation.eligible_candidate_count,
+        initial_opened_count=continuation.initial_opened_count, expansion_opened_count=0,
+        expansion_skipped_seen_count=0, expansion_terminal_failure_count=0,
+        status="failed", safe_reason_code="liepin_first_page_continuation_cleanup_failed",
+        continuation_deleted=False)
 
 
 def _envelope_reason(envelope: Mapping[str, object]) -> str | None:

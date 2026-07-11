@@ -8,6 +8,7 @@ from seektalent.core.retrieval.provider_contract import ProviderFirstPageExpansi
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.opencli_retriever import (
+    LiepinFirstPageExpansionBoundaryError,
     LiepinOpenCliResumeRequest,
     LiepinOpenCliResumeRetriever,
 )
@@ -31,9 +32,12 @@ class LiepinOpenCliWorkerClient:
     async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action: str,
             continuation: ProviderSearchContinuation, detail_open_claim_ledger: DetailOpenClaimLedger,
             logical_round_no: int, query_instance_id: str) -> ProviderFirstPageExpansionResult:
-        return await asyncio.to_thread(self._handle_first_page_continuation_sync, action=action,
-            continuation=continuation, detail_open_claim_ledger=detail_open_claim_ledger,
-            logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+        try:
+            return await asyncio.to_thread(self._handle_first_page_continuation_sync, action=action,
+                continuation=continuation, detail_open_claim_ledger=detail_open_claim_ledger,
+                logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+        except LiepinFirstPageExpansionBoundaryError as exc:
+            raise LiepinWorkerModeError("Liepin OpenCLI continuation failed.", code=str(exc)) from exc
 
     def _handle_first_page_continuation_sync(self, **kwargs) -> ProviderFirstPageExpansionResult:
         with _OPENCLI_SEARCH_LOCK:

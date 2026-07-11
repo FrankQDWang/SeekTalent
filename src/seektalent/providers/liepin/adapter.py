@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn, Protocol, cast
 
 from seektalent.config import AppSettings
-from seektalent.core.retrieval.provider_contract import ProviderCapabilities, ProviderFirstPageExpansionResult, ProviderSearchContinuation
+from seektalent.core.retrieval.provider_contract import ProviderCapabilities, ProviderFirstPageExpansionError, ProviderFirstPageExpansionResult, ProviderSearchContinuation, ProviderSearchError
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.providers.liepin.client import EventCallback
@@ -220,16 +220,37 @@ class LiepinProviderAdapter:
                 detail_open_claim_ledger=detail_open_claim_ledger,
                 logical_round_no=logical_round_no, query_instance_id=query_instance_id)
         result: ProviderFirstPageExpansionResult | None = None
+        primary_error: ProviderSearchError | LiepinWorkerModeError | None = None
+        deleted: ProviderFirstPageExpansionResult | None = None
         try:
-            result = await handler(action="expand", continuation=continuation,
-                detail_open_claim_ledger=detail_open_claim_ledger,
-                logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+            try:
+                result = await handler(action="expand", continuation=continuation,
+                    detail_open_claim_ledger=detail_open_claim_ledger,
+                    logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+            except (ProviderSearchError, LiepinWorkerModeError) as exc:
+                primary_error = exc
         finally:
-            deleted = await handler(action="discard", continuation=continuation,
-                detail_open_claim_ledger=detail_open_claim_ledger,
-                logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+            try:
+                deleted = await handler(action="discard", continuation=continuation,
+                    detail_open_claim_ledger=detail_open_claim_ledger,
+                    logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+            except (OSError, RuntimeError):
+                deleted = None
+        continuation_deleted = deleted is not None and deleted.continuation_deleted
+        cleanup_reason = None if continuation_deleted else "liepin_first_page_continuation_cleanup_failed"
+        if primary_error is not None:
+            if isinstance(primary_error, ProviderSearchError):
+                raise ProviderFirstPageExpansionError(str(primary_error), status="failed",
+                    safe_reason_code=primary_error.reason_code,
+                    continuation_deleted=continuation_deleted) from primary_error
+            if isinstance(primary_error, LiepinWorkerModeError):
+                raise ProviderFirstPageExpansionError(str(primary_error), status="blocked",
+                    safe_reason_code=str(primary_error.code or "liepin_first_page_expansion_blocked"),
+                    continuation_deleted=continuation_deleted) from primary_error
+            raise primary_error
         assert result is not None
-        return replace(result, continuation_deleted=deleted.continuation_deleted)
+        return replace(result, continuation_deleted=continuation_deleted,
+            safe_reason_code=cleanup_reason or result.safe_reason_code)
 
     async def _search(
         self,

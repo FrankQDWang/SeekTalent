@@ -109,6 +109,15 @@ class ProviderFirstPageExpansionResult:
     continuation_deleted: bool = False
 
 
+class ProviderFirstPageExpansionError(RuntimeError):
+    def __init__(self, message: str, *, status: Literal["partial", "blocked", "failed"],
+                 safe_reason_code: str, continuation_deleted: bool = False) -> None:
+        super().__init__(message)
+        self.status = status
+        self.safe_reason_code = safe_reason_code
+        self.continuation_deleted = continuation_deleted
+
+
 class ProviderSearchError(RuntimeError):
     def __init__(self, *, reason_code: str, message: str) -> None:
         super().__init__(message)

@@ -376,6 +376,13 @@ class LiepinSiteAdapter:
     def discard_liepin_first_page_continuation(self, opaque_ref: str) -> None:
         self._first_page_continuation_store().delete(opaque_ref)
 
+    def liepin_first_page_continuation_exists(self, opaque_ref: str) -> bool:
+        try:
+            self._first_page_continuation_store().load(opaque_ref)
+        except FileNotFoundError:
+            return False
+        return True
+
     def handle_liepin_first_page_continuation(self, *, continuation_ref: str,
             detail_open_claim_context: DetailOpenClaimSearchContext) -> dict[str, object]:
         from seektalent.providers.liepin.liepin_search_workflow import LiepinSearchWorkflow

@@ -13,6 +13,7 @@ from seektalent.finalize.deterministic import build_deterministic_final_result
 from seektalent.models import FinalizeContext, ScoredCandidate
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.detail_payload_text import STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
@@ -25,6 +26,52 @@ from seektalent.providers.liepin.worker_contracts import LiepinResumeSearchRespo
 from seektalent.runtime.production_contract import ProductionCandidateV1
 from seektalent.source_contracts import RuntimeSourceLanePlan
 import seektalent.sources.liepin.runtime_lane as runtime_lane
+
+
+def _continuation() -> ProviderSearchContinuation:
+    return ProviderSearchContinuation(kind="first_page_detail_expansion",
+        continuation_id="c1", opaque_ref="artifact://protected/c1.json", source_kind="liepin",
+        round_no=1, query_instance_id="q1", visible_candidate_count=3,
+        eligible_candidate_count=3, initial_opened_count=1)
+
+
+def test_discard_acknowledges_only_after_absence_readback() -> None:
+    class Runner:
+        deleted = False
+        def discard_liepin_first_page_continuation(self, opaque_ref):
+            del opaque_ref
+            self.deleted = True
+        def liepin_first_page_continuation_exists(self, opaque_ref):
+            del opaque_ref
+            return not self.deleted
+    result = LiepinOpenCliResumeRetriever(runner=Runner()).handle_first_page_continuation_with_detail_open_claim_ledger(
+        action="discard", continuation=_continuation(), detail_open_claim_ledger=DetailOpenClaimLedger({}),
+        logical_round_no=1, query_instance_id="q1")
+    assert result.continuation_deleted is True
+
+
+def test_discard_readback_failure_returns_typed_cleanup_result() -> None:
+    class Runner:
+        def discard_liepin_first_page_continuation(self, opaque_ref): del opaque_ref
+        def liepin_first_page_continuation_exists(self, opaque_ref):
+            del opaque_ref
+            raise RuntimeError("readback failed")
+    result = LiepinOpenCliResumeRetriever(runner=Runner()).handle_first_page_continuation_with_detail_open_claim_ledger(
+        action="discard", continuation=_continuation(), detail_open_claim_ledger=DetailOpenClaimLedger({}),
+        logical_round_no=1, query_instance_id="q1")
+    assert result.continuation_deleted is False
+    assert result.safe_reason_code == "liepin_first_page_continuation_cleanup_failed"
+
+
+def test_expansion_rejects_coroutine_from_synchronous_runner_seam() -> None:
+    class Runner:
+        async def handle_liepin_first_page_continuation(self, **kwargs):
+            del kwargs
+            return {}
+    with pytest.raises(RuntimeError, match="must_be_synchronous"):
+        LiepinOpenCliResumeRetriever(runner=Runner()).handle_first_page_continuation_with_detail_open_claim_ledger(
+            action="expand", continuation=_continuation(), detail_open_claim_ledger=DetailOpenClaimLedger({}),
+            logical_round_no=1, query_instance_id="q1")
 
 
 @dataclass
