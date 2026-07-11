@@ -12,7 +12,7 @@ from seektalent_conversation_agent.models import (
     TranscriptActivityItem,
     TranscriptMessage,
 )
-from seektalent.candidate_visibility import is_workbench_visible_score
+from seektalent.candidate_quality import is_workbench_visible_score
 from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_conversation_agent.store import ConversationStore
 from seektalent_runtime_control.models import RuntimeStageOutput

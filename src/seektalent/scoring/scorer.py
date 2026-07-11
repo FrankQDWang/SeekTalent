@@ -20,10 +20,9 @@ from seektalent.models import (
     ScoringPolicy,
     unique_strings,
 )
+from seektalent.candidate_quality import risk_at_or_above, risk_at_or_below
 from seektalent.scoring.weighted_score import (
     calculate_overall_score,
-    risk_at_or_above,
-    risk_at_or_below,
     score_dimension_applicability,
 )
 from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS, PROTECTED_ATTRIBUTE_SCORING_TEXT

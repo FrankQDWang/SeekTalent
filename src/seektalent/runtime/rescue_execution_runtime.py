@@ -17,7 +17,7 @@ from seektalent.models import (
 from seektalent.progress import ProgressCallback
 from seektalent.retrieval.query_identity import build_term_group_key
 from seektalent.runtime.query_identity import consumed_non_anchor_term_family_ids, used_term_group_keys
-from seektalent.scoring.weighted_score import risk_at_or_above
+from seektalent.candidate_quality import risk_at_or_above
 from seektalent.tracing import RunTracer
 
 

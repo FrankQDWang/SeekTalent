@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from seektalent.config import AppSettings
-from seektalent.candidate_visibility import is_workbench_visible_score
+from seektalent.candidate_quality import is_workbench_visible_score
 from seektalent.models import RequirementSheet
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService

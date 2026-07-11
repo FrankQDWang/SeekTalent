@@ -9,7 +9,7 @@ from seektalent.candidate_feedback.models import (
     FeedbackCandidateTerm,
 )
 from seektalent.models import QueryTermCandidate, ScoredCandidate, is_primary_anchor_role
-from seektalent.scoring.weighted_score import risk_at_or_below
+from seektalent.candidate_quality import risk_at_or_below
 
 GENERIC_TERMS = {
     "平台",

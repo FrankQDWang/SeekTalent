@@ -53,11 +53,3 @@ def calculate_overall_score(
     denominator = Decimal(sum(weight for _value, weight in weighted))
     rounded = int((numerator / denominator).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
     return min(100, max(0, rounded))
-
-
-def risk_at_or_above(score: int | None, threshold: int) -> bool:
-    return score is not None and score >= threshold
-
-
-def risk_at_or_below(score: int | None, threshold: int) -> bool:
-    return score is None or score <= threshold

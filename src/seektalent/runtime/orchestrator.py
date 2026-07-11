@@ -44,7 +44,7 @@ from seektalent.candidate_feedback.policy import (
     PRFPolicyDecision,
     build_prf_policy_decision,
 )
-from seektalent.scoring.weighted_score import risk_at_or_above
+from seektalent.candidate_quality import risk_at_or_above
 from seektalent.config import AppSettings
 from seektalent.corpus.documents import build_jd_document_row
 from seektalent.corpus.runtime import (

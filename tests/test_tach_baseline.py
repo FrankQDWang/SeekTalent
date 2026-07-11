@@ -40,10 +40,7 @@ def _source_boundary_cycles(graph: dict[str, list[str]]) -> list[tuple[str, ...]
 
 
 def test_normalize_failure_removes_line_numbers() -> None:
-    assert (
-        normalize_failure("[FAIL] src/a.py:123: Cannot use x")
-        == "[FAIL] src/a.py: Cannot use x"
-    )
+    assert normalize_failure("[FAIL] src/a.py:123: Cannot use x") == "[FAIL] src/a.py: Cannot use x"
 
 
 def test_extract_failures_keeps_only_fail_lines() -> None:
@@ -105,3 +102,18 @@ def test_tach_config_models_opencli_browser_package_boundary() -> None:
     assert "seektalent.sources" not in dependencies_by_module["seektalent.opencli_browser"]
     assert "seektalent.runtime" not in dependencies_by_module["seektalent.opencli_browser"]
     assert "seektalent.source_adapters" not in dependencies_by_module["seektalent.opencli_browser"]
+
+
+def test_tach_config_governs_shared_candidate_quality_policy() -> None:
+    dependencies_by_module = _dependencies_by_module()
+
+    assert dependencies_by_module["seektalent.candidate_quality"] == []
+    for consumer in (
+        "seektalent.candidate_feedback",
+        "seektalent.reflection",
+        "seektalent.scoring",
+        "seektalent.runtime",
+        "seektalent_ui",
+        "seektalent_workbench_v2",
+    ):
+        assert "seektalent.candidate_quality" in dependencies_by_module[consumer]

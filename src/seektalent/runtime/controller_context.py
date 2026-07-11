@@ -15,7 +15,7 @@ from seektalent.models import (
     is_title_anchor_role,
 )
 from seektalent.requirements import build_requirement_digest
-from seektalent.scoring.weighted_score import risk_at_or_above, risk_at_or_below
+from seektalent.candidate_quality import risk_at_or_above, risk_at_or_below
 
 from seektalent.runtime.context_views import (
     _reflection_summary,

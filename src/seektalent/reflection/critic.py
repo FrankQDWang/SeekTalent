@@ -26,7 +26,7 @@ from seektalent.prompt_safety import (
 )
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_reflection_draft, unpack_repair_result
-from seektalent.scoring.weighted_score import risk_at_or_below
+from seektalent.candidate_quality import risk_at_or_below
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
 DISABLED_FILTER_FIELDS = frozenset({"position", *PROTECTED_ATTRIBUTE_FIELDS})

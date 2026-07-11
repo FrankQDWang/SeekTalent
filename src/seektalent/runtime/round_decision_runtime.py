@@ -45,75 +45,56 @@ async def resolve_pre_controller_exhaustion(
     write_rescue_decision: Callable[..., None],
 ) -> tuple[ControllerDecision, RescueDecision] | None:
     """Resolve query-family exhaustion without spending a controller call."""
-    if _has_fresh_controller_selectable_family(run_state):
+    decision = choose_pre_controller_exhaustion_route(
+        run_state=run_state,
+        candidate_feedback_enabled=candidate_feedback_enabled,
+    )
+    if decision is None:
         return None
 
-    skipped: list[SkippedRescueLane] = []
-    reserve = _fresh_inactive_reserve(run_state)
-    if reserve is not None:
-        decision = RescueDecision(selected_lane="reserve_broaden")
+    if decision.selected_lane == "reserve_broaden":
         controller_decision: ControllerDecision = force_broaden_decision(
             run_state=run_state,
             round_no=round_no,
             reason="query family exhaustion preflight",
         )
-    else:
-        skipped.append(SkippedRescueLane(lane="reserve_broaden", reason="no_untried_reserve_family"))
-        if candidate_feedback_enabled and not run_state.retrieval_state.candidate_feedback_attempted:
-            decision = RescueDecision(selected_lane="candidate_feedback", skipped_lanes=skipped)
-            feedback_decision = force_candidate_feedback_decision(
+    elif decision.selected_lane == "candidate_feedback":
+        feedback_decision = force_candidate_feedback_decision(
+            run_state=run_state,
+            round_no=round_no,
+            reason="query family exhaustion preflight",
+            tracer=tracer,
+            progress_callback=progress_callback,
+        )
+        if feedback_decision is not None:
+            controller_decision = feedback_decision
+        else:
+            decision = await continue_after_empty_feedback(
                 run_state=run_state,
+                controller_context=controller_context,
                 round_no=round_no,
-                reason="query family exhaustion preflight",
                 tracer=tracer,
+                rescue_decision=decision,
                 progress_callback=progress_callback,
             )
-            if feedback_decision is not None:
-                controller_decision = feedback_decision
-            else:
-                decision = await continue_after_empty_feedback(
+            if decision.selected_lane == "anchor_only":
+                run_state.retrieval_state.anchor_only_broaden_attempted = True
+                controller_decision = force_anchor_only_decision(
                     run_state=run_state,
-                    controller_context=controller_context,
                     round_no=round_no,
-                    tracer=tracer,
-                    rescue_decision=decision,
-                    progress_callback=progress_callback,
+                    reason="query family exhaustion preflight",
                 )
-                if decision.selected_lane == "anchor_only":
-                    run_state.retrieval_state.anchor_only_broaden_attempted = True
-                    controller_decision = force_anchor_only_decision(
-                        run_state=run_state,
-                        round_no=round_no,
-                        reason="query family exhaustion preflight",
-                    )
-                else:
-                    controller_decision = _family_exhausted_stop()
-        elif rescue_execution_runtime.has_novel_anchor_only_group(run_state.retrieval_state):
-            skipped.append(
-                SkippedRescueLane(
-                    lane="candidate_feedback",
-                    reason="disabled" if not candidate_feedback_enabled else "already_attempted",
-                )
-            )
-            decision = RescueDecision(selected_lane="anchor_only", skipped_lanes=skipped)
-            run_state.retrieval_state.anchor_only_broaden_attempted = True
-            controller_decision = force_anchor_only_decision(
-                run_state=run_state,
-                round_no=round_no,
-                reason="query family exhaustion preflight",
-            )
-        else:
-            skipped.extend(
-                [
-                    SkippedRescueLane(
-                        lane="candidate_feedback",
-                        reason="disabled" if not candidate_feedback_enabled else "already_attempted",
-                    ),
-                    SkippedRescueLane(lane="anchor_only", reason="no_novel_anchor_only_query"),
-                ]
-            )
-            decision = RescueDecision(selected_lane="allow_stop", skipped_lanes=skipped)
-            controller_decision = _family_exhausted_stop()
+            else:
+                controller_decision = _family_exhausted_stop()
+    elif decision.selected_lane == "anchor_only":
+        run_state.retrieval_state.anchor_only_broaden_attempted = True
+        controller_decision = force_anchor_only_decision(
+            run_state=run_state,
+            round_no=round_no,
+            reason="query family exhaustion preflight",
+        )
+    else:
+        controller_decision = _family_exhausted_stop()
 
     run_state.retrieval_state.rescue_lane_history.append(
         {"round_no": round_no, "selected_lane": decision.selected_lane}
@@ -140,6 +121,36 @@ async def resolve_pre_controller_exhaustion(
         controller_decision.model_dump(mode="json"),
     )
     return controller_decision, decision
+
+
+def choose_pre_controller_exhaustion_route(
+    *,
+    run_state: RunState,
+    candidate_feedback_enabled: bool,
+) -> RescueDecision | None:
+    """Choose the first legal exhaustion route without mutating run state."""
+    if _has_fresh_controller_selectable_family(run_state):
+        return None
+
+    skipped: list[SkippedRescueLane] = []
+    if _fresh_inactive_reserve(run_state) is not None:
+        return RescueDecision(selected_lane="reserve_broaden")
+
+    skipped.append(SkippedRescueLane(lane="reserve_broaden", reason="no_untried_reserve_family"))
+    if candidate_feedback_enabled and not run_state.retrieval_state.candidate_feedback_attempted:
+        return RescueDecision(selected_lane="candidate_feedback", skipped_lanes=skipped)
+
+    skipped.append(
+        SkippedRescueLane(
+            lane="candidate_feedback",
+            reason="disabled" if not candidate_feedback_enabled else "already_attempted",
+        )
+    )
+    if rescue_execution_runtime.has_novel_anchor_only_group(run_state.retrieval_state):
+        return RescueDecision(selected_lane="anchor_only", skipped_lanes=skipped)
+
+    skipped.append(SkippedRescueLane(lane="anchor_only", reason="no_novel_anchor_only_query"))
+    return RescueDecision(selected_lane="allow_stop", skipped_lanes=skipped)
 
 
 def _has_fresh_controller_selectable_family(run_state: RunState) -> bool:
@@ -289,10 +300,7 @@ async def resolve_round_decision(
 
 def _raise_if_stop_disallowed(*, controller_context: ControllerContext, decision: ControllerDecision) -> None:
     if isinstance(decision, StopControllerDecision) and not controller_context.stop_guidance.can_stop:
-        raise ValueError(
-            "controller_stop_not_allowed:"
-            f"{controller_context.stop_guidance.reason}"
-        )
+        raise ValueError(f"controller_stop_not_allowed:{controller_context.stop_guidance.reason}")
 
 
 def sanitize_controller_decision(
@@ -395,7 +403,8 @@ def _repair_consumed_families(
     seen = {item.family for item in fresh}
     selectable = sorted(
         (
-            item for item in pool
+            item
+            for item in pool
             if item.queryability == "admitted"
             and item.retrieval_role not in {"primary_role_anchor", "role_anchor", "secondary_title_anchor"}
             and item.family not in consumed

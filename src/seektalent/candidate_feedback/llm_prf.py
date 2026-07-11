@@ -15,7 +15,7 @@ from seektalent.candidate_feedback.models import CandidateTermType, FeedbackCand
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import NormalizedResume, ScoredCandidate, unique_strings
-from seektalent.scoring.weighted_score import risk_at_or_above
+from seektalent.candidate_quality import risk_at_or_above
 from seektalent.prompt_safety import render_template_version_block, render_untrusted_json_block
 from seektalent.prompting import LoadedPrompt
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result

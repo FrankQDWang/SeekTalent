@@ -21,8 +21,12 @@ path = "seektalent.clients"
 depends_on = []
 
 [[modules]]
-path = "seektalent.candidate_feedback"
+path = "seektalent.candidate_quality"
 depends_on = []
+
+[[modules]]
+path = "seektalent.candidate_feedback"
+depends_on = ["seektalent.candidate_quality"]
 
 [[modules]]
 path = "seektalent.cache"
@@ -42,7 +46,7 @@ depends_on = []
 
 [[modules]]
 path = "seektalent.reflection"
-depends_on = []
+depends_on = ["seektalent.candidate_quality"]
 
 [[modules]]
 path = "seektalent.requirements"
@@ -76,6 +80,7 @@ depends_on = []
 path = "seektalent.runtime"
 depends_on = [
   "seektalent.cache",
+  "seektalent.candidate_quality",
   "seektalent.clients",
   "seektalent.candidate_feedback",
   "seektalent.controller",
@@ -90,7 +95,10 @@ depends_on = [
 
 [[modules]]
 path = "seektalent.scoring"
-depends_on = ["seektalent.cache"]
+depends_on = [
+  "seektalent.cache",
+  "seektalent.candidate_quality",
+]
 
 [[modules]]
 path = "seektalent.source_contracts"
@@ -136,10 +144,19 @@ depends_on = [
 [[modules]]
 path = "seektalent_ui"
 depends_on = [
+  "seektalent.candidate_quality",
   "seektalent_agent_memory",
   "seektalent_conversation_agent",
   "seektalent_runtime_control",
+  "seektalent_workbench_v2",
   "seektalent.providers",
   "seektalent.runtime",
   "seektalent.source_adapters",
+]
+
+[[modules]]
+path = "seektalent_workbench_v2"
+depends_on = [
+  "seektalent.candidate_quality",
+  "seektalent_runtime_control",
 ]

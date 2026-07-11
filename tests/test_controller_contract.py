@@ -450,8 +450,7 @@ def test_exhaustion_preflight_activates_fresh_inactive_reserve_without_controlle
     run_state = _run_state_with_previous_reflection()
     run_state.round_history[-1].reflection_advice = None
     run_state.retrieval_state.query_term_pool = [
-        item.model_copy(update={"active": item.term != "trace"})
-        for item in run_state.retrieval_state.query_term_pool
+        item.model_copy(update={"active": item.term != "trace"}) for item in run_state.retrieval_state.query_term_pool
     ]
     _consume_family(run_state, family="domain.resumematching", terms=["python", "resume matching"], query_id="used")
     _consume_family(run_state, family="domain.retrieval", terms=["python", "retrieval"], query_id="used-retrieval")
@@ -481,6 +480,26 @@ def test_exhaustion_preflight_activates_fresh_inactive_reserve_without_controlle
     assert isinstance(decision, SearchControllerDecision)
     assert decision.proposed_query_terms == ["python", "trace"]
     assert next(item for item in run_state.retrieval_state.query_term_pool if item.term == "trace").active is True
+
+
+def test_exhaustion_route_selection_is_pure_and_prioritizes_reserve() -> None:
+    run_state = _run_state_with_previous_reflection()
+    run_state.round_history[-1].reflection_advice = None
+    run_state.retrieval_state.query_term_pool = [
+        item.model_copy(update={"active": item.term != "trace"}) for item in run_state.retrieval_state.query_term_pool
+    ]
+    _consume_family(run_state, family="domain.resumematching", terms=["python", "resume matching"], query_id="used")
+    _consume_family(run_state, family="domain.retrieval", terms=["python", "retrieval"], query_id="used-retrieval")
+    before = run_state.model_dump(mode="json")
+
+    route = round_decision_runtime.choose_pre_controller_exhaustion_route(
+        run_state=run_state,
+        candidate_feedback_enabled=True,
+    )
+
+    assert route is not None
+    assert route.selected_lane == "reserve_broaden"
+    assert run_state.model_dump(mode="json") == before
 
 
 def test_exhaustion_preflight_stops_despite_disallowed_stop_without_model_or_provider_calls(tmp_path: Path) -> None:
@@ -725,6 +744,7 @@ def test_controller_validation_leaves_exact_novelty_to_runtime_sanitizer() -> No
 
     assert validate_controller_decision(context=context, decision=decision) is None
 
+
 def test_validate_controller_decision_rejects_position_filter() -> None:
     context = _controller_context()
     decision = SearchControllerDecision(
@@ -824,9 +844,7 @@ def test_controller_accepts_inactive_term_when_previous_reflection_advised_it() 
         item.model_copy(update={"active": False}) if item.term == "retrieval" else item
         for item in context.query_term_pool
     ]
-    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(
-        suggested_activate_terms=["retrieval"]
-    )
+    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(suggested_activate_terms=["retrieval"])
     context.latest_reflection_filter_advice = ReflectionFilterAdvice()
     decision = SearchControllerDecision(
         thought_summary="Accept reflection advice.",
@@ -846,9 +864,7 @@ def test_controller_rejects_inactive_term_when_advice_has_no_previous_reflection
         item.model_copy(update={"active": False}) if item.term == "retrieval" else item
         for item in context.query_term_pool
     ]
-    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(
-        suggested_activate_terms=["retrieval"]
-    )
+    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(suggested_activate_terms=["retrieval"])
     decision = SearchControllerDecision(
         thought_summary="Reject stale advice.",
         action="search_cts",
@@ -874,9 +890,7 @@ def test_controller_accepts_inactive_term_when_reflection_advised_keeping_it() -
         item.model_copy(update={"active": False}) if item.term == "retrieval" else item
         for item in context.query_term_pool
     ]
-    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(
-        suggested_keep_terms=["retrieval"]
-    )
+    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(suggested_keep_terms=["retrieval"])
     decision = SearchControllerDecision(
         thought_summary="Keep reflection term.",
         action="search_cts",
@@ -900,9 +914,7 @@ def test_controller_normalizes_reflection_advice_for_inactive_term_allow_list() 
         item.model_copy(update={"active": False}) if item.term == "retrieval" else item
         for item in context.query_term_pool
     ]
-    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(
-        suggested_activate_terms=["  retrieval  "]
-    )
+    context.latest_reflection_keyword_advice = ReflectionKeywordAdvice(suggested_activate_terms=["  retrieval  "])
     decision = SearchControllerDecision(
         thought_summary="Normalize reflection term.",
         action="search_cts",
@@ -1014,13 +1026,20 @@ def test_controller_projects_secondary_title_anchor_after_repair_and_retry(monke
         return invalid
 
     async def fake_repair_controller_decision(
-        settings, prompt, repair_prompt, source_user_prompt, decision, reason  # noqa: ANN001
+        settings,
+        prompt,
+        repair_prompt,
+        source_user_prompt,
+        decision,
+        reason,  # noqa: ANN001
     ) -> tuple[ControllerDecision, None, None]:
         del settings, prompt, repair_prompt, source_user_prompt, decision, reason
         return invalid, None, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
-    monkeypatch.setattr("seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision)
+    monkeypatch.setattr(
+        "seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision
+    )
 
     result = asyncio.run(controller.decide(context=context))
 
@@ -1076,7 +1095,12 @@ def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.Monk
         return invalid
 
     async def fake_repair_controller_decision(
-        settings, prompt, repair_prompt, source_user_prompt, decision, reason  # noqa: ANN001
+        settings,
+        prompt,
+        repair_prompt,
+        source_user_prompt,
+        decision,
+        reason,  # noqa: ANN001
     ) -> tuple[ControllerDecision, None, None]:
         del settings, source_user_prompt, decision, reason
         seen_prompt_names["source"] = prompt.name
@@ -1084,7 +1108,9 @@ def test_controller_repair_avoids_pydantic_output_retry(monkeypatch: pytest.Monk
         return repaired, None, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
-    monkeypatch.setattr("seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision)
+    monkeypatch.setattr(
+        "seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision
+    )
 
     result = asyncio.run(controller.decide(context=context))
 
@@ -1235,13 +1261,20 @@ def test_controller_full_retry_after_failed_semantic_repair(monkeypatch: pytest.
         return invalid if calls["count"] == 1 else valid
 
     async def fake_repair_controller_decision(
-        settings, prompt, repair_prompt, source_user_prompt, decision, reason  # noqa: ANN001
+        settings,
+        prompt,
+        repair_prompt,
+        source_user_prompt,
+        decision,
+        reason,  # noqa: ANN001
     ) -> tuple[ControllerDecision, None, None]:
         del settings, prompt, repair_prompt, source_user_prompt, decision, reason
         return still_invalid, None, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
-    monkeypatch.setattr("seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision)
+    monkeypatch.setattr(
+        "seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision
+    )
 
     result = asyncio.run(controller.decide(context=context, prompt_cache_key="controller-cache-key"))
 
@@ -1307,13 +1340,20 @@ def test_controller_aggregates_provider_usage_across_repair_and_full_retry(monke
         return invalid if calls["count"] == 1 else valid
 
     async def fake_repair_controller_decision(
-        settings, prompt, repair_prompt, source_user_prompt, decision, reason  # noqa: ANN001
+        settings,
+        prompt,
+        repair_prompt,
+        source_user_prompt,
+        decision,
+        reason,  # noqa: ANN001
     ) -> tuple[ControllerDecision, ProviderUsageSnapshot, None]:
         del settings, prompt, repair_prompt, source_user_prompt, decision, reason
         return still_invalid, repair_usage, None
 
     monkeypatch.setattr(controller, "_decide_live", fake_decide_live)
-    monkeypatch.setattr("seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision)
+    monkeypatch.setattr(
+        "seektalent.controller.react_controller.repair_controller_decision", fake_repair_controller_decision
+    )
 
     result = asyncio.run(controller.decide(context=context))
 
@@ -1355,19 +1395,43 @@ def test_runtime_repairs_consumed_controller_family_and_retains_fresh_term() -> 
     runtime = WorkflowRuntime(settings)
     run_state = _run_state_with_previous_reflection()
     run_state.retrieval_state.query_term_pool.append(
-        QueryTermCandidate(term="ranking", source="jd", category="domain", priority=9, evidence="jd", first_added_round=0, retrieval_role="core_skill", family="skill.ranking")
+        QueryTermCandidate(
+            term="ranking",
+            source="jd",
+            category="domain",
+            priority=9,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="core_skill",
+            family="skill.ranking",
+        )
     )
-    run_state.retrieval_state.query_execution_ledger.append(QueryExecutionReceipt(
-        round_no=1, source_kind="liepin", query_instance_id="q1", query_fingerprint="fp1",
-        term_group_key="g1", primary_anchor_family_id="role.python",
-        non_anchor_term_family_ids=["domain.resumematching"], query_role="exploit", lane_type="exploit",
-        query_terms=["python", "resume matching"], keyword_query="python resume matching",
-        requested_count=5, source_plan_version="1", status="completed", dispatch_started=True,
-    ))
+    run_state.retrieval_state.query_execution_ledger.append(
+        QueryExecutionReceipt(
+            round_no=1,
+            source_kind="liepin",
+            query_instance_id="q1",
+            query_fingerprint="fp1",
+            term_group_key="g1",
+            primary_anchor_family_id="role.python",
+            non_anchor_term_family_ids=["domain.resumematching"],
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["python", "resume matching"],
+            keyword_query="python resume matching",
+            requested_count=5,
+            source_plan_version="1",
+            status="completed",
+            dispatch_started=True,
+        )
+    )
     decision = SearchControllerDecision(
-        thought_summary="Continue.", action="source_search", decision_rationale="Expand.",
+        thought_summary="Continue.",
+        action="source_search",
+        decision_rationale="Expand.",
         proposed_query_terms=["python", "resume matching", "trace"],
-        proposed_filter_plan=ProposedFilterPlan(), response_to_reflection="Use a fresh family.",
+        proposed_filter_plan=ProposedFilterPlan(),
+        response_to_reflection="Use a fresh family.",
     )
 
     sanitized = runtime._sanitize_controller_decision(decision=decision, run_state=run_state, round_no=2)
@@ -1382,19 +1446,32 @@ def test_runtime_expands_used_anchor_only_group_with_fresh_family() -> None:
     settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
     runtime = WorkflowRuntime(settings)
     run_state = _run_state_with_previous_reflection()
-    anchor_key = build_term_group_key(
-        query_terms=["python"], query_term_pool=run_state.retrieval_state.query_term_pool
+    anchor_key = build_term_group_key(query_terms=["python"], query_term_pool=run_state.retrieval_state.query_term_pool)
+    run_state.retrieval_state.query_execution_ledger.append(
+        QueryExecutionReceipt(
+            round_no=1,
+            source_kind="liepin",
+            query_instance_id="anchor-only",
+            query_fingerprint="anchor-fp",
+            term_group_key=anchor_key,
+            primary_anchor_family_id="role.python",
+            non_anchor_term_family_ids=[],
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=["python"],
+            keyword_query="python",
+            requested_count=5,
+            source_plan_version="1",
+            status="completed",
+            dispatch_started=True,
+        )
     )
-    run_state.retrieval_state.query_execution_ledger.append(QueryExecutionReceipt(
-        round_no=1, source_kind="liepin", query_instance_id="anchor-only", query_fingerprint="anchor-fp",
-        term_group_key=anchor_key, primary_anchor_family_id="role.python",
-        non_anchor_term_family_ids=[], query_role="exploit", lane_type="exploit",
-        query_terms=["python"], keyword_query="python", requested_count=5,
-        source_plan_version="1", status="completed", dispatch_started=True,
-    ))
     decision = SearchControllerDecision(
-        thought_summary="Broaden.", action="source_search", decision_rationale="Try anchor.",
-        proposed_query_terms=["python"], proposed_filter_plan=ProposedFilterPlan(),
+        thought_summary="Broaden.",
+        action="source_search",
+        decision_rationale="Try anchor.",
+        proposed_query_terms=["python"],
+        proposed_filter_plan=ProposedFilterPlan(),
         response_to_reflection="Use deterministic novelty.",
     )
 
@@ -1415,21 +1492,35 @@ def test_novelty_conflict_uses_one_controller_call_and_runtime_sanitizer(
     runtime = WorkflowRuntime(settings)
     run_state = _run_state_with_previous_reflection()
     prior = QueryExecutionReceipt(
-        round_no=1, source_kind="liepin", query_instance_id="q1", query_fingerprint="fp1",
-        term_group_key="g1", primary_anchor_family_id="role.python",
-        non_anchor_term_family_ids=["domain.resumematching"], query_role="exploit", lane_type="exploit",
-        query_terms=["python", "resume matching"], keyword_query="python resume matching",
-        requested_count=5, source_plan_version="1", status="completed", dispatch_started=True,
+        round_no=1,
+        source_kind="liepin",
+        query_instance_id="q1",
+        query_fingerprint="fp1",
+        term_group_key="g1",
+        primary_anchor_family_id="role.python",
+        non_anchor_term_family_ids=["domain.resumematching"],
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=["python", "resume matching"],
+        keyword_query="python resume matching",
+        requested_count=5,
+        source_plan_version="1",
+        status="completed",
+        dispatch_started=True,
     )
     run_state.retrieval_state.query_execution_ledger.append(prior)
-    context = _controller_context(round_no=2, previous_reflection=ReflectionSummaryView(
-        decision="continue", reflection_summary="Use fresh terms."
-    ))
+    context = _controller_context(
+        round_no=2,
+        previous_reflection=ReflectionSummaryView(decision="continue", reflection_summary="Use fresh terms."),
+    )
     context = context.model_copy(update={"consumed_non_anchor_term_family_ids": ["domain.resumematching"]})
     conflicting = SearchControllerDecision(
-        thought_summary="Continue.", action="source_search", decision_rationale="Try terms.",
+        thought_summary="Continue.",
+        action="source_search",
+        decision_rationale="Try terms.",
         proposed_query_terms=["python", "resume matching", "trace"],
-        proposed_filter_plan=ProposedFilterPlan(), response_to_reflection="Use fresh terms.",
+        proposed_filter_plan=ProposedFilterPlan(),
+        response_to_reflection="Use fresh terms.",
     )
     calls = {"model": 0, "repair": 0}
 
