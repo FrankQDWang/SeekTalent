@@ -13,7 +13,7 @@ from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.providers.liepin.card_policy import (
     LiepinCardDecisionAction,
     LiepinCardSummary,

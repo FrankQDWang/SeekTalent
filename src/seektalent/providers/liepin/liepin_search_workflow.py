@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimSearchContext
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.liepin_state_machine import (
     LiepinStateSnapshot,

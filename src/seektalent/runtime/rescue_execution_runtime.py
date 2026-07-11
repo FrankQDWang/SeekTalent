@@ -15,7 +15,8 @@ from seektalent.models import (
     is_title_anchor_role,
 )
 from seektalent.progress import ProgressCallback
-from seektalent.runtime.query_identity import build_term_group_key, used_term_group_keys
+from seektalent.retrieval.query_identity import build_term_group_key
+from seektalent.runtime.query_identity import used_term_group_keys
 from seektalent.tracing import RunTracer
 
 

@@ -39,7 +39,7 @@ from seektalent.providers.liepin.worker_contracts import decode_session_status
 from seektalent.providers.liepin.worker_contracts import decode_worker_health
 
 if TYPE_CHECKING:
-    from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+    from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 
 
 EventCallback = Callable[[str, dict[str, object]], None]

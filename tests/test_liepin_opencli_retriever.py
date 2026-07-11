@@ -13,7 +13,7 @@ from seektalent.finalize.deterministic import build_deterministic_final_result
 from seektalent.models import FinalizeContext, ScoredCandidate
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.detail_payload_text import STRUCTURED_LIEPIN_DETAIL_TEXT_MAX_CHARS
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.opencli_retriever import (

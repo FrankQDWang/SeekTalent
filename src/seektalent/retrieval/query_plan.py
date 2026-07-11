@@ -10,6 +10,7 @@ from seektalent.models import (
     is_primary_anchor_role,
     unique_strings,
 )
+from seektalent.retrieval.query_identity import build_term_group_key
 
 
 _ROUND_SECONDARY_TITLE_ANCHOR_REASON = "rounds after 1 must not use secondary_title_anchor"
@@ -209,8 +210,6 @@ def derive_explore_query_terms(
     query_term_pool: list[QueryTermCandidate],
     used_term_group_keys: Collection[str],
 ) -> list[str] | None:
-    from seektalent.runtime.query_identity import build_term_group_key
-
     exploit_terms = [normalize_term(item) for item in exploit_terms if normalize_term(item)]
     exploit_terms = canonicalize_controller_query_terms(
         exploit_terms,

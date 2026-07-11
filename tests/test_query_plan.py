@@ -9,7 +9,7 @@ from seektalent.retrieval.query_plan import (
     serialize_keyword_query,
     try_project_secondary_title_anchor_after_round_one,
 )
-from seektalent.runtime.query_identity import build_term_group_key
+from seektalent.retrieval.query_identity import build_term_group_key
 
 
 def test_query_plan_enforces_round_budget() -> None:

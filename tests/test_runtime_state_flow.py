@@ -68,7 +68,7 @@ from seektalent.runtime.source_lanes import (
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext
 from seektalent.source_adapters import build_source_enabled_runtime
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 

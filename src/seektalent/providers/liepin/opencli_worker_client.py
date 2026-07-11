@@ -6,7 +6,7 @@ import threading
 
 from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.opencli_retriever import (
     LiepinOpenCliResumeRequest,
     LiepinOpenCliResumeRetriever,

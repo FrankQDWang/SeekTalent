@@ -32,7 +32,7 @@ from seektalent.models import (
     StopControllerDecision,
 )
 from seektalent.normalization import normalize_resume
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.prompting import LoadedPrompt
 from seektalent.runtime.context_builder import (
     build_controller_context,

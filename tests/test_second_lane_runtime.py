@@ -4,7 +4,7 @@ from seektalent.candidate_feedback.policy import PRFGateInput, build_prf_policy_
 from seektalent.retrieval import build_location_execution_plan
 from seektalent.runtime.retrieval_runtime import build_logical_query_state
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
-from seektalent.runtime.query_identity import build_term_group_key
+from seektalent.retrieval.query_identity import build_term_group_key
 
 
 def _retrieval_plan(*, query_terms: list[str]) -> RoundRetrievalPlan:

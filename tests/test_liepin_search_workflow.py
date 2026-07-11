@@ -7,7 +7,7 @@ from typing import Any, cast
 import pytest
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_search_workflow import (
     LiepinSearchWorkflow,
     LiepinSearchWorkflowRequest,

@@ -11,7 +11,7 @@ from seektalent.models import (
 )
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
 from seektalent.runtime import WorkflowRuntime
-from seektalent.runtime.query_identity import build_term_group_key
+from seektalent.retrieval.query_identity import build_term_group_key
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
 

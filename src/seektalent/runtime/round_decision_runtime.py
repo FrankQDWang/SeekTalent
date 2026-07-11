@@ -203,7 +203,8 @@ def sanitize_controller_decision(
         requirement_sheet=run_state.requirement_sheet,
         filter_plan=decision.proposed_filter_plan,
     )
-    from seektalent.runtime.query_identity import build_term_group_key, used_term_group_keys
+    from seektalent.retrieval.query_identity import build_term_group_key
+    from seektalent.runtime.query_identity import used_term_group_keys
 
     term_group_key = build_term_group_key(
         query_terms=query_terms,

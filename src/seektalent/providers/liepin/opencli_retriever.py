@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Protocol, cast
 
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimSearchContext
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.worker_contracts import (
     LiepinResumeSearchResponse,
     LiepinWorkerCandidateDetail,

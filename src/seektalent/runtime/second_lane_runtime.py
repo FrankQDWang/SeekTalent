@@ -5,7 +5,7 @@ from collections.abc import Collection
 from seektalent.candidate_feedback.policy import PRFPolicyDecision
 from seektalent.models import QueryTermCandidate, RoundRetrievalPlan, SecondLaneDecision
 from seektalent.retrieval import derive_explore_query_terms
-from seektalent.runtime.query_identity import build_term_group_key
+from seektalent.retrieval.query_identity import build_term_group_key
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, build_logical_query_state
 
 

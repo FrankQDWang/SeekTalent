@@ -28,7 +28,7 @@ from seektalent.opencli_browser.runtime import (
 )
 from seektalent_runtime_control.artifact_policy import RuntimeArtifactPolicy, normalize_artifact_output_mode
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimSearchContext
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.opencli_filter_planning import (
     LIEPIN_FILTER_SECTION_LABELS,
     RETRYABLE_NATIVE_FILTER_REASONS,

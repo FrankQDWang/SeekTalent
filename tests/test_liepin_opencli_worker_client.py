@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from seektalent.core.retrieval.provider_contract import SearchRequest
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 from seektalent.providers.liepin.worker_contracts import (
     LiepinResumeSearchResponse,

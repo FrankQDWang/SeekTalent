@@ -38,7 +38,7 @@ from seektalent.runtime.controller_context import build_controller_context as bu
 from seektalent.runtime.finalize_context import build_finalize_context as build_finalize_context_direct
 from seektalent.runtime.reflection_context import build_reflection_context as build_reflection_context_direct
 from seektalent.runtime.scoring_context import build_scoring_context as build_scoring_context_direct
-from seektalent.runtime.query_identity import build_term_group_key
+from seektalent.retrieval.query_identity import build_term_group_key
 
 CONTROLLER_CONTEXT_BUILDERS = [
     pytest.param(build_controller_context, id="legacy"),

@@ -34,7 +34,7 @@ from seektalent.models import (
     SentQueryRecord,
     StopGuidance,
 )
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.storage.json import sha256_json
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.orchestrator import RunStageError, RuntimeSourceRoundContext

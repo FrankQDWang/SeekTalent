@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from hashlib import sha256
 from typing import Any
 
-from seektalent.models import CanonicalQuerySpec
+from seektalent.models import CanonicalQuerySpec, QueryTermCandidate
 
 UNORDERED_TERM_FIELDS = {
     "anchors",
@@ -23,6 +24,33 @@ def _stable_hash(payload: dict[str, object]) -> str:
 
 def normalize_term(value: str) -> str:
     return " ".join(value.strip().casefold().split())
+
+
+def build_term_group_key(
+    *,
+    query_terms: Sequence[str],
+    query_term_pool: Sequence[QueryTermCandidate],
+) -> str:
+    families = {
+        normalize_term(item.term): normalize_term(item.family)
+        for item in query_term_pool
+        if normalize_term(item.term) and normalize_term(item.family)
+    }
+    semantic_terms = sorted(
+        {
+            families.get(term_key) or f"term:{term_key}"
+            for term in query_terms
+            if (term_key := normalize_term(term))
+        }
+    )
+    if not semantic_terms:
+        raise ValueError("term_group_key_requires_terms")
+    payload = json.dumps(
+        {"version": "term-group-v1", "members": semantic_terms},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
 def _canonicalize_value(value: Any) -> Any:

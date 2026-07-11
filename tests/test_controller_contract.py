@@ -36,7 +36,7 @@ from seektalent.models import (
 )
 from seektalent.prompting import LoadedPrompt
 from seektalent.runtime import WorkflowRuntime
-from seektalent.runtime.query_identity import build_term_group_key
+from seektalent.retrieval.query_identity import build_term_group_key
 from seektalent.tracing import ProviderUsageSnapshot
 from tests.settings_factory import make_settings
 

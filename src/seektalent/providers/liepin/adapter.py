@@ -22,7 +22,7 @@ from seektalent.providers.liepin.connection_safety import (
     TransportMode,
     validate_provider_connection_safety,
 )
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.models import LiepinConnectionRow
 from seektalent.providers.liepin.policy import LiepinCardCandidate
 from seektalent.providers.liepin.store import LiepinStore

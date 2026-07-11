@@ -1,48 +1,15 @@
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence
-from hashlib import sha256
 
 from seektalent.models import (
     LogicalQueryOutcome,
     QueryExecutionReceipt,
     QueryExecutionStatus,
-    QueryTermCandidate,
 )
+from seektalent.retrieval.query_identity import normalize_term
 from seektalent.source_contracts.runtime_lanes import RuntimeQueryCandidateAttribution
-
-
-def _term_key(value: str) -> str:
-    return " ".join(value.strip().casefold().split())
-
-
-def build_term_group_key(
-    *,
-    query_terms: Sequence[str],
-    query_term_pool: Sequence[QueryTermCandidate],
-) -> str:
-    families = {
-        _term_key(item.term): _term_key(item.family)
-        for item in query_term_pool
-        if _term_key(item.term) and _term_key(item.family)
-    }
-    semantic_terms = sorted(
-        {
-            families.get(term_key) or f"term:{term_key}"
-            for term in query_terms
-            if (term_key := _term_key(term))
-        }
-    )
-    if not semantic_terms:
-        raise ValueError("term_group_key_requires_terms")
-    payload = json.dumps(
-        {"version": "term-group-v1", "members": semantic_terms},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
 def used_term_group_keys(receipts: Sequence[QueryExecutionReceipt]) -> set[str]:
@@ -66,7 +33,7 @@ def _logical_identity(receipt: QueryExecutionReceipt) -> tuple[object, ...]:
         receipt.term_group_key,
         receipt.query_role,
         receipt.lane_type,
-        tuple(_term_key(term) for term in receipt.query_terms),
+        tuple(normalize_term(term) for term in receipt.query_terms),
         receipt.keyword_query,
     )
 

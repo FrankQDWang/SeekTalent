@@ -1,11 +1,8 @@
 import pytest
 
 from seektalent.models import LogicalQueryOutcome, QueryExecutionReceipt, QueryTermCandidate
-from seektalent.runtime.query_identity import (
-    build_term_group_key,
-    logical_outcomes_from_receipts,
-    used_term_group_keys,
-)
+from seektalent.retrieval.query_identity import build_term_group_key
+from seektalent.runtime.query_identity import logical_outcomes_from_receipts, used_term_group_keys
 
 
 def _pool() -> list[QueryTermCandidate]:

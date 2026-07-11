@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from seektalent.models import ResumeCandidate
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.public_events import make_runtime_public_event, normalize_runtime_public_event
 from seektalent.runtime.source_lanes import SourceQueryExecutionOutcome, build_runtime_source_plan

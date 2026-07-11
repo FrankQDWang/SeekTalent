@@ -109,7 +109,7 @@ from seektalent.models import (
 )
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates, select_identity_top_candidates
@@ -177,10 +177,10 @@ from seektalent.runtime.source_lanes import (
     runtime_source_lane_result_from_source_result,
 )
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
+from seektalent.retrieval.query_identity import build_term_group_key
 from seektalent.runtime.query_identity import (
     apply_post_merge_query_counts,
     assert_novel_term_group_keys,
-    build_term_group_key,
     logical_outcomes_from_receipts,
     used_term_group_keys,
 )

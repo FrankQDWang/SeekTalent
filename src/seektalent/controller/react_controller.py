@@ -236,7 +236,7 @@ def validate_controller_decision(*, context: ControllerContext, decision: Contro
             )
         except ValueError as exc:
             return str(exc)
-        from seektalent.runtime.query_identity import build_term_group_key
+        from seektalent.retrieval.query_identity import build_term_group_key
 
         term_group_key = build_term_group_key(
             query_terms=canonical_query_terms,

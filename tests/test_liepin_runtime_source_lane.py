@@ -10,7 +10,7 @@ from seektalent.core.retrieval.provider_contract import ProviderSnapshot, Search
 from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.providers.liepin.client import LiepinWorkerModeError, liepin_resume_search_response_to_search_result
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.liepin_search_workflow import LiepinSearchWorkflow, LiepinSearchWorkflowRequest
 from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever

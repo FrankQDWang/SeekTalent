@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from seektalent.models import RuntimeDetailOpenClaim
-from seektalent.providers.liepin.detail_open_claims import DetailOpenClaimLedger
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 
 
 def test_concurrent_claims_allow_exactly_one_winner() -> None:
