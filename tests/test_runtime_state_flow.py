@@ -47,6 +47,7 @@ from seektalent.models import (
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
 from seektalent.retrieval.query_identity import ResolvedQueryIdentity
 import seektalent.runtime.orchestrator as orchestrator_module
+import seektalent.runtime.controller_runtime as controller_runtime_module
 import seektalent.runtime.rescue_execution_runtime as rescue_execution_runtime
 from seektalent.runtime.candidate_intake import (
     build_canonical_scoring_intake,
@@ -70,7 +71,7 @@ from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
-from seektalent.tracing import RunTracer
+from seektalent.tracing import RunTracer, json_sha256
 from tests.settings_factory import make_settings
 
 
@@ -97,6 +98,34 @@ def _cts_source_plan(runtime: WorkflowRuntime, tracer: RunTracer):
 
 def _detail_open_claim_ledger(run_state: RunState) -> DetailOpenClaimLedger:
     return DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key)
+
+
+def _mark_query_terms_dispatched(run_state: RunState, *, query_terms: list[str], query_id: str) -> None:
+    from seektalent.retrieval.query_identity import resolve_query_identity
+
+    identity = resolve_query_identity(
+        query_terms=query_terms,
+        query_term_pool=run_state.retrieval_state.query_term_pool,
+    )
+    run_state.retrieval_state.query_execution_ledger.append(
+        QueryExecutionReceipt(
+            round_no=0,
+            source_kind="cts",
+            query_instance_id=query_id,
+            query_fingerprint=f"fp-{query_id}",
+            term_group_key=identity.term_group_key,
+            primary_anchor_family_id=identity.primary_anchor_family_id,
+            non_anchor_term_family_ids=list(identity.non_anchor_term_family_ids),
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=query_terms,
+            keyword_query=" ".join(query_terms),
+            requested_count=1,
+            source_plan_version="test",
+            status="completed",
+            dispatch_started=True,
+        )
+    )
 
 
 def _round_artifact(run_dir: Path, round_no: int, subsystem: str, name: str, *, extension: str = "json") -> Path:
@@ -4156,6 +4185,277 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
     assert stop_reason == "max_rounds_reached"
     assert rounds_executed == 4
     assert terminal_controller_round is None
+
+
+def test_pre_controller_final_exhaustion_skips_controller_finalizer_and_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        provider_name="cts",
+        min_rounds=3,
+        max_rounds=4,
+        candidate_feedback_enabled=False,
+    )
+    runtime = _workflow_runtime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+    calls = {"controller": 0, "finalizer": 0, "provider": 0}
+
+    class ControllerSpy:
+        async def decide(self, *, context):  # noqa: ANN001
+            del context
+            calls["controller"] += 1
+            raise AssertionError("exhaustion must skip controller")
+
+    def finalize_spy(**kwargs):  # noqa: ANN003
+        del kwargs
+        calls["finalizer"] += 1
+        raise AssertionError("exhaustion must skip controller finalization")
+
+    async def provider_spy(**kwargs):  # noqa: ANN003
+        del kwargs
+        calls["provider"] += 1
+        raise AssertionError("exhaustion must skip provider dispatch")
+
+    monkeypatch.setattr(controller_runtime_module, "finalize_controller_stage", finalize_spy)
+    monkeypatch.setattr(orchestrator_module, "dispatch_source_rounds", provider_spy)
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        runtime.controller = ControllerSpy()
+        anchor = run_state.requirement_sheet.title_anchor_terms[0]
+        for index, item in enumerate(run_state.retrieval_state.query_term_pool):
+            if item.retrieval_role in {"primary_role_anchor", "role_anchor", "secondary_title_anchor"}:
+                continue
+            _mark_query_terms_dispatched(
+                run_state,
+                query_terms=[anchor, item.term],
+                query_id=f"used-{index}",
+            )
+        _mark_query_terms_dispatched(run_state, query_terms=[anchor], query_id="used-anchor")
+        _, stop_reason, rounds_executed, terminal = asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert calls == {"controller": 0, "finalizer": 0, "provider": 0}
+    assert stop_reason == "query_family_exhausted"
+    assert rounds_executed == 0
+    assert terminal is not None
+    assert terminal.stop_guidance.can_stop is False
+
+
+def test_post_controller_novelty_exhaustion_keeps_model_evidence_and_skips_normal_finalizer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        provider_name="cts",
+        min_rounds=1,
+        max_rounds=2,
+        candidate_feedback_enabled=False,
+    )
+    runtime = _workflow_runtime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+    tracer = RunTracer(tmp_path / "trace-runs")
+    job_title, jd, notes = _sample_inputs()
+    calls = {"controller": 0, "finalizer": 0}
+    run_state_holder: dict[str, RunState] = {}
+    decision_holder: dict[str, SearchControllerDecision] = {}
+
+    class ConsumingController:
+        async def decide(self, *, context):  # noqa: ANN001
+            calls["controller"] += 1
+            run_state = run_state_holder["value"]
+            anchor = run_state.requirement_sheet.title_anchor_terms[0]
+            selected = None
+            for index, item in enumerate(run_state.retrieval_state.query_term_pool):
+                if item.retrieval_role in {"primary_role_anchor", "role_anchor", "secondary_title_anchor"}:
+                    continue
+                _mark_query_terms_dispatched(
+                    run_state,
+                    query_terms=[anchor, item.term],
+                    query_id=f"race-{index}",
+                )
+                selected = selected or item.term
+            assert selected is not None
+            decision = SearchControllerDecision(
+                thought_summary="Search a family that became consumed after preflight.",
+                action="source_search",
+                decision_rationale="Exercise the post-controller exhaustion path.",
+                proposed_query_terms=[anchor, selected],
+                proposed_filter_plan=ProposedFilterPlan(),
+            )
+            decision_holder["value"] = decision
+            return decision
+
+    def finalize_spy(**kwargs):  # noqa: ANN003
+        del kwargs
+        calls["finalizer"] += 1
+
+    monkeypatch.setattr(controller_runtime_module, "finalize_controller_stage", finalize_spy)
+    try:
+        run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
+        run_state_holder["value"] = run_state
+        runtime.controller = ConsumingController()
+        anchor = run_state.requirement_sheet.title_anchor_terms[0]
+        _mark_query_terms_dispatched(run_state, query_terms=[anchor], query_id="used-anchor")
+        _, stop_reason, _, _ = asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert calls == {"controller": 1, "finalizer": 0}
+    assert stop_reason == "query_family_exhausted"
+    controller_call = json.loads(
+        _round_artifact(tracer.run_dir, 1, "controller", "controller_call").read_text(encoding="utf-8")
+    )
+    override = json.loads(
+        _round_artifact(tracer.run_dir, 1, "controller", "controller_decision").read_text(encoding="utf-8")
+    )
+    assert controller_call["status"] == "succeeded"
+    assert controller_call["structured_output_sha256"] == json_sha256(
+        decision_holder["value"].model_dump(mode="json")
+    )
+    assert override["stop_reason"] == "query_family_exhausted"
+
+
+def test_four_round_ai_agent_runtime_never_replays_non_anchor_family_or_term_group(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        provider_name="cts",
+        min_rounds=1,
+        max_rounds=4,
+        candidate_feedback_enabled=False,
+    )
+    runtime = _workflow_runtime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+
+    class AgentRequirementExtractor:
+        async def extract_with_draft(self, *, input_truth):  # noqa: ANN001
+            del input_truth
+            sheet = RequirementSheet(
+                job_title="AI Agent Engineer",
+                title_anchor_terms=["AI Agent"],
+                title_anchor_rationale="AI Agent is the primary title anchor.",
+                role_summary="Build production agent systems.",
+                must_have_capabilities=["LangChain", "RAG"],
+                hard_constraints=HardConstraintSlots(locations=["上海"]),
+                initial_query_term_pool=[
+                    QueryTermCandidate(
+                        term="AI Agent",
+                        source="job_title",
+                        category="role_anchor",
+                        priority=1,
+                        evidence="Job title",
+                        first_added_round=0,
+                        family="role.ai-agent",
+                    ),
+                    QueryTermCandidate(
+                        term="LangChain",
+                        source="jd",
+                        category="tooling",
+                        priority=2,
+                        evidence="JD",
+                        first_added_round=0,
+                        family="framework.langchain",
+                    ),
+                    QueryTermCandidate(
+                        term="RAG",
+                        source="jd",
+                        category="domain",
+                        priority=3,
+                        evidence="JD",
+                        first_added_round=0,
+                        family="domain.rag",
+                    ),
+                ],
+                scoring_rationale="Prefer production agent evidence.",
+            )
+            draft = RequirementExtractionDraft(
+                title_anchor_terms=["AI Agent"],
+                title_anchor_rationale="AI Agent is the primary title anchor.",
+                jd_query_terms=["LangChain", "RAG"],
+                role_summary=sheet.role_summary,
+                must_have_capabilities=sheet.must_have_capabilities,
+                locations=["上海"],
+                scoring_rationale=sheet.scoring_rationale,
+            )
+            return draft, sheet
+
+    class ReplayingController:
+        async def decide(self, *, context):  # noqa: ANN001
+            return SearchControllerDecision(
+                thought_summary="Repeat the primary family proposal.",
+                action="source_search",
+                decision_rationale="Runtime must project this onto novelty.",
+                proposed_query_terms=["AI Agent", "LangChain"],
+                proposed_filter_plan=ProposedFilterPlan(),
+                response_to_reflection=("Apply novelty." if context.previous_reflection is not None else None),
+            )
+
+    runtime.requirement_extractor = AgentRequirementExtractor()
+    runtime.controller = ReplayingController()
+    tracer = RunTracer(tmp_path / "trace-runs")
+    try:
+        run_state = asyncio.run(
+            runtime._build_run_state(
+                job_title="AI Agent Engineer",
+                jd="Build LangChain and RAG agent systems.",
+                notes="Production experience required.",
+                tracer=tracer,
+            )
+        )
+        _, stop_reason, rounds_executed, terminal = asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
+        )
+    finally:
+        tracer.close()
+
+    attempted = [
+        outcome
+        for round_state in run_state.round_history
+        for outcome in round_state.query_outcomes
+        if outcome.attempted
+    ]
+    non_anchor_families = [
+        family
+        for outcome in attempted
+        for family in outcome.non_anchor_term_family_ids
+    ]
+    assert stop_reason == "query_family_exhausted"
+    assert rounds_executed == 3
+    assert terminal is not None and terminal.round_no == 4
+    assert len(non_anchor_families) == len(set(non_anchor_families))
+    assert len([outcome.term_group_key for outcome in attempted]) == len(
+        {outcome.term_group_key for outcome in attempted}
+    )
+    assert all(
+        sum(term == "AI Agent" for term in outcome.query_terms) == 1
+        for outcome in attempted
+    )
+    assert any(len(round_state.query_outcomes) == 1 for round_state in run_state.round_history)
 
 
 def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(tmp_path: Path) -> None:

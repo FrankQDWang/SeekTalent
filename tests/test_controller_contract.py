@@ -48,6 +48,12 @@ def test_exhaustion_preflight_resolver_is_available() -> None:
     assert callable(getattr(round_decision_runtime, "resolve_pre_controller_exhaustion", None))
 
 
+def test_novelty_exhaustion_uses_a_dedicated_internal_signal() -> None:
+    signal = getattr(round_decision_runtime, "NoFreshControllerSelectableFamilyError", None)
+    assert isinstance(signal, type)
+    assert issubclass(signal, ValueError)
+
+
 def test_controller_prompt_requires_atomic_search_terms() -> None:
     prompt = Path("src/seektalent/prompts/controller.md").read_text(encoding="utf-8")
     assert "Prefer atomic resume-side terms" in prompt

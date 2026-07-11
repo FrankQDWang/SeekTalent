@@ -26,6 +26,10 @@ from seektalent.runtime import rescue_execution_runtime
 from seektalent.tracing import RunTracer
 
 
+class NoFreshControllerSelectableFamilyError(ValueError):
+    """The controller decision cannot be projected onto a fresh query family."""
+
+
 async def resolve_pre_controller_exhaustion(
     *,
     run_state: RunState,
@@ -406,7 +410,7 @@ def _repair_consumed_families(
         if len(fresh) >= target:
             break
     if target and not fresh:
-        raise ValueError("no_fresh_controller_selectable_family")
+        raise NoFreshControllerSelectableFamilyError("no_fresh_controller_selectable_family")
     return [*(item.term for item in anchors[:1]), *(item.term for item in fresh[:target])]
 
 

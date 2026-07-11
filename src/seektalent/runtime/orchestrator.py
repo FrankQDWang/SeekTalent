@@ -2098,6 +2098,8 @@ class WorkflowRuntime:
                     prompt_cache_key=self._prompt_cache_key,
                     run_stage_error=RunStageError,
                 )
+                model_controller_decision = controller_decision
+                runtime_overrode_controller = False
                 try:
                     controller_decision, rescue_decision = await round_decision_runtime.resolve_round_decision(
                         run_state=run_state,
@@ -2114,9 +2116,7 @@ class WorkflowRuntime:
                         force_anchor_only_decision=self._force_anchor_only_decision,
                         write_rescue_decision=self._write_rescue_decision,
                     )
-                except ValueError as exc:
-                    if str(exc) != "no_fresh_controller_selectable_family":
-                        raise
+                except round_decision_runtime.NoFreshControllerSelectableFamilyError:
                     resolved = await round_decision_runtime.resolve_pre_controller_exhaustion(
                         run_state=run_state,
                         round_no=round_no,
@@ -2133,10 +2133,18 @@ class WorkflowRuntime:
                     if resolved is None:
                         raise
                     controller_decision, rescue_decision = resolved
-                controller_runtime.finalize_controller_stage(
+                    runtime_overrode_controller = True
+                record_controller_stage = (
+                    controller_runtime.record_controller_call_evidence
+                    if runtime_overrode_controller
+                    else controller_runtime.finalize_controller_stage
+                )
+                record_controller_stage(
                     settings=self.settings,
                     controller=self.controller,
-                    controller_decision=controller_decision,
+                    controller_decision=(
+                        model_controller_decision if runtime_overrode_controller else controller_decision
+                    ),
                     controller_stage_state=controller_stage_state,
                     round_no=round_no,
                     tracer=tracer,
