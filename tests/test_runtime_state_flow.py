@@ -1367,8 +1367,8 @@ def test_expansion_candidates_are_scored_and_visible_to_reflection_in_the_same_r
                     kind="first_page_detail_expansion", continuation_id=f"target-{intent.query_instance_id}",
                     opaque_ref=f"artifact://protected/{intent.query_instance_id}", source_kind="liepin",
                     round_no=context.round_no, query_instance_id=intent.query_instance_id,
-                    visible_candidate_count=intent.requested_count + 1,
-                    eligible_candidate_count=intent.requested_count + 1,
+                    visible_candidate_count=intent.requested_count + 2,
+                    eligible_candidate_count=intent.requested_count + 2,
                     initial_opened_count=intent.requested_count,
                 ))
             return SourceRoundAdapterResult(
@@ -1475,8 +1475,8 @@ def _integrated_expansion_runtime(tmp_path: Path, *, scorer: object | None = Non
                     kind="first_page_detail_expansion", continuation_id=f"matrix-{intent.query_instance_id}",
                     opaque_ref=f"artifact://protected/{intent.query_instance_id}", source_kind="liepin",
                     round_no=context.round_no, query_instance_id=intent.query_instance_id,
-                    visible_candidate_count=intent.requested_count + 1,
-                    eligible_candidate_count=intent.requested_count + 1,
+                    visible_candidate_count=intent.requested_count + 2,
+                    eligible_candidate_count=intent.requested_count + 2,
                     initial_opened_count=intent.requested_count,
                 ))
             return SourceRoundAdapterResult(
@@ -1550,7 +1550,18 @@ def test_integrated_baseline_scoring_failure_discards_all_and_audits_once(tmp_pa
                 resume_id=contexts[0].normalized_resume.resume_id, branch_id="baseline",
                 round_no=1, attempts=1, error_message="baseline failed",
             )]
-    runtime, _runtime_any, actions = _integrated_expansion_runtime(tmp_path, scorer=FailingScorer())
+    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path, scorer=FailingScorer())
+    writer_counts = {"query_hits": 0, "flywheel": 0}
+    original_hits = runtime_any._write_query_resume_hits
+    original_flywheel = runtime_any._record_flywheel_retrieval_rows
+    def counted_hits(**kwargs):
+        writer_counts["query_hits"] += 1
+        return original_hits(**kwargs)
+    def counted_flywheel(**kwargs):
+        writer_counts["flywheel"] += 1
+        return original_flywheel(**kwargs)
+    runtime_any._write_query_resume_hits = counted_hits
+    runtime_any._record_flywheel_retrieval_rows = counted_flywheel
     with pytest.raises(orchestrator_module.RunStageError):
         _run_integrated_round(runtime, tmp_path)
     assert actions and {action for _, action in actions} == {"discard"}
@@ -1559,6 +1570,9 @@ def test_integrated_baseline_scoring_failure_discards_all_and_audits_once(tmp_pa
         "attempted_count": len(actions), "deleted_count": len(actions),
         "failure_count": 0, "safe_reason_codes": [],
     }]
+    assert writer_counts == {"query_hits": 1, "flywheel": 1}
+    assert len(list((tmp_path / "trace-runs").glob("**/query_resume_hits.json"))) == 1
+    assert len(list((tmp_path / "trace-runs").glob("**/replay_snapshot.json"))) == 1
 
 
 def test_integrated_execute_failure_cleanup(tmp_path: Path) -> None:
@@ -1664,6 +1678,13 @@ def test_integrated_baseline_and_expansion_scorecard_jsonl_batches(tmp_path: Pat
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
     assert {row["batch_kind"] for row in rows} == {"baseline", "first_page_expansion"}
     assert sum(row["batch_kind"] == "first_page_expansion" for row in rows) == 1
+    [input_path] = list(tracer.run_dir.glob("rounds/*/scoring/scoring_input_refs.jsonl"))
+    input_rows = [json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines() if line]
+    assert {(row["resume_id"], row["batch_kind"]) for row in input_rows} == {
+        (row["resume_id"], row["batch_kind"]) for row in rows
+    }
+    assert len(input_rows) == len({row["resume_id"] for row in input_rows})
+    assert all(row["normalized_resume_ref"].endswith(f"{row['resume_id']}.json") for row in input_rows)
     assert any(action == "expand" for _, action in actions)
 
 
@@ -1721,25 +1742,70 @@ def test_integrated_fail_fast_partial_success_scorecards_persist(tmp_path: Path)
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
     assert len(rows) == 1
     assert rows[0]["batch_kind"] == "baseline"
+    [input_path] = list((tmp_path / "trace-runs").glob("**/scoring_input_refs.jsonl"))
+    input_rows = [json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines() if line]
+    assert len(input_rows) > len(rows)
+    assert sum(row["resume_id"] == rows[0]["resume_id"] for row in input_rows) == 1
+    assert all(row["batch_kind"] == "baseline" for row in input_rows)
 
 
 def test_integrated_dual_lane_completed_partial_receipts_observation_reflection(tmp_path: Path) -> None:
-    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path)
+    class DualScorer:
+        async def score_candidates_parallel(self, *, contexts, tracer):
+            del tracer
+            scored, failures = [], []
+            for context in contexts:
+                resume_id = context.normalized_resume.resume_id
+                if resume_id.startswith("partial-expanded-"):
+                    failures.append(ScoringFailure(
+                        resume_id=resume_id, branch_id="partial-expansion", round_no=1,
+                        attempts=1, error_message="partial expansion scoring failure",
+                    ))
+                else:
+                    scored.append(_scored_candidate(resume_id))
+            return scored, failures
+    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path, scorer=DualScorer())
     reflection = RecordingExpansionReflection()
     runtime_any.reflection_critic = reflection
+    original_bundle = runtime_any._build_round_query_bundle
+    def dual_bundle(**kwargs):
+        states, decision = original_bundle(**kwargs)
+        first = states[0]
+        second = replace(
+            first,
+            query_role="explore",
+            lane_type="generic_explore",
+            query_instance_id=f"{first.query_instance_id}-partial",
+            query_fingerprint=f"{first.query_fingerprint}-partial",
+            identity=replace(
+                first.identity,
+                term_group_key=f"{first.identity.term_group_key}-partial",
+                non_anchor_term_family_ids=("partial-family",),
+            ),
+        )
+        return [first, second], decision
+    runtime_any._build_round_query_bundle = dual_bundle
     registry = runtime_any.source_first_page_expander_provider(runtime, None)
     original = registry["liepin"]
     async def partial(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
         if request.action == "discard":
             return await original(request)
+        if not request.query_instance_id.endswith("-partial"):
+            return await original(request)
         actions.append((request.continuation_id, request.action))
+        candidate = _make_candidate(f"partial-expanded-{request.query_instance_id}", source_round=1)
         return SourceFirstPageExpansionResult(
             source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-            continuation_id=request.continuation_id, status="partial",
+            continuation_id=request.continuation_id, status="partial", candidates=(candidate,),
+            candidate_query_attributions=(RuntimeQueryCandidateAttribution(
+                source_kind=request.source_kind, query_instance_id=request.query_instance_id,
+                resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
+            ),),
             first_page_visible_count=request.continuation.visible_candidate_count,
             first_page_eligible_count=request.continuation.eligible_candidate_count,
             initial_opened_count=request.continuation.initial_opened_count,
-            expansion_terminal_failure_count=1, safe_reason_code="first_page_expansion_partial",
+            expansion_opened_count=1, expansion_skipped_seen_count=1,
+            safe_reason_code="first_page_expansion_partial",
             continuation_deleted=True,
         )
     runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": partial}
@@ -1747,8 +1813,13 @@ def test_integrated_dual_lane_completed_partial_receipts_observation_reflection(
     assert reflection.contexts
     context = reflection.contexts[0]
     assert context.search_observation.exhausted_reason == "first_page_expansion_partial"
-    assert context.query_outcomes[0].receipts[0].first_page_expansion_status == "partial"
-    assert context.query_outcomes[0].receipts[0].expansion_terminal_failure_count == 1
+    assert len(context.query_outcomes) == 2
+    completed, partial_outcome = context.query_outcomes
+    assert completed.receipts[0].first_page_expansion_status == "completed"
+    assert partial_outcome.receipts[0].first_page_expansion_status == "partial"
+    assert partial_outcome.receipts[0].expansion_scoring_failure_count == 1
+    assert partial_outcome.receipts[0].expansion_skipped_seen_count == 1
+    assert completed.receipts[0].expansion_scoring_failure_count == 0
     assert tracer.run_dir.exists()
 
 
