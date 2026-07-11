@@ -1342,6 +1342,8 @@ def test_liepin_logical_query_bundle_records_executed_query_packages(tmp_path) -
         query_instance_id="query-exploit",
         query_fingerprint="fingerprint-exploit",
         term_group_key="term-group-fastapi-retrieval",
+        primary_anchor_family_id="role.data-engineer",
+        non_anchor_term_family_ids=("skill.python",),
         query_terms=("FastAPI", "retrieval"),
         keyword_query="FastAPI retrieval",
         requested_count=3,

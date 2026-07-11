@@ -80,6 +80,10 @@ def build_second_lane_decision(
                 round_no=round_no,
                 lane_type="prf_probe",
                 query_terms=prf_terms,
+                query_term_pool=query_term_pool,
+                explicit_family_overrides={
+                    accepted_expression.canonical_expression: accepted_expression.term_family_id,
+                },
                 job_intent_fingerprint=job_intent_fingerprint,
                 source_plan_version=source_plan_version,
                 provider_filters=retrieval_plan.projected_provider_filters,
@@ -135,6 +139,7 @@ def build_second_lane_decision(
         round_no=round_no,
         lane_type="generic_explore",
         query_terms=explore_terms,
+        query_term_pool=query_term_pool,
         job_intent_fingerprint=job_intent_fingerprint,
         source_plan_version=source_plan_version,
         provider_filters=retrieval_plan.projected_provider_filters,

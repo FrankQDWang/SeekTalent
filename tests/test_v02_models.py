@@ -177,6 +177,8 @@ def test_controller_context_keeps_query_evidence_defaults_and_values() -> None:
     outcome = LogicalQueryOutcome(
         query_instance_id="query-1",
         term_group_key="term-group-python",
+        primary_anchor_family_id="role.data-engineer",
+        non_anchor_term_family_ids=["skill.python"],
         query_role="exploit",
         lane_type="exploit",
         query_terms=["python"],

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any
 
-from seektalent.models import CanonicalQuerySpec, QueryTermCandidate
+from seektalent.models import CanonicalQuerySpec, QueryTermCandidate, is_primary_anchor_role
 
 UNORDERED_TERM_FIELDS = {
     "anchors",
@@ -26,31 +27,97 @@ def normalize_term(value: str) -> str:
     return " ".join(value.strip().casefold().split())
 
 
+@dataclass(frozen=True)
+class ResolvedQueryIdentity:
+    term_group_key: str
+    primary_anchor_family_id: str
+    non_anchor_term_family_ids: tuple[str, ...]
+
+
+def _semantic_families(
+    *,
+    query_terms: Sequence[str],
+    query_term_pool: Sequence[QueryTermCandidate],
+    explicit_family_overrides: Mapping[str, str] | None = None,
+) -> list[tuple[str, QueryTermCandidate | None]]:
+    overrides: dict[str, str] = {}
+    for term, family_id in (explicit_family_overrides or {}).items():
+        term_key = normalize_term(term)
+        family_key = normalize_term(family_id)
+        if not term_key or not family_key:
+            raise ValueError("query_family_override_invalid")
+        overrides[term_key] = family_key
+    candidates = {normalize_term(item.term): item for item in query_term_pool}
+    resolved: list[tuple[str, QueryTermCandidate | None]] = []
+    seen: set[str] = set()
+    for term in query_terms:
+        term_key = normalize_term(term)
+        if not term_key:
+            continue
+        candidate = candidates.get(term_key)
+        family_id = overrides.get(term_key) or (
+            normalize_term(candidate.family) if candidate is not None else f"term:{term_key}"
+        )
+        if not family_id:
+            raise ValueError("query_family_identity_invalid")
+        if family_id in seen:
+            continue
+        seen.add(family_id)
+        resolved.append((family_id, candidate))
+    if not resolved:
+        raise ValueError("term_group_key_requires_terms")
+    return resolved
+
+
+def _term_group_hash(families: Sequence[str]) -> str:
+    payload = json.dumps(
+        {"version": "term-group-v1", "members": sorted(set(families))},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def resolve_query_identity(
+    *,
+    query_terms: Sequence[str],
+    query_term_pool: Sequence[QueryTermCandidate],
+    explicit_family_overrides: Mapping[str, str] | None = None,
+) -> ResolvedQueryIdentity:
+    resolved = _semantic_families(
+        query_terms=query_terms,
+        query_term_pool=query_term_pool,
+        explicit_family_overrides=explicit_family_overrides,
+    )
+    anchor_families = {
+        family_id
+        for family_id, candidate in resolved
+        if candidate is not None and is_primary_anchor_role(candidate.retrieval_role)
+    }
+    if len(anchor_families) != 1:
+        raise ValueError("query_primary_anchor_family_required")
+    primary_anchor_family_id = next(iter(anchor_families))
+    non_anchor_families = tuple(
+        family_id for family_id, _candidate in resolved if family_id != primary_anchor_family_id
+    )
+    return ResolvedQueryIdentity(
+        term_group_key=_term_group_hash([family_id for family_id, _candidate in resolved]),
+        primary_anchor_family_id=primary_anchor_family_id,
+        non_anchor_term_family_ids=non_anchor_families,
+    )
+
+
 def build_term_group_key(
     *,
     query_terms: Sequence[str],
     query_term_pool: Sequence[QueryTermCandidate],
 ) -> str:
-    families = {
-        normalize_term(item.term): normalize_term(item.family)
-        for item in query_term_pool
-        if normalize_term(item.term) and normalize_term(item.family)
-    }
-    semantic_terms = sorted(
-        {
-            families.get(term_key) or f"term:{term_key}"
-            for term in query_terms
-            if (term_key := normalize_term(term))
-        }
+    return _term_group_hash(
+        [family_id for family_id, _candidate in _semantic_families(
+            query_terms=query_terms,
+            query_term_pool=query_term_pool,
+        )]
     )
-    if not semantic_terms:
-        raise ValueError("term_group_key_requires_terms")
-    payload = json.dumps(
-        {"version": "term-group-v1", "members": semantic_terms},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return sha256(payload.encode("utf-8")).hexdigest()[:32]
 
 
 def _canonicalize_value(value: Any) -> Any:

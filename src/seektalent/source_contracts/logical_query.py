@@ -13,6 +13,8 @@ class LogicalQueryDispatch:
     query_instance_id: str
     query_fingerprint: str
     term_group_key: str
+    primary_anchor_family_id: str
+    non_anchor_term_family_ids: tuple[str, ...]
     query_terms: tuple[str, ...]
     keyword_query: str
     requested_count: int

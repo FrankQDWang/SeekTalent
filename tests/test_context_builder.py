@@ -38,7 +38,7 @@ from seektalent.runtime.controller_context import build_controller_context as bu
 from seektalent.runtime.finalize_context import build_finalize_context as build_finalize_context_direct
 from seektalent.runtime.reflection_context import build_reflection_context as build_reflection_context_direct
 from seektalent.runtime.scoring_context import build_scoring_context as build_scoring_context_direct
-from seektalent.retrieval.query_identity import build_term_group_key
+from seektalent.retrieval.query_identity import resolve_query_identity
 
 CONTROLLER_CONTEXT_BUILDERS = [
     pytest.param(build_controller_context, id="legacy"),
@@ -50,16 +50,20 @@ def _ledger_from_records(
     records: list[SentQueryRecord],
     query_term_pool: list[QueryTermCandidate],
 ) -> list[QueryExecutionReceipt]:
-    return [
-        QueryExecutionReceipt(
+    receipts = []
+    for index, record in enumerate(records, start=1):
+        identity = resolve_query_identity(
+            query_terms=record.query_terms,
+            query_term_pool=query_term_pool,
+        )
+        receipts.append(QueryExecutionReceipt(
             round_no=record.round_no,
             source_kind="cts",
             query_instance_id=f"fixture-query-{index}",
             query_fingerprint=f"fixture-fingerprint-{index}",
-            term_group_key=build_term_group_key(
-                query_terms=record.query_terms,
-                query_term_pool=query_term_pool,
-            ),
+            term_group_key=identity.term_group_key,
+            primary_anchor_family_id=identity.primary_anchor_family_id,
+            non_anchor_term_family_ids=list(identity.non_anchor_term_family_ids),
             query_role=record.query_role,
             lane_type=record.lane_type or "exploit",
             query_terms=record.query_terms,
@@ -68,9 +72,8 @@ def _ledger_from_records(
             source_plan_version=str(record.source_plan_version),
             status="completed",
             dispatch_started=True,
-        )
-        for index, record in enumerate(records, start=1)
-    ]
+        ))
+    return receipts
 
 
 def test_context_builder_is_a_thin_reexport_facade() -> None:
@@ -502,6 +505,8 @@ def test_controller_context_uses_receipt_ledger_and_bounds_previous_query_outcom
         LogicalQueryOutcome(
             query_instance_id=f"query-{index}",
             term_group_key=f"group-{index}",
+            primary_anchor_family_id="role.python",
+            non_anchor_term_family_ids=["skill.resume-matching"],
             query_role="exploit",
             lane_type="exploit",
             query_terms=["python", "resume matching"],
@@ -593,6 +598,8 @@ def test_reflection_context_keeps_current_decision_and_only_two_query_outcomes()
         LogicalQueryOutcome(
             query_instance_id=query_instance_id,
             term_group_key=f"group-{index}",
+            primary_anchor_family_id="role.python",
+            non_anchor_term_family_ids=[f"skill.support-{index}"],
             query_role="exploit" if index == 1 else "explore",
             lane_type="exploit" if index == 1 else "generic_explore",
             query_terms=["python", f"support-{index}"],

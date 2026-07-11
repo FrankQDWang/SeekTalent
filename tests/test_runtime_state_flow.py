@@ -45,6 +45,7 @@ from seektalent.models import (
     RunState,
 )
 from seektalent.retrieval import build_location_execution_plan, build_round_retrieval_plan
+from seektalent.retrieval.query_identity import ResolvedQueryIdentity
 import seektalent.runtime.orchestrator as orchestrator_module
 import seektalent.runtime.rescue_execution_runtime as rescue_execution_runtime
 from seektalent.runtime.candidate_intake import (
@@ -1641,6 +1642,8 @@ def test_cts_only_run_can_score_without_liepin(monkeypatch, tmp_path: Path) -> N
                     query_instance_id=query.query_instance_id,
                     query_fingerprint=query.query_fingerprint,
                     term_group_key=query.term_group_key,
+                    primary_anchor_family_id="role.data-engineer",
+                    non_anchor_term_family_ids=["skill.python"],
                     query_role=query.query_role,
                     lane_type=query.lane_type,
                     query_terms=list(query.query_terms),
@@ -2047,6 +2050,7 @@ def test_second_lane_starts_with_seventy_thirty_allocation() -> None:
             keyword_query='python "resume matching"',
             query_instance_id="exploit-1",
             query_fingerprint="fp-exploit",
+            identity=ResolvedQueryIdentity("group-exploit", "role.python", ("skill.resume-matching",)),
         ),
         LogicalQueryState(
             query_role="explore",
@@ -2055,6 +2059,7 @@ def test_second_lane_starts_with_seventy_thirty_allocation() -> None:
             keyword_query="python trace",
             query_instance_id="explore-1",
             query_fingerprint="fp-explore",
+            identity=ResolvedQueryIdentity("group-explore", "role.python", ("framework.trace",)),
         ),
     ]
 
@@ -2073,6 +2078,7 @@ def test_second_lane_allocation_does_not_exceed_small_target() -> None:
             keyword_query='python "resume matching"',
             query_instance_id="exploit-1",
             query_fingerprint="fp-exploit",
+            identity=ResolvedQueryIdentity("group-exploit", "role.python", ("skill.resume-matching",)),
         ),
         LogicalQueryState(
             query_role="explore",
@@ -2081,6 +2087,7 @@ def test_second_lane_allocation_does_not_exceed_small_target() -> None:
             keyword_query="python trace",
             query_instance_id="explore-1",
             query_fingerprint="fp-explore",
+            identity=ResolvedQueryIdentity("group-explore", "role.python", ("framework.trace",)),
         ),
     ]
 
@@ -2128,6 +2135,7 @@ def test_second_lane_stops_after_bad_current_batch_even_with_earlier_gain(tmp_pa
             keyword_query='python "resume matching" trace',
             query_instance_id="exploit-1",
             query_fingerprint="fp-exploit",
+            identity=ResolvedQueryIdentity("group-exploit", "role.python", ("skill.resume-matching", "framework.trace")),
         ),
         LogicalQueryState(
             query_role="explore",
@@ -2136,6 +2144,7 @@ def test_second_lane_stops_after_bad_current_batch_even_with_earlier_gain(tmp_pa
             keyword_query="python trace",
             query_instance_id="explore-1",
             query_fingerprint="fp-explore",
+            identity=ResolvedQueryIdentity("group-explore", "role.python", ("framework.trace",)),
         ),
     ]
     searched_cities: list[tuple[str, str | None]] = []
@@ -2316,7 +2325,11 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
         round_no=1,
         retrieval_plan=retrieval_plan,
         title_anchor_terms=["python"],
-        query_term_pool=[],
+        query_term_pool=[QueryTermCandidate(
+            term="python", source="job_title", category="role_anchor", priority=1,
+            evidence="title", first_added_round=0, retrieval_role="primary_role_anchor",
+            queryability="admitted", family="role.python",
+        )],
         used_term_group_keys=set(),
     )
 
@@ -2386,7 +2399,11 @@ def test_runtime_city_dispatch_passes_city_to_cts_builder(tmp_path: Path, monkey
         round_no=1,
         retrieval_plan=retrieval_plan,
         title_anchor_terms=["python"],
-        query_term_pool=[],
+        query_term_pool=[QueryTermCandidate(
+            term="python", source="job_title", category="role_anchor", priority=1,
+            evidence="title", first_added_round=0, retrieval_role="primary_role_anchor",
+            queryability="admitted", family="role.python",
+        )],
         used_term_group_keys=set(),
     )
 

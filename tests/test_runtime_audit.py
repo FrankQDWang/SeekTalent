@@ -1648,6 +1648,13 @@ def test_round_search_flushes_provider_returns_before_query_outcome_scoring_fail
         round_no=1,
         lane_type="exploit",
         query_terms=["python"],
+        query_term_pool=[
+            QueryTermCandidate(
+                term="python", source="job_title", category="role_anchor", priority=1,
+                evidence="title", first_added_round=0, retrieval_role="primary_role_anchor",
+                queryability="admitted", family="role.python",
+            )
+        ],
         job_intent_fingerprint="job-intent",
         source_plan_version="1",
         provider_filters={},

@@ -29,6 +29,8 @@ def build_logical_query_dispatches(
                 query_instance_id=query.query_instance_id,
                 query_fingerprint=query.query_fingerprint,
                 term_group_key=query.term_group_key,
+                primary_anchor_family_id=query.primary_anchor_family_id,
+                non_anchor_term_family_ids=query.non_anchor_term_family_ids,
                 query_terms=tuple(query.query_terms),
                 keyword_query=query.keyword_query,
                 requested_count=requested_count,

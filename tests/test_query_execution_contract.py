@@ -1,8 +1,17 @@
 import pytest
 
 from seektalent.models import LogicalQueryOutcome, QueryExecutionReceipt, QueryTermCandidate
-from seektalent.retrieval.query_identity import build_term_group_key
-from seektalent.runtime.query_identity import logical_outcomes_from_receipts, used_term_group_keys
+from seektalent.retrieval.query_identity import (
+    ResolvedQueryIdentity,
+    build_term_group_key,
+    resolve_query_identity,
+)
+from seektalent.runtime.query_identity import (
+    assert_novel_query_identities,
+    consumed_non_anchor_term_family_ids,
+    logical_outcomes_from_receipts,
+    used_term_group_keys,
+)
 
 
 def _pool() -> list[QueryTermCandidate]:
@@ -32,13 +41,20 @@ def _pool() -> list[QueryTermCandidate]:
     ]
 
 
-def _receipt(*, source_kind: str, dispatch_started: bool) -> QueryExecutionReceipt:
+def _receipt(
+    *,
+    source_kind: str,
+    dispatch_started: bool,
+    non_anchor_term_family_ids: list[str] | None = None,
+) -> QueryExecutionReceipt:
     return QueryExecutionReceipt(
         round_no=2,
         source_kind=source_kind,
         query_instance_id="query-2-primary",
         query_fingerprint=f"{source_kind}-fingerprint-2",
         term_group_key="group-1",
+        primary_anchor_family_id="role.platform",
+        non_anchor_term_family_ids=non_anchor_term_family_ids or ["skill.python"],
         query_role="exploit",
         lane_type="exploit",
         query_terms=["Platform", "Python"],
@@ -51,6 +67,49 @@ def _receipt(*, source_kind: str, dispatch_started: bool) -> QueryExecutionRecei
         unique_candidate_count=2,
         duplicate_candidate_count=1,
     )
+
+
+def test_attempted_query_consumes_non_anchor_families_but_blocked_preflight_does_not() -> None:
+    attempted = _receipt(
+        source_kind="liepin",
+        dispatch_started=True,
+        non_anchor_term_family_ids=["domain.multiagent", "domain.python"],
+    )
+    blocked = _receipt(
+        source_kind="cts",
+        dispatch_started=False,
+        non_anchor_term_family_ids=["domain.rag"],
+    )
+    assert consumed_non_anchor_term_family_ids([attempted, blocked]) == {
+        "domain.multiagent",
+        "domain.python",
+    }
+
+
+def test_query_identity_uses_explicit_prf_family_override() -> None:
+    identity = resolve_query_identity(
+        query_terms=["Platform", "agentic memory"],
+        query_term_pool=_pool(),
+        explicit_family_overrides={"agentic memory": "prf.memory.system"},
+    )
+    assert identity.non_anchor_term_family_ids == ("prf.memory.system",)
+
+
+def test_bundle_novelty_rejects_history_and_sibling_family_reuse() -> None:
+    exploit = ResolvedQueryIdentity("group-exploit", "role.aiagent", ("domain.python",))
+    explore = ResolvedQueryIdentity("group-explore", "role.aiagent", ("domain.rag",))
+    with pytest.raises(ValueError, match="non_anchor_term_family_already_executed"):
+        assert_novel_query_identities(
+            identities=[exploit, explore],
+            used_term_group_keys=set(),
+            consumed_non_anchor_family_ids={"domain.rag"},
+        )
+    with pytest.raises(ValueError, match="non_anchor_term_family_already_executed"):
+        assert_novel_query_identities(
+            identities=[exploit, ResolvedQueryIdentity("group-explore-2", "role.aiagent", ("domain.python",))],
+            used_term_group_keys=set(),
+            consumed_non_anchor_family_ids=set(),
+        )
 
 
 def test_term_group_key_is_order_and_source_independent() -> None:
@@ -101,6 +160,16 @@ def test_receipts_aggregate_by_logical_query_instance() -> None:
     }
 
 
+def test_receipts_for_same_logical_query_must_agree_on_family_identity() -> None:
+    first = _receipt(source_kind="cts", dispatch_started=True)
+    conflicting = _receipt(source_kind="liepin", dispatch_started=True).model_copy(
+        update={"primary_anchor_family_id": "role.conflicting"}
+    )
+
+    with pytest.raises(ValueError, match="logical_query_receipt_identity_mismatch"):
+        logical_outcomes_from_receipts([first, conflicting])
+
+
 @pytest.mark.parametrize(
     ("statuses", "expected"),
     [
@@ -131,6 +200,8 @@ def test_post_merge_counts_union_source_candidates_by_canonical_identity() -> No
     outcome = LogicalQueryOutcome(
         query_instance_id="query-1",
         term_group_key="group-1",
+        primary_anchor_family_id="role.platform",
+        non_anchor_term_family_ids=["skill.python"],
         query_role="exploit",
         lane_type="exploit",
         query_terms=["Platform", "Python"],
@@ -172,6 +243,8 @@ def test_post_merge_counts_allocate_shared_identity_to_earlier_logical_query() -
         LogicalQueryOutcome(
             query_instance_id="query-primary",
             term_group_key="group-primary",
+            primary_anchor_family_id="role.platform",
+            non_anchor_term_family_ids=["skill.python"],
             query_role="exploit",
             lane_type="exploit",
             query_terms=["Platform", "Python"],
@@ -182,6 +255,8 @@ def test_post_merge_counts_allocate_shared_identity_to_earlier_logical_query() -
         LogicalQueryOutcome(
             query_instance_id="query-explore",
             term_group_key="group-explore",
+            primary_anchor_family_id="role.platform",
+            non_anchor_term_family_ids=["skill.rust"],
             query_role="explore",
             lane_type="generic_explore",
             query_terms=["Platform", "Rust"],

@@ -25,6 +25,8 @@ class RuntimeSourceQueryIntent:
     query_instance_id: str
     query_fingerprint: str
     term_group_key: str
+    primary_anchor_family_id: str
+    non_anchor_term_family_ids: tuple[str, ...]
     query_terms: tuple[str, ...]
     keyword_query: str
     requested_count: int
@@ -47,6 +49,8 @@ class RuntimeSourceQueryIntent:
             raise ValueError("runtime_source_query_intent_missing_query_fingerprint")
         if not self.term_group_key:
             raise ValueError("runtime_source_query_intent_missing_term_group_key")
+        if not self.primary_anchor_family_id:
+            raise ValueError("runtime_source_query_intent_missing_primary_anchor_family_id")
 
 
 def query_package_from_intent(intent: RuntimeSourceQueryIntent) -> RuntimeQueryPackage:
@@ -140,6 +144,8 @@ def build_runtime_source_query_intents(
                     query_instance_id=dispatch.query_instance_id,
                     query_fingerprint=dispatch.query_fingerprint,
                     term_group_key=dispatch.term_group_key,
+                    primary_anchor_family_id=dispatch.primary_anchor_family_id,
+                    non_anchor_term_family_ids=dispatch.non_anchor_term_family_ids,
                     query_terms=dispatch.query_terms,
                     keyword_query=dispatch.keyword_query,
                     requested_count=requested_count,

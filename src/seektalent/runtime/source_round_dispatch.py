@@ -191,6 +191,8 @@ def _receipts_for_source_result(
                 query_instance_id=intent.query_instance_id,
                 query_fingerprint=intent.query_fingerprint,
                 term_group_key=intent.term_group_key,
+                primary_anchor_family_id=intent.primary_anchor_family_id,
+                non_anchor_term_family_ids=list(intent.non_anchor_term_family_ids),
                 query_role=intent.query_role,
                 lane_type=intent.lane_type,
                 query_terms=list(intent.query_terms),

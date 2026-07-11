@@ -168,6 +168,8 @@ def test_fixture_source_executes_through_workflow_runtime_without_runtime_source
                     query_instance_id="fixture-query",
                     query_fingerprint="fixture-fingerprint",
                     term_group_key="term-group-fixture-python",
+                    primary_anchor_family_id="role.data-engineer",
+                    non_anchor_term_family_ids=("skill.python",),
                     query_terms=("fixture python",),
                     keyword_query="fixture python",
                     requested_count=1,

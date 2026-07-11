@@ -46,6 +46,7 @@ from seektalent.runtime.retrieval_runtime import (
     RetrievalRuntime,
     allocate_initial_lane_targets,
 )
+from seektalent.retrieval.query_identity import ResolvedQueryIdentity
 from seektalent.source_adapters import default_source_query_policies, _run_cts_source_round, _run_liepin_source_round
 from seektalent.runtime.source_round_dispatch import (
     RuntimeSourceInvariantError,
@@ -94,7 +95,11 @@ def _query_state(lane_type: str) -> LogicalQueryState:
         keyword_query=f"数据开发 {lane_type}",
         query_instance_id=f"query-{lane_type}",
         query_fingerprint=f"fingerprint-{lane_type}",
-        term_group_key=f"term-group-{lane_type}",
+        identity=ResolvedQueryIdentity(
+            f"term-group-{lane_type}",
+            "role.data-engineer",
+            (f"skill.{lane_type}",),
+        ),
     )
 
 
@@ -157,9 +162,38 @@ def _dispatch(lane_type: str, requested_count: int) -> LogicalQueryDispatch:
         query_instance_id=f"query-{lane_type}",
         query_fingerprint=f"fingerprint-{lane_type}",
         term_group_key=f"term-group-{lane_type}",
+        primary_anchor_family_id="role.data-engineer",
+        non_anchor_term_family_ids=(f"skill.{lane_type}",),
         requested_count=requested_count,
         source_plan_version="2",
     )
+
+
+def test_family_identity_propagates_through_dispatch_intent_receipt_and_reconstruction() -> None:
+    state = _query_state("exploit")
+    dispatch = build_logical_query_dispatches(
+        round_no=1,
+        query_states=[state],
+        lane_requested_counts={"exploit": 2},
+        source_plan_version="2",
+    )[0]
+    intents = build_runtime_source_query_intents(
+        source_kinds=("cts", "liepin"),
+        logical_dispatches=(dispatch,),
+        filter_intents=(),
+        location_intent=None,
+        age_intent=None,
+        source_budget_policy=RuntimeSourceBudgetPolicy(),
+    )
+
+    assert dispatch.primary_anchor_family_id == state.primary_anchor_family_id
+    assert dispatch.non_anchor_term_family_ids == state.non_anchor_term_family_ids
+    assert {
+        (intent.primary_anchor_family_id, intent.non_anchor_term_family_ids)
+        for source_intents in intents.values()
+        for intent in source_intents
+    } == {("role.data-engineer", ("skill.exploit",))}
+
 
 
 def _requirement_sheet() -> RequirementSheet:
@@ -629,6 +663,8 @@ def test_query_outcome_unions_cross_source_candidates_after_identity_merge() -> 
     outcome = LogicalQueryOutcome(
         query_instance_id="query-1",
         term_group_key="group-1",
+        primary_anchor_family_id="role.data-engineer",
+        non_anchor_term_family_ids=["skill.python"],
         query_role="exploit",
         lane_type="exploit",
         query_terms=["数据开发", "Python"],
@@ -659,6 +695,8 @@ def test_query_outcome_allocates_later_lane_candidate_as_duplicate() -> None:
         LogicalQueryOutcome(
             query_instance_id="query-primary",
             term_group_key="group-primary",
+            primary_anchor_family_id="role.data-engineer",
+            non_anchor_term_family_ids=["skill.python"],
             query_role="exploit",
             lane_type="exploit",
             query_terms=["数据开发", "Python"],
@@ -669,6 +707,8 @@ def test_query_outcome_allocates_later_lane_candidate_as_duplicate() -> None:
         LogicalQueryOutcome(
             query_instance_id="query-explore",
             term_group_key="group-explore",
+            primary_anchor_family_id="role.data-engineer",
+            non_anchor_term_family_ids=["skill.rust"],
             query_role="explore",
             lane_type="generic_explore",
             query_terms=["数据开发", "Rust"],
@@ -958,6 +998,8 @@ def test_round_search_result_from_source_dispatch_preserves_retrieval_metadata_w
         query_instance_id="query-exploit",
         query_fingerprint="fingerprint-exploit",
         term_group_key="term-group-exploit",
+        primary_anchor_family_id="role.data-engineer",
+        non_anchor_term_family_ids=["skill.python"],
         query_role="exploit",
         lane_type="exploit",
         query_terms=["数据开发"],

@@ -28,6 +28,26 @@ def _retrieval_plan(*, query_terms: list[str]) -> RoundRetrievalPlan:
     )
 
 
+def _fingerprint_pool() -> list[QueryTermCandidate]:
+    return [
+        QueryTermCandidate(
+            term="python", source="job_title", category="role_anchor", priority=1,
+            evidence="title", first_added_round=0, retrieval_role="primary_role_anchor",
+            queryability="admitted", family="role.python",
+        ),
+        QueryTermCandidate(
+            term="ranking", source="jd", category="tooling", priority=2,
+            evidence="jd", first_added_round=0, retrieval_role="core_skill",
+            queryability="admitted", family="skill.ranking",
+        ),
+        QueryTermCandidate(
+            term="trace", source="jd", category="tooling", priority=3,
+            evidence="jd", first_added_round=0, retrieval_role="framework_tool",
+            queryability="admitted", family="framework.trace",
+        ),
+    ]
+
+
 def test_build_second_lane_decision_falls_back_to_generic_when_prf_policy_is_unavailable() -> None:
     pool = _semantic_pool()
     retrieval_plan = _retrieval_plan(query_terms=["Platform", "Python"])
@@ -124,7 +144,7 @@ def test_build_second_lane_decision_selects_prf_probe_when_gate_passes() -> None
     decision, lane = build_second_lane_decision(
         round_no=2,
         retrieval_plan=retrieval_plan,
-        query_term_pool=[],
+        query_term_pool=_fingerprint_pool(),
         used_term_group_keys=set(),
         prf_decision=prf_decision,
         run_id="run-a",
@@ -163,6 +183,7 @@ def test_build_logical_query_state_fingerprint_changes_with_filters_and_location
         round_no=2,
         lane_type="exploit",
         query_terms=["python", "ranking"],
+        query_term_pool=_fingerprint_pool(),
         job_intent_fingerprint="job-1",
         source_plan_version="2",
         provider_filters={"company_names": ["acme"]},
@@ -173,6 +194,7 @@ def test_build_logical_query_state_fingerprint_changes_with_filters_and_location
         round_no=2,
         lane_type="exploit",
         query_terms=["python", "ranking"],
+        query_term_pool=_fingerprint_pool(),
         job_intent_fingerprint="job-1",
         source_plan_version="2",
         provider_filters={"company_names": ["globex"]},
@@ -183,6 +205,7 @@ def test_build_logical_query_state_fingerprint_changes_with_filters_and_location
         round_no=2,
         lane_type="exploit",
         query_terms=["python", "ranking"],
+        query_term_pool=_fingerprint_pool(),
         job_intent_fingerprint="job-1",
         source_plan_version="2",
         provider_filters={"company_names": ["acme"]},
@@ -265,6 +288,7 @@ def test_build_logical_query_state_fingerprint_uses_provider_name() -> None:
         round_no=2,
         lane_type="exploit",
         query_terms=["python", "ranking"],
+        query_term_pool=_fingerprint_pool(),
         job_intent_fingerprint="job-1",
         source_plan_version="2",
         provider_filters={"city": "上海"},
@@ -276,6 +300,7 @@ def test_build_logical_query_state_fingerprint_uses_provider_name() -> None:
         round_no=2,
         lane_type="exploit",
         query_terms=["python", "ranking"],
+        query_term_pool=_fingerprint_pool(),
         job_intent_fingerprint="job-1",
         source_plan_version="2",
         provider_filters={"city": "上海"},

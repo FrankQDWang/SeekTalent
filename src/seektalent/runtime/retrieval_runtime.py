@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Sequence
 from collections.abc import Callable
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -23,6 +23,7 @@ from seektalent.models import (
     QueryOutcomeClassification,
     QueryOutcomeThresholds,
     QueryExecutionReceipt,
+    QueryTermCandidate,
     QueryResumeHit,
     QueryRole,
     ProviderQuery,
@@ -38,7 +39,12 @@ from seektalent.models import (
 from seektalent.resumes.snapshots import snapshot_sha256
 from seektalent.retrieval import allocate_balanced_city_targets, serialize_keyword_query
 from seektalent.retrieval.query_builder import ProviderQueryBuildInput, build_provider_query
-from seektalent.retrieval.query_identity import build_query_fingerprint, build_query_instance_id
+from seektalent.retrieval.query_identity import (
+    ResolvedQueryIdentity,
+    build_query_fingerprint,
+    build_query_instance_id,
+    resolve_query_identity,
+)
 from seektalent.runtime.runtime_diagnostics import classify_query_outcome
 from seektalent.storage.json import sha256_json
 from seektalent.tracing import RunTracer
@@ -172,11 +178,23 @@ class LogicalQueryState:
     keyword_query: str
     query_instance_id: str
     query_fingerprint: str
-    term_group_key: str = ""
+    identity: ResolvedQueryIdentity
     next_page: int = 1
     exhausted: bool = False
     adapter_notes: list[str] = field(default_factory=list)
     city_states: dict[str, CityExecutionState] = field(default_factory=dict)
+
+    @property
+    def term_group_key(self) -> str:
+        return self.identity.term_group_key
+
+    @property
+    def primary_anchor_family_id(self) -> str:
+        return self.identity.primary_anchor_family_id
+
+    @property
+    def non_anchor_term_family_ids(self) -> tuple[str, ...]:
+        return self.identity.non_anchor_term_family_ids
 
 
 @dataclass
@@ -208,12 +226,19 @@ def build_logical_query_state(
     round_no: int,
     lane_type: LaneType,
     query_terms: list[str],
+    query_term_pool: Sequence[QueryTermCandidate],
+    explicit_family_overrides: Mapping[str, str] | None = None,
     job_intent_fingerprint: str,
     source_plan_version: str,
     provider_filters: dict[str, ConstraintValue],
     location_execution_plan: LocationExecutionPlan,
     provider_name: str = "default",
 ) -> LogicalQueryState:
+    identity = resolve_query_identity(
+        query_terms=query_terms,
+        query_term_pool=query_term_pool,
+        explicit_family_overrides=explicit_family_overrides,
+    )
     keyword_query = serialize_keyword_query(query_terms)
     spec = CanonicalQuerySpec(
         lane_type=lane_type,
@@ -250,6 +275,7 @@ def build_logical_query_state(
             source_plan_version=source_plan_version,
         ),
         query_fingerprint=query_fingerprint,
+        identity=identity,
     )
 
 
@@ -744,7 +770,11 @@ class RetrievalRuntime:
                     keyword_query=logical_query.keyword_query,
                     query_instance_id=logical_query.query_instance_id,
                     query_fingerprint=logical_query.query_fingerprint,
-                    term_group_key=logical_query.term_group_key,
+                    identity=ResolvedQueryIdentity(
+                        logical_query.term_group_key,
+                        logical_query.primary_anchor_family_id,
+                        logical_query.non_anchor_term_family_ids,
+                    ),
                 )
             )
         return await self.execute_round_search(

@@ -177,7 +177,6 @@ from seektalent.runtime.source_lanes import (
     runtime_source_lane_result_from_source_result,
 )
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
-from seektalent.retrieval.query_identity import build_term_group_key
 from seektalent.runtime.query_identity import (
     apply_post_merge_query_counts,
     assert_novel_term_group_keys,
@@ -4038,6 +4037,7 @@ class WorkflowRuntime:
             round_no=round_no,
             lane_type="exploit",
             query_terms=list(retrieval_plan.query_terms),
+            query_term_pool=query_term_pool,
             job_intent_fingerprint=job_intent_fingerprint,
             source_plan_version=source_plan_version,
             provider_filters=retrieval_plan.projected_provider_filters,
@@ -4064,11 +4064,6 @@ class WorkflowRuntime:
         )
         if second_lane_query_state is not None:
             query_states.append(second_lane_query_state)
-        for query_state in query_states:
-            query_state.term_group_key = build_term_group_key(
-                query_terms=query_state.query_terms,
-                query_term_pool=query_term_pool,
-            )
         assert_novel_term_group_keys(
             term_group_keys=[query_state.term_group_key for query_state in query_states],
             used_term_group_keys=used_term_group_keys,

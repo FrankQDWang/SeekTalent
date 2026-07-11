@@ -458,6 +458,8 @@ class QueryExecutionReceipt(BaseModel):
     query_instance_id: str
     query_fingerprint: str
     term_group_key: str
+    primary_anchor_family_id: str
+    non_anchor_term_family_ids: list[str]
     query_role: QueryRole
     lane_type: LaneType
     query_terms: list[str] = Field(default_factory=list)
@@ -478,6 +480,8 @@ class LogicalQueryOutcome(BaseModel):
 
     query_instance_id: str
     term_group_key: str
+    primary_anchor_family_id: str
+    non_anchor_term_family_ids: list[str]
     query_role: QueryRole
     lane_type: LaneType
     query_terms: list[str] = Field(default_factory=list)

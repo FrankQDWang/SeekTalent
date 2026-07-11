@@ -8,12 +8,39 @@ from seektalent.models import (
     QueryExecutionReceipt,
     QueryExecutionStatus,
 )
-from seektalent.retrieval.query_identity import normalize_term
+from seektalent.retrieval.query_identity import ResolvedQueryIdentity, normalize_term
 from seektalent.source_contracts.runtime_lanes import RuntimeQueryCandidateAttribution
 
 
 def used_term_group_keys(receipts: Sequence[QueryExecutionReceipt]) -> set[str]:
     return {receipt.term_group_key for receipt in receipts if receipt.dispatch_started}
+
+
+def consumed_non_anchor_term_family_ids(receipts: Sequence[QueryExecutionReceipt]) -> set[str]:
+    return {
+        family_id
+        for receipt in receipts
+        if receipt.dispatch_started
+        for family_id in receipt.non_anchor_term_family_ids
+    }
+
+
+def assert_novel_query_identities(
+    *,
+    identities: Sequence[ResolvedQueryIdentity],
+    used_term_group_keys: Collection[str],
+    consumed_non_anchor_family_ids: Collection[str],
+) -> None:
+    assert_novel_term_group_keys(
+        term_group_keys=[item.term_group_key for item in identities],
+        used_term_group_keys=used_term_group_keys,
+    )
+    seen_families = set(consumed_non_anchor_family_ids)
+    for identity in identities:
+        overlap = seen_families & set(identity.non_anchor_term_family_ids)
+        if overlap:
+            raise ValueError("non_anchor_term_family_already_executed")
+        seen_families.update(identity.non_anchor_term_family_ids)
 
 
 def assert_novel_term_group_keys(
@@ -31,6 +58,8 @@ def assert_novel_term_group_keys(
 def _logical_identity(receipt: QueryExecutionReceipt) -> tuple[object, ...]:
     return (
         receipt.term_group_key,
+        receipt.primary_anchor_family_id,
+        tuple(receipt.non_anchor_term_family_ids),
         receipt.query_role,
         receipt.lane_type,
         tuple(normalize_term(term) for term in receipt.query_terms),
@@ -64,6 +93,8 @@ def logical_outcomes_from_receipts(
             LogicalQueryOutcome(
                 query_instance_id=query_instance_id,
                 term_group_key=first.term_group_key,
+                primary_anchor_family_id=first.primary_anchor_family_id,
+                non_anchor_term_family_ids=first.non_anchor_term_family_ids,
                 query_role=first.query_role,
                 lane_type=first.lane_type,
                 query_terms=list(first.query_terms),

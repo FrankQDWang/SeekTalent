@@ -376,6 +376,8 @@ def test_reflection_prompt_renders_safe_controller_and_query_evidence() -> None:
                 LogicalQueryOutcome(
                     query_instance_id="primary-2",
                     term_group_key="group-primary-2",
+                    primary_anchor_family_id="role.data-engineer",
+                    non_anchor_term_family_ids=["skill.python"],
                     query_role="exploit",
                     lane_type="exploit",
                     query_terms=["python", "retrieval"],
@@ -392,6 +394,8 @@ def test_reflection_prompt_renders_safe_controller_and_query_evidence() -> None:
                             query_instance_id="primary-2",
                             query_fingerprint="provider-fingerprint",
                             term_group_key="group-primary-2",
+                            primary_anchor_family_id="role.data-engineer",
+                            non_anchor_term_family_ids=["skill.python"],
                             query_role="exploit",
                             lane_type="exploit",
                             query_terms=["python", "retrieval"],
