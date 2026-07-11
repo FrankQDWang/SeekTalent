@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict
 
 from seektalent.config import AppSettings
 from seektalent.corpus.runtime import ProviderReturnedCandidate, build_deterministic_provider_request_id
-from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchResult
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation, ProviderSnapshot, SearchResult
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.models import (
     CanonicalQuerySpec,
@@ -333,6 +333,7 @@ class RetrievalExecutionResult:
     query_execution_receipts: list[QueryExecutionReceipt] = field(default_factory=list)
     candidate_query_attributions: list[RuntimeQueryCandidateAttribution] = field(default_factory=list)
     query_outcomes: list[LogicalQueryOutcome] = field(default_factory=list)
+    private_first_page_continuations: tuple[ProviderSearchContinuation, ...] = ()
 
 
 class _CityDispatchResult(TypedDict):

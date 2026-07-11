@@ -9,7 +9,7 @@ import pytest
 
 import seektalent.candidate_feedback.model_steps as candidate_feedback_model_steps
 from seektalent.candidate_feedback.llm_prf import LLMPRFCandidate, LLMPRFExtraction, LLMPRFSourceEvidenceRef
-from seektalent.core.retrieval.provider_contract import SearchResult
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation, SearchResult
 from seektalent.models import (
     CTSQuery,
     FinalCandidate,
@@ -56,6 +56,7 @@ from seektalent.runtime.candidate_intake import (
 )
 from seektalent.runtime.controller_context import build_controller_context
 from seektalent.runtime.finalize_context import build_finalize_context
+from seektalent.runtime.first_page_expansion import decide_first_page_expansion
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, allocate_initial_lane_targets
 from seektalent.runtime.reflection_context import build_reflection_context
@@ -77,6 +78,35 @@ from tests.settings_factory import make_settings
 
 def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
     return build_source_enabled_runtime(*args, **kwargs)
+
+
+def test_first_page_expansion_requires_every_baseline_candidate_to_be_high_quality() -> None:
+    continuation = ProviderSearchContinuation(
+        kind="first_page_detail_expansion",
+        continuation_id="c1",
+        opaque_ref="artifact://c1",
+        source_kind="liepin",
+        round_no=2,
+        query_instance_id="q1",
+        visible_candidate_count=3,
+        eligible_candidate_count=3,
+        initial_opened_count=2,
+    )
+    scores = [
+        ScoredCandidate(
+            resume_id=f"r{i}", fit_bucket="fit", overall_score=overall,
+            must_have_match_score=80, preferred_match_score=None, risk_score=None,
+            risk_flags=[], reasoning_summary="fixture", evidence=[], confidence="high",
+            matched_must_haves=[], missing_must_haves=[], matched_preferences=[],
+            negative_signals=[], strengths=[], weaknesses=[], source_round=2,
+        )
+        for i, overall in enumerate((90, 79))
+    ]
+    decision = decide_first_page_expansion(
+        continuations=[continuation], requested_count=2, baseline_opened_count=2,
+        baseline_identity_count=2, scorecards=scores,
+    )
+    assert decision.reason_code == "baseline_quality_below_threshold"
 
 
 def _liepin_fixture_settings(**overrides: object):

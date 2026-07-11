@@ -1908,6 +1908,7 @@ class WorkflowRuntime:
             executed_query_packages=dispatch_result.executed_query_packages,
             query_execution_receipts=list(dispatch_result.query_execution_receipts),
             candidate_query_attributions=list(dispatch_result.candidate_query_attributions),
+            private_first_page_continuations=dispatch_result.private_first_page_continuations,
             query_outcomes=query_outcomes or [],
         )
 

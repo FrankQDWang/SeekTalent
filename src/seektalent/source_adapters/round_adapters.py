@@ -155,6 +155,7 @@ async def _run_cts_source_round(
         lane_result,
         query_execution_outcomes=query_execution_outcomes,
         candidate_query_attributions=candidate_query_attributions,
+        private_first_page_continuations=result.private_first_page_continuations,
     )
     return SourceRoundAdapterResult(
         source=source_id,
@@ -240,6 +241,7 @@ async def _run_liepin_source_round(
         executed_query_packages=result.executed_query_packages,
         query_execution_outcomes=result.query_execution_outcomes,
         candidate_query_attributions=result.candidate_query_attributions,
+        private_first_page_continuations=result.private_first_page_continuations,
     )
 
 

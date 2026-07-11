@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from seektalent.models import QueryExecutionReceipt, ResumeCandidate
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.source_query_intent import RuntimeQueryPackage, RuntimeSourceQueryIntent
 from seektalent.source_contracts.runtime_lanes import (
@@ -49,7 +50,9 @@ class SourceRoundDispatchRequest:
     seen_resume_ids: frozenset[str]
     seen_dedup_keys: frozenset[str]
     requirement_sheet: "RequirementSheet"
-    source_query_intents_by_source: Mapping[SourceKind, tuple[RuntimeSourceQueryIntent, ...]] = field(default_factory=dict)
+    source_query_intents_by_source: Mapping[SourceKind, tuple[RuntimeSourceQueryIntent, ...]] = field(
+        default_factory=dict
+    )
 
 
 @dataclass(frozen=True)
@@ -65,6 +68,7 @@ class SourceRoundAdapterResult:
     executed_query_packages: tuple[RuntimeQueryPackage, ...] = ()
     query_execution_outcomes: tuple[SourceQueryExecutionOutcome, ...] = ()
     candidate_query_attributions: tuple[RuntimeQueryCandidateAttribution, ...] = ()
+    private_first_page_continuations: tuple[ProviderSearchContinuation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,6 +79,7 @@ class SourceRoundDispatchResult:
     executed_query_packages: tuple[RuntimeQueryPackage, ...] = ()
     query_execution_receipts: tuple[QueryExecutionReceipt, ...] = ()
     candidate_query_attributions: tuple[RuntimeQueryCandidateAttribution, ...] = ()
+    private_first_page_continuations: tuple[ProviderSearchContinuation, ...] = ()
 
 
 async def dispatch_source_rounds(
@@ -138,7 +143,27 @@ async def dispatch_source_rounds(
         ),
         query_execution_receipts=tuple(query_execution_receipts),
         candidate_query_attributions=tuple(candidate_query_attributions),
+        private_first_page_continuations=_private_first_page_continuations(source_results, query_execution_receipts),
     )
+
+
+def _private_first_page_continuations(
+    source_results: Sequence[SourceRoundAdapterResult], receipts: Sequence[QueryExecutionReceipt]
+) -> tuple[ProviderSearchContinuation, ...]:
+    receipt_keys = {(item.source_kind, item.query_instance_id) for item in receipts}
+    seen_ids: set[str] = set()
+    seen_refs: set[str] = set()
+    continuations: list[ProviderSearchContinuation] = []
+    for result in source_results:
+        for continuation in result.private_first_page_continuations:
+            if continuation.continuation_id in seen_ids or continuation.opaque_ref in seen_refs:
+                raise RuntimeSourceInvariantError("duplicate_first_page_continuation")
+            if (continuation.source_kind, continuation.query_instance_id) not in receipt_keys:
+                raise RuntimeSourceInvariantError("first_page_continuation_missing_receipt")
+            seen_ids.add(continuation.continuation_id)
+            seen_refs.add(continuation.opaque_ref)
+            continuations.append(continuation)
+    return tuple(continuations)
 
 
 def _validate_source_query_intents(request: SourceRoundDispatchRequest) -> None:
@@ -260,7 +285,6 @@ async def _run_adapter_safely(
                 safe_reason_code="blocked_backend_unavailable",
             ),
         )
-
 
     except SourceProviderPartial:
         return SourceRoundAdapterResult(

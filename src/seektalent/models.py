@@ -472,6 +472,16 @@ class QueryExecutionReceipt(BaseModel):
     unique_candidate_count: int = Field(default=0, ge=0)
     duplicate_candidate_count: int = Field(default=0, ge=0)
     pre_click_skipped_seen_count: int = Field(default=0, ge=0)
+    first_page_visible_count: int = Field(default=0, ge=0)
+    first_page_eligible_count: int = Field(default=0, ge=0)
+    initial_opened_count: int = Field(default=0, ge=0)
+    expansion_opened_count: int = Field(default=0, ge=0)
+    expansion_skipped_seen_count: int = Field(default=0, ge=0)
+    expansion_terminal_failure_count: int = Field(default=0, ge=0)
+    expansion_scoring_failure_count: int = Field(default=0, ge=0)
+    first_page_expansion_qualified: bool | None = None
+    first_page_expansion_status: Literal["not_qualified", "completed", "partial", "blocked", "failed"] | None = None
+    first_page_expansion_reason_code: str | None = None
     exhausted_reason: str | None = None
     safe_reason_code: str | None = None
 
