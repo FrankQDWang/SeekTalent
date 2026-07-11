@@ -3471,6 +3471,8 @@ def test_v2_runtime_display_drops_shared_unsafe_query_text(unsafe_text: str) -> 
         "note: Authorization: Bearer private-token",
         "debug secret=private-token",
         "api-key=private-token",
+        "api key=private-token",
+        "API Key: private-token",
         "X-API-Key: private-token",
         "OpenCLI CDP target 98b37a browser session failed",
         "INTERNAL_PROVIDER_REFERENCE",

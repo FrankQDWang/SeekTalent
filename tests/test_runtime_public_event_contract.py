@@ -247,6 +247,8 @@ def test_runtime_public_query_group_drops_shared_unsafe_text(unsafe_text: str) -
         "debug secret=private-token",
         "apikey=private-token",
         "api-key=private-token",
+        "api key=private-token",
+        "API Key: private-token",
         "X-API-Key: private-token",
         "OpenCLI CDP target 98b37a browser session failed",
         "INTERNAL_PROVIDER_REFERENCE",
