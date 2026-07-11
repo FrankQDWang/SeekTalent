@@ -56,13 +56,19 @@ def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.Mo
     assert settings.liepin_opencli_pacing_enabled is True
     assert settings.liepin_opencli_pacing_min_ms == 700
     assert settings.liepin_opencli_pacing_max_ms == 1800
-    assert settings.liepin_exploit_detail_target == 2
-    assert settings.liepin_explore_detail_target == 1
+    assert settings.liepin_exploit_detail_target == 3
+    assert settings.liepin_explore_detail_target == 2
 
     monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_PACING_MIN_MS", "2000")
     monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_PACING_MAX_MS", "1000")
     with pytest.raises(ValueError, match="liepin_opencli_pacing"):
         AppSettings(_env_file=None)
+
+
+def test_default_liepin_detail_targets_are_three_and_two() -> None:
+    settings = AppSettings(_env_file=None)
+    assert settings.liepin_exploit_detail_target == 3
+    assert settings.liepin_explore_detail_target == 2
 
 
 @pytest.mark.parametrize(

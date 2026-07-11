@@ -34,9 +34,40 @@ from seektalent.runtime.source_lanes import (
     RuntimeSourceLaneRequest,
 )
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
+from seektalent.source_adapters.query_policy import default_source_query_policies
 from seektalent.storage.json import sha256_json
 from seektalent.sources.liepin.reason_codes import LIEPIN_SOURCE_LANE_REASON_CODE_MAP
 from tests.settings_factory import make_settings
+
+
+def test_default_liepin_source_lane_caps_are_three_two_two() -> None:
+    settings = make_settings()
+    policy = default_source_query_policies(
+        settings=settings,
+        source_plan=(
+            RuntimeSourceLanePlan(source_plan_id="plan", runtime_run_id="run", source="liepin", label="liepin"),
+        ),
+    )["liepin"]
+    assert policy.requested_count_caps_by_lane == {
+        "exploit": 3,
+        "generic_explore": 2,
+        "prf_probe": 2,
+    }
+
+
+def test_liepin_source_lane_caps_honor_validated_overrides() -> None:
+    settings = make_settings(liepin_exploit_detail_target=7, liepin_explore_detail_target=4)
+    policy = default_source_query_policies(
+        settings=settings,
+        source_plan=(
+            RuntimeSourceLanePlan(source_plan_id="plan", runtime_run_id="run", source="liepin", label="liepin"),
+        ),
+    )["liepin"]
+    assert policy.requested_count_caps_by_lane == {
+        "exploit": 7,
+        "generic_explore": 4,
+        "prf_probe": 4,
+    }
 
 
 class FakeWorker:

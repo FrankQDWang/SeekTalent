@@ -15,6 +15,7 @@ from seektalent.models import (
     is_title_anchor_role,
 )
 from seektalent.requirements import build_requirement_digest
+from seektalent.scoring.weighted_score import risk_at_or_above, risk_at_or_below
 
 from seektalent.runtime.context_views import (
     _reflection_summary,
@@ -113,7 +114,9 @@ def _build_stop_guidance(
     top_pool_strength = _top_pool_strength(top_pool)
     fit_candidates = [item for item in top_pool if item.fit_bucket == "fit"]
     strong_fit_count = len(_strong_fit_candidates(top_pool))
-    high_risk_fit_count = sum(1 for item in fit_candidates if item.risk_score >= HIGH_RISK_FIT_THRESHOLD)
+    high_risk_fit_count = sum(
+        1 for item in fit_candidates if risk_at_or_above(item.risk_score, HIGH_RISK_FIT_THRESHOLD)
+    )
     tried_families = _tried_families(
         run_state.retrieval_state.query_term_pool,
         run_state.retrieval_state.query_execution_ledger,
@@ -222,7 +225,7 @@ def _strong_fit_candidates(top_pool: list[ScoredCandidate]) -> list[ScoredCandid
         if item.fit_bucket == "fit"
         and item.overall_score >= 80
         and item.must_have_match_score >= 70
-        and item.risk_score <= 30
+        and risk_at_or_below(item.risk_score, 30)
     ]
 
 

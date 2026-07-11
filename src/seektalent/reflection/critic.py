@@ -26,6 +26,7 @@ from seektalent.prompt_safety import (
 )
 from seektalent.prompting import LoadedPrompt, json_block
 from seektalent.repair import RepairCallError, repair_reflection_draft, unpack_repair_result
+from seektalent.scoring.weighted_score import risk_at_or_below
 from seektalent.tracing import ProviderUsageSnapshot, combine_provider_usage, provider_usage_from_result
 
 DISABLED_FILTER_FIELDS = frozenset({"position", *PROTECTED_ATTRIBUTE_FIELDS})
@@ -146,7 +147,7 @@ def _top_pool_is_strong(context: ReflectionContext) -> bool:
         if item.fit_bucket == "fit"
         and item.overall_score >= 80
         and item.must_have_match_score >= 70
-        and item.risk_score <= 30
+        and risk_at_or_below(item.risk_score, 30)
     )
     return len(context.top_candidates) >= 10 and strong_fit_count >= 5
 

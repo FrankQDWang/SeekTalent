@@ -544,8 +544,8 @@ class AppSettings(BaseSettings):
     liepin_stream_token_secret: str | None = "local-development"
     liepin_detail_open_approval_secret: str | None = None
     liepin_default_daily_detail_budget: int = 20
-    liepin_exploit_detail_target: int = 2
-    liepin_explore_detail_target: int = 1
+    liepin_exploit_detail_target: int = 3
+    liepin_explore_detail_target: int = 2
     liepin_live_enabled: bool = False
 
     text_llm_protocol_family: TextLLMProtocolFamily = "openai_chat_completions_compatible"

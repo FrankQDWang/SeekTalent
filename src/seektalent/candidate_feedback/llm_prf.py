@@ -15,6 +15,7 @@ from seektalent.candidate_feedback.models import CandidateTermType, FeedbackCand
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import NormalizedResume, ScoredCandidate, unique_strings
+from seektalent.scoring.weighted_score import risk_at_or_above
 from seektalent.prompt_safety import render_template_version_block, render_untrusted_json_block
 from seektalent.prompting import LoadedPrompt
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
@@ -352,8 +353,18 @@ def build_llm_prf_artifact_refs(*, round_no: int) -> LLMPRFArtifactRefs:
 
 
 def select_llm_prf_negative_resumes(candidates: list[ScoredCandidate], *, limit: int = 5) -> list[ScoredCandidate]:
-    selected = [candidate for candidate in candidates if candidate.fit_bucket != "fit" or candidate.risk_score >= 60]
-    selected.sort(key=lambda candidate: (-candidate.risk_score, candidate.overall_score, candidate.resume_id))
+    selected = [
+        candidate
+        for candidate in candidates
+        if candidate.fit_bucket != "fit" or risk_at_or_above(candidate.risk_score, 60)
+    ]
+    selected.sort(
+        key=lambda candidate: (
+            -(candidate.risk_score if candidate.risk_score is not None else 0),
+            candidate.overall_score,
+            candidate.resume_id,
+        )
+    )
     return selected[: min(limit, 5)]
 
 

@@ -10,6 +10,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from seektalent.config import AppSettings
+from seektalent.candidate_visibility import is_workbench_visible_score
 from seektalent.models import RequirementSheet
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
@@ -319,17 +320,23 @@ class WorkbenchV2RuntimeService:
         evidence_by_identity: dict[str, list[RuntimeControlCandidateEvidence]] = {}
         for evidence in self.store.list_candidate_evidence(runtime_run_id=runtime_run_id):
             evidence_by_identity.setdefault(evidence.identity_id, []).append(evidence)
-        sorted_identities = sorted(
-            identities,
-            key=lambda identity: (-(identity.score if identity.score is not None else -1), identity.identity_id),
-        )
-        candidates: list[dict[str, object]] = []
-        for index, identity in enumerate(sorted_identities[: max(0, limit)], start=1):
+        eligible_identities: list[
+            tuple[RuntimeControlCandidateIdentity, list[RuntimeControlCandidateEvidence], int]
+        ] = []
+        for identity in identities:
             evidence = evidence_by_identity.get(identity.identity_id, [])
+            score = _candidate_score(identity, evidence)
+            if not is_workbench_visible_score(score):
+                continue
+            eligible_identities.append((identity, evidence, score))
+        eligible_identities.sort(key=lambda row: (-row[2], row[0].identity_id))
+        candidates: list[dict[str, object]] = []
+        for index, (identity, evidence, score) in enumerate(
+            eligible_identities[: max(0, limit)], start=1
+        ):
             source_kinds = _candidate_source_kinds(evidence)
             headline = _candidate_headline(identity, evidence)
             display_name = _candidate_display_name(identity, evidence, fallback=f"候选人 {index}")
-            score = _candidate_score(identity, evidence)
             evidence_level = _candidate_evidence_level(evidence)
             detail_availability = _candidate_detail_availability(identity, evidence)
             city = identity.location or _candidate_location(evidence)

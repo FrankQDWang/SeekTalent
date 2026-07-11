@@ -9,6 +9,7 @@ from seektalent.candidate_feedback.models import (
     FeedbackCandidateTerm,
 )
 from seektalent.models import QueryTermCandidate, ScoredCandidate, is_primary_anchor_role
+from seektalent.scoring.weighted_score import risk_at_or_below
 
 GENERIC_TERMS = {
     "平台",
@@ -115,9 +116,16 @@ def select_feedback_seed_resumes(candidates: list[ScoredCandidate], *, limit: in
         if candidate.fit_bucket == "fit"
         and candidate.overall_score >= 75
         and candidate.must_have_match_score >= 70
-        and candidate.risk_score <= 45
+        and risk_at_or_below(candidate.risk_score, 45)
     ]
-    selected.sort(key=lambda candidate: (-candidate.overall_score, -candidate.must_have_match_score, candidate.risk_score, candidate.resume_id))
+    selected.sort(
+        key=lambda candidate: (
+            -candidate.overall_score,
+            -candidate.must_have_match_score,
+            candidate.risk_score if candidate.risk_score is not None else 0,
+            candidate.resume_id,
+        )
+    )
     return selected[:limit]
 
 

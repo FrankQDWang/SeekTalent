@@ -129,7 +129,7 @@ def _scored_candidate(
     round_no: int,
     overall_score: int = 92,
     must_have_match_score: int = 90,
-    risk_score: int = 10,
+    risk_score: int | None = 10,
 ) -> ScoredCandidate:
     return ScoredCandidate(
         resume_id=resume_id,
@@ -150,6 +150,22 @@ def _scored_candidate(
         weaknesses=[],
         source_round=round_no,
     )
+
+
+def test_absent_risk_is_not_counted_as_high_risk() -> None:
+    run_state = _run_state_for_stop_gate(
+        candidates=[_scored_candidate("r-no-risk", round_no=1, risk_score=None)],
+        completed_rounds=1,
+        include_untried_family=True,
+    )
+    context = build_controller_context(
+        run_state=run_state,
+        round_no=2,
+        min_rounds=1,
+        max_rounds=4,
+        target_new=5,
+    )
+    assert context.stop_guidance.high_risk_fit_count == 0
 
 
 def _run_state_for_stop_gate(

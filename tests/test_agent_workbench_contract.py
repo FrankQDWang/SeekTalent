@@ -59,6 +59,7 @@ from seektalent_ui.agent_workbench_projection import (
     AgentWorkbenchWorkflowStartIntentProjection,
     build_agent_workbench_projection_input,
     candidate_detail_response_from_review_item,
+    _candidate_summaries,
 )
 from seektalent_ui.agent_workbench_response import project_agent_workbench_view
 from seektalent_ui.agent_workbench_stream import build_stream_envelope, replay_stream_envelopes
@@ -73,6 +74,27 @@ from seektalent_ui.workbench_store_types import (
 )
 from tests.conversation_agent_test_support import sample_requirement_sheet, save_approved_requirement
 from tests.settings_factory import make_settings
+
+
+def test_candidate_summaries_hide_scores_below_sixty_and_rerank() -> None:
+    items = [
+        SimpleNamespace(
+            review_item_id=candidate_id,
+            aggregate_score=score,
+            display_name=candidate_id,
+            title="AI Agent Engineer",
+            company="Accio",
+            location="Hangzhou",
+            summary="score threshold fixture",
+            status="fit" if score is not None else "new",
+            created_at="2026-07-11T00:00:00+00:00",
+        )
+        for candidate_id, score in (("low", 59), ("edge", 60), ("high", 90), ("unscored", None))
+    ]
+
+    summaries = _candidate_summaries(items)
+
+    assert [(item.candidateId, item.rank) for item in summaries] == [("high", 1), ("edge", 2)]
 
 
 class DeterministicRouteRuntime:

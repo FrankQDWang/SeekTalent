@@ -196,6 +196,40 @@ class CandidateFactStore:
         ]
 
 
+class CandidateThresholdStore:
+    def list_candidate_identities(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateIdentity]:
+        return [
+            RuntimeControlCandidateIdentity(
+                runtime_run_id=runtime_run_id,
+                identity_id=identity_id,
+                canonical_resume_id=f"resume-{identity_id}",
+                display_name=identity_id,
+                title="AI Agent Engineer",
+                company="Accio",
+                location="Hangzhou",
+                summary="score threshold fixture",
+                score=score,
+                fit_bucket="fit" if score is not None else None,
+                payload_hash=f"hash-{identity_id}",
+                updated_at=NOW,
+            )
+            for identity_id, score in (("low", 59), ("edge", 60), ("high", 90), ("unscored", None))
+        ]
+
+    def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
+        del runtime_run_id
+        return []
+
+
+def test_candidate_summary_hides_scores_below_sixty_and_reranks() -> None:
+    service = WorkbenchV2RuntimeService(store=CandidateThresholdStore())  # type: ignore[arg-type]
+    summaries = service.list_candidate_summaries("rtrun_candidate")
+    assert [(item["candidateId"], item["rank"]) for item in summaries] == [
+        ("high", 1),
+        ("edge", 2),
+    ]
+
+
 class CandidateIdentityOnlyStore:
     def list_candidate_identities(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateIdentity]:
         assert runtime_run_id == "rtrun_candidate"
@@ -209,8 +243,8 @@ class CandidateIdentityOnlyStore:
                 company="",
                 location="",
                 summary="",
-                score=None,
-                fit_bucket=None,
+                score=60,
+                fit_bucket="fit",
                 payload_hash="identity_hash",
                 updated_at=NOW,
             )

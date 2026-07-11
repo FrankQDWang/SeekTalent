@@ -23,6 +23,7 @@ def _liepin_source_query_policy(settings: AppSettings) -> RuntimeSourceQueryPoli
         requested_count_caps_by_lane={
             "exploit": settings.liepin_exploit_detail_target,
             "generic_explore": settings.liepin_explore_detail_target,
+            "prf_probe": settings.liepin_explore_detail_target,
         },
         provider_scan_multiplier=3,
         provider_scan_cap=settings.liepin_opencli_max_cards_per_task,

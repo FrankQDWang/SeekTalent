@@ -17,6 +17,7 @@ from seektalent.models import (
 from seektalent.progress import ProgressCallback
 from seektalent.retrieval.query_identity import build_term_group_key
 from seektalent.runtime.query_identity import consumed_non_anchor_term_family_ids, used_term_group_keys
+from seektalent.scoring.weighted_score import risk_at_or_above
 from seektalent.tracing import RunTracer
 
 
@@ -50,7 +51,7 @@ def force_candidate_feedback_decision(
     negatives = [
         item
         for item in run_state.scorecards_by_resume_id.values()
-        if item.fit_bucket == "not_fit" or item.risk_score > 60
+        if item.fit_bucket == "not_fit" or risk_at_or_above(item.risk_score, 60)
     ]
     sent_terms = [
         term

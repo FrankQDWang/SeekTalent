@@ -44,6 +44,7 @@ from seektalent.candidate_feedback.policy import (
     PRFPolicyDecision,
     build_prf_policy_decision,
 )
+from seektalent.scoring.weighted_score import risk_at_or_above
 from seektalent.config import AppSettings
 from seektalent.corpus.documents import build_jd_document_row
 from seektalent.corpus.runtime import (
@@ -4461,7 +4462,7 @@ class WorkflowRuntime:
         negatives = [
             item
             for item in run_state.scorecards_by_resume_id.values()
-            if item.fit_bucket == "not_fit" or item.risk_score > 60
+            if item.fit_bucket == "not_fit" or risk_at_or_above(item.risk_score, 60)
         ]
         return seeds, negatives
 

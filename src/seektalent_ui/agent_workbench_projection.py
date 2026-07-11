@@ -12,6 +12,7 @@ from seektalent_conversation_agent.models import (
     TranscriptActivityItem,
     TranscriptMessage,
 )
+from seektalent.candidate_visibility import is_workbench_visible_score
 from seektalent_conversation_agent.service import ConversationAgentService
 from seektalent_conversation_agent.store import ConversationStore
 from seektalent_runtime_control.models import RuntimeStageOutput
@@ -303,11 +304,14 @@ def _candidate_summaries(
     *,
     preserve_order: bool = False,
 ) -> tuple[AgentWorkbenchCandidateSummaryResponse, ...]:
+    eligible = [
+        item for item in items if is_workbench_visible_score(_bounded_score(_attr(item, "aggregate_score")))
+    ]
     if preserve_order:
-        ranked = list(items)[:10]
+        ranked = eligible[:10]
     else:
         ranked = sorted(
-            items,
+            eligible,
             key=lambda item: (
                 -_candidate_score_for_sort(item),
                 _str_or_none(_attr(item, "created_at")) or "",
