@@ -6,7 +6,7 @@ from datetime import datetime
 from time import perf_counter
 from typing import Literal, cast
 
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
 import httpx
 
@@ -24,6 +24,7 @@ from seektalent.models import (
 )
 from seektalent.candidate_quality import risk_at_or_above, risk_at_or_below
 from seektalent.scoring.weighted_score import (
+    ScoreDimensionApplicability,
     calculate_overall_score,
     score_dimension_applicability,
 )
@@ -77,6 +78,19 @@ def _scoring_failure_category(
     if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
         return "transport_error", None
     return "response_validation_error", None
+
+
+def _validate_scoring_draft_applicability(
+    draft: ScoredCandidateDraft,
+    applicability: ScoreDimensionApplicability,
+) -> ScoredCandidateDraft:
+    if applicability.preferred != (draft.preferred_match_score is not None):
+        expected = "a score" if applicability.preferred else "null"
+        raise ModelRetry(f"preferred_match_score must be {expected} for this scoring policy")
+    if applicability.risk != (draft.risk_score is not None):
+        expected = "a score" if applicability.risk else "null"
+        raise ModelRetry(f"risk_score must be {expected} for this scoring policy")
+    return draft
 
 
 def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
@@ -195,16 +209,33 @@ class ResumeScorer:
         self.prompt = prompt
         self._model_config = resolve_stage_model_config(settings, stage="scoring")
 
-    def _build_agent(self, prompt_cache_key: str | None = None) -> Agent[None, ScoredCandidateDraft]:
+    def _build_agent(
+        self,
+        *,
+        applicability: ScoreDimensionApplicability,
+        prompt_cache_key: str | None = None,
+    ) -> Agent[None, ScoredCandidateDraft]:
         model = build_model(self._model_config)
-        return cast(Agent[None, ScoredCandidateDraft], Agent(
-            model=model,
-            output_type=build_output_spec(self._model_config, model, ScoredCandidateDraft),
-            system_prompt=self.prompt.content,
-            model_settings=build_model_settings(self._model_config, prompt_cache_key=prompt_cache_key),
-            retries=0,
-            output_retries=2,
-        ))
+        agent = cast(
+            Agent[None, ScoredCandidateDraft],
+            Agent(
+                model=model,
+                output_type=build_output_spec(self._model_config, model, ScoredCandidateDraft),
+                system_prompt=self.prompt.content,
+                model_settings=build_model_settings(
+                    self._model_config,
+                    prompt_cache_key=prompt_cache_key,
+                ),
+                retries=0,
+                output_retries=2,
+            ),
+        )
+
+        @agent.output_validator
+        def validate_applicability(draft: ScoredCandidateDraft) -> ScoredCandidateDraft:
+            return _validate_scoring_draft_applicability(draft, applicability)
+
+        return agent
 
     def rendered_prompt_for_cache(self, context: ScoringContext) -> str:
         return render_scoring_prompt(context)
@@ -235,11 +266,22 @@ class ResumeScorer:
         contexts: list[ScoringContext],
         tracer: RunTracer,
     ) -> tuple[list[ScoredCandidate], list[ScoringFailure]]:
+        if not contexts:
+            return [], []
+        applicability = score_dimension_applicability(contexts[0].scoring_policy)
+        if any(
+            score_dimension_applicability(context.scoring_policy) != applicability
+            for context in contexts[1:]
+        ):
+            raise ValueError("mixed_scoring_dimension_applicability")
         prompt_cache_key = self._batch_prompt_cache_key(contexts=contexts)
         prompt_cache_retention = (
             self.settings.openai_prompt_cache_retention if prompt_cache_key is not None else None
         )
-        agent = self._build_agent(prompt_cache_key=prompt_cache_key)
+        agent = self._build_agent(
+            applicability=applicability,
+            prompt_cache_key=prompt_cache_key,
+        )
         return await self._score_candidates_parallel(
             contexts=contexts,
             tracer=tracer,

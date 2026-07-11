@@ -488,3 +488,46 @@ def test_scorer_returns_failure_after_two_output_retries(monkeypatch: pytest.Mon
     assert scored == []
     assert len(failures) == 1
     assert failures[0].error_message == "Exceeded maximum retries (2) for output validation"
+
+
+def test_scorer_retries_model_output_with_inapplicable_risk_score(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scorer = ResumeScorer(_settings(monkeypatch, tmp_path), _prompt("scoring"))
+    real = build_model("openai-responses:gpt-5.4-mini")
+    model = TestModel(
+        custom_output_text=(
+            '{"fit_bucket":"fit","must_have_match_score":80,'
+            '"preferred_match_score":null,"risk_score":10,'
+            '"reasoning_summary":"Python evidence matches the must-have."}'
+        ),
+        profile=real.profile,
+    )
+    monkeypatch.setattr("seektalent.scoring.scorer.build_model", lambda model_config: model)
+
+    class StubTracer:
+        def __init__(self) -> None:
+            self.session = StubSession()
+
+        def emit(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+        def append_jsonl(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    class StubSession:
+        def register_path(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    scored, failures = asyncio.run(
+        scorer.score_candidates_parallel(
+            contexts=[_scoring_context()],
+            tracer=cast(Any, StubTracer()),
+        )
+    )
+
+    assert scored == []
+    assert len(failures) == 1
+    assert failures[0].failure_kind == "response_validation_error"
+    assert failures[0].error_message == "Exceeded maximum retries (2) for output validation"

@@ -484,6 +484,10 @@ def test_scoring_build_agent_uses_resolved_stage_config(
         def __init__(self, **kwargs):  # noqa: ANN003
             built.update(kwargs)
 
+        def output_validator(self, function):  # noqa: ANN001
+            built["output_validator"] = function
+            return function
+
     monkeypatch.setattr("seektalent.scoring.scorer.resolve_stage_model_config", lambda settings, *, stage: resolved_config)
     monkeypatch.setattr("seektalent.scoring.scorer.build_model", lambda config: ("model", config))
     monkeypatch.setattr(
@@ -497,7 +501,10 @@ def test_scoring_build_agent_uses_resolved_stage_config(
     monkeypatch.setattr("seektalent.scoring.scorer.Agent", FakeAgent)
 
     scorer = ResumeScorer(settings, _prompt())
-    scorer._build_agent(prompt_cache_key="prompt-cache-key")
+    scorer._build_agent(
+        applicability=ScoreDimensionApplicability(preferred=True, risk=False),
+        prompt_cache_key="prompt-cache-key",
+    )
 
     assert scorer._model_config is resolved_config
     assert built["model"] == ("model", resolved_config)
@@ -530,7 +537,8 @@ def test_scoring_prompt_cache_key_is_recorded_on_live_snapshot(
     context = _context()
     built_prompt_cache_keys: list[str | None] = []
 
-    def fake_build_agent(prompt_cache_key: str | None = None) -> object:
+    def fake_build_agent(*, applicability, prompt_cache_key: str | None = None) -> object:  # noqa: ANN001
+        assert applicability == ScoreDimensionApplicability(preferred=True, risk=True)
         built_prompt_cache_keys.append(prompt_cache_key)
         return object()
 
