@@ -1,6 +1,8 @@
 # Logical Query Execution Contract Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Status:** Implemented and verified on 2026-07-11; pre-existing static-gate debt is recorded below.
+>
+> **Completion-record convention:** A checked step records that its intended deliverable is present on `main` and covered by the current verification evidence below. The planned red-phase commands are historical TDD steps and cannot be re-run as failures on the completed tree; they are checked only after the corresponding final behavior was independently verified.
 
 **Goal:** Make every source query observable and novel at the logical-query level, then expose those real query groups to controller, reflection, and both Workbench routes.
 
@@ -28,7 +30,8 @@
 
 ## File Structure
 
-- Create: `src/seektalent/runtime/query_identity.py` — pure term-group identity, novelty checks, and receipt-to-logical-outcome aggregation.
+- Create: `src/seektalent/retrieval/query_identity.py` — pure term-group identity.
+- Create: `src/seektalent/runtime/query_identity.py` — novelty checks and receipt-to-logical-outcome aggregation.
 - Modify: `src/seektalent/models.py` — receipt, outcome, ledger, round-state, and bounded controller/reflection evidence models.
 - Modify: `src/seektalent/runtime/retrieval_runtime.py` and `src/seektalent/source_contracts/logical_query.py` — carry a term-group key on logical state and dispatch.
 - Modify: `src/seektalent/runtime/logical_query_dispatch.py` and `src/seektalent/runtime/orchestrator.py` — calculate the key while the compiled term pool is available, then preserve it through dispatch.
@@ -40,6 +43,10 @@
 - Modify: `src/seektalent/runtime/orchestrator.py` — append ledger, construct round outcomes after identity merge, emit v2 safe query groups.
 - Modify: controller/reflection/query-planning modules — use consumed logical groups rather than `sent_query_history` for novelty and prompt evidence.
 - Modify: public-stage, V2, legacy BFF, React DTO, React rail, fixtures, schema generation, and contract tests listed per task below.
+
+### Implemented Boundary Adjustment
+
+The final architecture review moved the pure `build_term_group_key()` helper to the retrieval leaf in `src/seektalent/retrieval/query_identity.py`; `src/seektalent/runtime/query_identity.py` retains runtime ledger and outcome policy. This is a post-plan placement correction, not a contract change: the semantic identity, receipt, novelty, and public-query-group interfaces specified here are unchanged.
 
 ### Task 1: Add Query Receipt, Outcome, And Semantic Group Foundations
 
@@ -60,7 +67,7 @@
 - Produces `QueryExecutionReceipt`, `LogicalQueryOutcome`, `RetrievalState.query_execution_ledger`, `RoundState.query_outcomes`, `build_term_group_key()`, `used_term_group_keys()`, and `logical_outcomes_from_receipts()`.
 - Later tasks consume `QueryExecutionReceipt.dispatch_started`, `LogicalQueryOutcome.query_instance_id`, and `LogicalQueryOutcome.term_group_key`.
 
-- [ ] **Step 1: Write failing semantic-identity and receipt tests**
+- [x] **Step 1: Write failing semantic-identity and receipt tests**
 
 Create `tests/test_query_execution_contract.py` with the following focused cases:
 
@@ -141,7 +148,7 @@ def test_logical_status_preserves_partial_source_coverage(statuses, expected) ->
     assert logical_outcomes_from_receipts(receipts)[0].status == expected
 ```
 
-- [ ] **Step 2: Run the tests and verify the missing-contract failure**
+- [x] **Step 2: Run the tests and verify the missing-contract failure**
 
 Run:
 
@@ -151,7 +158,7 @@ uv run pytest -q tests/test_query_execution_contract.py tests/test_query_identit
 
 Expected: collection fails because `QueryExecutionReceipt` and `seektalent.runtime.query_identity` do not exist.
 
-- [ ] **Step 3: Define the persistent models**
+- [x] **Step 3: Define the persistent models**
 
 Add these models in `src/seektalent/models.py` immediately after `SentQueryRecord`:
 
@@ -201,7 +208,7 @@ class LogicalQueryOutcome(BaseModel):
 
 Add `query_execution_ledger: list[QueryExecutionReceipt] = Field(default_factory=list)` to `RetrievalState`, `query_outcomes: list[LogicalQueryOutcome] = Field(default_factory=list)` to `RoundState`, and the bounded evidence fields named in the spec to `ControllerContext` and `ReflectionContext` with empty-list defaults where permitted.
 
-- [ ] **Step 4: Implement pure identity and aggregation helpers**
+- [x] **Step 4: Implement pure identity and aggregation helpers**
 
 Create `src/seektalent/runtime/query_identity.py` with this public surface:
 
@@ -281,7 +288,7 @@ def logical_outcomes_from_receipts(receipts: Sequence[QueryExecutionReceipt]) ->
     return outcomes
 ```
 
-- [ ] **Step 5: Calculate once while the compiled term pool is available, then preserve identity**
+- [x] **Step 5: Calculate once while the compiled term pool is available, then preserve identity**
 
 Add `term_group_key: str = ""` to `LogicalQueryState` and a required `term_group_key: str` to `LogicalQueryDispatch`. In `_build_round_query_bundle()`, immediately after the primary and optional second-lane states are assembled, assign each state with:
 
@@ -295,7 +302,7 @@ for query_state in query_states:
 
 Extend `build_logical_query_dispatches()` to copy `query.term_group_key`, then extend `RuntimeSourceQueryIntent` and `RuntimeQueryPackage` with `term_group_key`, `query_instance_id`, and `query_fingerprint`. `query_package_from_intent()` copies all three. The intent builder must reject an empty dispatch key with `ValueError("runtime_source_query_intent_missing_term_group_key")`.
 
-- [ ] **Step 6: Run foundation tests**
+- [x] **Step 6: Run foundation tests**
 
 Run:
 
@@ -305,7 +312,7 @@ uv run pytest -q tests/test_query_execution_contract.py tests/test_query_identit
 
 Expected: PASS. Existing package-boundary tests must still validate source-neutral imports.
 
-- [ ] **Step 7: Commit the isolated foundation**
+- [x] **Step 7: Commit the isolated foundation**
 
 ```bash
 git add src/seektalent/models.py src/seektalent/runtime/query_identity.py src/seektalent/runtime/retrieval_runtime.py src/seektalent/source_contracts/logical_query.py src/seektalent/source_contracts/runtime_lanes.py src/seektalent/runtime/logical_query_dispatch.py src/seektalent/runtime/orchestrator.py src/seektalent/runtime/source_query_intent.py tests/test_query_execution_contract.py tests/test_query_identity.py
@@ -330,7 +337,7 @@ git commit -m "feat: add logical query execution identities"
 - Consumes `RuntimeSourceQueryIntent` and `QueryExecutionReceipt` from Task 1.
 - Produces `SourceRoundDispatchResult.query_execution_receipts` and `RuntimeSourceLaneResult.query_execution_outcomes`.
 
-- [ ] **Step 1: Add conformance tests for CTS and Liepin**
+- [x] **Step 1: Add conformance tests for CTS and Liepin**
 
 Add these tests:
 
@@ -376,7 +383,7 @@ def test_liepin_bundle_preserves_one_execution_outcome_per_logical_query() -> No
     assert all(item.status in {"completed", "partial"} for item in result.query_execution_outcomes)
 ```
 
-- [ ] **Step 2: Run the new tests and verify they fail**
+- [x] **Step 2: Run the new tests and verify they fail**
 
 Run:
 
@@ -386,7 +393,7 @@ uv run pytest -q tests/test_runtime_source_adapter_boundary.py tests/test_liepin
 
 Expected: FAIL because adapter and lane-result contracts have no execution outcomes or receipts.
 
-- [ ] **Step 3: Add adapter outcomes and normalize at dispatch**
+- [x] **Step 3: Add adapter outcomes and normalize at dispatch**
 
 Add this frozen, source-neutral outcome DTO to `src/seektalent/source_contracts/runtime_lanes.py`, next to `RuntimeQueryPackage`; `source_round_dispatch.py` imports it. Do not make a source contract depend on a runtime implementation module:
 
@@ -431,7 +438,7 @@ Add a source-contract-private `RuntimeQueryCandidateAttribution(source_kind, que
 
 Implement `_receipts_for_source_result(request, result)` so it maps each requested source intent by `query_instance_id`, rejects duplicate or unmatched outcome IDs, and creates one `QueryExecutionReceipt` for every intent. An explicitly preflight-blocked adapter returns a `blocked` outcome with `dispatch_started=False` for every intent. A partial or failed source result must carry explicit per-intent outcomes: an outcome is `dispatch_started=True` whenever the adapter cannot prove the provider/browser query was never sent. Missing outcomes for a non-preflight result are an invariant failure; do not synthesize `dispatch_started=False`, and never inspect `result.source == "liepin"` or `result.source == "cts"` in this function.
 
-- [ ] **Step 4: Forward source-specific real outcomes**
+- [x] **Step 4: Forward source-specific real outcomes**
 
 In `round_adapters.py`:
 
@@ -475,11 +482,11 @@ In `merge_liepin_card_lane_results()`, concatenate both `query_execution_outcome
 
 Do not derive a status from `RuntimeQueryPackage`; packages remain display summaries only. The source-local unique/duplicate values above must not be summed into a cross-source logical outcome.
 
-- [ ] **Step 5: Carry receipts through retrieval result**
+- [x] **Step 5: Carry receipts through retrieval result**
 
 Add `query_execution_receipts: list[QueryExecutionReceipt]`, `candidate_query_attributions: list[RuntimeQueryCandidateAttribution]`, and `query_outcomes: list[LogicalQueryOutcome]` to `RetrievalExecutionResult`. `SourceRoundDispatchResult` supplies the receipts and attributions; the orchestrator derives final logical counts after identity merge in Task 3.
 
-- [ ] **Step 6: Run source conformance tests**
+- [x] **Step 6: Run source conformance tests**
 
 Run:
 
@@ -489,7 +496,7 @@ uv run pytest -q tests/test_runtime_source_adapter_boundary.py tests/test_liepin
 
 Expected: PASS, including a successful Liepin bundle with one terminal receipt per logical query.
 
-- [ ] **Step 7: Commit receipt conformance**
+- [x] **Step 7: Commit receipt conformance**
 
 ```bash
 git add src/seektalent/runtime/source_round_dispatch.py src/seektalent/runtime/retrieval_runtime.py src/seektalent/source_adapters/round_adapters.py src/seektalent/source_contracts/runtime_lanes.py src/seektalent/sources/liepin/runtime_lane.py tests/test_runtime_source_adapter_boundary.py tests/test_liepin_runtime_source_lane.py tests/test_runtime_multi_source_round_dispatch.py
@@ -519,7 +526,7 @@ git commit -m "feat: require source query execution receipts"
 - Consumes Task 1 identities and Task 2 receipts.
 - Produces `RetrievalState.query_execution_ledger`, `RoundState.query_outcomes`, and an invariant that no used `term_group_key` reaches source dispatch.
 
-- [ ] **Step 1: Add no-replay tests**
+- [x] **Step 1: Add no-replay tests**
 
 Add these tests to `tests/test_query_plan.py` and `tests/test_controller_contract.py`:
 
@@ -563,7 +570,7 @@ Add two identity-attribution regressions in `tests/test_runtime_multi_source_rou
 - the same canonical candidate returned by CTS and Liepin for one `query_instance_id` yields one `unique_candidate_count` in that logical outcome, not the sum of the two receipt-local counts;
 - the same canonical candidate returned by primary and explore is allocated to the earlier logical dispatch only, while the later group records it as a duplicate.
 
-- [ ] **Step 2: Run the policy tests and verify they fail**
+- [x] **Step 2: Run the policy tests and verify they fail**
 
 Run:
 
@@ -573,7 +580,7 @@ uv run pytest -q tests/test_query_plan.py tests/test_second_lane_runtime.py test
 
 Expected: FAIL because generic explore falls back to `used_candidates`, controller has no group history, and `RoundState` has no outcomes.
 
-- [ ] **Step 3: Append receipts and derive outcomes after identity merge**
+- [x] **Step 3: Append receipts and derive outcomes after identity merge**
 
 In `_round_search_result_from_source_dispatch()`, assign dispatch receipts to the returned `RetrievalExecutionResult` instead of collecting history only from non-null `retrieval_result`.
 
@@ -652,7 +659,7 @@ tracer.write_json(
 
 `apply_post_merge_query_counts()` unions canonical identities within a logical query across sources, then allocates an identity to the first logical dispatch in deterministic dispatch order when it was not already present before the round. Later logical groups and all previously seen identities count as duplicates. Populate outcome unique/duplicate counts only from this helper; do not use package lengths or sums of receipt-local counts as a proxy.
 
-- [ ] **Step 4: Replace used-query policy inputs**
+- [x] **Step 4: Replace used-query policy inputs**
 
 In `controller_context.py`, derive:
 
@@ -669,11 +676,11 @@ In `second_lane_runtime.py`, set `no_fetch_reason="no_novel_generic_explore_quer
 
 Call the same novelty assertion after the runtime builds its full logical bundle so controller repair, PRF, and rescue cannot bypass it. Rescue routes to its existing stop result when no unseen anchor-only group exists.
 
-- [ ] **Step 5: Update physical-history compatibility without source branches**
+- [x] **Step 5: Update physical-history compatibility without source branches**
 
 Keep all existing `SentQueryRecord` persistence and city-level artifacts. Update callers that answer novelty, tried-family, or broadening questions to read `query_execution_ledger`; retain `sent_query_history` only in diagnostics that need city/batch fields. Do not add source-name conditionals.
 
-- [ ] **Step 6: Run no-replay regression suite**
+- [x] **Step 6: Run no-replay regression suite**
 
 Run:
 
@@ -683,7 +690,7 @@ uv run pytest -q tests/test_query_execution_contract.py tests/test_query_plan.py
 
 Expected: PASS. The exhaustion case must now return `None`/rescue rather than a previously used group.
 
-- [ ] **Step 7: Commit ledger and policy changes**
+- [x] **Step 7: Commit ledger and policy changes**
 
 ```bash
 git add src/seektalent/runtime/orchestrator.py src/seektalent/runtime/controller_context.py src/seektalent/controller/react_controller.py src/seektalent/runtime/round_decision_runtime.py src/seektalent/retrieval/query_plan.py src/seektalent/runtime/second_lane_runtime.py src/seektalent/runtime/rescue_execution_runtime.py tests/test_query_plan.py tests/test_second_lane_runtime.py tests/test_controller_contract.py tests/test_runtime_state_flow.py tests/test_runtime_multi_source_round_dispatch.py
@@ -709,7 +716,7 @@ git commit -m "fix: prevent logical query replay"
 - Consumes `RoundState.query_outcomes` and `ControllerDecision` from Task 3.
 - Produces a current-round, maximum-two-query `ReflectionContext.query_outcomes` evidence block.
 
-- [ ] **Step 1: Write failing context and prompt tests**
+- [x] **Step 1: Write failing context and prompt tests**
 
 Add:
 
@@ -729,7 +736,7 @@ def test_reflection_prompt_renders_safe_query_evidence_only() -> None:
     assert "candidate-" not in prompt
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [x] **Step 2: Run the tests and verify they fail**
 
 Run:
 
@@ -739,7 +746,7 @@ uv run pytest -q tests/test_context_builder.py tests/test_llm_input_prompts.py t
 
 Expected: FAIL because `ReflectionContext` has neither field and its prompt cannot render them.
 
-- [ ] **Step 3: Assemble bounded evidence and render it**
+- [x] **Step 3: Assemble bounded evidence and render it**
 
 In `reflection_context.py`, pass the current `round_state.controller_decision` and `round_state.query_outcomes[:2]`. In `critic.py`, append two typed, untrusted JSON blocks:
 
@@ -760,7 +767,7 @@ Evaluate the controller's rationale and response to the prior reflection against
 
 Extend the slim diagnostics artifact with the same safe fields for audit parity; do not import diagnostics into prompt construction.
 
-- [ ] **Step 4: Run evidence-contract tests**
+- [x] **Step 4: Run evidence-contract tests**
 
 Run:
 
@@ -770,7 +777,7 @@ uv run pytest -q tests/test_context_builder.py tests/test_llm_input_prompts.py t
 
 Expected: PASS. The rendered prompt contains the two named blocks and no provider/candidate secrets.
 
-- [ ] **Step 5: Commit reflection evidence**
+- [x] **Step 5: Commit reflection evidence**
 
 ```bash
 git add src/seektalent/runtime/reflection_context.py src/seektalent/reflection/critic.py src/seektalent/runtime/reflection_runtime.py src/seektalent/prompts/reflection.md src/seektalent/runtime/runtime_diagnostics.py tests/test_context_builder.py tests/test_llm_input_prompts.py tests/test_reflection_contract.py tests/test_runtime_audit.py
@@ -801,7 +808,7 @@ git commit -m "feat: give reflection query outcome evidence"
 - Consumes `LogicalQueryOutcome` from Task 3.
 - Produces `queryGroups[]` in v2 stage output and both thinking-process DTO families.
 
-- [ ] **Step 1: Write failing public and BFF contract tests**
+- [x] **Step 1: Write failing public and BFF contract tests**
 
 Add a public-stage test with a two-lane outcome:
 
@@ -828,7 +835,7 @@ def test_runtime_public_feedback_v2_allows_safe_query_groups() -> None:
 
 Add one legacy and one V2 view test asserting a two-lane round has exactly two `queryGroups`, while a round-one fixture has exactly one. Add a reducer test that first receives a planned-only group and then its matching executed group: it must retain one group, change `lifecycle` to `executed`, and reject a changed term-group identity.
 
-- [ ] **Step 2: Run public/BFF tests and verify they fail**
+- [x] **Step 2: Run public/BFF tests and verify they fail**
 
 Run:
 
@@ -838,7 +845,7 @@ uv run pytest -q tests/test_runtime_public_event_contract.py tests/test_runtime_
 
 Expected: FAIL because the current schema is v1 and both BFFs model only keyword cards/packages.
 
-- [ ] **Step 3: Define the safe v2 public group shape**
+- [x] **Step 3: Define the safe v2 public group shape**
 
 In `public_events.py` and `stage_outputs.py`, set the schema constant to `runtime-public-stage-output/v2` and accept only these group keys:
 
@@ -856,7 +863,7 @@ _PUBLIC_QUERY_EXECUTION_KEYS = {
 
 Use fixed list caps of two groups per round and one execution per selected source. Sanitize strings with the existing safe text/reason helpers and drop every unlisted field.
 
-- [ ] **Step 4: Emit and reduce query groups**
+- [x] **Step 4: Emit and reduce query groups**
 
 In `orchestrator.py`, emit planned groups in `round_query` from logical dispatches with `lifecycle="planned"`, `executionStatus=None`, `attempted=False`, and empty executions. Emit final groups in `feedback` from `round_state.query_outcomes` with `lifecycle="executed"` and their terminal `executionStatus`. Use a single conversion helper that serializes the safe fields above.
 
@@ -884,11 +891,11 @@ class AgentWorkbenchThinkingProcessRoundResponse(BaseModel):
 
 `cards` contains observation and reflection only. The round reducer merges planned and final data by `queryInstanceId`; it never uses title or term order as identity. It must preserve a planned group until feedback arrives, replace only execution fields on a matching final group, and reject a final group whose immutable identity differs. Make the analogous V2 models/views changes.
 
-- [ ] **Step 5: Update legacy stream summary behavior**
+- [x] **Step 5: Update legacy stream summary behavior**
 
 In `agent_workbench_stream_projection.py`, keep emitting `thinkingProcess.changed` when group-only data arrives. A round with `queryGroups` but no observation/reflection must still update the right rail.
 
-- [ ] **Step 6: Run backend contract verification**
+- [x] **Step 6: Run backend contract verification**
 
 Run:
 
@@ -899,7 +906,7 @@ scripts/verify-dev-workbench.sh
 
 Expected: PASS. The verification script regenerates OpenAPI and rejects stale generated client types.
 
-- [ ] **Step 7: Commit the public/BFF contract**
+- [x] **Step 7: Commit the public/BFF contract**
 
 ```bash
 git add src/seektalent/runtime/public_events.py src/seektalent_runtime_control/stage_outputs.py src/seektalent/runtime/orchestrator.py src/seektalent_ui/agent_workbench_models.py src/seektalent_ui/agent_workbench_rounds.py src/seektalent_ui/agent_workbench_response.py src/seektalent_ui/agent_workbench_stream_projection.py src/seektalent_workbench_v2/models.py src/seektalent_workbench_v2/views.py src/seektalent_workbench_v2/runtime_display.py tests/test_runtime_public_event_contract.py tests/test_runtime_control_event_contract.py tests/test_agent_workbench_contract.py tests/test_workbench_v2_service.py apps/web-react/src/lib/api/schema.d.ts
@@ -924,7 +931,7 @@ git commit -m "feat: publish logical query groups to workbench"
 - Consumes `queryGroups` returned by Task 5's typed BFF contracts.
 - Produces an accessible outer `关键词` panel with stable-ID logical-query subsections.
 
-- [ ] **Step 1: Write failing React tests**
+- [x] **Step 1: Write failing React tests**
 
 Add to `ThinkingProcessRail.test.tsx`:
 
@@ -948,7 +955,7 @@ it("renders actual two-lane groups with stable query-instance labels", () => {
 })
 ```
 
-- [ ] **Step 2: Run the React test and verify it fails**
+- [x] **Step 2: Run the React test and verify it fails**
 
 Run:
 
@@ -958,7 +965,7 @@ cd apps/web-react && pnpm test -- ThinkingProcessRail.test.tsx
 
 Expected: TypeScript/test failure because `queryGroups` is not part of either normalized type.
 
-- [ ] **Step 3: Normalize query-group DTOs without raw fallback parsing**
+- [x] **Step 3: Normalize query-group DTOs without raw fallback parsing**
 
 Add shared normalized types in both API adapters:
 
@@ -987,7 +994,7 @@ export type ThinkingProcessQueryGroup = {
 
 Normalize absent optional arrays to `[]`; do not parse `card.text`, provider events, or localized labels to reconstruct groups.
 
-- [ ] **Step 4: Render group subsections with stable keys**
+- [x] **Step 4: Render group subsections with stable keys**
 
 In `ThinkingProcessRail.tsx`, render one outer keyword section when `round.queryGroups.length > 0`:
 
@@ -1020,11 +1027,11 @@ In `ThinkingProcessRail.tsx`, render one outer keyword section when `round.query
 
 Render observation/reflection cards after this section. Delete title-as-key usage. Use existing Workbench spacing/color tokens; do not add a visual graph, raw source values, or a second artificial lane.
 
-- [ ] **Step 5: Update fixtures, story, and visual proof**
+- [x] **Step 5: Update fixtures, story, and visual proof**
 
 Add round-one single-group and round-two two-group fixtures. Update the rail story so the WTS outer card rhythm remains intact while its keyword card contains labelled group subsections. Update the Playwright visual assertion to cover both group counts.
 
-- [ ] **Step 6: Run frontend verification**
+- [x] **Step 6: Run frontend verification**
 
 Run:
 
@@ -1037,7 +1044,7 @@ pnpm lint
 
 Expected: PASS. React renders actual group count, keyboard-visible semantic sections, and no duplicate-key console warnings.
 
-- [ ] **Step 7: Run complete slice verification and commit**
+- [x] **Step 7: Run complete slice verification and commit**
 
 Run:
 
@@ -1057,3 +1064,25 @@ Commit:
 git add apps/web-react/src/lib/api/agentWorkbenchTypes.ts apps/web-react/src/lib/api/workbenchV2Types.ts apps/web-react/src/components/workbench/ThinkingProcessRail.tsx apps/web-react/src/components/workbench/ThinkingProcessRail.css apps/web-react/src/components/workbench/ThinkingProcessRail.test.tsx apps/web-react/src/test/fixtures/agentWorkbenchBff.ts apps/web-react/src/components/workbench/ThinkingProcessRail.stories.tsx apps/web-react/tests/storybook-visual.spec.ts
 git commit -m "feat: render workbench logical query groups"
 ```
+
+## Completion Verification (2026-07-11)
+
+All six delivery tasks are implemented on `main` (`cee9c7cc`). The following is a current-state verification record, rather than an assertion that an old red test still fails after completion.
+
+| Task | Verified implementation and evidence |
+| --- | --- |
+| 1. Receipt, outcome, and semantic identity foundations | `QueryExecutionReceipt`, `LogicalQueryOutcome`, persisted ledger/outcomes, and order-independent family identity are present. `tests/test_query_execution_contract.py` covers identity, aggregation, attempted state, and duplicate-group rejection. |
+| 2. One terminal receipt per source intent | CTS and Liepin both preserve `query_instance_id`/`term_group_key` and emit terminal receipts. `tests/test_runtime_source_adapter_boundary.py`, `tests/test_liepin_runtime_source_lane.py`, and `tests/test_runtime_multi_source_round_dispatch.py` cover successful, blocked, failed, and parity paths. |
+| 3. Persist truth and prevent replay | Runtime appends receipt truth, derives logical outcomes, and rejects prior or in-bundle term-group reuse before dispatch. `tests/test_query_execution_contract.py`, `tests/test_query_plan.py`, `tests/test_second_lane_runtime.py`, `tests/test_controller_contract.py`, and `tests/test_runtime_state_flow.py` cover the policy. |
+| 4. Controller/reflection evidence | Bounded query outcomes and controller decision/response evidence reach reflection and prompts. `tests/test_context_builder.py`, `tests/test_llm_input_prompts.py`, `tests/test_reflection_contract.py`, and `tests/test_runtime_audit.py` cover the assembled contract. |
+| 5. Safe public query groups | V2 events, RuntimeControl, legacy projection, and both BFFs use canonical `queryGroups` with public-field sanitization. `tests/test_runtime_public_event_contract.py`, `tests/test_runtime_control_event_contract.py`, `tests/test_agent_workbench_contract.py`, and `tests/test_workbench_v2_service.py` cover one- and two-lane groups and unsafe payload rejection. |
+| 6. Typed React rendering | The shared rail uses `queryInstanceId` as its stable key and renders actual groups from typed DTOs. `apps/web-react` passed 170 tests, type check, and lint; focused 375px interaction and visual stories each passed. |
+
+Current verification completed after the merge:
+
+- The combined logical-query/detail-claim focused Python suite passed: **824 tests**.
+- The repository Python suite passed: **3476 tests**.
+- `apps/web-react` passed `pnpm test` (**170 tests**), `pnpm check`, and `pnpm lint`; the compact dual-lane 375px Storybook interaction and visual checks each passed.
+- `uv run python tools/check_arch_imports.py` passed, and `git diff --check` is re-run for this documentation update.
+
+Two repository-wide checks remain unable to satisfy the plan's historical “exit zero” expectation, but the failures pre-date the plan base commit `c6fc0e57` and are unchanged by this delivery: `tools/check_source_boundaries.py` reports the two `normalized_artifacts.py:8` Liepin branches, and `tools/check_tach_baseline.py` reports the three existing imports in `liepin_site_adapter.py` and `workbench_liepin_start_probe.py`. The Tach baseline is empty, so that tool still labels those old imports “New”; this record does not claim that either gate passes. They are recorded as unrelated baseline debt, not attributed to this slice.

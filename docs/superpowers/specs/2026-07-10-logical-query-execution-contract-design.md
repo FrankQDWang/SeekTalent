@@ -1,7 +1,7 @@
 # Logical Query Execution Contract Design
 
 > **Date:** 2026-07-10
-> **Status:** Approved design
+> **Status:** Approved design, implemented and verified on 2026-07-11
 > **Owner:** SeekTalent runtime and Workbench
 
 ## Summary
@@ -302,3 +302,11 @@ Add focused tests before implementation for:
 - public-stage v2 sanitization and rejection of raw provider fields.
 
 Run the focused Python and frontend suites, then repository contract/boundary checks before merge.
+
+## Implementation Verification (2026-07-11)
+
+This approved design is implemented on `main` at `cee9c7cc`. The detailed, task-by-task completion record is in the [logical-query implementation plan](../plans/2026-07-10-logical-query-execution-contract.md).
+
+Current evidence verifies receipt parity across CTS/Liepin, term-group no-replay, controller/reflection query evidence, safe V2 and legacy Workbench groups, and typed React rendering. The combined focused Python suite passed 824 tests; the full Python suite passed 3476 tests; `apps/web-react` passed 170 tests, type check, and lint; the compact dual-lane 375px interaction and visual checks each passed.
+
+The pure term-group helper was placed in `src/seektalent/retrieval/query_identity.py` during the final boundary review, while runtime aggregation remains in `src/seektalent/runtime/query_identity.py`. This is a dependency-direction correction, not a change to the approved contract.

@@ -1,7 +1,7 @@
 # Liepin Detail Open Claim Design
 
 > **Date:** 2026-07-10
-> **Status:** Approved design
+> **Status:** Approved design, implemented and verified on 2026-07-11
 > **Owner:** SeekTalent Liepin/OpenCLI provider
 
 ## Summary
@@ -244,3 +244,11 @@ Add focused tests before implementation for:
 - regression coverage for current OpenCLI navigation/recovery tests and approved-detail `LiepinStore` tests.
 
 Run the focused provider, source-lane, runtime state, and Workbench privacy suites before merge.
+
+## Implementation Verification (2026-07-11)
+
+This approved design is implemented on `main` at `cee9c7cc`. The detailed, task-by-task completion record is in the [detail-open-claim implementation plan](../plans/2026-07-10-liepin-detail-open-claim.md).
+
+Current evidence verifies run-level atomic claims, opaque canonical Liepin identity, pre-click enforcement, terminal attempted failures, checkpoint continuity, approved-detail workflow isolation, and public payload sanitization. The combined focused Python suite passed 824 tests, and the full Python suite passed 3476 tests.
+
+The facade was placed in `src/seektalent/source_contracts/detail_open_claims.py` during the final boundary review. The claim map remains runtime-owned/checkpointed and Liepin keeps only provider-private key derivation and consumption, so this is a dependency-direction correction rather than a change to the approved design.
