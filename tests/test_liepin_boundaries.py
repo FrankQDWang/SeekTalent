@@ -13,6 +13,11 @@ from fastapi.testclient import TestClient
 from seektalent.flywheel.outcomes import build_runtime_query_outcome_rows_from_hits
 from seektalent.flywheel.runtime import query_hit_rows_from_hits
 from seektalent.models import QueryResumeHit
+from seektalent.core.retrieval.provider_contract import (
+    ProviderFirstPageExpansionResult,
+    ProviderSearchContinuation,
+    SearchResult,
+)
 from seektalent.providers.liepin.client import LiepinWorkerModeError, build_liepin_worker_client
 from seektalent.providers.liepin.mapper import map_liepin_worker_card, map_liepin_worker_detail
 from seektalent.providers.liepin.security import issue_stream_token
@@ -85,6 +90,26 @@ _LITERAL_CARD_TEXT_TAIL_CONSTANTS = {
     "src/seektalent/providers/liepin/liepin_site_payloads.py": {"FORBIDDEN_CARD_SUMMARY_KEYS"},
     "src/seektalent/providers/liepin/worker_contracts.py": {"LIEPIN_CARD_PAYLOAD_TEXT_TAIL_KEYS"},
 }
+
+
+def test_provider_private_continuation_contract_stays_out_of_public_payloads() -> None:
+    continuation = ProviderSearchContinuation(
+        kind="first_page_detail_expansion",
+        continuation_id="continuation-1",
+        opaque_ref="artifact://protected/private.json",
+        source_kind="liepin",
+        round_no=2,
+        query_instance_id="query-2-exploit",
+        visible_candidate_count=3,
+        eligible_candidate_count=2,
+        initial_opened_count=1,
+    )
+    result = SearchResult(private_continuations=(continuation,))
+
+    assert result.private_continuations == (continuation,)
+    assert not hasattr(result, "to_public_payload")
+    assert not hasattr(continuation, "to_public_payload")
+    assert not hasattr(ProviderFirstPageExpansionResult, "to_public_payload")
 
 
 def test_liepin_card_evidence_does_not_emit_text_tail_fields() -> None:

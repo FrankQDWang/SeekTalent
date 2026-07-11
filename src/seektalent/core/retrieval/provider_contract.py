@@ -13,6 +13,7 @@ PagingMode = Literal["cursor"]
 FetchMode = Literal["summary", "detail"]
 QueryRole = Literal["primary", "expansion"]
 ProviderPayloadKind = Literal["card", "detail"]
+ProviderContinuationKind = Literal["first_page_detail_expansion"]
 
 
 @dataclass(frozen=True)
@@ -68,6 +69,19 @@ class ProviderSnapshot:
         }
 
 
+@dataclass(frozen=True, kw_only=True)
+class ProviderSearchContinuation:
+    kind: ProviderContinuationKind
+    continuation_id: str
+    opaque_ref: str
+    source_kind: str
+    round_no: int
+    query_instance_id: str
+    visible_candidate_count: int
+    eligible_candidate_count: int
+    initial_opened_count: int
+
+
 @dataclass(frozen=True)
 class SearchResult:
     candidates: list[ResumeCandidate] = field(default_factory=list)
@@ -78,6 +92,21 @@ class SearchResult:
     provider_snapshots: list[ProviderSnapshot] = field(default_factory=list)
     raw_candidate_count: int = 0
     latency_ms: int | None = None
+    private_continuations: tuple[ProviderSearchContinuation, ...] = ()
+
+
+@dataclass(frozen=True, kw_only=True)
+class ProviderFirstPageExpansionResult:
+    search_result: SearchResult
+    first_page_visible_count: int
+    first_page_eligible_count: int
+    initial_opened_count: int
+    expansion_opened_count: int
+    expansion_skipped_seen_count: int
+    expansion_terminal_failure_count: int
+    status: Literal["completed", "partial", "blocked", "failed"]
+    safe_reason_code: str | None = None
+    continuation_deleted: bool = False
 
 
 class ProviderSearchError(RuntimeError):

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import inspect
+import os
 from typing import Any, cast
 
 import pytest
 
+from seektalent.artifacts import safe_artifact_path
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_search_workflow import (
@@ -14,6 +17,93 @@ from seektalent.providers.liepin.liepin_search_workflow import (
 )
 from seektalent.providers.liepin.liepin_site_adapter import LiepinSiteAdapter, _LiepinSearchWorkflowSite
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
+from seektalent.providers.liepin.first_page_continuation import (
+    LiepinFirstPageCandidate,
+    LiepinFirstPageContinuation,
+    LiepinFirstPageContinuationStore,
+)
+
+
+def _stored_continuation(
+    store: LiepinFirstPageContinuationStore,
+    *,
+    query_instance_id: str,
+) -> LiepinFirstPageContinuation:
+    return store.create(
+        source_run_id="source-run-1",
+        logical_round_no=2,
+        query_instance_id=query_instance_id,
+        keyword_query="AI Agent Python",
+        visible_candidate_count=1,
+        candidates=[
+            LiepinFirstPageCandidate(
+                rank=1,
+                ref="private-ref-1",
+                detail_url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=subject1",
+                provider_candidate_key_hash="a" * 64,
+            )
+        ],
+    )
+
+
+def test_first_page_continuation_roundtrips_in_original_rank_order(tmp_path) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+    continuation = store.create(
+        source_run_id="source-run-1",
+        logical_round_no=2,
+        query_instance_id="query-2-exploit",
+        keyword_query="AI Agent Python",
+        visible_candidate_count=2,
+        candidates=[
+            LiepinFirstPageCandidate(
+                rank=2,
+                ref="private-ref-2",
+                detail_url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=subject2",
+                provider_candidate_key_hash="b" * 64,
+            ),
+            LiepinFirstPageCandidate(
+                rank=1,
+                ref="private-ref-1",
+                detail_url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=subject1",
+                provider_candidate_key_hash="a" * 64,
+            ),
+        ],
+    )
+
+    restored = store.load(continuation.opaque_ref)
+
+    assert [item.rank for item in restored.candidates] == [1, 2]
+    assert restored.candidates[0].state == "remaining"
+
+
+def test_continuation_updates_are_atomic(tmp_path) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+    continuation = _stored_continuation(store, query_instance_id="query-2-exploit")
+
+    store.mark_candidate(continuation.opaque_ref, rank=1, state="opened")
+
+    assert store.load(continuation.opaque_ref).candidates[0].state == "opened"
+    assert not list(tmp_path.rglob("*.tmp"))
+
+
+def test_continuation_delete_and_fixed_orphan_cleanup(tmp_path) -> None:
+    store = LiepinFirstPageContinuationStore(tmp_path)
+    expired = _stored_continuation(store, query_instance_id="expired")
+    fresh = _stored_continuation(store, query_instance_id="fresh")
+    expired_path = safe_artifact_path(
+        tmp_path.resolve(),
+        store._relative_path(expired.opaque_ref).as_posix(),
+    )
+    old_timestamp = datetime.now(tz=timezone.utc).timestamp() - (8 * 24 * 60 * 60)
+    os.utime(expired_path, (old_timestamp, old_timestamp))
+
+    assert store.delete_expired() == 1
+    with pytest.raises(FileNotFoundError):
+        store.load(expired.opaque_ref)
+    assert store.load(fresh.opaque_ref).query_instance_id == "fresh"
+    store.delete(fresh.opaque_ref)
+    with pytest.raises(FileNotFoundError):
+        store.load(fresh.opaque_ref)
 
 
 @dataclass
