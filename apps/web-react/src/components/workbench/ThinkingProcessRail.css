@@ -336,29 +336,3 @@
   font-weight: 720;
   padding: 4px 8px;
 }
-
-@media (max-width: 400px) {
-  .thinking-process-rail__tabs {
-    margin-inline: 12px;
-  }
-
-  .thinking-process-rail__panel {
-    padding-inline: 12px;
-  }
-
-  .thinking-timeline {
-    padding-left: 24px;
-  }
-
-  .thinking-round__dot {
-    left: -21px;
-  }
-
-  .thinking-query-group__executions li {
-    grid-template-columns: auto auto;
-  }
-
-  .thinking-query-group__executions li span:last-child {
-    grid-column: 1 / -1;
-  }
-}
