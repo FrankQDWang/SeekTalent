@@ -30,6 +30,8 @@ def _public_payload_safety_api(name: str):
         ("debug Bearer private-token", 80, None),
         ("secret=private-token", 80, None),
         ("api_key=private-token", 80, None),
+        ("api-key=private-token", 80, None),
+        ("X-API-Key: private-token", 80, None),
         ("cookie=private-token", 80, None),
         ("password=private-token", 80, None),
         ("OpenCLI browser diagnostic", 80, None),

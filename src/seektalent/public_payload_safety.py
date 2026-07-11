@@ -4,7 +4,7 @@ import re
 
 
 _PUBLIC_SOURCE_ALIAS = "internal_referrals"
-_UNSAFE_ASSIGNMENT = re.compile(r"(?:secret|api_key|apikey|token|cookie|password)\s*[:=]", re.IGNORECASE)
+_UNSAFE_ASSIGNMENT = re.compile(r"(?:secret|api[_-]?key|token|cookie|password)\s*[:=]", re.IGNORECASE)
 _UNSAFE_DIAGNOSTIC_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:opencli|cdp)(?![A-Za-z0-9])", re.IGNORECASE)
 _UNSAFE_BEARER_TOKEN = re.compile(r"(?<![A-Za-z0-9])bearer(?![A-Za-z0-9])", re.IGNORECASE)
 _UNSAFE_AUTHORIZATION = re.compile(r"authorization\s*[:=]", re.IGNORECASE)

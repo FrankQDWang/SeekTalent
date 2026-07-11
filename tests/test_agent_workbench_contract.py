@@ -1345,6 +1345,8 @@ def test_round_reducer_drops_shared_unsafe_query_text(unsafe_text: str) -> None:
     [
         "note: Authorization: Bearer private-token",
         "debug secret=private-token",
+        "api-key=private-token",
+        "X-API-Key: private-token",
         "OpenCLI CDP target 98b37a browser session failed",
         "INTERNAL_PROVIDER_REFERENCE",
     ],
@@ -1424,6 +1426,8 @@ def test_round_reducer_drops_shared_unsafe_text_from_all_public_query_fields(uns
         "https://provider.example/private/raw-identity",
         "note: Authorization: Bearer private-token",
         "debug secret=private-token",
+        "api-key=private-token",
+        "X-API-Key: private-token",
         "OpenCLI CDP target 98b37a browser session failed",
         "INTERNAL_PROVIDER_REFERENCE",
     ],

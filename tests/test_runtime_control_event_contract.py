@@ -1026,6 +1026,8 @@ def test_public_stage_output_v2_drops_sensitive_detail_text_and_invalid_status()
         "https://provider.example/private/raw-identity",
         "note: Authorization: Bearer private-token",
         "debug secret=private-token",
+        "api-key=private-token",
+        "X-API-Key: private-token",
         "OpenCLI CDP target 98b37a browser session failed",
         "INTERNAL_PROVIDER_REFERENCE",
     ],
@@ -1161,6 +1163,8 @@ def test_public_stage_output_v2_drops_shared_unsafe_query_text(unsafe_text: str)
     [
         "note: Authorization: Bearer private-token",
         "debug secret=private-token",
+        "api-key=private-token",
+        "X-API-Key: private-token",
         "OpenCLI CDP target 98b37a browser session failed",
         "INTERNAL_PROVIDER_REFERENCE",
     ],
