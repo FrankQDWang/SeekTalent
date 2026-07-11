@@ -153,6 +153,30 @@ def test_requirement_sheet_controls_dimension_applicability(preferred, risk, exp
 
 
 @pytest.mark.parametrize(
+    ("preferred_capabilities", "preferences"),
+    [
+        (["B2B 电商"], PreferenceSlots()),
+        ([], PreferenceSlots(preferred_locations=["上海"])),
+        ([], PreferenceSlots(preferred_companies=["甲骨文"])),
+        ([], PreferenceSlots(preferred_domains=["跨境电商"])),
+        ([], PreferenceSlots(preferred_backgrounds=["创业团队"])),
+    ],
+)
+def test_each_preference_source_independently_enables_preferred_dimension(
+    preferred_capabilities,
+    preferences,
+) -> None:
+    policy = _policy(preferred=False, risk=False).model_copy(
+        update={
+            "preferred_capabilities": preferred_capabilities,
+            "preferences": preferences,
+        }
+    )
+
+    assert score_dimension_applicability(policy).preferred is True
+
+
+@pytest.mark.parametrize(
     ("applicability", "preferred", "risk", "expected"),
     [
         (ScoreDimensionApplicability(preferred=True, risk=True), 80, 20, 77),
