@@ -138,7 +138,6 @@ path = "seektalent.sources"
 depends_on = [
   "seektalent.core",
   "seektalent.providers",
-  "seektalent.runtime",
   "seektalent.source_contracts",
 ]
 

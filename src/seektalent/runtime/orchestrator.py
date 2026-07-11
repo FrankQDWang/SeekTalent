@@ -112,8 +112,8 @@ from seektalent.models import (
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
-from seektalent.runtime.source_expansion import SourceFirstPageExpander
-from seektalent.runtime.source_expansion import SourceFirstPageExpansionResult
+from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpander
+from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionResult
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates, select_identity_top_candidates
@@ -2570,23 +2570,24 @@ class WorkflowRuntime:
                     candidate_query_attributions=all_attributions,
                     query_outcomes=query_outcomes,
                 )
-                self._emit_runtime_public_event(
-                    tracer=tracer,
-                    progress_callback=progress_callback,
-                    event=make_runtime_public_event(
-                        runtime_run_id=tracer.run_id,
-                        stage="first_page_expansion",
-                        event_seq=round_no * 100 + 65,
-                        round_no=round_no,
-                        counts={
-                            "qualifiedLaneCount": sum(1 for item in expansion_decisions if item.expand),
-                            "expandedCandidateCount": len(expansion_candidates),
-                            "skippedSeenCount": sum(item.expansion_skipped_seen_count for item in expansion_results),
-                            "terminalFailureCount": sum(item.expansion_terminal_failure_count for item in expansion_results),
-                            "scoringFailureCount": len(expansion_scoring_result.scoring_failures),
-                        },
-                    ),
-                )
+                if expansion_decisions:
+                    self._emit_runtime_public_event(
+                        tracer=tracer,
+                        progress_callback=progress_callback,
+                        event=make_runtime_public_event(
+                            runtime_run_id=tracer.run_id,
+                            stage="first_page_expansion",
+                            event_seq=round_no * 100 + 65,
+                            round_no=round_no,
+                            counts={
+                                "qualifiedLaneCount": sum(1 for item in expansion_decisions if item.expand),
+                                "expandedCandidateCount": len(expansion_candidates),
+                                "skippedSeenCount": sum(item.expansion_skipped_seen_count for item in expansion_results),
+                                "terminalFailureCount": sum(item.expansion_terminal_failure_count for item in expansion_results),
+                                "scoringFailureCount": len(expansion_scoring_result.scoring_failures),
+                            },
+                        ),
+                    )
                 run_state.retrieval_state.query_execution_ledger = [
                     next(
                         (updated for updated in updated_receipts if updated.source_kind == item.source_kind and updated.query_instance_id == item.query_instance_id),

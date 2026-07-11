@@ -6,7 +6,7 @@ from typing import Mapping, Sequence
 
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.models import QueryExecutionReceipt, RuntimeCanonicalResumeSelection, ScoredCandidate
-from seektalent.runtime.source_expansion import (
+from seektalent.source_contracts.first_page_expansion import (
     SourceFirstPageExpander,
     SourceFirstPageExpansionError,
     SourceFirstPageExpansionRequest,

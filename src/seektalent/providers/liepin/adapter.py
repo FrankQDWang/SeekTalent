@@ -234,7 +234,7 @@ class LiepinProviderAdapter:
                 deleted = await handler(action="discard", continuation=continuation,
                     detail_open_claim_ledger=detail_open_claim_ledger,
                     logical_round_no=logical_round_no, query_instance_id=query_instance_id)
-            except OSError:
+            except (OSError, ProviderSearchError, ProviderFirstPageExpansionError, LiepinWorkerModeError):
                 deleted = None
         continuation_deleted = deleted is not None and deleted.continuation_deleted
         cleanup_reason = None if continuation_deleted else "liepin_first_page_continuation_cleanup_failed"

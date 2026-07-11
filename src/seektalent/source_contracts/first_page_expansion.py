@@ -2,14 +2,24 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Protocol
 
-from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.models import ResumeCandidate
-from seektalent.source_contracts import RuntimeQueryCandidateAttribution, RuntimeSourceLaneResult
+from seektalent.source_contracts.runtime_lanes import RuntimeQueryCandidateAttribution, RuntimeSourceLaneResult
 
 ExpansionStatus = Literal["completed", "partial", "blocked", "failed"]
 ExpansionAction = Literal["expand", "discard"]
+
+
+class SourceFirstPageContinuation(Protocol):
+    continuation_id: str
+    opaque_ref: str
+    source_kind: str
+    round_no: int
+    query_instance_id: str
+    visible_candidate_count: int
+    eligible_candidate_count: int
+    initial_opened_count: int
 
 
 class SourceFirstPageExpansionError(RuntimeError):
@@ -28,7 +38,7 @@ class SourceFirstPageExpansionRequest:
     source_kind: str
     query_instance_id: str
     continuation_id: str
-    continuation: ProviderSearchContinuation
+    continuation: SourceFirstPageContinuation
     action: ExpansionAction
 
 

@@ -38,10 +38,10 @@ def _continuation() -> ProviderSearchContinuation:
 def test_discard_acknowledges_only_after_absence_readback() -> None:
     class Runner:
         deleted = False
-        def discard_liepin_first_page_continuation(self, opaque_ref):
+        def _discard_liepin_first_page_continuation(self, opaque_ref):
             del opaque_ref
             self.deleted = True
-        def liepin_first_page_continuation_exists(self, opaque_ref):
+        def _liepin_first_page_continuation_exists(self, opaque_ref):
             del opaque_ref
             return not self.deleted
     result = LiepinOpenCliResumeRetriever(runner=Runner()).handle_first_page_continuation_with_detail_open_claim_ledger(
@@ -52,8 +52,8 @@ def test_discard_acknowledges_only_after_absence_readback() -> None:
 
 def test_discard_readback_failure_returns_typed_cleanup_result() -> None:
     class Runner:
-        def discard_liepin_first_page_continuation(self, opaque_ref): del opaque_ref
-        def liepin_first_page_continuation_exists(self, opaque_ref):
+        def _discard_liepin_first_page_continuation(self, opaque_ref): del opaque_ref
+        def _liepin_first_page_continuation_exists(self, opaque_ref):
             del opaque_ref
             raise OSError("readback failed")
     result = LiepinOpenCliResumeRetriever(runner=Runner()).handle_first_page_continuation_with_detail_open_claim_ledger(
@@ -65,8 +65,8 @@ def test_discard_readback_failure_returns_typed_cleanup_result() -> None:
 
 def test_discard_readback_programmer_runtime_error_propagates() -> None:
     class Runner:
-        def discard_liepin_first_page_continuation(self, opaque_ref): del opaque_ref
-        def liepin_first_page_continuation_exists(self, opaque_ref):
+        def _discard_liepin_first_page_continuation(self, opaque_ref): del opaque_ref
+        def _liepin_first_page_continuation_exists(self, opaque_ref):
             del opaque_ref
             raise RuntimeError("readback invariant violated")
     with pytest.raises(RuntimeError, match="readback invariant violated"):
@@ -77,7 +77,7 @@ def test_discard_readback_programmer_runtime_error_propagates() -> None:
 
 def test_expansion_rejects_coroutine_from_synchronous_runner_seam() -> None:
     class Runner:
-        async def handle_liepin_first_page_continuation(self, **kwargs):
+        async def _handle_liepin_first_page_continuation(self, **kwargs):
             del kwargs
             return {}
     with pytest.raises(RuntimeError, match="must_be_synchronous"):
@@ -88,7 +88,7 @@ def test_expansion_rejects_coroutine_from_synchronous_runner_seam() -> None:
 
 def test_expansion_maps_successful_envelope_to_typed_provider_result() -> None:
     class Runner:
-        def handle_liepin_first_page_continuation(self, **kwargs):
+        def _handle_liepin_first_page_continuation(self, **kwargs):
             del kwargs
             return {"status": "partial", "safe_reason_code": "expansion_partial",
                 "first_page_visible_count": 5, "first_page_eligible_count": 4,

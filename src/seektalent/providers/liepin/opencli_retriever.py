@@ -115,8 +115,8 @@ class LiepinOpenCliResumeRetriever:
             continuation: ProviderSearchContinuation, detail_open_claim_ledger: DetailOpenClaimLedger,
             logical_round_no: int, query_instance_id: str) -> ProviderFirstPageExpansionResult:
         if action == "discard":
-            discard = getattr(self._runner, "discard_liepin_first_page_continuation", None)
-            exists = getattr(self._runner, "liepin_first_page_continuation_exists", None)
+            discard = getattr(self._runner, "_discard_liepin_first_page_continuation", None)
+            exists = getattr(self._runner, "_liepin_first_page_continuation_exists", None)
             if not callable(discard) or not callable(exists):
                 return _cleanup_failure_result(continuation)
             try:
@@ -135,7 +135,7 @@ class LiepinOpenCliResumeRetriever:
                 continuation_deleted=deleted)
         if action != "expand":
             raise ValueError("liepin_expansion_action_invalid")
-        handler = getattr(self._runner, "handle_liepin_first_page_continuation", None)
+        handler = getattr(self._runner, "_handle_liepin_first_page_continuation", None)
         if not callable(handler):
             raise LiepinFirstPageExpansionBoundaryError("liepin_opencli_private_expansion_route_unavailable")
         envelope = handler(continuation_ref=continuation.opaque_ref,

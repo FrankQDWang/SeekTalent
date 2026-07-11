@@ -3,13 +3,13 @@ from dataclasses import FrozenInstanceError, replace
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable, cast
+from typing import Any, cast
 
 import pytest
 
 import seektalent.candidate_feedback.model_steps as candidate_feedback_model_steps
 from seektalent.candidate_feedback.llm_prf import LLMPRFCandidate, LLMPRFExtraction, LLMPRFSourceEvidenceRef
-from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation, SearchResult
+from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.models import (
     CTSQuery,
     FinalCandidate,
@@ -22,7 +22,6 @@ from seektalent.models import (
     QueryExecutionReceipt,
     QueryTermCandidate,
     ReflectionAdvice,
-    ReflectionContext,
     ReflectionFilterAdvice,
     ReflectionKeywordAdvice,
     RequirementExtractionDraft,
@@ -57,31 +56,14 @@ from seektalent.runtime.candidate_intake import (
 )
 from seektalent.runtime.controller_context import build_controller_context
 from seektalent.runtime.finalize_context import build_finalize_context
-from seektalent.runtime.first_page_expansion import (
-    ExpansionQueryMergeCounts,
-    apply_first_page_expansion_to_receipts,
-    canonical_scorecards_by_identity_id,
-    decide_first_page_expansion,
-    discard_unconsumed_first_page_continuations,
-    execute_first_page_decisions,
-    select_qualified_first_page_expansions,
-)
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, RetrievalRuntime
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, allocate_initial_lane_targets
 from seektalent.runtime.reflection_context import build_reflection_context
-from seektalent.reflection.critic import render_reflection_prompt
 from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
 from seektalent.runtime.source_round_dispatch import (
     SourceRoundAdapterResult,
-    SourceRoundDispatchRequest,
     SourceRoundDispatchResult,
 )
-from seektalent.runtime.source_expansion import (
-    SourceFirstPageExpansionError,
-    SourceFirstPageExpansionRequest,
-    SourceFirstPageExpansionResult,
-)
-from seektalent.runtime.source_round_dispatch import RuntimeSourceInvariantError
 from seektalent.runtime.source_lanes import (
     RuntimeQueryCandidateAttribution,
     SourceQueryExecutionOutcome,
@@ -98,377 +80,6 @@ from tests.settings_factory import make_settings
 
 def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
     return build_source_enabled_runtime(*args, **kwargs)
-
-
-def test_first_page_expansion_requires_every_baseline_candidate_to_be_high_quality() -> None:
-    continuation = ProviderSearchContinuation(
-        kind="first_page_detail_expansion",
-        continuation_id="c1",
-        opaque_ref="artifact://c1",
-        source_kind="liepin",
-        round_no=2,
-        query_instance_id="q1",
-        visible_candidate_count=3,
-        eligible_candidate_count=3,
-        initial_opened_count=2,
-    )
-    scores = [
-        ScoredCandidate(
-            resume_id=f"r{i}", fit_bucket="fit", overall_score=overall,
-            must_have_match_score=80, preferred_match_score=None, risk_score=None,
-            risk_flags=[], reasoning_summary="fixture", evidence=[], confidence="high",
-            matched_must_haves=[], missing_must_haves=[], matched_preferences=[],
-            negative_signals=[], strengths=[], weaknesses=[], source_round=2,
-        )
-        for i, overall in enumerate((90, 79))
-    ]
-    decision = decide_first_page_expansion(
-        continuations=[continuation], requested_count=2, baseline_opened_count=2,
-        baseline_identity_count=2, scorecards=scores,
-    )
-    assert decision.reason_code == "baseline_quality_below_threshold"
-
-
-def _task7_score(resume_id: str, overall: int = 80, must: int = 70,
-                 risk: int | None = 30, fit_bucket: str = "fit") -> ScoredCandidate:
-    return ScoredCandidate(
-        resume_id=resume_id, fit_bucket=fit_bucket, overall_score=overall,
-        must_have_match_score=must, preferred_match_score=None, risk_score=risk,
-        risk_flags=[], reasoning_summary="fixture", evidence=[], confidence="high",
-        matched_must_haves=[], missing_must_haves=[], matched_preferences=[],
-        negative_signals=[], strengths=[], weaknesses=[], source_round=2,
-    )
-
-
-def _task7_continuation(query: str = "q1", continuation: str = "c1",
-                        initial: int = 1) -> ProviderSearchContinuation:
-    return ProviderSearchContinuation(
-        kind="first_page_detail_expansion", continuation_id=continuation,
-        opaque_ref=f"artifact://{continuation}", source_kind="liepin", round_no=2,
-        query_instance_id=query, visible_candidate_count=3,
-        eligible_candidate_count=3, initial_opened_count=initial,
-    )
-
-
-def _task7_receipt(query: str = "q1", requested: int = 1) -> QueryExecutionReceipt:
-    return QueryExecutionReceipt(
-        round_no=2, source_kind="liepin", query_instance_id=query,
-        query_fingerprint=f"fp-{query}", term_group_key="group",
-        primary_anchor_family_id="anchor", non_anchor_term_family_ids=[],
-        query_role="exploit", lane_type="exploit", keyword_query="python",
-        requested_count=requested, source_plan_version="1", status="completed",
-        dispatch_started=True,
-    )
-
-
-@pytest.mark.parametrize(
-    ("score", "expand", "reason"),
-    [
-        (_task7_score("r", overall=80, must=70, risk=30), True, "baseline_quality_gate_passed"),
-        (_task7_score("r", overall=79), False, "baseline_quality_below_threshold"),
-        (_task7_score("r", must=69), False, "baseline_quality_below_threshold"),
-        (_task7_score("r", risk=31), False, "baseline_risk_above_threshold"),
-        (_task7_score("r", risk=None), True, "baseline_quality_gate_passed"),
-        (_task7_score("r", fit_bucket="not_fit"), False, "baseline_not_fit"),
-    ],
-)
-def test_first_page_expansion_exact_quality_boundaries(score, expand, reason) -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[score],
-    )
-    assert (decision.expand, decision.reason_code) == (expand, reason)
-
-
-def test_first_page_expansion_rejects_target_and_scoring_shortfalls() -> None:
-    target = decide_first_page_expansion(
-        continuations=[_task7_continuation(initial=0)], requested_count=1,
-        baseline_opened_count=0, baseline_identity_count=0, scorecards=[],
-    )
-    scoring = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[],
-    )
-    assert target.reason_code == "baseline_target_not_met"
-    assert scoring.reason_code == "baseline_scoring_incomplete"
-
-
-def test_first_page_selector_resolves_alias_and_groups_physical_targets() -> None:
-    continuations = [_task7_continuation(), _task7_continuation(continuation="c2", initial=0)]
-    decisions = select_qualified_first_page_expansions(
-        continuations=continuations, receipts=[_task7_receipt()],
-        candidate_attributions=[RuntimeQueryCandidateAttribution(
-            source_kind="liepin", query_instance_id="q1", resume_id="alias", dedup_key="person")],
-        candidate_identity_by_resume_id={"alias": "identity"},
-        scorecards_by_identity_id={"identity": _task7_score("canonical")},
-    )
-    assert len(decisions) == 1
-    assert decisions[0].expand is True
-    assert [item.continuation_id for item in decisions[0].continuations] == ["c1", "c2"]
-
-
-def test_canonical_scorecards_prefer_selected_canonical_resume() -> None:
-    selection = RuntimeCanonicalResumeSelection(
-        identity_id="identity", canonical_resume_id="r2",
-    )
-    result = canonical_scorecards_by_identity_id(
-        scorecards_by_resume_id={"r1": _task7_score("r1", 90), "r2": _task7_score("r2", 80)},
-        candidate_identity_by_resume_id={"r1": "identity", "r2": "identity"},
-        canonical_resume_by_identity_id={"identity": selection},
-    )
-    assert result["identity"].resume_id == "r2"
-
-
-def test_first_page_executor_orders_actions_and_isolates_typed_failure() -> None:
-    qualified = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")],
-    )
-    rejected = replace(qualified, query_instance_id="q2", expand=False,
-                       continuations=(_task7_continuation("q2", "c2"),))
-    calls = []
-    async def expand(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        calls.append((request.query_instance_id, request.action))
-        if request.query_instance_id == "q1":
-            raise SourceFirstPageExpansionError(
-                "failed", status="failed", safe_reason_code="provider_failed", continuation_deleted=True)
-        return SourceFirstPageExpansionResult(
-            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-            continuation_id=request.continuation_id, status="completed",
-            first_page_visible_count=3, first_page_eligible_count=3,
-            initial_opened_count=1, continuation_deleted=True,
-        )
-    outcomes = asyncio.run(execute_first_page_decisions(
-        runtime_run_id="run", round_no=2, decisions=[qualified, rejected], expanders={"liepin": expand}))
-    assert calls == [("q1", "expand"), ("q2", "discard")]
-    assert [item.status for item in outcomes] == ["failed", "completed"]
-
-
-def test_first_page_executor_rejects_malformed_provider_result_and_missing_cleanup() -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    async def malformed(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        return SourceFirstPageExpansionResult(
-            source_kind=request.source_kind, query_instance_id="foreign",
-            continuation_id=request.continuation_id, status="completed",
-            first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1)
-    with pytest.raises(RuntimeSourceInvariantError, match="wrong_provenance"):
-        asyncio.run(execute_first_page_decisions(
-            runtime_run_id="run", round_no=2, decisions=[decision], expanders={"liepin": malformed}))
-
-
-def test_first_page_executor_rejects_missing_expander() -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    with pytest.raises(RuntimeSourceInvariantError, match="expander_unavailable"):
-        asyncio.run(execute_first_page_decisions(
-            runtime_run_id="run", round_no=2, decisions=[decision], expanders={}))
-
-
-def test_first_page_receipt_preserves_baseline_on_failed_discard() -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1,
-        scorecards=[_task7_score("r", overall=79)])
-    receipt = _task7_receipt().model_copy(update={"raw_candidate_count": 1, "unique_candidate_count": 1})
-    outcome = SourceFirstPageExpansionResult(
-        source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="failed",
-        first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
-        safe_reason_code="discard_failed", continuation_deleted=False)
-    updated = apply_first_page_expansion_to_receipts(
-        receipts=[receipt], decisions=[decision], outcomes=[outcome], merge_counts=[],
-        scoring_failure_counts={})[0]
-    assert (updated.raw_candidate_count, updated.unique_candidate_count) == (1, 1)
-    assert updated.first_page_expansion_status == "failed"
-    assert updated.first_page_expansion_reason_code == "first_page_continuation_discard_failed"
-
-
-def test_first_page_receipt_rejects_unreconciled_merge_counts() -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    outcome = SourceFirstPageExpansionResult(
-        source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
-        first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
-        expansion_opened_count=1, continuation_deleted=True)
-    with pytest.raises(RuntimeSourceInvariantError, match="merge_count_exceeds_opened"):
-        apply_first_page_expansion_to_receipts(
-            receipts=[_task7_receipt()], decisions=[decision], outcomes=[outcome],
-            merge_counts=[ExpansionQueryMergeCounts("liepin", "q1", 2, 0)],
-            scoring_failure_counts={})
-
-
-def test_first_page_receipt_rejects_missing_duplicate_and_foreign_outcomes() -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    outcome = SourceFirstPageExpansionResult(
-        source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
-        first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
-        continuation_deleted=True)
-    for outcomes in ([], [outcome, outcome], [replace(outcome, query_instance_id="foreign")]):
-        with pytest.raises(RuntimeSourceInvariantError):
-            apply_first_page_expansion_to_receipts(
-                receipts=[_task7_receipt()], decisions=[decision], outcomes=outcomes,
-                merge_counts=[], scoring_failure_counts={})
-
-
-@pytest.mark.parametrize("case", ["status", "missing", "foreign", "duplicate"])
-def test_first_page_executor_rejects_each_malformed_attribution_case(case: str) -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    candidate = _make_candidate("r-new", source_round=2)
-    good = RuntimeQueryCandidateAttribution(
-        source_kind="liepin", query_instance_id="q1", resume_id="r-new", dedup_key="r-new")
-    async def malformed(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        attributions = (good,)
-        status = "completed"
-        if case == "status":
-            status = "unknown"
-        elif case == "missing":
-            attributions = ()
-        elif case == "foreign":
-            attributions = (replace(good, query_instance_id="foreign"),)
-        elif case == "duplicate":
-            attributions = (good, good)
-        return SourceFirstPageExpansionResult(
-            source_kind="liepin", query_instance_id="q1", continuation_id="c1",
-            status=cast(Any, status), candidates=(candidate,),
-            candidate_query_attributions=attributions, first_page_visible_count=3,
-            first_page_eligible_count=3, initial_opened_count=1,
-            expansion_opened_count=1, continuation_deleted=True)
-    with pytest.raises(RuntimeSourceInvariantError):
-        asyncio.run(execute_first_page_decisions(
-            runtime_run_id="run", round_no=2, decisions=[decision], expanders={"liepin": malformed}))
-
-
-@pytest.mark.parametrize("dedup_key", ["different-person", None])
-def test_first_page_executor_rejects_mismatched_attribution_dedup_key(
-    dedup_key: str | None,
-) -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    candidate = _make_candidate("r-new", source_round=2)
-    async def malformed(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        return SourceFirstPageExpansionResult(
-            source_kind="liepin", query_instance_id="q1", continuation_id="c1",
-            status="completed", candidates=(candidate,),
-            candidate_query_attributions=(RuntimeQueryCandidateAttribution(
-                source_kind="liepin", query_instance_id="q1", resume_id="r-new",
-                dedup_key=dedup_key),),
-            first_page_visible_count=3, first_page_eligible_count=3,
-            initial_opened_count=1, expansion_opened_count=1, continuation_deleted=True)
-    with pytest.raises(RuntimeSourceInvariantError, match="dedup_mismatch"):
-        asyncio.run(execute_first_page_decisions(
-            runtime_run_id="run", round_no=2, decisions=[decision], expanders={"liepin": malformed}))
-
-
-@pytest.mark.parametrize("case", ["cleanup", "negative_provider", "excessive_provider"])
-def test_first_page_executor_rejects_each_cleanup_and_provider_counter_invariant(case: str) -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    async def malformed(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        return SourceFirstPageExpansionResult(
-            source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
-            first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
-            expansion_opened_count=-1 if case == "negative_provider" else 3 if case == "excessive_provider" else 0,
-            continuation_deleted=case != "cleanup")
-    with pytest.raises(RuntimeSourceInvariantError):
-        asyncio.run(execute_first_page_decisions(
-            runtime_run_id="run", round_no=2, decisions=[decision], expanders={"liepin": malformed}))
-
-
-@pytest.mark.parametrize("case", ["negative_merge", "negative_scoring", "excessive_scoring"])
-def test_first_page_receipt_rejects_each_counter_invariant(case: str) -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    outcome = SourceFirstPageExpansionResult(
-        source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
-        first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
-        expansion_opened_count=1, continuation_deleted=True)
-    merge = ExpansionQueryMergeCounts("liepin", "q1", -1 if case == "negative_merge" else 1, 0)
-    scoring = -1 if case == "negative_scoring" else 2 if case == "excessive_scoring" else 0
-    with pytest.raises(RuntimeSourceInvariantError):
-        apply_first_page_expansion_to_receipts(
-            receipts=[_task7_receipt()], decisions=[decision], outcomes=[outcome],
-            merge_counts=[merge], scoring_failure_counts={("liepin", "q1"): scoring})
-
-
-@pytest.mark.parametrize(
-    ("counter", "value"),
-    [("merge", True), ("merge", 1.5), ("scoring", False), ("scoring", "1")],
-)
-def test_first_page_receipt_rejects_non_integer_counter_types(counter: str, value: object) -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    outcome = SourceFirstPageExpansionResult(
-        source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
-        first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
-        expansion_opened_count=1, continuation_deleted=True)
-    merge_value = cast(int, value) if counter == "merge" else 1
-    scoring_value = cast(int, value) if counter == "scoring" else 0
-    with pytest.raises(RuntimeSourceInvariantError, match=f"invalid_{counter}_counter"):
-        apply_first_page_expansion_to_receipts(
-            receipts=[_task7_receipt()], decisions=[decision], outcomes=[outcome],
-            merge_counts=[ExpansionQueryMergeCounts("liepin", "q1", merge_value, 0)],
-            scoring_failure_counts={("liepin", "q1"): scoring_value})
-
-
-@pytest.mark.parametrize("case", ["foreign_decision", "foreign_merge", "foreign_scoring", "duplicate_receipt"])
-def test_first_page_receipt_rejects_each_foreign_or_duplicate_key(case: str) -> None:
-    decision = decide_first_page_expansion(
-        continuations=[_task7_continuation()], requested_count=1,
-        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
-    outcome = SourceFirstPageExpansionResult(
-        source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
-        first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
-        continuation_deleted=True)
-    receipts = [_task7_receipt()]
-    decisions = [decision]
-    merges = []
-    scoring = {}
-    if case == "foreign_decision":
-        decisions = [replace(decision, query_instance_id="foreign")]
-    elif case == "foreign_merge":
-        merges = [ExpansionQueryMergeCounts("liepin", "foreign", 0, 0)]
-    elif case == "foreign_scoring":
-        scoring = {("liepin", "foreign"): 0}
-    else:
-        receipts.append(_task7_receipt())
-    with pytest.raises(RuntimeSourceInvariantError):
-        apply_first_page_expansion_to_receipts(
-            receipts=receipts, decisions=decisions, outcomes=[outcome],
-            merge_counts=merges, scoring_failure_counts=scoring)
-
-
-def test_two_target_qualified_receipt_reconciles_exact_counts_once() -> None:
-    continuations = [_task7_continuation(), _task7_continuation(continuation="c2", initial=0)]
-    decision = decide_first_page_expansion(
-        continuations=continuations, requested_count=1, baseline_opened_count=1,
-        baseline_identity_count=1, scorecards=[_task7_score("r")])
-    outcomes = [
-        SourceFirstPageExpansionResult(
-            source_kind="liepin", query_instance_id="q1", continuation_id=item.continuation_id,
-            status="completed", first_page_visible_count=3, first_page_eligible_count=3,
-            initial_opened_count=item.initial_opened_count, expansion_opened_count=1,
-            continuation_deleted=True)
-        for item in continuations
-    ]
-    updated = apply_first_page_expansion_to_receipts(
-        receipts=[_task7_receipt()], decisions=[decision], outcomes=outcomes,
-        merge_counts=[ExpansionQueryMergeCounts("liepin", "q1", 1, 1)],
-        scoring_failure_counts={("liepin", "q1"): 1})
-    assert len(updated) == 1
-    assert (updated[0].initial_opened_count, updated[0].expansion_opened_count) == (1, 2)
-    assert (updated[0].unique_candidate_count, updated[0].duplicate_candidate_count) == (1, 1)
-    assert updated[0].expansion_scoring_failure_count == 1
 
 
 def _liepin_fixture_settings(**overrides: object):
@@ -785,16 +396,6 @@ class SequenceReflection:
         )
 
 
-class RecordingExpansionReflection(SequenceReflection):
-    def __init__(self) -> None:
-        super().__init__()
-        self.contexts: list[ReflectionContext] = []
-
-    async def reflect(self, *, context: ReflectionContext) -> ReflectionAdvice:
-        self.contexts.append(context)
-        return await super().reflect(context=context)
-
-
 class MutationAttemptReflection:
     async def reflect(self, *, context) -> ReflectionAdvice:
         del context
@@ -1072,7 +673,17 @@ class DuplicateAcrossLanesCTS:
         fetch_mode="summary",
         cursor=None,
     ) -> SearchResult:
-        del query_terms, query_role, keyword_query, adapter_notes, provider_filters, runtime_constraints, page_size, trace_id, fetch_mode
+        del (
+            query_terms,
+            query_role,
+            keyword_query,
+            adapter_notes,
+            provider_filters,
+            runtime_constraints,
+            page_size,
+            trace_id,
+            fetch_mode,
+        )
         if round_no == 1:
             return SearchResult(
                 candidates=[],
@@ -1115,7 +726,16 @@ class PRFProbeCTS:
         fetch_mode="summary",
         cursor=None,
     ) -> SearchResult:
-        del query_terms, keyword_query, adapter_notes, provider_filters, runtime_constraints, page_size, trace_id, fetch_mode
+        del (
+            query_terms,
+            keyword_query,
+            adapter_notes,
+            provider_filters,
+            runtime_constraints,
+            page_size,
+            trace_id,
+            fetch_mode,
+        )
         if int(cursor or "1") > 1:
             return SearchResult(
                 candidates=[],
@@ -1195,9 +815,7 @@ def _llm_langgraph_extraction(payload) -> LLMPRFExtraction:
     sources = [
         item
         for item in payload.source_texts
-        if item.resume_id in {"seed-1", "seed-2"}
-        and item.source_text_raw == "LangGraph"
-        and item.support_eligible
+        if item.resume_id in {"seed-1", "seed-2"} and item.source_text_raw == "LangGraph" and item.support_eligible
     ][:2]
     assert [item.resume_id for item in sources] == ["seed-1", "seed-2"]
     return LLMPRFExtraction(
@@ -1334,729 +952,6 @@ def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resu
     runtime_any.finalizer = StubFinalizer()
 
 
-def test_expansion_candidates_are_scored_and_visible_to_reflection_in_the_same_round(tmp_path: Path) -> None:
-    settings = make_settings(
-        runs_dir=str(tmp_path / "runs"), provider_name="liepin",
-        liepin_worker_mode="fake_fixture", liepin_allow_fake_fixture_worker=True,
-        min_rounds=1, max_rounds=1, enable_eval=False,
-    )
-    runtime = _workflow_runtime(settings)
-    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
-    cast(Any, runtime)._require_live_llm_config = lambda: None
-    runtime_any = cast(Any, runtime)
-    runtime_any._require_live_llm_config = lambda: None
-    reflection = RecordingExpansionReflection()
-    runtime_any.reflection_critic = reflection
-
-    def adapters(_runtime: WorkflowRuntime, context: RuntimeSourceRoundContext):
-        async def liepin(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-            candidates, outcomes, attributions, continuations = [], [], [], []
-            for intent in request.source_query_intents_by_source["liepin"]:
-                for index in range(intent.requested_count):
-                    candidate = _make_candidate(f"baseline-{intent.query_instance_id}-{index}", source_round=context.round_no)
-                    candidates.append(candidate)
-                    attributions.append(RuntimeQueryCandidateAttribution(
-                        source_kind="liepin", query_instance_id=intent.query_instance_id,
-                        resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
-                    ))
-                outcomes.append(SourceQueryExecutionOutcome(
-                    query_instance_id=intent.query_instance_id, status="completed", dispatch_started=True,
-                    raw_candidate_count=intent.requested_count, unique_candidate_count=intent.requested_count,
-                ))
-                continuations.append(ProviderSearchContinuation(
-                    kind="first_page_detail_expansion", continuation_id=f"target-{intent.query_instance_id}",
-                    opaque_ref=f"artifact://protected/{intent.query_instance_id}", source_kind="liepin",
-                    round_no=context.round_no, query_instance_id=intent.query_instance_id,
-                    visible_candidate_count=intent.requested_count + 2,
-                    eligible_candidate_count=intent.requested_count + 2,
-                    initial_opened_count=intent.requested_count,
-                ))
-            return SourceRoundAdapterResult(
-                source="liepin", status="completed", candidates=tuple(candidates),
-                raw_candidate_count=len(candidates), query_execution_outcomes=tuple(outcomes),
-                candidate_query_attributions=tuple(attributions),
-                private_first_page_continuations=tuple(continuations),
-            )
-        return {"liepin": liepin}
-
-    expanded_ids: list[str] = []
-    async def expand(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        if request.action == "discard":
-            return SourceFirstPageExpansionResult(
-                source_kind="liepin", query_instance_id=request.query_instance_id,
-                continuation_id=request.continuation_id, status="completed",
-                first_page_visible_count=request.continuation.visible_candidate_count,
-                first_page_eligible_count=request.continuation.eligible_candidate_count,
-                initial_opened_count=request.continuation.initial_opened_count, continuation_deleted=True,
-            )
-        resume_id = f"expanded-{request.query_instance_id}"
-        expanded_ids.append(resume_id)
-        candidate = _make_candidate(resume_id, source_round=request.round_no)
-        return SourceFirstPageExpansionResult(
-            source_kind="liepin", query_instance_id=request.query_instance_id,
-            continuation_id=request.continuation_id, status="completed", candidates=(candidate,),
-            candidate_query_attributions=(RuntimeQueryCandidateAttribution(
-                source_kind="liepin", query_instance_id=request.query_instance_id,
-                resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
-            ),), first_page_visible_count=request.continuation.visible_candidate_count,
-            first_page_eligible_count=request.continuation.eligible_candidate_count,
-            initial_opened_count=request.continuation.initial_opened_count,
-            expansion_opened_count=1, continuation_deleted=True,
-        )
-
-    runtime_any.source_round_adapter_provider = adapters
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": expand}
-    artifacts = runtime.run(source_kinds=["liepin"], job_title="AI Agent Engineer", jd="Build production agent systems.", notes="")
-
-    assert expanded_ids
-    assert artifacts.run_state is not None
-    assert set(expanded_ids) <= set(artifacts.run_state.scorecards_by_resume_id)
-    assert set(expanded_ids) <= {item.resume_id for context in reflection.contexts for item in context.top_candidates}
-    assert all(context.search_observation.raw_candidate_count > 0 for context in reflection.contexts)
-    cleanup_audits = list(artifacts.run_dir.glob("rounds/*/retrieval/first_page_continuation_cleanup.json"))
-    assert len(cleanup_audits) == 1
-    assert json.loads(cleanup_audits[0].read_text(encoding="utf-8")) == {
-        "attempted_count": 0,
-        "deleted_count": 0,
-        "failure_count": 0,
-        "safe_reason_codes": [],
-    }
-    [events_path] = list(artifacts.run_dir.glob("**/events.jsonl"))
-    trace_events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
-    scoring_batches = [
-        (item["event_type"], item.get("payload", {}).get("batch_kind"))
-        for item in trace_events
-        if item["event_type"].startswith("scoring_batch_")
-    ]
-    assert scoring_batches == [
-        ("scoring_batch_started", "baseline"),
-        ("scoring_batch_completed", "baseline"),
-        ("scoring_batch_started", "first_page_expansion"),
-        ("scoring_batch_completed", "first_page_expansion"),
-    ]
-
-
-def test_source_plan_public_payload_does_not_disclose_private_continuation_capability() -> None:
-    plan = build_runtime_source_plan(source_kinds=["liepin"], settings=object(), runtime_run_id="run")[0]
-    serialized = json.dumps(plan.to_public_payload(), ensure_ascii=False)
-    assert "produces_private_first_page_continuations" not in serialized
-    assert "continuation" not in serialized
-    assert "opaque_ref" not in serialized
-
-
-def _integrated_expansion_runtime(tmp_path: Path, *, scorer: object | None = None):
-    settings = make_settings(
-        runs_dir=str(tmp_path / "runs"), provider_name="liepin",
-        liepin_worker_mode="fake_fixture", liepin_allow_fake_fixture_worker=True,
-        min_rounds=1, max_rounds=1, enable_eval=False,
-    )
-    runtime = _workflow_runtime(settings)
-    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=scorer or StubScorer())
-    runtime_any = cast(Any, runtime)
-    runtime_any._require_live_llm_config = lambda: None
-    actions: list[tuple[str, str]] = []
-
-    def adapters(_runtime: WorkflowRuntime, context: RuntimeSourceRoundContext):
-        async def liepin(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
-            candidates, outcomes, attributions, continuations = [], [], [], []
-            for intent in request.source_query_intents_by_source["liepin"]:
-                for index in range(intent.requested_count):
-                    candidate = _make_candidate(f"matrix-{intent.query_instance_id}-{index}", source_round=context.round_no)
-                    candidates.append(candidate)
-                    attributions.append(RuntimeQueryCandidateAttribution(
-                        source_kind="liepin", query_instance_id=intent.query_instance_id,
-                        resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
-                    ))
-                outcomes.append(SourceQueryExecutionOutcome(
-                    query_instance_id=intent.query_instance_id, status="completed", dispatch_started=True,
-                    raw_candidate_count=intent.requested_count, unique_candidate_count=intent.requested_count,
-                ))
-                continuations.append(ProviderSearchContinuation(
-                    kind="first_page_detail_expansion", continuation_id=f"matrix-{intent.query_instance_id}",
-                    opaque_ref=f"artifact://protected/{intent.query_instance_id}", source_kind="liepin",
-                    round_no=context.round_no, query_instance_id=intent.query_instance_id,
-                    visible_candidate_count=intent.requested_count + 2,
-                    eligible_candidate_count=intent.requested_count + 2,
-                    initial_opened_count=intent.requested_count,
-                ))
-            return SourceRoundAdapterResult(
-                source="liepin", status="completed", candidates=tuple(candidates), raw_candidate_count=len(candidates),
-                query_execution_outcomes=tuple(outcomes), candidate_query_attributions=tuple(attributions),
-                private_first_page_continuations=tuple(continuations),
-            )
-        return {"liepin": liepin}
-
-    async def expander(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        actions.append((request.continuation_id, request.action))
-        if request.action == "expand":
-            candidate = _make_candidate(f"expanded-{request.query_instance_id}", source_round=request.round_no)
-            return SourceFirstPageExpansionResult(
-                source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-                continuation_id=request.continuation_id, status="completed", candidates=(candidate,),
-                candidate_query_attributions=(RuntimeQueryCandidateAttribution(
-                    source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-                    resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
-                ),), first_page_visible_count=request.continuation.visible_candidate_count,
-                first_page_eligible_count=request.continuation.eligible_candidate_count,
-                initial_opened_count=request.continuation.initial_opened_count,
-                expansion_opened_count=1, continuation_deleted=True,
-            )
-        return SourceFirstPageExpansionResult(
-            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-            continuation_id=request.continuation_id, status="completed",
-            first_page_visible_count=request.continuation.visible_candidate_count,
-            first_page_eligible_count=request.continuation.eligible_candidate_count,
-            initial_opened_count=request.continuation.initial_opened_count, continuation_deleted=True,
-        )
-    runtime_any.source_round_adapter_provider = adapters
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": expander}
-    return runtime, runtime_any, actions
-
-
-def _matrix_cleanup_audits(tmp_path: Path) -> list[dict[str, object]]:
-    return [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in (tmp_path / "runs").glob("**/first_page_continuation_cleanup.json")
-    ]
-
-
-def _run_integrated_round(
-    runtime: WorkflowRuntime, tmp_path: Path,
-    *, prepare_run_state: Callable[[RunState], None] | None = None,
-) -> RunTracer:
-    tracer = RunTracer(tmp_path / "trace-runs")
-    run_state = asyncio.run(runtime._build_run_state(
-        job_title="AI Agent Engineer", jd="Build agents.", notes="", tracer=tracer,
-    ))
-    if prepare_run_state is not None:
-        prepare_run_state(run_state)
-    source_plan = build_runtime_source_plan(
-        source_kinds=["liepin"], settings=runtime.settings, runtime_run_id=tracer.run_id,
-    )
-    try:
-        asyncio.run(runtime._run_rounds(
-            run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
-            tracer=tracer, source_plan=source_plan,
-        ))
-    except BaseException:
-        cast(Any, runtime)._test_last_run_state = run_state
-        tracer.close(status="failed")
-        raise
-    cast(Any, runtime)._test_last_run_state = run_state
-    tracer.close(status="completed")
-    return tracer
-
-
-def test_integrated_baseline_scoring_failure_discards_all_and_audits_once(tmp_path: Path) -> None:
-    class FailingScorer:
-        async def score_candidates_parallel(self, *, contexts, tracer):
-            del tracer
-            return [], [ScoringFailure(
-                resume_id=contexts[0].normalized_resume.resume_id, branch_id="baseline",
-                round_no=1, attempts=1, error_message="baseline failed",
-            )]
-    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path, scorer=FailingScorer())
-    writer_counts = {"query_hits": 0, "flywheel": 0}
-    original_hits = runtime_any._write_query_resume_hits
-    original_flywheel = runtime_any._record_flywheel_retrieval_rows
-    def counted_hits(**kwargs):
-        writer_counts["query_hits"] += 1
-        return original_hits(**kwargs)
-    def counted_flywheel(**kwargs):
-        writer_counts["flywheel"] += 1
-        return original_flywheel(**kwargs)
-    runtime_any._write_query_resume_hits = counted_hits
-    runtime_any._record_flywheel_retrieval_rows = counted_flywheel
-    with pytest.raises(orchestrator_module.RunStageError):
-        _run_integrated_round(runtime, tmp_path)
-    assert actions and {action for _, action in actions} == {"discard"}
-    audits = [json.loads(path.read_text()) for path in (tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json")]
-    assert audits == [{
-        "attempted_count": len(actions), "deleted_count": len(actions),
-        "failure_count": 0, "safe_reason_codes": [],
-    }]
-    assert writer_counts == {"query_hits": 1, "flywheel": 1}
-    assert len(list((tmp_path / "trace-runs").glob("**/query_resume_hits.json"))) == 1
-    assert len(list((tmp_path / "trace-runs").glob("**/replay_snapshot.json"))) == 1
-
-
-def test_integrated_execute_failure_cleanup(tmp_path: Path) -> None:
-    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path)
-    async def broken_execute(**_kwargs):
-        raise RuntimeError("execute seam failed")
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(orchestrator_module, "execute_first_page_decisions", broken_execute)
-    try:
-        with pytest.raises(RuntimeError, match="execute seam failed"):
-            _run_integrated_round(runtime, tmp_path)
-    finally:
-        monkeypatch.undo()
-    assert actions and {action for _, action in actions} == {"discard"}
-    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
-
-
-def test_integrated_merge_failure_cleanup(tmp_path: Path) -> None:
-    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path)
-    runtime_any._merge_expansion_candidates = lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("merge seam failed"))
-    with pytest.raises(RuntimeError, match="merge seam failed"):
-        _run_integrated_round(runtime, tmp_path)
-    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
-    assert actions
-
-
-def test_integrated_finalize_failure_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    runtime, _runtime_any, actions = _integrated_expansion_runtime(tmp_path)
-    monkeypatch.setattr(
-        orchestrator_module, "finalize_round_pool",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("finalize seam failed")),
-    )
-    with pytest.raises(RuntimeError, match="finalize seam failed"):
-        _run_integrated_round(runtime, tmp_path)
-    assert actions
-    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
-
-
-def test_integrated_runtime_cancellation_cleanup_and_reraises_cancelled(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime, _runtime_any, actions = _integrated_expansion_runtime(tmp_path)
-    async def cancelled(**_kwargs):
-        raise asyncio.CancelledError
-    monkeypatch.setattr(orchestrator_module, "execute_first_page_decisions", cancelled)
-    with pytest.raises(asyncio.CancelledError):
-        _run_integrated_round(runtime, tmp_path)
-    assert actions and {action for _, action in actions} == {"discard"}
-    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
-
-
-def test_integrated_reflection_failure_pending_empty_and_audit_once(tmp_path: Path) -> None:
-    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path)
-    class BrokenReflection:
-        async def reflect(self, *, context):
-            del context
-            raise RuntimeError("reflection seam failed")
-    runtime_any.reflection_critic = BrokenReflection()
-    with pytest.raises(orchestrator_module.RunStageError, match="reflection seam failed"):
-        _run_integrated_round(runtime, tmp_path)
-    assert actions
-    assert len(list((tmp_path / "trace-runs").glob("**/first_page_continuation_cleanup.json"))) == 1
-
-
-def test_integrated_cleanup_writer_failure_preserves_primary_exception(tmp_path: Path) -> None:
-    class FailingScorer:
-        async def score_candidates_parallel(self, *, contexts, tracer):
-            del tracer
-            return [], [ScoringFailure(
-                resume_id=contexts[0].normalized_resume.resume_id, branch_id="baseline",
-                round_no=1, attempts=1, error_message="primary scoring failure",
-            )]
-    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path, scorer=FailingScorer())
-    runtime_any._write_query_resume_hits = lambda **_kwargs: (_ for _ in ()).throw(
-        RuntimeError("secondary writer failure")
-    )
-    with pytest.raises(orchestrator_module.RunStageError) as caught:
-        _run_integrated_round(runtime, tmp_path)
-    assert "Scoring failed" in str(caught.value)
-    assert "secondary writer failure" not in str(caught.value)
-    assert actions and {action for _, action in actions} == {"discard"}
-
-
-def test_integrated_missing_expander_preflight_zero_provider_calls_or_files(tmp_path: Path) -> None:
-    runtime, runtime_any, _actions = _integrated_expansion_runtime(tmp_path)
-    provider_calls: list[str] = []
-    original_provider = runtime_any.source_round_adapter_provider
-    def recording_provider(*args, **kwargs):
-        provider_calls.append("provider")
-        return original_provider(*args, **kwargs)
-    runtime_any.source_round_adapter_provider = recording_provider
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {}
-    with pytest.raises(RuntimeSourceInvariantError, match="first_page_expander_unavailable"):
-        _run_integrated_round(runtime, tmp_path)
-    assert provider_calls == []
-    assert list(tmp_path.glob("**/*protected*")) == []
-
-
-def test_integrated_baseline_and_expansion_scorecard_jsonl_batches(tmp_path: Path) -> None:
-    runtime, _runtime_any, actions = _integrated_expansion_runtime(tmp_path)
-    tracer = _run_integrated_round(runtime, tmp_path)
-    [path] = list(tracer.run_dir.glob("rounds/*/scoring/scorecards.jsonl"))
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-    assert {row["batch_kind"] for row in rows} == {"baseline", "first_page_expansion"}
-    assert sum(row["batch_kind"] == "first_page_expansion" for row in rows) == 1
-    [input_path] = list(tracer.run_dir.glob("rounds/*/scoring/scoring_input_refs.jsonl"))
-    input_rows = [json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines() if line]
-    assert {(row["resume_id"], row["batch_kind"]) for row in input_rows} == {
-        (row["resume_id"], row["batch_kind"]) for row in rows
-    }
-    assert len(input_rows) == len({row["resume_id"] for row in input_rows})
-    assert all(row["normalized_resume_ref"].endswith(f"{row['resume_id']}.json") for row in input_rows)
-    assert any(action == "expand" for _, action in actions)
-
-
-def test_integrated_public_events_exact_counts_no_private_sentinels(tmp_path: Path) -> None:
-    runtime, _runtime_any, _actions = _integrated_expansion_runtime(tmp_path)
-    tracer = _run_integrated_round(runtime, tmp_path)
-    [path] = list(tracer.run_dir.glob("runtime/public_events.jsonl"))
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-    [event] = [row for row in rows if row.get("stage") == "first_page_expansion"]
-    assert event["counts"] == {
-        "qualifiedLaneCount": 1, "expandedCandidateCount": 1, "skippedSeenCount": 0,
-        "terminalFailureCount": 0, "scoringFailureCount": 0,
-    }
-    serialized = json.dumps(event)
-    assert "artifact://protected" not in serialized
-    assert "continuation" not in serialized.lower()
-    assert "providerCandidateId" not in serialized
-
-
-def test_integrated_non_liepin_no_expander_calls_or_files(tmp_path: Path) -> None:
-    settings = make_settings(
-        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts",
-        min_rounds=1, max_rounds=1, enable_eval=False,
-    )
-    runtime = _workflow_runtime(settings)
-    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
-    cast(Any, runtime)._require_live_llm_config = lambda: None
-    calls: list[str] = []
-    async def forbidden_expander(_request):
-        calls.append("transport")
-        raise AssertionError("non-Liepin expansion transport must not run")
-    cast(Any, runtime).source_first_page_expander_provider = lambda _runtime, _ledger: {"cts": forbidden_expander}
-    artifacts = runtime.run(
-        source_kinds=["cts"], job_title="AI Agent Engineer", jd="Build production agents.", notes="",
-    )
-    assert artifacts.run_state is not None
-    assert calls == []
-    assert list(tmp_path.glob("**/*protected*")) == []
-
-
-def test_integrated_fail_fast_partial_success_scorecards_persist(tmp_path: Path) -> None:
-    class PartialBaselineScorer:
-        async def score_candidates_parallel(self, *, contexts, tracer):
-            del tracer
-            success_id = contexts[0].normalized_resume.resume_id
-            failed_id = contexts[1].normalized_resume.resume_id
-            return [_scored_candidate(success_id)], [ScoringFailure(
-                resume_id=failed_id, branch_id="baseline-partial", round_no=1,
-                attempts=1, error_message="second candidate failed",
-            )]
-    runtime, _runtime_any, _actions = _integrated_expansion_runtime(tmp_path, scorer=PartialBaselineScorer())
-    with pytest.raises(orchestrator_module.RunStageError):
-        _run_integrated_round(runtime, tmp_path)
-    [path] = list((tmp_path / "trace-runs").glob("**/scorecards.jsonl"))
-    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
-    assert len(rows) == 1
-    assert rows[0]["batch_kind"] == "baseline"
-    [input_path] = list((tmp_path / "trace-runs").glob("**/scoring_input_refs.jsonl"))
-    input_rows = [json.loads(line) for line in input_path.read_text(encoding="utf-8").splitlines() if line]
-    assert len(input_rows) > len(rows)
-    assert sum(row["resume_id"] == rows[0]["resume_id"] for row in input_rows) == 1
-    assert all(row["batch_kind"] == "baseline" for row in input_rows)
-
-
-def test_integrated_dual_lane_completed_partial_receipts_observation_reflection(tmp_path: Path) -> None:
-    class DualScorer:
-        async def score_candidates_parallel(self, *, contexts, tracer):
-            del tracer
-            scored, failures = [], []
-            for context in contexts:
-                resume_id = context.normalized_resume.resume_id
-                if resume_id.startswith("partial-expanded-"):
-                    failures.append(ScoringFailure(
-                        resume_id=resume_id, branch_id="partial-expansion", round_no=1,
-                        attempts=1, error_message="partial expansion scoring failure",
-                    ))
-                else:
-                    scored.append(_scored_candidate(resume_id))
-            return scored, failures
-    runtime, runtime_any, actions = _integrated_expansion_runtime(tmp_path, scorer=DualScorer())
-    reflection = RecordingExpansionReflection()
-    runtime_any.reflection_critic = reflection
-    original_bundle = runtime_any._build_round_query_bundle
-    def dual_bundle(**kwargs):
-        states, decision = original_bundle(**kwargs)
-        first = states[0]
-        second = replace(
-            first,
-            query_role="explore",
-            lane_type="generic_explore",
-            query_instance_id=f"{first.query_instance_id}-partial",
-            query_fingerprint=f"{first.query_fingerprint}-partial",
-            identity=replace(
-                first.identity,
-                term_group_key=f"{first.identity.term_group_key}-partial",
-                non_anchor_term_family_ids=("partial-family",),
-            ),
-        )
-        return [first, second], decision
-    runtime_any._build_round_query_bundle = dual_bundle
-    registry = runtime_any.source_first_page_expander_provider(runtime, None)
-    original = registry["liepin"]
-    async def partial(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        if request.action == "discard":
-            return await original(request)
-        if not request.query_instance_id.endswith("-partial"):
-            return await original(request)
-        actions.append((request.continuation_id, request.action))
-        candidate = _make_candidate(f"partial-expanded-{request.query_instance_id}", source_round=1)
-        return SourceFirstPageExpansionResult(
-            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-            continuation_id=request.continuation_id, status="partial", candidates=(candidate,),
-            candidate_query_attributions=(RuntimeQueryCandidateAttribution(
-                source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-                resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
-            ),),
-            first_page_visible_count=request.continuation.visible_candidate_count,
-            first_page_eligible_count=request.continuation.eligible_candidate_count,
-            initial_opened_count=request.continuation.initial_opened_count,
-            expansion_opened_count=1, expansion_skipped_seen_count=1,
-            safe_reason_code="first_page_expansion_partial",
-            continuation_deleted=True,
-        )
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": partial}
-    tracer = _run_integrated_round(runtime, tmp_path)
-    assert reflection.contexts
-    context = reflection.contexts[0]
-    assert context.search_observation.exhausted_reason == "first_page_expansion_partial"
-    assert len(context.query_outcomes) == 2
-    completed, partial_outcome = context.query_outcomes
-    assert completed.receipts[0].first_page_expansion_status == "completed"
-    assert partial_outcome.receipts[0].first_page_expansion_status == "partial"
-    assert partial_outcome.receipts[0].expansion_scoring_failure_count == 1
-    assert partial_outcome.receipts[0].expansion_skipped_seen_count == 1
-    assert completed.receipts[0].expansion_scoring_failure_count == 0
-    assert tracer.run_dir.exists()
-
-
-def test_integrated_alias_bridge_final_identity_counts(tmp_path: Path) -> None:
-    runtime, runtime_any, _actions = _integrated_expansion_runtime(tmp_path)
-    captured_decisions: list[PoolDecision] = []
-    original_selector = orchestrator_module.select_qualified_first_page_expansions
-    original_rebuild = orchestrator_module.rebuild_candidate_identities
-    def bridge_rebuild(run_state, *, source_order):
-        original_rebuild(run_state, source_order=source_order)
-        winner = next((item for item in run_state.seen_resume_ids if item.startswith("z-winner-")), None)
-        if winner is None or "prior-top" not in run_state.candidate_identity_by_resume_id:
-            return
-        identity_id = run_state.candidate_identity_by_resume_id["prior-top"]
-        bridged_resumes = [
-            item for item in run_state.seen_resume_ids if item.startswith("matrix-")
-        ][:2]
-        for resume_id in (*bridged_resumes, winner):
-            run_state.candidate_identity_by_resume_id[resume_id] = identity_id
-        identity = run_state.candidate_identities[identity_id]
-        run_state.candidate_identities[identity_id] = identity.model_copy(
-            update={"resume_ids": sorted(set((*identity.resume_ids, *bridged_resumes, winner)))}
-        )
-        run_state.canonical_resume_by_identity_id[identity_id] = (
-            run_state.canonical_resume_by_identity_id[identity_id].model_copy(
-                update={"canonical_resume_id": winner}
-            )
-        )
-        if "prior-top" in run_state.scorecards_by_resume_id:
-            run_state.scorecards_by_resume_id[winner] = run_state.scorecards_by_resume_id[
-                "prior-top"
-            ].model_copy(update={"resume_id": winner})
-    orchestrator_module.rebuild_candidate_identities = bridge_rebuild
-    def force_expansion(**kwargs):
-        return [replace(item, expand=True, reason_code="baseline_quality_gate_passed")
-                for item in original_selector(**kwargs)]
-    orchestrator_module.select_qualified_first_page_expansions = force_expansion
-    original_reflection_stage = orchestrator_module.reflection_runtime.run_reflection_stage
-    async def capture_reflection(**kwargs):
-        captured_decisions.extend(kwargs["pool_decisions"])
-        return await original_reflection_stage(**kwargs)
-    orchestrator_module.reflection_runtime.run_reflection_stage = capture_reflection
-    def seed_prior(run_state: RunState) -> None:
-        prior = _make_candidate("prior-top", source_round=0, raw={
-            "resume_id": "prior-top", "candidate_name": "Prior Person",
-        }).model_copy(update={"work_experience_summaries": ["Prior Unique Co | Architect | 2012-2020"]})
-        run_state.candidate_store[prior.resume_id] = prior
-        run_state.seen_resume_ids.append(prior.resume_id)
-        normalize_runtime_candidates(run_state=run_state, candidates=[prior], round_no=0, tracer=None)
-        rebuild_candidate_identities(run_state, source_order={"liepin": 0})
-        run_state.scorecards_by_resume_id[prior.resume_id] = _scored_candidate(prior.resume_id, source_round=0)
-        run_state.top_pool_ids = [prior.resume_id]
-    async def alias_expander(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        if request.action == "discard":
-            return SourceFirstPageExpansionResult(
-                source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-                continuation_id=request.continuation_id, status="completed",
-                first_page_visible_count=request.continuation.visible_candidate_count,
-                first_page_eligible_count=request.continuation.eligible_candidate_count,
-                initial_opened_count=request.continuation.initial_opened_count, continuation_deleted=True,
-            )
-        candidate = _make_candidate(f"z-winner-{request.query_instance_id}", source_round=1).model_copy(
-            update={
-                "dedup_key": f"matrix-{request.query_instance_id}-0",
-                "raw": {
-                    "resume_id": f"z-winner-{request.query_instance_id}",
-                    "candidate_name": "Prior Person",
-                },
-                "work_experience_summaries": ["Prior Unique Co | Architect | 2012-2020"],
-            }
-        )
-        return SourceFirstPageExpansionResult(
-            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-            continuation_id=request.continuation_id, status="completed", candidates=(candidate,),
-            candidate_query_attributions=(RuntimeQueryCandidateAttribution(
-                source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-                resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
-            ),), first_page_visible_count=request.continuation.visible_candidate_count,
-            first_page_eligible_count=request.continuation.eligible_candidate_count,
-            initial_opened_count=request.continuation.initial_opened_count,
-            expansion_opened_count=1, continuation_deleted=True,
-        )
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": alias_expander}
-    try:
-        _run_integrated_round(runtime, tmp_path, prepare_run_state=seed_prior)
-    finally:
-        orchestrator_module.reflection_runtime.run_reflection_stage = original_reflection_stage
-        orchestrator_module.select_qualified_first_page_expansions = original_selector
-        orchestrator_module.rebuild_candidate_identities = original_rebuild
-    state = runtime_any._test_last_run_state
-    summary = state.latest_canonical_intake_summary
-    assert summary is not None
-    assert summary.identity_count == len(set(state.candidate_identity_by_resume_id.values()))
-    assert summary.auto_merged_duplicate_count >= 1
-    prior_identity = state.candidate_identity_by_resume_id["prior-top"]
-    winner = state.canonical_resume_by_identity_id[prior_identity].canonical_resume_id
-    assert winner.startswith("z-winner-")
-    assert state.top_pool_ids.count(winner) == 1
-    winner_decision = next(item for item in captured_decisions if item.resume_id == winner)
-    assert winner_decision.decision == "retained"
-    assert not any(item.resume_id == "prior-top" and item.decision == "dropped" for item in captured_decisions)
-
-
-def test_pending_cleanup_false_deletion_ack_is_reported_and_other_carriers_continue() -> None:
-    continuations = [
-        ProviderSearchContinuation(
-            kind="first_page_detail_expansion", continuation_id=f"c{index}", opaque_ref=f"artifact://private/{index}",
-            source_kind="liepin", round_no=1, query_instance_id=f"q{index}",
-            visible_candidate_count=2, eligible_candidate_count=2, initial_opened_count=1,
-        )
-        for index in (1, 2)
-    ]
-    calls: list[str] = []
-
-    async def expander(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        calls.append(request.continuation_id)
-        return SourceFirstPageExpansionResult(
-            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-            continuation_id=request.continuation_id, status="completed",
-            first_page_visible_count=request.continuation.visible_candidate_count,
-            first_page_eligible_count=request.continuation.eligible_candidate_count,
-            initial_opened_count=request.continuation.initial_opened_count,
-            continuation_deleted=request.continuation_id == "c2",
-        )
-
-    records = asyncio.run(discard_unconsumed_first_page_continuations(
-        runtime_run_id="run", round_no=1, continuations=continuations, expanders={"liepin": expander},
-    ))
-    assert calls == ["c1", "c2"]
-    assert len(records) == 2
-    assert sum(item.deleted for item in records) == 1
-    assert sum(not item.deleted for item in records) == 1
-    assert [item.safe_reason_code for item in records if not item.deleted] == [
-        "first_page_continuation_cleanup_failed"
-    ]
-
-
-def test_pending_cleanup_one_false_ack_has_exact_single_failure_record() -> None:
-    continuation = ProviderSearchContinuation(
-        kind="first_page_detail_expansion", continuation_id="one", opaque_ref="artifact://private/one",
-        source_kind="liepin", round_no=1, query_instance_id="q1",
-        visible_candidate_count=2, eligible_candidate_count=2, initial_opened_count=1,
-    )
-    async def false_ack(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        return SourceFirstPageExpansionResult(
-            source_kind=request.source_kind, query_instance_id=request.query_instance_id,
-            continuation_id=request.continuation_id, status="completed",
-            first_page_visible_count=2, first_page_eligible_count=2, initial_opened_count=1,
-            continuation_deleted=False,
-        )
-    records = asyncio.run(discard_unconsumed_first_page_continuations(
-        runtime_run_id="run", round_no=1, continuations=[continuation],
-        expanders={"liepin": false_ack},
-    ))
-    assert len(records) == 1
-    assert records[0].deleted is False
-    assert records[0].safe_reason_code == "first_page_continuation_cleanup_failed"
-
-
-def test_pending_cleanup_rejects_duplicate_carrier_ids() -> None:
-    continuation = ProviderSearchContinuation(
-        kind="first_page_detail_expansion", continuation_id="duplicate", opaque_ref="artifact://private/one",
-        source_kind="liepin", round_no=1, query_instance_id="q1",
-        visible_candidate_count=2, eligible_candidate_count=2, initial_opened_count=1,
-    )
-    with pytest.raises(RuntimeSourceInvariantError, match="duplicate_first_page_continuation_cleanup_carrier"):
-        asyncio.run(discard_unconsumed_first_page_continuations(
-            runtime_run_id="run", round_no=1, continuations=[continuation, continuation], expanders={},
-        ))
-
-
-def test_pending_cleanup_does_not_swallow_cancellation() -> None:
-    continuation = ProviderSearchContinuation(
-        kind="first_page_detail_expansion", continuation_id="cancel", opaque_ref="artifact://private/cancel",
-        source_kind="liepin", round_no=1, query_instance_id="q1",
-        visible_candidate_count=2, eligible_candidate_count=2, initial_opened_count=1,
-    )
-    async def cancelled(_request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        raise asyncio.CancelledError
-    with pytest.raises(asyncio.CancelledError):
-        asyncio.run(discard_unconsumed_first_page_continuations(
-            runtime_run_id="run", round_no=1, continuations=[continuation],
-            expanders={"liepin": cancelled},
-        ))
-
-
-def test_pending_cleanup_maps_private_provider_reason_to_source_neutral_code() -> None:
-    marker = "artifact://protected/x?providerCandidateId=secret"
-    continuation = ProviderSearchContinuation(
-        kind="first_page_detail_expansion", continuation_id="private", opaque_ref=marker,
-        source_kind="liepin", round_no=1, query_instance_id="q1",
-        visible_candidate_count=2, eligible_candidate_count=2, initial_opened_count=1,
-    )
-    async def malicious(_request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        raise SourceFirstPageExpansionError(
-            "provider cleanup failed", status="failed", safe_reason_code=marker, continuation_deleted=False
-        )
-    [record] = asyncio.run(discard_unconsumed_first_page_continuations(
-        runtime_run_id="run", round_no=1, continuations=[continuation], expanders={"liepin": malicious},
-    ))
-    assert record.safe_reason_code == "first_page_continuation_cleanup_failed"
-    assert marker not in json.dumps(record.__dict__)
-
-
-@pytest.mark.parametrize("status,expected", [
-    ("blocked", "first_page_expansion_blocked"),
-    ("partial", "first_page_expansion_partial"),
-    ("failed", "first_page_expansion_failed"),
-])
-def test_execute_maps_malicious_provider_reason_by_normalized_status(status: str, expected: str) -> None:
-    marker = "https://private.invalid/?providerCandidateId=secret"
-    continuation = ProviderSearchContinuation(
-        kind="first_page_detail_expansion", continuation_id="reason", opaque_ref="artifact://private/reason",
-        source_kind="liepin", round_no=1, query_instance_id="q1",
-        visible_candidate_count=2, eligible_candidate_count=2, initial_opened_count=1,
-    )
-    decision = decide_first_page_expansion(
-        continuations=[continuation], requested_count=1, baseline_opened_count=1,
-        baseline_identity_count=0, scorecards=[],
-    )
-    async def malicious(_request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
-        raise SourceFirstPageExpansionError(
-            "private provider failure", status=cast(Any, status),
-            safe_reason_code=marker, continuation_deleted=True,
-        )
-    [result] = asyncio.run(execute_first_page_decisions(
-        runtime_run_id="run", round_no=1, decisions=[decision], expanders={"liepin": malicious},
-    ))
-    assert result.safe_reason_code == expected
-    assert marker not in json.dumps(result.__dict__, default=str)
-
-
 def _requirement_sheet() -> RequirementSheet:
     return RequirementSheet(
         job_title="AI Agent Engineer",
@@ -2100,7 +995,8 @@ def _runtime_for_strict_source_tests(tmp_path: Path) -> WorkflowRuntime:
     runtime = _workflow_runtime(
         make_settings(
             runs_dir=str(tmp_path / "runs"),
-            mock_cts=True, provider_name="cts",
+            mock_cts=True,
+            provider_name="cts",
             min_rounds=1,
             max_rounds=1,
         )
@@ -2322,9 +1218,13 @@ def test_canonical_scoring_intake_skips_already_scored_identity() -> None:
     )
     run_state.candidate_store = {old_candidate.resume_id: old_candidate, new_candidate.resume_id: new_candidate}
     run_state.seen_resume_ids = [old_candidate.resume_id, new_candidate.resume_id]
-    normalize_runtime_candidates(run_state=run_state, candidates=(old_candidate, new_candidate), round_no=1, tracer=None)
+    normalize_runtime_candidates(
+        run_state=run_state, candidates=(old_candidate, new_candidate), round_no=1, tracer=None
+    )
     rebuild_candidate_identities(run_state, source_order={"cts": 0, "liepin": 1})
-    run_state.scorecards_by_resume_id[old_candidate.resume_id] = _scored_candidate(old_candidate.resume_id, source_round=1)
+    run_state.scorecards_by_resume_id[old_candidate.resume_id] = _scored_candidate(
+        old_candidate.resume_id, source_round=1
+    )
     identity_id = run_state.candidate_identity_by_resume_id[old_candidate.resume_id]
     run_state.canonical_resume_by_identity_id[identity_id] = RuntimeCanonicalResumeSelection(
         identity_id=identity_id,
@@ -2498,25 +1398,6 @@ def test_reflection_context_includes_latest_canonical_intake_summary() -> None:
     assert context.canonical_intake_summary.auto_merged_duplicate_count == 3
     assert context.canonical_intake_summary.source_raw_targets == {"cts": 10, "liepin": 10}
     assert context.canonical_intake_summary.per_source_raw_counts == {"cts": 10, "liepin": 10}
-
-
-def test_reflection_prompt_bounds_and_sanitizes_expansion_scoring_failures() -> None:
-    run_state = _run_state_for_canonical_intake_tests()
-    marker = "artifact://protected/private-resume?providerCandidateId=secret"
-    round_state = _round_state_for_reflection_tests(round_no=2).model_copy(update={
-        "scoring_failures": [
-            ScoringFailure(
-                resume_id=marker, branch_id="private-branch", round_no=2,
-                attempts=1, error_message=f"raw error {marker}",
-            )
-            for _ in range(9)
-        ]
-    })
-    prompt = render_reflection_prompt(build_reflection_context(run_state=run_state, round_state=round_state))
-    assert "expansion_scoring_failure_count=5" in prompt
-    assert marker not in prompt
-    assert "private-branch" not in prompt
-    assert "raw error" not in prompt
 
 
 def test_controller_context_includes_latest_canonical_intake_summary() -> None:
@@ -3145,9 +2026,11 @@ def test_workflow_runtime_uses_retrieval_runtime_for_round_search(tmp_path: Path
         rationale="delegation test",
     )
     captured: dict[str, object] = {}
+
     async def score_for_query_outcome(candidates: list[ResumeCandidate]) -> list[ScoredCandidate]:
         del candidates
         return []
+
     thresholds = QueryOutcomeThresholds()
 
     class FakeRetrievalRuntime:
@@ -3308,7 +2191,9 @@ def test_second_lane_stops_after_bad_current_batch_even_with_earlier_gain(tmp_pa
             keyword_query='python "resume matching" trace',
             query_instance_id="exploit-1",
             query_fingerprint="fp-exploit",
-            identity=ResolvedQueryIdentity("group-exploit", "role.python", ("skill.resume-matching", "framework.trace")),
+            identity=ResolvedQueryIdentity(
+                "group-exploit", "role.python", ("skill.resume-matching", "framework.trace")
+            ),
         ),
         LogicalQueryState(
             query_role="explore",
@@ -3338,7 +2223,17 @@ def test_second_lane_stops_after_bad_current_batch_even_with_earlier_gain(tmp_pa
             fetch_mode="summary",
             cursor=None,
         ) -> SearchResult:
-            del query_terms, keyword_query, provider_filters, runtime_constraints, page_size, round_no, trace_id, fetch_mode, cursor
+            del (
+                query_terms,
+                keyword_query,
+                provider_filters,
+                runtime_constraints,
+                page_size,
+                round_no,
+                trace_id,
+                fetch_mode,
+                cursor,
+            )
             city = None
             for note in adapter_notes:
                 if note.startswith("runtime location dispatch: "):
@@ -3498,11 +2393,19 @@ def test_runtime_round_search_uses_cts_builder_for_non_location_query(tmp_path: 
         round_no=1,
         retrieval_plan=retrieval_plan,
         title_anchor_terms=["python"],
-        query_term_pool=[QueryTermCandidate(
-            term="python", source="job_title", category="role_anchor", priority=1,
-            evidence="title", first_added_round=0, retrieval_role="primary_role_anchor",
-            queryability="admitted", family="role.python",
-        )],
+        query_term_pool=[
+            QueryTermCandidate(
+                term="python",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                queryability="admitted",
+                family="role.python",
+            )
+        ],
         used_term_group_keys=set(),
     )
 
@@ -3572,11 +2475,19 @@ def test_runtime_city_dispatch_passes_city_to_cts_builder(tmp_path: Path, monkey
         round_no=1,
         retrieval_plan=retrieval_plan,
         title_anchor_terms=["python"],
-        query_term_pool=[QueryTermCandidate(
-            term="python", source="job_title", category="role_anchor", priority=1,
-            evidence="title", first_added_round=0, retrieval_role="primary_role_anchor",
-            queryability="admitted", family="role.python",
-        )],
+        query_term_pool=[
+            QueryTermCandidate(
+                term="python",
+                source="job_title",
+                category="role_anchor",
+                priority=1,
+                evidence="title",
+                first_added_round=0,
+                retrieval_role="primary_role_anchor",
+                queryability="admitted",
+                family="role.python",
+            )
+        ],
         used_term_group_keys=set(),
     )
 
@@ -3659,7 +2570,8 @@ def _python_feedback_seed_scorecards() -> dict[str, ScoredCandidate]:
 def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=2,
     )
@@ -3672,7 +2584,13 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         top_candidates, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=progress_events.append)
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=progress_events.append,
+            )
         )
     finally:
         tracer.close()
@@ -3685,9 +2603,7 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     assert len(run_state.retrieval_state.query_execution_ledger) == 2
     assert [len(round_state.query_outcomes) for round_state in run_state.round_history] == [1, 1]
     assert all(
-        outcome.term_group_key
-        for round_state in run_state.round_history
-        for outcome in round_state.query_outcomes
+        outcome.term_group_key for round_state in run_state.round_history for outcome in round_state.query_outcomes
     )
     assert [item.round_no for item in run_state.retrieval_state.sent_query_history] == [1, 2]
     assert [item.city for item in run_state.retrieval_state.sent_query_history] == ["上海", "上海"]
@@ -3717,7 +2633,9 @@ def test_runtime_updates_run_state_across_rounds(tmp_path: Path) -> None:
     ]
     round_02_normalized = [
         json.loads(line)
-        for line in _round_artifact(tracer.run_dir, 2, "scoring", "scoring_input_refs", extension="jsonl").read_text(encoding="utf-8").splitlines()
+        for line in _round_artifact(tracer.run_dir, 2, "scoring", "scoring_input_refs", extension="jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
         if line.strip()
     ]
     assert [item.query_role for item in round_02_queries] == ["exploit"]
@@ -3807,7 +2725,8 @@ def test_round_two_serializes_exploit_and_generic_lane_types(
 ) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=2,
     )
@@ -3820,7 +2739,15 @@ def test_round_two_serializes_exploit_and_generic_lane_types(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -3848,7 +2775,8 @@ def test_round_two_uses_prf_probe_when_gate_passes(
 ) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=2,
     )
@@ -3862,7 +2790,15 @@ def test_round_two_uses_prf_probe_when_gate_passes(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -3906,7 +2842,9 @@ def test_default_llm_prf_backend_can_drive_prf_probe(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2
+    )
     runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
@@ -3918,7 +2856,15 @@ def test_default_llm_prf_backend_can_drive_prf_probe(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -3940,7 +2886,9 @@ def test_prf_selection_uses_llm_prf_without_backend_setting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2
+    )
     runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
@@ -3954,7 +2902,15 @@ def test_prf_selection_uses_llm_prf_without_backend_setting(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -3966,7 +2922,9 @@ def test_prf_selection_uses_llm_prf_without_backend_setting(
 
 
 def test_default_llm_prf_backend_skips_round_one_without_artifacts(tmp_path: Path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=1)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=1
+    )
     runtime = _workflow_runtime(settings)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
     _install_llm_prf_extractor(runtime, fake_extractor)
@@ -3977,7 +2935,15 @@ def test_default_llm_prf_backend_skips_round_one_without_artifacts(tmp_path: Pat
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -4016,7 +2982,9 @@ def test_insufficient_prf_seed_support_does_not_require_prf_provider_preflight(
         del settings
         preflight_calls.append(list(extra_stage_names or []))
 
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2
+    )
     runtime = _workflow_runtime(settings)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
     _install_llm_prf_extractor(runtime, fake_extractor)
@@ -4028,7 +2996,15 @@ def test_insufficient_prf_seed_support_does_not_require_prf_provider_preflight(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -4060,7 +3036,9 @@ def test_llm_prf_stage_preflight_failure_falls_back_without_model_call(
         if stages == ["prf_probe_phrase_proposal"]:
             raise RuntimeError("prf stage unsupported")
 
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2
+    )
     runtime = _workflow_runtime(settings)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
     _install_llm_prf_extractor(runtime, fake_extractor)
@@ -4072,7 +3050,15 @@ def test_llm_prf_stage_preflight_failure_falls_back_without_model_call(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -4094,7 +3080,8 @@ def test_llm_prf_backend_falls_back_to_generic_on_timeout(
 ) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=2,
         prf_probe_phrase_proposal_timeout_seconds=0.01,
@@ -4110,7 +3097,15 @@ def test_llm_prf_backend_falls_back_to_generic_on_timeout(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -4130,7 +3125,9 @@ def test_llm_prf_backend_falls_back_to_generic_on_provider_failure_without_legac
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2
+    )
     runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     fake_extractor = FakeLLMPRFExtractor(exc=RuntimeError("provider boom"))
@@ -4142,7 +3139,15 @@ def test_llm_prf_backend_falls_back_to_generic_on_provider_failure_without_legac
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -4159,7 +3164,9 @@ def test_llm_prf_backend_falls_back_to_generic_when_all_candidates_rejected(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2
+    )
     runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
 
@@ -4197,7 +3204,15 @@ def test_llm_prf_backend_falls_back_to_generic_when_all_candidates_rejected(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -4214,7 +3229,9 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2
+    )
     runtime = _workflow_runtime(settings)
     _disable_llm_prf_preflight(monkeypatch)
     fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
@@ -4226,7 +3243,15 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -4236,9 +3261,7 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
     decision = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "second_lane_decision").read_text())
     snapshot = json.loads(_round_artifact(tracer.run_dir, 2, "retrieval", "replay_snapshot").read_text())
 
-    seed_evidence_texts = [
-        item["source_text_raw"] for item in llm_input["source_texts"] if item["support_eligible"]
-    ]
+    seed_evidence_texts = [item["source_text_raw"] for item in llm_input["source_texts"] if item["support_eligible"]]
     assert seed_evidence_texts.count("LangGraph") == 2
     assert len(seed_evidence_texts) <= 8
     assert candidates["candidates"][0]["surface"] == "LangGraph"
@@ -4253,7 +3276,9 @@ def test_llm_prf_backend_writes_input_candidates_grounding_and_policy_artifacts(
 
 
 def test_family_novelty_avoids_duplicate_sibling_hit(tmp_path: Path) -> None:
-    settings = make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2)
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts", min_rounds=1, max_rounds=2
+    )
     runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
     runtime.retrieval_service = DuplicateAcrossLanesCTS()
@@ -4262,7 +3287,15 @@ def test_family_novelty_avoids_duplicate_sibling_hit(tmp_path: Path) -> None:
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -4283,12 +3316,11 @@ def test_family_novelty_avoids_duplicate_sibling_hit(tmp_path: Path) -> None:
     assert exploit_hit["was_duplicate"] is False
 
 
-def test_run_rounds_delegates_controller_stage_to_runtime_host(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_rounds_delegates_controller_stage_to_runtime_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=1,
     )
@@ -4345,12 +3377,19 @@ def test_run_rounds_delegates_controller_stage_to_runtime_host(
         ),
         raising=False,
     )
-    monkeypatch.setattr(orchestrator_module.round_decision_runtime, "resolve_round_decision", fake_resolve_round_decision)
+    monkeypatch.setattr(
+        orchestrator_module.round_decision_runtime, "resolve_round_decision", fake_resolve_round_decision
+    )
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
         )
     finally:
         tracer.close()
@@ -4371,7 +3410,8 @@ def test_run_rounds_delegates_controller_stage_to_runtime_host(
 def test_runtime_reflection_does_not_mutate_query_term_pool(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=1,
     )
@@ -4385,7 +3425,14 @@ def test_runtime_reflection_does_not_mutate_query_term_pool(tmp_path: Path) -> N
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
+        )
     finally:
         tracer.close()
 
@@ -4401,12 +3448,11 @@ def test_runtime_reflection_does_not_mutate_query_term_pool(tmp_path: Path) -> N
     assert advice.suggested_deprioritize_terms == ["resume matching"]
 
 
-def test_run_rounds_delegates_reflection_stage_to_runtime_host(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_rounds_delegates_reflection_stage_to_runtime_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=1,
     )
@@ -4447,7 +3493,12 @@ def test_run_rounds_delegates_reflection_stage_to_runtime_host(
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
         )
     finally:
         tracer.close()
@@ -4468,7 +3519,8 @@ def test_run_async_delegates_deterministic_finalization_stage_to_runtime_host(
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=1,
         enable_eval=False,
@@ -4529,19 +3581,27 @@ def test_run_async_delegates_deterministic_finalization_stage_to_runtime_host(
         final_markdown = "# Delegated final markdown\n"
         kwargs["tracer"].write_json(
             "runtime.finalization_call",
-            {"stage": "finalization", "engine": "deterministic_runtime", "candidate_count": len(final_result.candidates)},
+            {
+                "stage": "finalization",
+                "engine": "deterministic_runtime",
+                "candidate_count": len(final_result.candidates),
+            },
         )
         kwargs["tracer"].write_json("output.final_candidates", final_result.model_dump(mode="json"))
         kwargs["tracer"].write_text("output.final_answer", final_markdown)
-        return final_result, final_markdown, {
-            "artifacts": [
-                "runtime/finalization_context.json",
-                "runtime/finalization_call.json",
-                "output/final_candidates.json",
-                "output/final_answer.md",
-            ],
-            "latency_ms": 1,
-        }
+        return (
+            final_result,
+            final_markdown,
+            {
+                "artifacts": [
+                    "runtime/finalization_context.json",
+                    "runtime/finalization_call.json",
+                    "output/final_candidates.json",
+                    "output/final_answer.md",
+                ],
+                "latency_ms": 1,
+            },
+        )
 
     monkeypatch.setattr(
         orchestrator_module,
@@ -4632,7 +3692,8 @@ def test_run_async_reuses_one_detail_open_claim_ledger_across_round_contexts(
 def test_runtime_builds_plan_for_reflection_backed_inactive_term(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=2,
     )
@@ -4645,7 +3706,14 @@ def test_runtime_builds_plan_for_reflection_backed_inactive_term(tmp_path: Path)
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
+        )
     finally:
         tracer.close()
 
@@ -4905,7 +3973,8 @@ def test_workflow_runtime_retrieval_runtime_rejects_direct_rebinding(tmp_path: P
 def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=3,
     )
@@ -4917,7 +3986,12 @@ def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) ->
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
         )
     finally:
         tracer.close()
@@ -4931,7 +4005,8 @@ def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) ->
 def test_runtime_rejects_controller_stop_when_stop_guidance_blocks_stop(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=3,
     )
@@ -4945,7 +4020,14 @@ def test_runtime_rejects_controller_stop_when_stop_guidance_blocks_stop(tmp_path
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
         with pytest.raises(ValueError, match="controller_stop_not_allowed"):
-            asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+            asyncio.run(
+                runtime._run_rounds(
+                    run_state=run_state,
+                    detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                    tracer=tracer,
+                    source_plan=_cts_source_plan(runtime, tracer),
+                )
+            )
     finally:
         tracer.close()
 
@@ -4961,7 +4043,8 @@ def test_runtime_rejects_controller_stop_when_stop_guidance_blocks_stop(tmp_path
 def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=10,
     )
@@ -4973,7 +4056,12 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
         )
     finally:
         tracer.close()
@@ -5014,7 +4102,8 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
 def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=10,
     )
@@ -5026,7 +4115,12 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer))
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
         )
     finally:
         tracer.close()
@@ -5098,7 +4192,8 @@ def test_runtime_force_broaden_decision_delegates_to_rescue_execution_runtime(
 def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_term(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=10,
         candidate_feedback_enabled=True,
@@ -5112,7 +4207,14 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
+        )
     finally:
         tracer.close()
 
@@ -5139,7 +4241,8 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
 ) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=10,
         candidate_feedback_enabled=True,
@@ -5182,7 +4285,13 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
         }
         run_state.top_pool_ids = ["fit-1", "fit-2"]
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
-            runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=progress_events.append)
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=progress_events.append,
+            )
         )
     finally:
         tracer.close()
@@ -5214,7 +4323,8 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
 def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=10,
         candidate_feedback_enabled=True,
@@ -5255,7 +4365,15 @@ def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: P
             ),
         }
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer), progress_callback=None))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+                progress_callback=None,
+            )
+        )
     finally:
         tracer.close()
 
@@ -5268,7 +4386,8 @@ def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: P
 def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_was_attempted(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=1,
         max_rounds=10,
         candidate_feedback_enabled=True,
@@ -5283,7 +4402,14 @@ def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_wa
         run_state.retrieval_state.anchor_only_broaden_attempted = True
         run_state.scorecards_by_resume_id = _python_feedback_seed_scorecards()
         run_state.top_pool_ids = ["fit-1", "fit-2"]
-        asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+        asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
+        )
     finally:
         tracer.close()
 
@@ -5300,7 +4426,8 @@ def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_wa
 def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
-        mock_cts=True, provider_name="cts",
+        mock_cts=True,
+        provider_name="cts",
         min_rounds=3,
         max_rounds=4,
     )
@@ -5476,9 +4603,7 @@ def test_post_controller_novelty_exhaustion_keeps_model_evidence_and_skips_norma
         _round_artifact(tracer.run_dir, 1, "controller", "controller_decision").read_text(encoding="utf-8")
     )
     assert controller_call["status"] == "succeeded"
-    assert controller_call["structured_output_sha256"] == json_sha256(
-        decision_holder["value"].model_dump(mode="json")
-    )
+    assert controller_call["structured_output_sha256"] == json_sha256(decision_holder["value"].model_dump(mode="json"))
     assert override["stop_reason"] == "query_family_exhausted"
 
 
@@ -5586,11 +4711,7 @@ def test_four_round_ai_agent_runtime_never_replays_non_anchor_family_or_term_gro
         for outcome in round_state.query_outcomes
         if outcome.attempted
     ]
-    non_anchor_families = [
-        family
-        for outcome in attempted
-        for family in outcome.non_anchor_term_family_ids
-    ]
+    non_anchor_families = [family for outcome in attempted for family in outcome.non_anchor_term_family_ids]
     assert stop_reason == "query_family_exhausted"
     assert rounds_executed == 3
     assert terminal is not None and terminal.round_no == 4
@@ -5598,10 +4719,7 @@ def test_four_round_ai_agent_runtime_never_replays_non_anchor_family_or_term_gro
     assert len([outcome.term_group_key for outcome in attempted]) == len(
         {outcome.term_group_key for outcome in attempted}
     )
-    assert all(
-        sum(term == "AI Agent" for term in outcome.query_terms) == 1
-        for outcome in attempted
-    )
+    assert all(sum(term == "AI Agent" for term in outcome.query_terms) == 1 for outcome in attempted)
     assert any(len(round_state.query_outcomes) == 1 for round_state in run_state.round_history)
 
 

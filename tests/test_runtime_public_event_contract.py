@@ -9,6 +9,10 @@ import pytest
 
 from seektalent.models import ResumeCandidate
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
+from seektalent.source_contracts.first_page_expansion import (
+    SourceFirstPageExpansionRequest,
+    SourceFirstPageExpansionResult,
+)
 from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.public_events import make_runtime_public_event, normalize_runtime_public_event
 from seektalent.runtime.source_lanes import SourceQueryExecutionOutcome, build_runtime_source_plan
@@ -680,7 +684,11 @@ def _multi_source_runtime_public_event_payloads(
         max_rounds=1,
         enable_eval=False,
     )
-    runtime = WorkflowRuntime(settings, source_round_adapter_provider=_completed_source_round_adapters)
+    runtime = WorkflowRuntime(
+        settings,
+        source_round_adapter_provider=_completed_source_round_adapters,
+        source_first_page_expander_provider=_contract_valid_test_expanders,
+    )
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
@@ -709,6 +717,23 @@ def _multi_source_runtime_public_event_payloads(
         tracer.close()
 
     return _runtime_public_event_payloads(progress_events)
+
+
+def _contract_valid_test_expanders(_runtime, _ledger):
+    async def expander(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
+        continuation = request.continuation
+        return SourceFirstPageExpansionResult(
+            source_kind=request.source_kind,
+            query_instance_id=request.query_instance_id,
+            continuation_id=request.continuation_id,
+            status="completed",
+            first_page_visible_count=continuation.visible_candidate_count,
+            first_page_eligible_count=continuation.eligible_candidate_count,
+            initial_opened_count=continuation.initial_opened_count,
+            continuation_deleted=True,
+        )
+
+    return {"liepin": expander}
 
 
 def _completed_source_round_adapters(runtime: WorkflowRuntime, context):

@@ -572,7 +572,8 @@ def test_reflection_prompt_contains_round_review_and_candidate_ids() -> None:
     assert "new=2" in prompt
     assert "resume-1" in prompt
     assert "resume-2" in prompt
-    assert "schema parse failed" in prompt
+    assert "expansion_scoring_failure_count=1" in prompt
+    assert "schema parse failed" not in prompt
     assert '"current_query_terms"' not in prompt
     assert "REFLECTION_CONTEXT" not in prompt
     assert_prompt_snapshot_safe(prompt)

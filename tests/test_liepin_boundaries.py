@@ -109,6 +109,29 @@ def test_provider_preserves_expected_error_and_attaches_cleanup_ack() -> None:
     assert captured.value.continuation_deleted is True
 
 
+def test_provider_preserves_primary_error_when_expected_cleanup_boundary_fails() -> None:
+    continuation = ProviderSearchContinuation(kind="first_page_detail_expansion",
+        continuation_id="c", opaque_ref="artifact://protected/c", source_kind="liepin", round_no=1,
+        query_instance_id="q", visible_candidate_count=1, eligible_candidate_count=1,
+        initial_opened_count=0)
+
+    class Worker:
+        async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action, **kwargs):
+            del kwargs
+            if action == "expand":
+                from seektalent.core.retrieval.provider_contract import ProviderSearchError
+                raise ProviderSearchError(reason_code="primary_failed", message="primary failed")
+            raise LiepinWorkerModeError("cleanup blocked", code="cleanup_blocked")
+
+    with pytest.raises(ProviderFirstPageExpansionError) as captured:
+        asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
+            action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
+            logical_round_no=1, query_instance_id="q"))
+
+    assert captured.value.safe_reason_code == "primary_failed"
+    assert captured.value.continuation_deleted is False
+
+
 @pytest.mark.parametrize("status", ["completed", "partial", "failed"])
 def test_provider_deletes_every_terminal_expansion_result(status: str) -> None:
     continuation = ProviderSearchContinuation(kind="first_page_detail_expansion",

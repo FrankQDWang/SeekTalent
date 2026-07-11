@@ -47,7 +47,7 @@ from seektalent.source_contracts.runtime_lanes import (
 )
 from seektalent.providers.liepin.source_compiler import compile_liepin_source_query_intents
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
-from seektalent.runtime.source_expansion import SourceFirstPageExpansionRequest, SourceFirstPageExpansionResult
+from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionRequest, SourceFirstPageExpansionResult
 from seektalent.source_adapters.round_adapters import default_source_first_page_expander_provider
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 import seektalent.source_adapters.round_adapters as round_adapters

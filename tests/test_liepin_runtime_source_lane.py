@@ -15,7 +15,7 @@ from seektalent.core.retrieval.provider_contract import (
     SearchRequest,
     SearchResult,
 )
-from seektalent.runtime.source_expansion import SourceFirstPageExpansionError, SourceFirstPageExpansionRequest
+from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionError, SourceFirstPageExpansionRequest
 from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.providers.liepin.client import LiepinWorkerModeError, liepin_resume_search_response_to_search_result

@@ -711,7 +711,7 @@ def test_real_adapter_persists_continuation_only_under_protected_with_owner_mode
         detail_url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=70",
         provider_candidate_key_hash=_detail_key("70"),
     )
-    carrier = adapter.save_liepin_first_page_continuation(
+    carrier = adapter._save_liepin_first_page_continuation(
         source_run_id="run-adapter",
         logical_round_no=5,
         query_instance_id="query-adapter",

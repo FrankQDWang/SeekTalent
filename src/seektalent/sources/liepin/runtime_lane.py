@@ -10,8 +10,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 from seektalent.config import AppSettings
-from seektalent.core.retrieval.provider_contract import ProviderFirstPageExpansionError, ProviderSearchError, SearchRequest, SearchResult
-from seektalent.runtime.source_expansion import SourceFirstPageExpansionError, SourceFirstPageExpansionRequest, SourceFirstPageExpansionResult
+from seektalent.core.retrieval.provider_contract import (
+    ProviderFirstPageExpansionError,
+    ProviderSearchContinuation,
+    ProviderSearchError,
+    SearchRequest,
+    SearchResult,
+)
+from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionError, SourceFirstPageExpansionRequest, SourceFirstPageExpansionResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
@@ -72,7 +78,8 @@ async def run_liepin_first_page_expansion(*, settings: AppSettings,
     provider = _build_provider(settings=settings, worker_client=client)
     try:
         result = await provider.handle_first_page_continuation_with_detail_open_claim_ledger(
-            action=request.action, continuation=request.continuation,
+            action=request.action,
+            continuation=cast(ProviderSearchContinuation, request.continuation),
             detail_open_claim_ledger=detail_open_claim_ledger, logical_round_no=request.round_no,
             query_instance_id=request.query_instance_id)
     except ProviderFirstPageExpansionError as exc:

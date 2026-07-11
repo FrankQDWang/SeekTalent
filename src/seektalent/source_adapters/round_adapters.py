@@ -8,7 +8,7 @@ import httpx
 from seektalent.core.retrieval.provider_contract import ProviderSearchError
 from seektalent.models import QueryOutcomeThresholds
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext, WorkflowRuntime
-from seektalent.runtime.source_expansion import SourceFirstPageExpander
+from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpander
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.sources.liepin.runtime_lane import run_liepin_first_page_expansion
 from seektalent.runtime.source_query_intent import (

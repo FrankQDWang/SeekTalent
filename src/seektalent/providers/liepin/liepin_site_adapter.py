@@ -352,7 +352,7 @@ class LiepinSiteAdapter:
             self._continuation_store.delete_expired()
         return self._continuation_store
 
-    def save_liepin_first_page_continuation(self, *, source_run_id: str, logical_round_no: int,
+    def _save_liepin_first_page_continuation(self, *, source_run_id: str, logical_round_no: int,
         query_instance_id: str, keyword_query: str, visible_candidate_count: int,
         candidates: Sequence[LiepinFirstPageCandidate]) -> ProviderSearchContinuation:
         saved = self._first_page_continuation_store().create(
@@ -366,24 +366,24 @@ class LiepinSiteAdapter:
             visible_candidate_count=saved.visible_candidate_count,
             eligible_candidate_count=len(saved.candidates), initial_opened_count=0)
 
-    def mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
+    def _mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
         state: CandidateState) -> None:
         self._first_page_continuation_store().mark_candidate(opaque_ref, rank=rank, state=state)
 
-    def load_liepin_first_page_continuation(self, opaque_ref: str):
+    def _load_liepin_first_page_continuation(self, opaque_ref: str):
         return self._first_page_continuation_store().load(opaque_ref)
 
-    def discard_liepin_first_page_continuation(self, opaque_ref: str) -> None:
+    def _discard_liepin_first_page_continuation(self, opaque_ref: str) -> None:
         self._first_page_continuation_store().delete(opaque_ref)
 
-    def liepin_first_page_continuation_exists(self, opaque_ref: str) -> bool:
+    def _liepin_first_page_continuation_exists(self, opaque_ref: str) -> bool:
         try:
             self._first_page_continuation_store().load(opaque_ref)
         except FileNotFoundError:
             return False
         return True
 
-    def handle_liepin_first_page_continuation(self, *, continuation_ref: str,
+    def _handle_liepin_first_page_continuation(self, *, continuation_ref: str,
             detail_open_claim_context: DetailOpenClaimSearchContext) -> dict[str, object]:
         from seektalent.providers.liepin.liepin_search_workflow import LiepinSearchWorkflow
         return LiepinSearchWorkflow(site=_LiepinSearchWorkflowSite(self)).expand_first_page_continuation(
@@ -3506,17 +3506,17 @@ class _LiepinSearchWorkflowSite:
     adapter: LiepinSiteAdapter
 
     def save_liepin_first_page_continuation(self, **kwargs: object) -> ProviderSearchContinuation:
-        return self.adapter.save_liepin_first_page_continuation(**cast(dict, kwargs))
+        return self.adapter._save_liepin_first_page_continuation(**cast(dict, kwargs))
 
     def load_liepin_first_page_continuation(self, opaque_ref: str):
-        return self.adapter.load_liepin_first_page_continuation(opaque_ref)
+        return self.adapter._load_liepin_first_page_continuation(opaque_ref)
 
     def discard_liepin_first_page_continuation(self, opaque_ref: str) -> None:
-        self.adapter.discard_liepin_first_page_continuation(opaque_ref)
+        self.adapter._discard_liepin_first_page_continuation(opaque_ref)
 
     def mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
         state: CandidateState) -> None:
-        self.adapter.mark_liepin_first_page_candidate(opaque_ref=opaque_ref, rank=rank, state=state)
+        self.adapter._mark_liepin_first_page_candidate(opaque_ref=opaque_ref, rank=rank, state=state)
 
     def append_agent_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
         self.adapter._append_agent_event(source_run_id, event)
