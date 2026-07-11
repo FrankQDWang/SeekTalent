@@ -4,9 +4,11 @@ import asyncio
 import json
 from datetime import datetime
 from time import perf_counter
-from typing import cast
+from typing import Literal, cast
 
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError
+import httpx
 
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
@@ -34,6 +36,47 @@ from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
 SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v2"
+ScoringFailureKind = Literal[
+    "transport_error",
+    "provider_error",
+    "response_validation_error",
+    "score_applicability_error",
+]
+ScoringProviderFailureKind = Literal[
+    "provider_auth_error",
+    "provider_access_denied",
+    "provider_rate_limited",
+    "provider_model_not_found",
+    "provider_invalid_request",
+    "provider_unknown_error",
+]
+
+
+def _scoring_failure_category(
+    exc: Exception,
+) -> tuple[ScoringFailureKind, ScoringProviderFailureKind | None]:
+    if isinstance(exc, ValueError) and str(exc) in {
+        "preferred_match_score_required",
+        "preferred_match_score_not_applicable",
+        "risk_score_required",
+        "risk_score_not_applicable",
+    }:
+        return "score_applicability_error", None
+    if isinstance(exc, ModelHTTPError):
+        provider_kind_by_status: dict[int, ScoringProviderFailureKind] = {
+            400: "provider_invalid_request",
+            401: "provider_auth_error",
+            403: "provider_access_denied",
+            404: "provider_model_not_found",
+            429: "provider_rate_limited",
+        }
+        provider_kind = provider_kind_by_status.get(exc.status_code, "provider_unknown_error")
+        return "provider_error", provider_kind
+    if isinstance(exc, ModelAPIError):
+        return "provider_error", "provider_unknown_error"
+    if isinstance(exc, (httpx.ConnectError, httpx.TimeoutException)):
+        return "transport_error", None
+    return "response_validation_error", None
 
 
 def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
@@ -526,6 +569,7 @@ class ResumeScorer:
             return result, None
         except Exception as exc:  # noqa: BLE001
             latency_ms = max(1, int((perf_counter() - started_at_clock) * 1000))
+            failure_kind, provider_failure_kind = _scoring_failure_category(exc)
             failure = ScoringFailure(
                 resume_id=candidate.resume_id,
                 branch_id=branch_id,
@@ -533,6 +577,8 @@ class ResumeScorer:
                 attempts=1,
                 error_message=str(exc),
                 latency_ms=latency_ms,
+                failure_kind=failure_kind,
+                provider_failure_kind=provider_failure_kind,
             )
             tracer.append_jsonl(
                 f"round.{context.round_no:02d}.scoring.scoring_calls",
@@ -574,6 +620,8 @@ class ResumeScorer:
                     ),
                     output_summary=None,
                     error_message=str(exc),
+                    failure_kind=failure_kind,
+                    provider_failure_kind=provider_failure_kind,
                     cache_hit=False,
                     cache_key=cache_key,
                     cache_lookup_latency_ms=cache_lookup_latency_ms,
@@ -593,7 +641,11 @@ class ResumeScorer:
                 summary=str(exc),
                 error_message=str(exc),
                 artifact_paths=artifact_paths,
-                payload={"attempts": 1},
+                payload={
+                    "attempts": 1,
+                    "failure_kind": failure_kind,
+                    "provider_failure_kind": provider_failure_kind,
+                },
             )
             return None, failure
 

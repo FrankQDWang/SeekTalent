@@ -1198,6 +1198,20 @@ class ScoringFailure(BaseModel):
     attempts: int
     error_message: str
     latency_ms: int | None = None
+    failure_kind: Literal[
+        "transport_error",
+        "provider_error",
+        "response_validation_error",
+        "score_applicability_error",
+    ] = "response_validation_error"
+    provider_failure_kind: Literal[
+        "provider_auth_error",
+        "provider_access_denied",
+        "provider_rate_limited",
+        "provider_model_not_found",
+        "provider_invalid_request",
+        "provider_unknown_error",
+    ] | None = None
 
 
 class TopPoolEntryView(BaseModel):

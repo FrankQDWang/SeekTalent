@@ -7,6 +7,7 @@ from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
+from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
 from seektalent.models import (
     HardConstraintSlots,
@@ -309,6 +310,49 @@ def test_scoring_cache_miss_calls_provider_and_stores_result(
     cache_key = scoring_cache_key(settings, prompt, context, user_prompt)
     cached = get_cached_json(settings, namespace="scoring", key=cache_key)
     assert cached == scored[0].model_dump(mode="json")
+
+
+@pytest.mark.parametrize(
+    ("failure", "failure_kind", "provider_failure_kind"),
+    [
+        (ModelHTTPError(400, "test-model", {"error": "schema rejected"}), "provider_error", "provider_invalid_request"),
+        (UnexpectedModelBehavior("Exceeded maximum retries for output validation"), "response_validation_error", None),
+        (ValueError("risk_score_not_applicable"), "score_applicability_error", None),
+    ],
+)
+def test_scoring_failure_records_safe_diagnostic_category(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure: Exception,
+    failure_kind: str,
+    provider_failure_kind: str | None,
+) -> None:
+    scorer = ResumeScorer(_settings(tmp_path), _prompt())
+
+    async def fail_scoring(*, prompt: str, agent):  # noqa: ANN001
+        del prompt, agent
+        raise failure
+
+    monkeypatch.setattr(scorer, "_score_one_live", fail_scoring)
+    tracer = RunTracer(tmp_path / "runs")
+    try:
+        scored, failures = asyncio.run(
+            scorer._score_candidates_parallel(
+                contexts=[_context()],
+                tracer=tracer,
+                agent=cast(Any, object()),
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert scored == []
+    assert len(failures) == 1
+    assert failures[0].failure_kind == failure_kind
+    assert failures[0].provider_failure_kind == provider_failure_kind
+    snapshot = _read_jsonl(tracer.run_dir / "rounds/01/scoring/scoring_calls.jsonl")[0]
+    assert snapshot["failure_kind"] == failure_kind
+    assert snapshot.get("provider_failure_kind") == provider_failure_kind
 
 
 def test_scoring_propagates_safe_score_metadata_from_resume_candidate_raw(

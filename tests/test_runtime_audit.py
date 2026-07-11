@@ -1337,6 +1337,7 @@ class FailingScorer:
             round_no=contexts[0].round_no,
             attempts=1,
             error_message="forced scoring failure",
+            failure_kind="response_validation_error",
             latency_ms=1,
         )
         tracer.append_jsonl(
@@ -2877,7 +2878,7 @@ def test_runtime_aborts_when_scoring_has_a_final_failure(tmp_path: Path, monkeyp
     try:
         runtime.run(source_kinds=["cts"], job_title="Senior Python Engineer", jd="JD", notes="Notes")
     except RuntimeError as exc:
-        assert str(exc) == "Scoring failed for 1 resume(s): mock-r001."
+        assert str(exc) == "Scoring failed for 1 resume(s): response_validation_error=1."
     else:  # pragma: no cover
         raise AssertionError("Expected run() to fail after a final scoring failure")
 

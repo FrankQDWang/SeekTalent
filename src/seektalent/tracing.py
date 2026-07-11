@@ -189,6 +189,7 @@ class LLMCallSnapshot(BaseModel):
         "transport_error",
         "provider_error",
         "response_validation_error",
+        "score_applicability_error",
         "structured_output_parse_error",
         "insufficient_prf_seed_support",
         "settings_migration_error",

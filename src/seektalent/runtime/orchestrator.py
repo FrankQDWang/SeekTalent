@@ -3833,6 +3833,7 @@ class WorkflowRuntime:
             "transport_error",
             "provider_error",
             "response_validation_error",
+            "score_applicability_error",
             "structured_output_parse_error",
             "insufficient_prf_seed_support",
             "settings_migration_error",
@@ -4358,8 +4359,15 @@ class WorkflowRuntime:
         return providers
 
     def _format_scoring_failure_message(self, failures: Collection[object]) -> str:
-        resume_ids = [getattr(item, "resume_id", "unknown") for item in failures]
-        return f"Scoring failed for {len(failures)} resume(s): {', '.join(resume_ids)}."
+        categories = Counter(
+            getattr(item, "provider_failure_kind", None)
+            or getattr(item, "failure_kind", "unknown")
+            for item in failures
+        )
+        category_summary = ", ".join(
+            f"{category}={count}" for category, count in sorted(categories.items())
+        )
+        return f"Scoring failed for {len(failures)} resume(s): {category_summary}."
 
     def _preview_text(self, text: str, *, limit: int) -> str:
         collapsed = re.sub(r"\s+", " ", text).strip()
