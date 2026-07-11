@@ -310,10 +310,9 @@ def test_real_scorer_success_path_writes_scoring_calls_to_migrated_round_layout(
         return (
             ScoredCandidateDraft(
                 fit_bucket="fit",
-                overall_score=88,
                 must_have_match_score=91,
                 preferred_match_score=77,
-                risk_score=14,
+                risk_score=None,
                 risk_flags=[],
                 reasoning_summary="Strong fit for migrated scoring writer test.",
                 matched_must_haves=["python"],

@@ -1138,10 +1138,9 @@ class ScoredCandidateDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     fit_bucket: FitBucket = Field(description="Top-level keep-or-drop decision for this resume.")
-    overall_score: int = Field(ge=0, le=100, description="Overall role-fit score.")
     must_have_match_score: int = Field(ge=0, le=100, description="Score for critical must-have alignment.")
-    preferred_match_score: int = Field(ge=0, le=100, description="Score for preferred-signal alignment.")
-    risk_score: int = Field(ge=0, le=100, description="Risk score where higher means more concern.")
+    preferred_match_score: int | None = Field(default=None, ge=0, le=100, description="Score for preferred-signal alignment.")
+    risk_score: int | None = Field(default=None, ge=0, le=100, description="Risk score where higher means more concern.")
     risk_flags: list[str] = Field(default_factory=list, description="Concise risk flags grounded in the resume.")
     reasoning_summary: str = Field(min_length=1, description="Short scoring rationale for reviewers and logs.")
     matched_must_haves: list[str] = Field(default_factory=list, description="Must-have signals supported by resume evidence.")
@@ -1158,8 +1157,8 @@ class ScoredCandidate(BaseModel):
     fit_bucket: FitBucket = Field(description="Top-level keep-or-drop decision for this resume.")
     overall_score: int = Field(ge=0, le=100, description="Overall role-fit score.")
     must_have_match_score: int = Field(ge=0, le=100, description="Score for critical must-have alignment.")
-    preferred_match_score: int = Field(ge=0, le=100, description="Score for preferred-signal alignment.")
-    risk_score: int = Field(ge=0, le=100, description="Risk score where higher means more concern.")
+    preferred_match_score: int | None = Field(default=None, ge=0, le=100, description="Score for preferred-signal alignment.")
+    risk_score: int | None = Field(default=None, ge=0, le=100, description="Risk score where higher means more concern.")
     risk_flags: list[str] = Field(default_factory=list, description="Concise risk flags grounded in the resume.")
     reasoning_summary: str = Field(min_length=1, description="Short scoring rationale for reviewers and logs.")
     evidence: list[str] = Field(default_factory=list, description="Resume-grounded evidence snippets supporting the judgment.")
@@ -1197,7 +1196,7 @@ class TopPoolEntryView(BaseModel):
     fit_bucket: FitBucket
     overall_score: int = Field(ge=0, le=100)
     must_have_match_score: int = Field(ge=0, le=100)
-    risk_score: int = Field(ge=0, le=100)
+    risk_score: int | None = Field(default=None, ge=0, le=100)
     matched_must_haves: list[str] = Field(default_factory=list)
     risk_flags: list[str] = Field(default_factory=list)
     reasoning_summary: str
@@ -1808,6 +1807,6 @@ def scored_candidate_sort_key(candidate: ScoredCandidate) -> tuple[int, int, int
         0 if candidate.fit_bucket == "fit" else 1,
         -candidate.overall_score,
         -candidate.must_have_match_score,
-        candidate.risk_score,
+        candidate.risk_score if candidate.risk_score is not None else 0,
         candidate.resume_id,
     )

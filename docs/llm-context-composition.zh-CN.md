@@ -92,7 +92,7 @@ flowchart TD
     E --> F["用户输入第 5 段<br/>RAW EXCERPT<br/>简历原文摘录"]
     F --> G["用户输入第 6 段<br/>EXACT DATA<br/>轮次、resume_id、source_round"]
     G --> H["结构化输出要求<br/>ScoredCandidateDraft"]
-    H --> I["runtime 后处理<br/>补回 resume_id/source_round，派生 evidence、confidence、strengths、weaknesses"]
+    H --> I["runtime 后处理<br/>确定性计算 overall_score，补回标识并派生展示字段"]
     I --> J["runtime 排序<br/>进入 scorecards，并参与全局 top pool 更新"]
 ```
 
@@ -100,9 +100,19 @@ flowchart TD
 
 这一步像“单份简历评审”。Scoring prompt 会包含完整的结构化 hard constraints、preferences，以及本轮未能投到 CTS 的 runtime-only constraints。每个评分调用仍然只看一份简历和同一套岗位评分标准，不看其他候选人。这样可以避免模型因为候选人之间互相比较而改变标准。
 
-模型只负责判断这份简历的匹配度、分数、风险、命中的必备项和缺失项。候选人的最终排序、证据汇总、强弱点展示字段由 runtime 再统一整理。
+模型只负责判断这份简历的匹配度，输出适用的局部分数、风险、命中的必备项和缺失项；模型不输出 `overall_score`。候选人的总分、最终排序、证据汇总、强弱点展示字段由 runtime 再统一整理。
 
 业务上可以理解成：每份简历先单独过一遍岗位匹配打分，之后系统再统一排队。
+
+### Deterministic total score
+
+The scoring model outputs `must_have_match_score`, `preferred_match_score`, and `risk_score`; it never outputs `overall_score`.
+
+- Must-have is always applicable.
+- Preferred is null when the approved Requirement Sheet contains no preferred capability or structured preference.
+- Risk is null when the approved Requirement Sheet contains no exclusion signal.
+- Runtime computes `overall_score` from must-have `60`, preferred `25`, and inverted risk (`100 - risk`) `15`.
+- Runtime removes null dimensions, renormalizes the remaining weights to 100, and rounds half up to an integer in `0..100`.
 
 ---
 

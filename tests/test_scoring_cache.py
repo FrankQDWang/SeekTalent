@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 from seektalent.models import (
     HardConstraintSlots,
@@ -20,7 +21,7 @@ from seektalent.models import (
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import LoadedPrompt
 from seektalent.cache.exact_llm_cache import get_cached_json, put_cached_json
-from seektalent.scoring.scorer import ResumeScorer, scoring_cache_key
+from seektalent.scoring.scorer import ResumeScorer, _materialize_scored_candidate, scoring_cache_key
 from seektalent.scoring.weighted_score import (
     ScoreDimensionApplicability,
     calculate_overall_score,
@@ -55,7 +56,7 @@ def _context() -> ScoringContext:
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python"],
             preferred_capabilities=["retrieval"],
-            exclusion_signals=[],
+            exclusion_signals=["short tenure"],
             hard_constraints=HardConstraintSlots(locations=["Shanghai"]),
             preferences=PreferenceSlots(),
             scoring_rationale="Score Python fit first.",
@@ -81,7 +82,6 @@ def _context() -> ScoringContext:
 def _draft() -> ScoredCandidateDraft:
     return ScoredCandidateDraft(
         fit_bucket="fit",
-        overall_score=88,
         must_have_match_score=92,
         preferred_match_score=80,
         risk_score=20,
@@ -208,6 +208,54 @@ def test_total_score_rejects_missing_or_extra_dimension_values() -> None:
             preferred_match_score=None,
             risk_score=10,
             applicability=ScoreDimensionApplicability(preferred=False, risk=False),
+        )
+
+
+def test_scoring_draft_schema_does_not_accept_llm_overall_score() -> None:
+    with pytest.raises(ValidationError, match="overall_score"):
+        ScoredCandidateDraft.model_validate(
+            {
+                "fit_bucket": "fit",
+                "overall_score": 99,
+                "must_have_match_score": 70,
+                "preferred_match_score": None,
+                "risk_score": None,
+                "reasoning_summary": "证据匹配",
+            }
+        )
+
+
+def test_materializer_calculates_total_and_applicability_from_policy() -> None:
+    result = _materialize_scored_candidate(
+        draft=ScoredCandidateDraft(
+            fit_bucket="fit",
+            must_have_match_score=75,
+            preferred_match_score=80,
+            risk_score=None,
+            reasoning_summary="必须项与加分项匹配",
+        ),
+        scoring_policy=_policy(preferred=True, risk=False),
+        resume_id="resume-1",
+        source_round=1,
+    )
+    assert result.overall_score == 76
+    assert result.preferred_match_score == 80
+    assert result.risk_score is None
+
+
+def test_materializer_rejects_model_score_for_inapplicable_dimension() -> None:
+    with pytest.raises(ValueError, match="risk_score_not_applicable"):
+        _materialize_scored_candidate(
+            draft=ScoredCandidateDraft(
+                fit_bucket="fit",
+                must_have_match_score=80,
+                preferred_match_score=None,
+                risk_score=10,
+                reasoning_summary="不应生成风险分",
+            ),
+            scoring_policy=_policy(preferred=False, risk=False),
+            resume_id="resume-1",
+            source_round=1,
         )
 
 

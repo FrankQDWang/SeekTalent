@@ -4,7 +4,7 @@
 
 1. `ScoringPolicy` 是什么
 2. 一次评分是怎么来的
-3. 四个分数分别表示什么
+3. 三个局部分数和 runtime 总分分别表示什么
 
 事实来源：
 
@@ -79,7 +79,7 @@
 
 这一步最重要，因为后面的分数都必须服从它。
 
-### 第 4 步：再填三个局部分数
+### 第 4 步：模型填写三个局部分数
 
 先有顶层判断，再写局部分数：
 
@@ -87,22 +87,11 @@
 - `preferred_match_score`: 加分项匹配得怎么样
 - `risk_score`: 当前判断还有多大风险，越高风险越大
 
-这里没有固定公式，但顺序很清楚：
+`must_have_match_score` 始终存在。岗位没有加分项时，`preferred_match_score` 为 null；岗位没有排除信号时，`risk_score` 为 null。
 
-先判断，再分别描述“硬要求匹配度”“加分项匹配度”“风险大小”。
+### 第 5 步：runtime 计算 `overall_score`
 
-### 第 5 步：最后收束成 `overall_score`
-
-`overall_score` 不是自由发挥，也不是单独算出来的。
-
-它是对前面判断的收束，必须和前面的故事一致：
-
-- 如果已经是 `not_fit`，总分就不能高得像通过了一样
-- 如果关键项很强、风险也低，总分通常就应该更高
-
-一句话：
-
-分数不是先算出来再判断，而是先判断，再把这个判断展开成几项分数。
+模型不输出 `overall_score`。runtime 根据岗位实际适用的局部分数确定性计算总分。
 
 ## 3. 四个分数怎么理解
 
@@ -162,10 +151,20 @@
 3. 写 `must_have_match_score`。通常会比较高。
 4. 写 `preferred_match_score`。通常不会太高。
 5. 写 `risk_score`。因为证据厚度一般，风险不会特别低。
-6. 写 `overall_score`。大概率是偏高，但不是顶格。
+6. runtime 根据三个局部分数和适用维度计算 `overall_score`。
 
 ## 5. 记住这三句话就够了
 
 - `ScoringPolicy` 是固定评分尺子。
 - 评分顺序是：先看证据，先判 `fit_bucket`，再写分数。
-- `overall_score` 不是公式结果，而是对前面判断的收束。
+- 模型输出局部分数，runtime 确定性计算 `overall_score`。
+
+## Deterministic total score
+
+The scoring model outputs `must_have_match_score`, `preferred_match_score`, and `risk_score`; it never outputs `overall_score`.
+
+- Must-have is always applicable.
+- Preferred is null when the approved Requirement Sheet contains no preferred capability or structured preference.
+- Risk is null when the approved Requirement Sheet contains no exclusion signal.
+- Runtime computes `overall_score` from must-have `60`, preferred `25`, and inverted risk (`100 - risk`) `15`.
+- Runtime removes null dimensions, renormalizes the remaining weights to 100, and rounds half up to an integer in `0..100`.

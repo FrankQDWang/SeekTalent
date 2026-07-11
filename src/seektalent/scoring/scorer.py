@@ -17,7 +17,14 @@ from seektalent.models import (
     ScoringConfidence,
     ScoringFailure,
     ScoringContext,
+    ScoringPolicy,
     unique_strings,
+)
+from seektalent.scoring.weighted_score import (
+    calculate_overall_score,
+    risk_at_or_above,
+    risk_at_or_below,
+    score_dimension_applicability,
 )
 from seektalent.protected_attributes import PROTECTED_ATTRIBUTE_FIELDS, PROTECTED_ATTRIBUTE_SCORING_TEXT
 from seektalent.prompt_safety import render_template_version_block, render_untrusted_text_block
@@ -27,7 +34,7 @@ from seektalent.tracing import LLMCallSnapshot, RunTracer
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
-SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v1"
+SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v2"
 
 
 def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
@@ -320,7 +327,8 @@ class ResumeScorer:
                         f"summary={candidate.compact_summary()}"
                     ),
                     output_summary=(
-                        f"fit_bucket={result.fit_bucket}; score={result.overall_score}; "
+                        f"fit_bucket={result.fit_bucket}; overall={result.overall_score}; "
+                        f"must={result.must_have_match_score}; preferred={result.preferred_match_score}; "
                         f"risk={result.risk_score}"
                     ),
                     cache_hit=True,
@@ -355,6 +363,7 @@ class ResumeScorer:
             )
             result = _materialize_scored_candidate(
                 draft=draft,
+                scoring_policy=context.scoring_policy,
                 resume_id=candidate.resume_id,
                 source_round=candidate.source_round or context.round_no,
                 source_provider=candidate.source_provider,
@@ -414,7 +423,8 @@ class ResumeScorer:
                         f"summary={candidate.compact_summary()}"
                     ),
                     output_summary=(
-                        f"fit_bucket={result.fit_bucket}; score={result.overall_score}; "
+                        f"fit_bucket={result.fit_bucket}; overall={result.overall_score}; "
+                        f"must={result.must_have_match_score}; preferred={result.preferred_match_score}; "
                         f"risk={result.risk_score}"
                     ),
                     cache_hit=False,
@@ -486,7 +496,8 @@ class ResumeScorer:
                         f"summary={candidate.compact_summary()}"
                     ),
                     output_summary=(
-                        f"fit_bucket={result.fit_bucket}; score={result.overall_score}; "
+                        f"fit_bucket={result.fit_bucket}; overall={result.overall_score}; "
+                        f"must={result.must_have_match_score}; preferred={result.preferred_match_score}; "
                         f"risk={result.risk_score}"
                     ),
                     error_message=error_message,
@@ -600,6 +611,7 @@ class ResumeScorer:
 def _materialize_scored_candidate(
     *,
     draft: ScoredCandidateDraft,
+    scoring_policy: ScoringPolicy,
     resume_id: str,
     source_round: int,
     source_provider: str | None = None,
@@ -610,19 +622,26 @@ def _materialize_scored_candidate(
     detail_open_reason: str | None = None,
     detail_open_policy_version: str | None = None,
 ) -> ScoredCandidate:
+    applicability = score_dimension_applicability(scoring_policy)
+    overall_score = calculate_overall_score(
+        must_have_match_score=draft.must_have_match_score,
+        preferred_match_score=draft.preferred_match_score,
+        risk_score=draft.risk_score,
+        applicability=applicability,
+    )
     return ScoredCandidate(
         resume_id=resume_id,
         source_provider=source_provider,
         source_round=source_round,
         fit_bucket=draft.fit_bucket,
-        overall_score=draft.overall_score,
+        overall_score=overall_score,
         must_have_match_score=draft.must_have_match_score,
         preferred_match_score=draft.preferred_match_score,
         risk_score=draft.risk_score,
         risk_flags=draft.risk_flags,
         reasoning_summary=draft.reasoning_summary,
         evidence=_derived_evidence(draft),
-        confidence=_derived_confidence(draft),
+        confidence=_derived_confidence(draft=draft, overall_score=overall_score),
         matched_must_haves=draft.matched_must_haves,
         missing_must_haves=draft.missing_must_haves,
         matched_preferences=draft.matched_preferences,
@@ -640,13 +659,14 @@ def _materialize_scored_candidate(
 
 def _timeout_scored_candidate(*, context: ScoringContext, timeout_seconds: float) -> ScoredCandidate:
     candidate = context.normalized_resume
+    applicability = score_dimension_applicability(context.scoring_policy)
     return ScoredCandidate(
         resume_id=candidate.resume_id,
         fit_bucket="not_fit",
         overall_score=0,
         must_have_match_score=0,
-        preferred_match_score=0,
-        risk_score=100,
+        preferred_match_score=0 if applicability.preferred else None,
+        risk_score=100 if applicability.risk else None,
         risk_flags=["scoring_timeout"],
         reasoning_summary=(
             f"Scoring timed out after {timeout_seconds:g}s before producing a reliable assessment; "
@@ -700,22 +720,24 @@ def _derived_evidence(draft: ScoredCandidateDraft) -> list[str]:
     )[:8]
 
 
-def _derived_confidence(draft: ScoredCandidateDraft) -> ScoringConfidence:
-    score_gap = abs(draft.overall_score - draft.must_have_match_score)
+def _derived_confidence(*, draft: ScoredCandidateDraft, overall_score: int) -> ScoringConfidence:
+    score_gap = abs(overall_score - draft.must_have_match_score)
+    high_risk = risk_at_or_above(draft.risk_score, 65)
+    low_risk = risk_at_or_below(draft.risk_score, 35)
     if draft.fit_bucket == "fit":
         if (
-            draft.overall_score >= 75
+            overall_score >= 75
             and draft.must_have_match_score >= 70
-            and draft.risk_score <= 35
+            and low_risk
             and score_gap <= 25
         ):
             return "high"
-        if draft.overall_score < 60 or draft.must_have_match_score < 50 or draft.risk_score >= 65 or score_gap > 35:
+        if overall_score < 60 or draft.must_have_match_score < 50 or high_risk or score_gap > 35:
             return "low"
         return "medium"
-    if draft.overall_score <= 55 or draft.must_have_match_score <= 50 or draft.risk_score >= 60:
+    if overall_score <= 55 or draft.must_have_match_score <= 50 or risk_at_or_above(draft.risk_score, 60):
         return "high"
-    if draft.overall_score >= 75 and draft.must_have_match_score >= 70 and draft.risk_score <= 35:
+    if overall_score >= 75 and draft.must_have_match_score >= 70 and low_risk:
         return "low"
     return "medium"
 

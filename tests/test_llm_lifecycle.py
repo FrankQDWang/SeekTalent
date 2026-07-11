@@ -173,8 +173,8 @@ def _scoring_context() -> ScoringContext:
             job_title="Senior Python Engineer",
             role_summary="Build resume matching workflows.",
             must_have_capabilities=["python"],
-            preferred_capabilities=[],
-            exclusion_signals=[],
+            preferred_capabilities=["retrieval"],
+            exclusion_signals=["short tenure"],
             hard_constraints=HardConstraintSlots(locations=["上海"]),
             preferences=PreferenceSlots(),
             scoring_rationale="Score Python fit first.",
@@ -198,7 +198,6 @@ def test_scorer_materializes_public_fields_from_draft() -> None:
     candidate = _materialize_scored_candidate(
         draft=ScoredCandidateDraft(
             fit_bucket="fit",
-            overall_score=86,
             must_have_match_score=90,
             preferred_match_score=75,
             risk_score=20,
@@ -209,6 +208,7 @@ def test_scorer_materializes_public_fields_from_draft() -> None:
             matched_preferences=["retrieval"],
             negative_signals=["short tenure"],
         ),
+        scoring_policy=_scoring_context().scoring_policy,
         resume_id="resume-1",
         source_round=2,
     )
@@ -229,7 +229,6 @@ def test_scorer_materialization_fallback_does_not_invent_evidence() -> None:
     candidate = _materialize_scored_candidate(
         draft=ScoredCandidateDraft(
             fit_bucket="fit",
-            overall_score=68,
             must_have_match_score=62,
             preferred_match_score=50,
             risk_score=45,
@@ -240,12 +239,13 @@ def test_scorer_materialization_fallback_does_not_invent_evidence() -> None:
             matched_preferences=[],
             negative_signals=[],
         ),
+        scoring_policy=_scoring_context().scoring_policy,
         resume_id="resume-2",
         source_round=1,
     )
 
     assert candidate.evidence == []
-    assert candidate.confidence == "medium"
+    assert candidate.confidence == "low"
     assert candidate.strengths == ["Mixed but potentially relevant backend profile."]
     assert candidate.weaknesses == []
 

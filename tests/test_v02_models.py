@@ -25,6 +25,7 @@ from seektalent.models import (
     RuntimeConstraint,
     RunState,
     ScoredCandidate,
+    scored_candidate_sort_key,
     ScoringPolicy,
     SearchControllerDecision,
     SearchAttempt,
@@ -99,6 +100,24 @@ def _scored_candidate(resume_id: str) -> ScoredCandidate:
         weaknesses=[],
         source_round=1,
     )
+
+
+def test_scored_candidate_sort_key_handles_nullable_risk_deterministically() -> None:
+    candidates = [
+        _scored_candidate("not-fit").model_copy(update={"fit_bucket": "not_fit", "overall_score": 99}),
+        _scored_candidate("lower-total").model_copy(update={"overall_score": 80}),
+        _scored_candidate("lower-must").model_copy(update={"must_have_match_score": 80}),
+        _scored_candidate("higher-risk").model_copy(update={"risk_score": 20}),
+        _scored_candidate("no-risk").model_copy(update={"risk_score": None}),
+    ]
+
+    assert [candidate.resume_id for candidate in sorted(candidates, key=scored_candidate_sort_key)] == [
+        "no-risk",
+        "higher-risk",
+        "lower-must",
+        "lower-total",
+        "not-fit",
+    ]
 
 
 def test_v02_run_state_models_can_be_composed() -> None:
