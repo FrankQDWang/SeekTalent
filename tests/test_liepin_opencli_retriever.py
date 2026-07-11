@@ -74,6 +74,29 @@ def test_expansion_rejects_coroutine_from_synchronous_runner_seam() -> None:
             logical_round_no=1, query_instance_id="q1")
 
 
+def test_expansion_maps_successful_envelope_to_typed_provider_result() -> None:
+    class Runner:
+        def handle_liepin_first_page_continuation(self, **kwargs):
+            del kwargs
+            return {"status": "partial", "safe_reason_code": "expansion_partial",
+                "first_page_visible_count": 5, "first_page_eligible_count": 4,
+                "initial_opened_count": 1, "expansion_opened_count": 1,
+                "expansion_skipped_seen_count": 1, "expansion_terminal_failure_count": 1,
+                "resumes": [{"claim_aware": True, "provider_candidate_key_hash": "a" * 64,
+                    "provider_rank": 2, "detail_payload": {"currentTitle": "Data Engineer"}}]}
+    result = LiepinOpenCliResumeRetriever(runner=Runner()).handle_first_page_continuation_with_detail_open_claim_ledger(
+        action="expand", continuation=_continuation(), detail_open_claim_ledger=DetailOpenClaimLedger({}),
+        logical_round_no=1, query_instance_id="q1")
+    assert len(result.search_result.candidates) == 1
+    assert result.search_result.candidates[0].raw["currentTitle"] == "Data Engineer"
+    assert (result.first_page_visible_count, result.first_page_eligible_count,
+        result.initial_opened_count, result.expansion_opened_count,
+        result.expansion_skipped_seen_count, result.expansion_terminal_failure_count) == (5, 4, 1, 1, 1, 1)
+    assert result.status == "partial"
+    assert result.safe_reason_code == "expansion_partial"
+    assert result.continuation_deleted is False
+
+
 @dataclass
 class FakeOpenCliRunner:
     opened_refs: list[str]

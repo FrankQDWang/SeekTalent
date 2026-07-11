@@ -9,6 +9,7 @@ import pytest
 
 from seektalent.core.retrieval.provider_contract import (
     ProviderFirstPageExpansionError,
+    ProviderFirstPageExpansionResult,
     ProviderSearchContinuation,
     ProviderSnapshot,
     SearchRequest,
@@ -84,6 +85,31 @@ def test_expansion_does_not_swallow_programmer_error(monkeypatch) -> None:
     with pytest.raises(AssertionError, match="programmer bug"):
         asyncio.run(run_liepin_first_page_expansion(settings=make_settings(),
             request=_expansion_request(), detail_open_claim_ledger=DetailOpenClaimLedger({})))
+
+
+def test_expansion_maps_provider_result_to_source_lane_and_attribution(monkeypatch) -> None:
+    candidate = ResumeCandidate(resume_id="resume-1", source_resume_id="source-1",
+        snapshot_sha256="a" * 64, dedup_key="dedup-1", search_text="Data Engineer", raw={})
+    class Provider:
+        async def handle_first_page_continuation_with_detail_open_claim_ledger(self, **kwargs):
+            assert kwargs["action"] == "expand"
+            return ProviderFirstPageExpansionResult(search_result=SearchResult(candidates=[candidate], raw_candidate_count=1),
+                first_page_visible_count=5, first_page_eligible_count=4, initial_opened_count=1,
+                expansion_opened_count=1, expansion_skipped_seen_count=1,
+                expansion_terminal_failure_count=1, status="partial",
+                safe_reason_code="expansion_partial", continuation_deleted=True)
+    monkeypatch.setattr(runtime_lane, "build_liepin_worker_client", lambda settings: object())
+    monkeypatch.setattr(runtime_lane, "_build_provider", lambda **kwargs: Provider())
+    result = asyncio.run(run_liepin_first_page_expansion(settings=make_settings(),
+        request=_expansion_request(), detail_open_claim_ledger=DetailOpenClaimLedger({})))
+    assert result.candidates == (candidate,)
+    assert result.candidate_query_attributions[0].query_instance_id == "q"
+    assert result.lane_result is not None
+    assert result.lane_result.candidate_store_updates == {"resume-1": candidate}
+    assert result.lane_result.candidate_query_attributions == result.candidate_query_attributions
+    assert result.expansion_opened_count == 1
+    assert result.safe_reason_code == "expansion_partial"
+    assert result.continuation_deleted is True
 
 
 def test_default_liepin_source_lane_caps_are_three_two_two() -> None:

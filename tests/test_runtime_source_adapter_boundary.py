@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from types import SimpleNamespace
 
 from seektalent.models import (
     AgeRequirement,
@@ -45,6 +46,35 @@ from seektalent.source_contracts.runtime_lanes import (
     SourceQueryExecutionOutcome,
 )
 from seektalent.providers.liepin.source_compiler import compile_liepin_source_query_intents
+from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
+from seektalent.runtime.source_expansion import SourceFirstPageExpansionRequest, SourceFirstPageExpansionResult
+from seektalent.source_adapters.round_adapters import default_source_first_page_expander_provider
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
+import seektalent.source_adapters.round_adapters as round_adapters
+
+
+def test_source_neutral_expander_provider_forwards_action_and_maps_result(monkeypatch) -> None:
+    continuation = ProviderSearchContinuation(kind="first_page_detail_expansion",
+        continuation_id="c", opaque_ref="artifact://protected/c", source_kind="liepin", round_no=2,
+        query_instance_id="q", visible_candidate_count=3, eligible_candidate_count=2,
+        initial_opened_count=1)
+    request = SourceFirstPageExpansionRequest(runtime_run_id="r", round_no=2, source_kind="liepin",
+        query_instance_id="q", continuation_id="c", continuation=continuation, action="discard")
+    expected = SourceFirstPageExpansionResult(source_kind="liepin", query_instance_id="q",
+        continuation_id="c", status="completed", continuation_deleted=True)
+    calls = []
+    async def fake_run(**kwargs):
+        calls.append(kwargs)
+        return expected
+    monkeypatch.setattr(round_adapters, "run_liepin_first_page_expansion", fake_run)
+    runtime = SimpleNamespace(settings=object())
+    ledger = DetailOpenClaimLedger({})
+    expanders = default_source_first_page_expander_provider(runtime, ledger)
+    result = asyncio.run(expanders["liepin"](request))
+    assert result is expected
+    assert calls == [{"settings": runtime.settings, "request": request,
+        "detail_open_claim_ledger": ledger}]
+    assert set(expanders) == {"liepin"}
 
 
 def _requirement_sheet() -> RequirementSheet:

@@ -183,6 +183,30 @@ def test_search_and_expansion_share_single_opencli_lock() -> None:
     assert retriever.max_active == 1
 
 
+def test_expansion_forwards_exact_private_transport_arguments() -> None:
+    class Retriever(FakeRetriever):
+        expansion_kwargs = None
+        def handle_first_page_continuation_with_detail_open_claim_ledger(self, **kwargs):
+            self.expansion_kwargs = kwargs
+            return ProviderFirstPageExpansionResult(search_result=SearchResult(),
+                first_page_visible_count=2, first_page_eligible_count=2, initial_opened_count=1,
+                expansion_opened_count=1, expansion_skipped_seen_count=0,
+                expansion_terminal_failure_count=0, status="completed")
+    retriever = Retriever(calls=[])
+    client = LiepinOpenCliWorkerClient(retriever=retriever, connection_id="c", provider_account_hash="h")
+    ledger = DetailOpenClaimLedger({})
+    continuation = ProviderSearchContinuation(kind="first_page_detail_expansion",
+        continuation_id="c", opaque_ref="artifact://protected/c", source_kind="liepin", round_no=3,
+        query_instance_id="q3", visible_candidate_count=2, eligible_candidate_count=2,
+        initial_opened_count=1)
+    result = asyncio.run(client.handle_first_page_continuation_with_detail_open_claim_ledger(
+        action="expand", continuation=continuation, detail_open_claim_ledger=ledger,
+        logical_round_no=3, query_instance_id="q3"))
+    assert retriever.expansion_kwargs == {"action": "expand", "continuation": continuation,
+        "detail_open_claim_ledger": ledger, "logical_round_no": 3, "query_instance_id": "q3"}
+    assert result.expansion_opened_count == 1
+
+
 def test_opencli_worker_search_does_not_block_event_loop() -> None:
     class SlowRetriever(FakeRetriever):
         def search_resumes(self, request):
