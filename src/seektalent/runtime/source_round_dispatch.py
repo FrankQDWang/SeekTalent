@@ -143,12 +143,17 @@ async def dispatch_source_rounds(
         ),
         query_execution_receipts=tuple(query_execution_receipts),
         candidate_query_attributions=tuple(candidate_query_attributions),
-        private_first_page_continuations=_private_first_page_continuations(source_results, query_execution_receipts),
+        private_first_page_continuations=_private_first_page_continuations(
+            source_results, query_execution_receipts, round_no=request.round_no
+        ),
     )
 
 
 def _private_first_page_continuations(
-    source_results: Sequence[SourceRoundAdapterResult], receipts: Sequence[QueryExecutionReceipt]
+    source_results: Sequence[SourceRoundAdapterResult],
+    receipts: Sequence[QueryExecutionReceipt],
+    *,
+    round_no: int,
 ) -> tuple[ProviderSearchContinuation, ...]:
     receipt_keys = {(item.source_kind, item.query_instance_id) for item in receipts}
     seen_ids: set[str] = set()
@@ -156,6 +161,10 @@ def _private_first_page_continuations(
     continuations: list[ProviderSearchContinuation] = []
     for result in source_results:
         for continuation in result.private_first_page_continuations:
+            if continuation.source_kind != result.source:
+                raise RuntimeSourceInvariantError("first_page_continuation_wrong_source")
+            if continuation.round_no != round_no:
+                raise RuntimeSourceInvariantError("first_page_continuation_wrong_round")
             if continuation.continuation_id in seen_ids or continuation.opaque_ref in seen_refs:
                 raise RuntimeSourceInvariantError("duplicate_first_page_continuation")
             if (continuation.source_kind, continuation.query_instance_id) not in receipt_keys:

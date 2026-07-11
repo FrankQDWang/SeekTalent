@@ -142,6 +142,7 @@ async def execute_first_page_decisions(
         if expander is None:
             raise RuntimeSourceInvariantError("first_page_expander_unavailable")
         for continuation in decision.continuations:
+            action = "expand" if decision.expand else "discard"
             try:
                 result = await expander(
                     SourceFirstPageExpansionRequest(
@@ -151,9 +152,10 @@ async def execute_first_page_decisions(
                         query_instance_id=decision.query_instance_id,
                         continuation_id=continuation.continuation_id,
                         continuation=continuation,
-                        action="expand" if decision.expand else "discard",
+                        action=action,
                     )
                 )
+                _validate_expansion_result(result=result, continuation=continuation, action=action)
             except SourceFirstPageExpansionError as exc:
                 result = SourceFirstPageExpansionResult(
                     source_kind=decision.source_kind,
@@ -170,6 +172,42 @@ async def execute_first_page_decisions(
     return results
 
 
+def _validate_expansion_result(
+    *, result: SourceFirstPageExpansionResult, continuation: ProviderSearchContinuation, action: str
+) -> None:
+    expected = (continuation.source_kind, continuation.query_instance_id, continuation.continuation_id)
+    if (result.source_kind, result.query_instance_id, result.continuation_id) != expected:
+        raise RuntimeSourceInvariantError("first_page_expansion_result_wrong_provenance")
+    counts = (
+        result.first_page_visible_count, result.first_page_eligible_count,
+        result.initial_opened_count, result.expansion_opened_count,
+        result.expansion_skipped_seen_count, result.expansion_terminal_failure_count,
+    )
+    if any(not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts):
+        raise RuntimeSourceInvariantError("first_page_expansion_invalid_count")
+    if result.first_page_visible_count != continuation.visible_candidate_count:
+        raise RuntimeSourceInvariantError("first_page_expansion_visible_count_mismatch")
+    if result.first_page_eligible_count != continuation.eligible_candidate_count:
+        raise RuntimeSourceInvariantError("first_page_expansion_eligible_count_mismatch")
+    if result.initial_opened_count != continuation.initial_opened_count:
+        raise RuntimeSourceInvariantError("first_page_expansion_initial_count_mismatch")
+    remaining = result.first_page_eligible_count - result.initial_opened_count
+    consumed = (result.expansion_opened_count + result.expansion_skipped_seen_count
+                + result.expansion_terminal_failure_count)
+    if remaining < 0 or consumed > remaining:
+        raise RuntimeSourceInvariantError("first_page_expansion_count_exceeds_eligible")
+    if not result.continuation_deleted:
+        raise RuntimeSourceInvariantError("first_page_continuation_not_deleted")
+    if action == "discard" and (consumed or result.candidates or result.candidate_query_attributions):
+        raise RuntimeSourceInvariantError("first_page_discard_returned_candidates")
+    candidate_ids = {item.resume_id for item in result.candidates}
+    if any(item.source_kind != result.source_kind
+           or item.query_instance_id != result.query_instance_id
+           or item.resume_id not in candidate_ids
+           for item in result.candidate_query_attributions):
+        raise RuntimeSourceInvariantError("first_page_expansion_attribution_mismatch")
+
+
 def apply_first_page_expansion_to_receipts(
     *,
     receipts: Sequence[QueryExecutionReceipt],
@@ -179,10 +217,21 @@ def apply_first_page_expansion_to_receipts(
     scoring_failure_counts: Mapping[tuple[str, str], int],
 ) -> list[QueryExecutionReceipt]:
     decisions_by_key = {(d.source_kind, d.query_instance_id): d for d in decisions}
+    if len(decisions_by_key) != len(decisions):
+        raise RuntimeSourceInvariantError("duplicate_first_page_expansion_decision")
     outcomes_by_key: dict[tuple[str, str], list[SourceFirstPageExpansionResult]] = {}
     for outcome in outcomes:
         outcomes_by_key.setdefault((outcome.source_kind, outcome.query_instance_id), []).append(outcome)
+    if set(outcomes_by_key) - set(decisions_by_key):
+        raise RuntimeSourceInvariantError("foreign_first_page_expansion_outcome")
+    for key, decision in decisions_by_key.items():
+        expected_ids = [item.continuation_id for item in decision.continuations]
+        actual_ids = [item.continuation_id for item in outcomes_by_key.get(key, [])]
+        if len(set(actual_ids)) != len(actual_ids) or set(actual_ids) != set(expected_ids):
+            raise RuntimeSourceInvariantError("invalid_first_page_expansion_outcomes")
     merges = {(m.source_kind, m.query_instance_id): m for m in merge_counts}
+    if len(merges) != len(merge_counts):
+        raise RuntimeSourceInvariantError("duplicate_first_page_merge_counts")
     updated = []
     for receipt in receipts:
         key = (receipt.source_kind, receipt.query_instance_id)
@@ -191,6 +240,10 @@ def apply_first_page_expansion_to_receipts(
             updated.append(receipt)
             continue
         query_outcomes = outcomes_by_key.get(key, [])
+        expected_ids = {item.continuation_id for item in decision.continuations}
+        actual_ids = {item.continuation_id for item in query_outcomes}
+        if len(actual_ids) != len(query_outcomes) or actual_ids - expected_ids:
+            raise RuntimeSourceInvariantError("invalid_first_page_expansion_outcomes")
         base = {
             "first_page_visible_count": sum(i.visible_candidate_count for i in decision.continuations),
             "first_page_eligible_count": sum(i.eligible_candidate_count for i in decision.continuations),
@@ -208,27 +261,23 @@ def apply_first_page_expansion_to_receipts(
             else:
                 status, reason = "failed", "first_page_continuation_discard_failed"
             updated.append(
-                receipt.model_copy(
-                    update=base | {"first_page_expansion_status": status, "first_page_expansion_reason_code": reason}
-                )
-            )
-            continue
-        if not query_outcomes:
-            updated.append(
-                receipt.model_copy(
-                    update=base
-                    | {
-                        "first_page_expansion_status": "failed",
-                        "first_page_expansion_reason_code": "first_page_expansion_result_missing",
-                    }
+                _validated_receipt_update(
+                    receipt,
+                    base | {"first_page_expansion_status": status, "first_page_expansion_reason_code": reason},
                 )
             )
             continue
         merge = merges.get(key, ExpansionQueryMergeCounts(*key, 0, 0))
         scoring = scoring_failure_counts.get(key, 0)
+        if merge.unique_candidate_count < 0 or merge.duplicate_candidate_count < 0 or scoring < 0:
+            raise RuntimeSourceInvariantError("first_page_expansion_negative_counter")
         opened = sum(i.expansion_opened_count for i in query_outcomes)
         skipped = sum(i.expansion_skipped_seen_count for i in query_outcomes)
         terminal = sum(i.expansion_terminal_failure_count for i in query_outcomes)
+        if merge.unique_candidate_count + merge.duplicate_candidate_count > opened:
+            raise RuntimeSourceInvariantError("first_page_expansion_merge_count_exceeds_opened")
+        if scoring > merge.unique_candidate_count:
+            raise RuntimeSourceInvariantError("first_page_expansion_scoring_count_exceeds_unique")
         status = (
             "completed"
             if statuses == {"completed"} and scoring == 0
@@ -257,5 +306,11 @@ def apply_first_page_expansion_to_receipts(
             first_page_eligible_count=sum(i.first_page_eligible_count for i in query_outcomes),
             initial_opened_count=sum(i.initial_opened_count for i in query_outcomes),
         )
-        updated.append(receipt.model_copy(update=update))
+        updated.append(_validated_receipt_update(receipt, update))
     return updated
+
+
+def _validated_receipt_update(
+    receipt: QueryExecutionReceipt, update: Mapping[str, object]
+) -> QueryExecutionReceipt:
+    return QueryExecutionReceipt.model_validate(receipt.model_dump() | dict(update))

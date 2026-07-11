@@ -9,7 +9,12 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from seektalent.core.retrieval.provider_contract import ProviderSearchError, ProviderSnapshot, SearchResult
+from seektalent.core.retrieval.provider_contract import (
+    ProviderSearchContinuation,
+    ProviderSearchError,
+    ProviderSnapshot,
+    SearchResult,
+)
 from seektalent.corpus.store import DEFAULT_TENANT_ID, DEFAULT_WORKSPACE_ID, CorpusStore
 from seektalent.models import (
     CTSQuery,
@@ -56,6 +61,7 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchResult,
     SourceRoundDispatchRequest,
     dispatch_source_rounds,
+    _private_first_page_continuations,
 )
 from seektalent.runtime.source_lanes import (
     RuntimeSourceBudgetPolicy,
@@ -73,6 +79,61 @@ def test_retrieval_runtime_does_not_import_provider_modules() -> None:
     source = Path("src/seektalent/runtime/retrieval_runtime.py").read_text(encoding="utf-8")
 
     assert "seektalent.providers" not in source
+
+
+def _task7_dispatch_receipt() -> QueryExecutionReceipt:
+    return QueryExecutionReceipt(
+        round_no=2, source_kind="liepin", query_instance_id="q1", query_fingerprint="fp",
+        term_group_key="group", primary_anchor_family_id="anchor",
+        non_anchor_term_family_ids=[], query_role="exploit", lane_type="exploit",
+        keyword_query="python", requested_count=1, source_plan_version="1",
+        status="completed", dispatch_started=True,
+    )
+
+
+def _task7_dispatch_continuation(**updates) -> ProviderSearchContinuation:
+    values = dict(
+        kind="first_page_detail_expansion", continuation_id="c1", opaque_ref="artifact://c1",
+        source_kind="liepin", round_no=2, query_instance_id="q1",
+        visible_candidate_count=3, eligible_candidate_count=3, initial_opened_count=1,
+    )
+    values.update(updates)
+    return ProviderSearchContinuation(**values)
+
+
+@pytest.mark.parametrize(
+    ("continuations", "source", "reason"),
+    [
+        ((_task7_dispatch_continuation(source_kind="cts"),), "liepin", "wrong_source"),
+        ((_task7_dispatch_continuation(round_no=3),), "liepin", "wrong_round"),
+        ((_task7_dispatch_continuation(), _task7_dispatch_continuation(opaque_ref="artifact://c2")),
+         "liepin", "duplicate_first_page_continuation"),
+        ((_task7_dispatch_continuation(), _task7_dispatch_continuation(continuation_id="c2")),
+         "liepin", "duplicate_first_page_continuation"),
+    ],
+)
+def test_private_first_page_continuation_rejects_malformed_provenance(
+    continuations, source, reason
+) -> None:
+    with pytest.raises(RuntimeSourceInvariantError, match=reason):
+        _private_first_page_continuations(
+            [SourceRoundAdapterResult(source=source, status="completed",
+                                      private_first_page_continuations=continuations)],
+            [_task7_dispatch_receipt()], round_no=2,
+        )
+
+
+def test_private_first_page_continuations_preserve_two_targets_in_order() -> None:
+    continuations = (
+        _task7_dispatch_continuation(),
+        _task7_dispatch_continuation(continuation_id="c2", opaque_ref="artifact://c2"),
+    )
+    result = _private_first_page_continuations(
+        [SourceRoundAdapterResult(source="liepin", status="completed",
+                                  private_first_page_continuations=continuations)],
+        [_task7_dispatch_receipt()], round_no=2,
+    )
+    assert [item.continuation_id for item in result] == ["c1", "c2"]
 
 
 def test_orchestrator_does_not_construct_cts_queries_directly() -> None:
@@ -365,7 +426,7 @@ def test_runtime_multi_source_round_uses_adapter_query_policy_for_liepin(tmp_pat
         tracer.close()
 
     assert observed["cts"] == [("exploit", 7, 7), ("generic_explore", 3, 3)]
-    assert observed["liepin"] == [("exploit", 2, 6), ("generic_explore", 1, 3)]
+    assert observed["liepin"] == [("exploit", 2, 30), ("generic_explore", 1, 30)]
 
 
 def _retrieval_plan() -> RoundRetrievalPlan:
