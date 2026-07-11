@@ -135,7 +135,10 @@ function ThinkingRound({
       </div>
       <div className="thinking-round__cards">
         {round.queryGroups.length > 0 ? (
-          <QueryGroups queryGroups={round.queryGroups} />
+          <QueryGroups
+            queryGroups={round.queryGroups}
+            roundNo={round.roundNo}
+          />
         ) : null}
         {round.cards.filter(isNarrativeCard).map((card) => (
           <section className="thinking-card" key={card.title}>
@@ -157,10 +160,12 @@ function ThinkingRound({
 
 function QueryGroups({
   queryGroups,
+  roundNo,
 }: {
   queryGroups: readonly AgentWorkbenchQueryGroup[];
+  roundNo: number;
 }) {
-  const paths = selectQueryPaths(queryGroups);
+  const paths = selectQueryPaths(queryGroups, roundNo);
   return (
     <div aria-label="检索路径" className="thinking-query-paths" role="group">
       {paths.map(({ label, queryGroup }) => (
@@ -173,11 +178,17 @@ function QueryGroups({
   );
 }
 
-function selectQueryPaths(queryGroups: readonly AgentWorkbenchQueryGroup[]) {
+function selectQueryPaths(
+  queryGroups: readonly AgentWorkbenchQueryGroup[],
+  roundNo: number,
+) {
   const main = queryGroups.find(({ laneType }) => laneType === "exploit");
-  const expansion = queryGroups.find(({ laneType }) =>
-    ["generic_explore", "prf_probe"].includes(laneType),
-  );
+  const expansion =
+    roundNo === 1
+      ? undefined
+      : queryGroups.find(({ laneType }) =>
+          ["generic_explore", "prf_probe"].includes(laneType),
+        );
   return [
     ...(main ? [{ label: "主路径", queryGroup: main }] : []),
     ...(expansion ? [{ label: "扩展路径", queryGroup: expansion }] : []),

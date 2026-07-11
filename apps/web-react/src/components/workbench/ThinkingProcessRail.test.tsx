@@ -132,8 +132,8 @@ describe("ThinkingProcessRail", () => {
       within(queryGroups).getByRole("group", { name: "主路径" }),
     ).toHaveTextContent("主路径AI Agent、RAG、Python 后端");
     expect(
-      within(queryGroups).getByRole("group", { name: "扩展路径" }),
-    ).toHaveTextContent("扩展路径workflow orchestration、eval harness");
+      within(queryGroups).queryByRole("group", { name: "扩展路径" }),
+    ).toBeNull();
     expect(within(queryGroups).queryByText("关键词")).toBeNull();
     expect(within(queryGroups).queryByText("AI Agent AND RAG")).toBeNull();
     expect(within(queryGroups).queryByText("已执行")).toBeNull();
@@ -247,6 +247,7 @@ describe("ThinkingProcessRail", () => {
           rounds: [
             {
               ...firstRound,
+              roundNo: 2,
               queryGroups: [
                 {
                   ...firstQueryGroup,
@@ -298,8 +299,14 @@ describe("ThinkingProcessRail", () => {
         candidates={[]}
         defaultTab="thinking"
         thinkingProcess={{
-          activeRoundNo: 1,
-          rounds: [{ ...round, queryGroups: round.queryGroups.slice(0, 1) }],
+          activeRoundNo: 2,
+          rounds: [
+            {
+              ...round,
+              roundNo: 2,
+              queryGroups: round.queryGroups.slice(0, 1),
+            },
+          ],
         }}
       />,
     );

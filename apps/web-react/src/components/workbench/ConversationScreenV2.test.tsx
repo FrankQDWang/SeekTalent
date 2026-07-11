@@ -417,10 +417,10 @@ describe("ConversationScreenV2", () => {
       <ConversationScreenV2Side
         view={conversationView({
           thinkingProcess: {
-            activeRoundNo: 1,
+            activeRoundNo: 2,
             rounds: [
               {
-                roundNo: 1,
+                roundNo: 2,
                 status: "running",
                 queryGroups: [
                   {
@@ -473,7 +473,7 @@ describe("ConversationScreenV2", () => {
       />,
     );
 
-    expect(screen.getByRole("heading", { name: "第 1 轮" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "第 2 轮" })).toBeVisible();
     const queryGroups = screen.getByRole("group", { name: "检索路径" });
     expect(
       within(queryGroups).getByRole("group", { name: "主路径" }),
