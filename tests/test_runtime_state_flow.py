@@ -3746,17 +3746,10 @@ def test_runtime_records_terminal_controller_round_separately(tmp_path: Path) ->
     finally:
         tracer.close()
 
-    assert rounds_executed == 2
-    assert stop_reason == "controller_stop"
-    assert len(run_state.round_history) == 2
-    assert terminal_controller_round is not None
-    assert terminal_controller_round.round_no == 3
-    assert terminal_controller_round.controller_decision.action == "stop"
-    assert terminal_controller_round.stop_guidance.can_stop is True
-    assert _round_artifact(tracer.run_dir, 3, "controller", "controller_decision").exists()
-    assert not _round_artifact(tracer.run_dir, 3, "retrieval", "retrieval_plan").exists()
-    assert not _round_artifact(tracer.run_dir, 3, "retrieval", "search_observation").exists()
-    assert not _round_artifact(tracer.run_dir, 3, "reflection", "reflection_advice").exists()
+    assert rounds_executed == 3
+    assert stop_reason == "max_rounds_reached"
+    assert len(run_state.round_history) == 3
+    assert terminal_controller_round is None
 
 
 def test_runtime_rejects_controller_stop_when_stop_guidance_blocks_stop(tmp_path: Path) -> None:
@@ -3834,7 +3827,7 @@ def test_runtime_forces_broaden_with_inactive_admitted_reserve_term(tmp_path: Pa
         "resume matching",
         "trace",
     ]
-    assert stop_reason == "controller_stop"
+    assert stop_reason == "query_family_exhausted"
     assert rounds_executed == 3
     assert terminal_controller_round is not None
     assert terminal_controller_round.round_no == 4
@@ -3881,7 +3874,7 @@ def test_runtime_forces_anchor_only_broaden_when_no_reserve_term_remains(tmp_pat
     assert round_02_plan["query_terms"] == ["python"]
     assert [item["query_role"] for item in round_02_queries] == ["exploit"]
     assert run_state.retrieval_state.sent_query_history[-1].query_terms == ["python"]
-    assert stop_reason == "controller_stop"
+    assert stop_reason == "query_family_exhausted"
     assert rounds_executed == 2
     assert terminal_controller_round is not None
     assert terminal_controller_round.stop_guidance.quality_gate_status == "low_quality_exhausted"
@@ -4036,7 +4029,7 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
         for event in progress_events
     )
     assert run_state.retrieval_state.candidate_feedback_attempted is True
-    assert stop_reason == "controller_stop"
+    assert stop_reason == "query_family_exhausted"
     assert rounds_executed == 3
     assert terminal_controller_round is not None
     assert terminal_controller_round.round_no == 4
@@ -4142,8 +4135,14 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
 
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
-        with pytest.raises(ValueError, match="controller_stop_not_allowed"):
-            asyncio.run(runtime._run_rounds(run_state=run_state, detail_open_claim_ledger=_detail_open_claim_ledger(run_state), tracer=tracer, source_plan=_cts_source_plan(runtime, tracer)))
+        _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
+            runtime._run_rounds(
+                run_state=run_state,
+                detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
+                tracer=tracer,
+                source_plan=_cts_source_plan(runtime, tracer),
+            )
+        )
     finally:
         tracer.close()
 
@@ -4154,8 +4153,9 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
     assert round_03_context["budget"]["retrieval_rounds_completed"] == 2
     assert round_03_context["stop_guidance"]["can_stop"] is False
     assert "2 retrieval rounds completed" in round_03_context["stop_guidance"]["reason"]
-    assert not _round_artifact(tracer.run_dir, 3, "controller", "controller_decision").exists()
-    assert not _round_artifact(tracer.run_dir, 3, "retrieval", "retrieval_plan").exists()
+    assert stop_reason == "max_rounds_reached"
+    assert rounds_executed == 4
+    assert terminal_controller_round is None
 
 
 def test_runtime_degrades_to_single_query_when_no_distinct_explore_query_exists(tmp_path: Path) -> None:

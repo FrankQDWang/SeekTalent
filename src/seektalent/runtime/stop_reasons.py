@@ -13,6 +13,7 @@ PUBLIC_STOP_REASON_ALLOWLIST: tuple[str, ...] = (
     "max_attempts_reached",
     "source_lanes_completed",
     "source_lanes_degraded",
+    "query_family_exhausted",
 )
 
 

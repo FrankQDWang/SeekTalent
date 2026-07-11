@@ -102,6 +102,17 @@ def test_runtime_and_production_stop_reason_normalization_share_policy() -> None
     )
 
 
+def test_query_family_exhausted_is_a_canonical_public_stop_reason(tmp_path: Path) -> None:
+    assert "query_family_exhausted" in PUBLIC_STOP_REASON_ALLOWLIST
+    assert normalize_stop_reason("query_family_exhausted") == "query_family_exhausted"
+    result = ProductionMatchResultV1.from_debug_result(
+        _constraint_debug_result(tmp_path, stop_reason="query_family_exhausted"),
+        input_digest="digest",
+        source_selection=SourceSelectionV1(required=("cts",)),
+    )
+    assert result.stop_reason.code == "query_family_exhausted"
+
+
 def test_production_contract_normalizes_unknown_stop_reason(tmp_path: Path) -> None:
     result = ProductionMatchResultV1.from_debug_result(
         _constraint_debug_result(tmp_path, stop_reason="raw provider failure /tmp/secret"),

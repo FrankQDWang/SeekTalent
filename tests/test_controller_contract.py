@@ -37,9 +37,15 @@ from seektalent.models import (
 )
 from seektalent.prompting import LoadedPrompt
 from seektalent.runtime import WorkflowRuntime
+import seektalent.runtime.round_decision_runtime as round_decision_runtime
 from seektalent.retrieval.query_identity import build_term_group_key
 from seektalent.tracing import ProviderUsageSnapshot
+from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
+
+
+def test_exhaustion_preflight_resolver_is_available() -> None:
+    assert callable(getattr(round_decision_runtime, "resolve_pre_controller_exhaustion", None))
 
 
 def test_controller_prompt_requires_atomic_search_terms() -> None:
@@ -406,6 +412,114 @@ def _run_state_with_previous_reflection() -> RunState:
             )
         ],
     )
+
+
+def _consume_family(run_state: RunState, *, family: str, terms: list[str], query_id: str) -> None:
+    run_state.retrieval_state.query_execution_ledger.append(
+        QueryExecutionReceipt(
+            round_no=1,
+            source_kind="cts",
+            query_instance_id=query_id,
+            query_fingerprint=f"fp-{query_id}",
+            term_group_key=build_term_group_key(
+                query_terms=terms,
+                query_term_pool=run_state.retrieval_state.query_term_pool,
+            ),
+            primary_anchor_family_id="role.python",
+            non_anchor_term_family_ids=[family] if family else [],
+            query_role="exploit",
+            lane_type="exploit",
+            query_terms=terms,
+            keyword_query=" ".join(terms),
+            requested_count=5,
+            source_plan_version="1",
+            status="completed",
+            dispatch_started=True,
+        )
+    )
+
+
+def test_exhaustion_preflight_activates_fresh_inactive_reserve_without_controller_call(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path), mock_cts=True, provider_name="cts"))
+    run_state = _run_state_with_previous_reflection()
+    run_state.round_history[-1].reflection_advice = None
+    run_state.retrieval_state.query_term_pool = [
+        item.model_copy(update={"active": item.term != "trace"})
+        for item in run_state.retrieval_state.query_term_pool
+    ]
+    _consume_family(run_state, family="domain.resumematching", terms=["python", "resume matching"], query_id="used")
+    _consume_family(run_state, family="domain.retrieval", terms=["python", "retrieval"], query_id="used-retrieval")
+    tracer = RunTracer(tmp_path / "trace")
+    try:
+        resolved = asyncio.run(
+            round_decision_runtime.resolve_pre_controller_exhaustion(
+                run_state=run_state,
+                round_no=2,
+                controller_context=_controller_context(round_no=2),
+                tracer=tracer,
+                progress_callback=None,
+                candidate_feedback_enabled=False,
+                force_broaden_decision=runtime._force_broaden_decision,
+                force_candidate_feedback_decision=runtime._force_candidate_feedback_decision,
+                continue_after_empty_feedback=runtime._continue_after_empty_feedback,
+                force_anchor_only_decision=runtime._force_anchor_only_decision,
+                write_rescue_decision=runtime._write_rescue_decision,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert resolved is not None
+    decision, rescue = resolved
+    assert rescue.selected_lane == "reserve_broaden"
+    assert isinstance(decision, SearchControllerDecision)
+    assert decision.proposed_query_terms == ["python", "trace"]
+    assert next(item for item in run_state.retrieval_state.query_term_pool if item.term == "trace").active is True
+
+
+def test_exhaustion_preflight_stops_despite_disallowed_stop_without_model_or_provider_calls(tmp_path: Path) -> None:
+    runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path), mock_cts=True, provider_name="cts"))
+    run_state = _run_state_with_previous_reflection()
+    run_state.round_history[-1].reflection_advice = None
+    for item in run_state.retrieval_state.query_term_pool:
+        if item.retrieval_role not in {"primary_role_anchor", "role_anchor", "secondary_title_anchor"}:
+            _consume_family(run_state, family=item.family, terms=["python", item.term], query_id=item.family)
+    _consume_family(run_state, family="", terms=["python"], query_id="anchor")
+    run_state.retrieval_state.candidate_feedback_attempted = True
+    context = _controller_context(round_no=2).model_copy(
+        update={
+            "stop_guidance": StopGuidance(
+                can_stop=False,
+                reason="minimum rounds unmet",
+                top_pool_strength="weak",
+            )
+        }
+    )
+    tracer = RunTracer(tmp_path / "trace")
+    try:
+        resolved = asyncio.run(
+            round_decision_runtime.resolve_pre_controller_exhaustion(
+                run_state=run_state,
+                round_no=2,
+                controller_context=context,
+                tracer=tracer,
+                progress_callback=None,
+                candidate_feedback_enabled=True,
+                force_broaden_decision=lambda **_: (_ for _ in ()).throw(AssertionError("no reserve")),
+                force_candidate_feedback_decision=lambda **_: (_ for _ in ()).throw(AssertionError("no feedback")),
+                continue_after_empty_feedback=runtime._continue_after_empty_feedback,
+                force_anchor_only_decision=lambda **_: (_ for _ in ()).throw(AssertionError("no anchor")),
+                write_rescue_decision=runtime._write_rescue_decision,
+            )
+        )
+    finally:
+        tracer.close()
+
+    assert resolved is not None
+    decision, rescue = resolved
+    assert rescue.selected_lane == "allow_stop"
+    assert isinstance(decision, StopControllerDecision)
+    assert decision.stop_reason == "query_family_exhausted"
 
 
 def test_controller_decision_requires_proposals_for_search() -> None:

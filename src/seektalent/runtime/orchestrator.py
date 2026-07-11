@@ -2070,48 +2070,84 @@ class WorkflowRuntime:
                 ),
                 self._slim_controller_context(controller_context),
             )
-            controller_decision, controller_stage_state = await controller_runtime.run_controller_stage(
-                settings=self.settings,
-                controller=self.controller,
-                controller_context=controller_context,
-                round_no=round_no,
-                tracer=tracer,
-                progress_callback=progress_callback,
-                build_llm_call_snapshot=self._build_llm_call_snapshot,
-                write_aux_llm_call_artifact=self._write_aux_llm_call_artifact,
-                emit_llm_event=self._emit_llm_event,
-                emit_progress=self._emit_progress,
-                prompt_cache_key=self._prompt_cache_key,
-                run_stage_error=RunStageError,
-            )
-            controller_decision, rescue_decision = await round_decision_runtime.resolve_round_decision(
+            preflight = await round_decision_runtime.resolve_pre_controller_exhaustion(
                 run_state=run_state,
                 round_no=round_no,
-                max_rounds=self.settings.max_rounds,
                 controller_context=controller_context,
-                controller_decision=controller_decision,
                 tracer=tracer,
                 progress_callback=progress_callback,
-                choose_rescue_decision=self._choose_rescue_decision,
+                candidate_feedback_enabled=self.settings.candidate_feedback_enabled,
                 force_broaden_decision=self._force_broaden_decision,
                 force_candidate_feedback_decision=self._force_candidate_feedback_decision,
                 continue_after_empty_feedback=self._continue_after_empty_feedback,
                 force_anchor_only_decision=self._force_anchor_only_decision,
                 write_rescue_decision=self._write_rescue_decision,
             )
-            controller_runtime.finalize_controller_stage(
-                settings=self.settings,
-                controller=self.controller,
-                controller_decision=controller_decision,
-                controller_stage_state=controller_stage_state,
-                round_no=round_no,
-                tracer=tracer,
-                progress_callback=progress_callback,
-                build_llm_call_snapshot=self._build_llm_call_snapshot,
-                write_aux_llm_call_artifact=self._write_aux_llm_call_artifact,
-                emit_llm_event=self._emit_llm_event,
-                emit_progress=self._emit_progress,
-            )
+            if preflight is None:
+                controller_decision, controller_stage_state = await controller_runtime.run_controller_stage(
+                    settings=self.settings,
+                    controller=self.controller,
+                    controller_context=controller_context,
+                    round_no=round_no,
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    build_llm_call_snapshot=self._build_llm_call_snapshot,
+                    write_aux_llm_call_artifact=self._write_aux_llm_call_artifact,
+                    emit_llm_event=self._emit_llm_event,
+                    emit_progress=self._emit_progress,
+                    prompt_cache_key=self._prompt_cache_key,
+                    run_stage_error=RunStageError,
+                )
+                try:
+                    controller_decision, rescue_decision = await round_decision_runtime.resolve_round_decision(
+                        run_state=run_state,
+                        round_no=round_no,
+                        max_rounds=self.settings.max_rounds,
+                        controller_context=controller_context,
+                        controller_decision=controller_decision,
+                        tracer=tracer,
+                        progress_callback=progress_callback,
+                        choose_rescue_decision=self._choose_rescue_decision,
+                        force_broaden_decision=self._force_broaden_decision,
+                        force_candidate_feedback_decision=self._force_candidate_feedback_decision,
+                        continue_after_empty_feedback=self._continue_after_empty_feedback,
+                        force_anchor_only_decision=self._force_anchor_only_decision,
+                        write_rescue_decision=self._write_rescue_decision,
+                    )
+                except ValueError as exc:
+                    if str(exc) != "no_fresh_controller_selectable_family":
+                        raise
+                    resolved = await round_decision_runtime.resolve_pre_controller_exhaustion(
+                        run_state=run_state,
+                        round_no=round_no,
+                        controller_context=controller_context,
+                        tracer=tracer,
+                        progress_callback=progress_callback,
+                        candidate_feedback_enabled=self.settings.candidate_feedback_enabled,
+                        force_broaden_decision=self._force_broaden_decision,
+                        force_candidate_feedback_decision=self._force_candidate_feedback_decision,
+                        continue_after_empty_feedback=self._continue_after_empty_feedback,
+                        force_anchor_only_decision=self._force_anchor_only_decision,
+                        write_rescue_decision=self._write_rescue_decision,
+                    )
+                    if resolved is None:
+                        raise
+                    controller_decision, rescue_decision = resolved
+                controller_runtime.finalize_controller_stage(
+                    settings=self.settings,
+                    controller=self.controller,
+                    controller_decision=controller_decision,
+                    controller_stage_state=controller_stage_state,
+                    round_no=round_no,
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    build_llm_call_snapshot=self._build_llm_call_snapshot,
+                    write_aux_llm_call_artifact=self._write_aux_llm_call_artifact,
+                    emit_llm_event=self._emit_llm_event,
+                    emit_progress=self._emit_progress,
+                )
+            else:
+                controller_decision, rescue_decision = preflight
             if isinstance(controller_decision, StopControllerDecision):
                 stop_reason = self._normalize_stop_reason(
                     proposed=controller_decision.stop_reason,
