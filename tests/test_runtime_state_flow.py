@@ -22,6 +22,7 @@ from seektalent.models import (
     QueryExecutionReceipt,
     QueryTermCandidate,
     ReflectionAdvice,
+    ReflectionContext,
     ReflectionFilterAdvice,
     ReflectionKeywordAdvice,
     RequirementExtractionDraft,
@@ -68,7 +69,11 @@ from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult, Retri
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, allocate_initial_lane_targets
 from seektalent.runtime.reflection_context import build_reflection_context
 from seektalent.runtime.runtime_reports import render_round_review as render_round_review_direct
-from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
+from seektalent.runtime.source_round_dispatch import (
+    SourceRoundAdapterResult,
+    SourceRoundDispatchRequest,
+    SourceRoundDispatchResult,
+)
 from seektalent.runtime.source_expansion import (
     SourceFirstPageExpansionError,
     SourceFirstPageExpansionRequest,
@@ -778,6 +783,16 @@ class SequenceReflection:
         )
 
 
+class RecordingExpansionReflection(SequenceReflection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.contexts: list[ReflectionContext] = []
+
+    async def reflect(self, *, context: ReflectionContext) -> ReflectionAdvice:
+        self.contexts.append(context)
+        return await super().reflect(context=context)
+
+
 class MutationAttemptReflection:
     async def reflect(self, *, context) -> ReflectionAdvice:
         del context
@@ -1315,6 +1330,86 @@ def _install_runtime_stubs(runtime: WorkflowRuntime, *, controller: object, resu
     runtime_any.reflection_critic = SequenceReflection()
     runtime_any.resume_scorer = resume_scorer
     runtime_any.finalizer = StubFinalizer()
+
+
+def test_expansion_candidates_are_scored_and_visible_to_reflection_in_the_same_round(tmp_path: Path) -> None:
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"), provider_name="liepin",
+        liepin_worker_mode="fake_fixture", liepin_allow_fake_fixture_worker=True,
+        min_rounds=1, max_rounds=1, enable_eval=False,
+    )
+    runtime = _workflow_runtime(settings)
+    _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=StubScorer())
+    runtime_any = cast(Any, runtime)
+    runtime_any._require_live_llm_config = lambda: None
+    reflection = RecordingExpansionReflection()
+    runtime_any.reflection_critic = reflection
+
+    def adapters(_runtime: WorkflowRuntime, context: RuntimeSourceRoundContext):
+        async def liepin(request: SourceRoundDispatchRequest) -> SourceRoundAdapterResult:
+            candidates, outcomes, attributions, continuations = [], [], [], []
+            for intent in request.source_query_intents_by_source["liepin"]:
+                for index in range(intent.requested_count):
+                    candidate = _make_candidate(f"baseline-{intent.query_instance_id}-{index}", source_round=context.round_no)
+                    candidates.append(candidate)
+                    attributions.append(RuntimeQueryCandidateAttribution(
+                        source_kind="liepin", query_instance_id=intent.query_instance_id,
+                        resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
+                    ))
+                outcomes.append(SourceQueryExecutionOutcome(
+                    query_instance_id=intent.query_instance_id, status="completed", dispatch_started=True,
+                    raw_candidate_count=intent.requested_count, unique_candidate_count=intent.requested_count,
+                ))
+                continuations.append(ProviderSearchContinuation(
+                    kind="first_page_detail_expansion", continuation_id=f"target-{intent.query_instance_id}",
+                    opaque_ref=f"artifact://protected/{intent.query_instance_id}", source_kind="liepin",
+                    round_no=context.round_no, query_instance_id=intent.query_instance_id,
+                    visible_candidate_count=intent.requested_count + 1,
+                    eligible_candidate_count=intent.requested_count + 1,
+                    initial_opened_count=intent.requested_count,
+                ))
+            return SourceRoundAdapterResult(
+                source="liepin", status="completed", candidates=tuple(candidates),
+                raw_candidate_count=len(candidates), query_execution_outcomes=tuple(outcomes),
+                candidate_query_attributions=tuple(attributions),
+                private_first_page_continuations=tuple(continuations),
+            )
+        return {"liepin": liepin}
+
+    expanded_ids: list[str] = []
+    async def expand(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
+        if request.action == "discard":
+            return SourceFirstPageExpansionResult(
+                source_kind="liepin", query_instance_id=request.query_instance_id,
+                continuation_id=request.continuation_id, status="completed",
+                first_page_visible_count=request.continuation.visible_candidate_count,
+                first_page_eligible_count=request.continuation.eligible_candidate_count,
+                initial_opened_count=request.continuation.initial_opened_count, continuation_deleted=True,
+            )
+        resume_id = f"expanded-{request.query_instance_id}"
+        expanded_ids.append(resume_id)
+        candidate = _make_candidate(resume_id, source_round=request.round_no)
+        return SourceFirstPageExpansionResult(
+            source_kind="liepin", query_instance_id=request.query_instance_id,
+            continuation_id=request.continuation_id, status="completed", candidates=(candidate,),
+            candidate_query_attributions=(RuntimeQueryCandidateAttribution(
+                source_kind="liepin", query_instance_id=request.query_instance_id,
+                resume_id=candidate.resume_id, dedup_key=candidate.dedup_key,
+            ),), first_page_visible_count=request.continuation.visible_candidate_count,
+            first_page_eligible_count=request.continuation.eligible_candidate_count,
+            initial_opened_count=request.continuation.initial_opened_count,
+            expansion_opened_count=1, continuation_deleted=True,
+        )
+
+    runtime_any.source_round_adapter_provider = adapters
+    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": expand}
+    artifacts = runtime.run(source_kinds=["liepin"], job_title="AI Agent Engineer", jd="Build production agent systems.", notes="")
+
+    assert expanded_ids
+    assert artifacts.run_state is not None
+    assert set(expanded_ids) <= set(artifacts.run_state.scorecards_by_resume_id)
+    assert set(expanded_ids) <= {item.resume_id for context in reflection.contexts for item in context.top_candidates}
+    assert all(context.search_observation.raw_candidate_count > 0 for context in reflection.contexts)
 
 
 def _requirement_sheet() -> RequirementSheet:
@@ -3997,7 +4092,7 @@ def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_p
     ]
 
     try:
-        top_candidates, pool_decisions, dropped_candidates = asyncio.run(
+        scoring_result = asyncio.run(
             runtime._score_round(
                 round_no=2,
                 new_candidates=[_make_candidate("seen", source_round=2), _make_candidate("fresh", source_round=2)],
@@ -4006,6 +4101,9 @@ def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_p
                 runtime_only_constraints=runtime_only_constraints,
             )
         )
+        top_candidates = scoring_result.top_candidates
+        pool_decisions = scoring_result.pool_decisions
+        dropped_candidates = scoring_result.dropped_candidates
     finally:
         tracer.close()
 

@@ -149,6 +149,7 @@ class RuntimeSourceLanePlan:
     backend_mode: str | None = None
     max_cards: int | None = None
     max_details: int | None = None
+    produces_private_first_page_continuations: bool = False
     source_budget_policy: RuntimeSourceBudgetPolicy = field(default_factory=RuntimeSourceBudgetPolicy.defaults)
     safe_posture: Mapping[str, str | int | bool | None] = field(default_factory=dict)
 
@@ -164,6 +165,7 @@ class RuntimeSourceLanePlan:
             "backend_mode": self.backend_mode,
             "max_cards": self.max_cards,
             "max_details": self.max_details,
+            "produces_private_first_page_continuations": self.produces_private_first_page_continuations,
             "source_budget_policy": self.source_budget_policy.to_public_payload(),
             "safe_posture": sanitize_mapping(self.safe_posture),
         }

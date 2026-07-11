@@ -23,7 +23,7 @@ def build_reflection_context(
         search_attempts=round_state.search_attempts,
         top_candidates=round_state.top_candidates or top_candidates(run_state),
         dropped_candidates=dropped_candidates(run_state, round_state),
-        scoring_failures=[],
+        scoring_failures=list(round_state.scoring_failures),
         sent_query_history=run_state.retrieval_state.sent_query_history,
         query_term_pool=run_state.retrieval_state.query_term_pool,
         canonical_intake_summary=run_state.latest_canonical_intake_summary,

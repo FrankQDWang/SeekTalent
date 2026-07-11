@@ -160,8 +160,25 @@ def _candidate_line(candidate, rank: int) -> str:  # noqa: ANN001
 
 
 def _safe_query_outcomes(context: ReflectionContext) -> list[dict[str, object]]:
-    return [
-        {
+    safe = []
+    for outcome in context.query_outcomes[:2]:
+        expansion = {
+            key: value
+            for key, value in {
+                "first_page_expansion_qualified": next((r.first_page_expansion_qualified for r in outcome.receipts if r.first_page_expansion_qualified is not None), None),
+                "first_page_expansion_status": next((r.first_page_expansion_status for r in outcome.receipts if r.first_page_expansion_status is not None), None),
+                "first_page_visible_count": sum(r.first_page_visible_count for r in outcome.receipts),
+                "first_page_eligible_count": sum(r.first_page_eligible_count for r in outcome.receipts),
+                "initial_opened_count": sum(r.initial_opened_count for r in outcome.receipts),
+                "expansion_opened_count": sum(r.expansion_opened_count for r in outcome.receipts),
+                "expansion_skipped_seen_count": sum(r.expansion_skipped_seen_count for r in outcome.receipts),
+                "expansion_terminal_failure_count": sum(r.expansion_terminal_failure_count for r in outcome.receipts),
+                "expansion_scoring_failure_count": sum(r.expansion_scoring_failure_count for r in outcome.receipts),
+                "first_page_expansion_reason_code": next((r.first_page_expansion_reason_code for r in outcome.receipts if r.first_page_expansion_reason_code), None),
+            }.items()
+            if value is not None
+        }
+        safe.append({
             "query_instance_id": outcome.query_instance_id,
             "query_role": outcome.query_role,
             "lane_type": outcome.lane_type,
@@ -170,9 +187,9 @@ def _safe_query_outcomes(context: ReflectionContext) -> list[dict[str, object]]:
             "raw_candidate_count": outcome.raw_candidate_count,
             "unique_candidate_count": outcome.unique_candidate_count,
             "duplicate_candidate_count": outcome.duplicate_candidate_count,
-        }
-        for outcome in context.query_outcomes[:2]
-    ]
+            **expansion,
+        })
+    return safe
 
 
 def render_reflection_prompt(context: ReflectionContext) -> str:

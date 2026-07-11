@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Collection
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from seektalent.models import (
     NormalizedResume,
@@ -9,6 +10,8 @@ from seektalent.models import (
     ResumeCandidate,
     RunState,
     RuntimeConstraint,
+    RuntimeCanonicalIntakeSummary,
+    ScoringFailure,
     ScoredCandidate,
 )
 from seektalent.normalization import normalize_resume
@@ -17,6 +20,43 @@ from seektalent.runtime.normalized_artifacts import normalized_resume_artifact_p
 from seektalent.runtime.runtime_diagnostics import slim_top_pool_snapshot
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.tracing import RunTracer, json_char_count, json_sha256
+
+
+@dataclass(frozen=True)
+class ScoringRoundResult:
+    top_candidates: list[ScoredCandidate]
+    pool_decisions: list[PoolDecision]
+    dropped_candidates: list[ScoredCandidate]
+    scoring_failures: list[ScoringFailure]
+
+    @classmethod
+    def empty(cls) -> "ScoringRoundResult":
+        return cls([], [], [], [])
+
+
+def combine_round_intake_summaries(
+    *, baseline: RuntimeCanonicalIntakeSummary | None, expansion: RuntimeCanonicalIntakeSummary | None
+) -> RuntimeCanonicalIntakeSummary | None:
+    if baseline is None:
+        return expansion
+    if expansion is None:
+        return baseline
+    if baseline.round_no != expansion.round_no:
+        raise ValueError("canonical_intake_summary_round_mismatch")
+    def add_counts(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
+        return {key: left.get(key, 0) + right.get(key, 0) for key in dict.fromkeys((*left, *right))}
+    return baseline.model_copy(update={
+        "raw_candidate_count": baseline.raw_candidate_count + expansion.raw_candidate_count,
+        "normalized_candidate_count": baseline.normalized_candidate_count + expansion.normalized_candidate_count,
+        "identity_count": baseline.identity_count + expansion.identity_count,
+        "auto_merged_duplicate_count": baseline.auto_merged_duplicate_count + expansion.auto_merged_duplicate_count,
+        "uncertain_conflict_count": baseline.uncertain_conflict_count + expansion.uncertain_conflict_count,
+        "skipped_already_scored_identity_count": baseline.skipped_already_scored_identity_count + expansion.skipped_already_scored_identity_count,
+        "scoring_candidate_count": baseline.scoring_candidate_count + expansion.scoring_candidate_count,
+        "canonical_resume_ids": tuple(dict.fromkeys((*baseline.canonical_resume_ids, *expansion.canonical_resume_ids))),
+        "per_source_raw_counts": add_counts(baseline.per_source_raw_counts, expansion.per_source_raw_counts),
+        "per_source_normalized_counts": add_counts(baseline.per_source_normalized_counts, expansion.per_source_normalized_counts),
+    })
 
 
 async def score_round(
@@ -31,7 +71,10 @@ async def score_round(
     run_stage_error: Callable[[str, str], Exception],
     selected_source_kinds: tuple[str, ...] = (),
     source_raw_targets: dict[str, int] | None = None,
-) -> tuple[list[ScoredCandidate], list[PoolDecision], list[ScoredCandidate]]:
+    batch_kind: Literal["baseline", "first_page_expansion"] = "baseline",
+    fail_on_scoring_error: bool = True,
+    finalize_pool: bool = True,
+) -> ScoringRoundResult:
     canonical_intake = build_canonical_scoring_intake(
         run_state=run_state,
         round_no=round_no,
@@ -49,10 +92,14 @@ async def score_round(
         tracer=tracer,
         normalized_store=run_state.normalized_store,
     )
-    tracer.write_jsonl(
-        f"round.{round_no:02d}.scoring.scoring_input_refs",
-        [scoring_input_ref(item) for item in normalized_scoring_pool],
-    )
+    if batch_kind == "baseline":
+        tracer.write_jsonl(f"round.{round_no:02d}.scoring.scoring_input_refs", [])
+        tracer.write_jsonl(f"round.{round_no:02d}.scoring.scorecards", [])
+    for item in normalized_scoring_pool:
+        tracer.append_jsonl(
+            f"round.{round_no:02d}.scoring.scoring_input_refs",
+            {**scoring_input_ref(item), "batch_kind": batch_kind},
+        )
     scoring_contexts = [
         build_scoring_context(
             run_state=run_state,
@@ -63,27 +110,43 @@ async def score_round(
         for item in normalized_scoring_pool
     ]
     previous_top_ids = set(run_state.top_pool_ids)
+    scoring_failures: list[ScoringFailure] = []
     if scoring_contexts:
         scored_candidates, scoring_failures = await resume_scorer.score_candidates_parallel(
             contexts=scoring_contexts,
             tracer=tracer,
         )
-        if scoring_failures:
-            raise run_stage_error("scoring", format_scoring_failure_message(scoring_failures))
         for candidate in scored_candidates:
             if candidate.resume_id not in run_state.scorecards_by_resume_id:
                 run_state.scorecards_by_resume_id[candidate.resume_id] = candidate
+        if scoring_failures and fail_on_scoring_error:
+            raise run_stage_error("scoring", format_scoring_failure_message(scoring_failures))
     else:
         scored_candidates = []
+    for item in scored_candidates:
+        tracer.append_jsonl(
+            f"round.{round_no:02d}.scoring.scorecards",
+            {**item.model_dump(mode="json"), "batch_kind": batch_kind},
+        )
+    if not finalize_pool:
+        return ScoringRoundResult(select_identity_top_candidates(run_state), [], [], scoring_failures)
+    current_top_candidates, pool_decisions, dropped_candidates = finalize_round_pool(
+        round_no=round_no,
+        run_state=run_state,
+        tracer=tracer,
+        previous_top_ids=previous_top_ids,
+    )
+    return ScoringRoundResult(current_top_candidates, pool_decisions, dropped_candidates, scoring_failures)
+
+
+def finalize_round_pool(
+    *, round_no: int, run_state: RunState, tracer: RunTracer, previous_top_ids: set[str]
+) -> tuple[list[ScoredCandidate], list[PoolDecision], list[ScoredCandidate]]:
     current_top_candidates = select_identity_top_candidates(run_state)
     pool_decisions = build_pool_decisions(
         round_no=round_no,
         top_candidates=current_top_candidates,
         previous_top_ids=previous_top_ids,
-    )
-    tracer.write_jsonl(
-        f"round.{round_no:02d}.scoring.scorecards",
-        [item.model_dump(mode="json") for item in scored_candidates],
     )
     tracer.session.register_path(
         f"round.{round_no:02d}.scoring.top_pool_snapshot",

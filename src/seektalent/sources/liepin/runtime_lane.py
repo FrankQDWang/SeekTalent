@@ -592,6 +592,7 @@ def _card_lane_result_from_search_result(
         backend_mode="runtime_source_lane",
         max_cards=budget.max_cards,
         max_details=budget.max_detail_recommendations,
+        produces_private_first_page_continuations=True,
         source_budget_policy=budget,
     )
     candidates = tuple(search_result.candidates[: budget.max_cards])
@@ -702,6 +703,7 @@ async def _run_detail_lane(
         label="Liepin",
         lane_mode="detail",
         backend_mode="runtime_source_lane",
+        produces_private_first_page_continuations=True,
         source_budget_policy=request.source_budget_policy,
     )
     candidates = tuple(search_result.candidates)

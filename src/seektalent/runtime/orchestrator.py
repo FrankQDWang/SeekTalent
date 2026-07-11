@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from collections import Counter
 from collections.abc import Awaitable, Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import perf_counter
 from types import SimpleNamespace
@@ -112,6 +112,7 @@ from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.runtime.source_expansion import SourceFirstPageExpander
+from seektalent.runtime.source_expansion import SourceFirstPageExpansionResult
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates, select_identity_top_candidates
@@ -180,11 +181,21 @@ from seektalent.runtime.source_lanes import (
 )
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
 from seektalent.runtime.query_identity import (
+    add_pre_click_skips_to_query_outcomes,
     apply_post_merge_query_counts,
     assert_novel_query_identities,
     consumed_non_anchor_term_family_ids,
     logical_outcomes_from_receipts,
     used_term_group_keys,
+)
+from seektalent.runtime.first_page_expansion import (
+    ExpansionQueryMergeCounts,
+    apply_first_page_expansion_to_receipts,
+    assert_first_page_expanders_registered,
+    canonical_scorecards_by_identity_id,
+    discard_unconsumed_first_page_continuations,
+    execute_first_page_decisions,
+    select_qualified_first_page_expansions,
 )
 from seektalent.runtime.public_events import RuntimePublicEvent, make_runtime_public_event
 from seektalent.runtime.retrieval_runtime import (
@@ -210,7 +221,12 @@ from seektalent.runtime.source_query_intent import (
 )
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
 from seektalent.runtime.scoring_context import build_scoring_context
-from seektalent.runtime.scoring_runtime import score_round as score_round_direct
+from seektalent.runtime.scoring_runtime import (
+    ScoringRoundResult,
+    combine_round_intake_summaries,
+    finalize_round_pool,
+    score_round as score_round_direct,
+)
 from seektalent.runtime.stop_reasons import normalize_stop_reason
 from seektalent.source_contracts import (
     SourceBudget,
@@ -218,6 +234,7 @@ from seektalent.source_contracts import (
     SourceLaneResult as ContractSourceLaneResult,
     SourcePlan as ContractSourcePlan,
     SourceRegistry,
+    RuntimeQueryCandidateAttribution,
 )
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
@@ -2270,6 +2287,14 @@ class WorkflowRuntime:
                     "target_new": target_new,
                 },
             )
+            pre_round_top_ids = set(run_state.top_pool_ids)
+            pre_round_seen_resume_ids = set(run_state.seen_resume_ids)
+            source_expanders = (
+                self.source_first_page_expander_provider(self, detail_open_claim_ledger)
+                if self.source_first_page_expander_provider is not None
+                else {}
+            )
+            assert_first_page_expanders_registered(source_plan=source_plan, expanders=source_expanders)
             try:
                 retrieval_result = await self._execute_multi_source_round_search(
                     round_no=round_no,
@@ -2381,15 +2406,196 @@ class WorkflowRuntime:
                 payload={"stage": "scoring", "candidate_count": len(new_candidates)},
             )
             try:
-                current_top_candidates, pool_decisions, dropped_candidates = await self._score_round(
+                try:
+                    baseline_scoring_result = await self._score_round(
+                        round_no=round_no,
+                        new_candidates=new_candidates,
+                        run_state=run_state,
+                        tracer=tracer,
+                        runtime_only_constraints=retrieval_plan.runtime_only_constraints,
+                        selected_source_kinds=tuple(lane.source for lane in source_plan),
+                        source_raw_targets=source_raw_targets,
+                        batch_kind="baseline",
+                        fail_on_scoring_error=True,
+                        finalize_pool=False,
+                    )
+                except Exception:
+                    await discard_unconsumed_first_page_continuations(
+                        runtime_run_id=tracer.run_id,
+                        round_no=round_no,
+                        continuations=retrieval_result.private_first_page_continuations,
+                        expanders=source_expanders,
+                    )
+                    raise
+                baseline_intake_summary = run_state.latest_canonical_intake_summary
+                expansion_decisions = select_qualified_first_page_expansions(
+                    continuations=retrieval_result.private_first_page_continuations,
+                    receipts=retrieval_result.query_execution_receipts,
+                    candidate_attributions=retrieval_result.candidate_query_attributions,
+                    candidate_identity_by_resume_id=run_state.candidate_identity_by_resume_id,
+                    scorecards_by_identity_id=canonical_scorecards_by_identity_id(
+                        scorecards_by_resume_id=run_state.scorecards_by_resume_id,
+                        candidate_identity_by_resume_id=run_state.candidate_identity_by_resume_id,
+                        canonical_resume_by_identity_id=run_state.canonical_resume_by_identity_id,
+                    ),
+                )
+                expansion_results = await execute_first_page_decisions(
+                    runtime_run_id=tracer.run_id,
                     round_no=round_no,
-                    new_candidates=new_candidates,
+                    decisions=expansion_decisions,
+                    expanders=source_expanders,
+                )
+                expansion_candidates, expansion_attributions, expansion_merge_counts = (
+                    self._merge_expansion_candidates(
+                        results=expansion_results,
+                        run_state=run_state,
+                        source_plan=source_plan,
+                        round_no=round_no,
+                        tracer=tracer,
+                        seen_dedup_keys=seen_dedup_keys,
+                    )
+                )
+                if expansion_candidates:
+                    expansion_scoring_result = await self._score_round(
+                        round_no=round_no,
+                        new_candidates=expansion_candidates,
+                        run_state=run_state,
+                        tracer=tracer,
+                        runtime_only_constraints=retrieval_plan.runtime_only_constraints,
+                        selected_source_kinds=tuple(lane.source for lane in source_plan),
+                        source_raw_targets=None,
+                        batch_kind="first_page_expansion",
+                        fail_on_scoring_error=False,
+                        finalize_pool=False,
+                    )
+                    expansion_intake_summary = run_state.latest_canonical_intake_summary
+                else:
+                    expansion_scoring_result = ScoringRoundResult.empty()
+                    expansion_intake_summary = None
+                run_state.latest_canonical_intake_summary = combine_round_intake_summaries(
+                    baseline=baseline_intake_summary,
+                    expansion=expansion_intake_summary,
+                )
+                failed_ids = {failure.resume_id for failure in expansion_scoring_result.scoring_failures}
+                failure_counts: dict[tuple[str, str], int] = {}
+                counted_failures: set[tuple[str, str, str]] = set()
+                for attribution in expansion_attributions:
+                    identity_id = run_state.candidate_identity_by_resume_id.get(
+                        attribution.resume_id, attribution.resume_id
+                    )
+                    failed_identity_ids = {
+                        run_state.candidate_identity_by_resume_id.get(item, item) for item in failed_ids
+                    }
+                    key = (attribution.source_kind, attribution.query_instance_id)
+                    failure_key = (*key, identity_id)
+                    if identity_id in failed_identity_ids and failure_key not in counted_failures:
+                        counted_failures.add(failure_key)
+                        failure_counts[key] = failure_counts.get(key, 0) + 1
+                updated_receipts = apply_first_page_expansion_to_receipts(
+                    receipts=retrieval_result.query_execution_receipts,
+                    decisions=expansion_decisions,
+                    outcomes=expansion_results,
+                    merge_counts=expansion_merge_counts,
+                    scoring_failure_counts=failure_counts,
+                )
+                all_attributions = [
+                    *retrieval_result.candidate_query_attributions,
+                    *expansion_attributions,
+                ]
+                identities_seen_before_round = {
+                    run_state.candidate_identity_by_resume_id[resume_id]
+                    for resume_id in pre_round_seen_resume_ids
+                    if resume_id in run_state.candidate_identity_by_resume_id
+                }
+                query_outcomes = add_pre_click_skips_to_query_outcomes(
+                    outcomes=apply_post_merge_query_counts(
+                        outcomes=logical_outcomes_from_receipts(updated_receipts),
+                        candidate_attributions=all_attributions,
+                        candidate_identity_by_resume_id=run_state.candidate_identity_by_resume_id,
+                        dispatch_order=[item.query_instance_id for item in retrieval_result.query_outcomes],
+                        identities_seen_before_round=identities_seen_before_round,
+                    ),
+                    receipts=updated_receipts,
+                )
+                round_identity_ids = {
+                    run_state.candidate_identity_by_resume_id.get(item.resume_id, item.resume_id)
+                    for item in all_attributions
+                }
+                final_round_new_identity_count = len(round_identity_ids - identities_seen_before_round)
+                if run_state.latest_canonical_intake_summary is not None:
+                    summary = run_state.latest_canonical_intake_summary
+                    run_state.latest_canonical_intake_summary = summary.model_copy(update={
+                        "identity_count": len(round_identity_ids),
+                        "auto_merged_duplicate_count": max(
+                            0, summary.normalized_candidate_count - len(round_identity_ids)
+                        ),
+                    })
+                expanded_raw_count = sum(item.expansion_opened_count for item in expansion_results)
+                search_observation = search_observation.model_copy(
+                    update={
+                        "raw_candidate_count": search_observation.raw_candidate_count + expanded_raw_count,
+                        "unique_new_count": final_round_new_identity_count,
+                        "shortage_count": max(0, search_observation.requested_count - final_round_new_identity_count),
+                        "new_resume_ids": [*search_observation.new_resume_ids, *(item.resume_id for item in expansion_candidates)],
+                        "new_candidate_summaries": [*search_observation.new_candidate_summaries, *(item.compact_summary() for item in expansion_candidates)],
+                        "exhausted_reason": (
+                            "first_page_expansion_completed"
+                            if any(decision.expand for decision in expansion_decisions)
+                            else search_observation.exhausted_reason
+                        ),
+                    }
+                )
+                retrieval_result = replace(
+                    retrieval_result,
+                    new_candidates=[*retrieval_result.new_candidates, *expansion_candidates],
+                    search_observation=search_observation,
+                    query_execution_receipts=updated_receipts,
+                    candidate_query_attributions=all_attributions,
+                    query_outcomes=query_outcomes,
+                )
+                self._emit_runtime_public_event(
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    event=make_runtime_public_event(
+                        runtime_run_id=tracer.run_id,
+                        stage="first_page_expansion",
+                        event_seq=round_no * 100 + 65,
+                        round_no=round_no,
+                        counts={
+                            "qualifiedLaneCount": sum(1 for item in expansion_decisions if item.expand),
+                            "expandedCandidateCount": len(expansion_candidates),
+                            "skippedSeenCount": sum(item.expansion_skipped_seen_count for item in expansion_results),
+                            "terminalFailureCount": sum(item.expansion_terminal_failure_count for item in expansion_results),
+                            "scoringFailureCount": len(expansion_scoring_result.scoring_failures),
+                        },
+                    ),
+                )
+                run_state.retrieval_state.query_execution_ledger = [
+                    next(
+                        (updated for updated in updated_receipts if updated.source_kind == item.source_kind and updated.query_instance_id == item.query_instance_id),
+                        item,
+                    )
+                    for item in run_state.retrieval_state.query_execution_ledger
+                ]
+                tracer.write_json(
+                    "runtime.query_execution_ledger",
+                    [item.model_dump(mode="json") for item in run_state.retrieval_state.query_execution_ledger],
+                )
+                tracer.write_json(
+                    _round_artifact(tracer, round_no=round_no, subsystem="retrieval", name="query_execution_receipts"),
+                    [item.model_dump(mode="json") for item in updated_receipts],
+                )
+                tracer.write_json(
+                    _round_artifact(tracer, round_no=round_no, subsystem="retrieval", name="query_outcomes"),
+                    [item.model_dump(mode="json") for item in query_outcomes],
+                )
+                current_top_candidates, pool_decisions, dropped_candidates = finalize_round_pool(
+                    round_no=round_no,
                     run_state=run_state,
                     tracer=tracer,
-                    runtime_only_constraints=retrieval_plan.runtime_only_constraints,
-                    selected_source_kinds=tuple(lane.source for lane in source_plan),
-                    source_raw_targets=source_raw_targets,
+                    previous_top_ids=pre_round_top_ids,
                 )
+                del baseline_scoring_result
             finally:
                 self._write_query_resume_hits(
                     tracer=tracer,
@@ -2524,6 +2730,7 @@ class WorkflowRuntime:
                 top_pool_ids=run_state.top_pool_ids,
                 dropped_candidate_ids=[candidate.resume_id for candidate in dropped_candidates],
                 query_outcomes=query_outcomes,
+                scoring_failures=expansion_scoring_result.scoring_failures,
             )
             run_state.round_history.append(round_state)
             reflection_advice = await reflection_runtime.run_reflection_stage(
@@ -3257,6 +3464,64 @@ class WorkflowRuntime:
         run_state.retrieval_state.reflection_filter_advice_history.append(advice.filter_advice)
         return advice
 
+    def _merge_expansion_candidates(
+        self,
+        *,
+        results: Sequence[SourceFirstPageExpansionResult],
+        run_state: RunState,
+        source_plan: tuple[RuntimeSourceLanePlan, ...],
+        round_no: int,
+        tracer: RunTracer,
+        seen_dedup_keys: set[str],
+    ) -> tuple[list[ResumeCandidate], list[RuntimeQueryCandidateAttribution], list[ExpansionQueryMergeCounts]]:
+        source_order = {lane.source: index for index, lane in enumerate(source_plan)}
+        resume_ids_before = set(run_state.seen_resume_ids)
+        candidates = [candidate for result in results for candidate in result.candidates]
+        attributions = [item for result in results for item in result.candidate_query_attributions]
+        for result in results:
+            if result.lane_result is not None:
+                merge_source_lane_result_updates(
+                    run_state=run_state,
+                    result=result.lane_result,
+                    source_order=source_order,
+                    rebuild_identity=False,
+                )
+        for candidate in candidates:
+            run_state.candidate_store[candidate.resume_id] = candidate
+            if candidate.resume_id not in run_state.seen_resume_ids:
+                run_state.seen_resume_ids.append(candidate.resume_id)
+            if candidate.dedup_key:
+                seen_dedup_keys.add(candidate.dedup_key)
+        normalize_runtime_candidates(run_state=run_state, candidates=candidates, round_no=round_no, tracer=tracer)
+        rebuild_candidate_identities(run_state, source_order=source_order)
+        identities_before = {
+            run_state.candidate_identity_by_resume_id[item]
+            for item in resume_ids_before
+            if item in run_state.candidate_identity_by_resume_id
+        }
+        new_candidates: list[ResumeCandidate] = []
+        new_ids: set[str] = set()
+        for candidate in candidates:
+            identity_id = run_state.candidate_identity_by_resume_id.get(candidate.resume_id, candidate.resume_id)
+            if identity_id not in identities_before and identity_id not in new_ids:
+                new_ids.add(identity_id)
+                new_candidates.append(candidate)
+        counts: dict[tuple[str, str], list[int]] = {}
+        claimed: set[str] = set()
+        for attribution in attributions:
+            key = (attribution.source_kind, attribution.query_instance_id)
+            row = counts.setdefault(key, [0, 0])
+            identity_id = run_state.candidate_identity_by_resume_id.get(attribution.resume_id, attribution.resume_id)
+            if identity_id in identities_before or identity_id in claimed:
+                row[1] += 1
+            else:
+                claimed.add(identity_id)
+                row[0] += 1
+        return new_candidates, attributions, [
+            ExpansionQueryMergeCounts(source, query, values[0], values[1])
+            for (source, query), values in counts.items()
+        ]
+
     async def _score_round(
         self,
         *,
@@ -3267,7 +3532,10 @@ class WorkflowRuntime:
         runtime_only_constraints: list[RuntimeConstraint],
         selected_source_kinds: tuple[str, ...] = (),
         source_raw_targets: dict[str, int] | None = None,
-    ) -> tuple[list[ScoredCandidate], list[PoolDecision], list[ScoredCandidate]]:
+        batch_kind: Literal["baseline", "first_page_expansion"] = "baseline",
+        fail_on_scoring_error: bool = True,
+        finalize_pool: bool = True,
+    ) -> ScoringRoundResult:
         return await score_round_direct(
             round_no=round_no,
             new_candidates=new_candidates,
@@ -3279,6 +3547,9 @@ class WorkflowRuntime:
             run_stage_error=RunStageError,
             selected_source_kinds=selected_source_kinds,
             source_raw_targets=source_raw_targets,
+            batch_kind=batch_kind,
+            fail_on_scoring_error=fail_on_scoring_error,
+            finalize_pool=finalize_pool,
         )
 
     async def _score_candidates_for_query_outcome(

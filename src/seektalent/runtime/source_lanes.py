@@ -35,6 +35,7 @@ from seektalent.source_contracts import (
 )
 
 SourceKind = str
+_PRIVATE_FIRST_PAGE_CONTINUATION_SOURCES = frozenset({"liepin"})
 
 __all__ = [
     "DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY",
@@ -119,6 +120,7 @@ def build_runtime_source_plan(
                 runtime_run_id=runtime_run_id,
                 source=source,
                 label=source,
+                produces_private_first_page_continuations=(source in _PRIVATE_FIRST_PAGE_CONTINUATION_SOURCES),
             )
         )
     return tuple(plans)

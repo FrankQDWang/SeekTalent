@@ -13,6 +13,7 @@ from seektalent.runtime.source_expansion import (
 )
 from seektalent.runtime.source_round_dispatch import RuntimeSourceInvariantError
 from seektalent.source_contracts import RuntimeQueryCandidateAttribution
+from seektalent.source_contracts import RuntimeSourceLanePlan
 
 MIN_OVERALL_SCORE = 80
 MIN_MUST_HAVE_SCORE = 70
@@ -34,6 +35,18 @@ class ExpansionQueryMergeCounts:
     query_instance_id: str
     unique_candidate_count: int
     duplicate_candidate_count: int
+
+
+def assert_first_page_expanders_registered(
+    *, source_plan: Sequence[RuntimeSourceLanePlan], expanders: Mapping[str, SourceFirstPageExpander]
+) -> None:
+    if any(
+        lane.enabled
+        and lane.produces_private_first_page_continuations
+        and lane.source not in expanders
+        for lane in source_plan
+    ):
+        raise RuntimeSourceInvariantError("first_page_expander_unavailable")
 
 
 def canonical_scorecards_by_identity_id(
@@ -170,6 +183,29 @@ async def execute_first_page_decisions(
                 )
             results.append(result)
     return results
+
+
+async def discard_unconsumed_first_page_continuations(
+    *, runtime_run_id: str, round_no: int,
+    continuations: Sequence[ProviderSearchContinuation],
+    expanders: Mapping[str, SourceFirstPageExpander],
+) -> list[SourceFirstPageExpansionResult]:
+    decisions = [
+        FirstPageExpansionDecision(
+            source_kind=item.source_kind,
+            query_instance_id=item.query_instance_id,
+            expand=False,
+            reason_code="first_page_continuation_cleanup",
+            continuations=(item,),
+        )
+        for item in continuations
+    ]
+    return await execute_first_page_decisions(
+        runtime_run_id=runtime_run_id,
+        round_no=round_no,
+        decisions=decisions,
+        expanders=expanders,
+    )
 
 
 def _validate_expansion_result(

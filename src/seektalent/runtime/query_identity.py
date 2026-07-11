@@ -156,3 +156,24 @@ def apply_post_merge_query_counts(
             )
         )
     return counted
+
+
+def add_pre_click_skips_to_query_outcomes(
+    *, outcomes: Sequence[LogicalQueryOutcome], receipts: Sequence[QueryExecutionReceipt]
+) -> list[LogicalQueryOutcome]:
+    skipped_by_query: dict[str, int] = {}
+    for receipt in receipts:
+        skipped_by_query[receipt.query_instance_id] = (
+            skipped_by_query.get(receipt.query_instance_id, 0)
+            + receipt.pre_click_skipped_seen_count
+            + receipt.expansion_skipped_seen_count
+        )
+    return [
+        outcome.model_copy(
+            update={
+                "duplicate_candidate_count": outcome.duplicate_candidate_count
+                + skipped_by_query.get(outcome.query_instance_id, 0)
+            }
+        )
+        for outcome in outcomes
+    ]

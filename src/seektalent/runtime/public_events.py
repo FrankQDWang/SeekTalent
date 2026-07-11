@@ -15,6 +15,7 @@ _RUNTIME_PUBLIC_EVENT_NAMES = {
     "source_result": "runtime_round_source_result",
     "merge": "runtime_round_merge_completed",
     "scoring": "runtime_round_scoring_completed",
+    "first_page_expansion": "runtime_round_first_page_expansion",
     "feedback": "runtime_round_feedback_completed",
     "finalization": "runtime_finalization_completed",
 }
@@ -69,6 +70,11 @@ _PUBLIC_COUNT_KEYS = {
     "topPoolCount",
     "selectedIdentityCount",
     "feedbackCandidateCount",
+    "qualifiedLaneCount",
+    "expandedCandidateCount",
+    "skippedSeenCount",
+    "terminalFailureCount",
+    "scoringFailureCount",
 }
 _PUBLIC_DETAIL_TEXT_KEYS = {
     "resumeQualityComment",

@@ -1462,6 +1462,7 @@ class RoundState(BaseModel):
     dropped_candidate_ids: list[str] = Field(default_factory=list)
     reflection_advice: ReflectionAdvice | None = None
     query_outcomes: list[LogicalQueryOutcome] = Field(default_factory=list)
+    scoring_failures: list[ScoringFailure] = Field(default_factory=list)
 
     @property
     def cts_queries(self) -> list[ProviderQuery]:

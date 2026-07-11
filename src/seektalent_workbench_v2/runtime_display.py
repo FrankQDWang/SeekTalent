@@ -107,6 +107,7 @@ _PUBLIC_RUNTIME_EVENT_TYPES = {
     "runtime_scoring_started",
     "runtime_scoring_completed",
     "runtime_round_scoring_completed",
+    "runtime_round_first_page_expansion",
     "runtime_resume_quality_comment_completed",
     "runtime_reflection_started",
     "runtime_reflection_completed",
@@ -134,6 +135,7 @@ _PUBLIC_RUNTIME_STAGE_LABELS = {
     "search": "候选人检索",
     "merge": "候选人合并",
     "scoring": "候选人评分",
+    "first_page_expansion": "优质召回扩展",
     "resume_quality": "简历质量评估",
     "reflection": "检索复盘",
     "feedback": "检索复盘",
@@ -156,6 +158,11 @@ _COUNT_KEYS = {
     "topPoolCount",
     "selectedIdentityCount",
     "feedbackCandidateCount",
+    "qualifiedLaneCount",
+    "expandedCandidateCount",
+    "skippedSeenCount",
+    "terminalFailureCount",
+    "scoringFailureCount",
 }
 
 
@@ -333,6 +340,11 @@ def _runtime_event_progress_summary(
         if top_pool_count is not None:
             return f"{round_prefix}评分完成，{top_pool_count} 位候选人进入 Top Pool。"
         return f"{round_prefix}评分完成。"
+    if event_type == "runtime_round_first_page_expansion":
+        return (
+            f"{round_prefix}优质召回扩展完成：新增 {counts.get('expandedCandidateCount', 0)} 位，"
+            f"跳过重复 {counts.get('skippedSeenCount', 0)} 位。"
+        )
     if event_type == "runtime_resume_quality_comment_completed":
         return f"{round_prefix}简历质量评估完成。"
     if event_type == "runtime_reflection_started":
