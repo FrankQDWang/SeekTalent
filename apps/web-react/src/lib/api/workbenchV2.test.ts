@@ -107,6 +107,29 @@ describe("Workbench v2 normalization", () => {
           {
             roundNo: 1,
             status: "running",
+            queryGroups: [
+              {
+                queryInstanceId: "query_1",
+                termGroupKey: "term_group_1",
+                queryRole: "exploit",
+                laneType: "exploit",
+                lifecycle: "executed",
+                executionStatus: "completed",
+                attempted: true,
+                rawCandidateCount: 4,
+                uniqueCandidateCount: 3,
+                duplicateCandidateCount: 1,
+                executions: [
+                  {
+                    sourceKind: "liepin",
+                    status: "completed",
+                    rawCandidateCount: 4,
+                    uniqueCandidateCount: 3,
+                    duplicateCandidateCount: 1,
+                  },
+                ],
+              },
+            ],
           },
         ],
       },
@@ -123,6 +146,31 @@ describe("Workbench v2 normalization", () => {
         {
           roundNo: 1,
           status: "running",
+          queryGroups: [
+            {
+              queryInstanceId: "query_1",
+              termGroupKey: "term_group_1",
+              queryRole: "exploit",
+              laneType: "exploit",
+              queryTerms: [],
+              lifecycle: "executed",
+              executionStatus: "completed",
+              attempted: true,
+              rawCandidateCount: 4,
+              uniqueCandidateCount: 3,
+              duplicateCandidateCount: 1,
+              executions: [
+                {
+                  sourceKind: "liepin",
+                  status: "completed",
+                  rawCandidateCount: 4,
+                  uniqueCandidateCount: 3,
+                  duplicateCandidateCount: 1,
+                  safeReasonCode: null,
+                },
+              ],
+            },
+          ],
           cards: [],
         },
       ],

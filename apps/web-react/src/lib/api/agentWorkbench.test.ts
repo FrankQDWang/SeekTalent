@@ -3,7 +3,10 @@ import {
   shouldApplyWorkbenchSnapshot,
   workbenchStreamStartSeq,
 } from "./agentWorkbench";
-import type { AgentWorkbenchConversationResponse } from "./agentWorkbenchTypes";
+import {
+  normalizeAgentWorkbenchConversation,
+  type AgentWorkbenchConversationResponse,
+} from "./agentWorkbenchTypes";
 import { ApiRequestError, requireData } from "./client";
 
 describe("Agent Workbench snapshot helpers", () => {
@@ -37,6 +40,56 @@ describe("Agent Workbench snapshot helpers", () => {
         viewFixture({ latestStreamSeq: 12, snapshotSeq: 9 }),
       ),
     ).toBe(9);
+  });
+});
+
+describe("Agent Workbench response normalization", () => {
+  it("defaults omitted query-group arrays while retaining public query metadata", () => {
+    const input = {
+      ...viewFixture(),
+      thinkingProcess: {
+        activeRoundNo: 1,
+        rounds: [
+          {
+            roundNo: 1,
+            status: "running",
+            queryGroups: [
+              {
+                queryInstanceId: "query_1",
+                termGroupKey: "term_group_1",
+                queryRole: "exploit",
+                laneType: "exploit",
+                lifecycle: "executed",
+                executionStatus: "completed",
+                attempted: true,
+                rawCandidateCount: 4,
+                uniqueCandidateCount: 3,
+                duplicateCandidateCount: 1,
+              },
+            ],
+          },
+        ],
+      },
+    } as Parameters<typeof normalizeAgentWorkbenchConversation>[0];
+
+    const normalized = normalizeAgentWorkbenchConversation(input);
+
+    expect(normalized.thinkingProcess.rounds[0]?.queryGroups).toEqual([
+      {
+        queryInstanceId: "query_1",
+        termGroupKey: "term_group_1",
+        queryRole: "exploit",
+        laneType: "exploit",
+        queryTerms: [],
+        lifecycle: "executed",
+        executionStatus: "completed",
+        attempted: true,
+        rawCandidateCount: 4,
+        uniqueCandidateCount: 3,
+        duplicateCandidateCount: 1,
+        executions: [],
+      },
+    ]);
   });
 });
 

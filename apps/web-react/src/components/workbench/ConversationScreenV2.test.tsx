@@ -280,6 +280,7 @@ describe("ConversationScreenV2", () => {
           {
             roundNo: 1,
             status: "running",
+            queryGroups: [],
             cards: [
               {
                 title: "observation",
@@ -409,7 +410,7 @@ describe("ConversationScreenV2", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("maps WTS thinking card titles without exposing raw card keys", () => {
+  it("renders distinct WTS query groups without exposing internal identifiers", () => {
     expect.hasAssertions();
 
     render(
@@ -421,12 +422,39 @@ describe("ConversationScreenV2", () => {
               {
                 roundNo: 1,
                 status: "running",
-                cards: [
+                queryGroups: [
                   {
-                    title: "关键词",
-                    text: "AI agent, LLM",
-                    terms: [],
+                    queryInstanceId: "query_exploit_1",
+                    termGroupKey: "term_group_hidden_1",
+                    queryRole: "exploit",
+                    laneType: "exploit",
+                    queryTerms: ["AI agent", "LLM"],
+                    keywordQuery: "AI agent AND LLM",
+                    lifecycle: "executed",
+                    executionStatus: "completed",
+                    attempted: true,
+                    rawCandidateCount: 10,
+                    uniqueCandidateCount: 7,
+                    duplicateCandidateCount: 3,
+                    executions: [],
                   },
+                  {
+                    queryInstanceId: "query_probe_1",
+                    termGroupKey: "term_group_hidden_2",
+                    queryRole: "probe",
+                    laneType: "prf_probe",
+                    queryTerms: ["RAG evaluation"],
+                    keywordQuery: null,
+                    lifecycle: "planned",
+                    executionStatus: null,
+                    attempted: false,
+                    rawCandidateCount: 0,
+                    uniqueCandidateCount: 0,
+                    duplicateCandidateCount: 0,
+                    executions: [],
+                  },
+                ],
+                cards: [
                   {
                     title: "observation",
                     text: "初次搜索拿到 10 位新候选人。",
@@ -446,14 +474,21 @@ describe("ConversationScreenV2", () => {
     );
 
     expect(screen.getByRole("heading", { name: "第 1 轮" })).toBeVisible();
-    expect(screen.getByRole("heading", { name: "关键词" })).toBeVisible();
+    const queryGroups = screen.getByRole("region", { name: "关键词" });
+    expect(
+      within(queryGroups).getByRole("group", { name: /主检索/ }),
+    ).toBeVisible();
+    expect(
+      within(queryGroups).getByRole("group", { name: /补漏检索/ }),
+    ).toHaveTextContent("计划中");
     expect(
       screen.getByRole("heading", { name: "observation（结果）" }),
     ).toBeVisible();
     expect(
       screen.getByRole("heading", { name: "反思和下一轮变更" }),
     ).toBeVisible();
-    expect(screen.queryByRole("heading", { name: "keywords" })).toBeNull();
+    expect(screen.queryByText("query_exploit_1")).toBeNull();
+    expect(screen.queryByText("term_group_hidden_1")).toBeNull();
     expect(screen.queryByRole("heading", { name: "reflection" })).toBeNull();
   });
 
@@ -750,6 +785,7 @@ function workflowSurface(
         {
           roundNo: 1,
           status: "running",
+          queryGroups: [],
           cards: [
             {
               title: "observation",

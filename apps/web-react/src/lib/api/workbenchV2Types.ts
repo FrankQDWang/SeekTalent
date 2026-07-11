@@ -4,6 +4,9 @@ import {
   type AgentWorkbenchStrategyGraph,
   type AgentWorkbenchThinkingProcess,
 } from "./agentWorkbenchTypes";
+import type { components } from "./schema";
+
+type Schemas = components["schemas"];
 
 export type WorkbenchV2EventType =
   | "user_message"
@@ -111,21 +114,33 @@ type GeneratedWorkbenchV2StrategyGraph = Omit<
 };
 
 type GeneratedWorkbenchV2ThinkingProcessCard = Omit<
-  AgentWorkbenchThinkingProcess["rounds"][number]["cards"][number],
+  Schemas["WorkbenchV2ThinkingProcessCardView"],
   "terms"
 > & {
   terms?: string[] | null;
 };
 
+type GeneratedWorkbenchV2QueryExecution =
+  Schemas["WorkbenchV2QueryExecutionView"];
+
+type GeneratedWorkbenchV2QueryGroup = Omit<
+  Schemas["WorkbenchV2QueryGroupView"],
+  "executions" | "queryTerms"
+> & {
+  queryTerms?: string[] | null;
+  executions?: GeneratedWorkbenchV2QueryExecution[] | null;
+};
+
 type GeneratedWorkbenchV2ThinkingProcessRound = Omit<
-  AgentWorkbenchThinkingProcess["rounds"][number],
-  "cards"
+  Schemas["WorkbenchV2ThinkingProcessRoundView"],
+  "cards" | "queryGroups"
 > & {
   cards?: GeneratedWorkbenchV2ThinkingProcessCard[] | null;
+  queryGroups?: GeneratedWorkbenchV2QueryGroup[] | null;
 };
 
 type GeneratedWorkbenchV2ThinkingProcess = Omit<
-  AgentWorkbenchThinkingProcess,
+  Schemas["WorkbenchV2ThinkingProcessView"],
   "activeRoundNo" | "rounds"
 > & {
   activeRoundNo?: number | null;
@@ -210,6 +225,14 @@ function normalizeWorkbenchV2ThinkingProcess(
     activeRoundNo: thinkingProcess?.activeRoundNo ?? null,
     rounds: (thinkingProcess?.rounds ?? []).map((round) => ({
       ...round,
+      queryGroups: (round.queryGroups ?? []).map((queryGroup) => ({
+        ...queryGroup,
+        queryTerms: queryGroup.queryTerms ?? [],
+        executions: (queryGroup.executions ?? []).map((execution) => ({
+          ...execution,
+          safeReasonCode: execution.safeReasonCode ?? null,
+        })),
+      })),
       cards: (round.cards ?? []).map((card) => ({
         ...card,
         terms: card.terms ?? [],

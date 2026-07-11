@@ -89,6 +89,19 @@ test("Workbench v2 supports chat, JD form, confirmation, progress, and refresh",
   const rightRail = page.getByRole("complementary", { name: "运行右栏" });
   await expect(rightRail.getByRole("tab", { name: "候选人" })).toBeVisible();
   await expect(rightRail.getByRole("tab", { name: "思考过程" })).toBeVisible();
+  await rightRail.getByRole("tab", { name: "思考过程" }).click();
+  const thinkingPanel = rightRail.getByRole("tabpanel", { name: "思考过程" });
+  await expect(
+    thinkingPanel.getByRole("region", { name: "关键词" }),
+  ).toBeVisible();
+  await expect(
+    thinkingPanel.getByRole("group", { name: /主检索，已执行/ }),
+  ).toBeVisible();
+  await expect(
+    thinkingPanel.getByRole("group", { name: /扩展检索，计划中/ }),
+  ).toBeVisible();
+  await expect(page.getByText("query_e2e_main")).toHaveCount(0);
+  await expect(page.getByText("term_group_e2e_main")).toHaveCount(0);
   await expect(page.getByText("run_e2e")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "检索策略图" })).toBeVisible();
   await expect(
@@ -689,12 +702,48 @@ function workflowSurface(
         {
           roundNo: 1,
           status,
-          cards: [
+          queryGroups: [
             {
-              title: "关键词",
-              text: "根据已确认需求构建第一轮检索条件。",
-              terms: ["SQL", "Python", "A/B Testing"],
+              queryInstanceId: "query_e2e_main",
+              termGroupKey: "term_group_e2e_main",
+              queryRole: "exploit",
+              laneType: "exploit",
+              queryTerms: ["SQL", "Python", "A/B Testing"],
+              keywordQuery: "SQL AND Python",
+              lifecycle: "executed",
+              executionStatus: "completed",
+              attempted: true,
+              rawCandidateCount: 12,
+              uniqueCandidateCount: 9,
+              duplicateCandidateCount: 3,
+              executions: [
+                {
+                  sourceKind: "liepin",
+                  status: "completed",
+                  rawCandidateCount: 12,
+                  uniqueCandidateCount: 9,
+                  duplicateCandidateCount: 3,
+                  safeReasonCode: null,
+                },
+              ],
             },
+            {
+              queryInstanceId: "query_e2e_explore",
+              termGroupKey: "term_group_e2e_explore",
+              queryRole: "explore",
+              laneType: "generic_explore",
+              queryTerms: ["experiment design"],
+              keywordQuery: null,
+              lifecycle: "planned",
+              executionStatus: null,
+              attempted: false,
+              rawCandidateCount: 0,
+              uniqueCandidateCount: 0,
+              duplicateCandidateCount: 0,
+              executions: [],
+            },
+          ],
+          cards: [
             {
               title: "observation",
               text: summary,

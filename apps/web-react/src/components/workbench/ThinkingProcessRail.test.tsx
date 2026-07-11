@@ -13,26 +13,67 @@ const thinkingProcess: AgentWorkbenchThinkingProcess = {
     {
       roundNo: 1,
       status: "running",
-      cards: [
+      queryGroups: [
         {
-          title: "关键词",
-          text: "AI Agent 平台工程 上海 Python RAG",
-          terms: ["AI Agent", "RAG", "Python 后端", "工具调用"],
+          queryInstanceId: "query_exploit_1",
+          termGroupKey: "term_group_hidden_1",
+          queryRole: "exploit",
+          laneType: "exploit",
+          queryTerms: ["AI Agent", "RAG", "Python 后端"],
+          keywordQuery: "AI Agent AND RAG",
+          lifecycle: "executed",
+          executionStatus: "completed",
+          attempted: true,
+          rawCandidateCount: 12,
+          uniqueCandidateCount: 9,
+          duplicateCandidateCount: 3,
+          executions: [
+            {
+              sourceKind: "liepin",
+              status: "completed",
+              rawCandidateCount: 12,
+              uniqueCandidateCount: 9,
+              duplicateCandidateCount: 3,
+              safeReasonCode: null,
+            },
+          ],
         },
+        {
+          queryInstanceId: "query_explore_1",
+          termGroupKey: "term_group_hidden_2",
+          queryRole: "explore",
+          laneType: "generic_explore",
+          queryTerms: ["workflow orchestration", "eval harness"],
+          keywordQuery: null,
+          lifecycle: "planned",
+          executionStatus: null,
+          attempted: false,
+          rawCandidateCount: 0,
+          uniqueCandidateCount: 0,
+          duplicateCandidateCount: 0,
+          executions: [],
+        },
+      ],
+      cards: [
         {
           title: "observation",
           text: "覆盖面较好，强匹配候选人集中在平台后端和检索工程方向。",
           terms: ["searched: 42", "scored: 12"],
         },
         {
+          title: "关键词",
+          text: "旧关键词卡片不应显示",
+          terms: ["flattened legacy query"],
+        },
+        {
           title: "反思和下一轮变更",
           text: "下一轮应增加工作流编排和评测相关关键词。",
-          terms: ["workflow orchestration", "eval harness", "drop: 纯前端"],
+          terms: ["drop: 纯前端"],
         },
       ],
     },
   ],
-};
+} as AgentWorkbenchThinkingProcess;
 
 const candidates: AgentWorkbenchCandidateSummary[] = [
   {
@@ -84,7 +125,24 @@ describe("ThinkingProcessRail", () => {
       "aria-selected",
       "true",
     );
-    expect(within(thinkingPanel).getByText("关键词")).toBeInTheDocument();
+    const queryGroups = within(thinkingPanel).getByRole("region", {
+      name: "关键词",
+    });
+    expect(
+      within(queryGroups).getByRole("group", { name: /主检索/ }),
+    ).toHaveTextContent("已执行");
+    expect(
+      within(queryGroups).getByRole("group", { name: /扩展检索/ }),
+    ).toHaveTextContent("计划中");
+    expect(
+      within(queryGroups).getByText("AI Agent AND RAG"),
+    ).toBeInTheDocument();
+    expect(within(queryGroups).getByText("猎聘")).toBeInTheDocument();
+    expect(within(queryGroups).queryByText("query_exploit_1")).toBeNull();
+    expect(within(queryGroups).queryByText("term_group_hidden_1")).toBeNull();
+    expect(
+      within(thinkingPanel).queryByText("旧关键词卡片不应显示"),
+    ).toBeNull();
     expect(within(thinkingPanel).getByText("observation")).toBeInTheDocument();
     expect(
       within(thinkingPanel).getByText("反思和下一轮变更"),
@@ -134,6 +192,7 @@ describe("ThinkingProcessRail", () => {
             {
               roundNo: 1,
               status: "blocked",
+              queryGroups: [],
               cards: [
                 {
                   title: "observation",
@@ -145,6 +204,7 @@ describe("ThinkingProcessRail", () => {
             {
               roundNo: 2,
               status: "partial",
+              queryGroups: [],
               cards: [
                 {
                   title: "反思和下一轮变更",
@@ -161,5 +221,58 @@ describe("ThinkingProcessRail", () => {
     expect(screen.getByText("已阻塞")).toBeInTheDocument();
     expect(screen.getByText("部分完成")).toBeInTheDocument();
     expect(screen.queryByText("待处理")).not.toBeInTheDocument();
+  });
+
+  it("uses neutral public labels for unknown lane and source values", () => {
+    expect.hasAssertions();
+
+    const firstRound = thinkingProcess.rounds[0];
+    if (!firstRound) {
+      throw new Error(
+        "Expected the thinking-process fixture to include a round.",
+      );
+    }
+    const firstQueryGroup = firstRound.queryGroups[0];
+    if (!firstQueryGroup) {
+      throw new Error(
+        "Expected the thinking-process fixture to include a query group.",
+      );
+    }
+    const firstExecution = firstQueryGroup.executions[0];
+    if (!firstExecution) {
+      throw new Error("Expected the query group to include an execution.");
+    }
+
+    render(
+      <ThinkingProcessRail
+        candidates={[]}
+        defaultTab="thinking"
+        thinkingProcess={{
+          activeRoundNo: 1,
+          rounds: [
+            {
+              ...firstRound,
+              queryGroups: [
+                {
+                  ...firstQueryGroup,
+                  laneType: "unrecognized_lane",
+                  executions: [
+                    {
+                      ...firstExecution,
+                      sourceKind: "private_source_marker",
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("其他检索")).toBeInTheDocument();
+    expect(screen.getByText("其他来源")).toBeInTheDocument();
+    expect(screen.queryByText("unrecognized_lane")).toBeNull();
+    expect(screen.queryByText("private_source_marker")).toBeNull();
   });
 });

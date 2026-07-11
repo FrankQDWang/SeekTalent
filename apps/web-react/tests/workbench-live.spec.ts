@@ -549,12 +549,33 @@ const conversationSnapshot = {
       {
         roundNo: 1,
         status: "running",
-        cards: [
+        queryGroups: [
           {
-            title: "关键词",
-            text: "AI agent LLM",
-            terms: ["AI agent", "LLM"],
+            queryInstanceId: "query_live_main",
+            termGroupKey: "term_group_live_main",
+            queryRole: "exploit",
+            laneType: "exploit",
+            queryTerms: ["AI agent", "LLM"],
+            keywordQuery: "AI agent AND LLM",
+            lifecycle: "executed",
+            executionStatus: "completed",
+            attempted: true,
+            rawCandidateCount: 8,
+            uniqueCandidateCount: 6,
+            duplicateCandidateCount: 2,
+            executions: [
+              {
+                sourceKind: "liepin",
+                status: "completed",
+                rawCandidateCount: 8,
+                uniqueCandidateCount: 6,
+                duplicateCandidateCount: 2,
+                safeReasonCode: null,
+              },
+            ],
           },
+        ],
+        cards: [
           {
             title: "observation",
             text: "第一轮正在运行",

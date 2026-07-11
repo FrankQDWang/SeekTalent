@@ -118,8 +118,32 @@ function workbenchView(
         activityType: "runtime_event",
         payload: {
           kind: "runtime_round",
-          keywordQuery: "AI Agent 平台工程师 上海 Python RAG workflow",
-          queryTerms: ["AI Agent", "Python", "RAG", "workflow"],
+          queryGroups: [
+            {
+              attempted: true,
+              duplicateCandidateCount: 8,
+              executionStatus: "completed",
+              executions: [
+                {
+                  duplicateCandidateCount: 8,
+                  rawCandidateCount: 42,
+                  safeReasonCode: null,
+                  sourceKind: "liepin",
+                  status: "completed",
+                  uniqueCandidateCount: 34,
+                },
+              ],
+              keywordQuery: "AI Agent AND Python AND RAG",
+              laneType: "exploit",
+              lifecycle: "executed",
+              queryInstanceId: "query_activity_001",
+              queryRole: "exploit",
+              queryTerms: ["AI Agent", "Python", "RAG", "workflow"],
+              rawCandidateCount: 42,
+              termGroupKey: "term_group_activity_001",
+              uniqueCandidateCount: 34,
+            },
+          ],
           roundNo: 1,
           status: "running",
         },
@@ -375,12 +399,48 @@ function workbenchView(
       activeRoundNo: 1,
       rounds: [
         {
-          cards: [
+          queryGroups: [
             {
-              terms: ["AI Agent", "Python", "RAG", "workflow"],
-              text: "AI Agent 平台工程师 上海 Python RAG workflow orchestration",
-              title: "关键词",
+              attempted: true,
+              duplicateCandidateCount: 8,
+              executionStatus: "completed",
+              executions: [
+                {
+                  duplicateCandidateCount: 8,
+                  rawCandidateCount: 42,
+                  safeReasonCode: null,
+                  sourceKind: "liepin",
+                  status: "completed",
+                  uniqueCandidateCount: 34,
+                },
+              ],
+              keywordQuery: "AI Agent AND Python AND RAG",
+              laneType: "exploit",
+              lifecycle: "executed",
+              queryInstanceId: "query_main_001",
+              queryRole: "exploit",
+              queryTerms: ["AI Agent", "Python", "RAG", "workflow"],
+              rawCandidateCount: 42,
+              termGroupKey: "term_group_main_001",
+              uniqueCandidateCount: 34,
             },
+            {
+              attempted: false,
+              duplicateCandidateCount: 0,
+              executionStatus: null,
+              executions: [],
+              keywordQuery: null,
+              laneType: "generic_explore",
+              lifecycle: "planned",
+              queryInstanceId: "query_explore_001",
+              queryRole: "explore",
+              queryTerms: ["eval harness", "workflow orchestration"],
+              rawCandidateCount: 0,
+              termGroupKey: "term_group_explore_001",
+              uniqueCandidateCount: 0,
+            },
+          ],
+          cards: [
             {
               terms: ["searched: 42", "scored: 12"],
               text: "结果覆盖面较好，强匹配集中在工具平台和 RAG 工程。",
@@ -709,12 +769,33 @@ export const multiRoundThinkingProcessFixture: AgentWorkbenchThinkingProcess = {
   activeRoundNo: 3,
   rounds: [
     {
-      cards: [
+      queryGroups: [
         {
-          terms: ["AI Agent", "Python", "RAG"],
-          text: "锁定 AI Agent 平台、Python 后端、RAG 工程三个主关键词。",
-          title: "关键词",
+          attempted: true,
+          duplicateCandidateCount: 2,
+          executionStatus: "completed",
+          executions: [
+            {
+              duplicateCandidateCount: 2,
+              rawCandidateCount: 10,
+              safeReasonCode: null,
+              sourceKind: "liepin",
+              status: "completed",
+              uniqueCandidateCount: 8,
+            },
+          ],
+          keywordQuery: "AI Agent AND Python AND RAG",
+          laneType: "exploit",
+          lifecycle: "executed",
+          queryInstanceId: "query_round_1_main",
+          queryRole: "exploit",
+          queryTerms: ["AI Agent", "Python", "RAG"],
+          rawCandidateCount: 10,
+          termGroupKey: "term_group_round_1_main",
+          uniqueCandidateCount: 8,
         },
+      ],
+      cards: [
         {
           terms: ["searched: 10", "scored: 10"],
           text: "猎聘第一轮覆盖面较宽，强匹配集中在工具平台与检索工程。",
@@ -730,12 +811,57 @@ export const multiRoundThinkingProcessFixture: AgentWorkbenchThinkingProcess = {
       status: "completed",
     },
     {
-      cards: [
+      queryGroups: [
         {
-          terms: ["workflow orchestration", "agent runtime"],
-          text: "加入 workflow orchestration 与 agent runtime，排除纯算法岗位。",
-          title: "关键词",
+          attempted: true,
+          duplicateCandidateCount: 4,
+          executionStatus: "completed",
+          executions: [
+            {
+              duplicateCandidateCount: 4,
+              rawCandidateCount: 16,
+              safeReasonCode: null,
+              sourceKind: "liepin",
+              status: "completed",
+              uniqueCandidateCount: 12,
+            },
+          ],
+          keywordQuery: "workflow orchestration AND agent runtime",
+          laneType: "exploit",
+          lifecycle: "executed",
+          queryInstanceId: "query_round_2_main",
+          queryRole: "exploit",
+          queryTerms: ["workflow orchestration", "agent runtime"],
+          rawCandidateCount: 16,
+          termGroupKey: "term_group_round_2_main",
+          uniqueCandidateCount: 12,
         },
+        {
+          attempted: true,
+          duplicateCandidateCount: 1,
+          executionStatus: "partial",
+          executions: [
+            {
+              duplicateCandidateCount: 1,
+              rawCandidateCount: 6,
+              safeReasonCode: "source_partial_result",
+              sourceKind: "cts",
+              status: "partial",
+              uniqueCandidateCount: 5,
+            },
+          ],
+          keywordQuery: null,
+          laneType: "generic_explore",
+          lifecycle: "executed",
+          queryInstanceId: "query_round_2_explore",
+          queryRole: "explore",
+          queryTerms: ["RAG evaluation", "observability"],
+          rawCandidateCount: 6,
+          termGroupKey: "term_group_round_2_explore",
+          uniqueCandidateCount: 5,
+        },
+      ],
+      cards: [
         {
           terms: ["searched: 16", "scored: 7"],
           text: "候选人质量提升，但 RAG 评测和线上可观测性经验仍不够明确。",
@@ -751,12 +877,48 @@ export const multiRoundThinkingProcessFixture: AgentWorkbenchThinkingProcess = {
       status: "completed",
     },
     {
-      cards: [
+      queryGroups: [
         {
-          terms: ["eval harness", "observability", "平台工程"],
-          text: "当前轮正在验证评测体系、运行时可观测性和平台工程交集。",
-          title: "关键词",
+          attempted: true,
+          duplicateCandidateCount: 5,
+          executionStatus: "completed",
+          executions: [
+            {
+              duplicateCandidateCount: 5,
+              rawCandidateCount: 24,
+              safeReasonCode: null,
+              sourceKind: "liepin",
+              status: "completed",
+              uniqueCandidateCount: 19,
+            },
+          ],
+          keywordQuery: "eval harness AND observability",
+          laneType: "exploit",
+          lifecycle: "executed",
+          queryInstanceId: "query_round_3_main",
+          queryRole: "exploit",
+          queryTerms: ["eval harness", "observability", "平台工程"],
+          rawCandidateCount: 24,
+          termGroupKey: "term_group_round_3_main",
+          uniqueCandidateCount: 19,
         },
+        {
+          attempted: false,
+          duplicateCandidateCount: 0,
+          executionStatus: null,
+          executions: [],
+          keywordQuery: null,
+          laneType: "prf_probe",
+          lifecycle: "planned",
+          queryInstanceId: "query_round_3_probe",
+          queryRole: "probe",
+          queryTerms: ["online evaluation", "retrieval quality"],
+          rawCandidateCount: 0,
+          termGroupKey: "term_group_round_3_probe",
+          uniqueCandidateCount: 0,
+        },
+      ],
+      cards: [
         {
           terms: ["searched: 24", "scored: 12"],
           text: "猎聘返回的安全摘要显示三位候选人与运行时控制面高度相关。",
@@ -772,13 +934,24 @@ export const multiRoundThinkingProcessFixture: AgentWorkbenchThinkingProcess = {
       status: "running",
     },
     {
-      cards: [
+      queryGroups: [
         {
-          terms: ["补漏轮", "待生成"],
-          text: "等待第三轮评分后，由后端 runtime projection 决定是否生成补漏查询。",
-          title: "关键词",
+          attempted: false,
+          duplicateCandidateCount: 0,
+          executionStatus: null,
+          executions: [],
+          keywordQuery: null,
+          laneType: "prf_probe",
+          lifecycle: "planned",
+          queryInstanceId: "query_round_4_probe",
+          queryRole: "probe",
+          queryTerms: ["补漏轮", "待生成"],
+          rawCandidateCount: 0,
+          termGroupKey: "term_group_round_4_probe",
+          uniqueCandidateCount: 0,
         },
       ],
+      cards: [],
       roundNo: 4,
       status: "pending",
     },

@@ -100,11 +100,23 @@ export type AgentWorkbenchThinkingProcessCard = Omit<
   terms: string[];
 };
 
+export type AgentWorkbenchQueryExecution =
+  Schemas["AgentWorkbenchQueryExecutionResponse"];
+
+export type AgentWorkbenchQueryGroup = Omit<
+  Schemas["AgentWorkbenchQueryGroupResponse"],
+  "executions" | "queryTerms"
+> & {
+  queryTerms: string[];
+  executions: AgentWorkbenchQueryExecution[];
+};
+
 export type AgentWorkbenchThinkingProcessRound = Omit<
   Schemas["AgentWorkbenchThinkingProcessRoundResponse"],
-  "cards"
+  "cards" | "queryGroups"
 > & {
   cards: AgentWorkbenchThinkingProcessCard[];
+  queryGroups: AgentWorkbenchQueryGroup[];
 };
 
 export type AgentWorkbenchThinkingProcess = Omit<
@@ -409,6 +421,14 @@ function normalizeThinkingProcess(
     activeRoundNo: thinkingProcess.activeRoundNo ?? null,
     rounds: (thinkingProcess.rounds ?? []).map((round) => ({
       ...round,
+      queryGroups: (round.queryGroups ?? []).map((queryGroup) => ({
+        ...queryGroup,
+        queryTerms: queryGroup.queryTerms ?? [],
+        executions: (queryGroup.executions ?? []).map((execution) => ({
+          ...execution,
+          safeReasonCode: execution.safeReasonCode ?? null,
+        })),
+      })),
       cards: (round.cards ?? []).map((card) => ({
         ...card,
         terms: card.terms ?? [],
