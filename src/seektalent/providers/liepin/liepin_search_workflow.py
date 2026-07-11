@@ -162,6 +162,7 @@ class LiepinSearchWorkflow:
             else None
         )
         detail_claim_outcomes_emitted = False
+        private_continuation: ProviderSearchContinuation | None = None
 
         def emit_detail_claim_outcomes() -> None:
             nonlocal detail_claim_outcomes_emitted
@@ -177,14 +178,16 @@ class LiepinSearchWorkflow:
             *,
             provider_candidate_key_hash: str | None,
             safe_reason_code: str,
-        ) -> None:
-            if self._finish_detail_open_claim_after_failure(
+        ) -> CandidateState | None:
+            state = self._finish_detail_open_claim_after_failure(
                 detail_open_claim_context=detail_open_claim_context,
                 provider_candidate_key_hash=provider_candidate_key_hash,
                 safe_reason_code=safe_reason_code,
-            ):
+            )
+            if state == "terminal_failed":
                 assert detail_claim_outcomes is not None
                 detail_claim_outcomes["detail_open_terminal_failure_count"] += 1
+            return state
 
         self._append_event(
             request.source_run_id,
@@ -300,7 +303,6 @@ class LiepinSearchWorkflow:
             },
         )
 
-        private_continuation: ProviderSearchContinuation | None = None
         baseline_candidates: tuple[LiepinFirstPageCandidate, ...] = ()
         last_detail_safe_reason = "liepin_opencli_detail_not_opened"
         if detail_open_claim_context is not None:
@@ -400,11 +402,12 @@ class LiepinSearchWorkflow:
                 )
                 if not open_result.ok:
                     last_detail_safe_reason = open_result.safe_reason_code or "liepin_opencli_detail_not_opened"
-                    record_detail_open_claim_terminal_failure(
+                    failure_state = record_detail_open_claim_terminal_failure(
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
                     )
-                    mark_candidate(selected_rank, "terminal_failed")
+                    if failure_state is not None:
+                        mark_candidate(selected_rank, failure_state)
                     continue
 
                 wait_result = self._wait_detail_ready_transition(
@@ -413,11 +416,12 @@ class LiepinSearchWorkflow:
                 )
                 if not wait_result.ok:
                     last_detail_safe_reason = wait_result.safe_reason_code or "liepin_opencli_detail_not_opened"
-                    record_detail_open_claim_terminal_failure(
+                    failure_state = record_detail_open_claim_terminal_failure(
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
                     )
-                    mark_candidate(selected_rank, "terminal_failed")
+                    if failure_state is not None:
+                        mark_candidate(selected_rank, failure_state)
                     continue
 
                 capture_result = self._capture_detail_transition(
@@ -428,11 +432,12 @@ class LiepinSearchWorkflow:
                 )
                 if not capture_result.ok:
                     last_detail_safe_reason = capture_result.safe_reason_code or "liepin_opencli_detail_not_opened"
-                    record_detail_open_claim_terminal_failure(
+                    failure_state = record_detail_open_claim_terminal_failure(
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
                     )
-                    mark_candidate(selected_rank, "terminal_failed")
+                    if failure_state is not None:
+                        mark_candidate(selected_rank, failure_state)
                     continue
                 if provider_candidate_key_hash is not None:
                     assert detail_open_claim_context is not None
@@ -441,7 +446,7 @@ class LiepinSearchWorkflow:
                     detail_claim_outcomes["detail_opened_count"] += 1
                     mark_candidate(selected_rank, "opened")
             except Exception as exc:
-                record_detail_open_claim_terminal_failure(
+                failure_state = record_detail_open_claim_terminal_failure(
                     provider_candidate_key_hash=provider_candidate_key_hash,
                     safe_reason_code=(
                         exc.safe_reason_code
@@ -449,6 +454,8 @@ class LiepinSearchWorkflow:
                         else "liepin_opencli_detail_not_opened"
                     ),
                 )
+                if failure_state is not None:
+                    mark_candidate(selected_rank, failure_state)
                 raise
 
             opened += 1
@@ -933,18 +940,18 @@ class LiepinSearchWorkflow:
         detail_open_claim_context: DetailOpenClaimSearchContext | None,
         provider_candidate_key_hash: str | None,
         safe_reason_code: str,
-    ) -> bool:
+    ) -> CandidateState | None:
         if detail_open_claim_context is None or provider_candidate_key_hash is None:
-            return False
+            return None
         ledger = detail_open_claim_context.detail_open_claim_ledger
         if ledger.has_browser_open_attempt(provider_candidate_key_hash):
             ledger.mark_terminal_failed(
                 provider_candidate_key_hash,
                 safe_reason_code=safe_reason_code,
             )
-            return True
+            return "terminal_failed"
         ledger.release_unattempted(provider_candidate_key_hash)
-        return False
+        return "remaining"
 
     def _restore_search_transition(self, *, source_run_id: str, rank: int) -> str | None:
         restored_page_id: str | None = None

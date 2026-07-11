@@ -15,13 +15,17 @@ from pydantic import ValidationError
 
 from seektalent.artifacts import safe_artifact_path
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
-from seektalent.opencli_browser.contracts import OpenCliBrowserResult
+from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserResult
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_search_workflow import (
     LiepinSearchWorkflow,
     LiepinSearchWorkflowRequest,
 )
-from seektalent.providers.liepin.liepin_site_adapter import LiepinSiteAdapter, _LiepinSearchWorkflowSite
+from seektalent.providers.liepin.liepin_site_adapter import (
+    LiepinOpenCliSiteConfig,
+    LiepinSiteAdapter,
+    _LiepinSearchWorkflowSite,
+)
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.first_page_continuation import (
     CandidateState,
@@ -576,6 +580,12 @@ def _first_page_site(tmp_path: Path, *, card_count: int) -> FakeLiepinSearchWork
     )
 
 
+def _saved_candidate_state(site: FakeLiepinSearchWorkflowSite, *, rank: int = 1) -> CandidateState:
+    assert site.continuation_store is not None
+    saved = site.continuation_store.load(site.saved_continuations[0].opaque_ref)
+    return next(candidate.state for candidate in saved.candidates if candidate.rank == rank)
+
+
 def test_baseline_search_freezes_thirty_visible_cards_but_opens_only_target(tmp_path: Path) -> None:
     site = _first_page_site(tmp_path, card_count=30)
     envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
@@ -597,6 +607,60 @@ def test_visible_and_eligible_first_page_counts_are_distinct(tmp_path: Path) -> 
     continuation = site.saved_continuations[0]
     assert continuation.visible_candidate_count == 30
     assert continuation.eligible_candidate_count == 29
+
+
+def test_empty_first_page_returns_zero_opened_private_continuation(tmp_path: Path) -> None:
+    site = FakeLiepinSearchWorkflowSite(
+        continuation_store=LiepinFirstPageContinuationStore(tmp_path),
+        structured_cards=[[]],
+        search_states=[_search_state_with_detail_targets()],
+    )
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=1),
+        detail_open_claim_context=_private_claim_context(DetailOpenClaimLedger({})),
+    )
+    continuation = envelope["_private_first_page_continuations"][0]
+    assert (continuation.visible_candidate_count, continuation.eligible_candidate_count) == (0, 0)
+    assert continuation.initial_opened_count == 0
+
+
+def test_partial_target_retains_private_continuation_with_actual_opened_count(tmp_path: Path) -> None:
+    site = _first_page_site(tmp_path, card_count=1)
+    envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=2),
+        detail_open_claim_context=_private_claim_context(DetailOpenClaimLedger({})),
+    )
+    assert envelope["resumes_returned"] == 1
+    assert envelope["_private_first_page_continuations"][0].initial_opened_count == 1
+
+
+def test_real_adapter_persists_continuation_only_under_protected_with_owner_mode(tmp_path: Path) -> None:
+    adapter = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(command=("opencli",), session="test", timeout_seconds=1),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",), allowed_start_urls=(), artifact_root=tmp_path
+        ),
+        automation=cast(Any, object()),
+    )
+    candidate = LiepinFirstPageCandidate(
+        rank=1,
+        ref="70",
+        detail_url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=70",
+        provider_candidate_key_hash=_detail_key("70"),
+    )
+    carrier = adapter.save_liepin_first_page_continuation(
+        source_run_id="run-adapter",
+        logical_round_no=5,
+        query_instance_id="query-adapter",
+        keyword_query="AI Agent",
+        visible_candidate_count=1,
+        candidates=(candidate,),
+    )
+    relative = carrier.opaque_ref.removeprefix("artifact://protected/")
+    persisted = tmp_path / "protected" / relative
+    assert persisted.is_file()
+    assert persisted.stat().st_mode & 0o777 == 0o600
+    assert not (tmp_path / "public-summary" / relative).exists()
 
 
 def _detail_key(subject: str) -> str:
@@ -645,6 +709,7 @@ def test_workflow_opens_details_until_target_count() -> None:
     assert "extract_structured_liepin_cards" in site.calls
     assert "finalize_liepin_resumes" in site.calls
     assert not any(event.get("action_kind") == "detail_claim_outcomes" for event in site.events)
+    assert envelope.get("_private_first_page_continuations", ()) == ()
 
 
 def test_private_claim_context_route_preserves_current_detail_search_behavior() -> None:
@@ -668,6 +733,8 @@ def test_private_claim_context_route_preserves_current_detail_search_behavior() 
     assert "capture_liepin_detail_resume" not in site.calls
     key = _detail_key("70")
     assert site.claim_aware_capture_expected_keys == [key]
+    continuation = site.saved_continuations[0]
+    assert (continuation.round_no, continuation.query_instance_id) == (4, "logical-query-4")
     assert ledger.snapshot()[key].status == "opened"
     assert ledger.snapshot()[key].browser_open_attempt_count == 1
 
@@ -800,6 +867,8 @@ def test_private_claim_context_drops_stale_rank_url_when_refresh_has_no_identity
     assert set(claims) == {first_key, old_rank_two_key}
     assert claims[first_key].status == "opened"
     assert claims[old_rank_two_key].status == "opened"
+    assert _saved_candidate_state(site, rank=1) == "opened"
+    assert _saved_candidate_state(site, rank=2) == "opened"
 
 
 def test_private_claim_context_opens_validated_url_without_ref_probe_drift() -> None:
@@ -903,6 +972,7 @@ def test_private_claim_context_terminalizes_attempted_open_before_later_workflow
     assert site.calls.count("open_liepin_detail_cached_url") == expected_attempts
     assert claim.status == "terminal_failed"
     assert claim.browser_open_attempt_count == expected_attempts
+    assert _saved_candidate_state(site) == "terminal_failed"
     assert second["status"] == "blocked"
     assert "open_liepin_detail" not in second_site.calls
     assert "open_liepin_detail_cached_url" not in second_site.calls
@@ -934,6 +1004,7 @@ def test_private_claim_context_terminalizes_wait_failure_after_browser_open() ->
     assert envelope["status"] == "blocked"
     assert claim.status == "terminal_failed"
     assert claim.browser_open_attempt_count == 1
+    assert _saved_candidate_state(site) == "terminal_failed"
 
 
 def test_private_claim_context_terminalizes_capture_identity_mismatch_without_candidate() -> None:
@@ -956,6 +1027,7 @@ def test_private_claim_context_terminalizes_capture_identity_mismatch_without_ca
     assert envelope["safe_reason_code"] == "liepin_opencli_candidate_identity_mismatch"
     assert claim.status == "terminal_failed"
     assert claim.browser_open_attempt_count == 1
+    assert _saved_candidate_state(site) == "terminal_failed"
     assert site.claim_aware_capture_expected_keys == [_detail_key("70")]
     assert "capture_liepin_detail_resume" not in site.calls
 
@@ -989,6 +1061,7 @@ def test_private_claim_context_terminalizes_escaping_open_exception() -> None:
     claim = ledger.snapshot()[_detail_key("70")]
     assert claim.status == "terminal_failed"
     assert claim.browser_open_attempt_count == 1
+    assert _saved_candidate_state(site) == "terminal_failed"
 
 
 def test_private_claim_context_terminalizes_escaping_capture_exception() -> None:
@@ -1020,6 +1093,7 @@ def test_private_claim_context_terminalizes_escaping_capture_exception() -> None
     claim = ledger.snapshot()[_detail_key("70")]
     assert claim.status == "terminal_failed"
     assert claim.browser_open_attempt_count == 1
+    assert _saved_candidate_state(site) == "terminal_failed"
 
 
 def test_private_claim_context_releases_preopen_failure_without_browser_action() -> None:
@@ -1046,6 +1120,7 @@ def test_private_claim_context_releases_preopen_failure_without_browser_action()
     assert envelope["status"] == "blocked"
     assert "open_liepin_detail" not in site.calls
     assert ledger.transitions == [("try_claim", key), ("release_unattempted", key)]
+    assert _saved_candidate_state(site) == "remaining"
     assert ledger.try_claim(key) is True
 
 

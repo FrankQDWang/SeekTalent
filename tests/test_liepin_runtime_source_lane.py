@@ -3,10 +3,16 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from dataclasses import replace
 
 import pytest
 
-from seektalent.core.retrieval.provider_contract import ProviderSnapshot, SearchRequest, SearchResult
+from seektalent.core.retrieval.provider_contract import (
+    ProviderSearchContinuation,
+    ProviderSnapshot,
+    SearchRequest,
+    SearchResult,
+)
 from seektalent.models import RequirementSheet, ResumeCandidate
 from seektalent.opencli_browser.contracts import OpenCliBrowserResult
 from seektalent.providers.liepin.client import LiepinWorkerModeError, liepin_resume_search_response_to_search_result
@@ -52,6 +58,11 @@ def test_default_liepin_source_lane_caps_are_three_two_two() -> None:
         "exploit": 3,
         "generic_explore": 2,
         "prf_probe": 2,
+    }
+    assert policy.provider_scan_limits_by_lane == {
+        "exploit": 30,
+        "generic_explore": 30,
+        "prf_probe": 30,
     }
 
 
@@ -1024,7 +1035,7 @@ def test_liepin_detail_claim_ledger_keeps_non_concrete_worker_on_generic_search(
     assert "logical_round_no" not in worker.provider_contexts[0]
 
 
-async def _run_fixture_two_query_liepin_bundle():
+async def _run_fixture_two_query_liepin_bundle(worker_client: FakeWorker | None = None):
     return await run_liepin_logical_query_bundle(
         settings=make_settings(),
         runtime_run_id="runtime-run-1",
@@ -1065,8 +1076,49 @@ async def _run_fixture_two_query_liepin_bundle():
         ),
         source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
         liepin_context={"provider_account_hash": "acct_hash_123"},
-        worker_client=FakeWorker(),
+        worker_client=worker_client or FakeWorker(),
     )
+
+
+class ContinuationWorker(FakeWorker):
+    async def search(
+        self,
+        request: SearchRequest,
+        *,
+        round_no: int,
+        trace_id: str,
+        provider_account_hash: str | None = None,
+    ) -> SearchResult:
+        result = await super().search(
+            request,
+            round_no=round_no,
+            trace_id=trace_id,
+            provider_account_hash=provider_account_hash,
+        )
+        query_instance_id = request.provider_context["query_instance_id"]
+        continuation = ProviderSearchContinuation(
+            kind="first_page_detail_expansion",
+            continuation_id=trace_id,
+            opaque_ref=f"artifact://protected/pi-detail/{query_instance_id}.json",
+            source_kind="liepin",
+            round_no=round_no,
+            query_instance_id=query_instance_id,
+            visible_candidate_count=30,
+            eligible_candidate_count=30,
+            initial_opened_count=1,
+        )
+        return replace(result, private_continuations=(continuation,))
+
+
+def test_both_lanes_receive_independent_private_continuations() -> None:
+    result = asyncio.run(_run_fixture_two_query_liepin_bundle(ContinuationWorker()))
+    by_query = {item.query_instance_id: item for item in result.private_first_page_continuations}
+    assert set(by_query) == {"primary-1", "explore-1"}
+    assert by_query["primary-1"].opaque_ref != by_query["explore-1"].opaque_ref
+    assert all(item.visible_candidate_count == 30 for item in by_query.values())
+    assert all(item.raw_candidate_count == 1 for item in result.query_execution_outcomes)
+    assert all(item.duplicate_candidate_count == 0 for item in result.query_execution_outcomes)
+    assert "opaque_ref" not in json.dumps(result.to_public_payload(), ensure_ascii=False)
 
 
 def test_liepin_bundle_preserves_one_execution_outcome_per_logical_query() -> None:
@@ -1398,6 +1450,91 @@ def test_liepin_logical_query_bundle_executes_filter_targets_until_provider_scan
     assert all(call["provider_context"]["liepin_max_pages"] == "1" for call in worker.search_calls)
     assert len(result.candidate_store_updates) == 3
     assert all(item.query_fingerprint == "runtime-fingerprint-1" for item in result.source_evidence_updates)
+
+
+@pytest.mark.parametrize(
+    ("lane_type", "query_role", "requested_count", "target_yields", "expected_calls", "expected_preclick"),
+    [
+        ("exploit", "exploit", 3, (1, 1, 1, 1), 3, 0),
+        ("exploit", "exploit", 3, (0, 1, 1, 1), 4, 1),
+        ("generic_explore", "explore", 2, (1, 1, 1), 2, 0),
+        ("prf_probe", "explore", 2, (1, 1, 1), 2, 0),
+    ],
+)
+def test_logical_target_is_shared_across_physical_targets(
+    lane_type: str,
+    query_role: str,
+    requested_count: int,
+    target_yields: tuple[int, ...],
+    expected_calls: int,
+    expected_preclick: int,
+) -> None:
+    class CountWorker(FakeWorker):
+        async def search(self, request: SearchRequest, *, round_no: int, trace_id: str,
+            provider_account_hash: str | None = None) -> SearchResult:
+            del round_no, provider_account_hash
+            index = len(self.search_calls)
+            self.search_calls.append({"request": request, "trace_id": trace_id})
+            candidates = []
+            snapshots = []
+            for offset in range(min(target_yields[index], request.page_size)):
+                key = f"target-{index}-{offset}"
+                candidates.append(ResumeCandidate(
+                    resume_id=key, source_resume_id=key,
+                    snapshot_sha256=sha256_json({"candidateId": key}), dedup_key=key,
+                    search_text=key, raw={"score_evidence_source": "detail_enriched"},
+                ))
+                snapshots.append(ProviderSnapshot(
+                    provider_name="liepin", payload_kind="detail", raw_payload={"candidateId": key},
+                    normalized_text=key, provider_subject_id=key, provider_listing_id=None,
+                    synthetic_candidate_fingerprint=key, identity_confidence="provider_subject_id",
+                    extraction_source="test", extractor_version="test", pii_classification="no_direct_contact",
+                    retention_policy="provider_snapshot_30d", access_scope="local_run_only",
+                    redaction_state="redacted", score_evidence_source="detail_enriched",
+                ))
+            request_payload = {}
+            if target_yields[index] == 0:
+                request_payload = {"workflowSteps": [{"event_type": "source_workflow_step_completed", "status": "completed",
+                    "step_name": "finalize", "safe_counts": {"detail_open_skipped_seen_count": 1}}]}
+            return SearchResult(candidates=candidates, provider_snapshots=snapshots,
+                raw_candidate_count=len(candidates), exhausted=True, request_payload=request_payload)
+
+    cities = tuple(f"city-{index}" for index in range(len(target_yields)))
+    logical_query = LogicalQueryDispatch(
+        round_no=2, query_role=query_role, lane_type=lane_type,
+        query_terms=("数据开发",), keyword_query="数据开发", query_instance_id="query-counts",
+        query_fingerprint="fingerprint-counts", term_group_key="term-group-counts",
+        primary_anchor_family_id="role.data", non_anchor_term_family_ids=("skill.python",),
+        requested_count=requested_count, source_plan_version="7",
+    )
+    intent = RuntimeSourceQueryIntent(
+        round_no=2, source_kind="liepin", query_role=query_role, lane_type=lane_type,
+        query_instance_id="query-counts", query_fingerprint="fingerprint-counts",
+        term_group_key="term-group-counts", primary_anchor_family_id="role.data",
+        non_anchor_term_family_ids=("skill.python",), query_terms=("数据开发",),
+        keyword_query="数据开发", requested_count=requested_count, provider_scan_limit=30,
+        source_plan_version="7", filter_intents=(),
+        location_intent=RuntimeLocationExecutionIntent(
+            mode="priority_then_fallback", allowed_locations=cities, preferred_locations=(cities[0],),
+            priority_order=(cities[0],), balanced_order=cities[1:], rotation_offset=0,
+            target_new=requested_count,
+        ), age_intent=None,
+    )
+    worker = CountWorker()
+    result = asyncio.run(run_liepin_logical_query_bundle(
+        settings=make_settings(), runtime_run_id="run", source_plan_id="plan",
+        job_title="数据开发", jd="数据平台", notes="", requirement_sheet=_requirement_sheet(),
+        logical_queries=(logical_query,), source_budget_policy=RuntimeSourceBudgetPolicy(max_cards=30),
+        liepin_context={"provider_account_hash": "acct"}, source_query_intents=(intent,),
+        worker_client=worker,
+    ))
+    assert len(worker.search_calls) == expected_calls
+    assert len(result.candidate_store_updates) == requested_count
+    outcome = result.query_execution_outcomes[0]
+    assert outcome.pre_click_skipped_seen_count == expected_preclick
+    assert outcome.duplicate_candidate_count == expected_preclick
+    assert all(call["request"].provider_context["liepin_max_cards"] == "30" for call in worker.search_calls)
+    assert all(call["request"].provider_context["liepin_max_pages"] == "1" for call in worker.search_calls)
 
 
 def test_liepin_bundle_counts_dedup_key_repeated_across_filter_targets_once() -> None:
