@@ -1444,6 +1444,63 @@ def test_round_reducer_drops_internal_markers_from_feedback_details_and_query_gr
     assert embedded_marker not in serialized
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "INTERNAL_PROVIDER_REFERENCE",
+        "provider_SHOULD_NOT_RENDER",
+    ],
+)
+def test_round_reducer_drops_internal_markers_from_stage_and_execution_sources(marker: str) -> None:
+    from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
+
+    feedback = _public_stage_output(
+        output_id="rtout_feedback_internal_source_marker",
+        stage="feedback",
+        round_no=1,
+        source_kind=marker,
+        schema_version="runtime-public-stage-output/v2",
+        output={
+            "details": {
+                "queryGroups": [
+                    _v2_query_group(
+                        query_instance_id="query-1",
+                        term_group_key="group-1",
+                        query_role="exploit",
+                        lane_type="exploit",
+                        query_terms=["AI agent"],
+                        keyword_query="AI agent",
+                        lifecycle="executed",
+                        execution_status="completed",
+                        attempted=True,
+                        executions=[
+                            {"sourceKind": marker, "status": "completed"},
+                            {"sourceKind": "internal_referrals", "status": "completed"},
+                        ],
+                    )
+                ]
+            }
+        },
+    )
+
+    [summary] = round_summaries_from_stage_outputs(
+        [feedback],
+        expected_runtime_run_id="runtime_run_reducer",
+    )
+    response = project_agent_workbench_view(
+        AgentWorkbenchProjectionInput(
+            conversation_reopen_state=_thread_view().conversation_reopen_state,
+            round_summaries=[summary],
+        )
+    )
+
+    assert summary.stage_outputs[0].source_kind is None
+    assert [item.source_kind for item in summary.query_groups[0].executions] == ["internal_referrals"]
+    feedback_node = next(node for node in response.strategyGraph.nodes if node.stage == "feedback")
+    assert feedback_node.sourceKind == "all"
+    assert marker not in response.model_dump_json()
+
+
 def test_round_reducer_bounds_safe_feedback_details_before_public_response() -> None:
     from seektalent_ui.agent_workbench_rounds import round_summaries_from_stage_outputs
 

@@ -495,11 +495,15 @@ def _safe_public_source_identifier(value: object) -> str | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
-    if not text or len(text) > 80:
+    if not text or len(text) > 80 or _looks_like_unsafe_public_source_identifier(text):
         return None
     if any(not (character.isascii() and (character.isalnum() or character in "_-")) for character in text):
         return None
     return text
+
+
+def _looks_like_unsafe_public_source_identifier(text: str) -> bool:
+    return text != "internal_referrals" and _looks_like_unsafe_public_text(text)
 
 
 def _looks_like_unsafe_public_text(text: str) -> bool:
