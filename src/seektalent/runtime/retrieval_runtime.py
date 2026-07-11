@@ -228,13 +228,16 @@ def build_logical_query_state(
     query_terms: list[str],
     query_term_pool: Sequence[QueryTermCandidate],
     explicit_family_overrides: Mapping[str, str] | None = None,
+    resolved_identity: ResolvedQueryIdentity | None = None,
     job_intent_fingerprint: str,
     source_plan_version: str,
     provider_filters: dict[str, ConstraintValue],
     location_execution_plan: LocationExecutionPlan,
     provider_name: str = "default",
 ) -> LogicalQueryState:
-    identity = resolve_query_identity(
+    if resolved_identity is not None and explicit_family_overrides is not None:
+        raise ValueError("logical_query_identity_inputs_conflict")
+    identity = resolved_identity or resolve_query_identity(
         query_terms=query_terms,
         query_term_pool=query_term_pool,
         explicit_family_overrides=explicit_family_overrides,

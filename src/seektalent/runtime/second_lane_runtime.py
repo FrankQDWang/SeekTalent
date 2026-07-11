@@ -5,7 +5,7 @@ from collections.abc import Collection
 from seektalent.candidate_feedback.policy import PRFPolicyDecision
 from seektalent.models import QueryTermCandidate, RoundRetrievalPlan, SecondLaneDecision
 from seektalent.retrieval import derive_explore_query_terms
-from seektalent.retrieval.query_identity import build_term_group_key
+from seektalent.retrieval.query_identity import resolve_query_identity
 from seektalent.runtime.retrieval_runtime import LogicalQueryState, build_logical_query_state
 
 
@@ -73,17 +73,21 @@ def build_second_lane_decision(
     if prf_decision is not None and prf_decision.gate_passed and prf_decision.accepted_expression is not None:
         accepted_expression = prf_decision.accepted_expression
         prf_terms = [_select_prf_anchor(retrieval_plan), accepted_expression.canonical_expression]
-        prf_term_group_key = build_term_group_key(query_terms=prf_terms, query_term_pool=query_term_pool)
-        if prf_term_group_key not in used_keys:
+        prf_identity = resolve_query_identity(
+            query_terms=prf_terms,
+            query_term_pool=query_term_pool,
+            explicit_family_overrides={
+                accepted_expression.canonical_expression: accepted_expression.term_family_id,
+            },
+        )
+        if prf_identity.term_group_key not in used_keys:
             query_state = build_logical_query_state(
                 run_id=run_id,
                 round_no=round_no,
                 lane_type="prf_probe",
                 query_terms=prf_terms,
                 query_term_pool=query_term_pool,
-                explicit_family_overrides={
-                    accepted_expression.canonical_expression: accepted_expression.term_family_id,
-                },
+                resolved_identity=prf_identity,
                 job_intent_fingerprint=job_intent_fingerprint,
                 source_plan_version=source_plan_version,
                 provider_filters=retrieval_plan.projected_provider_filters,

@@ -4,7 +4,7 @@ from seektalent.candidate_feedback.policy import PRFGateInput, build_prf_policy_
 from seektalent.retrieval import build_location_execution_plan
 from seektalent.runtime.retrieval_runtime import build_logical_query_state
 from seektalent.runtime.second_lane_runtime import build_second_lane_decision
-from seektalent.retrieval.query_identity import build_term_group_key
+from seektalent.retrieval.query_identity import build_term_group_key, resolve_query_identity
 
 
 def _retrieval_plan(*, query_terms: list[str]) -> RoundRetrievalPlan:
@@ -162,6 +162,54 @@ def test_build_second_lane_decision_selects_prf_probe_when_gate_passes() -> None
     assert decision.prf_seed_resume_ids == ["seed-1", "seed-2"]
     assert decision.prf_candidate_expression_count == 1
     assert decision.prf_policy_version == "prf-policy-v1"
+
+
+def test_prf_novelty_precheck_uses_known_family_identity_for_pool_external_expression() -> None:
+    retrieval_plan = _retrieval_plan(query_terms=["python", "ranking", "trace"])
+    expression = FeedbackCandidateExpression(
+        term_family_id="feedback.langgraph",
+        canonical_expression="LangGraph",
+        surface_forms=["LangGraph"],
+        candidate_term_type="technical_phrase",
+        source_seed_resume_ids=["seed-1", "seed-2"],
+        positive_seed_support_count=2,
+        negative_support_count=0,
+    )
+    prf_decision = build_prf_policy_decision(
+        PRFGateInput(
+            round_no=2,
+            seed_resume_ids=["seed-1", "seed-2"],
+            seed_count=2,
+            negative_resume_ids=[],
+            candidate_expressions=[expression],
+            candidate_expression_count=1,
+            tried_term_family_ids=[],
+            tried_query_fingerprints=[],
+            min_seed_count=2,
+            max_negative_support_rate=0.4,
+            policy_version="prf-policy-v1",
+        )
+    )
+    expected_identity = resolve_query_identity(
+        query_terms=["python", "LangGraph"],
+        query_term_pool=_fingerprint_pool(),
+        explicit_family_overrides={"LangGraph": "feedback.langgraph"},
+    )
+
+    decision, lane = build_second_lane_decision(
+        round_no=2,
+        retrieval_plan=retrieval_plan,
+        query_term_pool=_fingerprint_pool(),
+        used_term_group_keys={expected_identity.term_group_key},
+        prf_decision=prf_decision,
+        run_id="run-a",
+        job_intent_fingerprint="job-1",
+        source_plan_version="2",
+    )
+
+    assert lane is not None
+    assert lane.lane_type == "generic_explore"
+    assert "prf_term_group_already_executed" in decision.reject_reasons
 
 
 def test_build_logical_query_state_fingerprint_changes_with_filters_and_location_plan() -> None:
