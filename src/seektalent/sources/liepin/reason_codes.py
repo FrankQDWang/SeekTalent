@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from seektalent.providers.liepin.worker_contracts import LIEPIN_WORKER_SAFE_REASON_CODES
+from seektalent.source_contracts.liepin_reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
 
 LIEPIN_PUBLIC_EVENT_REASON_MAP = {
     "liepin_connection_not_connected": "source_login_required",

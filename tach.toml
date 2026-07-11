@@ -152,6 +152,7 @@ depends_on = [
   "seektalent.providers",
   "seektalent.runtime",
   "seektalent.source_adapters",
+  "seektalent.source_contracts",
 ]
 
 [[modules]]
