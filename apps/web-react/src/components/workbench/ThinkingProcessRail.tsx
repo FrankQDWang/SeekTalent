@@ -4,7 +4,6 @@ import { useId, useState } from "react";
 import type {
   AgentWorkbenchCandidateSummary,
   AgentWorkbenchThinkingProcess,
-  AgentWorkbenchQueryExecution,
   AgentWorkbenchQueryGroup,
   AgentWorkbenchThinkingProcessRound,
 } from "../../lib/api/agentWorkbenchTypes";
@@ -161,100 +160,39 @@ function QueryGroups({
 }: {
   queryGroups: readonly AgentWorkbenchQueryGroup[];
 }) {
+  const paths = selectQueryPaths(queryGroups);
   return (
-    <section aria-label="关键词" className="thinking-query-groups">
-      <h3 className="thinking-query-groups__heading">关键词</h3>
-      <div className="thinking-query-groups__list">
-        {queryGroups.map((queryGroup) => (
-          <QueryGroup
-            key={queryGroup.queryInstanceId}
-            queryGroup={queryGroup}
-          />
-        ))}
-      </div>
-    </section>
+    <div aria-label="检索路径" className="thinking-query-paths" role="group">
+      {paths.map(({ label, queryGroup }) => (
+        <div aria-label={label} key={label} role="group">
+          <strong>{label}</strong>
+          <span>{deduplicateTerms(queryGroup.queryTerms).join("、")}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
-function QueryGroup({ queryGroup }: { queryGroup: AgentWorkbenchQueryGroup }) {
-  const laneLabel = queryLaneLabel(queryGroup.laneType);
-  const lifecycleLabel = queryLifecycleLabel(queryGroup.lifecycle);
-
-  return (
-    <section
-      aria-label={`${laneLabel}，${lifecycleLabel}`}
-      className="thinking-query-group"
-      role="group"
-    >
-      <div className="thinking-query-group__header">
-        <h4>{laneLabel}</h4>
-        <span data-lifecycle={queryGroup.lifecycle}>{lifecycleLabel}</span>
-      </div>
-      {queryGroup.keywordQuery ? (
-        <p className="thinking-query-group__keyword">
-          {queryGroup.keywordQuery}
-        </p>
-      ) : null}
-      {queryGroup.queryTerms.length > 0 ? (
-        <div
-          aria-label={`${laneLabel}关键词`}
-          className="thinking-query-group__terms"
-        >
-          {queryGroup.queryTerms.map((term, index) => (
-            <span key={`${term}-${String(index)}`}>{term}</span>
-          ))}
-        </div>
-      ) : null}
-      <dl
-        aria-label={`${laneLabel}汇总`}
-        className="thinking-query-group__counts"
-      >
-        <div>
-          <dt>原始</dt>
-          <dd>{queryGroup.rawCandidateCount}</dd>
-        </div>
-        <div>
-          <dt>新增</dt>
-          <dd>{queryGroup.uniqueCandidateCount}</dd>
-        </div>
-        <div>
-          <dt>重复</dt>
-          <dd>{queryGroup.duplicateCandidateCount}</dd>
-        </div>
-      </dl>
-      {queryGroup.executions.length > 0 ? (
-        <ul
-          aria-label={`${laneLabel}来源执行`}
-          className="thinking-query-group__executions"
-        >
-          {queryGroup.executions.map((execution, index) => (
-            <QueryExecution
-              execution={execution}
-              key={`${execution.sourceKind}-${String(index)}`}
-            />
-          ))}
-        </ul>
-      ) : null}
-    </section>
+function selectQueryPaths(queryGroups: readonly AgentWorkbenchQueryGroup[]) {
+  const main = queryGroups.find(({ laneType }) => laneType === "exploit");
+  const expansion = queryGroups.find(({ laneType }) =>
+    ["generic_explore", "prf_probe"].includes(laneType),
   );
+  return [
+    ...(main ? [{ label: "主路径", queryGroup: main }] : []),
+    ...(expansion ? [{ label: "扩展路径", queryGroup: expansion }] : []),
+  ];
 }
 
-function QueryExecution({
-  execution,
-}: {
-  execution: AgentWorkbenchQueryExecution;
-}) {
-  return (
-    <li>
-      <span>{querySourceLabel(execution.sourceKind)}</span>
-      <span>{queryExecutionStatusLabel(execution.status)}</span>
-      <span>
-        原始 {execution.rawCandidateCount}，新增{" "}
-        {execution.uniqueCandidateCount}，重复{" "}
-        {execution.duplicateCandidateCount}
-      </span>
-    </li>
-  );
+function deduplicateTerms(terms: readonly string[]): string[] {
+  const seen = new Set<string>();
+  return terms.flatMap((term) => {
+    const display = term.trim().replace(/\s+/g, " ");
+    const key = display.toLocaleLowerCase();
+    if (!display || seen.has(key)) return [];
+    seen.add(key);
+    return [display];
+  });
 }
 
 function isNarrativeCard({ title }: { title: string }): boolean {
@@ -288,55 +226,6 @@ function thinkingCardTitle(title: string): ReactNode {
     return "反思和下一轮变更";
   }
   return "补充信息";
-}
-
-function queryLaneLabel(laneType: string): string {
-  if (laneType === "exploit") {
-    return "主检索";
-  }
-  if (laneType === "generic_explore") {
-    return "扩展检索";
-  }
-  if (laneType === "prf_probe") {
-    return "补漏检索";
-  }
-  return "其他检索";
-}
-
-function queryLifecycleLabel(lifecycle: string): string {
-  if (lifecycle === "executed") {
-    return "已执行";
-  }
-  if (lifecycle === "planned") {
-    return "计划中";
-  }
-  return "状态待确认";
-}
-
-function querySourceLabel(sourceKind: string): string {
-  if (sourceKind === "liepin") {
-    return "猎聘";
-  }
-  if (sourceKind === "cts") {
-    return "CTS 实验";
-  }
-  return "其他来源";
-}
-
-function queryExecutionStatusLabel(status: string): string {
-  if (status === "completed") {
-    return "已完成";
-  }
-  if (status === "partial") {
-    return "部分完成";
-  }
-  if (status === "blocked") {
-    return "已阻塞";
-  }
-  if (status === "failed") {
-    return "失败";
-  }
-  return "状态待确认";
 }
 
 function statusLabel(status: string): string {

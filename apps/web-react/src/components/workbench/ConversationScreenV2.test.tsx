@@ -474,13 +474,15 @@ describe("ConversationScreenV2", () => {
     );
 
     expect(screen.getByRole("heading", { name: "第 1 轮" })).toBeVisible();
-    const queryGroups = screen.getByRole("region", { name: "关键词" });
+    const queryGroups = screen.getByRole("group", { name: "检索路径" });
     expect(
-      within(queryGroups).getByRole("group", { name: /主检索/ }),
-    ).toBeVisible();
+      within(queryGroups).getByRole("group", { name: "主路径" }),
+    ).toHaveTextContent("主路径AI agent、LLM");
     expect(
-      within(queryGroups).getByRole("group", { name: /补漏检索/ }),
-    ).toHaveTextContent("计划中");
+      within(queryGroups).getByRole("group", { name: "扩展路径" }),
+    ).toHaveTextContent("扩展路径RAG evaluation");
+    expect(within(queryGroups).queryByText("关键词")).toBeNull();
+    expect(within(queryGroups).queryByText("AI agent AND LLM")).toBeNull();
     expect(
       screen.getByRole("heading", { name: "observation（结果）" }),
     ).toBeVisible();

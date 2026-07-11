@@ -171,6 +171,15 @@ describe("ConversationScreen", () => {
 });
 
 describe("ConversationScreenSide", () => {
+  it("uses the shared distilled query paths in the legacy screen", () => {
+    render(<ConversationScreenSide view={agentWorkbenchRunningViewFixture} />);
+
+    const paths = screen.getByRole("group", { name: "检索路径" });
+    expect(within(paths).getByRole("group", { name: "主路径" })).toBeVisible();
+    expect(within(paths).queryByText("关键词")).toBeNull();
+    expect(within(paths).queryByText(/原始|新增|重复/)).toBeNull();
+  });
+
   it("keeps candidate detail navigation behind a callback", async () => {
     expect.hasAssertions();
     const user = userEvent.setup();

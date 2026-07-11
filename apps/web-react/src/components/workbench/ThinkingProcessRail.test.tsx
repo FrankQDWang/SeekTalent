@@ -125,19 +125,22 @@ describe("ThinkingProcessRail", () => {
       "aria-selected",
       "true",
     );
-    const queryGroups = within(thinkingPanel).getByRole("region", {
-      name: "关键词",
+    const queryGroups = within(thinkingPanel).getByRole("group", {
+      name: "检索路径",
     });
     expect(
-      within(queryGroups).getByRole("group", { name: /主检索/ }),
-    ).toHaveTextContent("已执行");
+      within(queryGroups).getByRole("group", { name: "主路径" }),
+    ).toHaveTextContent("主路径AI Agent、RAG、Python 后端");
     expect(
-      within(queryGroups).getByRole("group", { name: /扩展检索/ }),
-    ).toHaveTextContent("计划中");
-    expect(
-      within(queryGroups).getByText("AI Agent AND RAG"),
-    ).toBeInTheDocument();
-    expect(within(queryGroups).getByText("猎聘")).toBeInTheDocument();
+      within(queryGroups).getByRole("group", { name: "扩展路径" }),
+    ).toHaveTextContent("扩展路径workflow orchestration、eval harness");
+    expect(within(queryGroups).queryByText("关键词")).toBeNull();
+    expect(within(queryGroups).queryByText("AI Agent AND RAG")).toBeNull();
+    expect(within(queryGroups).queryByText("已执行")).toBeNull();
+    expect(within(queryGroups).queryByText("计划中")).toBeNull();
+    expect(within(queryGroups).queryByText("猎聘")).toBeNull();
+    expect(within(queryGroups).queryByText(/原始|新增|重复/)).toBeNull();
+    expect(queryGroups.querySelector(".thinking-query-group")).toBeNull();
     expect(within(queryGroups).queryByText("query_exploit_1")).toBeNull();
     expect(within(queryGroups).queryByText("term_group_hidden_1")).toBeNull();
     expect(
@@ -146,9 +149,6 @@ describe("ThinkingProcessRail", () => {
     expect(within(thinkingPanel).getByText("observation")).toBeInTheDocument();
     expect(
       within(thinkingPanel).getByText("反思和下一轮变更"),
-    ).toBeInTheDocument();
-    expect(
-      within(thinkingPanel).getByText("workflow orchestration"),
     ).toBeInTheDocument();
   });
 
@@ -223,7 +223,7 @@ describe("ThinkingProcessRail", () => {
     expect(screen.queryByText("待处理")).not.toBeInTheDocument();
   });
 
-  it("uses neutral public labels for unknown lane and source values", () => {
+  it("deduplicates terms and renders at most one main and expansion path", () => {
     expect.hasAssertions();
 
     const firstRound = thinkingProcess.rounds[0];
@@ -238,11 +238,6 @@ describe("ThinkingProcessRail", () => {
         "Expected the thinking-process fixture to include a query group.",
       );
     }
-    const firstExecution = firstQueryGroup.executions[0];
-    if (!firstExecution) {
-      throw new Error("Expected the query group to include an execution.");
-    }
-
     render(
       <ThinkingProcessRail
         candidates={[]}
@@ -255,13 +250,28 @@ describe("ThinkingProcessRail", () => {
               queryGroups: [
                 {
                   ...firstQueryGroup,
-                  laneType: "unrecognized_lane",
-                  executions: [
-                    {
-                      ...firstExecution,
-                      sourceKind: "private_source_marker",
-                    },
+                  queryTerms: [" AI   Agent ", "ai agent", "RAG", "rag"],
+                },
+                {
+                  ...firstQueryGroup,
+                  queryInstanceId: "query_exploit_duplicate",
+                  queryTerms: ["ignored main"],
+                },
+                {
+                  ...firstQueryGroup,
+                  queryInstanceId: "query_prf",
+                  laneType: "prf_probe",
+                  queryTerms: [
+                    "AI Agent",
+                    "  Vector   Search ",
+                    "vector search",
                   ],
+                },
+                {
+                  ...firstQueryGroup,
+                  queryInstanceId: "query_explore_duplicate",
+                  laneType: "generic_explore",
+                  queryTerms: ["ignored expansion"],
                 },
               ],
             },
@@ -270,9 +280,31 @@ describe("ThinkingProcessRail", () => {
       />,
     );
 
-    expect(screen.getByText("其他检索")).toBeInTheDocument();
-    expect(screen.getByText("其他来源")).toBeInTheDocument();
-    expect(screen.queryByText("unrecognized_lane")).toBeNull();
-    expect(screen.queryByText("private_source_marker")).toBeNull();
+    expect(screen.getAllByRole("group", { name: /路径/ })).toHaveLength(3);
+    expect(screen.getByRole("group", { name: "主路径" })).toHaveTextContent(
+      "主路径AI Agent、RAG",
+    );
+    expect(screen.getByRole("group", { name: "扩展路径" })).toHaveTextContent(
+      "扩展路径AI Agent、Vector Search",
+    );
+    expect(screen.queryByText(/ignored/)).toBeNull();
+  });
+
+  it("shows only the main path for a single lane", () => {
+    const round = thinkingProcess.rounds[0];
+    if (!round) throw new Error("Expected a round.");
+    render(
+      <ThinkingProcessRail
+        candidates={[]}
+        defaultTab="thinking"
+        thinkingProcess={{
+          activeRoundNo: 1,
+          rounds: [{ ...round, queryGroups: round.queryGroups.slice(0, 1) }],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("group", { name: "主路径" })).toBeVisible();
+    expect(screen.queryByRole("group", { name: "扩展路径" })).toBeNull();
   });
 });
