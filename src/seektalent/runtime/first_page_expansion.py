@@ -178,6 +178,8 @@ def _validate_expansion_result(
     expected = (continuation.source_kind, continuation.query_instance_id, continuation.continuation_id)
     if (result.source_kind, result.query_instance_id, result.continuation_id) != expected:
         raise RuntimeSourceInvariantError("first_page_expansion_result_wrong_provenance")
+    if result.status not in {"completed", "partial", "blocked", "failed"}:
+        raise RuntimeSourceInvariantError("first_page_expansion_invalid_status")
     counts = (
         result.first_page_visible_count, result.first_page_eligible_count,
         result.initial_opened_count, result.expansion_opened_count,
@@ -200,10 +202,14 @@ def _validate_expansion_result(
         raise RuntimeSourceInvariantError("first_page_continuation_not_deleted")
     if action == "discard" and (consumed or result.candidates or result.candidate_query_attributions):
         raise RuntimeSourceInvariantError("first_page_discard_returned_candidates")
-    candidate_ids = {item.resume_id for item in result.candidates}
+    candidate_ids = [item.resume_id for item in result.candidates]
+    attribution_ids = [item.resume_id for item in result.candidate_query_attributions]
+    if len(set(candidate_ids)) != len(candidate_ids) or len(set(attribution_ids)) != len(attribution_ids):
+        raise RuntimeSourceInvariantError("first_page_expansion_duplicate_candidate_attribution")
+    if set(candidate_ids) != set(attribution_ids):
+        raise RuntimeSourceInvariantError("first_page_expansion_candidate_attribution_coverage")
     if any(item.source_kind != result.source_kind
            or item.query_instance_id != result.query_instance_id
-           or item.resume_id not in candidate_ids
            for item in result.candidate_query_attributions):
         raise RuntimeSourceInvariantError("first_page_expansion_attribution_mismatch")
 
@@ -216,9 +222,15 @@ def apply_first_page_expansion_to_receipts(
     merge_counts: Sequence[ExpansionQueryMergeCounts],
     scoring_failure_counts: Mapping[tuple[str, str], int],
 ) -> list[QueryExecutionReceipt]:
+    receipt_keys = [(r.source_kind, r.query_instance_id) for r in receipts]
+    if len(set(receipt_keys)) != len(receipt_keys):
+        raise RuntimeSourceInvariantError("duplicate_first_page_receipt")
+    receipt_key_set = set(receipt_keys)
     decisions_by_key = {(d.source_kind, d.query_instance_id): d for d in decisions}
     if len(decisions_by_key) != len(decisions):
         raise RuntimeSourceInvariantError("duplicate_first_page_expansion_decision")
+    if set(decisions_by_key) - receipt_key_set:
+        raise RuntimeSourceInvariantError("first_page_decision_missing_receipt")
     outcomes_by_key: dict[tuple[str, str], list[SourceFirstPageExpansionResult]] = {}
     for outcome in outcomes:
         outcomes_by_key.setdefault((outcome.source_kind, outcome.query_instance_id), []).append(outcome)
@@ -232,6 +244,12 @@ def apply_first_page_expansion_to_receipts(
     merges = {(m.source_kind, m.query_instance_id): m for m in merge_counts}
     if len(merges) != len(merge_counts):
         raise RuntimeSourceInvariantError("duplicate_first_page_merge_counts")
+    if set(merges) - receipt_key_set:
+        raise RuntimeSourceInvariantError("first_page_merge_missing_receipt")
+    if set(scoring_failure_counts) - receipt_key_set:
+        raise RuntimeSourceInvariantError("first_page_scoring_missing_receipt")
+    if set(merges) - set(decisions_by_key) or set(scoring_failure_counts) - set(decisions_by_key):
+        raise RuntimeSourceInvariantError("first_page_counter_missing_decision")
     updated = []
     for receipt in receipts:
         key = (receipt.source_kind, receipt.query_instance_id)

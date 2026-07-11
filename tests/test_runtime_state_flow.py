@@ -308,6 +308,119 @@ def test_first_page_receipt_rejects_missing_duplicate_and_foreign_outcomes() -> 
                 merge_counts=[], scoring_failure_counts={})
 
 
+@pytest.mark.parametrize("case", ["status", "missing", "foreign", "duplicate"])
+def test_first_page_executor_rejects_each_malformed_attribution_case(case: str) -> None:
+    decision = decide_first_page_expansion(
+        continuations=[_task7_continuation()], requested_count=1,
+        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
+    candidate = _make_candidate("r-new", source_round=2)
+    good = RuntimeQueryCandidateAttribution(
+        source_kind="liepin", query_instance_id="q1", resume_id="r-new", dedup_key="r-new")
+    async def malformed(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
+        attributions = (good,)
+        status = "completed"
+        if case == "status":
+            status = "unknown"
+        elif case == "missing":
+            attributions = ()
+        elif case == "foreign":
+            attributions = (replace(good, query_instance_id="foreign"),)
+        elif case == "duplicate":
+            attributions = (good, good)
+        return SourceFirstPageExpansionResult(
+            source_kind="liepin", query_instance_id="q1", continuation_id="c1",
+            status=cast(Any, status), candidates=(candidate,),
+            candidate_query_attributions=attributions, first_page_visible_count=3,
+            first_page_eligible_count=3, initial_opened_count=1,
+            expansion_opened_count=1, continuation_deleted=True)
+    with pytest.raises(RuntimeSourceInvariantError):
+        asyncio.run(execute_first_page_decisions(
+            runtime_run_id="run", round_no=2, decisions=[decision], expanders={"liepin": malformed}))
+
+
+@pytest.mark.parametrize("case", ["cleanup", "negative_provider", "excessive_provider"])
+def test_first_page_executor_rejects_each_cleanup_and_provider_counter_invariant(case: str) -> None:
+    decision = decide_first_page_expansion(
+        continuations=[_task7_continuation()], requested_count=1,
+        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
+    async def malformed(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
+        return SourceFirstPageExpansionResult(
+            source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
+            first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
+            expansion_opened_count=-1 if case == "negative_provider" else 3 if case == "excessive_provider" else 0,
+            continuation_deleted=case != "cleanup")
+    with pytest.raises(RuntimeSourceInvariantError):
+        asyncio.run(execute_first_page_decisions(
+            runtime_run_id="run", round_no=2, decisions=[decision], expanders={"liepin": malformed}))
+
+
+@pytest.mark.parametrize("case", ["negative_merge", "negative_scoring", "excessive_scoring"])
+def test_first_page_receipt_rejects_each_counter_invariant(case: str) -> None:
+    decision = decide_first_page_expansion(
+        continuations=[_task7_continuation()], requested_count=1,
+        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
+    outcome = SourceFirstPageExpansionResult(
+        source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
+        first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
+        expansion_opened_count=1, continuation_deleted=True)
+    merge = ExpansionQueryMergeCounts("liepin", "q1", -1 if case == "negative_merge" else 1, 0)
+    scoring = -1 if case == "negative_scoring" else 2 if case == "excessive_scoring" else 0
+    with pytest.raises(RuntimeSourceInvariantError):
+        apply_first_page_expansion_to_receipts(
+            receipts=[_task7_receipt()], decisions=[decision], outcomes=[outcome],
+            merge_counts=[merge], scoring_failure_counts={("liepin", "q1"): scoring})
+
+
+@pytest.mark.parametrize("case", ["foreign_decision", "foreign_merge", "foreign_scoring", "duplicate_receipt"])
+def test_first_page_receipt_rejects_each_foreign_or_duplicate_key(case: str) -> None:
+    decision = decide_first_page_expansion(
+        continuations=[_task7_continuation()], requested_count=1,
+        baseline_opened_count=1, baseline_identity_count=1, scorecards=[_task7_score("r")])
+    outcome = SourceFirstPageExpansionResult(
+        source_kind="liepin", query_instance_id="q1", continuation_id="c1", status="completed",
+        first_page_visible_count=3, first_page_eligible_count=3, initial_opened_count=1,
+        continuation_deleted=True)
+    receipts = [_task7_receipt()]
+    decisions = [decision]
+    merges = []
+    scoring = {}
+    if case == "foreign_decision":
+        decisions = [replace(decision, query_instance_id="foreign")]
+    elif case == "foreign_merge":
+        merges = [ExpansionQueryMergeCounts("liepin", "foreign", 0, 0)]
+    elif case == "foreign_scoring":
+        scoring = {("liepin", "foreign"): 0}
+    else:
+        receipts.append(_task7_receipt())
+    with pytest.raises(RuntimeSourceInvariantError):
+        apply_first_page_expansion_to_receipts(
+            receipts=receipts, decisions=decisions, outcomes=[outcome],
+            merge_counts=merges, scoring_failure_counts=scoring)
+
+
+def test_two_target_qualified_receipt_reconciles_exact_counts_once() -> None:
+    continuations = [_task7_continuation(), _task7_continuation(continuation="c2", initial=0)]
+    decision = decide_first_page_expansion(
+        continuations=continuations, requested_count=1, baseline_opened_count=1,
+        baseline_identity_count=1, scorecards=[_task7_score("r")])
+    outcomes = [
+        SourceFirstPageExpansionResult(
+            source_kind="liepin", query_instance_id="q1", continuation_id=item.continuation_id,
+            status="completed", first_page_visible_count=3, first_page_eligible_count=3,
+            initial_opened_count=item.initial_opened_count, expansion_opened_count=1,
+            continuation_deleted=True)
+        for item in continuations
+    ]
+    updated = apply_first_page_expansion_to_receipts(
+        receipts=[_task7_receipt()], decisions=[decision], outcomes=outcomes,
+        merge_counts=[ExpansionQueryMergeCounts("liepin", "q1", 1, 1)],
+        scoring_failure_counts={("liepin", "q1"): 1})
+    assert len(updated) == 1
+    assert (updated[0].initial_opened_count, updated[0].expansion_opened_count) == (1, 2)
+    assert (updated[0].unique_candidate_count, updated[0].duplicate_candidate_count) == (1, 1)
+    assert updated[0].expansion_scoring_failure_count == 1
+
+
 def _liepin_fixture_settings(**overrides: object):
     return make_settings(
         liepin_worker_mode="fake_fixture",
