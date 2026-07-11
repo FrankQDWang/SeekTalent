@@ -89,6 +89,7 @@ from .round_adapters import (
     _source_filter_warning_reason as _source_filter_warning_reason,
     _source_round_status as _source_round_status,
     default_source_round_adapter_provider as default_source_round_adapter_provider,
+    default_source_first_page_expander_provider as default_source_first_page_expander_provider,
 )
 from .runtime_factory import (
     _build_provider_retrieval_service as _build_provider_retrieval_service,

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, NoReturn, Protocol, cast
 
 from seektalent.config import AppSettings
-from seektalent.core.retrieval.provider_contract import ProviderCapabilities
+from seektalent.core.retrieval.provider_contract import ProviderCapabilities, ProviderFirstPageExpansionResult, ProviderSearchContinuation
 from seektalent.core.retrieval.provider_contract import SearchRequest
 from seektalent.core.retrieval.provider_contract import SearchResult
 from seektalent.providers.liepin.client import EventCallback
@@ -207,6 +207,29 @@ class LiepinProviderAdapter:
             logical_round_no=logical_round_no,
             query_instance_id=query_instance_id,
         )
+
+    async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action: str,
+            continuation: ProviderSearchContinuation, detail_open_claim_ledger: DetailOpenClaimLedger,
+            logical_round_no: int, query_instance_id: str) -> ProviderFirstPageExpansionResult:
+        worker = self.worker_client
+        handler = getattr(worker, "handle_first_page_continuation_with_detail_open_claim_ledger", None)
+        if not callable(handler):
+            raise LiepinWorkerModeError("Liepin continuation requires an OpenCLI worker.")
+        if action == "discard":
+            return await handler(action=action, continuation=continuation,
+                detail_open_claim_ledger=detail_open_claim_ledger,
+                logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+        result: ProviderFirstPageExpansionResult | None = None
+        try:
+            result = await handler(action="expand", continuation=continuation,
+                detail_open_claim_ledger=detail_open_claim_ledger,
+                logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+        finally:
+            deleted = await handler(action="discard", continuation=continuation,
+                detail_open_claim_ledger=detail_open_claim_ledger,
+                logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+        assert result is not None
+        return replace(result, continuation_deleted=deleted.continuation_deleted)
 
     async def _search(
         self,

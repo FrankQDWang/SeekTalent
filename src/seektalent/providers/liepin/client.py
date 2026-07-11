@@ -40,6 +40,7 @@ from seektalent.providers.liepin.worker_contracts import decode_worker_health
 
 if TYPE_CHECKING:
     from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
+    from seektalent.core.retrieval.provider_contract import ProviderFirstPageExpansionResult, ProviderSearchContinuation
 
 
 EventCallback = Callable[[str, dict[str, object]], None]
@@ -101,6 +102,9 @@ class LiepinWorkerClient(Protocol):
 
 
 class _DetailOpenClaimCapableLiepinWorker(Protocol):
+    async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action: str,
+        continuation: ProviderSearchContinuation, detail_open_claim_ledger: DetailOpenClaimLedger,
+        logical_round_no: int, query_instance_id: str) -> ProviderFirstPageExpansionResult: ...
     async def search_with_detail_open_claim_ledger(
         self,
         request: SearchRequest,

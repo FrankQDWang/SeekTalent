@@ -8,6 +8,9 @@ import httpx
 from seektalent.core.retrieval.provider_contract import ProviderSearchError
 from seektalent.models import QueryOutcomeThresholds
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext, WorkflowRuntime
+from seektalent.runtime.source_expansion import SourceFirstPageExpander
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
+from seektalent.sources.liepin.runtime_lane import run_liepin_first_page_expansion
 from seektalent.runtime.source_query_intent import (
     RuntimeSourceQueryIntent,
     query_package_from_provider_query,
@@ -30,6 +33,14 @@ from .evidence import _record_source_provider_results_from_lane, _source_lane_re
 _SOURCE_ROUND_STATUSES: dict[str, SourceRoundDispatchStatus] = {
     "blocked": "blocked", "completed": "completed", "failed": "failed", "partial": "partial"
 }
+
+
+def default_source_first_page_expander_provider(runtime: WorkflowRuntime,
+        detail_open_claim_ledger: DetailOpenClaimLedger) -> Mapping[str, SourceFirstPageExpander]:
+    async def expand_liepin(request):
+        return await run_liepin_first_page_expansion(settings=runtime.settings, request=request,
+            detail_open_claim_ledger=detail_open_claim_ledger)
+    return {"liepin": expand_liepin}
 
 
 def default_source_round_adapter_provider(

@@ -111,6 +111,7 @@ from seektalent.models import (
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
+from seektalent.runtime.source_expansion import SourceFirstPageExpander
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates, select_identity_top_candidates
@@ -334,6 +335,7 @@ RuntimeSourceRoundAdapterProvider = Callable[
     ["WorkflowRuntime", RuntimeSourceRoundContext],
     Mapping[str, SourceRoundAdapter],
 ]
+RuntimeSourceFirstPageExpanderProvider = Callable[["WorkflowRuntime", DetailOpenClaimLedger], Mapping[str, SourceFirstPageExpander]]
 RuntimeSourceQueryPolicyProvider = Callable[
     [tuple[RuntimeSourceLanePlan, ...]],
     Mapping[SourceKind, RuntimeSourceQueryPolicy],
@@ -486,6 +488,7 @@ class WorkflowRuntime:
         source_registry: SourceRegistry | None = None,
         source_lane_request_runner: RuntimeSourceLaneRequestRunner | None = None,
         source_round_adapter_provider: RuntimeSourceRoundAdapterProvider | None = None,
+        source_first_page_expander_provider: RuntimeSourceFirstPageExpanderProvider | None = None,
         source_query_policy_provider: RuntimeSourceQueryPolicyProvider | None = None,
         retrieval_service: RetrievalService | None = None,
         judge_limiter: AsyncJudgeLimiter | None = None,
@@ -495,6 +498,7 @@ class WorkflowRuntime:
         self.source_registry = source_registry
         self.source_lane_request_runner = source_lane_request_runner
         self.source_round_adapter_provider = source_round_adapter_provider
+        self.source_first_page_expander_provider = source_first_page_expander_provider
         self.source_query_policy_provider = source_query_policy_provider
         self.judge_limiter = judge_limiter
         self.eval_remote_logging = eval_remote_logging
@@ -898,7 +902,13 @@ class WorkflowRuntime:
                 requirement_cache_scope=requirement_cache_scope,
                 approved_requirement_sheet=approved_requirement_sheet,
             )
-            detail_open_claim_ledger = DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key)
+            detail_open_claim_ledger: DetailOpenClaimLedger
+            detail_open_claim_ledger = DetailOpenClaimLedger(
+                run_state.detail_open_claims_by_provider_key,
+                checkpoint=lambda: self._refresh_runtime_candidate_checkpoint(
+                    runtime_checkpoint_callback=runtime_checkpoint_callback, tracer=tracer,
+                    run_state=run_state, detail_open_claim_ledger=detail_open_claim_ledger),
+            )
             top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
                 run_state=run_state,
                 detail_open_claim_ledger=detail_open_claim_ledger,

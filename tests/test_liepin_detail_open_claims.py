@@ -82,3 +82,15 @@ def test_snapshot_is_independent_from_claim_map() -> None:
 
     assert claims["candidate-key"].status == "claimed"
     assert "another-key" not in claims
+
+
+def test_attempt_and_terminal_claim_transitions_are_checkpointed() -> None:
+    claims: dict[str, RuntimeDetailOpenClaim] = {}
+    snapshots: list[dict[str, RuntimeDetailOpenClaim]] = []
+    ledger: DetailOpenClaimLedger
+    ledger = DetailOpenClaimLedger(claims, checkpoint=lambda: snapshots.append(ledger.snapshot()))
+    assert ledger.try_claim("candidate-key") is True
+    assert snapshots == []
+    ledger.record_browser_open_attempt("candidate-key")
+    ledger.mark_opened("candidate-key")
+    assert [snapshot["candidate-key"].status for snapshot in snapshots] == ["claimed", "opened"]

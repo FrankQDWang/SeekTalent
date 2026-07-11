@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 import inspect
 import json
@@ -348,6 +348,14 @@ class FakeLiepinSearchWorkflowSite:
         self.saved_continuations.append(carrier)
         return carrier
 
+    def load_liepin_first_page_continuation(self, opaque_ref: str) -> LiepinFirstPageContinuation:
+        assert self.continuation_store is not None
+        return self.continuation_store.load(opaque_ref)
+
+    def discard_liepin_first_page_continuation(self, opaque_ref: str) -> None:
+        assert self.continuation_store is not None
+        self.continuation_store.delete(opaque_ref)
+
     def mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
         state: CandidateState) -> None:
         assert self.continuation_store is not None
@@ -578,6 +586,61 @@ def _first_page_site(tmp_path: Path, *, card_count: int) -> FakeLiepinSearchWork
         search_states=[_search_state_with_detail_targets(*refs)],
         structured_cards=[[{"ref": ref, "provider_rank": rank} for rank, ref in enumerate(refs, start=1)]],
     )
+
+
+def _baseline_with_continuation(tmp_path: Path, *, visible: int, opened: int):
+    site = _first_page_site(tmp_path, card_count=visible)
+    ledger = DetailOpenClaimLedger({})
+    LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
+        _request(target_resumes=opened, max_cards=visible),
+        detail_open_claim_context=_private_claim_context(ledger))
+    return site, replace(site.saved_continuations[0], initial_opened_count=opened), ledger
+
+
+def test_expansion_consumes_every_remaining_snapshot_candidate_in_rank_order(tmp_path) -> None:
+    site, continuation, ledger = _baseline_with_continuation(tmp_path, visible=6, opened=2)
+    baseline = len(site.cached_opened_refs)
+    envelope = LiepinSearchWorkflow(site=site).expand_first_page_continuation(
+        continuation_ref=continuation.opaque_ref,
+        detail_open_claim_context=_private_claim_context(ledger))
+    assert envelope["resumes_returned"] == 4
+    assert site.cached_opened_refs[baseline:] == ["72", "73", "74", "75"]
+    assert site.calls.count("search_liepin_cards") == 1
+    assert "next_page" not in site.calls
+
+
+def test_discard_deletes_continuation_without_browser_action(tmp_path) -> None:
+    site, continuation, _ = _baseline_with_continuation(tmp_path, visible=5, opened=2)
+    calls_before = list(site.calls)
+    site.discard_liepin_first_page_continuation(continuation.opaque_ref)
+    assert site.calls == calls_before
+    with pytest.raises(FileNotFoundError):
+        site.load_liepin_first_page_continuation(continuation.opaque_ref)
+
+
+def test_expansion_skips_seen_and_continues_to_page_end(tmp_path) -> None:
+    site, continuation, ledger = _baseline_with_continuation(tmp_path, visible=5, opened=2)
+    stored = site.load_liepin_first_page_continuation(continuation.opaque_ref)
+    rank_three = next(item for item in stored.candidates if item.rank == 3)
+    assert ledger.try_claim(rank_three.provider_candidate_key_hash)
+    envelope = LiepinSearchWorkflow(site=site).expand_first_page_continuation(
+        continuation_ref=continuation.opaque_ref,
+        detail_open_claim_context=_private_claim_context(ledger))
+    assert envelope["expansion_skipped_seen_count"] == 1
+    assert site.cached_opened_refs[-2:] == ["73", "74"]
+
+
+def test_expansion_failure_preserves_baseline_and_returns_partial(tmp_path) -> None:
+    site, continuation, ledger = _baseline_with_continuation(tmp_path, visible=5, opened=2)
+    baseline = list(site.resumes)
+    site.open_ok = False
+    envelope = LiepinSearchWorkflow(site=site).expand_first_page_continuation(
+        continuation_ref=continuation.opaque_ref,
+        detail_open_claim_context=_private_claim_context(ledger))
+    assert envelope["status"] == "partial"
+    assert site.resumes[:2] == baseline
+    restored = site.load_liepin_first_page_continuation(continuation.opaque_ref)
+    assert all(item.state == "terminal_failed" for item in restored.candidates[2:])
 
 
 def _saved_candidate_state(site: FakeLiepinSearchWorkflowSite, *, rank: int = 1) -> CandidateState:

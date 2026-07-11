@@ -12,7 +12,7 @@ from seektalent.runtime.composition import RuntimeComposition, build_workflow_ru
 from seektalent.runtime.orchestrator import WorkflowRuntime
 from seektalent.source_adapters.query_policy import default_source_query_policies
 from seektalent.source_adapters.registry import build_default_source_registry, build_source_lane_request_runner
-from seektalent.source_adapters.round_adapters import default_source_round_adapter_provider
+from seektalent.source_adapters.round_adapters import default_source_first_page_expander_provider, default_source_round_adapter_provider
 
 
 def build_runtime_composition(
@@ -28,6 +28,7 @@ def build_runtime_composition(
         source_registry=build_default_source_registry(settings),
         source_lane_request_runner=build_source_lane_request_runner(settings),
         source_round_adapter_provider=default_source_round_adapter_provider,
+        source_first_page_expander_provider=default_source_first_page_expander_provider,
         source_query_policy_provider=lambda source_plan: default_source_query_policies(
             settings=settings,
             source_plan=source_plan,

@@ -4,10 +4,11 @@ import hashlib
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol, cast
+from typing import Literal, Protocol, cast
 
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
-from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
+from seektalent.core.retrieval.provider_contract import ProviderFirstPageExpansionResult, ProviderSearchContinuation
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.worker_contracts import (
     LiepinResumeSearchResponse,
@@ -105,6 +106,43 @@ class LiepinOpenCliResumeRetriever:
     def search_resumes(self, request: LiepinOpenCliResumeRequest) -> LiepinResumeSearchResponse:
         return self._search_resumes(request, search=self._search_liepin_resumes)
 
+    def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action: str,
+            continuation: ProviderSearchContinuation, detail_open_claim_ledger: DetailOpenClaimLedger,
+            logical_round_no: int, query_instance_id: str) -> ProviderFirstPageExpansionResult:
+        if action == "discard":
+            discard = getattr(self._runner, "discard_liepin_first_page_continuation", None)
+            if not callable(discard):
+                raise RuntimeError("liepin_opencli_private_expansion_route_unavailable")
+            discard(continuation.opaque_ref)
+            from seektalent.core.retrieval.provider_contract import SearchResult
+            return ProviderFirstPageExpansionResult(search_result=SearchResult(),
+                first_page_visible_count=continuation.visible_candidate_count,
+                first_page_eligible_count=continuation.eligible_candidate_count,
+                initial_opened_count=continuation.initial_opened_count, expansion_opened_count=0,
+                expansion_skipped_seen_count=0, expansion_terminal_failure_count=0,
+                status="completed", continuation_deleted=True)
+        if action != "expand":
+            raise ValueError("liepin_expansion_action_invalid")
+        handler = getattr(self._runner, "handle_liepin_first_page_continuation", None)
+        if not callable(handler):
+            raise RuntimeError("liepin_opencli_private_expansion_route_unavailable")
+        envelope = handler(continuation_ref=continuation.opaque_ref,
+            detail_open_claim_context=DetailOpenClaimSearchContext(
+                detail_open_claim_ledger=detail_open_claim_ledger,
+                logical_round_no=logical_round_no, query_instance_id=query_instance_id))
+        response = _response_from_opencli_envelope(cast(Mapping[str, object], envelope))
+        from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
+        return ProviderFirstPageExpansionResult(
+            search_result=liepin_resume_search_response_to_search_result(response),
+            first_page_visible_count=int(envelope.get("first_page_visible_count", 0)),
+            first_page_eligible_count=int(envelope.get("first_page_eligible_count", 0)),
+            initial_opened_count=int(envelope.get("initial_opened_count", 0)),
+            expansion_opened_count=int(envelope.get("expansion_opened_count", 0)),
+            expansion_skipped_seen_count=int(envelope.get("expansion_skipped_seen_count", 0)),
+            expansion_terminal_failure_count=int(envelope.get("expansion_terminal_failure_count", 0)),
+            status=cast(Literal["completed", "partial", "blocked", "failed"], envelope.get("status", "failed")),
+            safe_reason_code=cast(str | None, envelope.get("safe_reason_code")))
+
     def _search_resumes_with_detail_open_claim_context(
         self,
         request: LiepinOpenCliResumeRequest,
@@ -184,7 +222,7 @@ def _response_from_opencli_envelope(envelope: Mapping[str, object]) -> LiepinRes
     ):
         raise RuntimeError("liepin_opencli_malformed_private_continuation")
     status = envelope.get("status")
-    if status not in {"succeeded", "partial", "blocked", "failed"}:
+    if status not in {"succeeded", "completed", "partial", "blocked", "failed"}:
         reason = envelope.get("safe_reason_code") or envelope.get("stop_reason") or "failed_provider_error"
         raise RuntimeError(str(reason))
     raw_resumes = envelope.get("resumes")
@@ -208,7 +246,7 @@ def _response_from_opencli_envelope(envelope: Mapping[str, object]) -> LiepinRes
         request_payload["workflowSteps"] = workflow_steps
     response = LiepinResumeSearchResponse(
         resumes=resumes,
-        exhausted=status == "succeeded",
+        exhausted=status in {"succeeded", "completed"},
         requestPayload=request_payload,
         raw_candidate_count=len(resumes),
     )

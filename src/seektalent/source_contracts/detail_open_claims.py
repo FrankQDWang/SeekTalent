@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass
 from threading import RLock
 
@@ -20,10 +20,18 @@ class DetailOpenClaimSearchContext:
             raise ValueError("detail_open_claim_context_missing_query_instance_id")
 
 
+DetailClaimCheckpoint = Callable[[], None]
+
+
 class DetailOpenClaimLedger:
-    def __init__(self, claims: MutableMapping[str, RuntimeDetailOpenClaim]) -> None:
+    def __init__(self, claims: MutableMapping[str, RuntimeDetailOpenClaim], *, checkpoint: DetailClaimCheckpoint | None = None) -> None:
         self._claims = claims
         self._lock = RLock()
+        self._checkpoint_callback = checkpoint
+
+    def _checkpoint(self) -> None:
+        if self._checkpoint_callback is not None:
+            self._checkpoint_callback()
 
     def try_claim(self, provider_candidate_key_hash: str) -> bool:
         with self._lock:
@@ -37,6 +45,7 @@ class DetailOpenClaimLedger:
             claim = self._require_claim(provider_candidate_key_hash)
             self._require_claimed(claim)
             claim.browser_open_attempt_count += 1
+        self._checkpoint()
 
     def has_browser_open_attempt(self, provider_candidate_key_hash: str) -> bool:
         with self._lock:
@@ -49,6 +58,7 @@ class DetailOpenClaimLedger:
             if claim.browser_open_attempt_count == 0:
                 raise ValueError("detail_open_claim_opened_without_browser_attempt")
             claim.status = "opened"
+        self._checkpoint()
 
     def mark_terminal_failed(self, provider_candidate_key_hash: str, *, safe_reason_code: str) -> None:
         with self._lock:
@@ -58,6 +68,7 @@ class DetailOpenClaimLedger:
                 raise ValueError("detail_open_claim_failure_without_browser_attempt")
             claim.status = "terminal_failed"
             claim.last_safe_reason_code = safe_reason_code
+        self._checkpoint()
 
     def release_unattempted(self, provider_candidate_key_hash: str) -> None:
         with self._lock:

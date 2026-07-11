@@ -10,7 +10,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 from seektalent.config import AppSettings
-from seektalent.core.retrieval.provider_contract import SearchRequest, SearchResult
+from seektalent.core.retrieval.provider_contract import ProviderSearchError, SearchRequest, SearchResult
+from seektalent.runtime.source_expansion import SourceFirstPageExpansionError, SourceFirstPageExpansionRequest, SourceFirstPageExpansionResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
@@ -62,6 +63,45 @@ def liepin_backend_posture(settings: AppSettings) -> dict[str, str]:
     if worker_mode == "fake_fixture" and settings.liepin_allow_fake_fixture_worker:
         return {"backend_mode": "fake_fixture", "reason": "explicit_test_fixture"}
     return {"backend_mode": "blocked", "reason": "no_live_action_backend"}
+
+
+async def run_liepin_first_page_expansion(*, settings: AppSettings,
+        request: SourceFirstPageExpansionRequest,
+        detail_open_claim_ledger: DetailOpenClaimLedger) -> SourceFirstPageExpansionResult:
+    client = build_liepin_worker_client(settings)
+    provider = _build_provider(settings=settings, worker_client=client)
+    try:
+        result = await provider.handle_first_page_continuation_with_detail_open_claim_ledger(
+            action=request.action, continuation=request.continuation,
+            detail_open_claim_ledger=detail_open_claim_ledger, logical_round_no=request.round_no,
+            query_instance_id=request.query_instance_id)
+    except ProviderSearchError as exc:
+        raise SourceFirstPageExpansionError(str(exc), status="failed",
+            safe_reason_code=exc.reason_code) from exc
+    except LiepinWorkerModeError as exc:
+        raise SourceFirstPageExpansionError(str(exc), status="blocked",
+            safe_reason_code=str(exc.code or "liepin_first_page_expansion_blocked")) from exc
+    candidates = tuple(result.search_result.candidates)
+    attributions = tuple(RuntimeQueryCandidateAttribution(source_kind="liepin",
+        query_instance_id=request.query_instance_id, resume_id=item.resume_id,
+        dedup_key=item.dedup_key) for item in candidates)
+    lane = RuntimeSourceLaneResult(runtime_run_id=request.runtime_run_id,
+        source_plan_id=f"{request.runtime_run_id}:source:{request.round_no}:liepin",
+        source_lane_run_id=f"{request.runtime_run_id}:expansion:{request.continuation_id}",
+        source="liepin", lane_mode="card", attempt=request.round_no, status=result.status,
+        candidate_store_updates={item.resume_id: item for item in candidates},
+        raw_candidate_count=result.search_result.raw_candidate_count,
+        candidate_query_attributions=attributions, stop_reason_code=result.safe_reason_code)
+    return SourceFirstPageExpansionResult(source_kind="liepin",
+        query_instance_id=request.query_instance_id, continuation_id=request.continuation_id,
+        status=result.status, candidates=candidates, candidate_query_attributions=attributions,
+        lane_result=lane, first_page_visible_count=result.first_page_visible_count,
+        first_page_eligible_count=result.first_page_eligible_count,
+        initial_opened_count=result.initial_opened_count,
+        expansion_opened_count=result.expansion_opened_count,
+        expansion_skipped_seen_count=result.expansion_skipped_seen_count,
+        expansion_terminal_failure_count=result.expansion_terminal_failure_count,
+        safe_reason_code=result.safe_reason_code, continuation_deleted=result.continuation_deleted)
 
 
 async def run_liepin_source_lane(

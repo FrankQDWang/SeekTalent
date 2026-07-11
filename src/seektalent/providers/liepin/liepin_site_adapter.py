@@ -370,6 +370,18 @@ class LiepinSiteAdapter:
         state: CandidateState) -> None:
         self._first_page_continuation_store().mark_candidate(opaque_ref, rank=rank, state=state)
 
+    def load_liepin_first_page_continuation(self, opaque_ref: str):
+        return self._first_page_continuation_store().load(opaque_ref)
+
+    def discard_liepin_first_page_continuation(self, opaque_ref: str) -> None:
+        self._first_page_continuation_store().delete(opaque_ref)
+
+    def handle_liepin_first_page_continuation(self, *, continuation_ref: str,
+            detail_open_claim_context: DetailOpenClaimSearchContext) -> dict[str, object]:
+        from seektalent.providers.liepin.liepin_search_workflow import LiepinSearchWorkflow
+        return LiepinSearchWorkflow(site=_LiepinSearchWorkflowSite(self)).expand_first_page_continuation(
+            continuation_ref=continuation_ref, detail_open_claim_context=detail_open_claim_context)
+
     @property
     def _commands(self):
         return self._automation.commands
@@ -3488,6 +3500,12 @@ class _LiepinSearchWorkflowSite:
 
     def save_liepin_first_page_continuation(self, **kwargs: object) -> ProviderSearchContinuation:
         return self.adapter.save_liepin_first_page_continuation(**cast(dict, kwargs))
+
+    def load_liepin_first_page_continuation(self, opaque_ref: str):
+        return self.adapter.load_liepin_first_page_continuation(opaque_ref)
+
+    def discard_liepin_first_page_continuation(self, opaque_ref: str) -> None:
+        self.adapter.discard_liepin_first_page_continuation(opaque_ref)
 
     def mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
         state: CandidateState) -> None:

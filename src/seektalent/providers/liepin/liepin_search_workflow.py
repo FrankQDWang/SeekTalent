@@ -6,7 +6,7 @@ from typing import Protocol, cast
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
-from seektalent.providers.liepin.first_page_continuation import CandidateState, LiepinFirstPageCandidate
+from seektalent.providers.liepin.first_page_continuation import CandidateState, LiepinFirstPageCandidate, LiepinFirstPageContinuation
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.liepin_state_machine import (
@@ -37,6 +37,8 @@ class LiepinSearchWorkflowRequest:
 
 
 class LiepinSearchWorkflowSite(Protocol):
+    def load_liepin_first_page_continuation(self, opaque_ref: str) -> LiepinFirstPageContinuation: ...
+    def discard_liepin_first_page_continuation(self, opaque_ref: str) -> None: ...
     def save_liepin_first_page_continuation(self, *, source_run_id: str, logical_round_no: int,
         query_instance_id: str, keyword_query: str, visible_candidate_count: int,
         candidates: Sequence[LiepinFirstPageCandidate]) -> ProviderSearchContinuation: ...
@@ -125,6 +127,85 @@ class LiepinSearchWorkflow:
 
     def search_detail_backed_resumes(self, request: LiepinSearchWorkflowRequest) -> dict[str, object]:
         return self._search_detail_backed_resumes(request)
+
+    def expand_first_page_continuation(self, *, continuation_ref: str,
+            detail_open_claim_context: DetailOpenClaimSearchContext) -> dict[str, object]:
+        continuation = self._site.load_liepin_first_page_continuation(continuation_ref)
+        ledger = detail_open_claim_context.detail_open_claim_ledger
+        initial_opened_count = sum(item.state == "opened" for item in continuation.candidates)
+        opened_ranks: set[int] = set()
+        skipped_seen = terminal_failures = 0
+        last_reason: str | None = None
+        interrupted = False
+
+        def finish_failure(candidate: LiepinFirstPageCandidate, reason: str) -> bool:
+            nonlocal terminal_failures, last_reason
+            last_reason = reason
+            if ledger.has_browser_open_attempt(candidate.provider_candidate_key_hash):
+                ledger.mark_terminal_failed(candidate.provider_candidate_key_hash, safe_reason_code=reason)
+                self._site.mark_liepin_first_page_candidate(opaque_ref=continuation_ref,
+                    rank=candidate.rank, state="terminal_failed")
+                terminal_failures += 1
+                return True
+            ledger.release_unattempted(candidate.provider_candidate_key_hash)
+            return False
+
+        for candidate in continuation.candidates:
+            if candidate.state != "remaining":
+                continue
+            key = candidate.provider_candidate_key_hash
+            if not ledger.try_claim(key):
+                self._site.mark_liepin_first_page_candidate(opaque_ref=continuation_ref,
+                    rank=candidate.rank, state="skipped_seen")
+                skipped_seen += 1
+                continue
+            try:
+                opened = self._open_detail_with_retry(source_run_id=continuation.source_run_id,
+                    ref=candidate.ref, rank=candidate.rank, cached_detail_url=candidate.detail_url,
+                    use_cached=True, before_browser_open_attempt=lambda key=key: ledger.record_browser_open_attempt(key))
+                if not opened.ok:
+                    if not finish_failure(candidate, opened.safe_reason_code or "liepin_opencli_detail_not_opened"):
+                        interrupted = True
+                        break
+                    continue
+                waited = self._wait_detail_ready_transition(source_run_id=continuation.source_run_id, rank=candidate.rank)
+                if not waited.ok:
+                    finish_failure(candidate, waited.safe_reason_code or "liepin_opencli_detail_not_opened")
+                    continue
+                captured = self._capture_detail_transition(source_run_id=continuation.source_run_id,
+                    rank=candidate.rank, require_ready=False, expected_provider_candidate_key_hash=key)
+                if not captured.ok:
+                    finish_failure(candidate, captured.safe_reason_code or "liepin_opencli_detail_not_opened")
+                    continue
+            except OpenCliBrowserError as exc:
+                if not finish_failure(candidate, exc.safe_reason_code or "liepin_opencli_detail_not_opened"):
+                    interrupted = True
+                break
+            ledger.mark_opened(key)
+            self._site.mark_liepin_first_page_candidate(opaque_ref=continuation_ref,
+                rank=candidate.rank, state="opened")
+            opened_ranks.add(candidate.rank)
+
+        finalized = self._site.finalize_liepin_resumes(source_run_id=continuation.source_run_id,
+            query=continuation.keyword_query, max_pages=1, max_cards=len(continuation.candidates),
+            cards_seen=len(continuation.candidates), target_resumes=None)
+        expansion_resumes = [cast(Mapping[str, object], item)
+            for item in cast(Sequence[object], finalized.get("resumes", []))
+            if isinstance(item, Mapping)
+            and cast(Mapping[str, object], item).get("provider_rank") in opened_ranks]
+        remaining = sum(item.state == "remaining" for item in
+            self._site.load_liepin_first_page_continuation(continuation_ref).candidates)
+        status = "completed" if not interrupted and terminal_failures == 0 and remaining == 0 else "partial"
+        self._append_event(continuation.source_run_id, {"action_kind": "first_page_expansion_completed",
+            "expansion_opened_count": len(opened_ranks)})
+        return {**finalized, "status": status,
+            "safe_reason_code": "liepin_first_page_expansion_partial" if status == "partial" else None,
+            "resumes": expansion_resumes, "resumes_returned": len(expansion_resumes),
+            "first_page_visible_count": continuation.visible_candidate_count,
+            "first_page_eligible_count": len(continuation.candidates),
+            "initial_opened_count": initial_opened_count, "expansion_opened_count": len(opened_ranks),
+            "expansion_skipped_seen_count": skipped_seen,
+            "expansion_terminal_failure_count": terminal_failures, "last_safe_reason_code": last_reason}
 
     def _search_detail_backed_resumes_with_detail_open_claim_context(
         self,
