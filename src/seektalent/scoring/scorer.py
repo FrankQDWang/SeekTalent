@@ -58,6 +58,8 @@ ScoringProviderFailureKind = Literal[
 class _ScoringOutputValidationState:
     applicability: ScoreDimensionApplicability
     applicability_retry_count: int = 0
+    last_applicability_retry: int | None = None
+    max_output_retries: int | None = None
 
 
 class ScoringApplicabilityRetryExhausted(RuntimeError):
@@ -256,6 +258,8 @@ class ResumeScorer:
                 )
             except ModelRetry:
                 context.deps.applicability_retry_count += 1
+                context.deps.last_applicability_retry = context.retry
+                context.deps.max_output_retries = context.max_retries
                 raise
 
         return agent
@@ -722,7 +726,11 @@ class ResumeScorer:
         try:
             result = await agent.run(prompt, deps=validation_state)
         except UnexpectedModelBehavior as exc:
-            if validation_state.applicability_retry_count:
+            if (
+                validation_state.last_applicability_retry is not None
+                and validation_state.last_applicability_retry
+                == validation_state.max_output_retries
+            ):
                 raise ScoringApplicabilityRetryExhausted(
                     "scoring applicability output retries exhausted"
                 ) from exc
