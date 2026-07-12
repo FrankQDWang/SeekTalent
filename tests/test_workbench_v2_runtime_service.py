@@ -209,11 +209,17 @@ class CandidateThresholdStore:
                 location="Hangzhou",
                 summary="score threshold fixture",
                 score=score,
-                fit_bucket="fit" if score is not None else None,
+                fit_bucket=fit_bucket,
                 payload_hash=f"hash-{identity_id}",
                 updated_at=NOW,
             )
-            for identity_id, score in (("low", 59), ("edge", 60), ("high", 90), ("unscored", None))
+            for identity_id, score, fit_bucket in (
+                ("low", 59, "fit"),
+                ("edge", 60, "fit"),
+                ("high", 90, "fit"),
+                ("hard-fail", 95, "not_fit"),
+                ("unscored", None, None),
+            )
         ]
 
     def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:

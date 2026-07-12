@@ -39,6 +39,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _liepin_structured_cards_payload_probe_script,
     _safe_detail_payload_from_probe_output,
     _safe_structured_cards_from_probe_output,
+    canonical_liepin_detail_source_url,
     stable_liepin_detail_candidate_key_hash,
 )
 from seektalent.providers.liepin.opencli_workflow import workflow_steps_from_action_events
@@ -3980,6 +3981,16 @@ def test_stable_detail_candidate_key_hash_is_subject_stable_and_rejects_invalid_
     ) == first
 
 
+def test_canonical_detail_source_url_strips_volatile_search_position() -> None:
+    assert canonical_liepin_detail_source_url(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+        "&index=5&position=5&cur_page=2&pageSize=30"
+    ) == "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    assert canonical_liepin_detail_source_url(
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=not-valid"
+    ) is None
+
+
 def test_capture_liepin_detail_resume_preserves_legacy_envelope_without_carried_key(tmp_path: Path) -> None:
     detail_url = (
         "https://h.liepin.com/resume/showresumedetail/?res_id_encode=778882227ddfWf393e2b5fdad"
@@ -4107,7 +4118,10 @@ def test_claim_aware_capture_rejects_encoded_subject_url_before_artifact_write(t
 
 
 def test_claim_aware_capture_persists_only_the_matched_opaque_key(tmp_path: Path) -> None:
-    detail_url = "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    detail_url = (
+        "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+        "&index=8&position=8&cur_page=1"
+    )
     expected_key = stable_liepin_detail_candidate_key_hash(detail_url)
     assert expected_key is not None
     commands = RefEvalCommands(
@@ -4138,7 +4152,10 @@ def test_claim_aware_capture_persists_only_the_matched_opaque_key(tmp_path: Path
     assert resume["provider_candidate_key_hash"] == expected_key
     assert "provider_candidate_key_material_ref" not in resume
     assert "candidate_resume_id" not in resume
-    assert "sourceUrl" not in resume["detail_payload"]
+    assert (
+        resume["detail_payload"]["sourceUrl"]
+        == "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject"
+    )
 
 
 def test_capture_liepin_detail_resume_preserves_collected_resumes_dict_schema_under_update(tmp_path: Path) -> None:

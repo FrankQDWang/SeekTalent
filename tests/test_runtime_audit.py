@@ -1312,6 +1312,12 @@ class StubScorer:
         return scored, []
 
 
+class NotFitHighScoreScorer(StubScorer):
+    async def score_candidates_parallel(self, *, contexts, tracer):
+        scored, failures = await super().score_candidates_parallel(contexts=contexts, tracer=tracer)
+        return [candidate.model_copy(update={"fit_bucket": "not_fit"}) for candidate in scored], failures
+
+
 class FailingScorer:
     async def score_candidates_parallel(self, *, contexts, tracer):
         if not hasattr(tracer, "run_dir"):
@@ -1426,6 +1432,11 @@ class StubResumeQualityCommenter:
         assert kwargs["query_terms"] == ["python", "resume matching"]
         assert kwargs["candidates"]
         return "本轮简历整体质量较好，Python 和检索经验集中，少数候选人管理经验仍需复核。"
+
+
+class UnexpectedResumeQualityCommenter:
+    async def comment(self, **kwargs) -> str:
+        raise AssertionError("quality commenter must not receive ineligible candidates")
 
 
 class AuditResumeQualityCommenter:
@@ -2411,6 +2422,39 @@ def test_runtime_round_payload_includes_resume_quality_comment(tmp_path: Path, m
     )
     assert event_types.index("scoring_completed") < event_types.index("resume_quality_comment_completed")
     assert event_types.index("resume_quality_comment_completed") < event_types.index("reflection_started")
+
+
+def test_runtime_quality_comment_excludes_not_fit_high_scores(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "test-key")
+    settings = make_settings(
+        runs_dir=str(tmp_path / "runs"),
+        mock_cts=True,
+        provider_name="cts",
+        min_rounds=1,
+        max_rounds=1,
+        enable_eval=False,
+        cts_tenant_key="tenant-key",
+        cts_tenant_secret="tenant-secret",
+    )
+    runtime = _workflow_runtime(settings)
+    _install_runtime_stubs(runtime, controller=StubController(), resume_scorer=NotFitHighScoreScorer())
+    cast(Any, runtime).resume_quality_commenter = UnexpectedResumeQualityCommenter()
+    progress_events: list[ProgressEvent] = []
+
+    runtime.run(
+        source_kinds=["cts"],
+        job_title="Senior Python Engineer",
+        jd="JD",
+        notes="Notes",
+        progress_callback=progress_events.append,
+    )
+
+    round_event = next(event for event in progress_events if event.type == "round_completed")
+    assert (
+        round_event.payload["resume_quality_comment"]
+        == "本轮暂无达到 60 分推荐标准且满足硬性条件的候选人。"
+    )
+    assert round_event.payload["resume_quality_comment_error"] is None
 
 
 def test_runtime_tui_summary_artifacts_exclude_company_discovery_prompts(tmp_path: Path, monkeypatch) -> None:

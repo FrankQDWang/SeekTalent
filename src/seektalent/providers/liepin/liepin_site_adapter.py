@@ -104,6 +104,7 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     _validate_native_filter_label,
     bucket_text,
     build_observation,
+    canonical_liepin_detail_source_url,
     classify_liepin_state,
     extract_allowed_click_refs as extract_allowed_click_refs,
     extract_liepin_card_summaries,  # noqa: F401 - public re-export for callers/tests.
@@ -1053,15 +1054,19 @@ class LiepinSiteAdapter:
                     source_url = current_url
             detail_payload = dict(payload)
             if claim_aware:
-                provider_candidate_key_hash = (
-                    stable_liepin_detail_candidate_key_hash(source_url) if source_url is not None else None
-                )
+                if source_url is None:
+                    raise OpenCliBrowserError("liepin_opencli_candidate_identity_mismatch")
+                provider_candidate_key_hash = stable_liepin_detail_candidate_key_hash(source_url)
                 if (
                     not _is_provider_candidate_key_hash(expected_provider_candidate_key_hash)
                     or provider_candidate_key_hash is None
                     or provider_candidate_key_hash != expected_provider_candidate_key_hash
                 ):
                     raise OpenCliBrowserError("liepin_opencli_candidate_identity_mismatch")
+                canonical_source_url = canonical_liepin_detail_source_url(source_url)
+                if canonical_source_url is None:
+                    raise OpenCliBrowserError("liepin_opencli_candidate_identity_mismatch")
+                detail_payload["sourceUrl"] = canonical_source_url
             elif source_url is not None:
                 detail_payload["sourceUrl"] = source_url
             raw_snapshot_ref = self._write_pi_artifact(

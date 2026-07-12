@@ -10,7 +10,7 @@ from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
 from seektalent.config import AppSettings
-from seektalent.candidate_quality import is_workbench_visible_score
+from seektalent.candidate_quality import is_recommendation_eligible
 from seektalent.models import RequirementSheet
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
@@ -326,8 +326,9 @@ class WorkbenchV2RuntimeService:
         for identity in identities:
             evidence = evidence_by_identity.get(identity.identity_id, [])
             score = _candidate_score(identity, evidence)
-            if not is_workbench_visible_score(score):
+            if not is_recommendation_eligible(score=score, fit_bucket=identity.fit_bucket):
                 continue
+            assert score is not None
             eligible_identities.append((identity, evidence, score))
         eligible_identities.sort(key=lambda row: (-row[2], row[0].identity_id))
         candidates: list[dict[str, object]] = []

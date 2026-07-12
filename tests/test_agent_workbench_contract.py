@@ -87,9 +87,16 @@ def test_candidate_summaries_hide_scores_below_sixty_and_rerank() -> None:
             location="Hangzhou",
             summary="score threshold fixture",
             status="fit" if score is not None else "new",
+            fit_bucket=("not_fit" if candidate_id == "hard-fail" else "fit") if score is not None else None,
             created_at="2026-07-11T00:00:00+00:00",
         )
-        for candidate_id, score in (("low", 59), ("edge", 60), ("high", 90), ("unscored", None))
+        for candidate_id, score in (
+            ("low", 59),
+            ("edge", 60),
+            ("high", 90),
+            ("hard-fail", 95),
+            ("unscored", None),
+        )
     ]
 
     summaries = _candidate_summaries(items)
@@ -4547,7 +4554,7 @@ class _FakeWorkbenchStore:
                 experience_years=8,
                 summary="Safe candidate summary.",
                 aggregate_score=91,
-                fit_bucket="strong",
+                fit_bucket="fit",
                 why_selected="Strong backend fit.",
                 source_round=1,
                 source_badges=["liepin"],
@@ -4625,7 +4632,7 @@ def _candidate_review_item(index: int, *, evidence_level: str | None = None) -> 
         experience_years=10 + index,
         summary=f"Safe candidate summary {index}.",
         aggregate_score=100 - index,
-        fit_bucket="strong",
+        fit_bucket="fit",
         why_selected="Strong backend fit.",
         source_round=1,
         source_badges=["cts", "liepin"],

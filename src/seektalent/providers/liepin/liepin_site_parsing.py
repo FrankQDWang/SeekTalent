@@ -402,7 +402,7 @@ def _is_liepin_detail_url(url: str) -> bool:
         return False
 
 
-def stable_liepin_detail_candidate_key_hash(detail_url: str) -> str | None:
+def _strict_liepin_detail_subject(detail_url: str) -> str | None:
     try:
         parsed = urlparse(detail_url)
         if (
@@ -426,8 +426,22 @@ def stable_liepin_detail_candidate_key_hash(detail_url: str) -> str | None:
         subject_values.append(value)
     if len(subject_values) != 1 or not re.fullmatch(r"[A-Za-z0-9]+", subject_values[0]):
         return None
-    material = f"liepin:res_id_encode:v1:{subject_values[0]}"
+    return subject_values[0]
+
+
+def stable_liepin_detail_candidate_key_hash(detail_url: str) -> str | None:
+    subject = _strict_liepin_detail_subject(detail_url)
+    if subject is None:
+        return None
+    material = f"liepin:res_id_encode:v1:{subject}"
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def canonical_liepin_detail_source_url(detail_url: str) -> str | None:
+    subject = _strict_liepin_detail_subject(detail_url)
+    if subject is None:
+        return None
+    return f"https://h.liepin.com/resume/showresumedetail/?res_id_encode={subject}"
 
 
 def _is_blank_tab_url(url: str) -> bool:

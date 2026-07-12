@@ -45,7 +45,7 @@ from seektalent.candidate_feedback.policy import (
     PRFPolicyDecision,
     build_prf_policy_decision,
 )
-from seektalent.candidate_quality import risk_at_or_above
+from seektalent.candidate_quality import is_recommendation_eligible, risk_at_or_above
 from seektalent.config import AppSettings
 from seektalent.corpus.documents import build_jd_document_row
 from seektalent.corpus.runtime import (
@@ -2739,18 +2739,31 @@ class WorkflowRuntime:
             )
             resume_quality_comment: str | None = None
             resume_quality_comment_error: str | None = None
-            try:
-                resume_quality_comment = (
-                    await self.resume_quality_commenter.comment(
-                        round_no=round_no,
-                        query_terms=retrieval_plan.query_terms,
-                        candidates=sorted(scored_this_round, key=scored_candidate_sort_key)[:5],
-                        normalized_store=run_state.normalized_store,
-                    )
-                    or None
+            quality_candidates = [
+                candidate
+                for candidate in sorted(scored_this_round, key=scored_candidate_sort_key)
+                if is_recommendation_eligible(
+                    score=candidate.overall_score,
+                    fit_bucket=candidate.fit_bucket,
                 )
-            except Exception as exc:  # noqa: BLE001
-                resume_quality_comment_error = str(exc)
+            ][:5]
+            quality_call_artifact: Mapping[str, Any] | None = None
+            if not quality_candidates:
+                resume_quality_comment = "本轮暂无达到 60 分推荐标准且满足硬性条件的候选人。"
+            else:
+                try:
+                    resume_quality_comment = (
+                        await self.resume_quality_commenter.comment(
+                            round_no=round_no,
+                            query_terms=retrieval_plan.query_terms,
+                            candidates=quality_candidates,
+                            normalized_store=run_state.normalized_store,
+                        )
+                        or None
+                    )
+                    quality_call_artifact = getattr(self.resume_quality_commenter, "last_call_artifact", None)
+                except Exception as exc:  # noqa: BLE001
+                    resume_quality_comment_error = str(exc)
             tui_summary_output_refs: list[str] = []
             if resume_quality_comment:
                 tracer.write_json(
@@ -2761,7 +2774,7 @@ class WorkflowRuntime:
             self._write_aux_llm_call_artifact(
                 tracer=tracer,
                 path=f"round.{round_no:02d}.scoring.tui_summary_call",
-                call_artifact=getattr(self.resume_quality_commenter, "last_call_artifact", None),
+                call_artifact=quality_call_artifact,
                 input_artifact_refs=[
                     f"round.{round_no:02d}.retrieval.retrieval_plan",
                     f"round.{round_no:02d}.scoring.scorecards",

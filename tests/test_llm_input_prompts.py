@@ -591,6 +591,15 @@ def test_reflection_prompt_excludes_rationale_schema_field() -> None:
     assert "Do not include free-text rationale" in prompt
 
 
+def test_scoring_prompt_keeps_match_and_risk_scales_directionally_distinct() -> None:
+    prompt = Path("src/seektalent/prompts/scoring.md").read_text(encoding="utf-8")
+
+    assert "Higher match scores mean stronger evidence" in prompt
+    assert "Higher risk scores mean greater concern" in prompt
+    assert "0 means no explicit exclusion risk is evidenced" in prompt
+    assert "Do not use 0 or 1 as boolean substitutes for match scores" in prompt
+
+
 def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> None:
     prompt = render_scoring_prompt(
         ScoringContext(

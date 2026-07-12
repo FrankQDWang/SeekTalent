@@ -203,6 +203,15 @@ def test_total_score_renormalizes_only_applicable_dimensions(applicability, pref
     ) == expected
 
 
+def test_zero_explicit_risk_contributes_full_inverse_risk_credit() -> None:
+    assert calculate_overall_score(
+        must_have_match_score=80,
+        preferred_match_score=None,
+        risk_score=0,
+        applicability=ScoreDimensionApplicability(preferred=False, risk=True),
+    ) == 84
+
+
 def test_total_score_rejects_missing_or_extra_dimension_values() -> None:
     with pytest.raises(ValueError, match="preferred_score_required"):
         calculate_overall_score(

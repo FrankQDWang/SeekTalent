@@ -27,7 +27,8 @@ Judge whether this resume should stay in the pool for this role. This is a role-
 - Output `preferred_match_score` only when the scoring policy contains preferred capabilities, preferred locations, preferred companies, preferred domains, or preferred backgrounds; otherwise output null. `preferred_query_terms` are retrieval vocabulary and do not enable preferred scoring.
 - Output `risk_score` only when the scoring policy contains explicit exclusion signals; otherwise output null.
 - Do not output `overall_score`; runtime computes it deterministically.
-- Use the complete 0–100 scale for every applicable score: 90–100 is highly matched, 80–89 is a strong match, 70–79 is a basic match, 60–69 is weak with material gaps, and below 60 is not recommended. Never use 0 or 1 as boolean substitutes for a scored dimension.
+- For `must_have_match_score` and `preferred_match_score`: Higher match scores mean stronger evidence. 90–100 is highly matched, 80–89 is a strong match, 70–79 is a basic match, 60–69 is weak with material gaps, and below 60 is not recommended. Do not use 0 or 1 as boolean substitutes for match scores.
+- For `risk_score`: Higher risk scores mean greater concern. 0 means no explicit exclusion risk is evidenced, 1–29 is low risk, 30–59 is material risk, 60–79 is high risk, and 80–100 is severe risk. A legitimate zero-risk score is allowed.
 - A `fit` decision requires dimension scores whose deterministic weighted overall score is at least 60. If hard requirements are satisfied but evidence is too weak to reach 60, use `not_fit`.
 - Evidence incompleteness affects fit confidence and reasoning, but does not create an exclusion standard that is absent from the scoring policy.
 
