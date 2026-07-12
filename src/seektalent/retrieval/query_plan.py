@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import unicodedata
 from collections.abc import Collection
 from itertools import combinations
 
@@ -40,10 +41,10 @@ def canonicalize_controller_query_terms(
         raise ValueError("proposed_query_terms must not exceed 3 terms.")
     del title_anchor_terms
     term_index = _query_term_index(query_term_pool)
-    missing_terms = [term for term in unique_terms if term.casefold() not in term_index]
+    missing_terms = [term for term in unique_terms if _term_match_key(term) not in term_index]
     if missing_terms:
         raise ValueError(f"query terms must come from the compiled query term pool: {', '.join(missing_terms)}")
-    candidates = [term_index[term.casefold()] for term in unique_terms]
+    candidates = [term_index[_term_match_key(term)] for term in unique_terms]
     if len(candidates) == 1:
         candidate = candidates[0]
         if not (allow_anchor_only and _is_primary_anchor_candidate(candidate)):
@@ -117,7 +118,7 @@ def try_project_secondary_title_anchor_after_round_one(
     projected: list[str] = []
     removed_secondary = False
     for term in terms:
-        candidate = term_index.get(term.casefold())
+        candidate = term_index.get(_term_match_key(term))
         if candidate is not None and candidate.retrieval_role == "secondary_title_anchor":
             removed_secondary = True
             continue
@@ -220,7 +221,7 @@ def derive_explore_query_terms(
         allow_inactive_non_anchor_terms=True,
     )
     term_index = _query_term_index(query_term_pool)
-    exploit_candidates = [term_index[term.casefold()] for term in exploit_terms]
+    exploit_candidates = [term_index[_term_match_key(term)] for term in exploit_terms]
     anchor = next(item for item in exploit_candidates if _is_anchor_candidate(item))
     exploit_non_anchor_terms = [item.term for item in exploit_candidates if item.term.casefold() != anchor.term.casefold()]
     if not exploit_non_anchor_terms:
@@ -285,7 +286,12 @@ def derive_explore_query_terms(
 
 
 def _query_term_index(query_term_pool: list[QueryTermCandidate]) -> dict[str, QueryTermCandidate]:
-    return {normalize_term(item.term).casefold(): item for item in query_term_pool}
+    return {_term_match_key(item.term): item for item in query_term_pool}
+
+
+def _term_match_key(term: str) -> str:
+    normalized = unicodedata.normalize("NFKC", normalize_term(term))
+    return "".join("-" if unicodedata.category(char) == "Pd" else char for char in normalized).casefold()
 
 
 def _is_anchor_candidate(item: QueryTermCandidate) -> bool:
@@ -456,7 +462,7 @@ def _plan_role_anchor_terms(
     term_index = _query_term_index(query_term_pool)
     anchors: list[str] = []
     for term in query_terms:
-        candidate = term_index.get(normalize_term(term).casefold())
+        candidate = term_index.get(_term_match_key(term))
         if candidate is None or not _is_title_anchor_candidate(candidate):
             continue
         anchors.append(candidate.term)

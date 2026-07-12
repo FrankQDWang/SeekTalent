@@ -40,6 +40,40 @@ def test_query_plan_enforces_round_budget() -> None:
     assert terms == ["python", "resume matching"]
 
 
+def test_query_plan_accepts_unicode_hyphen_variant_and_returns_canonical_pool_term() -> None:
+    pool = [
+        QueryTermCandidate(
+            term="AI Agent",
+            source="job_title",
+            category="role_anchor",
+            priority=1,
+            evidence="job title",
+            first_added_round=0,
+            retrieval_role="primary_role_anchor",
+            queryability="admitted",
+            family="role.aiagent",
+        ),
+        QueryTermCandidate(
+            term="Multi‑Agent",
+            source="jd",
+            category="domain",
+            priority=2,
+            evidence="jd",
+            first_added_round=0,
+            retrieval_role="domain_context",
+            queryability="admitted",
+            family="domain.multiagent",
+        ),
+    ]
+
+    assert canonicalize_controller_query_terms(
+        ["AI Agent", "Multi-Agent"],
+        round_no=1,
+        title_anchor_terms=["AI Agent"],
+        query_term_pool=pool,
+    ) == ["AI Agent", "Multi‑Agent"]
+
+
 def test_query_plan_accepts_compiled_anchor_without_literal_title_anchor() -> None:
     pool = [
         QueryTermCandidate(
