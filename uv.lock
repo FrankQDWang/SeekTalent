@@ -1787,7 +1787,7 @@ wheels = [
 
 [[package]]
 name = "seektalent"
-version = "0.7.41"
+version = "0.7.42"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
