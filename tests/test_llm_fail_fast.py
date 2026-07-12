@@ -589,6 +589,60 @@ def test_scorer_recovers_after_one_applicability_correction_retry(
     assert scored[0].overall_score == 80
 
 
+def test_scorer_retries_fit_output_below_recommendation_floor(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scorer = ResumeScorer(_settings(monkeypatch, tmp_path), _prompt("scoring"))
+    responses = [
+        '{"fit_bucket":"fit","must_have_match_score":1,'
+        '"preferred_match_score":null,"risk_score":null,'
+        '"reasoning_summary":"Initial response uses a boolean-like score."}',
+        '{"fit_bucket":"fit","must_have_match_score":80,'
+        '"preferred_match_score":null,"risk_score":null,'
+        '"reasoning_summary":"Python evidence matches the must-have."}',
+    ]
+    calls = 0
+
+    def sequential_response(messages, agent_info):  # noqa: ANN001
+        nonlocal calls
+        del messages, agent_info
+        response = responses[calls]
+        calls += 1
+        return ModelResponse(parts=[TextPart(content=response)])
+
+    real = build_model("openai-responses:gpt-5.4-mini")
+    model = FunctionModel(sequential_response, profile=real.profile)
+    monkeypatch.setattr("seektalent.scoring.scorer.build_model", lambda model_config: model)
+
+    class StubTracer:
+        def __init__(self) -> None:
+            self.session = StubSession()
+
+        def emit(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+        def append_jsonl(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    class StubSession:
+        def register_path(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    scored, failures = asyncio.run(
+        scorer.score_candidates_parallel(
+            contexts=[_scoring_context()],
+            tracer=cast(Any, StubTracer()),
+        )
+    )
+
+    assert calls == 2
+    assert failures == []
+    assert len(scored) == 1
+    assert scored[0].fit_bucket == "fit"
+    assert scored[0].overall_score == 80
+
+
 def test_scorer_reports_final_structural_failure_after_applicability_retry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

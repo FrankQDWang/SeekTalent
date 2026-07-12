@@ -60,6 +60,7 @@ class _ScoringOutputValidationState:
     applicability_retry_count: int = 0
     last_applicability_retry: int | None = None
     max_output_retries: int | None = None
+    last_retry_kind: Literal["applicability", "fit_score"] | None = None
 
 
 class ScoringApplicabilityRetryExhausted(RuntimeError):
@@ -252,7 +253,7 @@ class ResumeScorer:
             draft: ScoredCandidateDraft,
         ) -> ScoredCandidateDraft:
             try:
-                return _validate_scoring_draft_applicability(
+                validated = _validate_scoring_draft_applicability(
                     draft,
                     context.deps.applicability,
                 )
@@ -260,7 +261,22 @@ class ResumeScorer:
                 context.deps.applicability_retry_count += 1
                 context.deps.last_applicability_retry = context.retry
                 context.deps.max_output_retries = context.max_retries
+                context.deps.last_retry_kind = "applicability"
                 raise
+            overall_score = calculate_overall_score(
+                must_have_match_score=validated.must_have_match_score,
+                preferred_match_score=validated.preferred_match_score,
+                risk_score=validated.risk_score,
+                applicability=context.deps.applicability,
+            )
+            if validated.fit_bucket == "fit" and overall_score < 60:
+                context.deps.last_applicability_retry = context.retry
+                context.deps.max_output_retries = context.max_retries
+                context.deps.last_retry_kind = "fit_score"
+                raise ModelRetry(
+                    "fit candidates must have a deterministic overall score of at least 60"
+                )
+            return validated
 
         return agent
 
@@ -727,6 +743,8 @@ class ResumeScorer:
             result = await agent.run(prompt, deps=validation_state)
         except UnexpectedModelBehavior as exc:
             if (
+                validation_state.last_retry_kind == "applicability"
+                and
                 validation_state.last_applicability_retry is not None
                 and validation_state.last_applicability_retry
                 == validation_state.max_output_retries
