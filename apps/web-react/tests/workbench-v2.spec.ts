@@ -93,7 +93,7 @@ test("Workbench v2 supports chat, JD form, confirmation, progress, and refresh",
   const thinkingPanel = rightRail.getByRole("tabpanel", { name: "思考过程" });
   const paths = thinkingPanel.getByRole("group", { name: "检索路径" });
   await expect(paths.getByRole("group", { name: "主路径" })).toBeVisible();
-  await expect(paths.getByRole("group", { name: "扩展路径" })).toBeVisible();
+  await expect(paths.getByRole("group", { name: "扩展路径" })).toHaveCount(0);
   await expect(page.getByText("query_e2e_main")).toHaveCount(0);
   await expect(page.getByText("term_group_e2e_main")).toHaveCount(0);
   await expect(page.getByText("run_e2e")).toHaveCount(0);
