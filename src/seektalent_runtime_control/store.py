@@ -50,7 +50,7 @@ from seektalent_runtime_control.requirements import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 5
+RUNTIME_CONTROL_SCHEMA_VERSION = 6
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -110,7 +110,7 @@ class RuntimeControlStore:
                     now=_migration_now(),
                 )
             with conn:
-                if version in {1, 2, 3, 4}:
+                if version in {1, 2, 3, 4, 5}:
                     run_ordered_migrations(
                         conn,
                         from_version=version,
@@ -120,6 +120,7 @@ class RuntimeControlStore:
                             2: SQLiteMigrationStep(2, 3, _migrate_v2_to_v3),
                             3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
                             4: SQLiteMigrationStep(4, 5, _migrate_v4_to_v5),
+                            5: SQLiteMigrationStep(5, 6, _migrate_v5_to_v6),
                         },
                         store_name="runtime-control",
                     )
@@ -2401,6 +2402,12 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           canonical_resume_id TEXT NOT NULL,
           merged_resume_ids_json TEXT NOT NULL,
           source_evidence_ids_json TEXT NOT NULL,
+          equivalent_latest_resume_ids_json TEXT NOT NULL DEFAULT '[]',
+          display_source_evidence_ids_json TEXT NOT NULL DEFAULT '[]',
+          conflicting_resume_ids_json TEXT NOT NULL DEFAULT '[]',
+          incomparable_resume_ids_json TEXT NOT NULL DEFAULT '[]',
+          content_version_key TEXT NOT NULL DEFAULT '',
+          safe_reason_codes_json TEXT NOT NULL DEFAULT '[]',
           display_name TEXT NOT NULL,
           title TEXT NOT NULL,
           company TEXT NOT NULL,
@@ -2641,6 +2648,35 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
 def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     _create_schema(conn)
     _ensure_requirement_amendment_provenance_column(conn)
+
+
+def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+    _create_schema(conn)
+    _ensure_candidate_identity_version_columns(conn)
+
+
+def _ensure_candidate_identity_version_columns(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "runtime_control_candidate_identities"):
+        return
+    columns = _column_names(conn, "runtime_control_candidate_identities")
+    json_columns = (
+        "equivalent_latest_resume_ids_json",
+        "display_source_evidence_ids_json",
+        "conflicting_resume_ids_json",
+        "incomparable_resume_ids_json",
+        "safe_reason_codes_json",
+    )
+    for column in json_columns:
+        if column not in columns:
+            conn.execute(
+                f"ALTER TABLE runtime_control_candidate_identities "
+                f"ADD COLUMN {column} TEXT NOT NULL DEFAULT '[]'"
+            )
+    if "content_version_key" not in columns:
+        conn.execute(
+            "ALTER TABLE runtime_control_candidate_identities "
+            "ADD COLUMN content_version_key TEXT NOT NULL DEFAULT ''"
+        )
 
 
 def _ensure_requirement_amendment_provenance_column(conn: sqlite3.Connection) -> None:
@@ -3708,14 +3744,23 @@ def _sync_candidate_truth_from_checkpoint(conn: sqlite3.Connection, checkpoint: 
             """
             INSERT INTO runtime_control_candidate_identities (
                 runtime_run_id, identity_id, canonical_resume_id, merged_resume_ids_json,
-                source_evidence_ids_json, display_name, title, company, location, summary,
+                source_evidence_ids_json, equivalent_latest_resume_ids_json,
+                display_source_evidence_ids_json, conflicting_resume_ids_json,
+                incomparable_resume_ids_json, content_version_key, safe_reason_codes_json,
+                display_name, title, company, location, summary,
                 score, fit_bucket, source_round, payload_hash, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(runtime_run_id, identity_id) DO UPDATE SET
                 canonical_resume_id = excluded.canonical_resume_id,
                 merged_resume_ids_json = excluded.merged_resume_ids_json,
                 source_evidence_ids_json = excluded.source_evidence_ids_json,
+                equivalent_latest_resume_ids_json = excluded.equivalent_latest_resume_ids_json,
+                display_source_evidence_ids_json = excluded.display_source_evidence_ids_json,
+                conflicting_resume_ids_json = excluded.conflicting_resume_ids_json,
+                incomparable_resume_ids_json = excluded.incomparable_resume_ids_json,
+                content_version_key = excluded.content_version_key,
+                safe_reason_codes_json = excluded.safe_reason_codes_json,
                 display_name = excluded.display_name,
                 title = excluded.title,
                 company = excluded.company,
@@ -3733,6 +3778,12 @@ def _sync_candidate_truth_from_checkpoint(conn: sqlite3.Connection, checkpoint: 
                 identity.canonical_resume_id,
                 _json(identity.merged_resume_ids),
                 _json(identity.source_evidence_ids),
+                _json(identity.equivalent_latest_resume_ids),
+                _json(identity.display_source_evidence_ids),
+                _json(identity.conflicting_resume_ids),
+                _json(identity.incomparable_resume_ids),
+                identity.content_version_key,
+                _json(identity.safe_reason_codes),
                 identity.display_name,
                 identity.title,
                 identity.company,
@@ -3983,6 +4034,12 @@ def _candidate_identity_from_row(row: sqlite3.Row) -> RuntimeControlCandidateIde
         canonical_resume_id=row["canonical_resume_id"],
         merged_resume_ids=_json_string_list(row["merged_resume_ids_json"]),
         source_evidence_ids=_json_string_list(row["source_evidence_ids_json"]),
+        equivalent_latest_resume_ids=_json_string_list(row["equivalent_latest_resume_ids_json"]),
+        display_source_evidence_ids=_json_string_list(row["display_source_evidence_ids_json"]),
+        conflicting_resume_ids=_json_string_list(row["conflicting_resume_ids_json"]),
+        incomparable_resume_ids=_json_string_list(row["incomparable_resume_ids_json"]),
+        content_version_key=row["content_version_key"],
+        safe_reason_codes=_json_string_list(row["safe_reason_codes_json"]),
         display_name=row["display_name"],
         title=row["title"],
         company=row["company"],

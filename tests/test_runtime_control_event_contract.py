@@ -29,7 +29,7 @@ def test_v1_database_migrates_to_run_intent_ownership_without_dropping_rows(tmp_
             "SELECT runtime_run_id, run_intent_id, start_idempotency_key, run_kind FROM runtime_control_runs"
         ).fetchone()
 
-    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 5
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 6
     assert migrated["runtime_run_id"] == "runtime_run_v1"
     assert migrated["run_intent_id"] == "runtime_run_v1"
     assert migrated["start_idempotency_key"] == "runtime_run_v1"
@@ -110,7 +110,7 @@ def test_v4_database_migrates_requirement_amendment_provenance_to_v5(tmp_path: P
             """
         ).fetchone()["provenance_json"]
 
-    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 5
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 6
     assert "provenance_json" in columns
     assert provenance == "{}"
 

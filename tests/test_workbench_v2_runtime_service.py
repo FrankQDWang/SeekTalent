@@ -268,14 +268,27 @@ class CandidateMergedEvidenceStore:
             RuntimeControlCandidateIdentity(
                 runtime_run_id=runtime_run_id,
                 identity_id="identity_merged",
-                canonical_resume_id="resume_merged",
-                display_name="Candidate 1",
-                title="",
-                company="",
-                location="",
-                summary="identity fallback summary",
-                score=None,
-                fit_bucket=None,
+                canonical_resume_id="resume_canonical",
+                merged_resume_ids=[
+                    "resume_canonical",
+                    "resume_equivalent",
+                    "resume_older",
+                    "resume_conflicting",
+                    "resume_incomparable",
+                ],
+                equivalent_latest_resume_ids=["resume_canonical", "resume_equivalent"],
+                display_source_evidence_ids=["evidence_canonical", "evidence_equivalent"],
+                conflicting_resume_ids=["resume_conflicting"],
+                incomparable_resume_ids=["resume_incomparable"],
+                content_version_key="canonical-version-key",
+                safe_reason_codes=["equivalent_latest_content", "version_conflict"],
+                display_name="Canonical Name",
+                title="Canonical Title",
+                company="Canonical Company",
+                location="Canonical City",
+                summary="Canonical match summary",
+                score=70,
+                fit_bucket="fit",
                 payload_hash="identity_hash",
                 updated_at=NOW,
             )
@@ -284,66 +297,77 @@ class CandidateMergedEvidenceStore:
     def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
         assert runtime_run_id == "rtrun_candidate"
         return [
-            RuntimeControlCandidateEvidence(
-                runtime_run_id=runtime_run_id,
-                evidence_id="evidence_cts_sparse",
-                identity_id="identity_merged",
-                resume_id="resume_merged",
-                source_kind="cts",
-                evidence_level="summary",
-                provider_candidate_key_hash="provider_hash_cts",
-                score=70,
-                fit_bucket="possible",
-                payload={
-                    "match": {"score": 70, "fitBucket": "possible"},
-                    "wtsDetail": {
-                        "candidateName": "CTS占位",
-                        "skills": ["CTS标签"],
-                    },
-                },
-                payload_hash="evidence_hash_cts",
-                updated_at=NOW,
-            ),
-            RuntimeControlCandidateEvidence(
-                runtime_run_id=runtime_run_id,
-                evidence_id="evidence_liepin_detail",
-                identity_id="identity_merged",
-                resume_id="resume_merged",
-                source_kind="liepin",
-                evidence_level="detail",
-                provider_candidate_key_hash="provider_hash_liepin",
-                score=95,
-                fit_bucket="fit",
-                payload={
-                    "match": {
-                        "score": 95,
-                        "fitBucket": "fit",
-                        "reasoningSummary": "猎聘详情显示候选人与岗位高度匹配。",
-                        "strengths": ["有完整 0-1 体验设计项目经验。"],
-                        "weaknesses": ["AI 项目经验需要面试确认。"],
-                    },
-                    "wtsDetail": {
-                        "candidateName": "吴所谓",
-                        "jobIntention": {
-                            "expectedRole": "高端设计职位",
-                            "expectedCity": "上海",
-                            "expectedSalary": "20-24k*14薪",
-                        },
-                        "workExperience": [
-                            {
-                                "dateRange": "2019.06-至今（7年）",
-                                "company": "平安好医",
-                                "title": "用户体验设计专家",
-                            }
-                        ],
-                        "skills": ["用户研究", "交互设计"],
-                        "sourceUrl": "https://h.liepin.com/resume/showresumedetail/?res_id_encode=rich",
-                    },
-                },
-                payload_hash="evidence_hash_liepin",
-                updated_at=NOW,
-            ),
+            _rich_version_evidence(runtime_run_id, "canonical", source_kind="cts", score=70),
+            _rich_version_evidence(runtime_run_id, "equivalent", source_kind="liepin", score=95),
+            _rich_version_evidence(runtime_run_id, "older", source_kind="liepin", score=96),
+            _rich_version_evidence(runtime_run_id, "conflicting", source_kind="liepin", score=97),
+            _rich_version_evidence(runtime_run_id, "incomparable", source_kind="liepin", score=98),
         ]
+
+
+def _rich_version_evidence(
+    runtime_run_id: str,
+    version: str,
+    *,
+    source_kind: str,
+    score: int,
+) -> RuntimeControlCandidateEvidence:
+    label = version.capitalize()
+    return RuntimeControlCandidateEvidence(
+        runtime_run_id=runtime_run_id,
+        evidence_id=f"evidence_{version}",
+        identity_id="identity_merged",
+        resume_id=f"resume_{version}",
+        source_kind=source_kind,
+        evidence_level="detail",
+        provider_candidate_key_hash=f"provider_hash_{version}",
+        score=score,
+        fit_bucket="fit",
+        payload={
+            "reasonCode": f"{version}_reason",
+            "candidateProfile": {
+                "age": score - 40,
+                "gender": f"{label} Gender",
+                "activeStatus": f"{label} Active",
+                "jobState": f"{label} Job State",
+                "nowLocation": f"{label} City",
+                "workYear": score - 62,
+            },
+            "safeSummary": {"educationLevel": f"{label} Education"},
+            "match": {
+                "score": score,
+                "fitBucket": "fit",
+                "reasoningSummary": f"{label} match summary",
+                "strengths": [f"{label} strength"],
+                "weaknesses": [f"{label} weakness"],
+            },
+            "wtsDetail": {
+                "candidateName": f"{label} Name",
+                "activeStatus": f"{label} Active",
+                "jobStatus": f"{label} Job State",
+                "gender": f"{label} Gender",
+                "age": score - 40,
+                "city": f"{label} City",
+                "education": f"{label} Education",
+                "workYears": score - 62,
+                "currentTitle": f"{label} Title",
+                "currentCompany": f"{label} Company",
+                "jobIntention": {
+                    "expectedRole": f"{label} Role",
+                    "expectedIndustry": f"{label} Industry",
+                    "expectedCity": f"{label} City",
+                    "expectedSalary": f"{label} Salary",
+                },
+                "workExperience": [{"company": f"{label} Work Company", "title": f"{label} Work Title"}],
+                "projectExperience": [{"name": f"{label} Project", "role": f"{label} Project Role"}],
+                "educationExperience": [{"school": f"{label} School", "degree": f"{label} Degree"}],
+                "skills": [f"{label} Skill"],
+                "sourceUrl": f"https://example.test/{version}",
+            },
+        },
+        payload_hash=f"evidence_hash_{version}",
+        updated_at=NOW,
+    )
 
 
 def test_runtime_service_extracts_requirement_form(tmp_path: Path) -> None:
@@ -549,29 +573,92 @@ def test_runtime_service_candidate_detail_projects_wts_profile_fields() -> None:
     assert "SAFE_DETAIL_PROFILE_SHOULD_NOT_RENDER" not in serialized_sections
 
 
-def test_runtime_service_candidate_detail_prefers_rich_liepin_evidence_over_sparse_cts() -> None:
-    service = WorkbenchV2RuntimeService(store=CandidateMergedEvidenceStore())  # type: ignore[arg-type]
+def test_runtime_service_candidate_detail_uses_only_canonical_resume_evidence() -> None:
+    store = CandidateMergedEvidenceStore()
+    service = WorkbenchV2RuntimeService(store=store)  # type: ignore[arg-type]
 
+    summary = service.list_candidate_summaries("rtrun_candidate")[0]
     detail = service.get_candidate_detail("rtrun_candidate", "identity_merged")
+    [identity] = store.list_candidate_identities(runtime_run_id="rtrun_candidate")
+    retained_evidence = store.list_candidate_evidence(runtime_run_id="rtrun_candidate")
 
-    assert detail["displayName"] == "吴所谓"
-    assert detail["sourceUrl"] == "https://h.liepin.com/resume/showresumedetail/?res_id_encode=rich"
+    assert identity.equivalent_latest_resume_ids == ["resume_canonical", "resume_equivalent"]
+    assert identity.conflicting_resume_ids == ["resume_conflicting"]
+    assert identity.incomparable_resume_ids == ["resume_incomparable"]
+    assert identity.display_source_evidence_ids == ["evidence_canonical", "evidence_equivalent"]
+    assert {item.evidence_id for item in retained_evidence} == {
+        "evidence_canonical",
+        "evidence_equivalent",
+        "evidence_older",
+        "evidence_conflicting",
+        "evidence_incomparable",
+    }
+
+    assert summary["displayName"] == "Canonical Name"
+    assert summary["headline"] == "Canonical Title · Canonical Company"
+    assert summary["company"] == "Canonical Company"
+    assert summary["currentTitle"] == "Canonical Title"
+    assert summary["currentCompany"] == "Canonical Company"
+    assert summary["location"] == "Canonical City"
+    assert summary["city"] == "Canonical City"
+    assert summary["education"] == "Canonical Education"
+    assert summary["experienceYears"] == 8
+    assert summary["workYears"] == 8
+    assert summary["age"] == 30
+    assert summary["gender"] == "Canonical Gender"
+    assert summary["activeStatus"] == "Canonical Active"
+    assert summary["jobStatus"] == "Canonical Job State"
+    assert summary["matchScore"] == 70
+    assert summary["matchSummary"] == "Canonical match summary"
+    assert summary["sourceKinds"] == ["cts"]
+    assert summary["sourceLabel"] == "CTS 实验"
+    assert summary["evidenceLevel"] == "detail"
+    assert detail["displayName"] == "Canonical Name"
+    assert detail["headline"] == "Canonical Title · Canonical Company"
+    assert detail["company"] == "Canonical Company"
+    assert detail["currentTitle"] == "Canonical Title"
+    assert detail["currentCompany"] == "Canonical Company"
+    assert detail["location"] == "Canonical City"
+    assert detail["city"] == "Canonical City"
+    assert detail["education"] == "Canonical Education"
+    assert detail["experienceYears"] == 8
+    assert detail["workYears"] == 8
+    assert detail["age"] == 30
+    assert detail["gender"] == "Canonical Gender"
+    assert detail["activeStatus"] == "Canonical Active"
+    assert detail["jobStatus"] == "Canonical Job State"
+    assert detail["sourceUrl"] == "https://example.test/canonical"
     assert detail["workExperience"] == [
-        {
-            "dateRange": "2019.06-至今（7年）",
-            "company": "平安好医",
-            "title": "用户体验设计专家",
-        }
+        {"title": "Canonical Work Title", "company": "Canonical Work Company"}
     ]
-    assert detail["jobIntention"]["expectedSalary"] == "20-24k*14薪"
-    assert detail["skills"] == ["用户研究", "交互设计"]
+    assert detail["projectExperience"] == [
+        {"name": "Canonical Project", "role": "Canonical Project Role"}
+    ]
+    assert detail["educationExperience"] == [
+        {"school": "Canonical School", "degree": "Canonical Degree"}
+    ]
+    assert detail["jobIntention"] == {
+        "expectedRole": "Canonical Role",
+        "expectedIndustry": "Canonical Industry",
+        "expectedCity": "Canonical City",
+        "expectedSalary": "Canonical Salary",
+    }
+    assert detail["skills"] == ["Canonical Skill"]
+    assert detail["sourceKinds"] == ["cts"]
+    assert detail["sourceLabel"] == "CTS 实验"
     assert detail["match"] == {
-        "summary": "猎聘详情显示候选人与岗位高度匹配。",
-        "strengths": ["有完整 0-1 体验设计项目经验。"],
-        "weaknesses": ["AI 项目经验需要面试确认。"],
-        "score": 95,
+        "summary": "Canonical match summary",
+        "strengths": ["Canonical strength"],
+        "weaknesses": ["Canonical weakness"],
+        "score": 70,
         "fitBucket": "fit",
     }
+    assert detail["evidence"] == ["来源：CTS detail 证据"]
+    assert detail["evidenceLevel"] == "detail"
+    assert detail["reasonCode"] == "canonical_reason"
+    serialized_projection = json.dumps({"summary": summary, "detail": detail}, ensure_ascii=False)
+    for excluded_version in ("Equivalent", "Older", "Conflicting", "Incomparable"):
+        assert excluded_version not in serialized_projection
 
 
 def test_runtime_service_does_not_claim_source_without_evidence() -> None:

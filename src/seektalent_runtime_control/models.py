@@ -118,6 +118,12 @@ class RuntimeControlCandidateIdentity(BaseModel):
     canonical_resume_id: str
     merged_resume_ids: list[str] = Field(default_factory=list)
     source_evidence_ids: list[str] = Field(default_factory=list)
+    equivalent_latest_resume_ids: list[str] = Field(default_factory=list)
+    display_source_evidence_ids: list[str] = Field(default_factory=list)
+    conflicting_resume_ids: list[str] = Field(default_factory=list)
+    incomparable_resume_ids: list[str] = Field(default_factory=list)
+    content_version_key: str = ""
+    safe_reason_codes: list[str] = Field(default_factory=list)
     display_name: str = ""
     title: str = ""
     company: str = ""

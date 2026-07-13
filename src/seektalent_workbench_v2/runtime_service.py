@@ -324,7 +324,10 @@ class WorkbenchV2RuntimeService:
             tuple[RuntimeControlCandidateIdentity, list[RuntimeControlCandidateEvidence], int]
         ] = []
         for identity in identities:
-            evidence = evidence_by_identity.get(identity.identity_id, [])
+            evidence = _canonical_candidate_evidence(
+                identity,
+                evidence_by_identity.get(identity.identity_id, []),
+            )
             score = _candidate_score(identity, evidence)
             if not is_recommendation_eligible(score=score, fit_bucket=identity.fit_bucket):
                 continue
@@ -382,7 +385,7 @@ class WorkbenchV2RuntimeService:
         evidence = [
             item
             for item in self.store.list_candidate_evidence(runtime_run_id=runtime_run_id)
-            if item.identity_id == candidate_id
+            if item.identity_id == candidate_id and item.resume_id == identity.canonical_resume_id
         ]
         detail_availability = _candidate_detail_availability(identity, evidence)
         display_name = _candidate_display_name(identity, evidence, fallback="候选人")
@@ -512,6 +515,13 @@ def _candidate_source_kinds(evidence: Sequence[RuntimeControlCandidateEvidence])
         }
     )
     return source_kinds
+
+
+def _canonical_candidate_evidence(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> list[RuntimeControlCandidateEvidence]:
+    return [item for item in evidence if item.resume_id == identity.canonical_resume_id]
 
 
 def _candidate_source_label(source_kinds: Sequence[str]) -> str | None:
@@ -725,12 +735,11 @@ def _candidate_wts_detail(evidence: Sequence[RuntimeControlCandidateEvidence]) -
 def _wts_detail_payload_rank(
     evidence: RuntimeControlCandidateEvidence,
     payload: Mapping[str, object],
-) -> tuple[int, int, int, int, str]:
+) -> tuple[int, str, str]:
+    del payload
     return (
-        _candidate_source_priority(evidence.source_kind),
         _candidate_evidence_level_priority(evidence.evidence_level),
-        _payload_richness(payload),
-        evidence.score if evidence.score is not None else -1,
+        evidence.updated_at,
         evidence.evidence_id,
     )
 
@@ -738,13 +747,12 @@ def _wts_detail_payload_rank(
 def _match_payload_rank(
     evidence: RuntimeControlCandidateEvidence,
     payload: Mapping[str, object],
-) -> tuple[int, int, int, int, int, str]:
+) -> tuple[int, int, int, str, str]:
     return (
         _match_signal_priority(payload),
         _int_from_mapping(payload, "score") or evidence.score or -1,
-        _candidate_source_priority(evidence.source_kind),
         _candidate_evidence_level_priority(evidence.evidence_level),
-        _payload_richness(payload),
+        evidence.updated_at,
         evidence.evidence_id,
     )
 
@@ -758,14 +766,6 @@ def _match_signal_priority(payload: Mapping[str, object]) -> int:
     if _list_texts_from_mapping(payload, "weaknesses"):
         signals += 1
     return signals
-
-
-def _candidate_source_priority(source_kind: str) -> int:
-    if source_kind == "liepin":
-        return 3
-    if source_kind == "cts":
-        return 2
-    return 1
 
 
 def _candidate_evidence_level_priority(evidence_level: str) -> int:
@@ -796,14 +796,6 @@ def _merge_payload_mapping(target: dict[str, object], source: Mapping[str, objec
             target[key] = nested
             continue
         target[key] = value
-
-
-def _payload_richness(value: object) -> int:
-    if isinstance(value, Mapping):
-        return sum(_payload_richness(item) for item in value.values())
-    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
-        return sum(_payload_richness(item) for item in value)
-    return 1 if _payload_value_present(value) else 0
 
 
 def _payload_value_present(value: object) -> bool:

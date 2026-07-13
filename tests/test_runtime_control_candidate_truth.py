@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 
 
 def test_checkpoint_persists_compact_candidate_truth_without_artifacts(tmp_path: Path) -> None:
@@ -43,12 +44,75 @@ def test_checkpoint_persists_compact_candidate_truth_without_artifacts(tmp_path:
         ("identity_1", "resume_1", 92)
     ]
     assert identities[0].display_name == "Alice Chen"
-    assert identities[0].source_evidence_ids == ["evidence_1"]
-    assert [(item.evidence_id, item.identity_id, item.source_kind) for item in evidence] == [
-        ("evidence_1", "identity_1", "cts")
+    assert identities[0].source_evidence_ids == [
+        "evidence_1",
+        "evidence_equivalent",
+        "evidence_conflicting",
+        "evidence_incomparable",
+    ]
+    assert identities[0].equivalent_latest_resume_ids == ["resume_1", "resume_equivalent"]
+    assert identities[0].display_source_evidence_ids == ["evidence_1", "evidence_equivalent"]
+    assert identities[0].conflicting_resume_ids == ["resume_conflicting"]
+    assert identities[0].incomparable_resume_ids == ["resume_incomparable"]
+    assert identities[0].content_version_key == "content-version-1"
+    assert identities[0].safe_reason_codes == ["equivalent_latest_content", "version_conflict"]
+    assert [item.evidence_id for item in evidence] == [
+        "evidence_1",
+        "evidence_conflicting",
+        "evidence_equivalent",
+        "evidence_incomparable",
     ]
     assert [(item.revision, item.candidate_identity_ids) for item in revisions] == [(1, ["identity_1"])]
     assert revisions[0].source_checkpoint_id == "rtcheckpoint_candidates"
+
+
+def test_legacy_candidate_identity_reads_version_fields_with_safe_defaults(tmp_path: Path) -> None:
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = tmp_path / "runtime_control.sqlite3"
+    store = RuntimeControlStore(path)
+    store.initialize()
+    _create_run(store)
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            DROP TABLE runtime_control_candidate_identities;
+            CREATE TABLE runtime_control_candidate_identities (
+              runtime_run_id TEXT NOT NULL,
+              identity_id TEXT NOT NULL,
+              canonical_resume_id TEXT NOT NULL,
+              merged_resume_ids_json TEXT NOT NULL,
+              source_evidence_ids_json TEXT NOT NULL,
+              display_name TEXT NOT NULL,
+              title TEXT NOT NULL,
+              company TEXT NOT NULL,
+              location TEXT NOT NULL,
+              summary TEXT NOT NULL,
+              score INTEGER,
+              fit_bucket TEXT,
+              source_round INTEGER,
+              payload_hash TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(runtime_run_id, identity_id)
+            );
+            INSERT INTO runtime_control_candidate_identities VALUES (
+              'runtime_run_candidates', 'identity_legacy', 'resume_legacy',
+              '["resume_legacy"]', '["evidence_legacy"]', 'Legacy', '', '', '', '',
+              NULL, NULL, NULL, 'legacy_hash', '2026-06-17T00:00:00Z'
+            );
+            PRAGMA user_version = 5;
+            """
+        )
+
+    store.initialize()
+    [identity] = store.list_candidate_identities(runtime_run_id="runtime_run_candidates")
+
+    assert identity.equivalent_latest_resume_ids == []
+    assert identity.display_source_evidence_ids == []
+    assert identity.conflicting_resume_ids == []
+    assert identity.incomparable_resume_ids == []
+    assert identity.content_version_key == ""
+    assert identity.safe_reason_codes == []
 
 
 def test_candidate_truth_projects_scorecard_match_fields() -> None:
@@ -348,8 +412,18 @@ def _run_state_payload() -> dict[str, object]:
             "identity_1": {
                 "identity_id": "identity_1",
                 "canonical_identity_id": "identity_1",
-                "resume_ids": ["resume_1"],
-                "evidence_ids": ["evidence_1"],
+                "resume_ids": [
+                    "resume_1",
+                    "resume_equivalent",
+                    "resume_conflicting",
+                    "resume_incomparable",
+                ],
+                "evidence_ids": [
+                    "evidence_1",
+                    "evidence_equivalent",
+                    "evidence_conflicting",
+                    "evidence_incomparable",
+                ],
             }
         },
         "candidate_identity_by_resume_id": {"resume_1": "identity_1"},
@@ -357,6 +431,12 @@ def _run_state_payload() -> dict[str, object]:
             "identity_1": {
                 "identity_id": "identity_1",
                 "canonical_resume_id": "resume_1",
+                "equivalent_latest_resume_ids": ["resume_1", "resume_equivalent"],
+                "display_source_evidence_ids": ["evidence_1", "evidence_equivalent"],
+                "conflicting_resume_ids": ["resume_conflicting"],
+                "incomparable_resume_ids": ["resume_incomparable"],
+                "content_version_key": "content-version-1",
+                "safe_reason_codes": ["equivalent_latest_content", "version_conflict"],
             }
         },
         "source_evidence_by_identity_id": {
@@ -369,7 +449,25 @@ def _run_state_payload() -> dict[str, object]:
                     "candidate_resume_id": "resume_1",
                     "provider_candidate_key_hash": "provider_hash_1",
                     "collected_at": "2026-06-17T00:00:02.000000Z",
-                }
+                },
+                {
+                    "evidence_id": "evidence_equivalent",
+                    "source": "liepin",
+                    "evidence_level": "detail",
+                    "candidate_resume_id": "resume_equivalent",
+                },
+                {
+                    "evidence_id": "evidence_conflicting",
+                    "source": "cts",
+                    "evidence_level": "card",
+                    "candidate_resume_id": "resume_conflicting",
+                },
+                {
+                    "evidence_id": "evidence_incomparable",
+                    "source": "liepin",
+                    "evidence_level": "detail",
+                    "candidate_resume_id": "resume_incomparable",
+                },
             ]
         },
         "candidate_store": {

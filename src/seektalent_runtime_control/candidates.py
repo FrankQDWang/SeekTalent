@@ -49,6 +49,7 @@ def candidate_truth_from_run_state(
         if canonical_resume_id is None:
             continue
         merged_resume_ids = _string_list(identity_payload.get("resume_ids")) or [canonical_resume_id]
+        canonical_selection = _mapping(canonical_by_identity.get(identity_id))
         identity_evidence_payloads = _mapping_list(source_evidence_by_identity.get(identity_id))
         source_evidence_ids = [
             evidence_id
@@ -81,6 +82,19 @@ def candidate_truth_from_run_state(
                 canonical_resume_id=canonical_resume_id,
                 merged_resume_ids=merged_resume_ids,
                 source_evidence_ids=source_evidence_ids,
+                equivalent_latest_resume_ids=_string_list(
+                    canonical_selection.get("equivalent_latest_resume_ids")
+                ),
+                display_source_evidence_ids=_string_list(
+                    canonical_selection.get("display_source_evidence_ids")
+                ),
+                conflicting_resume_ids=_string_list(canonical_selection.get("conflicting_resume_ids")),
+                incomparable_resume_ids=_string_list(canonical_selection.get("incomparable_resume_ids")),
+                content_version_key=_safe_text(
+                    canonical_selection.get("content_version_key"), max_length=256
+                )
+                or "",
+                safe_reason_codes=_string_list(canonical_selection.get("safe_reason_codes")),
                 candidate=_mapping(candidate_store.get(canonical_resume_id)),
                 normalized=_mapping(normalized_store.get(canonical_resume_id)),
                 scorecard=_mapping(scorecards_by_resume_id.get(canonical_resume_id)),
@@ -111,6 +125,12 @@ def _candidate_identity(
     canonical_resume_id: str,
     merged_resume_ids: list[str],
     source_evidence_ids: list[str],
+    equivalent_latest_resume_ids: list[str],
+    display_source_evidence_ids: list[str],
+    conflicting_resume_ids: list[str],
+    incomparable_resume_ids: list[str],
+    content_version_key: str,
+    safe_reason_codes: list[str],
     candidate: Mapping[str, object],
     normalized: Mapping[str, object],
     scorecard: Mapping[str, object],
@@ -156,6 +176,12 @@ def _candidate_identity(
             "canonical_resume_id": canonical_resume_id,
             "merged_resume_ids": merged_resume_ids,
             "source_evidence_ids": source_evidence_ids,
+            "equivalent_latest_resume_ids": equivalent_latest_resume_ids,
+            "display_source_evidence_ids": display_source_evidence_ids,
+            "conflicting_resume_ids": conflicting_resume_ids,
+            "incomparable_resume_ids": incomparable_resume_ids,
+            "content_version_key": content_version_key,
+            "safe_reason_codes": safe_reason_codes,
             "display_name": display_name,
             "title": title,
             "company": company,
@@ -172,6 +198,12 @@ def _candidate_identity(
         canonical_resume_id=canonical_resume_id,
         merged_resume_ids=merged_resume_ids,
         source_evidence_ids=source_evidence_ids,
+        equivalent_latest_resume_ids=equivalent_latest_resume_ids,
+        display_source_evidence_ids=display_source_evidence_ids,
+        conflicting_resume_ids=conflicting_resume_ids,
+        incomparable_resume_ids=incomparable_resume_ids,
+        content_version_key=content_version_key,
+        safe_reason_codes=safe_reason_codes,
         display_name=display_name,
         title=title,
         company=company,
