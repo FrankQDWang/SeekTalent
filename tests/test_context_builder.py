@@ -462,7 +462,6 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
             language_tags=[],
             recent_experiences=[],
             key_achievements=[],
-            raw_text_excerpt="",
             completeness_score=80,
             missing_fields=[],
             normalization_notes=[],

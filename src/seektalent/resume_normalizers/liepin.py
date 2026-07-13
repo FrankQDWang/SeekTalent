@@ -32,9 +32,6 @@ PROHIBITED_LIEPIN_TEXT_KEYS = frozenset(
     }
 )
 
-LEGACY_EXCERPT_LIMIT = 4000
-
-
 def normalize_liepin_resume(candidate: ResumeCandidate) -> NormalizedResume:
     raw = candidate.raw
     prohibited = sorted(key for key in PROHIBITED_LIEPIN_TEXT_KEYS if key in raw)
@@ -121,7 +118,6 @@ def normalize_liepin_resume(candidate: ResumeCandidate) -> NormalizedResume:
             }
         )
     education_summary = _education_summary(raw, education_items, safe_card)
-    raw_text_excerpt = _structured_text_for_legacy_consumers(structured)
     completeness_score, missing_fields = _completeness_score(
         candidate_name=candidate_name,
         current_title=current_title,
@@ -131,7 +127,7 @@ def normalize_liepin_resume(candidate: ResumeCandidate) -> NormalizedResume:
         education_summary=education_summary,
         skills=skills,
         recent_experiences=recent_experiences,
-        raw_text_excerpt=raw_text_excerpt,
+        has_structured_evidence=bool(structured.model_dump(exclude_defaults=True)),
     )
     return NormalizedResume(
         resume_id=resume_id,
@@ -151,7 +147,6 @@ def normalize_liepin_resume(candidate: ResumeCandidate) -> NormalizedResume:
         recent_experiences=recent_experiences,
         key_achievements=[item.summary for item in [*work_items, *project_items] if item.summary][:4],
         structured_evidence=structured,
-        raw_text_excerpt=raw_text_excerpt,
         completeness_score=completeness_score,
         missing_fields=missing_fields,
         normalization_notes=["Normalized from Liepin structured detail."],
@@ -229,15 +224,6 @@ def _list_of_mappings(value: object) -> list[Mapping[str, object]]:
     return [cast(Mapping[str, object], item) for item in value if isinstance(item, Mapping)]
 
 
-def _structured_text_for_legacy_consumers(evidence: StructuredResumeEvidence) -> str:
-    parts: list[str] = []
-    parts.extend(str(value) for value in evidence.current_role.values() if str(value).strip())
-    parts.extend(evidence.skills)
-    for item in [*evidence.work_experience, *evidence.project_experience]:
-        parts.extend(part for part in [item.company, item.title, item.name, item.duration, item.summary] if part)
-    return " ".join(parts)[:LEGACY_EXCERPT_LIMIT]
-
-
 def _education_summary(
     raw: Mapping[str, object], education_items: list[StructuredResumeTimelineItem], safe_card: Mapping[str, object]
 ) -> str:
@@ -282,7 +268,7 @@ def _completeness_score(
     education_summary: str,
     skills: list[str],
     recent_experiences: list[NormalizedExperience],
-    raw_text_excerpt: str,
+    has_structured_evidence: bool,
 ) -> tuple[int, list[str]]:
     checks = {
         "candidate_name": bool(candidate_name),
@@ -293,7 +279,7 @@ def _completeness_score(
         "education_summary": bool(education_summary),
         "skills": bool(skills),
         "recent_experiences": bool(recent_experiences),
-        "raw_text_excerpt": bool(raw_text_excerpt),
+        "structured_evidence": has_structured_evidence,
     }
     missing_fields = [field for field, present in checks.items() if not present]
     return max(0, 100 - len(missing_fields) * 12), missing_fields

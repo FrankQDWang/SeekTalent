@@ -1081,7 +1081,6 @@ class NormalizedResume(BaseModel):
     recent_experiences: list[NormalizedExperience] = Field(default_factory=list)
     structured_evidence: StructuredResumeEvidence = Field(default_factory=StructuredResumeEvidence)
     key_achievements: list[str] = Field(default_factory=list)
-    raw_text_excerpt: str = ""
     completeness_score: int = Field(ge=0, le=100)
     missing_fields: list[str] = Field(default_factory=list)
     normalization_notes: list[str] = Field(default_factory=list)
@@ -1101,29 +1100,6 @@ class NormalizedResume(BaseModel):
             f"{self.years_of_experience}y" if self.years_of_experience is not None else "",
         ]
         return " | ".join(part for part in parts if part)
-
-    @property
-    def scoring_text(self) -> str:
-        experience_blobs = [
-            " ".join(part for part in [item.title, item.company, item.duration, item.summary] if part)
-            for item in self.recent_experiences
-        ]
-        chunks = [
-            self.candidate_name,
-            self.headline,
-            self.current_title,
-            self.current_company,
-            " ".join(self.locations),
-            self.education_summary,
-            " ".join(self.skills),
-            " ".join(self.industry_tags),
-            " ".join(self.language_tags),
-            " ".join(self.key_achievements),
-            self.raw_text_excerpt,
-            *experience_blobs,
-        ]
-        return " ".join(chunk for chunk in chunks if chunk)
-
 
 class ScoringPolicy(BaseModel):
     model_config = ConfigDict(extra="forbid")

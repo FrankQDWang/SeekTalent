@@ -14,9 +14,6 @@ from seektalent.models import (
     unique_strings,
 )
 
-EXCERPT_LIMIT = 700
-
-
 def _first_text(*values: Any) -> str:
     for value in values:
         if isinstance(value, str) and value.strip():
@@ -168,40 +165,6 @@ def _extract_education_summary(
     return ""
 
 
-def _build_excerpt(
-    candidate: ResumeCandidate,
-    recent_experiences: list[NormalizedExperience],
-    *,
-    normalization_notes: list[str],
-) -> str:
-    raw_skills = candidate.raw.get("skills")
-    skill_values: list[Any] = raw_skills if isinstance(raw_skills, list) else []
-    structured_profile_text = " ".join(
-        part
-        for part in [
-            _first_text(candidate.raw.get("currentTitle"), candidate.raw.get("current_title")),
-            _first_text(candidate.raw.get("currentCompany"), candidate.raw.get("current_company")),
-            " ".join(_normalize_strings(skill_values)),
-        ]
-        if part
-    )
-    recent_experience_text = " ".join(
-        " ".join(part for part in [item.company, item.title, item.summary] if part) for item in recent_experiences
-    )
-    chunks = [
-        structured_profile_text,
-        " ".join(candidate.work_summaries),
-        " ".join(candidate.project_names[:4]),
-        recent_experience_text,
-        " ".join(candidate.education_summaries[:2]),
-    ]
-    excerpt = " ".join(chunk.strip() for chunk in chunks if isinstance(chunk, str) and chunk.strip())
-    if len(excerpt) > EXCERPT_LIMIT:
-        excerpt = excerpt[:EXCERPT_LIMIT].rstrip() + "..."
-        normalization_notes.append(f"Truncated raw_text_excerpt to {EXCERPT_LIMIT} characters.")
-    return excerpt
-
-
 def _build_key_achievements(
     candidate: ResumeCandidate,
     recent_experiences: list[NormalizedExperience],
@@ -281,7 +244,7 @@ def _completeness_score(
     education_summary: str,
     skills: list[str],
     recent_experiences: list[NormalizedExperience],
-    raw_text_excerpt: str,
+    has_structured_evidence: bool,
 ) -> tuple[int, list[str]]:
     score = 0
     missing_fields: list[str] = []
@@ -294,7 +257,7 @@ def _completeness_score(
         ("education_summary", bool(education_summary), 10),
         ("skills", bool(skills), 10),
         ("recent_experiences", bool(recent_experiences), 16),
-        ("raw_text_excerpt", len(raw_text_excerpt) >= 60, 8),
+        ("structured_evidence", has_structured_evidence, 8),
     ]
     for field_name, present, weight in weighted_checks:
         if present:
@@ -356,11 +319,6 @@ def normalize_cts_resume(candidate: ResumeCandidate) -> NormalizedResume:
         recent_experiences,
         normalization_notes=normalization_notes,
     )
-    raw_text_excerpt = _build_excerpt(
-        candidate,
-        recent_experiences,
-        normalization_notes=normalization_notes,
-    )
     structured_evidence = _build_structured_evidence(
         candidate,
         candidate_name=candidate_name,
@@ -379,7 +337,7 @@ def normalize_cts_resume(candidate: ResumeCandidate) -> NormalizedResume:
         education_summary=education_summary,
         skills=skills,
         recent_experiences=recent_experiences,
-        raw_text_excerpt=raw_text_excerpt,
+        has_structured_evidence=bool(structured_evidence.model_dump(exclude_defaults=True)),
     )
 
     if candidate.used_fallback_id and not candidate.resume_id.startswith("fallback-"):
@@ -417,7 +375,6 @@ def normalize_cts_resume(candidate: ResumeCandidate) -> NormalizedResume:
         recent_experiences=recent_experiences,
         structured_evidence=structured_evidence,
         key_achievements=key_achievements,
-        raw_text_excerpt=raw_text_excerpt,
         completeness_score=completeness_score,
         missing_fields=missing_fields,
         normalization_notes=normalization_notes,

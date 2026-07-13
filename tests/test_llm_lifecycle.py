@@ -186,7 +186,6 @@ def _scoring_context() -> ScoringContext:
             current_company="Example Co",
             locations=["上海"],
             skills=["python"],
-            raw_text_excerpt="Python retrieval trace",
             completeness_score=90,
             source_round=1,
         ),

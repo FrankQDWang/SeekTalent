@@ -47,7 +47,6 @@ def _normalized_resume(resume_id: str) -> NormalizedResume:
         education_summary="复旦大学 计算机 本科",
         skills=["Python", "LLM", "检索"],
         key_achievements=["搭建过候选人搜索链路"],
-        raw_text_excerpt="负责 AI agent、RAG 检索和业务工作流落地。",
         completeness_score=92,
         source_round=1,
     )

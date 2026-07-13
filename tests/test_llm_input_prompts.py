@@ -645,7 +645,6 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
                         summary="Built retrieval APIs.",
                     )
                 ],
-                raw_text_excerpt="复旦大学背景，Python retrieval trace",
                 completeness_score=90,
                 source_round=2,
             ),
@@ -754,7 +753,6 @@ def test_scoring_prompt_accepts_liepin_without_full_text() -> None:
                     ],
                     skills=["用户研究", "交互设计"],
                 ),
-                raw_text_excerpt="潘** 平安好医 用户体验设计专家 提供B端及C端体验设计方案。",
                 completeness_score=92,
                 source_round=1,
                 score_evidence_source="detail_enriched",

@@ -266,7 +266,7 @@ def test_llm_prf_source_text_rejects_conflicting_support_flags(
         )
 
 
-def _normalized_resume(resume_id: str, *, raw_text_excerpt: str, key_achievements: list[str] | None = None) -> NormalizedResume:
+def _normalized_resume(resume_id: str, *, evidence_text: str, key_achievements: list[str] | None = None) -> NormalizedResume:
     return NormalizedResume(
         resume_id=resume_id,
         dedup_key=resume_id,
@@ -284,7 +284,7 @@ def _normalized_resume(resume_id: str, *, raw_text_excerpt: str, key_achievement
                 title="AI Engineer",
                 company="Example Co",
                 duration="2023-2026",
-                summary=raw_text_excerpt,
+                summary=evidence_text,
             )
         ],
         structured_evidence=StructuredResumeEvidence(
@@ -293,13 +293,12 @@ def _normalized_resume(resume_id: str, *, raw_text_excerpt: str, key_achievement
                     company="Example Co",
                     title="AI Engineer",
                     duration="2023-2026",
-                    summary=raw_text_excerpt,
+                    summary=evidence_text,
                 )
             ],
             skills=["Python", "LangGraph"],
         ),
-        key_achievements=key_achievements or [raw_text_excerpt],
-        raw_text_excerpt=raw_text_excerpt,
+        key_achievements=key_achievements or [evidence_text],
         completeness_score=90,
         missing_fields=[],
         normalization_notes=[],
@@ -439,11 +438,11 @@ def test_build_llm_prf_input_prefers_normalized_resume_snippets_over_scorecard_l
         normalized_resumes_by_id={
             "seed-1": _normalized_resume(
                 "seed-1",
-                raw_text_excerpt="Built LangGraph workflow orchestration for agent memory and tool use.",
+                evidence_text="Built LangGraph workflow orchestration for agent memory and tool use.",
             ),
             "seed-2": _normalized_resume(
                 "seed-2",
-                raw_text_excerpt="Maintained LangGraph agent runtime and evaluation workflows.",
+                evidence_text="Maintained LangGraph agent runtime and evaluation workflows.",
             ),
         },
     )
@@ -482,7 +481,6 @@ def test_llm_prf_input_uses_normalized_resume_source_sections() -> None:
             ],
             skills=["LangGraph", "Agent Skills"],
         ),
-        raw_text_excerpt="Agent Skills and LangGraph were used in production retrieval.",
     )
     seed_2 = _scored_candidate("seed-2", overall_score=91, must_have_match_score=89)
     normalized_2 = NormalizedResume(
@@ -508,7 +506,6 @@ def test_llm_prf_input_uses_normalized_resume_source_sections() -> None:
             ],
             skills=["LangGraph"],
         ),
-        raw_text_excerpt="Agent Skills and LangGraph were used in matching retrieval.",
     )
 
     payload = build_llm_prf_input(
@@ -549,7 +546,6 @@ def test_llm_prf_uses_only_structured_resume_evidence_sources() -> None:
         ),
         recent_experiences=[NormalizedExperience(summary="LEGACY_RECENT_EXPERIENCE")],
         key_achievements=["LEGACY_KEY_ACHIEVEMENT"],
-        raw_text_excerpt="LEGACY_RAW_EXCERPT",
         completeness_score=90,
     )
 
@@ -563,28 +559,8 @@ def test_llm_prf_uses_only_structured_resume_evidence_sources() -> None:
     assert "structured_evidence.work_experience[0]" in serialized
     assert "structured_evidence.project_experience[0]" in serialized
     assert "structured_evidence.skills[0]" in serialized
-    assert "raw_text_excerpt" not in serialized
-    assert "LEGACY_RAW_EXCERPT" not in serialized
     assert "LEGACY_RECENT_EXPERIENCE" not in serialized
     assert "LEGACY_KEY_ACHIEVEMENT" not in serialized
-
-
-def test_llm_prf_structured_sources_do_not_change_with_legacy_raw_excerpt() -> None:
-    evidence = StructuredResumeEvidence(
-        work_experience=[StructuredResumeTimelineItem(summary="Built retrieval agents.")],
-        project_experience=[StructuredResumeTimelineItem(summary="Implemented evaluation workflows.")],
-        skills=["Python"],
-    )
-    first = NormalizedResume(
-        resume_id="seed-structured",
-        dedup_key="seed-structured",
-        structured_evidence=evidence,
-        raw_text_excerpt="FIRST_LEGACY_EXCERPT",
-        completeness_score=90,
-    )
-    second = first.model_copy(update={"raw_text_excerpt": "SECOND_LEGACY_EXCERPT"})
-
-    assert llm_prf._normalized_resume_text_sources(first) == llm_prf._normalized_resume_text_sources(second)
 
 
 def test_llm_prf_source_sanitizer_rejects_metadata_dominated_snippets() -> None:

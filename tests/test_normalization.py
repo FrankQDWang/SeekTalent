@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from seektalent.models import (
+    NormalizedResume,
     ResumeCandidate,
     StructuredResumeEvidence,
     StructuredResumeTimelineItem,
@@ -106,7 +107,7 @@ def test_liepin_safe_card_summary_feeds_normalized_resume() -> None:
     assert normalized.recent_experiences[0].company == "业务线科技公司"
     assert normalized.recent_experiences[0].title == "数据开发工程师"
     assert normalized.recent_experiences[0].duration == "2019.01-至今"
-    assert "大规模数据处理" in normalized.raw_text_excerpt
+    assert "大规模数据处理" in normalized.structured_evidence.skills
     serialized = json.dumps(normalized.model_dump(mode="json"), ensure_ascii=False)
     assert "normalized_card_text" not in serialized
     assert "visible_text" not in serialized
@@ -179,12 +180,12 @@ def test_liepin_detail_candidate_reuses_shared_structured_resume_normalization()
     assert normalized.education_summary == "北京大学 计算机 本科"
     assert "Python" in normalized.skills
     assert "北京" in normalized.locations
-    assert "大规模数据平台" in normalized.raw_text_excerpt
+    assert normalized.structured_evidence.work_experience[0].summary == "建设大规模数据平台、数据治理和 ETL 链路。"
     assert normalized.score_evidence_source == "detail_enriched"
     assert normalized.completeness_score >= 80
 
 
-def test_liepin_detail_without_full_text_still_produces_legacy_excerpt() -> None:
+def test_liepin_detail_without_full_text_still_produces_structured_evidence() -> None:
     candidate = ResumeCandidate(
         resume_id="liepin-detail-structured-1",
         dedup_key="dedup-liepin-detail-structured-1",
@@ -209,9 +210,8 @@ def test_liepin_detail_without_full_text_still_produces_legacy_excerpt() -> None
 
     normalized = normalize_resume(candidate)
 
-    assert normalized.raw_text_excerpt
-    assert "平安好医" in normalized.raw_text_excerpt
-    assert "fullText" not in normalized.raw_text_excerpt
+    assert normalized.structured_evidence.work_experience[0].company == "平安好医"
+    assert normalized.structured_evidence.work_experience[0].summary == "提供B端及C端体验设计方案。"
 
 
 def test_normalization_dispatches_liepin_to_liepin_normalizer(monkeypatch) -> None:
@@ -296,12 +296,21 @@ def test_liepin_normalization_uses_structured_evidence_without_whole_page_text()
     assert normalized.structured_evidence.work_experience[0].company == "平安好医"
     assert normalized.structured_evidence.project_experience[0].name == "增长项目"
     assert normalized.structured_evidence.education_experience[0].school == "华东师范大学"
-    assert normalized.raw_text_excerpt
-    assert "fullText" not in normalized.raw_text_excerpt
+    assert normalized.structured_evidence.work_experience[0].summary == "负责 B 端和 C 端体验设计。"
     assert normalized.completeness_score == 100
 
 
-def test_liepin_normalized_artifact_excludes_legacy_raw_text_excerpt() -> None:
+def test_normalized_resume_contract_rejects_legacy_raw_text_excerpt() -> None:
+    with pytest.raises(ValidationError, match="raw_text_excerpt"):
+        NormalizedResume(
+            resume_id="legacy-contract-1",
+            dedup_key="legacy-contract-1",
+            raw_text_excerpt="legacy text",
+            completeness_score=100,
+        )
+
+
+def test_liepin_normalized_artifact_is_source_neutral_and_structured() -> None:
     normalized = normalize_resume(
         ResumeCandidate(
             resume_id="liepin-detail-artifact-1",
@@ -322,12 +331,12 @@ def test_liepin_normalized_artifact_excludes_legacy_raw_text_excerpt() -> None:
 
     payload = normalized_resume_artifact_payload(normalized)
 
-    assert normalized.raw_text_excerpt
+    assert "raw_text_excerpt" not in NormalizedResume.model_fields
     assert "raw_text_excerpt" not in payload
     assert payload["structured_evidence"]
 
 
-def test_cts_normalized_artifact_keeps_cts_raw_text_excerpt() -> None:
+def test_cts_normalized_artifact_is_source_neutral_and_structured() -> None:
     normalized = normalize_resume(
         ResumeCandidate(
             resume_id="cts-artifact-1",
@@ -345,7 +354,51 @@ def test_cts_normalized_artifact_keeps_cts_raw_text_excerpt() -> None:
 
     payload = normalized_resume_artifact_payload(normalized)
 
-    assert payload["raw_text_excerpt"]
+    assert "raw_text_excerpt" not in NormalizedResume.model_fields
+    assert "raw_text_excerpt" not in payload
+    assert payload["structured_evidence"]["work_experience"][0]["summary"] == "Built retrieval workflows."
+
+
+def test_completeness_uses_structured_evidence_without_legacy_missing_field() -> None:
+    normalized = normalize_resume(
+        ResumeCandidate(
+            resume_id="cts-completeness-1",
+            dedup_key="cts-completeness-1",
+            search_text="Python backend engineer",
+            raw={"provider": "cts", "candidate_name": "Alice"},
+        )
+    )
+
+    assert 0 <= normalized.completeness_score <= 100
+    assert "current_title" in normalized.missing_fields
+    assert "structured_evidence" not in normalized.missing_fields
+    assert "raw_text_excerpt" not in normalized.missing_fields
+
+
+def test_cts_complete_structured_resume_reaches_maximum_completeness() -> None:
+    normalized = normalize_resume(
+        ResumeCandidate(
+            resume_id="cts-complete-1",
+            dedup_key="cts-complete-1",
+            search_text="Python backend engineer",
+            now_location="上海",
+            work_year=8,
+            education_summaries=["复旦大学 计算机 本科"],
+            raw={
+                "provider": "cts",
+                "candidate_name": "Alice",
+                "currentTitle": "Python Engineer",
+                "currentCompany": "Example Co",
+                "skills": ["Python"],
+                "workExperienceList": [
+                    {"company": "Example Co", "title": "Python Engineer", "summary": "Built retrieval systems."}
+                ],
+            },
+        )
+    )
+
+    assert normalized.completeness_score == 100
+    assert normalized.missing_fields == []
 
 
 def test_liepin_normalization_rejects_whole_page_text_keys() -> None:

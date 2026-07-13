@@ -454,7 +454,6 @@ def _candidate_artifacts(
                 current_title="Senior Backend Engineer",
                 current_company="SearchCo",
                 locations=["Shanghai"],
-                raw_text_excerpt="Private full text excerpt should not be returned by ordinary API.",
             )
         },
     )

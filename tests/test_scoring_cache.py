@@ -72,7 +72,6 @@ def _context() -> ScoringContext:
             locations=["Shanghai"],
             education_summary="BS",
             skills=["python", "retrieval"],
-            raw_text_excerpt="Built retrieval ranking services.",
             completeness_score=90,
             source_round=1,
         ),
