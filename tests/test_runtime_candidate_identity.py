@@ -15,6 +15,7 @@ from seektalent.runtime.source_lanes import (
     RuntimeCandidateIdentityIndex,
     choose_canonical_resume_for_identity,
 )
+from seektalent.runtime.resume_versions import materially_consistent, resume_content_version
 
 
 def _signals(
@@ -61,8 +62,8 @@ def _normalized(
     score_source: str = "card",
     current_duration: str = "",
     prior_work: tuple[tuple[str, str, str], ...] = (),
-    project_duration: str = "",
-    education_duration: str = "",
+    projects: tuple[tuple[str, str, str, str, str], ...] = (),
+    education: tuple[tuple[str, str, str, str, str], ...] = (),
 ) -> NormalizedResume:
     work_experience = [
         StructuredResumeTimelineItem(
@@ -86,12 +87,26 @@ def _normalized(
         structured_evidence=StructuredResumeEvidence(
             current_role={"company": current_company, "title": current_title},
             work_experience=work_experience,
-            project_experience=[StructuredResumeTimelineItem(name="项目", duration=project_duration)]
-            if project_duration
-            else [],
-            education_experience=[StructuredResumeTimelineItem(school="南京邮电大学", duration=education_duration)]
-            if education_duration
-            else [],
+            project_experience=[
+                StructuredResumeTimelineItem(
+                    name=name,
+                    company=company,
+                    title=title,
+                    duration=duration,
+                    summary=summary,
+                )
+                for name, company, title, duration, summary in projects
+            ],
+            education_experience=[
+                StructuredResumeTimelineItem(
+                    school=school,
+                    major=major,
+                    degree=degree,
+                    duration=duration,
+                    summary=summary,
+                )
+                for school, major, degree, duration, summary in education
+            ],
         ),
         completeness_score=completeness,
         score_evidence_source=score_source,
@@ -161,7 +176,9 @@ def test_identity_index_merges_later_protected_contact_hash_and_preserves_alias(
     liepin_identity = index.upsert_candidate(
         resume_id="liepin-1",
         evidence_id="evidence-liepin",
-        signals=_signals(name="李雷", company="量子科技", title="算法工程师", provider_hash="liepin-provider", contacts=()),
+        signals=_signals(
+            name="李雷", company="量子科技", title="算法工程师", provider_hash="liepin-provider", contacts=()
+        ),
     )
 
     assert cts_identity.identity_id != liepin_identity.identity_id
@@ -321,7 +338,9 @@ def test_identity_index_removes_medium_conflict_after_later_strong_merge() -> No
     assert index.conflicts() == ()
 
 
-@pytest.mark.parametrize("masked_name", ["王**", "*明", "王某", "王女士", "W**", "Wang**", "候选人123", "匿名", "-", ""])
+@pytest.mark.parametrize(
+    "masked_name", ["王**", "*明", "王某", "王女士", "W**", "Wang**", "候选人123", "匿名", "-", ""]
+)
 def test_masked_name_plus_company_and_title_does_not_auto_merge(masked_name: str) -> None:
     index = RuntimeCandidateIdentityIndex()
     visible = index.upsert_candidate(
@@ -443,24 +462,440 @@ def test_canonical_resume_prefers_later_structured_work_chronology() -> None:
     assert selection.canonical_resume_id == "2025"
 
 
-def test_project_and_education_dates_do_not_make_work_content_newer() -> None:
+def test_later_project_chronology_makes_resume_content_newer() -> None:
     selection = choose_canonical_resume_for_identity(
         identity_id="identity-1",
-        resume_ids=("work-newer", "non-work-later"),
-        candidates={resume_id: _candidate(resume_id) for resume_id in ("work-newer", "non-work-later")},
+        resume_ids=("old-project", "new-project"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("old-project", "new-project")},
         normalized_store={
-            "work-newer": _normalized("work-newer", current_duration="2021-01 - 2025-03"),
-            "non-work-later": _normalized(
-                "non-work-later",
+            "old-project": _normalized(
+                "old-project",
                 current_duration="2021-01 - 2024-12",
-                project_duration="2025-12",
-                education_duration="2026-06",
+                projects=(("搜索平台", "甲公司", "负责人", "2024-01 - 2024-12", ""),),
+                completeness=95,
+            ),
+            "new-project": _normalized(
+                "new-project",
+                current_duration="2021-01 - 2024-12",
+                projects=(("智能体平台", "甲公司", "负责人", "2025-01 - 2025-12", ""),),
+                completeness=20,
             ),
         },
         evidence=[],
     )
 
-    assert selection.canonical_resume_id == "work-newer"
+    assert selection.canonical_resume_id == "new-project"
+
+
+def test_later_education_chronology_makes_resume_content_newer() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("old-education", "new-education"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("old-education", "new-education")},
+        normalized_store={
+            "old-education": _normalized(
+                "old-education",
+                current_duration="2021-01 - 2024-12",
+                education=(("南京邮电大学", "计算机", "本科", "2018-09 - 2022-06", ""),),
+                completeness=95,
+            ),
+            "new-education": _normalized(
+                "new-education",
+                current_duration="2021-01 - 2024-12",
+                education=(("清华大学", "软件工程", "硕士", "2023-09 - 2025-06", ""),),
+                completeness=20,
+            ),
+        },
+        evidence=[],
+    )
+
+    assert selection.canonical_resume_id == "new-education"
+
+
+@pytest.mark.parametrize(
+    ("alpha_project", "beta_project"),
+    (
+        (
+            ("搜索平台", "甲公司", "负责人", "2025-01 - 2025-12", ""),
+            ("推荐平台", "甲公司", "负责人", "2025.01 - 2025.12", ""),
+        ),
+        (
+            ("搜索平台", "甲公司", "负责人", "2025-01 - 2025-12", ""),
+            ("搜索平台", "乙公司", "负责人", "2025.01 - 2025.12", ""),
+        ),
+        (
+            ("搜索平台", "甲公司", "负责人", "2025-01 - 2025-12", ""),
+            ("搜索平台", "甲公司", "架构师", "2025.01 - 2025.12", ""),
+        ),
+    ),
+    ids=("name", "company", "title"),
+)
+def test_same_latest_project_conflict_keeps_only_selected_version_links(
+    alpha_project: tuple[str, str, str, str, str],
+    beta_project: tuple[str, str, str, str, str],
+) -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("alpha", "beta"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("alpha", "beta")},
+        normalized_store={
+            "alpha": _normalized(
+                "alpha",
+                current_duration="2020-01 - 2024-12",
+                projects=(alpha_project,),
+                completeness=30,
+            ),
+            "beta": _normalized(
+                "beta",
+                current_duration="2020-01 - 2024-12",
+                projects=(beta_project,),
+                completeness=90,
+            ),
+        },
+        evidence=[
+            _evidence("e-alpha", resume_id="alpha", source="cts"),
+            _evidence("e-beta", resume_id="beta", source="liepin"),
+        ],
+    )
+
+    assert selection.canonical_resume_id == "beta"
+    assert selection.equivalent_latest_resume_ids == ("beta",)
+    assert selection.conflicting_resume_ids == ("alpha",)
+    assert selection.display_source_evidence_ids == ("e-beta",)
+
+
+@pytest.mark.parametrize(
+    ("alpha_education", "beta_education"),
+    (
+        (("甲大学", "计算机", "硕士", "2023-09 - 2025-06", ""), ("乙大学", "计算机", "硕士", "2023.09 - 2025.06", "")),
+        (("甲大学", "计算机", "硕士", "2023-09 - 2025-06", ""), ("甲大学", "金融", "硕士", "2023.09 - 2025.06", "")),
+        (("甲大学", "计算机", "硕士", "2023-09 - 2025-06", ""), ("甲大学", "计算机", "博士", "2023.09 - 2025.06", "")),
+    ),
+    ids=("school", "major", "degree"),
+)
+def test_same_latest_education_conflict_keeps_only_selected_version_links(
+    alpha_education: tuple[str, str, str, str, str],
+    beta_education: tuple[str, str, str, str, str],
+) -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("alpha", "beta"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("alpha", "beta")},
+        normalized_store={
+            "alpha": _normalized(
+                "alpha",
+                current_duration="2020-01 - 2024-12",
+                education=(alpha_education,),
+                completeness=30,
+            ),
+            "beta": _normalized(
+                "beta",
+                current_duration="2020-01 - 2024-12",
+                education=(beta_education,),
+                completeness=90,
+            ),
+        },
+        evidence=[
+            _evidence("e-alpha", resume_id="alpha", source="cts"),
+            _evidence("e-beta", resume_id="beta", source="liepin"),
+        ],
+    )
+
+    assert selection.canonical_resume_id == "beta"
+    assert selection.equivalent_latest_resume_ids == ("beta",)
+    assert selection.conflicting_resume_ids == ("alpha",)
+    assert selection.display_source_evidence_ids == ("e-beta",)
+
+
+def test_structured_timeline_formatting_differences_are_equivalent() -> None:
+    left = _normalized(
+        "left",
+        current_duration="2020-01 - 2024-12",
+        projects=(("ＡＩ 平台", "甲公司", "负责人", "2025.01 - 2025.12", "项目 简介"),),
+        education=(("南京邮电大学", "计算机 科学", "硕士", "2018.09 - 2021.06", ""),),
+    )
+    right = _normalized(
+        "right",
+        current_duration="2020/01 - 2024/12",
+        projects=(("ai   平台", "甲公司", "负责人", "2025-01 - 2025-12", "项目   简介"),),
+        education=(("南京邮电大学", "计算机   科学", "硕士", "2018-09 - 2021-06", ""),),
+    )
+
+    left_version = resume_content_version("left", left)
+    right_version = resume_content_version("right", right)
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("left", "right"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("left", "right")},
+        normalized_store={"left": left, "right": right},
+        evidence=[],
+    )
+
+    assert left_version.content_key == right_version.content_key
+    assert set(selection.equivalent_latest_resume_ids) == {"left", "right"}
+    assert selection.conflicting_resume_ids == ()
+
+
+def test_summary_richness_difference_does_not_create_version_conflict() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("brief", "rich"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("brief", "rich")},
+        normalized_store={
+            "brief": _normalized(
+                "brief",
+                current_duration="2020-01 - 2024-12",
+                projects=(("智能体平台", "甲公司", "负责人", "2025-01 - 2025-12", "负责项目。"),),
+                completeness=30,
+            ),
+            "rich": _normalized(
+                "rich",
+                current_duration="2020-01 - 2024-12",
+                projects=(
+                    (
+                        "智能体平台",
+                        "甲公司",
+                        "负责人",
+                        "2025-01 - 2025-12",
+                        "负责项目架构、交付与跨团队协作。",
+                    ),
+                ),
+                completeness=90,
+            ),
+        },
+        evidence=[],
+    )
+
+    assert set(selection.equivalent_latest_resume_ids) == {"brief", "rich"}
+    assert selection.conflicting_resume_ids == ()
+
+
+def test_missing_structured_material_fields_remain_compatible() -> None:
+    left = _normalized(
+        "left",
+        current_company="",
+        current_title="",
+        current_duration="2020-01 - 2024-12",
+        projects=(("智能体平台", "", "负责人", "2025-01 - 2025-12", ""),),
+        education=(("南京邮电大学", "", "硕士", "2018-09 - 2021-06", ""),),
+    )
+    right = _normalized(
+        "right",
+        current_company="",
+        current_title="",
+        current_duration="2020-01 - 2024-12",
+        projects=(("智能体平台", "甲公司", "负责人", "2025-01 - 2025-12", ""),),
+        education=(("南京邮电大学", "计算机", "硕士", "2018-09 - 2021-06", ""),),
+    )
+
+    assert (
+        materially_consistent(
+            resume_content_version("left", left),
+            resume_content_version("right", right),
+        )
+        is True
+    )
+
+
+def test_parallel_project_set_is_consistent_across_order_and_formatting() -> None:
+    left = _normalized(
+        "left",
+        current_company="",
+        current_title="",
+        current_duration="2020-01 - 2024-12",
+        projects=(
+            ("ＡＩ 平台", "甲公司", "负责人", "2025.01 - 2025.12", ""),
+            ("搜索平台", "乙公司", "架构师", "2025.01 - 2025.12", ""),
+        ),
+    )
+    right = _normalized(
+        "right",
+        current_company="",
+        current_title="",
+        current_duration="2020/01 - 2024/12",
+        projects=(
+            ("搜索平台", "乙公司", "架构师", "2025-01 - 2025-12", ""),
+            ("ai   平台", "甲公司", "负责人", "2025-01 - 2025-12", ""),
+        ),
+    )
+
+    assert (
+        materially_consistent(
+            resume_content_version("left", left),
+            resume_content_version("right", right),
+        )
+        is True
+    )
+
+
+def test_single_sided_extra_parallel_project_remains_compatible() -> None:
+    shared_project = ("智能体平台", "甲公司", "负责人", "2025-01 - 2025-12", "")
+    left = _normalized(
+        "left",
+        current_company="",
+        current_title="",
+        current_duration="2020-01 - 2024-12",
+        projects=(shared_project,),
+    )
+    right = _normalized(
+        "right",
+        current_company="",
+        current_title="",
+        current_duration="2020-01 - 2024-12",
+        projects=(
+            shared_project,
+            ("搜索平台", "乙公司", "架构师", "2025-01 - 2025-12", ""),
+        ),
+    )
+
+    assert (
+        materially_consistent(
+            resume_content_version("left", left),
+            resume_content_version("right", right),
+        )
+        is True
+    )
+
+
+def test_unmatched_parallel_projects_on_both_sides_preserve_explicit_conflict() -> None:
+    shared_project = ("智能体平台", "甲公司", "负责人", "2025-01 - 2025-12", "")
+    left = _normalized(
+        "left",
+        current_company="",
+        current_title="",
+        current_duration="2020-01 - 2024-12",
+        projects=(
+            shared_project,
+            ("搜索平台", "乙公司", "架构师", "2025-01 - 2025-12", ""),
+        ),
+    )
+    right = _normalized(
+        "right",
+        current_company="",
+        current_title="",
+        current_duration="2020-01 - 2024-12",
+        projects=(
+            shared_project,
+            ("推荐平台", "丙公司", "总监", "2025-01 - 2025-12", ""),
+        ),
+    )
+
+    assert (
+        materially_consistent(
+            resume_content_version("left", left),
+            resume_content_version("right", right),
+        )
+        is False
+    )
+
+
+_AMBIGUOUS_LEFT_PROJECTS = (
+    ("", "", "title-a", "2025-01 - 2025-12", ""),
+    ("", "", "title-b", "2025-01 - 2025-12", ""),
+    ("", "company-a", "", "2025-01 - 2025-12", ""),
+)
+_AMBIGUOUS_RIGHT_PROJECTS = (
+    ("", "company-a", "title-a", "2025-01 - 2025-12", ""),
+    ("project-a", "company-a", "", "2025-01 - 2025-12", ""),
+    ("project-a", "company-a", "title-a", "2025-01 - 2025-12", ""),
+)
+
+
+def _ambiguous_parallel_resume(
+    resume_id: str,
+    *,
+    projects: tuple[tuple[str, str, str, str, str], ...],
+    completeness: int = 50,
+) -> NormalizedResume:
+    return _normalized(
+        resume_id,
+        current_company="",
+        current_title="",
+        current_duration="2020-01 - 2024-12",
+        projects=projects,
+        completeness=completeness,
+    )
+
+
+def test_parallel_partial_record_ambiguity_is_direction_independent() -> None:
+    left = resume_content_version(
+        "left",
+        _ambiguous_parallel_resume("left", projects=_AMBIGUOUS_LEFT_PROJECTS),
+    )
+    right = resume_content_version(
+        "right",
+        _ambiguous_parallel_resume("right", projects=_AMBIGUOUS_RIGHT_PROJECTS),
+    )
+
+    assert materially_consistent(left, right) is None
+    assert materially_consistent(right, left) is None
+
+
+def test_parallel_partial_record_ambiguity_is_stable_across_input_order() -> None:
+    left = resume_content_version(
+        "left",
+        _ambiguous_parallel_resume("left", projects=tuple(reversed(_AMBIGUOUS_LEFT_PROJECTS))),
+    )
+    right = resume_content_version(
+        "right",
+        _ambiguous_parallel_resume("right", projects=tuple(reversed(_AMBIGUOUS_RIGHT_PROJECTS))),
+    )
+
+    assert materially_consistent(left, right) is None
+    assert materially_consistent(right, left) is None
+
+
+def test_parallel_partial_record_classification_does_not_change_with_completeness() -> None:
+    def select(left_completeness: int, right_completeness: int):
+        normalized = {
+            "left": _ambiguous_parallel_resume(
+                "left",
+                projects=_AMBIGUOUS_LEFT_PROJECTS,
+                completeness=left_completeness,
+            ),
+            "right": _ambiguous_parallel_resume(
+                "right",
+                projects=_AMBIGUOUS_RIGHT_PROJECTS,
+                completeness=right_completeness,
+            ),
+        }
+        return choose_canonical_resume_for_identity(
+            identity_id="identity-1",
+            resume_ids=("left", "right"),
+            candidates={resume_id: _candidate(resume_id) for resume_id in normalized},
+            normalized_store=normalized,
+            evidence=[],
+        )
+
+    left_selected = select(90, 20)
+    right_selected = select(20, 90)
+
+    assert left_selected.conflicting_resume_ids == right_selected.conflicting_resume_ids == ()
+    assert len(left_selected.equivalent_latest_resume_ids) == len(right_selected.equivalent_latest_resume_ids) == 1
+    assert len(left_selected.incomparable_resume_ids) == len(right_selected.incomparable_resume_ids) == 1
+    assert "resume_version_incomparable" in left_selected.safe_reason_codes
+    assert "resume_version_incomparable" in right_selected.safe_reason_codes
+
+
+def test_current_work_is_newer_than_ended_project_or_education() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("current-work", "ended-later"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("current-work", "ended-later")},
+        normalized_store={
+            "current-work": _normalized("current-work", current_duration="2024-01 - present", completeness=20),
+            "ended-later": _normalized(
+                "ended-later",
+                current_duration="2020-01 - 2024-12",
+                projects=(("项目", "甲公司", "负责人", "2025-01 - 2026-06", ""),),
+                education=(("南京邮电大学", "计算机", "硕士", "2025-09 - 2026-06", ""),),
+                completeness=95,
+            ),
+        },
+        evidence=[],
+    )
+
+    assert selection.canonical_resume_id == "current-work"
 
 
 def test_consistent_same_latest_work_state_is_equivalent_despite_completeness() -> None:
@@ -622,12 +1057,8 @@ def test_current_markers_share_one_freshness_layer_even_when_start_dates_differ(
         resume_ids=("short-current", "long-current"),
         candidates={resume_id: _candidate(resume_id) for resume_id in ("short-current", "long-current")},
         normalized_store={
-            "short-current": _normalized(
-                "short-current", current_duration="2024-06 - present", completeness=30
-            ),
-            "long-current": _normalized(
-                "long-current", current_duration="2020-01 - 至今", completeness=90
-            ),
+            "short-current": _normalized("short-current", current_duration="2024-06 - present", completeness=30),
+            "long-current": _normalized("long-current", current_duration="2020-01 - 至今", completeness=90),
         },
         evidence=[],
     )
