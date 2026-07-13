@@ -114,7 +114,7 @@ if not card_items:
 - [x] **Step 2: Run focused gates:** `uv run --group dev ruff check src tests`, `uv run --group dev ty check`, the source-boundary check from `.github/workflows/python-quality.yml`, and `uv run --group dev tach check`.
 - [x] **Step 3: Run full tests:** `uv run --group dev python -m pytest -q -n auto --dist=loadfile`.
 - [x] **Step 4: Run the Workbench contract:** `uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider`.
-- [ ] **Step 5: Commit the implementation only after all fresh verification outputs are green.**
+- [x] **Step 5: Commit the implementation only after all fresh verification outputs are green.**
 
 ### Task 5: Brooks review loop and release
 
@@ -122,7 +122,7 @@ if not card_items:
 - Modify during review: only files implicated by concrete Brooks findings.
 - Modify for release: `pyproject.toml`, `src/seektalent/version.py`, `scripts/install-seektalent-domi.sh`, `scripts/install-seektalent-domi.ps1`, `uv.lock`.
 
-- [ ] **Step 1: Dispatch a Brooks PR-review subagent** over the feature diff and test evidence, requiring Symptom -> Source -> Consequence -> Remedy findings or `CLEAR`.
+- [x] **Step 1: Dispatch a Brooks PR-review subagent** over the feature diff and test evidence, requiring Symptom -> Source -> Consequence -> Remedy findings or `CLEAR`.
 - [ ] **Step 2: For every finding, add or update a failing test where behavior is affected, implement the smallest fix, rerun focused/full gates, and dispatch a fresh Brooks review. Repeat until `CLEAR`.**
 - [ ] **Step 3: Fast-forward merge to local `main`, preserve the pre-existing `.gitignore` and reference-document changes, and rerun the full verification suite on merged `main`.**
 - [ ] **Step 4: Bump the next patch version consistently, build and inspect distribution metadata, commit, push `main`, create and push the annotated version tag, and publish the GitHub release.**
