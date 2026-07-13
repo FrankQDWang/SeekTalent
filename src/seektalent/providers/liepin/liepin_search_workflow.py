@@ -332,15 +332,16 @@ class LiepinSearchWorkflow:
             )
 
         card_items = _structured_card_items(structured_cards)
+        visible_card_count = len(card_items)
         self._append_event(
             request.source_run_id,
             {
                 "action_kind": "visible_cards_observed",
                 "route_kind": "search",
                 "ok": True,
-                "visible_cards": len(card_items),
+                "visible_cards": visible_card_count,
                 "target_resumes": request.target_resumes,
-                "cards_seen": cards_seen or len(card_items),
+                "cards_seen": cards_seen or visible_card_count,
             },
         )
         cards_seen_for_resume = max(cards_seen, len(card_items))
@@ -416,6 +417,23 @@ class LiepinSearchWorkflow:
             )
             if not baseline_candidates:
                 last_detail_safe_reason = "liepin_opencli_candidate_identity_missing"
+
+        if visible_card_count == 0 and cards_seen_for_resume == 0:
+            emit_detail_claim_outcomes()
+            envelope = self._site.finalize_liepin_resumes(
+                source_run_id=request.source_run_id,
+                query=request.query,
+                max_pages=request.max_pages,
+                max_cards=request.max_cards,
+                cards_seen=0,
+                target_resumes=request.target_resumes,
+            )
+            envelope["_private_first_page_continuations"] = (
+                (replace(private_continuation, initial_opened_count=0),)
+                if private_continuation is not None
+                else ()
+            )
+            return envelope
 
         def mark_candidate(rank: int, state: CandidateState) -> None:
             if private_continuation is not None:

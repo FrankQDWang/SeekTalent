@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from seektalent.candidate_feedback import (
-    build_feedback_decision,
-    extract_feedback_candidate_expressions,
-    select_feedback_seed_resumes,
+from seektalent.candidate_feedback.models import (
+    CandidateFeedbackDecision,
+    FeedbackCandidateExpression,
+    FeedbackCandidateTerm,
 )
+from seektalent.candidate_feedback.policy import PRFPolicyDecision
 from seektalent.core.filter_plan import build_default_filter_plan
 from seektalent.models import (
     QueryTermCandidate,
@@ -17,7 +18,6 @@ from seektalent.models import (
 from seektalent.progress import ProgressCallback
 from seektalent.retrieval.query_identity import build_term_group_key
 from seektalent.runtime.query_identity import consumed_non_anchor_term_family_ids, used_term_group_keys
-from seektalent.candidate_quality import risk_at_or_above
 from seektalent.tracing import RunTracer
 
 
@@ -40,49 +40,32 @@ def force_candidate_feedback_decision(
     tracer: RunTracer,
     progress_callback: ProgressCallback | None,
     emit_progress,
+    prf_decision: PRFPolicyDecision,
+    proposal_backend: str,
 ) -> SearchControllerDecision | None:
-    seeds = select_feedback_seed_resumes(
-        [
-            run_state.scorecards_by_resume_id[resume_id]
-            for resume_id in run_state.top_pool_ids
-            if resume_id in run_state.scorecards_by_resume_id
-        ]
-    )
-    negatives = [
-        item
-        for item in run_state.scorecards_by_resume_id.values()
-        if item.fit_bucket == "not_fit" or risk_at_or_above(item.risk_score, 60)
-    ]
     sent_terms = [
         term
         for receipt in run_state.retrieval_state.query_execution_ledger
         if receipt.dispatch_started
         for term in receipt.query_terms
     ]
-    feedback = build_feedback_decision(
-        seed_resumes=seeds,
-        negative_resumes=negatives,
-        existing_terms=run_state.retrieval_state.query_term_pool,
-        sent_query_terms=sent_terms,
+    feedback = _feedback_decision_from_prf(
+        run_state=run_state,
         round_no=round_no,
-    )
-    shared_expression_evidence = extract_feedback_candidate_expressions(
-        seed_resumes=seeds,
-        negative_resumes=negatives,
-        known_company_entities=set(),
-        known_product_platforms=set(),
+        prf_decision=prf_decision,
     )
     tracer.write_json(
         _round_artifact(tracer, round_no=round_no, name="candidate_feedback_input"),
         {
-            "seed_resume_ids": [item.resume_id for item in seeds],
-            "negative_resume_ids": [item.resume_id for item in negatives],
+            "proposal_backend": proposal_backend,
+            "seed_resume_ids": prf_decision.gate_input.seed_resume_ids,
+            "negative_resume_ids": prf_decision.gate_input.negative_resume_ids,
             "sent_query_terms": sent_terms,
         },
     )
     tracer.write_json(
         _round_artifact(tracer, round_no=round_no, name="candidate_feedback_expression_evidence"),
-        [item.model_dump(mode="json") for item in shared_expression_evidence],
+        [item.model_dump(mode="json") for item in prf_decision.candidate_expressions],
     )
     tracer.write_json(
         _round_artifact(tracer, round_no=round_no, name="candidate_feedback_terms"),
@@ -97,6 +80,9 @@ def force_candidate_feedback_decision(
             ),
             "forced_query_terms": feedback.forced_query_terms,
             "skipped_reason": feedback.skipped_reason,
+            "proposal_backend": proposal_backend,
+            "prf_gate_passed": prf_decision.gate_passed,
+            "prf_reject_reasons": prf_decision.reject_reasons,
         },
     )
     if feedback.accepted_term is None or feedback.accepted_term.family in consumed_non_anchor_term_family_ids(
@@ -107,13 +93,16 @@ def force_candidate_feedback_decision(
     emit_progress(
         progress_callback,
         "rescue_lane_completed",
-        f"Recall repair: extracted feedback term {feedback.accepted_term.term} from {len(seeds)} fit seed resumes.",
+        (
+            f"Recall repair: accepted grounded feedback term {feedback.accepted_term.term} "
+            f"from {len(prf_decision.gate_input.seed_resume_ids)} fit seed resumes."
+        ),
         round_no=round_no,
         payload={
             "stage": "rescue",
             "selected_lane": "candidate_feedback",
             "accepted_term": feedback.accepted_term.term,
-            "seed_resume_count": len(seeds),
+            "seed_resume_count": len(prf_decision.gate_input.seed_resume_ids),
         },
     )
     return SearchControllerDecision(
@@ -123,6 +112,65 @@ def force_candidate_feedback_decision(
         proposed_query_terms=feedback.forced_query_terms,
         proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
         response_to_reflection=f"Runtime rescue: {reason}",
+    )
+
+
+def _feedback_decision_from_prf(
+    *,
+    run_state: RunState,
+    round_no: int,
+    prf_decision: PRFPolicyDecision,
+) -> CandidateFeedbackDecision:
+    seed_resume_ids = list(prf_decision.gate_input.seed_resume_ids)
+    candidate_terms = [_feedback_candidate_term(item) for item in prf_decision.candidate_expressions]
+    accepted_expression = prf_decision.accepted_expression if prf_decision.gate_passed else None
+    if accepted_expression is None:
+        return CandidateFeedbackDecision(
+            seed_resume_ids=seed_resume_ids,
+            candidate_terms=candidate_terms,
+            rejected_terms=[item for item in candidate_terms if item.rejection_reason is not None],
+            skipped_reason="no_safe_feedback_term",
+        )
+
+    anchor = active_admitted_anchor(run_state.retrieval_state.query_term_pool)
+    supporting_resume_ids = list(accepted_expression.source_seed_resume_ids)
+    accepted_candidate = _feedback_candidate_term(accepted_expression)
+    accepted_term = QueryTermCandidate(
+        term=accepted_expression.canonical_expression,
+        source="candidate_feedback",
+        category="expansion",
+        priority=1,
+        evidence=(
+            f"Grounded in {len(supporting_resume_ids)} seed resumes: "
+            f"{', '.join(supporting_resume_ids)}."
+        ),
+        first_added_round=round_no,
+        active=True,
+        retrieval_role="core_skill",
+        queryability="admitted",
+        family=accepted_expression.term_family_id,
+    )
+    return CandidateFeedbackDecision(
+        seed_resume_ids=seed_resume_ids,
+        candidate_terms=candidate_terms,
+        rejected_terms=[item for item in candidate_terms if item.rejection_reason is not None],
+        accepted_candidates=[accepted_candidate],
+        accepted_term=accepted_term,
+        forced_query_terms=[anchor.term, accepted_term.term],
+    )
+
+
+def _feedback_candidate_term(expression: FeedbackCandidateExpression) -> FeedbackCandidateTerm:
+    return FeedbackCandidateTerm(
+        term=expression.canonical_expression,
+        supporting_resume_ids=list(expression.source_seed_resume_ids),
+        linked_requirements=list(expression.linked_requirements),
+        field_hits=dict(expression.field_hits),
+        fit_support_rate=expression.fit_support_rate,
+        not_fit_support_rate=expression.not_fit_support_rate,
+        score=expression.score,
+        risk_flags=list(expression.reject_reasons),
+        rejection_reason=expression.reject_reasons[0] if expression.reject_reasons else None,
     )
 
 

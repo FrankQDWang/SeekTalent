@@ -27,6 +27,7 @@ from seektalent.providers.liepin.liepin_site_adapter import (
     _LiepinSearchWorkflowSite,
 )
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
+from seektalent.providers.liepin.liepin_site_payloads import resumes_envelope
 from seektalent.providers.liepin.first_page_continuation import (
     CandidateState,
     LiepinFirstPageCandidate,
@@ -330,6 +331,7 @@ class FakeLiepinSearchWorkflowSite:
             ]
         ]
     )
+    search_cards_seen: int | None = None
 
     def save_liepin_first_page_continuation(self, *, source_run_id: str, logical_round_no: int,
         query_instance_id: str, keyword_query: str, visible_candidate_count: int,
@@ -380,7 +382,7 @@ class FakeLiepinSearchWorkflowSite:
         return {
             "status": "succeeded",
             "stop_reason": "completed",
-            "cards_seen": max_cards,
+            "cards_seen": max_cards if self.search_cards_seen is None else self.search_cards_seen,
         }
 
     def observe_liepin_search_state(self) -> OpenCliBrowserResult:
@@ -677,14 +679,41 @@ def test_empty_first_page_returns_zero_opened_private_continuation(tmp_path: Pat
         continuation_store=LiepinFirstPageContinuationStore(tmp_path),
         structured_cards=[[]],
         search_states=[_search_state_with_detail_targets()],
+        search_cards_seen=0,
     )
     envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
         _request(target_resumes=1),
         detail_open_claim_context=_private_claim_context(DetailOpenClaimLedger({})),
     )
     continuation = envelope["_private_first_page_continuations"][0]
+    assert envelope["status"] == "succeeded"
+    assert envelope["stop_reason"] == "completed"
+    assert envelope.get("safe_reason_code") is None
+    assert envelope["resumes_returned"] == 0
+    assert "blocked_resumes_envelope" not in site.calls
     assert (continuation.visible_candidate_count, continuation.eligible_candidate_count) == (0, 0)
     assert continuation.initial_opened_count == 0
+
+
+def test_zero_card_resume_envelope_is_completed_instead_of_partial() -> None:
+    envelope = resumes_envelope(
+        source_run_id="source-empty",
+        query="AI Agent 不存在的关键词",
+        safe_run_id="source-empty",
+        pages_visited=1,
+        events=[],
+        cards_seen=0,
+        max_cards=30,
+        resumes=[],
+        protected_snapshot_refs=[],
+        target_resumes=2,
+        write_pi_artifact=lambda *args, **kwargs: "artifact://protected/empty",
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert envelope["stop_reason"] == "completed"
+    assert envelope["safe_reason_code"] is None
+    assert envelope["resumes_returned"] == 0
 
 
 def test_partial_target_retains_private_continuation_with_actual_opened_count(tmp_path: Path) -> None:

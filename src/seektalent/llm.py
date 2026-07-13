@@ -34,9 +34,11 @@ OPENAI_NATIVE_JSON_SCHEMA_STAGES = frozenset(
         "judge",
         "structured_repair",
         "workbench_conversation",
+        "candidate_feedback",
+        "prf_probe_phrase_proposal",
     }
 )
-OPENAI_PROMPTED_JSON_STAGES = frozenset({"tui_summary", "candidate_feedback", "prf_probe_phrase_proposal"})
+OPENAI_PROMPTED_JSON_STAGES = frozenset({"tui_summary"})
 PLAIN_TEXT_STAGES = frozenset({"workbench_note_writer"})
 STAGE_MODEL_ATTR = {
     "requirements": "requirements_model_id",

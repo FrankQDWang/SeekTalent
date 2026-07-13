@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from hashlib import sha256
 from typing import Any, Literal, Mapping, cast
 
-from pydantic_ai import Agent, PromptedOutput
+from pydantic_ai import Agent, NativeOutput
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from seektalent.candidate_feedback.extraction import classify_feedback_expressions
@@ -24,7 +24,7 @@ LLM_PRF_SCHEMA_VERSION = "llm-prf-v2"
 LLM_PRF_EXTRACTOR_VERSION = "llm-prf-deepseek-v4-flash-v1"
 GROUNDING_VALIDATOR_VERSION = "llm-prf-grounding-v1"
 LLM_PRF_FAMILYING_VERSION = "llm-prf-conservative-surface-family-v1"
-LLM_PRF_OUTPUT_RETRIES = 2
+LLM_PRF_OUTPUT_RETRIES = 1
 LLM_PRF_TOP_N_CANDIDATE_CAP = 4
 LLM_PRF_STAGE = "prf_probe_phrase_proposal"
 LLM_PRF_MAX_SOURCE_TEXTS_PER_SEED_RESUME = 4
@@ -250,8 +250,8 @@ class LLMPRFExtractor:
         config = resolve_stage_model_config(self.settings, stage=LLM_PRF_STAGE)
         model = build_model(config, provider_max_retries=0)
         output_spec = build_output_spec(config, model, LLMPRFExtraction)
-        if not isinstance(output_spec, PromptedOutput):
-            raise ValueError(f"{LLM_PRF_STAGE} must use PromptedOutput for prompted JSON extraction.")
+        if not isinstance(output_spec, NativeOutput) or not output_spec.strict:
+            raise ValueError(f"{LLM_PRF_STAGE} must use strict native JSON Schema output.")
         model_settings = dict(build_model_settings(config))
         model_settings["temperature"] = 0
         model_settings["max_tokens"] = self.settings.prf_probe_phrase_proposal_max_output_tokens

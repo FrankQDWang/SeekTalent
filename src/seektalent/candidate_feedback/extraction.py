@@ -405,7 +405,6 @@ def _score_terms(
 
 def _resume_field_texts(resume: ScoredCandidate) -> dict[str, list[str]]:
     return {
-        "reasoning_summary": [resume.reasoning_summary],
         "evidence": list(resume.evidence),
         "strengths": list(resume.strengths),
         "matched_must_haves": list(resume.matched_must_haves),

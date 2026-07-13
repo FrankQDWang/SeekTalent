@@ -159,8 +159,8 @@ All stage model settings now use bare model ids.
 | `SEEKTALENT_STRUCTURED_REPAIR_MODEL_ID` | `deepseek-v4-flash` | Structured-output repair lane. |
 | `SEEKTALENT_JUDGE_MODEL_ID` | `deepseek-v4-pro` | Eval judge. |
 | `SEEKTALENT_TUI_SUMMARY_MODEL_ID` | empty | Optional short progress summary model. Falls back to the scoring model when unset. |
-| `SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID` | `deepseek-v4-flash` | Reserved for dormant model-ranked candidate feedback steps; the active rescue lane remains deterministic. |
-| `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID` | `deepseek-v4-flash` | LLM PRF phrase proposal extractor used by the `llm_deepseek_v4_flash` PRF probe backend. |
+| `SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID` | `deepseek-v4-flash` | Reserved for the dormant legacy model-ranking step. Active rescue uses the shared PRF phrase-proposal model below. |
+| `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID` | `deepseek-v4-flash` | Strict native structured-output phrase proposal used by both candidate-feedback rescue and the PRF probe backend. |
 
 ## Thinking, Reasoning, And Prompt Behavior
 
@@ -295,13 +295,12 @@ Eval is off by default. Enable it with `SEEKTALENT_ENABLE_EVAL=true` or the CLI 
 
 ## Rescue Variables
 
-These settings control the active deterministic rescue lane and its dormant model-ranked extension point.
-The rescue `candidate_feedback` lane does not call the LLM PRF extractor; it uses deterministic feedback extraction artifacts when low-quality recall needs repair.
+These settings control candidate-feedback rescue. The active lane asks the shared PRF extractor to propose phrases from at most five eligible top resumes using strict native structured output. Runtime then requires exact source grounding, support from at least two distinct resumes, novelty, and the existing deterministic PRF policy gate. An empty or rejected proposal advances to the next rescue lane without inventing a term or failing the run.
 
 | Variable | Starter value | Notes |
 | --- | --- | --- |
-| `SEEKTALENT_CANDIDATE_FEEDBACK_ENABLED` | `true` | Allows runtime to derive a safe expansion term from strong scored candidates. |
-| `SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID` | `deepseek-v4-flash` | Reserved for dormant model-ranked candidate feedback steps; the active rescue lane remains deterministic. |
+| `SEEKTALENT_CANDIDATE_FEEDBACK_ENABLED` | `true` | Allows runtime to request and deterministically validate one grounded expansion term from strong scored candidates. |
+| `SEEKTALENT_CANDIDATE_FEEDBACK_MODEL_ID` | `deepseek-v4-flash` | Reserved for the dormant legacy model-ranking step; active rescue uses `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID`. |
 | `SEEKTALENT_CANDIDATE_FEEDBACK_REASONING_EFFORT` | `off` | Reasoning effort for the dormant model-ranked candidate-feedback lane. |
 
 ## Development-Only Mock CTS

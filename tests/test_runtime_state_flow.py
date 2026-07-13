@@ -4189,7 +4189,10 @@ def test_runtime_force_broaden_decision_delegates_to_rescue_execution_runtime(
     }
 
 
-def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_term(tmp_path: Path) -> None:
+def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_term(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -4200,6 +4203,9 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
     )
     runtime = _workflow_runtime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
+    _disable_llm_prf_preflight(monkeypatch)
+    fake_extractor = FakeLLMPRFExtractor(LLMPRFExtraction())
+    _install_llm_prf_extractor(runtime, fake_extractor)
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
 
@@ -4233,6 +4239,8 @@ def test_runtime_falls_back_to_anchor_only_when_candidate_feedback_has_no_safe_t
     assert all(item["lane"] != "web_company_discovery" for item in rescue_decision["skipped_lanes"])
     assert feedback_decision["accepted_term"] is None
     assert round_02_decision["proposed_query_terms"] == ["python"]
+    assert feedback_decision["proposal_backend"] == "llm_deepseek_v4_flash"
+    assert feedback_decision["prf_gate_passed"] is False
 
 
 def test_candidate_feedback_lane_does_not_instantiate_model_steps(
@@ -4249,6 +4257,9 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
     )
     runtime = _workflow_runtime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
+    _disable_llm_prf_preflight(monkeypatch)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
+    _install_llm_prf_extractor(runtime, fake_extractor)
     tracer = RunTracer(tmp_path / "trace-runs")
     job_title, jd, notes = _sample_inputs()
     progress_events = []
@@ -4262,28 +4273,28 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
     try:
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         run_state.scorecards_by_resume_id = {
-            "fit-1": _fit_scorecard(
-                "fit-1",
+            "seed-1": _fit_scorecard(
+                "seed-1",
                 overall_score=90,
                 must_have_match_score=82,
                 risk_score=15,
                 reasoning_summary="Built LangGraph workflow orchestration.",
-                evidence=["LangGraph workflow orchestration and tool calling."],
+                evidence=["LangGraph"],
                 matched_must_haves=["Agent workflow orchestration with LangGraph"],
                 strengths=["LangGraph", "tool calling"],
             ),
-            "fit-2": _fit_scorecard(
-                "fit-2",
+            "seed-2": _fit_scorecard(
+                "seed-2",
                 overall_score=88,
                 must_have_match_score=80,
                 risk_score=18,
                 reasoning_summary="Used LangGraph for Agent workflow.",
-                evidence=["LangGraph and RAG workflow implementation."],
+                evidence=["LangGraph"],
                 matched_must_haves=["Agent workflow orchestration with LangGraph"],
                 strengths=["LangGraph"],
             ),
         }
-        run_state.top_pool_ids = ["fit-1", "fit-2"]
+        run_state.top_pool_ids = ["seed-1", "seed-2"]
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
@@ -4314,13 +4325,18 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
         for event in progress_events
     )
     assert run_state.retrieval_state.candidate_feedback_attempted is True
+    feedback_decision = json.loads(
+        _round_artifact(tracer.run_dir, 2, "retrieval", "candidate_feedback_decision").read_text(encoding="utf-8")
+    )
+    assert feedback_decision["proposal_backend"] == "llm_deepseek_v4_flash"
+    assert feedback_decision["prf_gate_passed"] is True
     assert stop_reason == "query_family_exhausted"
     assert rounds_executed == 3
     assert terminal_controller_round is not None
     assert terminal_controller_round.round_no == 4
 
 
-def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: Path) -> None:
+def test_low_quality_rescue_candidate_feedback_calls_llm_prf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(
         runs_dir=str(tmp_path / "runs"),
         mock_cts=True,
@@ -4331,40 +4347,37 @@ def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: P
     )
     runtime = _workflow_runtime(settings)
     _install_broaden_stubs(runtime, include_reserve=False)
-
-    class ExplodingLLMPRFExtractor:
-        async def propose(self, payload) -> LLMPRFExtraction:
-            raise AssertionError("low-quality rescue must not call llm_prf")
-
-    _install_llm_prf_extractor(runtime, cast(Any, ExplodingLLMPRFExtractor()))
+    _disable_llm_prf_preflight(monkeypatch)
+    fake_extractor = FakeLLMPRFExtractor(_llm_langgraph_extraction)
+    _install_llm_prf_extractor(runtime, fake_extractor)
     tracer = RunTracer(tmp_path / "trace")
 
     try:
         job_title, jd, notes = _sample_inputs()
         run_state = asyncio.run(runtime._build_run_state(job_title=job_title, jd=jd, notes=notes, tracer=tracer))
         run_state.scorecards_by_resume_id = {
-            "fit-1": _fit_scorecard(
-                "fit-1",
+            "seed-1": _fit_scorecard(
+                "seed-1",
                 overall_score=90,
                 must_have_match_score=82,
                 risk_score=15,
                 reasoning_summary="Built LangGraph workflow orchestration.",
-                evidence=["LangGraph workflow orchestration and tool calling."],
+                evidence=["LangGraph"],
                 matched_must_haves=["Agent workflow orchestration with LangGraph"],
                 strengths=["LangGraph", "tool calling"],
             ),
-            "fit-2": _fit_scorecard(
-                "fit-2",
+            "seed-2": _fit_scorecard(
+                "seed-2",
                 overall_score=88,
                 must_have_match_score=80,
                 risk_score=18,
                 reasoning_summary="Used LangGraph for Agent workflow.",
-                evidence=["LangGraph and RAG workflow implementation."],
+                evidence=["LangGraph"],
                 matched_must_haves=["Agent workflow orchestration with LangGraph"],
                 strengths=["LangGraph"],
             ),
         }
-        run_state.top_pool_ids = ["fit-1", "fit-2"]
+        run_state.top_pool_ids = ["seed-1", "seed-2"]
         asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
@@ -4381,6 +4394,11 @@ def test_low_quality_rescue_candidate_feedback_does_not_call_llm_prf(tmp_path: P
         _round_artifact(tracer.run_dir, 2, "controller", "rescue_decision").read_text(encoding="utf-8")
     )
     assert rescue_decision["selected_lane"] == "candidate_feedback"
+    feedback_decision = json.loads(
+        _round_artifact(tracer.run_dir, 2, "retrieval", "candidate_feedback_decision").read_text(encoding="utf-8")
+    )
+    assert feedback_decision["proposal_backend"] == "llm_deepseek_v4_flash"
+    assert feedback_decision["prf_gate_passed"] is True
 
 
 def test_runtime_allows_stop_after_feedback_has_no_safe_term_once_anchor_only_was_attempted(tmp_path: Path) -> None:
@@ -4430,6 +4448,7 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
         provider_name="cts",
         min_rounds=3,
         max_rounds=4,
+        candidate_feedback_enabled=False,
     )
     runtime = _workflow_runtime(settings)
     _install_runtime_stubs(runtime, controller=StopAfterSecondRoundController(), resume_scorer=StubScorer())
@@ -4456,9 +4475,10 @@ def test_runtime_min_rounds_count_completed_retrieval_rounds(tmp_path: Path) -> 
     assert round_03_context["budget"]["retrieval_rounds_completed"] == 2
     assert round_03_context["stop_guidance"]["can_stop"] is False
     assert "2 retrieval rounds completed" in round_03_context["stop_guidance"]["reason"]
-    assert stop_reason == "max_rounds_reached"
-    assert rounds_executed == 4
-    assert terminal_controller_round is None
+    assert stop_reason == "query_family_exhausted"
+    assert rounds_executed == 3
+    assert terminal_controller_round is not None
+    assert terminal_controller_round.round_no == 4
 
 
 def test_pre_controller_final_exhaustion_skips_controller_finalizer_and_provider(

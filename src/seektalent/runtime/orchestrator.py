@@ -2241,11 +2241,14 @@ class WorkflowRuntime:
                 projection_result.model_dump(mode="json"),
             )
             job_intent_fingerprint = self._build_job_intent_fingerprint(run_state=run_state)
-            prf_selection = await self._select_prf_backend_decision(
-                run_state=run_state,
-                retrieval_plan=retrieval_plan,
-                tracer=tracer,
-            )
+            if rescue_decision is not None and rescue_decision.selected_lane == "candidate_feedback":
+                prf_selection = _PRFBackendSelection(prf_decision=None)
+            else:
+                prf_selection = await self._select_prf_backend_decision(
+                    run_state=run_state,
+                    retrieval_plan=retrieval_plan,
+                    tracer=tracer,
+                )
             query_states, second_lane_decision = self._build_round_query_bundle(
                 round_no=round_no,
                 retrieval_plan=retrieval_plan,
@@ -3490,7 +3493,7 @@ class WorkflowRuntime:
             },
         )
 
-    def _force_candidate_feedback_decision(
+    async def _force_candidate_feedback_decision(
         self,
         *,
         run_state: RunState,
@@ -3499,6 +3502,15 @@ class WorkflowRuntime:
         tracer: RunTracer,
         progress_callback: ProgressCallback | None,
     ) -> SearchControllerDecision | None:
+        anchor = rescue_execution_runtime.active_admitted_anchor(run_state.retrieval_state.query_term_pool)
+        selection = await self._build_llm_prf_policy_decision(
+            run_state=run_state,
+            round_no=round_no,
+            retrieval_query_terms=[anchor.term],
+            tracer=tracer,
+        )
+        if selection.prf_decision is None:
+            raise RuntimeError("candidate_feedback_prf_decision_missing")
         return rescue_execution_runtime.force_candidate_feedback_decision(
             run_state=run_state,
             round_no=round_no,
@@ -3506,6 +3518,8 @@ class WorkflowRuntime:
             tracer=tracer,
             progress_callback=progress_callback,
             emit_progress=self._emit_progress,
+            prf_decision=selection.prf_decision,
+            proposal_backend=selection.prf_probe_proposal_backend or "llm_prf",
         )
 
     def _force_anchor_only_decision(
@@ -4362,7 +4376,7 @@ class WorkflowRuntime:
         try:
             extra_stage_names = []
             if self.settings.candidate_feedback_enabled:
-                extra_stage_names.append("candidate_feedback")
+                extra_stage_names.append("prf_probe_phrase_proposal")
             preflight_models(self.settings, extra_stage_names=extra_stage_names)
         except Exception as exc:  # noqa: BLE001
             raise RunStageError("llm_preflight", str(exc)) from exc
@@ -4517,7 +4531,8 @@ class WorkflowRuntime:
             return _PRFBackendSelection(prf_decision=None)
         return await self._build_llm_prf_policy_decision(
             run_state=run_state,
-            retrieval_plan=retrieval_plan,
+            round_no=retrieval_plan.round_no,
+            retrieval_query_terms=list(retrieval_plan.query_terms),
             tracer=tracer,
         )
 
@@ -4528,14 +4543,17 @@ class WorkflowRuntime:
         self,
         *,
         run_state: RunState,
-        retrieval_plan,
+        round_no: int,
+        retrieval_query_terms: list[str],
         tracer: RunTracer,
     ) -> _PRFBackendSelection:
-        round_no = retrieval_plan.round_no
         artifact_refs = build_llm_prf_artifact_refs(round_no=round_no)
         seeds, feedback_negatives = self._feedback_seed_sets(run_state=run_state)
         negatives = select_llm_prf_negative_resumes(feedback_negatives)
-        tried_term_family_ids = self._tried_term_family_ids(run_state=run_state, retrieval_plan=retrieval_plan)
+        tried_term_family_ids = self._tried_term_family_ids(
+            run_state=run_state,
+            retrieval_query_terms=retrieval_query_terms,
+        )
         payload = build_llm_prf_input(
             seed_resumes=seeds,
             negative_resumes=negatives,
@@ -4543,7 +4561,7 @@ class WorkflowRuntime:
             job_title=run_state.requirement_sheet.job_title,
             role_summary=run_state.requirement_sheet.role_summary,
             must_have_capabilities=run_state.requirement_sheet.must_have_capabilities,
-            retrieval_query_terms=retrieval_plan.query_terms,
+            retrieval_query_terms=retrieval_query_terms,
             existing_query_terms=[item.term for item in run_state.retrieval_state.query_term_pool],
             sent_query_terms=[
                 term
@@ -4560,7 +4578,7 @@ class WorkflowRuntime:
                 job_title=run_state.requirement_sheet.job_title,
                 role_summary=run_state.requirement_sheet.role_summary,
                 must_have_capabilities=list(run_state.requirement_sheet.must_have_capabilities),
-                retrieval_query_terms=list(retrieval_plan.query_terms),
+                retrieval_query_terms=list(retrieval_query_terms),
                 existing_query_terms=[item.term for item in run_state.retrieval_state.query_term_pool],
                 sent_query_terms=[
                     term
@@ -4687,7 +4705,7 @@ class WorkflowRuntime:
             payload=payload,
             expressions=expressions,
             run_state=run_state,
-            retrieval_plan=retrieval_plan,
+            round_no=round_no,
         )
         failure_kind = None if decision.gate_passed else "no_safe_llm_prf_expression"
         if failure_kind is not None:
@@ -4724,11 +4742,11 @@ class WorkflowRuntime:
         payload: LLMPRFInput,
         expressions: list[FeedbackCandidateExpression],
         run_state: RunState,
-        retrieval_plan,
+        round_no: int,
     ) -> PRFPolicyDecision:
         return build_prf_policy_decision(
             PRFGateInput(
-                round_no=retrieval_plan.round_no,
+                round_no=round_no,
                 seed_resume_ids=payload.seed_resume_ids,
                 seed_count=len(payload.seed_resume_ids),
                 negative_resume_ids=payload.negative_resume_ids,
@@ -4847,11 +4865,16 @@ class WorkflowRuntime:
         ]
         return seeds, negatives
 
-    def _tried_term_family_ids(self, *, run_state: RunState, retrieval_plan) -> list[str]:
+    def _tried_term_family_ids(
+        self,
+        *,
+        run_state: RunState,
+        retrieval_query_terms: list[str],
+    ) -> list[str]:
         return unique_strings(
             list(consumed_non_anchor_term_family_ids(run_state.retrieval_state.query_execution_ledger))
             + list(resolve_query_identity(
-                query_terms=retrieval_plan.query_terms,
+                query_terms=retrieval_query_terms,
                 query_term_pool=run_state.retrieval_state.query_term_pool,
             ).non_anchor_term_family_ids)
         )

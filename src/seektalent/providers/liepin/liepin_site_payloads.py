@@ -268,7 +268,8 @@ def resumes_envelope(
 ) -> dict[str, object]:
     returned_count = len(resumes)
     target_count = max(0, int(target_resumes or 0))
-    status = "partial" if target_count and returned_count < target_count else "succeeded"
+    empty_search_completed = cards_seen == 0 and returned_count == 0
+    status = "partial" if target_count and returned_count < target_count and not empty_search_completed else "succeeded"
     stop_reason = "partial_timeout" if status == "partial" else "completed"
     action_trace_ref = write_pi_artifact(
         "protected",

@@ -912,7 +912,7 @@ def test_collect_llm_schema_pressure_ignores_legacy_company_discovery_run_config
     ]
 
 
-def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypatch) -> None:
+def test_runtime_preflight_requires_llm_prf_model_when_candidate_feedback_is_enabled(monkeypatch) -> None:
     captured_extra_specs: list[str] | None = None
 
     def fake_preflight_models(settings, *, extra_stage_names=None):  # noqa: ANN001
@@ -923,13 +923,13 @@ def test_runtime_preflight_passes_rescue_models_from_top_level_settings(monkeypa
     monkeypatch.setattr("seektalent.runtime.orchestrator.preflight_models", fake_preflight_models)
     settings = _liepin_fixture_settings(
         candidate_feedback_enabled=True,
-        candidate_feedback_model_id="qwen-feedback",
+        prf_probe_phrase_proposal_model_id="qwen-feedback",
     )
     runtime = _workflow_runtime(settings)
 
     runtime._require_live_llm_config()
 
-    assert captured_extra_specs == ["candidate_feedback"]
+    assert captured_extra_specs == ["prf_probe_phrase_proposal"]
 
 
 def test_runtime_preflight_defers_llm_prf_stage_until_prf_is_eligible(monkeypatch) -> None:

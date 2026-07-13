@@ -368,7 +368,7 @@ class _DeterministicPrivateClaimWorkflowSite:
         return {
             "status": "succeeded",
             "stop_reason": "completed",
-            "cards_seen": cards_seen or 1,
+            "cards_seen": cards_seen if cards_seen is not None else 1,
             "resumes": list(self.resumes),
         }
 
@@ -389,9 +389,32 @@ class _DeterministicPrivateClaimWorkflowSite:
         }
 
 
+class _EmptyPrivateClaimWorkflowSite(_DeterministicPrivateClaimWorkflowSite):
+    def search_liepin_cards(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        max_pages: int,
+        max_cards: int,
+        native_filters: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del source_run_id, query, max_pages, max_cards, native_filters
+        return {"status": "succeeded", "cards_seen": 0}
+
+    def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
+        del source_run_id, max_cards
+        return OpenCliBrowserResult(
+            ok=True,
+            action="extract_structured_liepin_cards",
+            observation={"cards": []},
+        )
+
+
 class _DeterministicPrivateClaimWorkflowRunner:
-    def __init__(self, *, subject: str) -> None:
+    def __init__(self, *, subject: str, empty: bool = False) -> None:
         self._subject = subject
+        self._empty = empty
         self.opened_subjects: list[str] = []
         self.private_contexts: list[DetailOpenClaimSearchContext] = []
 
@@ -415,7 +438,8 @@ class _DeterministicPrivateClaimWorkflowRunner:
     ) -> dict[str, object]:
         del native_filters
         self.private_contexts.append(detail_open_claim_context)
-        site = _DeterministicPrivateClaimWorkflowSite(subject=self._subject, opened_subjects=self.opened_subjects)
+        site_type = _EmptyPrivateClaimWorkflowSite if self._empty else _DeterministicPrivateClaimWorkflowSite
+        site = site_type(subject=self._subject, opened_subjects=self.opened_subjects)
         envelope = LiepinSearchWorkflow(site=site)._search_detail_backed_resumes_with_detail_open_claim_context(
             LiepinSearchWorkflowRequest(
                 source_run_id=source_run_id,
@@ -435,6 +459,74 @@ class _DeterministicPrivateClaimWorkflowRunner:
             action_trace_ref=None,
         )
         return envelope
+
+
+def test_zero_card_private_workflow_completes_logical_query_bundle_without_provider_failure() -> None:
+    query = LogicalQueryDispatch(
+        round_no=2,
+        query_instance_id="round-2-empty",
+        query_role="exploit",
+        lane_type="exploit",
+        query_terms=("AI Agent", "不存在的关键词"),
+        keyword_query="AI Agent 不存在的关键词",
+        query_fingerprint="fingerprint-empty",
+        term_group_key="term-group-empty",
+        primary_anchor_family_id="role.ai-agent",
+        non_anchor_term_family_ids=("feedback.missing",),
+        requested_count=2,
+        source_plan_version="2",
+    )
+    intent = RuntimeSourceQueryIntent(
+        source_kind="liepin",
+        round_no=2,
+        query_instance_id=query.query_instance_id,
+        query_fingerprint=query.query_fingerprint,
+        term_group_key=query.term_group_key,
+        primary_anchor_family_id=query.primary_anchor_family_id,
+        non_anchor_term_family_ids=query.non_anchor_term_family_ids,
+        query_role=query.query_role,
+        lane_type=query.lane_type,
+        query_terms=query.query_terms,
+        keyword_query=query.keyword_query,
+        requested_count=query.requested_count,
+        provider_scan_limit=30,
+        source_plan_version=query.source_plan_version,
+        filter_intents=(),
+        location_intent=None,
+        age_intent=None,
+    )
+    runner = _DeterministicPrivateClaimWorkflowRunner(subject="unused", empty=True)
+    worker_client = LiepinOpenCliWorkerClient(
+        retriever=LiepinOpenCliResumeRetriever(runner=runner),
+        connection_id="liepin-opencli",
+        provider_account_hash="local-opencli",
+    )
+
+    result = asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=make_settings(liepin_worker_mode="fake_fixture", liepin_allow_fake_fixture_worker=True),
+            runtime_run_id="runtime-run-empty",
+            source_plan_id="plan-liepin-empty",
+            job_title="AI Agent Engineer",
+            jd="Build agent systems.",
+            notes="",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=(query,),
+            source_query_intents=(intent,),
+            source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
+            liepin_context={"backend_mode": "opencli"},
+            detail_open_claim_ledger=DetailOpenClaimLedger({}),
+            worker_client=worker_client,
+        )
+    )
+
+    assert result.status == "completed"
+    assert result.candidate_store_updates == {}
+    assert result.raw_candidate_count == 0
+    assert [(outcome.status, outcome.raw_candidate_count) for outcome in result.query_execution_outcomes] == [
+        ("completed", 0)
+    ]
+    assert result.blocked_reason_code is None
 
 
 def _requirement_sheet() -> RequirementSheet:

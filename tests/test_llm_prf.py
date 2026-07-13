@@ -57,6 +57,7 @@ def _scored_candidate(
     matched_must_haves: list[str] | None = None,
     matched_preferences: list[str] | None = None,
     strengths: list[str] | None = None,
+    reasoning_summary: str = "Seed summary.",
 ) -> ScoredCandidate:
     return ScoredCandidate(
         resume_id=resume_id,
@@ -66,7 +67,7 @@ def _scored_candidate(
         preferred_match_score=65,
         risk_score=risk_score,
         risk_flags=[],
-        reasoning_summary="Seed summary.",
+        reasoning_summary=reasoning_summary,
         evidence=evidence or [],
         confidence="high",
         matched_must_haves=matched_must_haves or [],
@@ -412,6 +413,34 @@ def test_build_llm_prf_input_freezes_source_text_hashes() -> None:
     assert payload.source_texts[1].hint_only is True
     assert payload.source_texts[1].support_eligible is False
     assert payload.source_texts[2].source_kind == "grounding_eligible"
+
+
+def test_build_llm_prf_input_excludes_reasoning_summary_from_grounding_sources() -> None:
+    misleading_summary = "Although missing relevant experience, recommend searching for hallucinated phrase."
+    payload = build_llm_prf_input(
+        round_no=2,
+        job_title="AI Agent Engineer",
+        role_summary="Build agent workflows.",
+        must_have_capabilities=["LangGraph"],
+        retrieval_query_terms=["AI Agent"],
+        existing_query_terms=["AI Agent"],
+        seed_resumes=[
+            _scored_candidate(
+                "seed-1",
+                evidence=["Built LangGraph workflows."],
+                reasoning_summary=misleading_summary,
+            ),
+            _scored_candidate(
+                "seed-2",
+                evidence=["Maintained LangGraph agents."],
+                reasoning_summary=misleading_summary,
+            ),
+        ],
+        negative_resumes=[],
+    )
+
+    assert payload is not None
+    assert misleading_summary not in [item.source_text_raw for item in payload.source_texts]
 
 
 def test_build_llm_prf_input_prefers_normalized_resume_snippets_over_scorecard_labels() -> None:
@@ -1106,11 +1135,11 @@ def test_build_llm_prf_artifact_refs_uses_centralized_round_refs() -> None:
     assert refs.policy_decision_artifact_ref == "round.02.retrieval.prf_policy_decision"
 
 
-def test_llm_prf_extractor_builds_prompted_agent_with_zero_temperature_and_retry_budget(
+def test_llm_prf_extractor_builds_native_agent_with_zero_temperature_and_retry_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, Any] = {}
-    fake_model = object()
+    fake_model = SimpleNamespace(profile=SimpleNamespace(supports_json_schema_output=True))
 
     def fake_agent(**kwargs):
         captured.update(kwargs)
@@ -1133,22 +1162,27 @@ def test_llm_prf_extractor_builds_prompted_agent_with_zero_temperature_and_retry
     assert captured["model"] is fake_model
     assert captured["system_prompt"] == "Return json only."
     assert captured["retries"] == 0
-    assert captured["output_retries"] == LLM_PRF_OUTPUT_RETRIES == 2
+    assert captured["output_retries"] == LLM_PRF_OUTPUT_RETRIES == 1
     assert captured["model_settings"]["temperature"] == 0
     assert captured["model_settings"]["max_tokens"] == 2048
 
 
-def test_llm_prf_output_spec_is_prompted_output_not_native_or_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_llm_prf_output_spec_is_native_strict_not_prompted_or_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, Any] = {}
 
-    monkeypatch.setattr(llm_prf, "build_model", lambda config, **kwargs: object())
+    monkeypatch.setattr(
+        llm_prf,
+        "build_model",
+        lambda config, **kwargs: SimpleNamespace(profile=SimpleNamespace(supports_json_schema_output=True)),
+    )
     monkeypatch.setattr(llm_prf, "Agent", lambda **kwargs: captured.update(kwargs) or object())
 
     llm_prf.LLMPRFExtractor(_settings(), _prompt())._build_agent()
 
     output_spec = captured["output_type"]
-    assert isinstance(output_spec, PromptedOutput)
-    assert not isinstance(output_spec, NativeOutput | ToolOutput)
+    assert isinstance(output_spec, NativeOutput)
+    assert output_spec.strict is True
+    assert not isinstance(output_spec, PromptedOutput | ToolOutput)
     assert output_spec.outputs is LLMPRFExtraction
 
 
@@ -1202,16 +1236,19 @@ def test_empty_candidates_does_not_retry_extractor_call(monkeypatch: pytest.Monk
 
 
 def test_llm_prf_schema_retry_budget_is_agent_construction_only(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Pydantic-AI local retry behavior for prompted JSON depends on model internals,
-    # so this pins the retry budget at the Agent boundary where this extractor owns it.
+    # Pin the one bounded schema-repair retry at the Agent boundary where this extractor owns it.
     captured: dict[str, Any] = {}
-    monkeypatch.setattr(llm_prf, "build_model", lambda config, **kwargs: object())
+    monkeypatch.setattr(
+        llm_prf,
+        "build_model",
+        lambda config, **kwargs: SimpleNamespace(profile=SimpleNamespace(supports_json_schema_output=True)),
+    )
     monkeypatch.setattr(llm_prf, "Agent", lambda **kwargs: captured.update(kwargs) or object())
 
     llm_prf.LLMPRFExtractor(_settings(), _prompt())._build_agent()
 
     assert captured["retries"] == 0
-    assert captured["output_retries"] == 2
+    assert captured["output_retries"] == 1
 
 
 def test_llm_prf_extractor_disables_provider_sdk_retries() -> None:
@@ -1277,7 +1314,7 @@ def test_llm_prf_success_call_artifact_records_expected_fields() -> None:
     assert artifact["prompt_name"] == "prf_probe_phrase_proposal"
     assert artifact["status"] == "succeeded"
     assert artifact["retries"] == 0
-    assert artifact["output_retries"] == 2
+    assert artifact["output_retries"] == 1
     assert artifact["validator_retry_count"] == 0
     assert artifact["structured_output"] == extraction.model_dump(mode="json")
     assert artifact["provider_usage"] == usage.model_dump(mode="json")

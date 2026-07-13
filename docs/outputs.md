@@ -129,10 +129,10 @@ Optional recall-rescue files may also appear under a round when the quality gate
 | Path | Purpose |
 | --- | --- |
 | `rounds/01/retrieval/rescue_decision.json` | Runtime-selected rescue lane, skipped lanes, and any forced terms. |
-| `rounds/01/retrieval/candidate_feedback_input.json` | Seed, negative, and already-sent resume/query facts used by deterministic candidate feedback extraction. |
-| `rounds/01/retrieval/candidate_feedback_expression_evidence.json` | Shared evidence spans extracted from seed and negative resumes before feedback-term selection. |
-| `rounds/01/retrieval/candidate_feedback_terms.json` | Candidate feedback term extraction result. |
-| `rounds/01/retrieval/candidate_feedback_decision.json` | Accepted feedback term and forced query terms, or the skip reason. |
+| `rounds/01/retrieval/candidate_feedback_input.json` | Top-resume/negative IDs, sent terms, and proposal backend used by candidate-feedback rescue. |
+| `rounds/01/retrieval/candidate_feedback_expression_evidence.json` | LLM-proposed expressions after exact grounding and deterministic policy evaluation. |
+| `rounds/01/retrieval/candidate_feedback_terms.json` | Grounded candidate terms, rejections, and any accepted term materialized for rescue. |
+| `rounds/01/retrieval/candidate_feedback_decision.json` | Accepted feedback term and forced query terms, or the skip reason and PRF gate outcome. |
 
 Evaluation exports may also include:
 
@@ -187,7 +187,9 @@ When `prf_probe_proposal_backend=llm_deepseek_v4_flash`, the PRF replay snapshot
 - `llm_prf_candidates_artifact_ref`
 - `llm_prf_grounding_artifact_ref`
 
-The LLM PRF extractor only proposes phrases. Runtime grounding, phrase-family checks, and the deterministic PRF policy gate remain authoritative before a `prf_probe` second lane can run.
+The LLM PRF extractor only proposes phrases through strict native structured output. Runtime grounding, phrase-family checks, and the deterministic PRF policy gate remain authoritative before either candidate-feedback rescue or a `prf_probe` second lane can run.
+
+A source search that is successfully submitted and structurally observed with zero visible cards is a completed exhausted outcome. It records zero candidates and terminal query receipts; it is not a provider failure and does not discard candidates retained from earlier rounds.
 
 ## Legacy archive-only artifacts
 

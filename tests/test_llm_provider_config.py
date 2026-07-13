@@ -34,6 +34,8 @@ STRICT_NATIVE_OPENAI_STAGES = (
     "scoring",
     "judge",
     "structured_repair",
+    "candidate_feedback",
+    "prf_probe_phrase_proposal",
 )
 
 
@@ -251,7 +253,7 @@ def test_env_file_none_does_not_scan_default_dotenv(tmp_path: Path, monkeypatch:
     assert settings.prf_probe_phrase_proposal_model_id == "deepseek-v4-flash"
 
 
-def test_prf_probe_phrase_proposal_stage_uses_prompted_json() -> None:
+def test_prf_probe_phrase_proposal_stage_uses_native_json_schema() -> None:
     settings = make_settings()
 
     stage = resolve_stage_model_config(settings, stage="prf_probe_phrase_proposal")
@@ -259,7 +261,7 @@ def test_prf_probe_phrase_proposal_stage_uses_prompted_json() -> None:
     assert stage.model_id == "deepseek-v4-flash"
     assert stage.reasoning_effort == "off"
     assert stage.thinking_mode is False
-    assert resolve_structured_output_mode(stage) == "prompted_json"
+    assert resolve_structured_output_mode(stage) == "native_json_schema"
 
 
 def test_workbench_note_writer_defaults_to_deepseek_v4_flash_non_reasoning() -> None:
@@ -481,7 +483,7 @@ def test_anthropic_structured_stages_remain_prompted_output() -> None:
         assert isinstance(output_spec, PromptedOutput)
 
 
-def test_openai_tui_summary_and_candidate_feedback_remain_prompted_output() -> None:
+def test_openai_tui_summary_remains_prompted_output() -> None:
     settings = make_settings(
         text_llm_protocol_family="openai_chat_completions_compatible",
         text_llm_endpoint_kind="bailian_openai_chat_completions",
@@ -489,7 +491,7 @@ def test_openai_tui_summary_and_candidate_feedback_remain_prompted_output() -> N
     )
     model = _json_schema_capable_model()
 
-    for stage_name in ("tui_summary", "candidate_feedback"):
+    for stage_name in ("tui_summary",):
         stage = resolve_stage_model_config(settings, stage=stage_name)
         output_spec = build_output_spec(stage, model, dict)
 
@@ -497,7 +499,7 @@ def test_openai_tui_summary_and_candidate_feedback_remain_prompted_output() -> N
         assert isinstance(output_spec, PromptedOutput)
 
 
-def test_openai_stage_policy_can_prompt_one_strict_capable_stage_while_another_stays_native() -> None:
+def test_openai_candidate_feedback_uses_native_strict_output() -> None:
     settings = make_settings(
         text_llm_protocol_family="openai_chat_completions_compatible",
         text_llm_endpoint_kind="bailian_openai_chat_completions",
@@ -516,8 +518,9 @@ def test_openai_stage_policy_can_prompt_one_strict_capable_stage_while_another_s
     assert resolve_structured_output_mode(scoring_stage) == "native_json_schema"
     assert isinstance(scoring_output_spec, NativeOutput)
     assert scoring_output_spec.strict is True
-    assert resolve_structured_output_mode(candidate_feedback_stage) == "prompted_json"
-    assert isinstance(candidate_feedback_output_spec, PromptedOutput)
+    assert resolve_structured_output_mode(candidate_feedback_stage) == "native_json_schema"
+    assert isinstance(candidate_feedback_output_spec, NativeOutput)
+    assert candidate_feedback_output_spec.strict is True
 
 
 def test_bailian_deepseek_v4_defaults_to_native_json_schema_mode() -> None:

@@ -39,7 +39,7 @@ async def resolve_pre_controller_exhaustion(
     progress_callback: ProgressCallback | None,
     candidate_feedback_enabled: bool,
     force_broaden_decision: Callable[..., SearchControllerDecision],
-    force_candidate_feedback_decision: Callable[..., SearchControllerDecision | None],
+    force_candidate_feedback_decision: Callable[..., Awaitable[SearchControllerDecision | None]],
     continue_after_empty_feedback: Callable[..., Awaitable[RescueDecision]],
     force_anchor_only_decision: Callable[..., SearchControllerDecision],
     write_rescue_decision: Callable[..., None],
@@ -59,7 +59,7 @@ async def resolve_pre_controller_exhaustion(
             reason="query family exhaustion preflight",
         )
     elif decision.selected_lane == "candidate_feedback":
-        feedback_decision = force_candidate_feedback_decision(
+        feedback_decision = await force_candidate_feedback_decision(
             run_state=run_state,
             round_no=round_no,
             reason="query family exhaustion preflight",
@@ -193,7 +193,7 @@ async def resolve_round_decision(
     progress_callback: ProgressCallback | None,
     choose_rescue_decision: Callable[..., RescueDecision],
     force_broaden_decision: Callable[..., SearchControllerDecision],
-    force_candidate_feedback_decision: Callable[..., SearchControllerDecision | None],
+    force_candidate_feedback_decision: Callable[..., Awaitable[SearchControllerDecision | None]],
     continue_after_empty_feedback: Callable[..., Awaitable[RescueDecision]],
     force_anchor_only_decision: Callable[..., SearchControllerDecision],
     write_rescue_decision: Callable[..., None],
@@ -212,7 +212,7 @@ async def resolve_round_decision(
                 reason=controller_context.stop_guidance.reason,
             )
         elif rescue_decision.selected_lane == "candidate_feedback":
-            feedback_decision = force_candidate_feedback_decision(
+            feedback_decision = await force_candidate_feedback_decision(
                 run_state=run_state,
                 round_no=round_no,
                 reason=controller_context.stop_guidance.reason,

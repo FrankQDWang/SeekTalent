@@ -194,7 +194,7 @@ flowchart TD
 
 业务上可以理解成：当 CTS 常规关键词搜不出足够好的人时，先找“可能产出这类人才的公司”，再把这些公司作为下一轮搜索线索。
 
-当前 candidate feedback rescue 不走 LLM；它从已评分候选人和负样本里确定性提取一个安全反馈词，写入 `candidate_feedback_*` artifacts。
+当前 candidate feedback rescue 会从 Top-K 中最多选择 5 份合格简历，把结构化简历证据与受控 scorecard evidence 交给共享的 LLM PRF extractor。模型通过 provider-native strict structured output 提议候选词；runtime 再做精确原文 grounding、至少两份不同简历支持、已用词族去重和负样本门禁。`reasoning_summary` 不进入候选词证据。若没有安全新词，系统继续 anchor-only/stop，而不是编造关键词或让 run 失败。全过程写入 `llm_prf_*`、`prf_policy_decision` 和 `candidate_feedback_*` artifacts。
 
 ---
 
