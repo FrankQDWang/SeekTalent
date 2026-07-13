@@ -390,7 +390,13 @@ describe("Workbench v2 client", () => {
       workYears: 10,
       sourceKinds: ["liepin"],
       sourceLabel: "猎聘",
-      sourceUrl: "https://example.test/candidate/1",
+      sourceReferences: [
+        {
+          sourceKind: "liepin",
+          displayLabel: "猎聘",
+          url: "https://example.test/candidate/1",
+        },
+      ],
       match: {
         summary: "可独立主导 0-1 产品体验搭建。",
       },
@@ -422,7 +428,13 @@ describe("Workbench v2 client", () => {
       city: "上海",
       workYears: 10,
       sourceLabel: "猎聘",
-      sourceUrl: "https://example.test/candidate/1",
+      sourceReferences: [
+        {
+          sourceKind: "liepin",
+          displayLabel: "猎聘",
+          url: "https://example.test/candidate/1",
+        },
+      ],
       match: {
         summary: "可独立主导 0-1 产品体验搭建。",
         strengths: [],

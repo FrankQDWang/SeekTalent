@@ -5,7 +5,6 @@ import type {
   AgentWorkbenchCandidateSummary,
 } from "../../lib/api/agentWorkbenchTypes";
 import { Button } from "../primitives/Button";
-import { candidateSourceLabel } from "./candidateSource";
 import "./CandidateDetailDrawer.css";
 
 type CandidateDetailDrawerStatus = "idle" | "loading" | "error" | "ready";
@@ -97,14 +96,13 @@ export function CandidateDetailDrawer({
   const headline = candidateDetailHeadline(detail, candidate);
   const profileChips = candidateDetailChips(detail, candidate);
   const jobStatus = detail?.jobStatus ?? candidate?.jobStatus ?? null;
-  const sourceKinds = detail?.sourceKinds ?? candidate?.sourceKinds ?? [];
-  const sourceLabel =
-    detail?.sourceLabel?.trim() ||
-    candidate?.sourceLabel?.trim() ||
-    (sourceKinds.length > 0
-      ? `${candidateSourceLabel(sourceKinds)}来源`
-      : null);
-  const sourceUrl = safeExternalSourceUrl(detail?.sourceUrl);
+  const sourceReferences = (detail?.sourceReferences ?? []).flatMap(
+    (reference) => {
+      const url = safeExternalSourceUrl(reference.url);
+      const displayLabel = reference.displayLabel.trim();
+      return url && displayLabel ? [{ ...reference, displayLabel, url }] : [];
+    },
+  );
   const avatarLabel = candidateAvatarLabel(detail, candidate);
   const avatarColorKey =
     detail?.avatarColorKey ?? candidate?.avatarColorKey ?? "default";
@@ -149,23 +147,17 @@ export function CandidateDetailDrawer({
             ) : null}
           </div>
           <div className="candidate-detail-drawer__actions">
-            {sourceUrl ? (
+            {sourceReferences.map((reference) => (
               <a
                 className="candidate-detail-drawer__source-action"
-                href={sourceUrl}
+                href={reference.url}
+                key={`${reference.sourceKind}:${reference.url}`}
                 rel="noreferrer"
                 target="_blank"
               >
-                查看来源
+                {reference.displayLabel}
               </a>
-            ) : sourceLabel ? (
-              <span
-                aria-label="候选人来源已记录"
-                className="candidate-detail-drawer__source-action"
-              >
-                {sourceLabel}
-              </span>
-            ) : null}
+            ))}
             <Button
               aria-label="关闭候选人详情"
               className="candidate-detail-drawer__close"
@@ -515,7 +507,9 @@ function safeExternalSourceUrl(
   }
   try {
     const url = new URL(trimmed);
-    return url.protocol === "http:" || url.protocol === "https:"
+    return (url.protocol === "http:" || url.protocol === "https:") &&
+      !url.username &&
+      !url.password
       ? url.href
       : null;
   } catch {

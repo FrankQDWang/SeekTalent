@@ -65,7 +65,7 @@ def test_liepin_source_evidence_copies_source_references_without_url_parsing() -
     source_reference = SourceReference(
         source_kind="future_source",
         display_label="Future Source",
-        url="opaque-reference://candidate/1",
+        url="https://future.example.test/candidate/1",
     )
     candidate = ResumeCandidate(
         resume_id="resume-1",

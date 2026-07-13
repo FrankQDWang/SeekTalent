@@ -382,9 +382,14 @@ class WorkbenchV2RuntimeService:
         identity = next((item for item in identities if item.identity_id == candidate_id), None)
         if identity is None:
             raise KeyError(candidate_id)
-        evidence = [
+        retained_evidence = [
             item
             for item in self.store.list_candidate_evidence(runtime_run_id=runtime_run_id)
+            if item.identity_id == candidate_id
+        ]
+        evidence = [
+            item
+            for item in retained_evidence
             if item.identity_id == candidate_id and item.resume_id == identity.canonical_resume_id
         ]
         detail_availability = _candidate_detail_availability(identity, evidence)
@@ -419,7 +424,7 @@ class WorkbenchV2RuntimeService:
             "projectExperience": _candidate_timeline(evidence, "projectExperience"),
             "educationExperience": _candidate_timeline(evidence, "educationExperience"),
             "skills": _candidate_skills(evidence),
-            "sourceUrl": _text_from_mapping(_candidate_wts_detail(evidence), "sourceUrl"),
+            "sourceReferences": _candidate_source_references(identity, retained_evidence),
             "sections": _candidate_detail_sections(identity, evidence),
             "evidence": _candidate_detail_evidence(evidence),
             "detailAvailability": detail_availability,
@@ -522,6 +527,37 @@ def _canonical_candidate_evidence(
     evidence: Sequence[RuntimeControlCandidateEvidence],
 ) -> list[RuntimeControlCandidateEvidence]:
     return [item for item in evidence if item.resume_id == identity.canonical_resume_id]
+
+
+def _candidate_source_references(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> list[dict[str, str]]:
+    display_evidence_ids = set(identity.display_source_evidence_ids)
+    references = sorted(
+        (
+            reference
+            for item in evidence
+            if item.evidence_id in display_evidence_ids
+            for reference in item.source_references
+        ),
+        key=lambda reference: (reference.display_label, reference.source_kind, reference.url),
+    )
+    seen: set[tuple[str, str]] = set()
+    projected: list[dict[str, str]] = []
+    for reference in references:
+        key = (reference.source_kind, reference.url)
+        if key in seen:
+            continue
+        seen.add(key)
+        projected.append(
+            {
+                "sourceKind": reference.source_kind,
+                "displayLabel": reference.display_label,
+                "url": reference.url,
+            }
+        )
+    return projected
 
 
 def _candidate_source_label(source_kinds: Sequence[str]) -> str | None:

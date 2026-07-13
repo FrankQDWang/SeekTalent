@@ -266,6 +266,14 @@ class WorkbenchV2CandidateDetailSectionView(BaseModel):
     items: list[str] = Field(default_factory=list)
 
 
+class WorkbenchV2SourceReferenceView(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceKind: str
+    displayLabel: str
+    url: str
+
+
 class WorkbenchV2CandidateDetailView(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -299,7 +307,7 @@ class WorkbenchV2CandidateDetailView(BaseModel):
         default_factory=list, exclude_if=_is_empty_list
     )
     skills: list[str] = Field(default_factory=list, exclude_if=_is_empty_list)
-    sourceUrl: str | None = Field(default=None, exclude_if=_is_none)
+    sourceReferences: list[WorkbenchV2SourceReferenceView] = Field(default_factory=list)
     sections: list[WorkbenchV2CandidateDetailSectionView] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
     detailAvailability: Literal["available", "redacted", "approval_required", "unavailable"]

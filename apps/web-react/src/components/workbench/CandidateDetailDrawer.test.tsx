@@ -43,9 +43,8 @@ describe("CandidateDetailDrawer", () => {
     expect(screen.getByRole("dialog", { name: "候选人详情" })).toBeVisible();
     expect(screen.getByText("吴所谓")).toBeVisible();
     expect(screen.getByText("在职，看看新机会")).toBeVisible();
-    expect(screen.getByLabelText("候选人来源已记录")).toHaveTextContent(
-      "猎聘来源",
-    );
+    expect(screen.queryByLabelText("候选人来源已记录")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
     expect(screen.getByText("近30天内活跃")).toBeVisible();
     expect(screen.getByText("男")).toBeVisible();
     expect(screen.getByText("32岁")).toBeVisible();
@@ -66,7 +65,7 @@ describe("CandidateDetailDrawer", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders WTS structured match, intention, timeline, skills, and source link", () => {
+  it("renders WTS structured fields and one labeled link per source reference", () => {
     expect.hasAssertions();
 
     render(
@@ -92,7 +91,18 @@ describe("CandidateDetailDrawer", () => {
           education: "本科",
           workYears: 10,
           sourceLabel: "猎聘",
-          sourceUrl: "https://example.test/candidate/1",
+          sourceReferences: [
+            {
+              sourceKind: "liepin",
+              displayLabel: "猎聘",
+              url: "https://example.test/candidate/1",
+            },
+            {
+              sourceKind: "zhaopin",
+              displayLabel: "智联招聘",
+              url: "https://zhaopin.example.test/candidate/1",
+            },
+          ],
           match: {
             summary: "可独立主导 0-1 产品体验搭建，擅长拆解复杂 B 端业务流程。",
             strengths: ["搭建可量化体验度量体系", "具备完整设计系统经验"],
@@ -145,9 +155,13 @@ describe("CandidateDetailDrawer", () => {
       "avatar-0",
     );
     expect(screen.getByText("资深体验设计工程师 · 平安集团")).toBeVisible();
-    expect(screen.getByRole("link", { name: "查看来源" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "猎聘" })).toHaveAttribute(
       "href",
       "https://example.test/candidate/1",
+    );
+    expect(screen.getByRole("link", { name: "智联招聘" })).toHaveAttribute(
+      "href",
+      "https://zhaopin.example.test/candidate/1",
     );
     expect(screen.getByText("匹配程度")).toBeVisible();
     expect(screen.getByText(/推荐理由：可独立主导/)).toBeVisible();
@@ -200,12 +214,14 @@ describe("CandidateDetailDrawer", () => {
     expect(screen.getByText("暂无候选人详情")).toBeVisible();
   });
 
-  it("does not render unsafe sourceUrl values as external links", () => {
+  it("omits unsafe source reference URLs", () => {
     expect.hasAssertions();
 
-    for (const sourceUrl of [
+    for (const url of [
       "javascript:alert(1)",
       "data:text/html,<script>alert(1)</script>",
+      "https://user:secret@example.test/candidate/1",
+      "not a url",
     ]) {
       const { unmount } = render(
         <CandidateDetailDrawer
@@ -213,7 +229,9 @@ describe("CandidateDetailDrawer", () => {
           detail={{
             ...agentWorkbenchCandidateDetailFixture,
             sourceLabel: "猎聘",
-            sourceUrl,
+            sourceReferences: [
+              { sourceKind: "liepin", displayLabel: "猎聘", url },
+            ],
           }}
           onClose={() => undefined}
           open
@@ -221,10 +239,8 @@ describe("CandidateDetailDrawer", () => {
         />,
       );
 
-      expect(screen.queryByRole("link", { name: "查看来源" })).toBeNull();
-      expect(screen.getByLabelText("候选人来源已记录")).toHaveTextContent(
-        "猎聘",
-      );
+      expect(screen.queryByRole("link", { name: "猎聘" })).toBeNull();
+      expect(screen.queryByLabelText("候选人来源已记录")).toBeNull();
       unmount();
     }
   });
@@ -248,9 +264,7 @@ describe("CandidateDetailDrawer", () => {
       />,
     );
 
-    expect(screen.getByLabelText("候选人来源已记录")).toHaveTextContent(
-      "CTS 实验来源",
-    );
+    expect(screen.queryByLabelText("候选人来源已记录")).not.toBeInTheDocument();
     expect(screen.queryByText("猎聘来源")).not.toBeInTheDocument();
   });
 

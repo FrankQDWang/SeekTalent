@@ -35,6 +35,11 @@ export type AgentWorkbenchCandidateDetailSection = Omit<
 > & {
   items: string[];
 };
+export type AgentWorkbenchSourceReference = {
+  sourceKind: string;
+  displayLabel: string;
+  url: string;
+};
 export type AgentWorkbenchDetailApproval =
   Schemas["AgentWorkbenchDetailApprovalResponse"];
 export type AgentWorkbenchFinalSummary =
@@ -183,7 +188,7 @@ export type AgentWorkbenchConversationListResponse = {
 
 export type AgentWorkbenchCandidateDetailResponse = Omit<
   Schemas["AgentWorkbenchCandidateDetailResponse"],
-  "sections" | "evidence"
+  "sections" | "evidence" | "sourceReferences"
 > & {
   activeStatus?: string | null;
   age?: number | null;
@@ -206,7 +211,7 @@ export type AgentWorkbenchCandidateDetailResponse = Omit<
   projectExperience?: WorkbenchV2CandidateTimelineItem[];
   skills?: string[];
   sourceLabel?: string | null;
-  sourceUrl?: string | null;
+  sourceReferences: AgentWorkbenchSourceReference[];
   workExperience?: WorkbenchV2CandidateTimelineItem[];
   workYears?: number | null;
 };
@@ -297,6 +302,7 @@ type GeneratedCandidateDetailResponse = Omit<
   | "projectExperience"
   | "sections"
   | "skills"
+  | "sourceReferences"
   | "workExperience"
 > & {
   avatarColorKey?: string | null;
@@ -311,7 +317,7 @@ type GeneratedCandidateDetailResponse = Omit<
   sections?: GeneratedCandidateDetailSection[] | null;
   skills?: string[] | null;
   sourceLabel?: string | null;
-  sourceUrl?: string | null;
+  sourceReferences?: AgentWorkbenchSourceReference[] | null;
   workExperience?: WorkbenchV2CandidateTimelineItem[] | null;
   workYears?: number | null;
 };
@@ -366,6 +372,7 @@ export function normalizeAgentWorkbenchCandidateDetail(
   return {
     ...response,
     sourceKinds: response.sourceKinds ?? [],
+    sourceReferences: response.sourceReferences ?? [],
     match: normalizeCandidateMatch(response.match),
     workExperience: response.workExperience ?? [],
     projectExperience: response.projectExperience ?? [],

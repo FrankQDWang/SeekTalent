@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet
+from seektalent.source_references import SourceReference
 from seektalent_runtime_control.models import (
     RuntimeControlCandidateEvidence,
     RuntimeControlCandidateIdentity,
@@ -313,6 +314,21 @@ def _rich_version_evidence(
     score: int,
 ) -> RuntimeControlCandidateEvidence:
     label = version.capitalize()
+    source_references = [
+        SourceReference(
+            source_kind=source_kind,
+            display_label={"cts": "CTS 实验", "liepin": "猎聘"}.get(source_kind, label),
+            url=f"https://example.test/source/{version}",
+        )
+    ]
+    if version == "canonical":
+        source_references.append(
+            SourceReference(
+                source_kind=source_kind,
+                display_label="CTS 实验",
+                url="https://EXAMPLE.test:443/source/canonical",
+            )
+        )
     return RuntimeControlCandidateEvidence(
         runtime_run_id=runtime_run_id,
         evidence_id=f"evidence_{version}",
@@ -323,6 +339,7 @@ def _rich_version_evidence(
         provider_candidate_key_hash=f"provider_hash_{version}",
         score=score,
         fit_bucket="fit",
+        source_references=source_references,
         payload={
             "reasonCode": f"{version}_reason",
             "candidateProfile": {
@@ -560,7 +577,8 @@ def test_runtime_service_candidate_detail_projects_wts_profile_fields() -> None:
     assert detail["projectExperience"][0]["name"] == "助力C端业务增长"
     assert detail["educationExperience"][0]["school"] == "华东师范大学"
     assert detail["skills"] == ["用户研究", "交互设计"]
-    assert detail["sourceUrl"].startswith("https://h.liepin.com/resume/showresumedetail/")
+    assert detail["sourceReferences"] == []
+    assert "sourceUrl" not in detail
     assert detail["sections"][1]["title"] == "求职意向"
     serialized_sections = "\n".join(item for section in detail["sections"] for item in section["items"])
     assert "提供 B 端及 C 端体验设计方案" in serialized_sections
@@ -627,7 +645,7 @@ def test_runtime_service_candidate_detail_uses_only_canonical_resume_evidence() 
     assert detail["gender"] == "Canonical Gender"
     assert detail["activeStatus"] == "Canonical Active"
     assert detail["jobStatus"] == "Canonical Job State"
-    assert detail["sourceUrl"] == "https://example.test/canonical"
+    assert "sourceUrl" not in detail
     assert detail["workExperience"] == [
         {"title": "Canonical Work Title", "company": "Canonical Work Company"}
     ]
@@ -656,9 +674,24 @@ def test_runtime_service_candidate_detail_uses_only_canonical_resume_evidence() 
     assert detail["evidence"] == ["来源：CTS detail 证据"]
     assert detail["evidenceLevel"] == "detail"
     assert detail["reasonCode"] == "canonical_reason"
+    assert detail["sourceReferences"] == [
+        {
+            "sourceKind": "cts",
+            "displayLabel": "CTS 实验",
+            "url": "https://example.test/source/canonical",
+        },
+        {
+            "sourceKind": "liepin",
+            "displayLabel": "猎聘",
+            "url": "https://example.test/source/equivalent",
+        },
+    ]
+    assert "sourceUrl" not in detail
     serialized_projection = json.dumps({"summary": summary, "detail": detail}, ensure_ascii=False)
     for excluded_version in ("Equivalent", "Older", "Conflicting", "Incomparable"):
         assert excluded_version not in serialized_projection
+    for excluded_version in ("older", "conflicting", "incomparable"):
+        assert f"/source/{excluded_version}" not in serialized_projection
 
 
 def test_runtime_service_does_not_claim_source_without_evidence() -> None:
@@ -670,6 +703,8 @@ def test_runtime_service_does_not_claim_source_without_evidence() -> None:
     assert summary["sourceKinds"] == []
     assert summary["avatarColorKey"] in {f"avatar-{index}" for index in range(6)}
     assert detail["sourceKinds"] == []
+    assert detail["sourceReferences"] == []
+    assert "sourceUrl" not in detail
     assert detail["avatarColorKey"] in {f"avatar-{index}" for index in range(6)}
     assert detail["evidenceLevel"] == "unknown"
 

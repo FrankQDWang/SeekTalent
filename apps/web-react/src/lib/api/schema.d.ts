@@ -1646,6 +1646,8 @@ export interface components {
       sections?: components["schemas"]["AgentWorkbenchCandidateDetailSectionResponse"][];
       /** Evidence */
       evidence?: string[];
+      /** Sourcereferences */
+      sourceReferences?: components["schemas"]["AgentWorkbenchSourceReferenceResponse"][];
       /**
        * Detailavailability
        * @enum {string}
@@ -2319,6 +2321,15 @@ export interface components {
       displayName: string;
       /** Lastcheckedat */
       lastCheckedAt?: string | null;
+    };
+    /** AgentWorkbenchSourceReferenceResponse */
+    AgentWorkbenchSourceReferenceResponse: {
+      /** Sourcekind */
+      sourceKind: string;
+      /** Displaylabel */
+      displayLabel: string;
+      /** Url */
+      url: string;
     };
     /** AgentWorkbenchStrategyGraphResponse */
     AgentWorkbenchStrategyGraphResponse: {
@@ -4732,8 +4743,8 @@ export interface components {
       educationExperience?: components["schemas"]["WorkbenchV2CandidateTimelineItemView"][];
       /** Skills */
       skills?: string[];
-      /** Sourceurl */
-      sourceUrl?: string | null;
+      /** Sourcereferences */
+      sourceReferences?: components["schemas"]["WorkbenchV2SourceReferenceView"][];
       /** Sections */
       sections?: components["schemas"]["WorkbenchV2CandidateDetailSectionView"][];
       /** Evidence */
@@ -5130,6 +5141,15 @@ export interface components {
         | "cancelled";
       /** Runtimerunid */
       runtimeRunId?: string | null;
+    };
+    /** WorkbenchV2SourceReferenceView */
+    WorkbenchV2SourceReferenceView: {
+      /** Sourcekind */
+      sourceKind: string;
+      /** Displaylabel */
+      displayLabel: string;
+      /** Url */
+      url: string;
     };
     /** WorkbenchV2StrategyGraphView */
     WorkbenchV2StrategyGraphView: {

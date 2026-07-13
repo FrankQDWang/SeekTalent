@@ -658,6 +658,14 @@ class AgentWorkbenchCandidateDetailSectionResponse(BaseModel):
     items: list[str] = Field(default_factory=list)
 
 
+class AgentWorkbenchSourceReferenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sourceKind: str
+    displayLabel: str
+    url: str
+
+
 class AgentWorkbenchCandidateDetailResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -668,6 +676,7 @@ class AgentWorkbenchCandidateDetailResponse(BaseModel):
     matchScore: int | None = Field(default=None, ge=0, le=100)
     sections: list[AgentWorkbenchCandidateDetailSectionResponse] = Field(default_factory=list)
     evidence: list[str] = Field(default_factory=list)
+    sourceReferences: list[AgentWorkbenchSourceReferenceResponse] = Field(default_factory=list)
     detailAvailability: Literal["available", "redacted", "approval_required", "unavailable"]
     accessState: Literal["allowed", "redacted", "approval_required", "denied"]
     evidenceLevel: Literal["summary", "detail", "final", "unknown"]

@@ -1012,6 +1012,7 @@ export const agentWorkbenchCandidateDetailFixture: AgentWorkbenchCandidateDetail
       },
     ],
     sourceKinds: ["liepin"],
+    sourceReferences: [],
   };
 
 export const agentWorkbenchCandidateApprovalRequiredDetailFixture: AgentWorkbenchCandidateDetailResponse =
