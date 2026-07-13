@@ -50,7 +50,7 @@ from seektalent_runtime_control.requirements import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 6
+RUNTIME_CONTROL_SCHEMA_VERSION = 7
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -110,7 +110,7 @@ class RuntimeControlStore:
                     now=_migration_now(),
                 )
             with conn:
-                if version in {1, 2, 3, 4, 5}:
+                if version in {1, 2, 3, 4, 5, 6}:
                     run_ordered_migrations(
                         conn,
                         from_version=version,
@@ -121,6 +121,7 @@ class RuntimeControlStore:
                             3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
                             4: SQLiteMigrationStep(4, 5, _migrate_v4_to_v5),
                             5: SQLiteMigrationStep(5, 6, _migrate_v5_to_v6),
+                            6: SQLiteMigrationStep(6, 7, _migrate_v6_to_v7),
                         },
                         store_name="runtime-control",
                     )
@@ -2431,6 +2432,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           provider_candidate_key_hash TEXT NOT NULL,
           score INTEGER,
           fit_bucket TEXT,
+          source_references_json TEXT NOT NULL DEFAULT '[]',
           payload_json TEXT NOT NULL,
           payload_hash TEXT NOT NULL,
           updated_at TEXT NOT NULL,
@@ -2653,6 +2655,21 @@ def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
 def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     _create_schema(conn)
     _ensure_candidate_identity_version_columns(conn)
+
+
+def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
+    _create_schema(conn)
+    _ensure_candidate_evidence_source_references_column(conn)
+
+
+def _ensure_candidate_evidence_source_references_column(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "runtime_control_candidate_evidence"):
+        return
+    if "source_references_json" not in _column_names(conn, "runtime_control_candidate_evidence"):
+        conn.execute(
+            "ALTER TABLE runtime_control_candidate_evidence "
+            "ADD COLUMN source_references_json TEXT NOT NULL DEFAULT '[]'"
+        )
 
 
 def _ensure_candidate_identity_version_columns(conn: sqlite3.Connection) -> None:
@@ -3801,9 +3818,10 @@ def _sync_candidate_truth_from_checkpoint(conn: sqlite3.Connection, checkpoint: 
             """
             INSERT INTO runtime_control_candidate_evidence (
                 runtime_run_id, evidence_id, identity_id, resume_id, source_kind, evidence_level,
-                provider_candidate_key_hash, score, fit_bucket, payload_json, payload_hash, updated_at
+                provider_candidate_key_hash, score, fit_bucket, source_references_json,
+                payload_json, payload_hash, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(runtime_run_id, evidence_id) DO UPDATE SET
                 identity_id = excluded.identity_id,
                 resume_id = excluded.resume_id,
@@ -3812,6 +3830,7 @@ def _sync_candidate_truth_from_checkpoint(conn: sqlite3.Connection, checkpoint: 
                 provider_candidate_key_hash = excluded.provider_candidate_key_hash,
                 score = excluded.score,
                 fit_bucket = excluded.fit_bucket,
+                source_references_json = excluded.source_references_json,
                 payload_json = excluded.payload_json,
                 payload_hash = excluded.payload_hash,
                 updated_at = excluded.updated_at
@@ -3826,6 +3845,7 @@ def _sync_candidate_truth_from_checkpoint(conn: sqlite3.Connection, checkpoint: 
                 evidence.provider_candidate_key_hash,
                 evidence.score,
                 evidence.fit_bucket,
+                _json([reference.model_dump(mode="json") for reference in evidence.source_references]),
                 _json(evidence.payload),
                 evidence.payload_hash,
                 evidence.updated_at,
@@ -4064,10 +4084,32 @@ def _candidate_evidence_from_row(row: sqlite3.Row) -> RuntimeControlCandidateEvi
         provider_candidate_key_hash=row["provider_candidate_key_hash"],
         score=row["score"],
         fit_bucket=row["fit_bucket"],
+        source_references=_source_references_from_json(row["source_references_json"]),
         payload=_json_object(row["payload_json"]),
         payload_hash=row["payload_hash"],
         updated_at=row["updated_at"],
     )
+
+
+def _source_references_from_json(value: str) -> list[dict[str, str]]:
+    try:
+        parsed = json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [
+        {
+            "source_kind": item["source_kind"],
+            "display_label": item["display_label"],
+            "url": item["url"],
+        }
+        for item in parsed
+        if isinstance(item, dict)
+        and isinstance(item.get("source_kind"), str)
+        and isinstance(item.get("display_label"), str)
+        and isinstance(item.get("url"), str)
+    ]
 
 
 def _candidate_finalization_revision_from_row(row: sqlite3.Row) -> RuntimeControlCandidateFinalizationRevision:

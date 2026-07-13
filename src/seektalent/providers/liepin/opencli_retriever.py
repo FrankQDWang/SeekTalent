@@ -16,6 +16,8 @@ from seektalent.providers.liepin.worker_contracts import (
     LiepinWorkerCandidateDetail,
     SessionStatus,
 )
+from seektalent.providers.liepin.liepin_site_parsing import canonical_liepin_detail_source_url
+from seektalent.source_references import SourceReference
 
 
 class LiepinResumeSearchSite(Protocol):
@@ -311,6 +313,11 @@ def _detail_from_resume_payload(
         detail._opencli_private_candidate_identity = True
         detail._opencli_claim_aware_candidate_identity = True
         detail._opencli_presentation_resume_id = presentation_resume_id
+        source_url = _private_claim_aware_source_url(resume.get("detail_payload"))
+        if source_url is not None:
+            detail._source_references = (
+                SourceReference(source_kind="liepin", display_label="猎聘", url=source_url),
+            )
         return detail
 
     provider_rank = _positive_int(resume.get("provider_rank"), default=0)
@@ -384,6 +391,18 @@ def _public_detail_payload(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         return {}
     return _strip_private_detail_transport(cast(Mapping[str, object], value))
+
+
+def _private_claim_aware_source_url(value: object) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    source_url = value.get("sourceUrl")
+    if not isinstance(source_url, str):
+        return None
+    canonical = canonical_liepin_detail_source_url(source_url)
+    if canonical != source_url:
+        return None
+    return canonical
 
 
 def _strip_private_detail_transport(value: Mapping[str, object]) -> dict[str, object]:

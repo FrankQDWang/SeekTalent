@@ -1025,6 +1025,7 @@ def _source_evidence_for_candidate(
         score_hint=None,
         reason_code="source_detail_candidate" if evidence_level == "detail" else "source_card_candidate",
         safe_reason_codes=("source_detail_candidate" if evidence_level == "detail" else "source_card_candidate",),
+        source_references=candidate.source_references,
     )
 
 

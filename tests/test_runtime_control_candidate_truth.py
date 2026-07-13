@@ -115,6 +115,77 @@ def test_legacy_candidate_identity_reads_version_fields_with_safe_defaults(tmp_p
     assert identity.safe_reason_codes == []
 
 
+def test_candidate_evidence_source_references_round_trip_and_legacy_schema_defaults_empty(
+    tmp_path: Path,
+) -> None:
+    from seektalent_runtime_control.models import RuntimeCheckpoint
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = tmp_path / "runtime_control.sqlite3"
+    store = RuntimeControlStore(path)
+    store.initialize()
+    _create_run(store)
+    run_state = _run_state_payload()
+    evidence_payload = run_state["source_evidence_by_identity_id"]["identity_1"][0]
+    evidence_payload["source_references"] = [
+        {
+            "source_kind": "liepin",
+            "display_label": "猎聘",
+            "url": "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject",
+            "token": "must-not-pass",
+        }
+    ]
+    lease = store.acquire_executor_lease(
+        runtime_run_id="runtime_run_candidates",
+        executor_id="executor_1",
+        acquired_at="2026-06-17T00:00:00.000000Z",
+        lease_expires_at="2026-06-17T00:01:00.000000Z",
+    )
+    store.write_checkpoint(
+        RuntimeCheckpoint(
+            checkpoint_id="rtcheckpoint_source_references",
+            runtime_run_id="runtime_run_candidates",
+            stage="finalization",
+            round_no=None,
+            safe_boundary="runtime_candidate_checkpoint",
+            run_state=run_state,
+            source_plan={"sourceIds": ["liepin"]},
+            pending_commands=[],
+            artifact_manifest_ref=None,
+            schema_version="runtime-control-checkpoint/v1",
+            created_at="2026-06-17T00:00:10.000000Z",
+        ),
+        executor_id="executor_1",
+        attempt_no=lease.attempt_no,
+    )
+
+    [evidence, *_] = store.list_candidate_evidence(runtime_run_id="runtime_run_candidates")
+    assert [item.model_dump(mode="json") for item in evidence.source_references] == [
+        {
+            "source_kind": "liepin",
+            "display_label": "猎聘",
+            "url": "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject",
+        }
+    ]
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE runtime_control_candidate_evidence RENAME TO evidence_current")
+        conn.execute(
+            """
+            CREATE TABLE runtime_control_candidate_evidence AS
+            SELECT runtime_run_id, evidence_id, identity_id, resume_id, source_kind,
+                   evidence_level, provider_candidate_key_hash, score, fit_bucket,
+                   payload_json, payload_hash, updated_at
+            FROM evidence_current
+            """
+        )
+        conn.execute("DROP TABLE evidence_current")
+        conn.execute("PRAGMA user_version = 6")
+
+    store.initialize()
+    [legacy, *_] = store.list_candidate_evidence(runtime_run_id="runtime_run_candidates")
+    assert legacy.source_references == []
+
+
 def test_candidate_truth_projects_scorecard_match_fields() -> None:
     from seektalent_runtime_control.candidates import candidate_truth_from_run_state
 

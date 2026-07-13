@@ -11,6 +11,7 @@ from seektalent_runtime_control.models import (
     RuntimeControlCandidateFinalizationRevision,
     RuntimeControlCandidateIdentity,
 )
+from seektalent.source_references import SourceReference
 
 
 @dataclass(frozen=True)
@@ -253,10 +254,29 @@ def _candidate_evidence(
         or "",
         score=_int_or_none(scorecard.get("overall_score")),
         fit_bucket=_safe_text(scorecard.get("fit_bucket"), max_length=64),
+        source_references=_source_references(evidence_payload.get("source_references")),
         payload=payload,
         payload_hash=payload_hash,
         updated_at=observed_at,
     )
+
+
+def _source_references(value: object) -> list[SourceReference]:
+    references: list[SourceReference] = []
+    for item in _mapping_list(value):
+        source_kind = _safe_text(item.get("source_kind"), max_length=64)
+        display_label = _safe_text(item.get("display_label"), max_length=120)
+        url = _safe_text(item.get("url"), max_length=2048)
+        if source_kind is None or display_label is None or url is None:
+            continue
+        references.append(
+            SourceReference(
+                source_kind=source_kind,
+                display_label=display_label,
+                url=url,
+            )
+        )
+    return references
 
 
 def _candidate_profile_payload(candidate: Mapping[str, object]) -> dict[str, object]:

@@ -47,6 +47,7 @@ from seektalent.runtime.source_lanes import (
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 from seektalent.source_adapters.query_policy import default_source_query_policies
 from seektalent.storage.json import sha256_json
+from seektalent.source_references import SourceReference
 from seektalent.sources.liepin.reason_codes import LIEPIN_SOURCE_LANE_REASON_CODE_MAP
 from tests.settings_factory import make_settings
 
@@ -58,6 +59,34 @@ def _expansion_request() -> SourceFirstPageExpansionRequest:
         initial_opened_count=0)
     return SourceFirstPageExpansionRequest(runtime_run_id="r", round_no=1, source_kind="liepin",
         query_instance_id="q", continuation_id="c", continuation=continuation, action="expand")
+
+
+def test_liepin_source_evidence_copies_source_references_without_url_parsing() -> None:
+    source_reference = SourceReference(
+        source_kind="future_source",
+        display_label="Future Source",
+        url="opaque-reference://candidate/1",
+    )
+    candidate = ResumeCandidate(
+        resume_id="resume-1",
+        dedup_key="dedup-1",
+        search_text="Data Engineer",
+        source_references=(source_reference,),
+    )
+
+    evidence = runtime_lane._source_evidence_for_candidate(
+        source_plan=RuntimeSourceLanePlan(
+            source_plan_id="plan-1",
+            runtime_run_id="run-1",
+            source="liepin",
+            label="Liepin",
+        ),
+        candidate=candidate,
+        collected_at="2026-07-13T00:00:00Z",
+        evidence_level="detail",
+    )
+
+    assert evidence.source_references == (source_reference,)
 
 
 def test_expansion_maps_typed_provider_cleanup_error(monkeypatch) -> None:

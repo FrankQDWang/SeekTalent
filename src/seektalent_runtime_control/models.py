@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from seektalent.source_references import SourceReference
+
 
 RunStatus = Literal[
     "queued",
@@ -148,6 +150,7 @@ class RuntimeControlCandidateEvidence(BaseModel):
     provider_candidate_key_hash: str
     score: int | None = None
     fit_bucket: str | None = None
+    source_references: list[SourceReference] = Field(default_factory=list)
     payload: dict[str, object] = Field(default_factory=dict)
     payload_hash: str
     updated_at: str

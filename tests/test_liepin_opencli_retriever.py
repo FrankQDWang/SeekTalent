@@ -109,6 +109,56 @@ def test_expansion_maps_successful_envelope_to_typed_provider_result() -> None:
     assert result.continuation_deleted is False
 
 
+@pytest.mark.parametrize(
+    "source_url, expected_references",
+    [
+        (
+            "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject",
+            (
+                {
+                    "source_kind": "liepin",
+                    "display_label": "猎聘",
+                    "url": "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject",
+                },
+            ),
+        ),
+        ("http://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject", ()),
+        ("https://h.liepin.com.evil.test/resume/showresumedetail/?res_id_encode=sameSubject", ()),
+        (
+            "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject&index=5",
+            (),
+        ),
+        (
+            "https://h.liepin.com/resume/showresumedetail/?res_id_encode=sameSubject&token=secret",
+            (),
+        ),
+    ],
+)
+def test_claim_aware_detail_carries_only_a_validated_private_source_reference(
+    source_url: str,
+    expected_references: tuple[dict[str, str], ...],
+) -> None:
+    response = _response_from_opencli_envelope(
+        {
+            "status": "completed",
+            "resumes": [
+                {
+                    "claim_aware": True,
+                    "provider_candidate_key_hash": "a" * 64,
+                    "detail_payload": {
+                        "currentTitle": "Data Engineer",
+                        "sourceUrl": source_url,
+                    },
+                }
+            ],
+        }
+    )
+
+    [detail] = response.resumes
+    assert "sourceUrl" not in detail.payload
+    assert tuple(reference.model_dump(mode="json") for reference in detail.source_references) == expected_references
+
+
 @dataclass
 class FakeOpenCliRunner:
     opened_refs: list[str]

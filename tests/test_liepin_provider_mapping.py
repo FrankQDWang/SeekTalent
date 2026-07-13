@@ -436,6 +436,26 @@ def test_detail_mapping_keeps_raw_payload_and_detail_body_out_of_resume_candidat
     assert mapped.candidate.raw["raw_payload_artifact_ref"] == "worker://details/candidate-1.json"
 
 
+def test_claim_aware_detail_mapping_uses_typed_source_reference_without_restoring_url_to_payload() -> None:
+    from seektalent.source_references import SourceReference
+
+    detail = _worker_detail()
+    detail.payload.pop("sourceUrl")
+    detail._source_references = (
+        SourceReference(
+            source_kind="liepin",
+            display_label="猎聘",
+            url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=abc",
+        ),
+    )
+
+    mapped = map_liepin_worker_detail(detail)
+
+    assert mapped.candidate.source_references == detail.source_references
+    assert "sourceUrl" not in mapped.candidate.raw
+    assert "sourceUrl" not in mapped.provider_snapshot.raw_payload
+
+
 @pytest.mark.parametrize("alias", WHOLE_PAGE_TEXT_ALIASES)
 def test_worker_detail_rejects_whole_page_text_payload_aliases(alias: str) -> None:
     payload = _worker_detail().model_dump(mode="json")

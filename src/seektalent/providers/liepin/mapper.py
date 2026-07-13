@@ -93,6 +93,9 @@ def _map_candidate(
         snapshot_sha256=snapshot_hash,
         dedup_key=worker_candidate.synthetic_candidate_fingerprint,
         search_text=normalized_text,
+        source_references=worker_candidate.source_references
+        if isinstance(worker_candidate, LiepinWorkerCandidateDetail)
+        else (),
         raw=raw,
     )
     snapshot = ProviderSnapshot(

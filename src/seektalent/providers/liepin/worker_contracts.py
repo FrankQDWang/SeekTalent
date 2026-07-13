@@ -18,6 +18,7 @@ from seektalent.providers.liepin.models import LiepinIdentityConfidence
 from seektalent.providers.liepin.models import LiepinPiiClassification
 from seektalent.providers.liepin.models import LiepinRedactionState
 from seektalent.providers.liepin.models import LiepinRetentionPolicy
+from seektalent.source_references import SourceReference
 
 
 DetailOpenStatus = Literal[
@@ -285,6 +286,11 @@ class LiepinWorkerCandidateDetail(BaseModel):
     _opencli_private_candidate_identity: bool = PrivateAttr(default=False)
     _opencli_claim_aware_candidate_identity: bool = PrivateAttr(default=False)
     _opencli_presentation_resume_id: str | None = PrivateAttr(default=None)
+    _source_references: tuple[SourceReference, ...] = PrivateAttr(default=())
+
+    @property
+    def source_references(self) -> tuple[SourceReference, ...]:
+        return self._source_references
 
     @model_validator(mode="after")
     def reject_whole_page_text_payload_aliases(self) -> LiepinWorkerCandidateDetail:

@@ -8,6 +8,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
+from seektalent.source_references import SourceReference
+
 FitBucket = Literal["fit", "not_fit"]
 DecisionType = Literal["continue", "stop"]
 ControllerAction = Literal["source_search", "search_cts", "stop"]
@@ -758,6 +760,7 @@ class ResumeCandidate(BaseModel):
     work_experience_summaries: list[str] = Field(default_factory=list)
     project_names: list[str] = Field(default_factory=list)
     work_summaries: list[str] = Field(default_factory=list)
+    source_references: tuple[SourceReference, ...] = Field(default=(), exclude=True)
     search_text: str
     raw: dict[str, Any] = Field(default_factory=dict)
 
@@ -1702,6 +1705,7 @@ class RuntimeSourceEvidence(BaseModel):
     score_hint: int | None = None
     reason_code: str | None = None
     safe_reason_codes: tuple[str, ...] = ()
+    source_references: tuple[SourceReference, ...] = ()
 
     def to_public_payload(self) -> dict[str, object]:
         return {
@@ -1723,6 +1727,7 @@ class RuntimeSourceEvidence(BaseModel):
             "score_hint": self.score_hint,
             "reason_code": _runtime_public_reason_code(self.reason_code),
             "safe_reason_codes": [_runtime_public_reason_code(value) for value in self.safe_reason_codes],
+            "source_references": [reference.model_dump(mode="json") for reference in self.source_references],
         }
 
 
