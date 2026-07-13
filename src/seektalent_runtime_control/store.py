@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from seektalent.source_references import SourceReference
 from seektalent.sqlite_migrations import (
     SQLiteMigrationError,
     SQLiteMigrationStep,
@@ -4091,7 +4092,7 @@ def _candidate_evidence_from_row(row: sqlite3.Row) -> RuntimeControlCandidateEvi
     )
 
 
-def _source_references_from_json(value: str) -> list[dict[str, str]]:
+def _source_references_from_json(value: str) -> list[SourceReference]:
     try:
         parsed = json.loads(value)
     except (TypeError, json.JSONDecodeError):
@@ -4099,11 +4100,11 @@ def _source_references_from_json(value: str) -> list[dict[str, str]]:
     if not isinstance(parsed, list):
         return []
     return [
-        {
-            "source_kind": item["source_kind"],
-            "display_label": item["display_label"],
-            "url": item["url"],
-        }
+        SourceReference(
+            source_kind=item["source_kind"],
+            display_label=item["display_label"],
+            url=item["url"],
+        )
         for item in parsed
         if isinstance(item, dict)
         and isinstance(item.get("source_kind"), str)

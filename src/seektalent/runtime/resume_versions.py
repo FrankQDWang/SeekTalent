@@ -75,7 +75,7 @@ def resume_content_version(resume_id: str, normalized: NormalizedResume | None) 
     freshness_values = [_timeline_freshness(item.duration) for item in timeline_items]
     known_freshness = [value for value in freshness_values if value is not None]
     freshness = max(known_freshness) if known_freshness else None
-    payload = {
+    payload: dict[str, object] = {
         "current_role": {"company": current_company, "title": current_title},
         "work_experience": [
             {"period": list(period), "company": company, "title": title, "summary": summary}
