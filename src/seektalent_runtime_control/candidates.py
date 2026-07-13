@@ -327,9 +327,62 @@ def _normalized_profile_payload(normalized: Mapping[str, object]) -> dict[str, o
             "languageTags": _string_list(normalized.get("language_tags"))[:8],
             "recentExperiences": recent_experiences,
             "keyAchievements": _string_list(normalized.get("key_achievements"))[:6],
-            "rawTextExcerpt": _safe_text(normalized.get("raw_text_excerpt"), max_length=1200),
+            "structuredEvidence": _structured_evidence_payload(normalized.get("structured_evidence")),
         }
     )
+
+
+def _structured_evidence_payload(value: object) -> dict[str, object]:
+    evidence = _mapping(value)
+    return _compact_mapping(
+        {
+            "identity": _structured_value_mapping(evidence.get("identity")),
+            "current_role": _structured_value_mapping(evidence.get("current_role")),
+            "status": _structured_value_mapping(evidence.get("status")),
+            "job_intention": _structured_value_mapping(evidence.get("job_intention")),
+            "work_experience": _structured_timeline_items(evidence.get("work_experience")),
+            "project_experience": _structured_timeline_items(evidence.get("project_experience")),
+            "education_experience": _structured_timeline_items(evidence.get("education_experience")),
+            "skills": [
+                text
+                for skill in _string_list(evidence.get("skills"))[:24]
+                if (text := _safe_text(skill, max_length=160)) is not None
+            ],
+            "source_metadata": _structured_value_mapping(evidence.get("source_metadata")),
+        }
+    )
+
+
+def _structured_value_mapping(value: object) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, item in list(_mapping(value).items())[:32]:
+        if isinstance(item, str):
+            text = _safe_text(item, max_length=600)
+            if text is not None:
+                result[key] = text
+        elif isinstance(item, int) and not isinstance(item, bool):
+            result[key] = item
+    return result
+
+
+def _structured_timeline_items(value: object) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    for raw_item in _mapping_list(value)[:8]:
+        item = _compact_mapping(
+            {
+                "company": _safe_text(raw_item.get("company"), max_length=160),
+                "title": _safe_text(raw_item.get("title"), max_length=160),
+                "name": _safe_text(raw_item.get("name"), max_length=160),
+                "school": _safe_text(raw_item.get("school"), max_length=160),
+                "major": _safe_text(raw_item.get("major"), max_length=160),
+                "degree": _safe_text(raw_item.get("degree"), max_length=120),
+                "duration": _safe_text(raw_item.get("duration"), max_length=120),
+                "summary": _safe_text(raw_item.get("summary"), max_length=600),
+            }
+        )
+        if item:
+            items.append(item)
+    return items
 
 
 def _safe_summary_payload(raw: Mapping[str, object]) -> dict[str, object]:

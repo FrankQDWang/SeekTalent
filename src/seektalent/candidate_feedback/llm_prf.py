@@ -37,7 +37,7 @@ LLMPRFSourceSection = Literal[
     "skill",
     "recent_experience_summary",
     "key_achievement",
-    "raw_text_excerpt",
+    "structured_resume_evidence",
     "scorecard_evidence",
     "scorecard_matched_must_have",
     "scorecard_matched_preference",
@@ -58,7 +58,7 @@ _SOURCE_SECTION_ORDER: tuple[LLMPRFSourceSection, ...] = (
     "skill",
     "recent_experience_summary",
     "key_achievement",
-    "raw_text_excerpt",
+    "structured_resume_evidence",
     "scorecard_evidence",
     "scorecard_matched_must_have",
     "scorecard_matched_preference",
@@ -729,15 +729,39 @@ def _source_texts_from_normalized_resume(
 
 def _normalized_resume_text_sources(resume: NormalizedResume) -> list[tuple[int, LLMPRFSourceSection, str, str]]:
     sources: list[tuple[int, LLMPRFSourceSection, str, str]] = []
-    sources.extend((0, "key_achievement", f"key_achievements[{index}]", text) for index, text in enumerate(resume.key_achievements))
+    evidence = resume.structured_evidence
     sources.extend(
-        (1, "recent_experience_summary", f"recent_experiences[{index}].summary", item.summary)
-        for index, item in enumerate(resume.recent_experiences)
+        (
+            0,
+            "structured_resume_evidence",
+            f"structured_evidence.work_experience[{index}]",
+            _structured_timeline_text(item.company, item.title, item.name, item.duration, item.summary),
+        )
+        for index, item in enumerate(evidence.work_experience[:8])
     )
-    if resume.raw_text_excerpt:
-        sources.append((2, "raw_text_excerpt", "raw_text_excerpt", resume.raw_text_excerpt))
-    sources.extend((3, "skill", f"skills[{index}]", skill) for index, skill in enumerate(resume.skills))
+    sources.extend(
+        (
+            1,
+            "structured_resume_evidence",
+            f"structured_evidence.project_experience[{index}]",
+            _structured_timeline_text(item.company, item.title, item.name, item.duration, item.summary),
+        )
+        for index, item in enumerate(evidence.project_experience[:8])
+    )
+    sources.extend(
+        (
+            2,
+            "structured_resume_evidence",
+            f"structured_evidence.skills[{index}]",
+            skill,
+        )
+        for index, skill in enumerate(evidence.skills[:24])
+    )
     return sources
+
+
+def _structured_timeline_text(*parts: str) -> str:
+    return " ".join(part.strip() for part in parts if part.strip())
 
 
 def _resume_source_snippets(text: str) -> list[str]:

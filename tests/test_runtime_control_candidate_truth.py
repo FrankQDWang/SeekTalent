@@ -213,6 +213,74 @@ def test_candidate_truth_projects_scorecard_match_fields() -> None:
     }
 
 
+def test_candidate_truth_normalized_profile_projects_structured_evidence_without_raw_excerpt() -> None:
+    from seektalent_runtime_control.candidates import candidate_truth_from_run_state
+
+    run_state = _run_state_payload()
+    normalized_store = run_state["normalized_store"]
+    assert isinstance(normalized_store, dict)
+    normalized = normalized_store["resume_1"]
+    assert isinstance(normalized, dict)
+    normalized.update(
+        {
+            "structured_evidence": {
+                "work_experience": [
+                    {
+                        "company": "Data Co",
+                        "title": "Staff Engineer",
+                        "duration": "2023-2026",
+                        "summary": "Built ranking systems.",
+                    }
+                ],
+                "project_experience": [
+                    {"name": "Search Platform", "summary": "Improved retrieval quality."}
+                ],
+                "skills": ["Python", "Retrieval"],
+            },
+            "raw_text_excerpt": "LEGACY_RAW_EXCERPT",
+            "rawTextExcerpt": "LEGACY_CAMEL_EXCERPT",
+        }
+    )
+
+    truth = candidate_truth_from_run_state(
+        runtime_run_id="runtime_run_candidates",
+        run_state=run_state,
+        source_checkpoint_id="rtcheckpoint_candidates",
+        observed_at="2026-06-17T00:00:10.000000Z",
+    )
+
+    profile = truth.evidence[0].payload["normalizedProfile"]
+    assert profile["structuredEvidence"] == normalized["structured_evidence"]
+    assert "rawTextExcerpt" not in profile
+    assert "raw_text_excerpt" not in profile
+    serialized = json.dumps(profile, ensure_ascii=False)
+    assert "LEGACY_RAW_EXCERPT" not in serialized
+    assert "LEGACY_CAMEL_EXCERPT" not in serialized
+
+
+def test_candidate_truth_reads_legacy_normalized_mapping_and_drops_raw_excerpt() -> None:
+    from seektalent_runtime_control.candidates import candidate_truth_from_run_state
+
+    run_state = _run_state_payload()
+    run_state["normalized_store"] = {
+        "resume_1": {
+            "candidate_name": "Alice Chen",
+            "raw_text_excerpt": "HISTORICAL_LEGACY_EXCERPT",
+        }
+    }
+
+    truth = candidate_truth_from_run_state(
+        runtime_run_id="runtime_run_candidates",
+        run_state=run_state,
+        source_checkpoint_id="rtcheckpoint_candidates",
+        observed_at="2026-06-17T00:00:10.000000Z",
+    )
+
+    profile = truth.evidence[0].payload["normalizedProfile"]
+    assert profile == {"candidateName": "Alice Chen"}
+    assert "HISTORICAL_LEGACY_EXCERPT" not in json.dumps(profile, ensure_ascii=False)
+
+
 def test_candidate_truth_safe_detail_uses_field_whitelist() -> None:
     from seektalent_runtime_control.candidates import candidate_truth_from_run_state
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,7 +33,14 @@ from seektalent.candidate_feedback.llm_prf import (
 )
 from seektalent.candidate_feedback.policy import PRFGateInput, build_prf_policy_decision
 from seektalent.config import AppSettings
-from seektalent.models import FitBucket, NormalizedExperience, NormalizedResume, ScoredCandidate
+from seektalent.models import (
+    FitBucket,
+    NormalizedExperience,
+    NormalizedResume,
+    ScoredCandidate,
+    StructuredResumeEvidence,
+    StructuredResumeTimelineItem,
+)
 from seektalent.prompt_safety import assert_prompt_snapshot_safe, prompt_template_version
 from seektalent.prompting import LoadedPrompt
 from seektalent.tracing import ProviderUsageSnapshot
@@ -279,6 +287,17 @@ def _normalized_resume(resume_id: str, *, raw_text_excerpt: str, key_achievement
                 summary=raw_text_excerpt,
             )
         ],
+        structured_evidence=StructuredResumeEvidence(
+            work_experience=[
+                StructuredResumeTimelineItem(
+                    company="Example Co",
+                    title="AI Engineer",
+                    duration="2023-2026",
+                    summary=raw_text_excerpt,
+                )
+            ],
+            skills=["Python", "LangGraph"],
+        ),
         key_achievements=key_achievements or [raw_text_excerpt],
         raw_text_excerpt=raw_text_excerpt,
         completeness_score=90,
@@ -453,6 +472,16 @@ def test_llm_prf_input_uses_normalized_resume_source_sections() -> None:
             )
         ],
         key_achievements=["Delivered Agent Skills modules for resume matching."],
+        structured_evidence=StructuredResumeEvidence(
+            work_experience=[
+                StructuredResumeTimelineItem(
+                    company="Example",
+                    title="Agent Engineer",
+                    summary="Built LangGraph workflows for multi-agent retrieval.",
+                )
+            ],
+            skills=["LangGraph", "Agent Skills"],
+        ),
         raw_text_excerpt="Agent Skills and LangGraph were used in production retrieval.",
     )
     seed_2 = _scored_candidate("seed-2", overall_score=91, must_have_match_score=89)
@@ -469,6 +498,16 @@ def test_llm_prf_input_uses_normalized_resume_source_sections() -> None:
             )
         ],
         key_achievements=["Delivered Agent Skills modules for talent matching."],
+        structured_evidence=StructuredResumeEvidence(
+            work_experience=[
+                StructuredResumeTimelineItem(
+                    company="Example",
+                    title="Agent Engineer",
+                    summary="Built LangGraph workflows for agent evaluation.",
+                )
+            ],
+            skills=["LangGraph"],
+        ),
         raw_text_excerpt="Agent Skills and LangGraph were used in matching retrieval.",
     )
 
@@ -483,8 +522,69 @@ def test_llm_prf_input_uses_normalized_resume_source_sections() -> None:
 
     assert payload is not None
     sections = {item.source_section for item in payload.source_texts}
-    assert {"skill", "recent_experience_summary", "key_achievement", "raw_text_excerpt"} <= sections
+    assert sections == {"structured_resume_evidence"}
+    assert all(item.original_field_path.startswith("structured_evidence.") for item in payload.source_texts)
     assert all(item.support_eligible for item in payload.source_texts if item.source_section != "scorecard_strength")
+
+
+def test_llm_prf_uses_only_structured_resume_evidence_sources() -> None:
+    resume = NormalizedResume(
+        resume_id="seed-structured",
+        dedup_key="seed-structured",
+        structured_evidence=StructuredResumeEvidence(
+            work_experience=[
+                StructuredResumeTimelineItem(
+                    company="Acme",
+                    title="Agent Engineer",
+                    summary="Built retrieval agents.",
+                )
+            ],
+            project_experience=[
+                StructuredResumeTimelineItem(
+                    name="Agent Workflow",
+                    summary="Implemented evaluation workflows.",
+                )
+            ],
+            skills=["Python", "RAG"],
+        ),
+        recent_experiences=[NormalizedExperience(summary="LEGACY_RECENT_EXPERIENCE")],
+        key_achievements=["LEGACY_KEY_ACHIEVEMENT"],
+        raw_text_excerpt="LEGACY_RAW_EXCERPT",
+        completeness_score=90,
+    )
+
+    sources = llm_prf._normalized_resume_text_sources(resume)
+    serialized = json.dumps(sources, ensure_ascii=False)
+
+    assert "Built retrieval agents" in serialized
+    assert "Implemented evaluation workflows" in serialized
+    assert "Python" in serialized
+    assert "RAG" in serialized
+    assert "structured_evidence.work_experience[0]" in serialized
+    assert "structured_evidence.project_experience[0]" in serialized
+    assert "structured_evidence.skills[0]" in serialized
+    assert "raw_text_excerpt" not in serialized
+    assert "LEGACY_RAW_EXCERPT" not in serialized
+    assert "LEGACY_RECENT_EXPERIENCE" not in serialized
+    assert "LEGACY_KEY_ACHIEVEMENT" not in serialized
+
+
+def test_llm_prf_structured_sources_do_not_change_with_legacy_raw_excerpt() -> None:
+    evidence = StructuredResumeEvidence(
+        work_experience=[StructuredResumeTimelineItem(summary="Built retrieval agents.")],
+        project_experience=[StructuredResumeTimelineItem(summary="Implemented evaluation workflows.")],
+        skills=["Python"],
+    )
+    first = NormalizedResume(
+        resume_id="seed-structured",
+        dedup_key="seed-structured",
+        structured_evidence=evidence,
+        raw_text_excerpt="FIRST_LEGACY_EXCERPT",
+        completeness_score=90,
+    )
+    second = first.model_copy(update={"raw_text_excerpt": "SECOND_LEGACY_EXCERPT"})
+
+    assert llm_prf._normalized_resume_text_sources(first) == llm_prf._normalized_resume_text_sources(second)
 
 
 def test_llm_prf_source_sanitizer_rejects_metadata_dominated_snippets() -> None:
@@ -499,6 +599,13 @@ def test_llm_prf_source_sanitizer_rejects_metadata_dominated_snippets() -> None:
             NormalizedExperience(company="阿里云", title="高级工程师", summary="阿里云 上海团队 高级工程师"),
             NormalizedExperience(company="Example", title="Engineer", summary="使用 LangGraph 构建 Agent 工作流"),
         ],
+        structured_evidence=StructuredResumeEvidence(
+            work_experience=[
+                StructuredResumeTimelineItem(company="阿里云", title="高级工程师", summary="阿里云 上海团队 高级工程师"),
+                StructuredResumeTimelineItem(company="Example", title="Engineer", summary="使用 LangGraph 构建 Agent 工作流"),
+            ],
+            skills=["LangGraph"],
+        ),
     )
     normalized_2 = NormalizedResume(
         resume_id="seed-2",
@@ -508,6 +615,12 @@ def test_llm_prf_source_sanitizer_rejects_metadata_dominated_snippets() -> None:
         recent_experiences=[
             NormalizedExperience(company="Example", title="Engineer", summary="使用 LangGraph 构建 Agent 检索系统"),
         ],
+        structured_evidence=StructuredResumeEvidence(
+            work_experience=[
+                StructuredResumeTimelineItem(company="Example", title="Engineer", summary="使用 LangGraph 构建 Agent 检索系统"),
+            ],
+            skills=["LangGraph"],
+        ),
     )
 
     payload = build_llm_prf_input(
