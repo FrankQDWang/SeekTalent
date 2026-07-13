@@ -16,6 +16,7 @@ from seektalent.llm import (
     build_model,
     build_model_settings,
     build_provider_request_policy,
+    preflight_models,
     resolve_stage_model_config,
     resolve_structured_output_mode,
     resolve_text_llm_api_key,
@@ -477,10 +478,24 @@ def test_anthropic_structured_stages_remain_prompted_output() -> None:
 
     for stage_name in STRICT_NATIVE_OPENAI_STAGES:
         stage = resolve_stage_model_config(settings, stage=stage_name)
-        output_spec = build_output_spec(stage, model, dict)
-
         assert resolve_structured_output_mode(stage) == "prompted_json"
-        assert isinstance(output_spec, PromptedOutput)
+        if stage_name in {"candidate_feedback", "prf_probe_phrase_proposal"}:
+            with pytest.raises(ValueError, match=f"{stage_name} requires strict native JSON Schema output"):
+                build_output_spec(stage, model, dict)
+        else:
+            assert isinstance(build_output_spec(stage, model, dict), PromptedOutput)
+
+
+def test_preflight_rejects_anthropic_when_strict_llm_prf_is_required() -> None:
+    settings = make_settings(
+        text_llm_protocol_family="anthropic_messages_compatible",
+        text_llm_endpoint_kind="bailian_anthropic_messages",
+        text_llm_endpoint_region="beijing",
+        text_llm_api_key="test-key",
+    )
+
+    with pytest.raises(ValueError, match="prf_probe_phrase_proposal requires strict native JSON Schema output"):
+        preflight_models(settings, extra_stage_names=["prf_probe_phrase_proposal"])
 
 
 def test_openai_tui_summary_remains_prompted_output() -> None:

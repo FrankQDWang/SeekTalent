@@ -295,7 +295,7 @@ Eval is off by default. Enable it with `SEEKTALENT_ENABLE_EVAL=true` or the CLI 
 
 ## Rescue Variables
 
-These settings control candidate-feedback rescue. The active lane asks the shared PRF extractor to propose phrases from at most five eligible top resumes using strict native structured output. Runtime then requires exact source grounding, support from at least two distinct resumes, novelty, and the existing deterministic PRF policy gate. An empty or rejected proposal advances to the next rescue lane without inventing a term or failing the run.
+These settings control candidate-feedback rescue. The active lane asks the shared PRF extractor to propose phrases from at most five eligible top resumes using strict native structured output. Enabling candidate feedback therefore requires a protocol/model combination that supports strict native JSON Schema; Anthropic-compatible prompted output is rejected during preflight. Runtime then requires exact source grounding, support from at least two distinct resumes, novelty, and the existing deterministic PRF policy gate. An empty or rejected proposal advances to the next rescue lane without inventing a term or failing the run.
 
 | Variable | Starter value | Notes |
 | --- | --- | --- |

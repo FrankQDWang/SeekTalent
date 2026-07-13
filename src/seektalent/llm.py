@@ -40,6 +40,12 @@ OPENAI_NATIVE_JSON_SCHEMA_STAGES = frozenset(
 )
 OPENAI_PROMPTED_JSON_STAGES = frozenset({"tui_summary"})
 PLAIN_TEXT_STAGES = frozenset({"workbench_note_writer"})
+STRICT_NATIVE_JSON_SCHEMA_REQUIRED_STAGES = frozenset(
+    {
+        "candidate_feedback",
+        "prf_probe_phrase_proposal",
+    }
+)
 STAGE_MODEL_ATTR = {
     "requirements": "requirements_model_id",
     "controller": "controller_model_id",
@@ -269,6 +275,13 @@ def resolve_structured_output_mode(config: ResolvedTextModelConfig) -> Structure
     return "native_json_schema"
 
 
+def ensure_stage_structured_output_policy(config: ResolvedTextModelConfig) -> StructuredOutputMode:
+    mode = resolve_structured_output_mode(config)
+    if config.stage in STRICT_NATIVE_JSON_SCHEMA_REQUIRED_STAGES and mode != "native_json_schema":
+        raise ValueError(f"{config.stage} requires strict native JSON Schema output.")
+    return mode
+
+
 def _resolve_text_llm_capability(config: ResolvedTextModelConfig) -> TextLLMCapability | None:
     return TEXT_LLM_CAPABILITIES.get(
         (
@@ -469,7 +482,7 @@ def ensure_native_structured_output(model_id: str, model: Model) -> None:
 
 def build_output_spec(model_or_config: str | ResolvedTextModelConfig, model: Model, output_type: Any) -> Any:
     if isinstance(model_or_config, ResolvedTextModelConfig):
-        structured_output_mode = resolve_structured_output_mode(model_or_config)
+        structured_output_mode = ensure_stage_structured_output_policy(model_or_config)
         if structured_output_mode == "plain_text":
             return output_type
         if structured_output_mode == "native_json_schema":
@@ -564,6 +577,7 @@ def preflight_models(
                 stage_names.append(stage_name)
     for stage_name in stage_names:
         config = resolve_stage_model_config(settings, stage=stage_name)
+        structured_output_mode = ensure_stage_structured_output_policy(config)
         key = (
             config.protocol_family,
             config.endpoint_kind,
@@ -573,6 +587,6 @@ def preflight_models(
         if key in seen:
             continue
         model = build_model(config)
-        if resolve_structured_output_mode(config) == "native_json_schema":
+        if structured_output_mode == "native_json_schema":
             ensure_native_structured_output(config.model_id, model)
         seen.add(key)
