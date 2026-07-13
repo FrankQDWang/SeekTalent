@@ -7,6 +7,8 @@ from seektalent.models import (
     ResumeCandidate,
     RuntimeIdentitySignals,
     RuntimeSourceEvidence,
+    StructuredResumeEvidence,
+    StructuredResumeTimelineItem,
 )
 import seektalent.runtime.source_lanes as source_lanes_module
 from seektalent.runtime.source_lanes import (
@@ -57,7 +59,22 @@ def _normalized(
     current_title: str = "高级主管工程师",
     completeness: int = 80,
     score_source: str = "card",
+    current_duration: str = "",
+    prior_work: tuple[tuple[str, str, str], ...] = (),
+    project_duration: str = "",
+    education_duration: str = "",
 ) -> NormalizedResume:
+    work_experience = [
+        StructuredResumeTimelineItem(
+            company=current_company,
+            title=current_title,
+            duration=current_duration,
+        ),
+        *(
+            StructuredResumeTimelineItem(company=company, title=title, duration=duration)
+            for company, title, duration in prior_work
+        ),
+    ]
     return NormalizedResume(
         resume_id=resume_id,
         dedup_key=resume_id,
@@ -66,6 +83,16 @@ def _normalized(
         current_title=current_title,
         current_company=current_company,
         education_summary="南京邮电大学 硕士",
+        structured_evidence=StructuredResumeEvidence(
+            current_role={"company": current_company, "title": current_title},
+            work_experience=work_experience,
+            project_experience=[StructuredResumeTimelineItem(name="项目", duration=project_duration)]
+            if project_duration
+            else [],
+            education_experience=[StructuredResumeTimelineItem(school="南京邮电大学", duration=education_duration)]
+            if education_duration
+            else [],
+        ),
         completeness_score=completeness,
         score_evidence_source=score_source,
     )
@@ -355,44 +382,377 @@ def test_identity_index_scores_only_candidate_fuzzy_bucket(monkeypatch: pytest.M
     assert calls == [("person-20", "person-20")]
 
 
-def test_canonical_resume_prefers_detail_then_freshness_completeness_and_provider_rank() -> None:
+def test_canonical_resume_ignores_collected_at_when_older_content_arrives_later() -> None:
     candidates = {
-        "card-old": _candidate("card-old"),
-        "detail-old": _candidate("detail-old"),
-        "detail-new": _candidate("detail-new"),
+        "older": _candidate("older"),
+        "newer": _candidate("newer"),
     }
     normalized = {
-        "card-old": _normalized("card-old", completeness=100, score_source="card"),
-        "detail-old": _normalized("detail-old", completeness=75, score_source="detail"),
-        "detail-new": _normalized("detail-new", completeness=75, score_source="detail"),
+        "older": _normalized("older", current_duration="2020-01 - 2022-12"),
+        "newer": _normalized("newer", current_duration="2023-01 - 2025-06"),
     }
     evidence = [
-        _evidence("card-evidence", resume_id="card-old", source="cts", level="card", provider_rank=1),
         _evidence(
-            "detail-old-evidence",
-            resume_id="detail-old",
-            source="liepin",
+            "older-evidence",
+            resume_id="older",
+            source="cts",
             level="detail",
-            provider_rank=3,
-            collected_at="2026-05-14T00:00:00Z",
+            collected_at="2026-07-01T00:00:00Z",
         ),
         _evidence(
-            "detail-new-evidence",
-            resume_id="detail-new",
+            "newer-evidence",
+            resume_id="newer",
             source="liepin",
-            level="detail",
-            provider_rank=2,
-            collected_at="2026-05-15T00:00:00Z",
+            level="card",
+            collected_at="2026-01-01T00:00:00Z",
         ),
     ]
 
     selection = choose_canonical_resume_for_identity(
         identity_id="identity-1",
-        resume_ids=("card-old", "detail-old", "detail-new"),
+        resume_ids=("older", "newer"),
         candidates=candidates,
         normalized_store=normalized,
         evidence=evidence,
     )
 
-    assert selection.canonical_resume_id == "detail-new"
-    assert "detail_evidence" in selection.safe_reason_codes
+    assert selection.canonical_resume_id == "newer"
+    assert selection.equivalent_latest_resume_ids == ("newer",)
+    assert selection.display_source_evidence_ids == ("newer-evidence",)
+    assert selection.conflicting_resume_ids == ()
+    assert selection.content_version_key
+    assert "structured_work_newer" in selection.safe_reason_codes
+    assert "structured_work_newer" in selection.to_public_payload()["safe_reason_codes"]
+
+
+def test_canonical_resume_prefers_later_structured_work_chronology() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("2024", "2025"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("2024", "2025")},
+        normalized_store={
+            "2024": _normalized("2024", current_duration="2021-03 to 2024-08"),
+            "2025": _normalized("2025", current_duration="2021-03 to 2025-02"),
+        },
+        evidence=[
+            _evidence("e-2024", resume_id="2024", source="cts"),
+            _evidence("e-2025", resume_id="2025", source="liepin"),
+        ],
+    )
+
+    assert selection.canonical_resume_id == "2025"
+
+
+def test_project_and_education_dates_do_not_make_work_content_newer() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("work-newer", "non-work-later"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("work-newer", "non-work-later")},
+        normalized_store={
+            "work-newer": _normalized("work-newer", current_duration="2021-01 - 2025-03"),
+            "non-work-later": _normalized(
+                "non-work-later",
+                current_duration="2021-01 - 2024-12",
+                project_duration="2025-12",
+                education_duration="2026-06",
+            ),
+        },
+        evidence=[],
+    )
+
+    assert selection.canonical_resume_id == "work-newer"
+
+
+def test_consistent_same_latest_work_state_is_equivalent_despite_completeness() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("sparse", "complete"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("sparse", "complete")},
+        normalized_store={
+            "sparse": _normalized("sparse", current_duration="2023-10 - present", completeness=35),
+            "complete": _normalized(
+                "complete",
+                current_duration="2023-10 - 至今",
+                prior_work=(("旧公司", "工程师", "2020-01 - 2023-09"),),
+                completeness=95,
+            ),
+        },
+        evidence=[
+            _evidence("e-sparse", resume_id="sparse", source="cts"),
+            _evidence("e-complete", resume_id="complete", source="liepin"),
+        ],
+    )
+
+    assert set(selection.equivalent_latest_resume_ids) == {"sparse", "complete"}
+    assert selection.canonical_resume_id == "complete"
+    assert set(selection.display_source_evidence_ids) == {"e-sparse", "e-complete"}
+    assert selection.selected_evidence_id == "e-complete"
+    assert selection.conflicting_resume_ids == ()
+    assert "equivalent_latest_content" in selection.safe_reason_codes
+
+
+def test_same_latest_marker_with_conflicting_current_role_is_version_conflict() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("alpha", "beta"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("alpha", "beta")},
+        normalized_store={
+            "alpha": _normalized(
+                "alpha",
+                current_company="甲公司",
+                current_title="架构师",
+                current_duration="2024-01 - present",
+                completeness=30,
+            ),
+            "beta": _normalized(
+                "beta",
+                current_company="乙公司",
+                current_title="总监",
+                current_duration="2024-01 - present",
+                completeness=90,
+            ),
+        },
+        evidence=[
+            _evidence("e-alpha", resume_id="alpha", source="cts"),
+            _evidence("e-beta", resume_id="beta", source="liepin"),
+        ],
+    )
+
+    assert len(selection.equivalent_latest_resume_ids) == 1
+    assert selection.canonical_resume_id == "beta"
+    assert len(selection.display_source_evidence_ids) == 1
+    assert set(selection.conflicting_resume_ids) | set(selection.equivalent_latest_resume_ids) == {"alpha", "beta"}
+    assert "resume_version_conflict" in selection.safe_reason_codes
+
+
+def test_sparse_newer_work_content_beats_more_complete_older_content() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("sparse-new", "complete-old"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("sparse-new", "complete-old")},
+        normalized_store={
+            "sparse-new": _normalized("sparse-new", current_duration="2025-04", completeness=20),
+            "complete-old": _normalized(
+                "complete-old",
+                current_duration="2024-12",
+                prior_work=(("旧公司", "工程师", "2018-01 - 2024-11"),),
+                completeness=100,
+            ),
+        },
+        evidence=[],
+    )
+
+    assert selection.canonical_resume_id == "sparse-new"
+
+
+def test_unknown_work_freshness_is_deterministic_and_not_semantically_equivalent() -> None:
+    inputs = {
+        "alpha": _normalized("alpha", current_company="甲公司", current_title="工程师"),
+        "beta": _normalized("beta", current_company="乙公司", current_title="工程师"),
+    }
+
+    forward = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("alpha", "beta"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in inputs},
+        normalized_store=inputs,
+        evidence=[],
+    )
+    reverse = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("beta", "alpha"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in inputs},
+        normalized_store=inputs,
+        evidence=[],
+    )
+
+    assert forward.canonical_resume_id == reverse.canonical_resume_id
+    assert forward.content_version_key == reverse.content_version_key
+    assert len(forward.equivalent_latest_resume_ids) == 1
+    assert forward.conflicting_resume_ids == ()
+    assert len(forward.incomparable_resume_ids) == 1
+    assert forward.to_public_payload()["incomparable_resume_ids"] == list(forward.incomparable_resume_ids)
+    assert "content_freshness_unknown" in forward.safe_reason_codes
+
+
+def test_unknown_work_freshness_ignores_completeness_and_input_order() -> None:
+    equal_completeness = {
+        "alpha": _normalized("alpha", current_company="甲公司", current_title="工程师", completeness=50),
+        "beta": _normalized("beta", current_company="乙公司", current_title="总监", completeness=50),
+    }
+    baseline = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("alpha", "beta"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in equal_completeness},
+        normalized_store=equal_completeness,
+        evidence=[],
+    )
+    expected_id = baseline.canonical_resume_id
+    other_id = next(resume_id for resume_id in equal_completeness if resume_id != expected_id)
+    unequal_completeness = {
+        expected_id: equal_completeness[expected_id].model_copy(update={"completeness_score": 10}),
+        other_id: equal_completeness[other_id].model_copy(update={"completeness_score": 100}),
+    }
+
+    forward = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=(expected_id, other_id),
+        candidates={resume_id: _candidate(resume_id) for resume_id in unequal_completeness},
+        normalized_store=unequal_completeness,
+        evidence=[],
+    )
+    reverse = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=(other_id, expected_id),
+        candidates={resume_id: _candidate(resume_id) for resume_id in unequal_completeness},
+        normalized_store=unequal_completeness,
+        evidence=[],
+    )
+
+    assert forward.canonical_resume_id == expected_id
+    assert reverse.canonical_resume_id == expected_id
+    assert forward.content_version_key == baseline.content_version_key
+    assert forward.conflicting_resume_ids == ()
+    assert forward.incomparable_resume_ids == (other_id,)
+
+
+def test_current_markers_share_one_freshness_layer_even_when_start_dates_differ() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("short-current", "long-current"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("short-current", "long-current")},
+        normalized_store={
+            "short-current": _normalized(
+                "short-current", current_duration="2024-06 - present", completeness=30
+            ),
+            "long-current": _normalized(
+                "long-current", current_duration="2020-01 - 至今", completeness=90
+            ),
+        },
+        evidence=[],
+    )
+
+    assert set(selection.equivalent_latest_resume_ids) == {"short-current", "long-current"}
+    assert selection.canonical_resume_id == "long-current"
+
+
+def test_partially_overlapping_work_periods_with_different_roles_are_conflicting() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("alpha", "beta"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("alpha", "beta")},
+        normalized_store={
+            "alpha": _normalized(
+                "alpha",
+                current_duration="2024-01 - present",
+                prior_work=(("甲公司", "工程师", "2020-01 - 2022-12"),),
+                completeness=40,
+            ),
+            "beta": _normalized(
+                "beta",
+                current_duration="2024-01 - present",
+                prior_work=(("乙公司", "总监", "2021-06 - 2022-12"),),
+                completeness=90,
+            ),
+        },
+        evidence=[],
+    )
+
+    assert selection.canonical_resume_id == "beta"
+    assert selection.conflicting_resume_ids == ("alpha",)
+    assert selection.incomparable_resume_ids == ()
+    assert "resume_version_conflict" in selection.safe_reason_codes
+
+
+def test_english_current_markers_require_word_boundaries() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("unknown", "dated"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("unknown", "dated")},
+        normalized_store={
+            "unknown": _normalized("unknown", current_duration="unknown"),
+            "dated": _normalized("dated", current_duration="2025-01"),
+        },
+        evidence=[],
+    )
+
+    assert selection.canonical_resume_id == "dated"
+    assert selection.conflicting_resume_ids == ()
+    assert selection.incomparable_resume_ids == ("unknown",)
+
+
+def test_negated_chinese_employment_phrase_is_not_a_current_marker() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("not-current", "current"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("not-current", "current")},
+        normalized_store={
+            "not-current": _normalized("not-current", current_duration="2025-01 - 不在职"),
+            "current": _normalized("current", current_duration="2024-01 - 至今"),
+        },
+        evidence=[],
+    )
+
+    assert selection.canonical_resume_id == "current"
+
+
+@pytest.mark.parametrize(
+    "negated_duration",
+    ("目前不在职", "现在不在职", "not current", "not presently employed"),
+)
+def test_explicitly_negated_employment_status_overrides_current_markers(negated_duration: str) -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("negated", "current"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("negated", "current")},
+        normalized_store={
+            "negated": _normalized("negated", current_duration=f"2025-01 - {negated_duration}"),
+            "current": _normalized("current", current_duration="2024-01 - present"),
+        },
+        evidence=[],
+    )
+
+    assert selection.canonical_resume_id == "current"
+
+
+def test_equivalent_latest_resumes_are_pairwise_materially_consistent() -> None:
+    selection = choose_canonical_resume_for_identity(
+        identity_id="identity-1",
+        resume_ids=("sparse", "engineer", "director"),
+        candidates={resume_id: _candidate(resume_id) for resume_id in ("sparse", "engineer", "director")},
+        normalized_store={
+            "sparse": _normalized(
+                "sparse",
+                current_company="acme",
+                current_title="",
+                current_duration="2024-01 - present",
+                completeness=100,
+            ),
+            "engineer": _normalized(
+                "engineer",
+                current_company="acme",
+                current_title="engineer",
+                current_duration="2024-01 - present",
+                completeness=60,
+            ),
+            "director": _normalized(
+                "director",
+                current_company="acme",
+                current_title="director",
+                current_duration="2024-01 - present",
+                completeness=50,
+            ),
+        },
+        evidence=[
+            _evidence("e-sparse", resume_id="sparse", source="cts"),
+            _evidence("e-engineer", resume_id="engineer", source="liepin"),
+            _evidence("e-director", resume_id="director", source="liepin"),
+        ],
+    )
+
+    assert selection.canonical_resume_id == "sparse"
+    assert selection.equivalent_latest_resume_ids == ("engineer", "sparse")
+    assert selection.conflicting_resume_ids == ("director",)
+    assert selection.incomparable_resume_ids == ()
+    assert set(selection.display_source_evidence_ids) == {"e-sparse", "e-engineer"}
+    assert "e-director" not in selection.display_source_evidence_ids

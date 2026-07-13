@@ -15,6 +15,7 @@ from seektalent.models import (
     RuntimeSourceEvidence,
 )
 from seektalent.runtime.candidate_intake import normalize_runtime_candidates
+from seektalent.runtime.resume_versions import ResumeContentVersion, materially_consistent, resume_content_version
 from seektalent.source_contracts import (
     DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY,
     RuntimeApprovedDetailLease,
@@ -587,31 +588,77 @@ def choose_canonical_resume_for_identity(
     evidence_by_resume_id: dict[str, list[RuntimeSourceEvidence]] = {}
     for item in evidence:
         evidence_by_resume_id.setdefault(item.candidate_resume_id, []).append(item)
+    versions = [resume_content_version(resume_id, normalized_store.get(resume_id)) for resume_id in set(resume_ids)]
+    known_versions = [version for version in versions if version.freshness is not None]
+    reason_codes: list[str] = []
+    if known_versions:
+        latest_freshness = max(version.freshness for version in known_versions if version.freshness is not None)
+        latest_versions = [version for version in known_versions if version.freshness == latest_freshness]
+        if any(version.freshness != latest_freshness for version in known_versions) or len(known_versions) < len(versions):
+            reason_codes.append("structured_work_newer")
+    else:
+        latest_versions = versions
+        reason_codes.append("content_freshness_unknown")
 
-    def sort_key(resume_id: str) -> tuple[int, str, int, int, int, str]:
-        resume_evidence = evidence_by_resume_id.get(resume_id, [])
-        best_level = 1 if any(item.evidence_level == "detail" for item in resume_evidence) else 0
-        newest_collected_at = max((item.collected_at for item in resume_evidence), default="")
-        normalized = normalized_store.get(resume_id)
-        completeness = normalized.completeness_score if normalized is not None else 0
-        source_trust = max((_source_trust(item.source) for item in resume_evidence), default=0)
-        provider_rank = min((item.provider_rank for item in resume_evidence if item.provider_rank is not None), default=9999)
-        return (best_level, newest_collected_at, completeness, source_trust, -provider_rank, resume_id)
+    def canonical_rank(version: ResumeContentVersion) -> tuple[int, str, str]:
+        resume_id = version.resume_id
+        completeness = normalized_store[resume_id].completeness_score if resume_id in normalized_store else 0
+        return (
+            -completeness if known_versions else 0,
+            version.content_key,
+            resume_id,
+        )
 
-    selected_resume_id = max(resume_ids, key=sort_key)
-    selected_evidence = sorted(
-        evidence_by_resume_id.get(selected_resume_id, []),
-        key=lambda item: (1 if item.evidence_level == "detail" else 0, item.collected_at, item.evidence_id),
-        reverse=True,
+    selected_version = min(latest_versions, key=canonical_rank)
+    equivalent_ids = [selected_version.resume_id]
+    equivalent_versions = [selected_version]
+    conflicting_ids: list[str] = []
+    incomparable_ids = [version.resume_id for version in versions if version.freshness is None and known_versions]
+    has_conflict = False
+    has_incomparable = bool(incomparable_ids)
+    for version in sorted(latest_versions, key=canonical_rank):
+        if version.resume_id == selected_version.resume_id:
+            continue
+        consistencies = [materially_consistent(existing, version) for existing in equivalent_versions]
+        if selected_version.freshness is not None and all(consistency is True for consistency in consistencies):
+            equivalent_ids.append(version.resume_id)
+            equivalent_versions.append(version)
+        elif selected_version.freshness is not None and any(consistency is False for consistency in consistencies):
+            conflicting_ids.append(version.resume_id)
+            has_conflict = True
+        else:
+            incomparable_ids.append(version.resume_id)
+            has_incomparable = True
+
+    equivalent_ids = sorted(set(equivalent_ids))
+    conflicting_ids = sorted(set(conflicting_ids) - set(equivalent_ids))
+    incomparable_ids = sorted(set(incomparable_ids) - set(equivalent_ids) - set(conflicting_ids))
+    display_evidence_ids = sorted(
+        item.evidence_id
+        for resume_id in equivalent_ids
+        for item in evidence_by_resume_id.get(resume_id, [])
     )
-    reason_codes = ["detail_evidence"] if selected_evidence and selected_evidence[0].evidence_level == "detail" else [
-        "provider_rank_preserved"
-    ]
+    selected_evidence = min(
+        evidence_by_resume_id.get(selected_version.resume_id, []),
+        key=lambda item: item.evidence_id,
+        default=None,
+    )
+    if len(equivalent_ids) > 1:
+        reason_codes.append("equivalent_latest_content")
+    if has_conflict:
+        reason_codes.append("resume_version_conflict")
+    if has_incomparable:
+        reason_codes.append("resume_version_incomparable")
     return RuntimeCanonicalResumeSelection(
         identity_id=identity_id,
-        canonical_resume_id=selected_resume_id,
-        selected_evidence_id=selected_evidence[0].evidence_id if selected_evidence else None,
-        selected_at=selected_evidence[0].collected_at if selected_evidence else None,
+        canonical_resume_id=selected_version.resume_id,
+        equivalent_latest_resume_ids=tuple(equivalent_ids),
+        display_source_evidence_ids=tuple(display_evidence_ids),
+        conflicting_resume_ids=tuple(conflicting_ids),
+        incomparable_resume_ids=tuple(incomparable_ids),
+        content_version_key=selected_version.content_key,
+        selected_evidence_id=selected_evidence.evidence_id if selected_evidence else None,
+        selected_at=selected_evidence.collected_at if selected_evidence else None,
         safe_reason_codes=tuple(reason_codes),
     )
 

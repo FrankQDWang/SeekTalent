@@ -315,7 +315,13 @@ def test_apply_source_lane_result_populates_identity_store_and_canonical_selecti
         "evidence-cts",
         "evidence-liepin-detail",
     ]
-    assert run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id == "resume-liepin"
+    selection = run_state.canonical_resume_by_identity_id[identity_id]
+    assert selection.canonical_resume_id == "resume-cts"
+    assert selection.equivalent_latest_resume_ids == ("resume-cts",)
+    assert selection.display_source_evidence_ids == ("evidence-cts",)
+    assert selection.conflicting_resume_ids == ()
+    assert selection.incomparable_resume_ids == ("resume-liepin",)
+    assert "content_freshness_unknown" in selection.safe_reason_codes
 
 
 def test_apply_source_lane_result_normalizes_raw_candidates_before_identity_rebuild() -> None:
@@ -1719,12 +1725,12 @@ def test_source_round_dispatch_merge_finalizes_top_10_by_identity_not_raw_resume
 
     identity_top_candidates = runtime._apply_identity_top_pool(run_state)
 
-    assert [candidate.resume_id for candidate in identity_top_candidates] == ["resume-liepin"]
-    assert run_state.top_pool_ids == ["resume-liepin"]
+    assert [candidate.resume_id for candidate in identity_top_candidates] == ["resume-cts"]
+    assert run_state.top_pool_ids == ["resume-cts"]
     assert len(run_state.candidate_identities) == 1
     identity_id = run_state.candidate_identity_by_resume_id["resume-cts"]
     assert run_state.candidate_identity_by_resume_id["resume-liepin"] == identity_id
-    assert run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id == "resume-liepin"
+    assert run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id == "resume-cts"
     assert [item.source for item in run_state.source_evidence_by_identity_id[identity_id]] == ["cts", "liepin"]
 
 

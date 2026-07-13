@@ -1569,6 +1569,11 @@ class RuntimeCanonicalResumeSelection(BaseModel):
 
     identity_id: str
     canonical_resume_id: str
+    equivalent_latest_resume_ids: tuple[str, ...] = ()
+    display_source_evidence_ids: tuple[str, ...] = ()
+    conflicting_resume_ids: tuple[str, ...] = ()
+    incomparable_resume_ids: tuple[str, ...] = ()
+    content_version_key: str = ""
     selected_evidence_id: str | None = None
     selected_at: str | None = None
     safe_reason_codes: tuple[str, ...] = ()
@@ -1577,6 +1582,11 @@ class RuntimeCanonicalResumeSelection(BaseModel):
         return {
             "identity_id": self.identity_id,
             "canonical_resume_id": self.canonical_resume_id,
+            "equivalent_latest_resume_ids": list(self.equivalent_latest_resume_ids),
+            "display_source_evidence_ids": list(self.display_source_evidence_ids),
+            "conflicting_resume_ids": list(self.conflicting_resume_ids),
+            "incomparable_resume_ids": list(self.incomparable_resume_ids),
+            "content_version_key": self.content_version_key,
             "selected_evidence_id": self.selected_evidence_id,
             "selected_at": self.selected_at,
             "safe_reason_codes": [_runtime_public_reason_code(value) for value in self.safe_reason_codes],
@@ -1750,6 +1760,7 @@ _RUNTIME_PUBLIC_REASON_CODES = {
     "blocked_login_required",
     "cancelled_by_user",
     "card_rank_budget",
+    "content_freshness_unknown",
     "detail_enrichment_applied",
     "detail_evidence",
     "failed_internal_error",
@@ -1761,10 +1772,14 @@ _RUNTIME_PUBLIC_REASON_CODES = {
     "partial_budget_exhausted",
     "partial_timeout",
     "provider_rank_preserved",
+    "equivalent_latest_content",
+    "resume_version_conflict",
+    "resume_version_incomparable",
     "source_card_candidate",
     "source_detail_candidate",
     "source_lanes_completed",
     "source_lanes_degraded",
+    "structured_work_newer",
 }
 
 
