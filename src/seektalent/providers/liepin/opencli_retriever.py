@@ -396,7 +396,7 @@ def _public_detail_payload(value: object) -> dict[str, object]:
 def _private_claim_aware_source_url(value: object) -> str | None:
     if not isinstance(value, Mapping):
         return None
-    source_url = cast(Mapping[str, object], value).get("sourceUrl")
+    source_url = dict(value).get("sourceUrl")
     if not isinstance(source_url, str):
         return None
     canonical = canonical_liepin_detail_source_url(source_url)

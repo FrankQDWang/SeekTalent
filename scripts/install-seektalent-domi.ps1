@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.7.43",
+  [string]$Version = "0.7.44",
   [string]$DomiPython = "",
   [string]$DomiNode = ""
 )
@@ -10,7 +10,7 @@ function Fail($ReasonCode, $Message) {
 
 function Install-SeekTalentDomi {
   param(
-    [string]$Version = "0.7.43",
+    [string]$Version = "0.7.44",
     [string]$DomiPython = "",
     [string]$DomiNode = ""
   )
