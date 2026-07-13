@@ -531,7 +531,9 @@ def test_scorer_retries_model_output_with_inapplicable_risk_score(
     assert scored == []
     assert len(failures) == 1
     assert failures[0].failure_kind == "score_applicability_error"
-    assert failures[0].error_message == "scoring applicability output retries exhausted"
+    assert failures[0].error_message == (
+        "scoring applicability output retries exhausted: risk_score_not_applicable"
+    )
 
 
 def test_scorer_recovers_after_one_applicability_correction_retry(

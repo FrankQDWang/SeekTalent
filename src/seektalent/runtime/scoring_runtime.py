@@ -34,6 +34,16 @@ class ScoringRoundResult:
         return cls([], [], [], [])
 
 
+def scoring_failures_are_recoverable(
+    scored_candidates: Collection[ScoredCandidate],
+    scoring_failures: Collection[ScoringFailure],
+) -> bool:
+    return bool(scored_candidates) and bool(scoring_failures) and all(
+        failure.failure_kind == "score_applicability_error"
+        for failure in scoring_failures
+    )
+
+
 def combine_round_intake_summaries(
     *, baseline: RuntimeCanonicalIntakeSummary | None, expansion: RuntimeCanonicalIntakeSummary | None
 ) -> RuntimeCanonicalIntakeSummary | None:
@@ -130,7 +140,11 @@ async def score_round(
                 f"round.{round_no:02d}.scoring.scorecards",
                 {**item.model_dump(mode="json"), "batch_kind": batch_kind},
             )
-        if scoring_failures and fail_on_scoring_error:
+        if (
+            scoring_failures
+            and fail_on_scoring_error
+            and not scoring_failures_are_recoverable(scored_candidates, scoring_failures)
+        ):
             tracer.emit(
                 "scoring_batch_failed",
                 round_no=round_no,
@@ -144,7 +158,7 @@ async def score_round(
     tracer.emit(
         "scoring_batch_completed",
         round_no=round_no,
-        status="succeeded",
+        status="partial" if scoring_failures else "succeeded",
         payload={"batch_kind": batch_kind, "scored_candidate_count": len(scored_candidates),
                  "scoring_failure_count": len(scoring_failures)},
     )

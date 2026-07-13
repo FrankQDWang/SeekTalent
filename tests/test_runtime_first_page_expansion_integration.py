@@ -329,6 +329,7 @@ def _run_integrated_round(
     tmp_path: Path,
     *,
     prepare_run_state: Callable[[RunState], None] | None = None,
+    progress_callback: Callable[[Any], None] | None = None,
 ) -> RunTracer:
     tracer = RunTracer(tmp_path / "trace-runs")
     run_state = asyncio.run(
@@ -353,6 +354,7 @@ def _run_integrated_round(
                 detail_open_claim_ledger=_detail_open_claim_ledger(run_state),
                 tracer=tracer,
                 source_plan=source_plan,
+                progress_callback=progress_callback,
             )
         )
     except BaseException:
@@ -619,6 +621,100 @@ def test_integrated_fail_fast_partial_success_scorecards_persist(tmp_path: Path)
     assert len(input_rows) > len(rows)
     assert sum(row["resume_id"] == rows[0]["resume_id"] for row in input_rows) == 1
     assert all(row["batch_kind"] == "baseline" for row in input_rows)
+
+
+def test_integrated_partial_applicability_failure_continues_and_reaches_reflection(
+    tmp_path: Path,
+) -> None:
+    class PartialApplicabilityScorer:
+        async def score_candidates_parallel(self, *, contexts, tracer):
+            del tracer
+            scored = [_scored_candidate(contexts[0].normalized_resume.resume_id)]
+            if len(contexts) == 1:
+                return scored, []
+            return scored, [
+                ScoringFailure(
+                    resume_id=contexts[1].normalized_resume.resume_id,
+                    branch_id="baseline-applicability",
+                    round_no=1,
+                    attempts=1,
+                    error_message=(
+                        "scoring applicability output retries exhausted: "
+                        "risk_score_not_applicable"
+                    ),
+                    failure_kind="score_applicability_error",
+                )
+            ]
+
+    runtime, runtime_any, _actions = _integrated_expansion_runtime(
+        tmp_path,
+        scorer=PartialApplicabilityScorer(),
+    )
+    reflection = RecordingExpansionReflection()
+    runtime_any.reflection_critic = reflection
+    progress_events: list[Any] = []
+
+    tracer = _run_integrated_round(
+        runtime,
+        tmp_path,
+        progress_callback=progress_events.append,
+    )
+
+    run_state = runtime_any._test_last_run_state
+    [round_state] = run_state.round_history
+    assert len(run_state.scorecards_by_resume_id) >= 1
+    assert [failure.failure_kind for failure in round_state.scoring_failures] == [
+        "score_applicability_error"
+    ]
+    assert reflection.contexts[0].scoring_failures == round_state.scoring_failures
+    [events_path] = list(tracer.run_dir.glob("**/events.jsonl"))
+    events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+    baseline_completed = next(
+        event
+        for event in events
+        if event["event_type"] == "scoring_batch_completed"
+        and event["payload"]["batch_kind"] == "baseline"
+    )
+    assert baseline_completed["status"] == "partial"
+    scoring_completed = next(event for event in progress_events if event.type == "scoring_completed")
+    assert scoring_completed.payload["scoring_failure_count"] == 1
+    [public_events_path] = list(tracer.run_dir.glob("runtime/public_events.jsonl"))
+    public_events = [
+        json.loads(line)
+        for line in public_events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    scoring_public_event = next(event for event in public_events if event["stage"] == "scoring")
+    assert scoring_public_event["counts"]["scoringFailureCount"] == 1
+
+
+def test_integrated_whole_batch_applicability_failure_still_aborts(
+    tmp_path: Path,
+) -> None:
+    class ApplicabilityFailingScorer:
+        async def score_candidates_parallel(self, *, contexts, tracer):
+            del tracer
+            return [], [
+                ScoringFailure(
+                    resume_id=context.normalized_resume.resume_id,
+                    branch_id=f"applicability-{index}",
+                    round_no=1,
+                    attempts=1,
+                    error_message=(
+                        "scoring applicability output retries exhausted: "
+                        "risk_score_not_applicable"
+                    ),
+                    failure_kind="score_applicability_error",
+                )
+                for index, context in enumerate(contexts)
+            ]
+
+    runtime, _runtime_any, _actions = _integrated_expansion_runtime(
+        tmp_path,
+        scorer=ApplicabilityFailingScorer(),
+    )
+
+    with pytest.raises(orchestrator_module.RunStageError, match="score_applicability_error"):
+        _run_integrated_round(runtime, tmp_path)
 
 
 def test_integrated_dual_lane_completed_partial_receipts_observation_reflection(tmp_path: Path) -> None:

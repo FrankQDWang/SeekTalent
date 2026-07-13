@@ -356,7 +356,9 @@ def test_scorer_builds_one_agent_per_parallel_call(monkeypatch: pytest.MonkeyPat
     created_agents: list[object] = []
     used_agents: list[object] = []
 
-    def build_agent(*, prompt_cache_key: str | None = None) -> object:
+    def build_agent(*, applicability, prompt_cache_key: str | None = None) -> object:  # noqa: ANN001
+        assert applicability.preferred is True
+        assert applicability.risk is True
         del prompt_cache_key
         agent = object()
         created_agents.append(agent)

@@ -7,6 +7,7 @@ from datetime import datetime
 from time import perf_counter
 from typing import Literal, cast
 
+from pydantic import Field, ValidationError
 from pydantic_ai import Agent, ModelRetry, RunContext
 from pydantic_ai.exceptions import ModelAPIError, ModelHTTPError, UnexpectedModelBehavior
 import httpx
@@ -52,6 +53,40 @@ ScoringProviderFailureKind = Literal[
     "provider_invalid_request",
     "provider_unknown_error",
 ]
+ScoringApplicabilityFailureCode = Literal[
+    "preferred_match_score_required",
+    "preferred_match_score_not_applicable",
+    "risk_score_required",
+    "risk_score_not_applicable",
+]
+
+
+class _ScoredCandidateDraftPreferredAndRisk(ScoredCandidateDraft):
+    preferred_match_score: int = Field(ge=0, le=100, description="Required preferred-signal score.")
+    risk_score: int = Field(ge=0, le=100, description="Required explicit-exclusion risk score.")
+
+
+class _ScoredCandidateDraftPreferredOnly(ScoredCandidateDraft):
+    preferred_match_score: int = Field(ge=0, le=100, description="Required preferred-signal score.")
+    risk_score: None = Field(description="Must be null because no explicit exclusion signals apply.")
+
+
+class _ScoredCandidateDraftRiskOnly(ScoredCandidateDraft):
+    preferred_match_score: None = Field(description="Must be null because no preferred signals apply.")
+    risk_score: int = Field(ge=0, le=100, description="Required explicit-exclusion risk score.")
+
+
+class _ScoredCandidateDraftMustHaveOnly(ScoredCandidateDraft):
+    preferred_match_score: None = Field(description="Must be null because no preferred signals apply.")
+    risk_score: None = Field(description="Must be null because no explicit exclusion signals apply.")
+
+
+_SCORING_OUTPUT_TYPES: dict[tuple[bool, bool], type[ScoredCandidateDraft]] = {
+    (True, True): _ScoredCandidateDraftPreferredAndRisk,
+    (True, False): _ScoredCandidateDraftPreferredOnly,
+    (False, True): _ScoredCandidateDraftRiskOnly,
+    (False, False): _ScoredCandidateDraftMustHaveOnly,
+}
 
 
 @dataclass
@@ -61,10 +96,13 @@ class _ScoringOutputValidationState:
     last_applicability_retry: int | None = None
     max_output_retries: int | None = None
     last_retry_kind: Literal["applicability", "fit_score"] | None = None
+    last_applicability_failure_code: ScoringApplicabilityFailureCode | None = None
 
 
 class ScoringApplicabilityRetryExhausted(RuntimeError):
-    pass
+    def __init__(self, failure_code: ScoringApplicabilityFailureCode) -> None:
+        self.failure_code = failure_code
+        super().__init__(f"scoring applicability output retries exhausted: {failure_code}")
 
 
 def _scoring_failure_category(
@@ -96,16 +134,78 @@ def _scoring_failure_category(
     return "response_validation_error", None
 
 
+def _scoring_output_type(
+    applicability: ScoreDimensionApplicability,
+) -> type[ScoredCandidateDraft]:
+    return _SCORING_OUTPUT_TYPES[(applicability.preferred, applicability.risk)]
+
+
+def _scoring_applicability_failure_code(
+    draft: ScoredCandidateDraft,
+    applicability: ScoreDimensionApplicability,
+) -> ScoringApplicabilityFailureCode | None:
+    if applicability.preferred != (draft.preferred_match_score is not None):
+        if applicability.preferred:
+            return "preferred_match_score_required"
+        return "preferred_match_score_not_applicable"
+    if applicability.risk != (draft.risk_score is not None):
+        if applicability.risk:
+            return "risk_score_required"
+        return "risk_score_not_applicable"
+    return None
+
+
+def _schema_applicability_failure_code(
+    exc: Exception,
+    applicability: ScoreDimensionApplicability,
+) -> ScoringApplicabilityFailureCode | None:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ValidationError):
+            dimension_fields = {"preferred_match_score", "risk_score"}
+            failure_codes: list[ScoringApplicabilityFailureCode] = []
+            for error in current.errors():
+                if not error["loc"]:
+                    return None
+                field_name = str(error["loc"][0])
+                if field_name not in dimension_fields:
+                    return None
+                error_type = str(error["type"])
+                input_value = error.get("input")
+                if field_name == "preferred_match_score":
+                    if applicability.preferred and (
+                        error_type == "missing" or input_value is None
+                    ):
+                        failure_codes.append("preferred_match_score_required")
+                        continue
+                    if not applicability.preferred and error_type == "none_required":
+                        failure_codes.append("preferred_match_score_not_applicable")
+                        continue
+                    return None
+                if applicability.risk and (
+                    error_type == "missing" or input_value is None
+                ):
+                    failure_codes.append("risk_score_required")
+                    continue
+                if not applicability.risk and error_type == "none_required":
+                    failure_codes.append("risk_score_not_applicable")
+                    continue
+                return None
+            if failure_codes:
+                return failure_codes[0]
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _validate_scoring_draft_applicability(
     draft: ScoredCandidateDraft,
     applicability: ScoreDimensionApplicability,
 ) -> ScoredCandidateDraft:
-    if applicability.preferred != (draft.preferred_match_score is not None):
-        expected = "a score" if applicability.preferred else "null"
-        raise ModelRetry(f"preferred_match_score must be {expected} for this scoring policy")
-    if applicability.risk != (draft.risk_score is not None):
-        expected = "a score" if applicability.risk else "null"
-        raise ModelRetry(f"risk_score must be {expected} for this scoring policy")
+    failure_code = _scoring_applicability_failure_code(draft, applicability)
+    if failure_code is not None:
+        raise ModelRetry(failure_code)
     return draft
 
 
@@ -148,6 +248,7 @@ def _scoring_cache_resume_payload(resume: NormalizedResume) -> dict[str, object]
 def render_scoring_prompt(context: ScoringContext) -> str:
     policy = context.scoring_policy
     resume = context.normalized_resume
+    applicability = score_dimension_applicability(policy)
     exact_data = {
         "round_no": context.round_no,
         "resume_id": resume.resume_id,
@@ -190,6 +291,21 @@ def render_scoring_prompt(context: ScoringContext) -> str:
                 "STRUCTURED_RESUME_EVIDENCE",
                 _structured_scoring_evidence_json(resume),
             ),
+            json_block(
+                "OUTPUT DIMENSION CONTRACT",
+                {
+                    "preferred_match_score": (
+                        "required integer from 0 to 100"
+                        if applicability.preferred
+                        else "required null"
+                    ),
+                    "risk_score": (
+                        "required integer from 0 to 100"
+                        if applicability.risk
+                        else "required null"
+                    ),
+                },
+            ),
             json_block("EXACT DATA", exact_data),
         ]
     )
@@ -228,6 +344,7 @@ class ResumeScorer:
     def _build_agent(
         self,
         *,
+        applicability: ScoreDimensionApplicability,
         prompt_cache_key: str | None = None,
     ) -> Agent[_ScoringOutputValidationState, ScoredCandidateDraft]:
         model = build_model(self._model_config)
@@ -236,7 +353,11 @@ class ResumeScorer:
             Agent(
                 model=model,
                 deps_type=_ScoringOutputValidationState,
-                output_type=build_output_spec(self._model_config, model, ScoredCandidateDraft),
+                output_type=build_output_spec(
+                    self._model_config,
+                    model,
+                    _scoring_output_type(applicability),
+                ),
                 system_prompt=self.prompt.content,
                 model_settings=build_model_settings(
                     self._model_config,
@@ -262,6 +383,9 @@ class ResumeScorer:
                 context.deps.last_applicability_retry = context.retry
                 context.deps.max_output_retries = context.max_retries
                 context.deps.last_retry_kind = "applicability"
+                context.deps.last_applicability_failure_code = (
+                    _scoring_applicability_failure_code(draft, context.deps.applicability)
+                )
                 raise
             overall_score = calculate_overall_score(
                 must_have_match_score=validated.must_have_match_score,
@@ -315,7 +439,14 @@ class ResumeScorer:
         prompt_cache_retention = (
             self.settings.openai_prompt_cache_retention if prompt_cache_key is not None else None
         )
+        applicability = score_dimension_applicability(contexts[0].scoring_policy)
+        if any(
+            score_dimension_applicability(context.scoring_policy) != applicability
+            for context in contexts[1:]
+        ):
+            raise ValueError("scoring_batch_mixed_dimension_applicability")
         agent = self._build_agent(
+            applicability=applicability,
             prompt_cache_key=prompt_cache_key,
         )
         return await self._score_candidates_parallel(
@@ -742,15 +873,19 @@ class ResumeScorer:
         try:
             result = await agent.run(prompt, deps=validation_state)
         except UnexpectedModelBehavior as exc:
+            schema_failure_code = _schema_applicability_failure_code(exc, applicability)
+            if schema_failure_code is not None:
+                raise ScoringApplicabilityRetryExhausted(schema_failure_code) from exc
             if (
                 validation_state.last_retry_kind == "applicability"
                 and
                 validation_state.last_applicability_retry is not None
                 and validation_state.last_applicability_retry
                 == validation_state.max_output_retries
+                and validation_state.last_applicability_failure_code is not None
             ):
                 raise ScoringApplicabilityRetryExhausted(
-                    "scoring applicability output retries exhausted"
+                    validation_state.last_applicability_failure_code
                 ) from exc
             raise
         return result.output, provider_usage_from_result(result)

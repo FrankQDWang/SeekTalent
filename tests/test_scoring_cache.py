@@ -22,7 +22,16 @@ from seektalent.models import (
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import LoadedPrompt
 from seektalent.cache.exact_llm_cache import get_cached_json, put_cached_json
-from seektalent.scoring.scorer import ResumeScorer, _materialize_scored_candidate, scoring_cache_key
+from seektalent.scoring.scorer import (
+    ResumeScorer,
+    ScoringApplicabilityRetryExhausted,
+    _materialize_scored_candidate,
+    _scoring_applicability_failure_code,
+    _scoring_output_type,
+    _schema_applicability_failure_code,
+    render_scoring_prompt,
+    scoring_cache_key,
+)
 from seektalent.scoring.weighted_score import (
     ScoreDimensionApplicability,
     calculate_overall_score,
@@ -150,6 +159,161 @@ def _policy(*, preferred: bool, risk: bool) -> ScoringPolicy:
 )
 def test_requirement_sheet_controls_dimension_applicability(preferred, risk, expected) -> None:
     assert score_dimension_applicability(_policy(preferred=preferred, risk=risk)) == expected
+
+
+@pytest.mark.parametrize(
+    ("preferred", "risk", "preferred_schema", "risk_schema"),
+    [
+        (True, True, {"type": "integer"}, {"type": "integer"}),
+        (True, False, {"type": "integer"}, {"type": "null"}),
+        (False, True, {"type": "null"}, {"type": "integer"}),
+        (False, False, {"type": "null"}, {"type": "null"}),
+    ],
+)
+def test_scoring_output_schema_encodes_dimension_applicability(
+    preferred: bool,
+    risk: bool,
+    preferred_schema: dict[str, str],
+    risk_schema: dict[str, str],
+) -> None:
+    output_type = _scoring_output_type(
+        ScoreDimensionApplicability(preferred=preferred, risk=risk)
+    )
+    schema = output_type.model_json_schema()
+
+    assert {"preferred_match_score", "risk_score"} <= set(schema["required"])
+    for field_name, expected in (
+        ("preferred_match_score", preferred_schema),
+        ("risk_score", risk_schema),
+    ):
+        field_schema = schema["properties"][field_name]
+        assert "anyOf" not in field_schema
+        assert field_schema["type"] == expected["type"]
+
+
+def test_scoring_prompt_includes_exact_dimension_output_contract() -> None:
+    context = _context().model_copy(
+        update={"scoring_policy": _policy(preferred=True, risk=False)}
+    )
+
+    prompt = render_scoring_prompt(context)
+
+    assert '"preferred_match_score": "required integer from 0 to 100"' in prompt
+    assert '"risk_score": "required null"' in prompt
+
+
+@pytest.mark.parametrize(
+    ("preferred", "risk", "preferred_score", "risk_score", "expected"),
+    [
+        (True, False, None, None, "preferred_match_score_required"),
+        (False, False, 10, None, "preferred_match_score_not_applicable"),
+        (False, True, None, None, "risk_score_required"),
+        (False, False, None, 10, "risk_score_not_applicable"),
+    ],
+)
+def test_scoring_applicability_failure_code_is_exact(
+    preferred: bool,
+    risk: bool,
+    preferred_score: int | None,
+    risk_score: int | None,
+    expected: str,
+) -> None:
+    draft = _draft().model_copy(
+        update={
+            "preferred_match_score": preferred_score,
+            "risk_score": risk_score,
+        }
+    )
+
+    assert _scoring_applicability_failure_code(
+        draft,
+        ScoreDimensionApplicability(preferred=preferred, risk=risk),
+    ) == expected
+
+
+def test_scoring_retry_exhaustion_preserves_exact_applicability_code(
+    tmp_path: Path,
+) -> None:
+    scorer = ResumeScorer(_settings(tmp_path), _prompt())
+
+    class ExhaustedAgent:
+        async def run(self, prompt: str, *, deps):  # noqa: ANN001, ANN202
+            del prompt
+            deps.last_retry_kind = "applicability"
+            deps.last_applicability_retry = 2
+            deps.max_output_retries = 2
+            deps.last_applicability_failure_code = "risk_score_not_applicable"
+            raise UnexpectedModelBehavior("output retries exhausted")
+
+    with pytest.raises(
+        ScoringApplicabilityRetryExhausted,
+        match="risk_score_not_applicable",
+    ):
+        asyncio.run(
+            scorer._score_one_live(
+                prompt="score",
+                agent=cast(Any, ExhaustedAgent()),
+                applicability=ScoreDimensionApplicability(preferred=True, risk=False),
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("applicability", "payload_update", "omitted_fields", "expected"),
+    [
+        (
+            ScoreDimensionApplicability(preferred=True, risk=False),
+            {"risk_score": None},
+            {"preferred_match_score"},
+            "preferred_match_score_required",
+        ),
+        (
+            ScoreDimensionApplicability(preferred=True, risk=False),
+            {"preferred_match_score": None, "risk_score": None},
+            set(),
+            "preferred_match_score_required",
+        ),
+        (
+            ScoreDimensionApplicability(preferred=False, risk=False),
+            {"preferred_match_score": 10, "risk_score": None},
+            set(),
+            "preferred_match_score_not_applicable",
+        ),
+        (
+            ScoreDimensionApplicability(preferred=False, risk=True),
+            {"preferred_match_score": None, "risk_score": "bad"},
+            set(),
+            None,
+        ),
+        (
+            ScoreDimensionApplicability(preferred=False, risk=True),
+            {"preferred_match_score": None, "risk_score": 101},
+            set(),
+            None,
+        ),
+    ],
+)
+def test_schema_applicability_classification_only_accepts_presence_contract_errors(
+    applicability: ScoreDimensionApplicability,
+    payload_update: dict[str, object],
+    omitted_fields: set[str],
+    expected: str | None,
+) -> None:
+    payload: dict[str, object] = {
+        "fit_bucket": "fit",
+        "must_have_match_score": 80,
+        "preferred_match_score": 80,
+        "risk_score": 20,
+        "reasoning_summary": "Evidence-backed fit.",
+    }
+    payload.update(payload_update)
+    for field_name in omitted_fields:
+        payload.pop(field_name)
+
+    with pytest.raises(ValidationError) as caught:
+        _scoring_output_type(applicability).model_validate(payload)
+
+    assert _schema_applicability_failure_code(caught.value, applicability) == expected
 
 
 @pytest.mark.parametrize(
@@ -509,7 +673,8 @@ def test_scoring_build_agent_uses_resolved_stage_config(
     monkeypatch.setattr("seektalent.scoring.scorer.Agent", FakeAgent)
 
     scorer = ResumeScorer(settings, _prompt())
-    scorer._build_agent(prompt_cache_key="prompt-cache-key")
+    applicability = ScoreDimensionApplicability(preferred=True, risk=True)
+    scorer._build_agent(applicability=applicability, prompt_cache_key="prompt-cache-key")
 
     assert scorer._model_config is resolved_config
     assert built["model"] == ("model", resolved_config)
@@ -517,7 +682,7 @@ def test_scoring_build_agent_uses_resolved_stage_config(
         "output",
         resolved_config,
         ("model", resolved_config),
-        ScoredCandidateDraft,
+        _scoring_output_type(applicability),
     )
     assert built["model_settings"] == {
         "config": resolved_config,
@@ -542,7 +707,12 @@ def test_scoring_prompt_cache_key_is_recorded_on_live_snapshot(
     context = _context()
     built_prompt_cache_keys: list[str | None] = []
 
-    def fake_build_agent(*, prompt_cache_key: str | None = None) -> object:
+    def fake_build_agent(
+        *,
+        applicability: ScoreDimensionApplicability,
+        prompt_cache_key: str | None = None,
+    ) -> object:
+        assert applicability == ScoreDimensionApplicability(preferred=True, risk=True)
         built_prompt_cache_keys.append(prompt_cache_key)
         return object()
 

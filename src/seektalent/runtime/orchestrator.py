@@ -226,6 +226,7 @@ from seektalent.runtime.scoring_runtime import (
     ScoringRoundResult,
     combine_round_intake_summaries,
     finalize_round_pool,
+    scoring_failures_are_recoverable,
     score_round as score_round_direct,
 )
 from seektalent.runtime.stop_reasons import normalize_stop_reason
@@ -2473,6 +2474,10 @@ class WorkflowRuntime:
                 else:
                     expansion_scoring_result = ScoringRoundResult.empty()
                     expansion_intake_summary = None
+                round_scoring_failures = [
+                    *baseline_scoring_result.scoring_failures,
+                    *expansion_scoring_result.scoring_failures,
+                ]
                 run_state.latest_canonical_intake_summary = combine_round_intake_summaries(
                     baseline=baseline_intake_summary,
                     expansion=expansion_intake_summary,
@@ -2715,6 +2720,7 @@ class WorkflowRuntime:
                     "fit_count": sum(1 for item in scored_this_round if item.fit_bucket == "fit"),
                     "not_fit_count": sum(1 for item in scored_this_round if item.fit_bucket == "not_fit"),
                     "top_pool_count": len(current_top_candidates),
+                    "scoring_failure_count": len(round_scoring_failures),
                 },
             )
             self._emit_runtime_public_event(
@@ -2728,6 +2734,7 @@ class WorkflowRuntime:
                     counts={
                         "roundIdentities": newly_scored_count,
                         "topPoolCount": len(current_top_candidates),
+                        "scoringFailureCount": len(round_scoring_failures),
                     },
                 ),
             )
@@ -2811,7 +2818,7 @@ class WorkflowRuntime:
                 top_pool_ids=run_state.top_pool_ids,
                 dropped_candidate_ids=[candidate.resume_id for candidate in dropped_candidates],
                 query_outcomes=query_outcomes,
-                scoring_failures=expansion_scoring_result.scoring_failures,
+                scoring_failures=round_scoring_failures,
             )
             run_state.round_history.append(round_state)
             reflection_advice = await reflection_runtime.run_reflection_stage(
@@ -3671,7 +3678,10 @@ class WorkflowRuntime:
             contexts=scoring_contexts,
             tracer=_NoOpTracer(),  # ty:ignore[invalid-argument-type]
         )
-        if scoring_failures:
+        if scoring_failures and not scoring_failures_are_recoverable(
+            scored_candidates,
+            scoring_failures,
+        ):
             raise RunStageError("scoring", self._format_scoring_failure_message(scoring_failures))
         return scored_candidates
 

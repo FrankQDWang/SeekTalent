@@ -58,6 +58,7 @@ from seektalent.runtime import finalize_runtime
 from seektalent.runtime.retrieval_runtime import RetrievalRuntime, _provider_request_id, build_logical_query_state
 from seektalent.runtime.source_lanes import build_runtime_source_plan
 from seektalent.scoring.scorer import ResumeScorer
+from seektalent.scoring.weighted_score import ScoreDimensionApplicability
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.tracing import (
     LLMCallSnapshot,
@@ -305,8 +306,10 @@ def test_real_scorer_success_path_writes_scoring_calls_to_migrated_round_layout(
 
     def fake_build_agent(
         *,
+        applicability: ScoreDimensionApplicability,
         prompt_cache_key: str | None = None,
     ) -> object:
+        assert applicability == ScoreDimensionApplicability(preferred=True, risk=False)
         del prompt_cache_key
         return cast(Any, object())
 
