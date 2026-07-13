@@ -181,17 +181,16 @@ Reasoning effort values are `off`, `low`, `medium`, and `high`. Stage-specific s
 
 ## PRF Probe Variables
 
-These settings control the mainline PRF probe proposal backend. The default backend calls the LLM phrase proposal extractor in round 2+ when enough feedback seed support exists, then applies deterministic grounding and PRF policy gates before a PRF probe query can run.
+These settings control the single active PRF phrase-proposal path. In round 2+, when enough feedback seed support exists, the shared LLM extractor proposes phrases and deterministic grounding and policy gates decide whether a PRF probe query can run. The `llm_deepseek_v4_flash` value found in replay artifacts is an audit label, not a configurable backend switch.
 
 | Variable | Starter value | Notes |
 | --- | --- | --- |
-| `SEEKTALENT_PRF_PROBE_PROPOSAL_BACKEND` | `llm_deepseek_v4_flash` | Mainline PRF probe proposal backend. Other supported values keep legacy or sidecar span proposal paths. |
 | `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MODEL_ID` | `deepseek-v4-flash` | Model id for the LLM PRF phrase proposal stage. |
 | `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_REASONING_EFFORT` | `off` | Reasoning effort for the LLM PRF phrase proposal stage. |
 | `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_TIMEOUT_SECONDS` | `30` | Per-call timeout for phrase proposal extraction. |
 | `SEEKTALENT_PRF_PROBE_PHRASE_PROPOSAL_MAX_OUTPUT_TOKENS` | `2048` | Maximum output tokens for phrase proposal extraction. |
 
-Before using `llm_deepseek_v4_flash` as production-ready benchmark behavior, run the live LLM PRF bakeoff manually and require `blocker_count == 0`:
+Before treating the shared LLM PRF extractor as production-ready benchmark behavior, run the live LLM PRF bakeoff manually and require `blocker_count == 0`:
 
 ```bash
 uv run python -m seektalent.candidate_feedback.llm_prf_bakeoff \
