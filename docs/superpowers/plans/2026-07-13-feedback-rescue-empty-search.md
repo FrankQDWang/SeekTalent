@@ -123,7 +123,7 @@ if not card_items:
 - Modify for release: `pyproject.toml`, `src/seektalent/version.py`, `scripts/install-seektalent-domi.sh`, `scripts/install-seektalent-domi.ps1`, `uv.lock`.
 
 - [x] **Step 1: Dispatch a Brooks PR-review subagent** over the feature diff and test evidence, requiring Symptom -> Source -> Consequence -> Remedy findings or `CLEAR`.
-- [ ] **Step 2: For every finding, add or update a failing test where behavior is affected, implement the smallest fix, rerun focused/full gates, and dispatch a fresh Brooks review. Repeat until `CLEAR`.**
+- [x] **Step 2: For every finding, add or update a failing test where behavior is affected, implement the smallest fix, rerun focused/full gates, and dispatch a fresh Brooks review. Repeat until `CLEAR`.**
 - [ ] **Step 3: Fast-forward merge to local `main`, preserve the pre-existing `.gitignore` and reference-document changes, and rerun the full verification suite on merged `main`.**
 - [ ] **Step 4: Bump the next patch version consistently, build and inspect distribution metadata, commit, push `main`, create and push the annotated version tag, and publish the GitHub release.**
 - [ ] **Step 5: Wait for Python Quality, Workbench Contract, CodeQL, and package publishing to succeed; verify the version is available from the package index.**
