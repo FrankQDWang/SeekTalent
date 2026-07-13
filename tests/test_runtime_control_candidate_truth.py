@@ -25,7 +25,7 @@ def test_checkpoint_persists_compact_candidate_truth_without_artifacts(tmp_path:
             stage="finalization",
             round_no=None,
             safe_boundary="runtime_candidate_checkpoint",
-            run_state=_run_state_payload(),
+            run_state=_versioned_run_state_payload(),
             source_plan={"sourceIds": ["cts"]},
             pending_commands=[],
             artifact_manifest_ref=None,
@@ -551,18 +551,8 @@ def _run_state_payload() -> dict[str, object]:
             "identity_1": {
                 "identity_id": "identity_1",
                 "canonical_identity_id": "identity_1",
-                "resume_ids": [
-                    "resume_1",
-                    "resume_equivalent",
-                    "resume_conflicting",
-                    "resume_incomparable",
-                ],
-                "evidence_ids": [
-                    "evidence_1",
-                    "evidence_equivalent",
-                    "evidence_conflicting",
-                    "evidence_incomparable",
-                ],
+                "resume_ids": ["resume_1"],
+                "evidence_ids": ["evidence_1"],
             }
         },
         "candidate_identity_by_resume_id": {"resume_1": "identity_1"},
@@ -570,12 +560,6 @@ def _run_state_payload() -> dict[str, object]:
             "identity_1": {
                 "identity_id": "identity_1",
                 "canonical_resume_id": "resume_1",
-                "equivalent_latest_resume_ids": ["resume_1", "resume_equivalent"],
-                "display_source_evidence_ids": ["evidence_1", "evidence_equivalent"],
-                "conflicting_resume_ids": ["resume_conflicting"],
-                "incomparable_resume_ids": ["resume_incomparable"],
-                "content_version_key": "content-version-1",
-                "safe_reason_codes": ["equivalent_latest_content", "version_conflict"],
             }
         },
         "source_evidence_by_identity_id": {
@@ -588,24 +572,6 @@ def _run_state_payload() -> dict[str, object]:
                     "candidate_resume_id": "resume_1",
                     "provider_candidate_key_hash": "provider_hash_1",
                     "collected_at": "2026-06-17T00:00:02.000000Z",
-                },
-                {
-                    "evidence_id": "evidence_equivalent",
-                    "source": "liepin",
-                    "evidence_level": "detail",
-                    "candidate_resume_id": "resume_equivalent",
-                },
-                {
-                    "evidence_id": "evidence_conflicting",
-                    "source": "cts",
-                    "evidence_level": "card",
-                    "candidate_resume_id": "resume_conflicting",
-                },
-                {
-                    "evidence_id": "evidence_incomparable",
-                    "source": "liepin",
-                    "evidence_level": "detail",
-                    "candidate_resume_id": "resume_incomparable",
                 },
             ]
         },
@@ -647,3 +613,66 @@ def _run_state_payload() -> dict[str, object]:
             }
         ],
     }
+
+
+def _versioned_run_state_payload() -> dict[str, object]:
+    payload = _run_state_payload()
+    identities = payload["candidate_identities"]
+    canonical_by_identity = payload["canonical_resume_by_identity_id"]
+    evidence_by_identity = payload["source_evidence_by_identity_id"]
+    assert isinstance(identities, dict)
+    assert isinstance(canonical_by_identity, dict)
+    assert isinstance(evidence_by_identity, dict)
+
+    identity = identities["identity_1"]
+    canonical = canonical_by_identity["identity_1"]
+    evidence = evidence_by_identity["identity_1"]
+    assert isinstance(identity, dict)
+    assert isinstance(canonical, dict)
+    assert isinstance(evidence, list)
+
+    identity["resume_ids"] = [
+        "resume_1",
+        "resume_equivalent",
+        "resume_conflicting",
+        "resume_incomparable",
+    ]
+    identity["evidence_ids"] = [
+        "evidence_1",
+        "evidence_equivalent",
+        "evidence_conflicting",
+        "evidence_incomparable",
+    ]
+    canonical.update(
+        {
+            "equivalent_latest_resume_ids": ["resume_1", "resume_equivalent"],
+            "display_source_evidence_ids": ["evidence_1", "evidence_equivalent"],
+            "conflicting_resume_ids": ["resume_conflicting"],
+            "incomparable_resume_ids": ["resume_incomparable"],
+            "content_version_key": "content-version-1",
+            "safe_reason_codes": ["equivalent_latest_content", "version_conflict"],
+        }
+    )
+    evidence.extend(
+        [
+            {
+                "evidence_id": "evidence_equivalent",
+                "source": "liepin",
+                "evidence_level": "detail",
+                "candidate_resume_id": "resume_equivalent",
+            },
+            {
+                "evidence_id": "evidence_conflicting",
+                "source": "cts",
+                "evidence_level": "card",
+                "candidate_resume_id": "resume_conflicting",
+            },
+            {
+                "evidence_id": "evidence_incomparable",
+                "source": "liepin",
+                "evidence_level": "detail",
+                "candidate_resume_id": "resume_incomparable",
+            },
+        ]
+    )
+    return payload
