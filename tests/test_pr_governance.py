@@ -23,6 +23,7 @@ from tools.check_pr_governance import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+OFFLINE_DISTRIBUTION_GOAL_ID = "offline-distribution-2026-07"
 RUNTIME_PRODUCTION_READINESS_GOAL_ID = "runtime-production-readiness-2026-06"
 
 
@@ -114,7 +115,9 @@ def _major_refactor_goal_payload(
         ),
     ]
     default_verification = (
-        bootstrap_verification
+        list(MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID[OFFLINE_DISTRIBUTION_GOAL_ID])
+        if goal_id == OFFLINE_DISTRIBUTION_GOAL_ID
+        else bootstrap_verification
         if goal_id == "governance-bootstrap-2026-06"
         else agent_safety_verification
         if goal_id == "goal-2-agent-safety-gate-2026-06"
@@ -922,6 +925,39 @@ def test_evaluate_changed_files_allows_governance_bootstrap_major_refactor_manif
             "tests/test_pr_governance.py",
         ],
         line_changes=[LineCountChange("tools/check_pr_governance.py", base_lines=594, head_lines=700)],
+        project_root=tmp_path,
+    )
+
+    assert result.ok
+
+
+def test_evaluate_changed_files_allows_offline_distribution_major_refactor_manifest(
+    tmp_path: Path,
+) -> None:
+    manifest_path = "docs/governance/agent-goals/offline-distribution-2026-07.json"
+    red_files = [
+        ".github/workflows/build-macos-intel-offline.yml",
+        "tools/check_pr_governance.py",
+    ]
+    _write_json(
+        tmp_path / manifest_path,
+        _major_refactor_goal_payload(
+            goal_id=OFFLINE_DISTRIBUTION_GOAL_ID,
+            red_files=red_files,
+            touched_layers=["governance", "docs", "tests", "other"],
+        ),
+    )
+
+    result = evaluate_changed_files(
+        [
+            manifest_path,
+            *red_files,
+            "scripts/build_offline_macos_intel.py",
+            "tests/test_build_offline_macos_intel.py",
+            "tests/test_pr_governance.py",
+            "docs/references/offline-distribution.md",
+            "CONTEXT.md",
+        ],
         project_root=tmp_path,
     )
 
