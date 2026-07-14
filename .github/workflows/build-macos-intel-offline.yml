@@ -58,7 +58,7 @@ jobs:
 
       - name: Verify archive and bundled checksums
         run: |
-          shasum -a 256 -c "dist/${BUNDLE_NAME}.zip.sha256"
+          (cd dist && shasum -a 256 -c "${BUNDLE_NAME}.zip.sha256")
           rm -rf "$RUNNER_TEMP/seektalent-intel-bundle"
           mkdir -p "$RUNNER_TEMP/seektalent-intel-bundle"
           unzip -q "dist/${BUNDLE_NAME}.zip" -d "$RUNNER_TEMP/seektalent-intel-bundle"
