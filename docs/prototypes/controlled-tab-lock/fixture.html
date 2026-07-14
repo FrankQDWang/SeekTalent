@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PROTOTYPE — OpenCLI 受控 Tab 实机验证</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        min-height: 1800px;
+        margin: 0;
+        color: #1d2935;
+        background: #eef2f5;
+        font: 15px/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
+      }
+      main { width: min(760px, calc(100% - 48px)); margin: 72px auto; }
+      section {
+        margin-bottom: 20px;
+        padding: 24px;
+        border: 1px solid #d8e0e6;
+        border-radius: 12px;
+        background: #fff;
+      }
+      button, input { min-height: 42px; padding: 0 14px; font: inherit; }
+      input { width: 100%; margin: 12px 0; }
+      output { display: block; margin-top: 12px; color: #52616d; }
+      .scroll-proof { margin-top: 900px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>受控 Tab 行为夹具</h1>
+      <section>
+        <button id="action-button" type="button">增加计数</button>
+        <input id="prototype-input" aria-label="原型输入" />
+        <button id="spa-button" type="button">模拟 SPA 重绘</button>
+        <output id="fixture-state">count=0; spa=0</output>
+      </section>
+      <section class="scroll-proof" id="scroll-proof">滚动已到达验证区域</section>
+    </main>
+    <script>
+      let count = 0;
+      let spaVersion = 0;
+      const state = document.querySelector("#fixture-state");
+      const render = () => {
+        state.textContent = `count=${count}; spa=${spaVersion}`;
+      };
+      document.querySelector("#action-button").addEventListener("click", () => {
+        count += 1;
+        render();
+      });
+      document.querySelector("#spa-button").addEventListener("click", () => {
+        spaVersion += 1;
+        const replacement = document.createElement("section");
+        replacement.id = "spa-version";
+        replacement.textContent = `SPA version ${spaVersion}`;
+        document.querySelector("#spa-version")?.remove();
+        document.querySelector("main").prepend(replacement);
+        render();
+      });
+      window.__controlledTabFixture = {
+        snapshot: () => ({
+          count,
+          inputValue: document.querySelector("#prototype-input").value,
+          overlayConnected:
+            window.__seektalentControlledTabLockV1?.snapshot?.().installed === true,
+          scrollY: window.scrollY,
+          spaVersion,
+        }),
+      };
+      render();
+    </script>
+  </body>
+</html>

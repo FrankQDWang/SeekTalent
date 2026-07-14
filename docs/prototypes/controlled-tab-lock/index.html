@@ -1,0 +1,747 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PROTOTYPE — 受控 Tab 锁定层</title>
+    <style>
+      :root {
+        color: #17202a;
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+        background: #f4f6f8;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+
+      body {
+        margin: 0;
+        min-width: 960px;
+        min-height: 100vh;
+        background: #f4f6f8;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      .site-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        height: 64px;
+        padding: 0 56px;
+        color: #ffffff;
+        background: #172938;
+      }
+
+      .brand {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        font-size: 20px;
+        font-weight: 700;
+      }
+
+      .brand-mark {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border-radius: 10px;
+        color: #172938;
+        background: #f6b943;
+      }
+
+      .account {
+        color: #cbd4dc;
+        font-size: 13px;
+      }
+
+      .site-shell {
+        display: grid;
+        grid-template-columns: 210px minmax(0, 1fr);
+        min-height: calc(100vh - 64px);
+      }
+
+      .site-nav {
+        padding: 28px 18px;
+        border-right: 1px solid #dce2e8;
+        background: #ffffff;
+      }
+
+      .nav-item {
+        margin-bottom: 8px;
+        padding: 12px 16px;
+        border-radius: 8px;
+        color: #5e6a75;
+      }
+
+      .nav-item.active {
+        color: #1b2630;
+        background: #fff4da;
+        font-weight: 650;
+      }
+
+      .site-main {
+        padding: 30px 42px 150px;
+      }
+
+      .title-row {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        margin-bottom: 22px;
+      }
+
+      .title-row h1 {
+        margin: 0 0 5px;
+        font-size: 24px;
+      }
+
+      .title-row p {
+        margin: 0;
+        color: #7b8792;
+        font-size: 13px;
+      }
+
+      .primary-button {
+        padding: 10px 18px;
+        border: 0;
+        border-radius: 7px;
+        color: #1f2a34;
+        background: #f6b943;
+        font-weight: 650;
+      }
+
+      .filters {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr 1fr auto;
+        gap: 12px;
+        margin-bottom: 18px;
+        padding: 18px;
+        border: 1px solid #e1e6eb;
+        border-radius: 10px;
+        background: #ffffff;
+      }
+
+      .filters input,
+      .fake-select {
+        height: 40px;
+        padding: 0 12px;
+        border: 1px solid #d7dde3;
+        border-radius: 6px;
+        color: #58646f;
+        background: #ffffff;
+      }
+
+      .fake-select {
+        display: flex;
+        align-items: center;
+      }
+
+      .candidate-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .candidate-card {
+        display: grid;
+        grid-template-columns: 56px minmax(0, 1fr) auto;
+        gap: 16px;
+        align-items: center;
+        padding: 18px;
+        border: 1px solid #e1e6eb;
+        border-radius: 10px;
+        background: #ffffff;
+        box-shadow: 0 2px 10px rgb(34 49 63 / 4%);
+      }
+
+      .avatar {
+        display: grid;
+        width: 48px;
+        height: 48px;
+        place-items: center;
+        border-radius: 50%;
+        color: #607080;
+        background: #e8edf1;
+        font-weight: 700;
+      }
+
+      .candidate-card h2 {
+        margin: 0 0 7px;
+        font-size: 16px;
+      }
+
+      .candidate-card p {
+        margin: 0;
+        color: #73808c;
+        font-size: 13px;
+      }
+
+      .candidate-meta {
+        color: #46535f;
+        font-size: 13px;
+        text-align: right;
+      }
+
+      .automation-proof {
+        position: fixed;
+        top: 80px;
+        right: 20px;
+        z-index: 2147483644;
+        width: 260px;
+        padding: 14px 16px;
+        border: 1px solid rgb(255 255 255 / 45%);
+        border-radius: 10px;
+        color: #f7fafc;
+        background: rgb(17 24 31 / 84%);
+        box-shadow: 0 12px 32px rgb(0 0 0 / 20%);
+        font-size: 12px;
+        line-height: 1.45;
+        backdrop-filter: blur(12px);
+      }
+
+      .automation-proof strong {
+        display: block;
+        margin-bottom: 4px;
+        color: #ffffff;
+        font-size: 13px;
+      }
+
+      .lock-layer {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483640;
+        overflow: hidden;
+        color: #ffffff;
+        background: rgb(29 34 39 / 58%);
+        backdrop-filter: grayscale(0.9) blur(1px);
+        cursor: not-allowed;
+        user-select: none;
+      }
+
+      .lock-layer[hidden] {
+        display: none;
+      }
+
+      .lock-layer::before {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          180deg,
+          rgb(9 13 16 / 8%),
+          rgb(9 13 16 / 20%)
+        );
+        content: "";
+      }
+
+      .timer {
+        position: absolute;
+        z-index: 1;
+      }
+
+      .timer-a {
+        bottom: 88px;
+        left: 50%;
+        display: flex;
+        width: min(620px, 62vw);
+        align-items: center;
+        gap: 14px;
+        transform: translateX(-50%);
+      }
+
+      .timer-a .rail {
+        position: relative;
+        flex: 1;
+        height: 1px;
+        overflow: hidden;
+        background: rgb(255 255 255 / 35%);
+      }
+
+      .timer-a .rail::after {
+        position: absolute;
+        inset: 0;
+        background: rgb(255 255 255 / 88%);
+        content: "";
+        transform: scaleX(var(--progress));
+        transition: transform 0.25s linear;
+      }
+
+      .timer-a .rail:first-child::after {
+        transform-origin: right;
+      }
+
+      .timer-a .rail:last-child::after {
+        transform-origin: left;
+      }
+
+      .timer-a .seconds {
+        min-width: 48px;
+        color: rgb(255 255 255 / 94%);
+        font-size: 13px;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.08em;
+        text-align: center;
+        text-shadow: 0 1px 8px rgb(0 0 0 / 35%);
+      }
+
+      .timer-b {
+        bottom: 88px;
+        left: 50%;
+        width: min(720px, 70vw);
+        padding-top: 9px;
+        transform: translateX(-50%);
+      }
+
+      .timer-b .bar {
+        height: 3px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: rgb(255 255 255 / 22%);
+      }
+
+      .timer-b .bar::after {
+        display: block;
+        width: calc(var(--progress) * 100%);
+        height: 100%;
+        border-radius: inherit;
+        background: #f2c56b;
+        box-shadow: 0 0 12px rgb(242 197 107 / 52%);
+        content: "";
+        transition: width 0.25s linear;
+      }
+
+      .timer-b .status-chip {
+        position: absolute;
+        top: -22px;
+        left: 50%;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 7px 12px;
+        border: 1px solid rgb(255 255 255 / 18%);
+        border-radius: 999px;
+        color: rgb(255 255 255 / 76%);
+        background: rgb(20 24 28 / 68%);
+        box-shadow: 0 8px 22px rgb(0 0 0 / 18%);
+        font-size: 11px;
+        transform: translateX(-50%);
+        backdrop-filter: blur(10px);
+      }
+
+      .timer-b .seconds {
+        color: #ffffff;
+        font-size: 15px;
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+
+      .timer-c {
+        right: 34px;
+        bottom: 88px;
+        display: grid;
+        grid-template-columns: 48px auto;
+        gap: 12px;
+        align-items: center;
+        padding: 10px 14px 10px 10px;
+        border-left: 2px solid rgb(255 255 255 / 72%);
+        color: rgb(255 255 255 / 74%);
+        background: rgb(18 22 26 / 46%);
+        box-shadow: 0 10px 24px rgb(0 0 0 / 15%);
+        backdrop-filter: blur(8px);
+      }
+
+      .timer-c .dial {
+        display: grid;
+        width: 44px;
+        height: 44px;
+        place-items: center;
+        border-radius: 50%;
+        background: conic-gradient(
+          #ffffff calc(var(--progress) * 1turn),
+          rgb(255 255 255 / 16%) 0
+        );
+      }
+
+      .timer-c .dial::before {
+        position: absolute;
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: #34393e;
+        content: "";
+      }
+
+      .timer-c .seconds {
+        position: relative;
+        z-index: 1;
+        color: #ffffff;
+        font-size: 12px;
+        font-variant-numeric: tabular-nums;
+        font-weight: 700;
+      }
+
+      .timer-c strong {
+        display: block;
+        margin-bottom: 2px;
+        color: #ffffff;
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .timer-c span:last-child {
+        font-size: 10px;
+      }
+
+      .prototype-panel {
+        position: fixed;
+        top: 80px;
+        left: 20px;
+        z-index: 2147483646;
+        width: 224px;
+        padding: 12px;
+        border: 1px solid #d9dfe5;
+        border-radius: 12px;
+        background: rgb(255 255 255 / 96%);
+        box-shadow: 0 12px 32px rgb(20 30 40 / 18%);
+      }
+
+      .prototype-panel strong {
+        display: block;
+        margin-bottom: 3px;
+        font-size: 12px;
+      }
+
+      .prototype-panel p {
+        margin: 0 0 10px;
+        color: #697581;
+        font-size: 10px;
+        line-height: 1.4;
+      }
+
+      .prototype-panel button {
+        display: block;
+        width: 100%;
+        margin-top: 6px;
+        padding: 7px 9px;
+        border: 1px solid #d9dfe5;
+        border-radius: 7px;
+        color: #283541;
+        background: #ffffff;
+        font-size: 11px;
+        text-align: left;
+      }
+
+      .prototype-panel button:hover {
+        background: #f3f6f8;
+      }
+
+      .prototype-switcher {
+        position: fixed;
+        bottom: 16px;
+        left: 50%;
+        z-index: 2147483647;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px;
+        border: 1px solid rgb(255 255 255 / 16%);
+        border-radius: 999px;
+        color: #ffffff;
+        background: #101820;
+        box-shadow: 0 10px 30px rgb(0 0 0 / 28%);
+        transform: translateX(-50%);
+      }
+
+      .prototype-switcher button {
+        display: grid;
+        width: 32px;
+        height: 32px;
+        place-items: center;
+        border: 0;
+        border-radius: 50%;
+        color: #ffffff;
+        background: rgb(255 255 255 / 10%);
+      }
+
+      .prototype-switcher button:hover {
+        background: rgb(255 255 255 / 19%);
+      }
+
+      .variant-label {
+        min-width: 180px;
+        font-size: 11px;
+        letter-spacing: 0.02em;
+        text-align: center;
+      }
+
+      .prototype-only {
+        color: #f2c56b;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="brand">
+        <div class="brand-mark">示</div>
+        猎聘页面示意
+      </div>
+      <div class="account">已登录用户 · 当前 Chrome 窗口</div>
+    </header>
+
+    <div class="site-shell">
+      <nav class="site-nav">
+        <div class="nav-item active">人才搜索</div>
+        <div class="nav-item">沟通记录</div>
+        <div class="nav-item">收藏候选人</div>
+        <div class="nav-item">职位管理</div>
+      </nav>
+
+      <main class="site-main">
+        <div class="title-row">
+          <div>
+            <h1>人才搜索</h1>
+            <p id="render-state">页面内容版本 1 · 等待自动化命令</p>
+          </div>
+          <button class="primary-button" id="underlay-button">新增搜索</button>
+        </div>
+
+        <section class="filters">
+          <input placeholder="职位或技能关键词" />
+          <div class="fake-select">工作城市：上海</div>
+          <div class="fake-select">经验：5 年以上</div>
+          <button class="primary-button">搜索</button>
+        </section>
+
+        <section class="candidate-list" id="candidate-list">
+          <article class="candidate-card">
+            <div class="avatar">陈</div>
+            <div>
+              <h2>高级后端工程师</h2>
+              <p>Python · 分布式系统 · 数据平台</p>
+            </div>
+            <div class="candidate-meta">8 年经验<br />上海</div>
+          </article>
+          <article class="candidate-card">
+            <div class="avatar">林</div>
+            <div>
+              <h2>机器学习平台工程师</h2>
+              <p>LLM · 搜索推荐 · MLOps</p>
+            </div>
+            <div class="candidate-meta">6 年经验<br />杭州</div>
+          </article>
+          <article class="candidate-card">
+            <div class="avatar">周</div>
+            <div>
+              <h2>数据基础设施负责人</h2>
+              <p>Kafka · Flink · 数据治理</p>
+            </div>
+            <div class="candidate-meta">10 年经验<br />深圳</div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <div
+      class="lock-layer"
+      id="lock-layer"
+      aria-label="SeekTalent 正在控制此页面"
+    >
+      <div class="timer timer-a" data-timer="a">
+        <span class="rail"></span>
+        <span class="seconds" data-seconds>60s</span>
+        <span class="rail"></span>
+      </div>
+
+      <div class="timer timer-b" data-timer="b" hidden>
+        <div class="bar"></div>
+        <div class="status-chip">
+          <span class="seconds" data-seconds>60</span>
+          <span>秒后自动关闭</span>
+        </div>
+      </div>
+
+      <div class="timer timer-c" data-timer="c" hidden>
+        <div class="dial"><span class="seconds" data-seconds>60</span></div>
+        <span>
+          <strong>SeekTalent 正在操作</strong>
+          <span>闲置后自动关闭</span>
+        </span>
+      </div>
+    </div>
+
+    <aside class="prototype-panel">
+      <strong><span class="prototype-only">PROTOTYPE</span> 行为验证</strong>
+      <p>此面板不会出现在真实受控 Tab。它模拟 OpenCLI 从遮罩下面操作页面。</p>
+      <button id="automation-command">模拟自动化命令并重置 60 秒</button>
+      <button id="spa-render">模拟 SPA 重绘</button>
+      <button id="overlay-failure">模拟锁定层故障（业务继续）</button>
+      <button id="restore-overlay">恢复锁定层</button>
+    </aside>
+
+    <output class="automation-proof" id="automation-proof" aria-live="polite">
+      <strong>完整状态</strong>
+      Variant A · 锁定层正常 · 剩余 60 秒 · 自动化命令 0 次 · 页面版本 1
+    </output>
+
+    <nav class="prototype-switcher" aria-label="Prototype variant switcher">
+      <button id="previous-variant" aria-label="上一个方案">←</button>
+      <span class="variant-label" id="variant-label">A — Dokobot 双线</span>
+      <button id="next-variant" aria-label="下一个方案">→</button>
+    </nav>
+
+    <script>
+      const variants = [
+        { key: "a", label: "A — Dokobot 双线" },
+        { key: "b", label: "B — 底部进度轨" },
+        { key: "c", label: "C — 右下状态表" },
+      ];
+
+      const query = new URLSearchParams(window.location.search);
+      const requestedVariant = query.get("variant")?.toLowerCase();
+      let variantIndex = Math.max(
+        0,
+        variants.findIndex((variant) => variant.key === requestedVariant),
+      );
+      let remaining = 60;
+      let commandCount = 0;
+      let renderVersion = 1;
+      let overlayHealthy = true;
+      let lastTickAt = performance.now();
+
+      const lockLayer = document.querySelector("#lock-layer");
+      const proof = document.querySelector("#automation-proof");
+      const variantLabel = document.querySelector("#variant-label");
+      const renderState = document.querySelector("#render-state");
+
+      function currentVariant() {
+        return variants[variantIndex];
+      }
+
+      function render() {
+        const selected = currentVariant();
+        document.querySelectorAll("[data-timer]").forEach((timer) => {
+          timer.hidden = timer.dataset.timer !== selected.key;
+        });
+        document.querySelectorAll("[data-seconds]").forEach((seconds) => {
+          seconds.textContent =
+            selected.key === "a" ? `${remaining}s` : String(remaining);
+        });
+        lockLayer.hidden = !overlayHealthy;
+        lockLayer.style.setProperty("--progress", remaining / 60);
+        variantLabel.textContent = selected.label;
+        proof.innerHTML = `<strong>完整状态</strong>${selected.label} · ${
+          overlayHealthy ? "锁定层正常" : "锁定层故障，业务放行"
+        } · 剩余 ${remaining} 秒 · 自动化命令 ${commandCount} 次 · 页面版本 ${renderVersion}`;
+      }
+
+      function selectVariant(nextIndex) {
+        variantIndex = (nextIndex + variants.length) % variants.length;
+        const selected = currentVariant();
+        const nextQuery = new URLSearchParams(window.location.search);
+        nextQuery.set("variant", selected.key);
+        window.history.replaceState(null, "", `?${nextQuery.toString()}`);
+        render();
+      }
+
+      function resetDeadline() {
+        remaining = 60;
+        lastTickAt = performance.now();
+      }
+
+      document
+        .querySelector("#previous-variant")
+        .addEventListener("click", () => {
+          selectVariant(variantIndex - 1);
+        });
+      document.querySelector("#next-variant").addEventListener("click", () => {
+        selectVariant(variantIndex + 1);
+      });
+
+      document
+        .querySelector("#automation-command")
+        .addEventListener("click", () => {
+          commandCount += 1;
+          resetDeadline();
+          renderState.textContent = `页面内容版本 ${renderVersion} · 自动化已写入结果 ${commandCount}`;
+          render();
+        });
+
+      document.querySelector("#spa-render").addEventListener("click", () => {
+        renderVersion += 1;
+        resetDeadline();
+        document
+          .querySelector("#candidate-list")
+          .insertAdjacentHTML(
+            "afterbegin",
+            `<article class="candidate-card"><div class="avatar">新</div><div><h2>SPA 重绘产生的候选人</h2><p>页面已重绘，锁定层独立保留</p></div><div class="candidate-meta">版本 ${renderVersion}<br />模拟数据</div></article>`,
+          );
+        renderState.textContent = `页面内容版本 ${renderVersion} · SPA 重绘完成`;
+        render();
+      });
+
+      document
+        .querySelector("#overlay-failure")
+        .addEventListener("click", () => {
+          overlayHealthy = false;
+          render();
+        });
+
+      document
+        .querySelector("#restore-overlay")
+        .addEventListener("click", () => {
+          overlayHealthy = true;
+          resetDeadline();
+          render();
+        });
+
+      window.addEventListener("keydown", (event) => {
+        const target = event.target;
+        if (
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target?.isContentEditable
+        ) {
+          return;
+        }
+        if (event.key === "ArrowLeft") {
+          selectVariant(variantIndex - 1);
+        }
+        if (event.key === "ArrowRight") {
+          selectVariant(variantIndex + 1);
+        }
+      });
+
+      lockLayer.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+
+      window.setInterval(() => {
+        const now = performance.now();
+        if (now - lastTickAt >= 1000 && remaining > 0) {
+          remaining -= 1;
+          lastTickAt = now;
+          render();
+        }
+      }, 200);
+
+      render();
+    </script>
+  </body>
+</html>
