@@ -2,9 +2,6 @@ name: Build macOS Intel Offline Bundle
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - codex/macos-intel-offline
 
 permissions:
   contents: read
