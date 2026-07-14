@@ -53,3 +53,8 @@ docs/assets/prd-seektalent-startup-states/
 node_modules/
 test-results/
 playwright-report/
+.gstack/
+
+# Local WTS setup prototype
+wts_setup_prototype.html
+design-qa.md
