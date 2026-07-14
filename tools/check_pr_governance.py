@@ -140,6 +140,19 @@ RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION = (
     "uv run pytest tests/test_prompt_safety.py tests/test_llm_input_prompts.py -q"
 )
 MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
+    "offline-distribution-2026-07": (
+        "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
+        (
+            "uv run ruff check scripts/build_offline_macos_intel.py "
+            "tests/test_build_offline_macos_intel.py tools/check_pr_governance.py "
+            "tests/test_pr_governance.py"
+        ),
+        (
+            "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py "
+            "tests/test_build_offline_macos_intel.py tests/test_pr_governance.py"
+        ),
+        "uv run python tools/check_pr_governance.py --base origin/main",
+    ),
     "source-decoupling-2026-06": (
         "uv run python tools/check_source_boundaries.py",
         "scripts/verify-source-decoupling.sh",
