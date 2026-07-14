@@ -71,12 +71,12 @@ jobs:
           HTTP_PROXY: http://127.0.0.1:9
           HTTPS_PROXY: http://127.0.0.1:9
           ALL_PROXY: http://127.0.0.1:9
-          http_proxy: http://127.0.0.1:9
-          https_proxy: http://127.0.0.1:9
-          all_proxy: http://127.0.0.1:9
           NO_PROXY: ""
-          no_proxy: ""
         run: |
+          export http_proxy="$HTTP_PROXY"
+          export https_proxy="$HTTPS_PROXY"
+          export all_proxy="$ALL_PROXY"
+          export no_proxy="$NO_PROXY"
           export DOMI_PYTHON="$(command -v python)"
           export DOMI_NODE="$(command -v node)"
           export BUNDLE_ROOT="$RUNNER_TEMP/seektalent-intel-bundle/${BUNDLE_NAME}"
