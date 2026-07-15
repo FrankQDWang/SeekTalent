@@ -9,6 +9,12 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
+from seektalent.browser_bridge_manifest import (
+    BrowserBridgeManifestError,
+    BrowserBridgeRequirement,
+    load_browser_bridge_requirement,
+)
+
 
 OPENCLI_PACKAGE = "@jackwener/opencli"
 OPENCLI_VERSION = "1.8.6"
@@ -44,9 +50,16 @@ class BootstrapError(RuntimeError):
 
 
 class OpenCliRuntime:
-    def __init__(self, *, node: Path, opencli_main: Path) -> None:
+    def __init__(
+        self,
+        *,
+        node: Path,
+        opencli_main: Path,
+        bridge_manifest: Path | None = None,
+    ) -> None:
         self.node = node
         self.opencli_main = opencli_main
+        self.bridge_manifest = bridge_manifest
 
     @property
     def node_bin_dir(self) -> Path:
@@ -65,35 +78,45 @@ def ensure_opencli_runtime(
         raise BootstrapError(
             "domi_node_missing: SEEKTALENT_OPENCLI_NODE, SEEKTALENT_DOMI_NODE, or DOMI_NODE is required"
         )
-    runtime_root.mkdir(parents=True, exist_ok=True)
+    if not runtime_root.is_dir():
+        raise BootstrapError(
+            f"opencli_offline_runtime_missing: Reinstall SeekTalent to restore {runtime_root}"
+        )
     with _runtime_lock(runtime_root):
         node = _require_domi_node_file(external_node)
         install_dir = _opencli_install_dir(runtime_root, opencli_version)
-        node_verified = False
-        if not _managed_opencli_is_complete(install_dir, opencli_version=opencli_version):
-            _verify_domi_node(node)
-            node_verified = True
-        opencli_main = _ensure_managed_opencli(runtime_root, node=node, opencli_version=opencli_version)
+        opencli_main = _require_installed_opencli(install_dir, opencli_version=opencli_version)
         package_json = _opencli_package_json_path(install_dir)
+        bridge_identity = _opencli_bridge_identity_path(install_dir)
+        bridge_manifest = _bridge_manifest_path(runtime_root)
+        requirement = _load_bridge_requirement(bridge_manifest)
+        _verify_runtime_bridge_identity(bridge_identity, requirement)
         stamp_path = _verification_stamp_path(install_dir)
         if not _verification_stamp_matches(
             stamp_path,
             node=node,
             opencli_main=opencli_main,
             package_json=package_json,
+            bridge_identity=bridge_identity,
+            bridge_manifest=bridge_manifest,
             opencli_version=opencli_version,
         ):
-            if not node_verified:
-                _verify_domi_node(node)
+            _verify_domi_node(node)
             _probe_opencli_cli(node=node, opencli_main=opencli_main, opencli_version=opencli_version)
             _write_verification_stamp(
                 stamp_path,
                 node=node,
                 opencli_main=opencli_main,
                 package_json=package_json,
+                bridge_identity=bridge_identity,
+                bridge_manifest=bridge_manifest,
                 opencli_version=opencli_version,
             )
-    return OpenCliRuntime(node=node, opencli_main=opencli_main)
+    return OpenCliRuntime(
+        node=node,
+        opencli_main=opencli_main,
+        bridge_manifest=bridge_manifest,
+    )
 
 
 def _configured_node_from_env(env: Mapping[str, str] | None = None) -> Path | None:
@@ -151,39 +174,17 @@ def _probe_node_version(node: Path) -> None:
         raise BootstrapError(f"Node runtime returned an unexpected version: {node}")
 
 
-def _ensure_managed_opencli(runtime_root: Path, *, node: Path, opencli_version: str) -> Path:
-    install_dir = _opencli_install_dir(runtime_root, opencli_version)
+def _require_installed_opencli(install_dir: Path, *, opencli_version: str) -> Path:
     main = _opencli_main_path(install_dir)
     package_json = _opencli_package_json_path(install_dir)
-    if _managed_opencli_is_complete(install_dir, opencli_version=opencli_version):
-        return main
-    npm_command = _npm_command_for_node(node)
-    install_dir.mkdir(parents=True, exist_ok=True)
-    env = _opencli_subprocess_env(node_bin_dir=node.parent)
-    completed = subprocess.run(
-        (
-            *(str(part) for part in npm_command),
-            "install",
-            "--prefix",
-            str(install_dir),
-            "--omit=dev",
-            "--no-audit",
-            "--no-fund",
-            f"{OPENCLI_PACKAGE}@{opencli_version}",
-        ),
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=300,
-    )
-    if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "").strip()
-        raise BootstrapError(f"OpenCLI {opencli_version} install failed: {detail[:500]}")
     if not main.exists() or _package_version(package_json) != opencli_version:
-        raise BootstrapError(f"OpenCLI {opencli_version} install is incomplete")
+        raise BootstrapError(
+            f"opencli_offline_runtime_missing: Reinstall SeekTalent to restore OpenCLI {opencli_version}"
+        )
+    if not _opencli_bridge_identity_path(install_dir).is_file():
+        raise BootstrapError(
+            "opencli_bridge_integrity_failed: Installed OpenCLI has no SeekTalent bridge identity"
+        )
     return main
 
 
@@ -203,10 +204,45 @@ def _opencli_package_json_path(install_dir: Path) -> Path:
     return _opencli_package_dir(install_dir) / "package.json"
 
 
-def _managed_opencli_is_complete(install_dir: Path, *, opencli_version: str) -> bool:
-    return _opencli_main_path(install_dir).exists() and _package_version(
-        _opencli_package_json_path(install_dir)
-    ) == opencli_version
+def _opencli_bridge_identity_path(install_dir: Path) -> Path:
+    return _opencli_package_dir(install_dir) / "bridge-identity.json"
+
+
+def _bridge_manifest_path(runtime_root: Path) -> Path:
+    return runtime_root.parent / "browser-bridge" / "bridge-manifest.json"
+
+
+def _load_bridge_requirement(path: Path) -> BrowserBridgeRequirement:
+    try:
+        return load_browser_bridge_requirement(path)
+    except BrowserBridgeManifestError as exc:
+        raise BootstrapError(
+            f"opencli_bridge_{exc.code}: Reinstall the SeekTalent browser bridge"
+        ) from exc
+
+
+def _verify_runtime_bridge_identity(
+    path: Path,
+    requirement: BrowserBridgeRequirement,
+) -> None:
+    try:
+        identity = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise BootstrapError("opencli_bridge_integrity_failed: Invalid runtime bridge identity") from exc
+    expected_protocol = {
+        "major": requirement.protocol_major,
+        "minor": requirement.protocol_minor,
+    }
+    if (
+        not isinstance(identity, dict)
+        or identity.get("implementation") != requirement.implementation
+        or identity.get("bridgeBuildId") != requirement.bridge_build_id
+        or identity.get("protocolVersion") != expected_protocol
+        or identity.get("capabilities") != sorted(requirement.capabilities)
+    ):
+        raise BootstrapError(
+            "opencli_bridge_build_mismatch: Installed runtime and extension manifest are not a pair"
+        )
 
 
 def _probe_opencli_cli(*, node: Path, opencli_main: Path, opencli_version: str) -> None:
@@ -239,6 +275,8 @@ def _verification_stamp_matches(
     node: Path,
     opencli_main: Path,
     package_json: Path,
+    bridge_identity: Path,
+    bridge_manifest: Path,
     opencli_version: str,
 ) -> bool:
     try:
@@ -249,6 +287,8 @@ def _verification_stamp_matches(
         node=node,
         opencli_main=opencli_main,
         package_json=package_json,
+        bridge_identity=bridge_identity,
+        bridge_manifest=bridge_manifest,
         opencli_version=opencli_version,
     )
 
@@ -259,12 +299,16 @@ def _write_verification_stamp(
     node: Path,
     opencli_main: Path,
     package_json: Path,
+    bridge_identity: Path,
+    bridge_manifest: Path,
     opencli_version: str,
 ) -> None:
     payload = _verification_payload(
         node=node,
         opencli_main=opencli_main,
         package_json=package_json,
+        bridge_identity=bridge_identity,
+        bridge_manifest=bridge_manifest,
         opencli_version=opencli_version,
     )
     stamp_path.parent.mkdir(parents=True, exist_ok=True)
@@ -288,6 +332,8 @@ def _write_verification_stamp(
                 node=node,
                 opencli_main=opencli_main,
                 package_json=package_json,
+                bridge_identity=bridge_identity,
+                bridge_manifest=bridge_manifest,
                 opencli_version=opencli_version,
             ):
                 return
@@ -297,7 +343,15 @@ def _write_verification_stamp(
             temporary_path.unlink()
 
 
-def _verification_payload(*, node: Path, opencli_main: Path, package_json: Path, opencli_version: str) -> dict[str, object]:
+def _verification_payload(
+    *,
+    node: Path,
+    opencli_main: Path,
+    package_json: Path,
+    bridge_identity: Path,
+    bridge_manifest: Path,
+    opencli_version: str,
+) -> dict[str, object]:
     return {
         "schema_version": VERIFICATION_STAMP_SCHEMA_VERSION,
         "opencli_package": OPENCLI_PACKAGE,
@@ -305,6 +359,8 @@ def _verification_payload(*, node: Path, opencli_main: Path, package_json: Path,
         "node": _file_fingerprint(node),
         "opencli_main": _file_fingerprint(opencli_main),
         "package_json": _file_fingerprint(package_json),
+        "bridge_identity": _file_fingerprint(bridge_identity),
+        "bridge_manifest": _file_fingerprint(bridge_manifest),
     }
 
 
@@ -323,23 +379,6 @@ def _opencli_subprocess_env(*, node_bin_dir: Path) -> dict[str, str]:
         env.pop(key, None)
     env["PATH"] = os.pathsep.join((str(node_bin_dir), env.get("PATH", "")))
     return env
-
-
-def _npm_for_node(node: Path) -> Path:
-    npm = node.parent / ("npm.cmd" if sys.platform == "win32" else "npm")
-    if npm.exists():
-        return npm
-    raise BootstrapError(f"Node npm is missing beside Node runtime: {node}")
-
-
-def _npm_command_for_node(node: Path) -> tuple[Path, ...]:
-    try:
-        return (_npm_for_node(node),)
-    except BootstrapError:
-        npm_cli = node.parent / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
-        if npm_cli.exists():
-            return (node, npm_cli)
-        raise
 
 
 def _package_version(path: Path) -> str | None:

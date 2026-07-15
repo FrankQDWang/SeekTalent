@@ -12,6 +12,15 @@ from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import urlencode
 
+from seektalent.browser_bridge_manifest import (
+    BROWSER_BRIDGE_IMPLEMENTATION as OPENCLI_BRIDGE_IMPLEMENTATION,
+    BROWSER_BRIDGE_MANIFEST_SCHEMA,
+    BROWSER_BRIDGE_PROTOCOL_MAJOR as OPENCLI_BRIDGE_PROTOCOL_MAJOR,
+    REQUIRED_BROWSER_BRIDGE_CAPABILITIES as REQUIRED_OPENCLI_BRIDGE_CAPABILITIES,
+    BrowserBridgeManifestError,
+    BrowserBridgeRequirement as OpenCliBridgeRequirement,
+    load_browser_bridge_requirement,
+)
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_BUILD_MISMATCH,
@@ -31,21 +40,7 @@ from seektalent.opencli_browser.reason_codes import (
 OPENCLI_DAEMON_HOST = "127.0.0.1"
 OPENCLI_DAEMON_PORT = 19825
 OPENCLI_DAEMON_MAX_RESPONSE_BYTES = 1024 * 1024
-OPENCLI_BRIDGE_MANIFEST_SCHEMA = "seektalent.browser_bridge_bundle.v1"
-OPENCLI_BRIDGE_IMPLEMENTATION = "seektalent-opencli"
-OPENCLI_BRIDGE_PROTOCOL_MAJOR = 1
-REQUIRED_OPENCLI_BRIDGE_CAPABILITIES = frozenset(
-    {
-        "browser.operation-deadline.v1",
-        "browser.operations.v1",
-        "control-fence.v1",
-        "tab.close-verified.v1",
-        "tab.create-in-existing-window.v1",
-        "tab.find.v1",
-        "tab.idle-deadline.v1",
-    }
-)
-
+OPENCLI_BRIDGE_MANIFEST_SCHEMA = BROWSER_BRIDGE_MANIFEST_SCHEMA
 OpenCliDaemonAction = Literal[
     "browser-operation",
     "exec",
@@ -60,15 +55,6 @@ _ALLOWED_DAEMON_ACTIONS = frozenset(
     {"browser-operation", "exec", "navigate", "tabs", "screenshot", "insert-text", "cdp", "control"}
 )
 _RESERVED_COMMAND_FIELDS = frozenset({"id", "action", "timeout", "deadlineAt", "contextId", "preferredContextId"})
-
-
-@dataclass(frozen=True)
-class OpenCliBridgeRequirement:
-    implementation: str
-    bridge_build_id: str
-    protocol_major: int
-    protocol_minor: int
-    capabilities: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -251,41 +237,15 @@ def _command_response_timeout(command_timeout_seconds: float) -> float:
 
 def load_bridge_requirement(path: Path) -> OpenCliBridgeRequirement:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_INTEGRITY_FAILED) from exc
-    if not isinstance(payload, dict) or payload.get("schemaVersion") != OPENCLI_BRIDGE_MANIFEST_SCHEMA:
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_INTEGRITY_FAILED)
-    implementation = payload.get("implementation")
-    if implementation != OPENCLI_BRIDGE_IMPLEMENTATION:
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_WRONG_IMPLEMENTATION)
-    bridge_build_id = payload.get("bridgeBuildId")
-    protocol = payload.get("protocolVersion")
-    capabilities = payload.get("capabilities")
-    if (
-        not isinstance(bridge_build_id, str)
-        or not bridge_build_id
-        or not isinstance(protocol, dict)
-        or type(protocol.get("major")) is not int
-        or type(protocol.get("minor")) is not int
-        or protocol["major"] < 0
-        or protocol["minor"] < 0
-        or not isinstance(capabilities, list)
-        or not all(isinstance(value, str) and value for value in capabilities)
-    ):
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_INTEGRITY_FAILED)
-    if protocol["major"] != OPENCLI_BRIDGE_PROTOCOL_MAJOR:
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_PROTOCOL_MISMATCH)
-    capability_set = frozenset(cast("list[str]", capabilities))
-    if not REQUIRED_OPENCLI_BRIDGE_CAPABILITIES.issubset(capability_set):
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_CAPABILITY_MISSING)
-    return OpenCliBridgeRequirement(
-        implementation=implementation,
-        bridge_build_id=bridge_build_id,
-        protocol_major=protocol["major"],
-        protocol_minor=protocol["minor"],
-        capabilities=capability_set,
-    )
+        return load_browser_bridge_requirement(path)
+    except BrowserBridgeManifestError as exc:
+        reason = {
+            "integrity_failed": OPENCLI_BRIDGE_INTEGRITY_FAILED,
+            "wrong_implementation": OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
+            "protocol_mismatch": OPENCLI_BRIDGE_PROTOCOL_MISMATCH,
+            "capability_missing": OPENCLI_BRIDGE_CAPABILITY_MISSING,
+        }[exc.code]
+        raise OpenCliBrowserError(reason) from exc
 
 
 def _validate_requirement(requirement: OpenCliBridgeRequirement) -> None:

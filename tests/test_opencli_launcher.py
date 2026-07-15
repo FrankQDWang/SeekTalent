@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
 from seektalent import opencli_launcher
+from seektalent.opencli_browser.daemon_transport import REQUIRED_OPENCLI_BRIDGE_CAPABILITIES
 
 
 def test_managed_opencli_version_is_pinned_to_1_8_6() -> None:
@@ -17,7 +19,6 @@ def test_ensure_opencli_runtime_rejects_without_domi_node_even_if_system_node_ex
     tmp_path: Path,
 ) -> None:
     node = _write_fake_node(tmp_path / "bin", exit_code=0)
-    _write_fake_npm(node.parent)
     _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("PATH", str(node.parent))
     monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
@@ -63,24 +64,11 @@ def test_launcher_delegates_to_managed_opencli(
     assert argv[1:] == ["browser", "seektalent-liepin", "state"]
 
 
-def test_opencli_install_requires_npm_from_domi_node(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    node = _write_fake_node(tmp_path / "managed-bin", exit_code=0)
-    _write_fake_npm(tmp_path / "system-bin")
-    monkeypatch.setenv("PATH", str(tmp_path / "system-bin"))
-
-    with pytest.raises(opencli_launcher.BootstrapError):
-        opencli_launcher._npm_for_node(node)
-
-
 def test_ensure_opencli_runtime_uses_explicit_domi_node_without_downloading(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
-    _write_fake_npm(domi_node.parent)
     opencli_main = _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
     calls = _patch_existing_opencli_subprocess(
@@ -93,6 +81,7 @@ def test_ensure_opencli_runtime_uses_explicit_domi_node_without_downloading(
 
     assert runtime.node == domi_node
     assert runtime.opencli_main.name == "main.js"
+    assert runtime.bridge_manifest == tmp_path / "browser-bridge" / "bridge-manifest.json"
     assert calls == [[str(domi_node), "--version"], [str(domi_node), str(opencli_main), "--help"]]
 
 
@@ -102,7 +91,6 @@ def test_existing_opencli_is_probed_with_domi_node_without_downloading(
 ) -> None:
     log_path = tmp_path / "node-argv.txt"
     domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0, log_path=log_path)
-    _write_fake_npm(domi_node.parent)
     opencli_main = _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
     _patch_existing_opencli_subprocess(
@@ -124,7 +112,6 @@ def test_verified_existing_opencli_is_not_reprobed_on_next_runtime_check(
     tmp_path: Path,
 ) -> None:
     domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
-    _write_fake_npm(domi_node.parent)
     runtime_root = tmp_path / "runtime"
     opencli_main = _write_managed_opencli(runtime_root)
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
@@ -151,12 +138,16 @@ def test_verification_stamp_write_tolerates_concurrent_matching_writer(
     opencli_main = _write_managed_opencli(runtime_root)
     install_dir = opencli_launcher._opencli_install_dir(runtime_root, opencli_launcher.OPENCLI_VERSION)
     package_json = opencli_launcher._opencli_package_json_path(install_dir)
+    bridge_identity = opencli_launcher._opencli_bridge_identity_path(install_dir)
+    bridge_manifest = opencli_launcher._bridge_manifest_path(runtime_root)
     stamp_path = opencli_launcher._verification_stamp_path(install_dir)
     opencli_launcher._write_verification_stamp(
         stamp_path,
         node=domi_node,
         opencli_main=opencli_main,
         package_json=package_json,
+        bridge_identity=bridge_identity,
+        bridge_manifest=bridge_manifest,
         opencli_version=opencli_launcher.OPENCLI_VERSION,
     )
 
@@ -170,6 +161,8 @@ def test_verification_stamp_write_tolerates_concurrent_matching_writer(
         node=domi_node,
         opencli_main=opencli_main,
         package_json=package_json,
+        bridge_identity=bridge_identity,
+        bridge_manifest=bridge_manifest,
         opencli_version=opencli_launcher.OPENCLI_VERSION,
     )
 
@@ -194,56 +187,57 @@ def test_existing_opencli_does_not_require_npm_from_domi_node(
     assert all("npm" not in part for call in calls for part in call)
 
 
-def test_missing_opencli_installs_pinned_cli_with_domi_node_and_probes(
+def test_missing_opencli_fails_without_running_npm_or_any_subprocess(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
-    npm = _write_fake_npm(domi_node.parent)
     runtime_root = tmp_path / "runtime"
-    expected_main = (
-        runtime_root
-        / "opencli"
-        / opencli_launcher.OPENCLI_VERSION
-        / "node_modules"
-        / "@jackwener"
-        / "opencli"
-        / "dist"
-        / "src"
-        / "main.js"
-    )
     calls: list[list[str]] = []
 
-    class Completed:
-        def __init__(self, *, returncode: int = 0, stdout: str = "", stderr: str = "") -> None:
-            self.returncode = returncode
-            self.stdout = stdout
-            self.stderr = stderr
-
     def fake_run(argv, **_kwargs):
-        argv_list = [str(part) for part in argv]
-        calls.append(argv_list)
-        if argv_list == [str(domi_node), "--version"]:
-            return Completed(stdout="v24.16.0\n")
-        if argv_list[:2] == [str(npm), "install"]:
-            _write_managed_opencli(runtime_root)
-            return Completed()
-        if argv_list == [str(domi_node), str(expected_main), "--help"]:
-            return Completed(stdout="Usage: opencli\n")
-        raise AssertionError(f"Unexpected subprocess call: {argv_list}")
+        calls.append([str(part) for part in argv])
+        raise AssertionError("missing offline runtime must not launch a subprocess")
 
     monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
 
-    runtime = opencli_launcher.ensure_opencli_runtime(
-        root=runtime_root,
-        env={"SEEKTALENT_DOMI_NODE": str(domi_node)},
-    )
+    with pytest.raises(opencli_launcher.BootstrapError, match="opencli_offline_runtime_missing"):
+        opencli_launcher.ensure_opencli_runtime(
+            root=runtime_root,
+            env={"SEEKTALENT_DOMI_NODE": str(domi_node)},
+        )
 
-    assert runtime.node == domi_node
-    assert runtime.opencli_main == expected_main
-    assert any(call[:2] == [str(npm), "install"] for call in calls)
-    assert f"{opencli_launcher.OPENCLI_PACKAGE}@{opencli_launcher.OPENCLI_VERSION}" in calls[1]
-    assert calls[-1] == [str(domi_node), str(expected_main), "--help"]
+    assert calls == []
+
+
+def test_installed_opencli_requires_the_paired_bridge_manifest(tmp_path: Path) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
+    _write_managed_opencli(tmp_path / "runtime")
+    (tmp_path / "browser-bridge" / "bridge-manifest.json").unlink()
+
+    with pytest.raises(opencli_launcher.BootstrapError, match="opencli_bridge_integrity_failed"):
+        opencli_launcher.ensure_opencli_runtime(
+            root=tmp_path / "runtime",
+            env={"SEEKTALENT_DOMI_NODE": str(domi_node)},
+        )
+
+
+def test_installed_opencli_rejects_runtime_from_another_bridge_build(tmp_path: Path) -> None:
+    domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
+    _write_managed_opencli(tmp_path / "runtime")
+    install_dir = opencli_launcher._opencli_install_dir(
+        tmp_path / "runtime", opencli_launcher.OPENCLI_VERSION
+    )
+    identity_path = opencli_launcher._opencli_bridge_identity_path(install_dir)
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    identity["bridgeBuildId"] = "seektalent-opencli-1.8.6+stale"
+    identity_path.write_text(json.dumps(identity), encoding="utf-8")
+
+    with pytest.raises(opencli_launcher.BootstrapError, match="opencli_bridge_build_mismatch"):
+        opencli_launcher.ensure_opencli_runtime(
+            root=tmp_path / "runtime",
+            env={"SEEKTALENT_DOMI_NODE": str(domi_node)},
+        )
 
 
 def test_existing_opencli_must_be_executable_by_domi_node(
@@ -251,7 +245,6 @@ def test_existing_opencli_must_be_executable_by_domi_node(
     tmp_path: Path,
 ) -> None:
     domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=9)
-    _write_fake_npm(domi_node.parent)
     opencli_main = _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
     _patch_existing_opencli_subprocess(
@@ -265,31 +258,11 @@ def test_existing_opencli_must_be_executable_by_domi_node(
         opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
 
 
-def test_ensure_opencli_runtime_accepts_domi_bundled_npm_cli(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    domi_node = _write_fake_node(tmp_path / "domi-node", exit_code=0)
-    _write_domi_bundled_npm_cli(domi_node.parent)
-    opencli_main = _write_managed_opencli(tmp_path / "runtime")
-    monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
-    _patch_existing_opencli_subprocess(
-        monkeypatch,
-        node=domi_node,
-        opencli_main=opencli_main,
-    )
-
-    runtime = opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
-
-    assert runtime.node == domi_node
-
-
 def test_ensure_opencli_runtime_rejects_unusable_domi_node(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
-    _write_fake_npm(domi_node.parent)
     _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("SEEKTALENT_DOMI_NODE", str(domi_node))
     version_probe_calls: list[tuple[str, ...]] = []
@@ -352,7 +325,6 @@ def test_domi_node_env_accepts_node_bin_directory(
 ) -> None:
     domi_bin = tmp_path / "domi-bin"
     domi_node = _write_fake_node(domi_bin, exit_code=0)
-    _write_fake_npm(domi_bin)
     opencli_main = _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("DOMI_NODE", str(domi_bin))
     _patch_existing_opencli_subprocess(
@@ -366,75 +338,22 @@ def test_domi_node_env_accepts_node_bin_directory(
     assert runtime.node == domi_node
 
 
-def test_opencli_install_env_excludes_provider_secrets(
+def test_opencli_subprocess_env_excludes_provider_secrets(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     node = _write_fake_node(tmp_path / "managed-bin", exit_code=0)
-    _write_fake_npm(node.parent)
-    captured_env: dict[str, str] = {}
-
-    class Completed:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def fake_run(_argv, **kwargs):
-        captured_env.update(kwargs["env"])
-        _write_managed_opencli(tmp_path / "runtime")
-        return Completed()
-
     monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-secret-jwt")
     monkeypatch.setenv("SEEKTALENT_DOMI_LLM_BASE_URL", "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1")
     monkeypatch.setenv("SEEKTALENT_DOMI_LLM_CHANNEL", "seek_talent")
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "text-secret-key")
-    monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
-
-    opencli_launcher._ensure_managed_opencli(
-        tmp_path / "runtime",
-        node=node,
-        opencli_version=opencli_launcher.OPENCLI_VERSION,
-    )
+    captured_env = opencli_launcher._opencli_subprocess_env(node_bin_dir=node.parent)
 
     assert "SEEKTALENT_DOMI_JWT" not in captured_env
     assert "SEEKTALENT_DOMI_LLM_BASE_URL" not in captured_env
     assert "SEEKTALENT_DOMI_LLM_CHANNEL" not in captured_env
     assert "SEEKTALENT_TEXT_LLM_API_KEY" not in captured_env
     assert str(node.parent) in captured_env["PATH"]
-
-
-def test_opencli_install_uses_domi_bundled_npm_cli_when_npm_cmd_missing(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    node = _write_fake_node(tmp_path / "domi-node", exit_code=0)
-    npm_cli = _write_domi_bundled_npm_cli(node.parent)
-    captured_argv: list[str] = []
-    captured_kwargs: dict[str, object] = {}
-
-    class Completed:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    def fake_run(argv, **kwargs):
-        captured_argv.extend(str(part) for part in argv)
-        captured_kwargs.update(kwargs)
-        _write_managed_opencli(tmp_path / "runtime")
-        return Completed()
-
-    monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
-
-    opencli_launcher._ensure_managed_opencli(
-        tmp_path / "runtime",
-        node=node,
-        opencli_version=opencli_launcher.OPENCLI_VERSION,
-    )
-
-    assert captured_argv[:2] == [str(node), str(npm_cli)]
-    assert "install" in captured_argv
-    assert captured_kwargs["encoding"] == "utf-8"
-    assert captured_kwargs["errors"] == "replace"
 
 
 def _write_managed_opencli(root: Path) -> Path:
@@ -444,6 +363,27 @@ def _write_managed_opencli(root: Path) -> Path:
     main.write_text("#!/usr/bin/env node\n", encoding="utf-8")
     (package_dir / "package.json").write_text(
         f'{{"version": "{opencli_launcher.OPENCLI_VERSION}"}}\n',
+        encoding="utf-8",
+    )
+    bridge_identity = {
+        "implementation": "seektalent-opencli",
+        "bridgeBuildId": "seektalent-opencli-1.8.6+test",
+        "protocolVersion": {"major": 1, "minor": 0},
+        "capabilities": sorted(REQUIRED_OPENCLI_BRIDGE_CAPABILITIES),
+    }
+    (package_dir / "bridge-identity.json").write_text(
+        json.dumps(bridge_identity),
+        encoding="utf-8",
+    )
+    bridge_manifest = root.parent / "browser-bridge" / "bridge-manifest.json"
+    bridge_manifest.parent.mkdir(parents=True, exist_ok=True)
+    bridge_manifest.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "seektalent.browser_bridge_bundle.v1",
+                **bridge_identity,
+            }
+        ),
         encoding="utf-8",
     )
     return main
@@ -497,18 +437,3 @@ def _patch_existing_opencli_subprocess(
 
     monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
     return calls
-
-
-def _write_fake_npm(bin_dir: Path) -> Path:
-    npm = bin_dir / "npm"
-    npm.parent.mkdir(parents=True, exist_ok=True)
-    npm.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    npm.chmod(0o755)
-    return npm
-
-
-def _write_domi_bundled_npm_cli(node_dir: Path) -> Path:
-    npm_cli = node_dir / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
-    npm_cli.parent.mkdir(parents=True, exist_ok=True)
-    npm_cli.write_text("#!/usr/bin/env node\n", encoding="utf-8")
-    return npm_cli
