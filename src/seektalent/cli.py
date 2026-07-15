@@ -1119,7 +1119,7 @@ def _inspect_payload() -> dict[str, object]:
                 "seektalent workbench --host 0.0.0.0 --lan --allowed-host recruiting.internal",
             ],
             "outputs": "Starts the local API server and serves the packaged Workbench frontend; preflight failures print reason_code diagnostics on stderr.",
-            "side_effects": "May download the pinned OpenCLI CLI package under ~/.seektalent/opencli-runtime using Domi Node, and create or update local Workbench data under the configured workspace root.",
+            "side_effects": "Uses the locally installed SeekTalent OpenCLI runtime and may create or update Workbench data under the configured workspace root; it does not download browser components.",
         },
         "llm-prf-live-validate": {
             "description": "Run the manual live LLM PRF validation harness on checked input cases.",
