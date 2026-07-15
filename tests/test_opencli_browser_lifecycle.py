@@ -254,7 +254,7 @@ def test_startup_recovers_owned_tab_but_not_previous_failed_close(tmp_path: Path
     BrowserControlLifecycle(registry=BrowserControlRegistry(path), closer=closer)
 
     _wait_until(lambda: [tab.tab_token for tab in closer.calls] == ["owned"])
-    assert _tab_state(path, owned.tab_token) == ("reclaimed", "closed", None)
+    _wait_until(lambda: _tab_state(path, owned.tab_token) == ("reclaimed", "closed", None))
     assert _tab_state(path, failed.tab_token) == ("reclaim_failed", "failed", "close_failed")
 
 
