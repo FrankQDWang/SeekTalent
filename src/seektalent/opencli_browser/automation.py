@@ -7,7 +7,7 @@ import re
 import subprocess
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from urllib.parse import urlparse
 
@@ -16,6 +16,7 @@ from seektalent.opencli_browser.contracts import (
     BrowserHostTab,
     OpenCliBrowserConfig,
     OpenCliBrowserError,
+    OpenCliBrowserLifecycle,
     OpenCliBrowserResult,
     OpenCliBrowserTiming,
     OpenCliBrowserTimingRecorder,
@@ -67,11 +68,13 @@ class OpenCliBrowserAutomation:
         config: OpenCliBrowserConfig,
         commands: OpenCliCommandRunner | None = None,
         daemon: OpenCliDaemonClient | None = None,
+        lifecycle: OpenCliBrowserLifecycle | None = None,
         timing_recorder: OpenCliBrowserTimingRecorder | None = None,
     ) -> None:
         self.config = config
         self.commands = commands or SubprocessOpenCliCommandRunner()
         self._daemon = daemon
+        self._lifecycle = lifecycle
         self._daemon_page: str | None = None
         self._control_scope: BrowserControlScope | None = None
         self._owned_tabs: dict[str, OpenCliOwnedTab] = {}
@@ -84,6 +87,7 @@ class OpenCliBrowserAutomation:
     def activate_control_scope(self, control_key: str) -> BrowserControlScope:
         if self._daemon is None or not control_key.strip() or len(control_key) > 256:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        self.finish_control_scope()
         result = self._daemon_command(
             "control",
             {"op": "activate", "controlKey": control_key},
@@ -102,7 +106,17 @@ class OpenCliBrowserAutomation:
         self._control_scope = scope
         self._daemon_page = None
         self._owned_tabs = {}
+        self._best_effort_lifecycle(lambda lifecycle: lifecycle.record_scope(scope))
         return scope
+
+    def finish_control_scope(self) -> None:
+        scope = self._control_scope
+        tabs = tuple(self._owned_tabs.values())
+        self._control_scope = None
+        self._daemon_page = None
+        self._owned_tabs = {}
+        if scope is not None:
+            self._best_effort_lifecycle(lambda lifecycle: lifecycle.request_reclaim(scope, tabs))
 
     def find_host_tabs(self, url_prefix: str) -> tuple[BrowserHostTab, ...]:
         parsed = urlparse(url_prefix)
@@ -150,7 +164,7 @@ class OpenCliBrowserAutomation:
         url: str,
         tab_kind: OpenCliTabKind,
     ) -> OpenCliOwnedTab:
-        self._require_control_scope()
+        scope = self._require_control_scope()
         parsed = urlparse(url)
         if (
             not _is_safe_page_id(host_page)
@@ -161,6 +175,14 @@ class OpenCliBrowserAutomation:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         tab_token = uuid.uuid4().hex
         session = f"st_tab_{uuid.uuid4().hex}"
+        self._best_effort_lifecycle(
+            lambda lifecycle: lifecycle.record_tab_allocation(
+                scope,
+                tab_token=tab_token,
+                session=session,
+                tab_kind=tab_kind,
+            )
+        )
         params = self._daemon_session_params(session)
         params.update(
             {
@@ -190,6 +212,7 @@ class OpenCliBrowserAutomation:
         )
         self._owned_tabs[result.page] = owned_tab
         self._daemon_page = result.page
+        self._best_effort_lifecycle(lambda lifecycle: lifecycle.record_owned_tab(scope, owned_tab))
         self._best_effort_install_lock(result.page, result.idle_deadline_at)
         return self._owned_tabs[result.page]
 
@@ -500,7 +523,18 @@ class OpenCliBrowserAutomation:
             return
         owned_tab = self._owned_tabs.get(page)
         if owned_tab is not None:
-            self._owned_tabs[page] = replace(owned_tab, idle_deadline_at=deadline_at)
+            updated_tab = replace(owned_tab, idle_deadline_at=deadline_at)
+            self._owned_tabs[page] = updated_tab
+            self._best_effort_lifecycle(lambda lifecycle: lifecycle.record_idle_deadline(updated_tab))
+
+    def _best_effort_lifecycle(self, action: Callable[[OpenCliBrowserLifecycle], None]) -> None:
+        lifecycle = self._lifecycle
+        if lifecycle is None:
+            return
+        isolated_call(lambda: action(lifecycle), self._report_lifecycle_failure)
+
+    def _report_lifecycle_failure(self, exc: Exception) -> None:
+        _LOGGER.warning("browser_control_lifecycle_failed error=%s", type(exc).__name__)
 
     def _daemon_page_params(self, page: str | None) -> dict[str, object]:
         owned_tab = self._owned_tabs.get(page or "")

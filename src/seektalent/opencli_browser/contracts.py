@@ -7,6 +7,7 @@ from typing import Literal, Protocol
 
 OpenCliWindowMode = Literal["foreground", "background"]
 OpenCliTabKind = Literal["search", "detail"]
+OpenCliTabCloseOutcome = Literal["closed", "already_missing", "failed"]
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,14 @@ class OpenCliOwnedTab:
     page_id: str
     tab_kind: OpenCliTabKind
     idle_deadline_at: int | None = None
+
+
+@dataclass(frozen=True)
+class OpenCliTabCloseResult:
+    tab_token: str
+    outcome: OpenCliTabCloseOutcome
+    verified: bool
+    error_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,3 +96,22 @@ class OpenCliBrowserTiming:
 
 class OpenCliBrowserTimingRecorder(Protocol):
     def record(self, timing: OpenCliBrowserTiming) -> None: ...
+
+
+class OpenCliBrowserLifecycle(Protocol):
+    def record_scope(self, scope: BrowserControlScope) -> None: ...
+
+    def record_tab_allocation(
+        self,
+        scope: BrowserControlScope,
+        *,
+        tab_token: str,
+        session: str,
+        tab_kind: OpenCliTabKind,
+    ) -> None: ...
+
+    def record_owned_tab(self, scope: BrowserControlScope, tab: OpenCliOwnedTab) -> None: ...
+
+    def record_idle_deadline(self, tab: OpenCliOwnedTab) -> None: ...
+
+    def request_reclaim(self, scope: BrowserControlScope, tabs: tuple[OpenCliOwnedTab, ...]) -> None: ...
