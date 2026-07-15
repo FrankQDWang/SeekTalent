@@ -19,6 +19,7 @@ from seektalent.opencli_browser.fault_isolation import isolated_call
 
 
 _LOGGER = logging.getLogger(__name__)
+_BACKGROUND_SQLITE_BUSY_TIMEOUT_MS = 100
 
 
 @dataclass(frozen=True)
@@ -276,8 +277,12 @@ class BrowserControlRegistry:
         isolated_call(write, self._report_failure)
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.path, timeout=0, isolation_level=None)
-        connection.execute("PRAGMA busy_timeout = 0")
+        connection = sqlite3.connect(
+            self.path,
+            timeout=_BACKGROUND_SQLITE_BUSY_TIMEOUT_MS / 1000,
+            isolation_level=None,
+        )
+        connection.execute(f"PRAGMA busy_timeout = {_BACKGROUND_SQLITE_BUSY_TIMEOUT_MS}")
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
