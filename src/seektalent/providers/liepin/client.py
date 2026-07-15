@@ -431,7 +431,7 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         try:
             runtime = ensure_opencli_runtime()
             daemon = connect_installed_opencli_daemon(runtime)
-            lifecycle = BrowserControlLifecycle.from_daemon(
+            lifecycle = BrowserControlLifecycle.shared_from_daemon(
                 registry_path=settings.project_root / ".seektalent" / "browser_control.sqlite3",
                 daemon=daemon,
             )

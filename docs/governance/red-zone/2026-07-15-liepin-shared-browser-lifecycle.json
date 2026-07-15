@@ -1,0 +1,15 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Reuse the managed-tab lifecycle in the production Liepin browser client.",
+  "rationale": "The provider remains lazily initialized and source-safe, while repeated source rounds no longer create permanent duplicate reclaim threads for the same workspace and installed bridge build.",
+  "red_files": [
+    "src/seektalent/providers/liepin/client.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run pytest -q tests/test_liepin_worker_client.py tests/test_opencli_browser_lifecycle.py",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools"
+  ]
+}
