@@ -24,6 +24,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
     OPENCLI_COMMAND_RESULT_UNKNOWN,
     OPENCLI_FORBIDDEN_COMMAND,
+    OPENCLI_SELECTOR_NOT_FOUND,
     OPENCLI_STATUS_UNAVAILABLE,
 )
 
@@ -237,6 +238,16 @@ def test_daemon_client_never_retries_unknown_command_result() -> None:
 
     assert captured.value.safe_reason_code == OPENCLI_COMMAND_RESULT_UNKNOWN
     assert [request[0] for request in connection.requests] == ["GET", "POST"]
+
+
+def test_daemon_client_preserves_selector_error_semantics() -> None:
+    connection = _Connection(status_payload=_status(), command_error=(404, "selector_not_found"))
+    client = OpenCliDaemonClient(requirement=_requirement(), connection_factory=lambda *_args: connection)
+
+    with pytest.raises(OpenCliBrowserError) as captured:
+        client.command("browser-operation", {"operation": "find-css"}, timeout_seconds=3)
+
+    assert captured.value.safe_reason_code == OPENCLI_SELECTOR_NOT_FOUND
 
 
 def test_daemon_client_rejects_reserved_fields_before_transport() -> None:
