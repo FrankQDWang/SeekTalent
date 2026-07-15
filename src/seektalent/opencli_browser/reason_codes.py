@@ -20,6 +20,11 @@ OPENCLI_BRIDGE_BUILD_MISMATCH = "opencli_bridge_build_mismatch"
 OPENCLI_BRIDGE_PROTOCOL_MISMATCH = "opencli_bridge_protocol_mismatch"
 OPENCLI_BRIDGE_CAPABILITY_MISSING = "opencli_bridge_capability_missing"
 OPENCLI_COMMAND_RESULT_UNKNOWN = "opencli_command_result_unknown"
+OPENCLI_HOST_TAB_NOT_FOUND = "opencli_host_tab_not_found"
+OPENCLI_HOST_PAGE_MISSING = "opencli_host_page_missing"
+OPENCLI_HOST_WINDOW_AMBIGUOUS = "opencli_host_window_ambiguous"
+OPENCLI_OWNED_TAB_MISSING = "opencli_owned_tab_missing"
+OPENCLI_STALE_CONTROL_FENCE = "opencli_stale_control_fence"
 
 OPENCLI_ERROR_CODE_TO_REASON = {
     "bound_tab_mutation_blocked": OPENCLI_WINDOW_POLICY_BLOCKED,
@@ -28,4 +33,8 @@ OPENCLI_ERROR_CODE_TO_REASON = {
     "selector_ambiguous": OPENCLI_SELECTOR_AMBIGUOUS,
     "target_not_found": OPENCLI_TARGET_NOT_FOUND,
     "not_found": OPENCLI_TARGET_NOT_FOUND,
+    "host_tab_not_found": OPENCLI_HOST_TAB_NOT_FOUND,
+    "host_page_missing": OPENCLI_HOST_PAGE_MISSING,
+    "owned_tab_gone": OPENCLI_OWNED_TAB_MISSING,
+    "stale_control_fence": OPENCLI_STALE_CONTROL_FENCE,
 }

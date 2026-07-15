@@ -5,14 +5,20 @@ import random
 import re
 import subprocess
 import time
+import uuid
 from collections.abc import Mapping, Sequence
+from urllib.parse import urlparse
 
 from seektalent.opencli_browser.contracts import (
+    BrowserControlScope,
+    BrowserHostTab,
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
     OpenCliBrowserTiming,
     OpenCliBrowserTimingRecorder,
+    OpenCliOwnedTab,
+    OpenCliTabKind,
 )
 from seektalent.opencli_browser.daemon_transport import (
     OpenCliDaemonAction,
@@ -30,6 +36,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_STATUS_UNAVAILABLE,
     OPENCLI_TIMEOUT,
 )
+from seektalent.opencli_browser.lifecycle import OPENCLI_OWNED_TAB_IDLE_SECONDS
 from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
@@ -55,7 +62,124 @@ class OpenCliBrowserAutomation:
         self.commands = commands or SubprocessOpenCliCommandRunner()
         self._daemon = daemon
         self._daemon_page: str | None = None
+        self._control_scope: BrowserControlScope | None = None
+        self._owned_tabs: dict[str, OpenCliOwnedTab] = {}
         self._timing_recorder = timing_recorder
+
+    @property
+    def daemon_enabled(self) -> bool:
+        return self._daemon is not None
+
+    def activate_control_scope(self, control_key: str) -> BrowserControlScope:
+        if self._daemon is None or not control_key.strip() or len(control_key) > 256:
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        result = self._daemon_command(
+            "control",
+            {"op": "activate", "controlKey": control_key},
+            label="control.activate",
+        )
+        payload = _string_key_mapping_or_none(result.data)
+        fence_token = payload.get("fenceToken") if payload is not None else None
+        returned_key = payload.get("controlKey") if payload is not None else None
+        if returned_key != control_key or type(fence_token) is not int or fence_token < 1:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        scope = BrowserControlScope(
+            scope_id=uuid.uuid4().hex,
+            control_key=control_key,
+            fence_token=fence_token,
+        )
+        self._control_scope = scope
+        self._daemon_page = None
+        self._owned_tabs = {}
+        return scope
+
+    def find_host_tabs(self, url_prefix: str) -> tuple[BrowserHostTab, ...]:
+        parsed = urlparse(url_prefix)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        params = self._daemon_session_params(f"st_probe_{uuid.uuid4().hex}")
+        params.update({"op": "find", "urlPrefix": url_prefix})
+        result = self._daemon_command("tabs", params, label="tab.find")
+        if not isinstance(result.data, list):
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        candidates: list[BrowserHostTab] = []
+        for item in result.data:
+            payload = _string_key_mapping_or_none(item)
+            if payload is None:
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+            page_id = payload.get("page")
+            url = payload.get("url")
+            window_id = payload.get("windowId")
+            active = payload.get("active")
+            window_focused = payload.get("windowFocused")
+            if (
+                not isinstance(page_id, str)
+                or not _is_safe_page_id(page_id)
+                or not isinstance(url, str)
+                or type(window_id) is not int
+                or not isinstance(active, bool)
+                or not isinstance(window_focused, bool)
+            ):
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+            candidates.append(
+                BrowserHostTab(
+                    page_id=page_id,
+                    url=url,
+                    window_id=window_id,
+                    active=active,
+                    window_focused=window_focused,
+                )
+            )
+        return tuple(candidates)
+
+    def open_owned_tab(
+        self,
+        *,
+        host_page: str,
+        url: str,
+        tab_kind: OpenCliTabKind,
+    ) -> OpenCliOwnedTab:
+        self._require_control_scope()
+        parsed = urlparse(url)
+        if (
+            not _is_safe_page_id(host_page)
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or tab_kind not in {"search", "detail"}
+        ):
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        tab_token = uuid.uuid4().hex
+        session = f"st_tab_{uuid.uuid4().hex}"
+        params = self._daemon_session_params(session)
+        params.update(
+            {
+                "op": "new",
+                "hostPage": host_page,
+                "url": url,
+                "active": False,
+                "idleTimeout": OPENCLI_OWNED_TAB_IDLE_SECONDS,
+            }
+        )
+        result = self._daemon_command("tabs", params, label="tab.new-in-host")
+        payload = _string_key_mapping_or_none(result.data)
+        if (
+            payload is None
+            or payload.get("active") is not False
+            or payload.get("placement") != "borrowed-host-window"
+            or not isinstance(result.page, str)
+            or not _is_safe_page_id(result.page)
+        ):
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        owned_tab = OpenCliOwnedTab(
+            tab_token=tab_token,
+            session=session,
+            page_id=result.page,
+            tab_kind=tab_kind,
+            idle_deadline_at=result.idle_deadline_at,
+        )
+        self._owned_tabs[result.page] = owned_tab
+        self._daemon_page = result.page
+        return owned_tab
 
     def status(self) -> OpenCliBrowserResult:
         if self._daemon is not None:
@@ -213,11 +337,15 @@ class OpenCliBrowserAutomation:
             )
         if command == "open":
             page = args[1] if len(args) == 3 else self._daemon_page
+            if self._control_scope is not None and page not in self._owned_tabs:
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
             url = args[-1]
             params = self._daemon_page_params(page)
             params["url"] = url
             result = self._daemon_command("navigate", params, label=command)
             if result.page:
+                if self._control_scope is not None and result.page not in self._owned_tabs:
+                    raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
                 self._daemon_page = result.page
             return _daemon_output(result)
         if command == "tab":
@@ -226,11 +354,30 @@ class OpenCliBrowserAutomation:
 
     def _run_daemon_tab_command(self, args: tuple[str, ...]) -> str:
         operation = args[0]
+        if operation == "new":
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        if self._control_scope is not None:
+            if operation == "list":
+                return self._list_owned_tabs()
+            page = args[1]
+            owned_tab = self._owned_tabs.get(page)
+            if owned_tab is None:
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+            if operation == "select":
+                self._daemon_page = page
+                return json.dumps({"page": page, "selected": True}, sort_keys=True)
+            params = self._daemon_page_params(page)
+            params["op"] = "close"
+            result = self._daemon_command("tabs", params, label="tab.close")
+            outcome = _string_key_mapping_or_none(result.data)
+            if outcome is not None and outcome.get("outcome") in {"closed", "already_missing"}:
+                self._owned_tabs.pop(page, None)
+                if page == self._daemon_page:
+                    self._daemon_page = None
+            return _daemon_output(result)
         params = self._daemon_page_params(None)
         params["op"] = operation
-        if operation == "new":
-            params["url"] = args[1]
-        elif operation in {"select", "close"}:
+        if operation in {"select", "close"}:
             params["page"] = args[1]
         result = self._daemon_command("tabs", params, label="tab")
         if operation == "select" and result.page:
@@ -238,6 +385,17 @@ class OpenCliBrowserAutomation:
         elif operation == "close" and args[1] == self._daemon_page:
             self._daemon_page = None
         return _daemon_output(result)
+
+    def _list_owned_tabs(self) -> str:
+        tabs: list[object] = []
+        for owned_tab in tuple(self._owned_tabs.values()):
+            params = self._daemon_page_params(owned_tab.page_id)
+            params["op"] = "list"
+            result = self._daemon_command("tabs", params, label="tab.list")
+            if not isinstance(result.data, list):
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+            tabs.extend(result.data)
+        return json.dumps(tabs, ensure_ascii=False, sort_keys=True)
 
     def _daemon_semantic_ref(self, args: tuple[str, ...]) -> str:
         if args[0] != "--role":
@@ -267,20 +425,42 @@ class OpenCliBrowserAutomation:
         )
 
     def _daemon_operation(self, operation: str, params: Mapping[str, object], *, label: str) -> str:
+        if self._control_scope is not None and self._daemon_page not in self._owned_tabs:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
         command_params = self._daemon_page_params(self._daemon_page)
         command_params.update({"operation": operation, **params})
         result = self._daemon_command("browser-operation", command_params, label=label)
         if result.page:
+            if self._control_scope is not None and result.page not in self._owned_tabs:
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
             self._daemon_page = result.page
         return _daemon_output(result)
 
     def _daemon_page_params(self, page: str | None) -> dict[str, object]:
-        return {
-            "session": self.config.session,
+        owned_tab = self._owned_tabs.get(page or "")
+        params = self._daemon_session_params(owned_tab.session if owned_tab is not None else self.config.session)
+        if page:
+            params["page"] = page
+        if owned_tab is not None:
+            params["idleTimeout"] = OPENCLI_OWNED_TAB_IDLE_SECONDS
+        return params
+
+    def _daemon_session_params(self, session: str) -> dict[str, object]:
+        params: dict[str, object] = {
+            "session": session,
             "surface": "browser",
             "windowMode": self.config.window_mode,
-            **({"page": page} if page else {}),
         }
+        scope = self._control_scope
+        if scope is not None:
+            params.update({"controlKey": scope.control_key, "fenceToken": scope.fence_token})
+        return params
+
+    def _require_control_scope(self) -> BrowserControlScope:
+        scope = self._control_scope
+        if scope is None:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        return scope
 
     def _daemon_command(
         self,
