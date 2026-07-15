@@ -24,7 +24,9 @@ claiming it, and creates one inactive owned tab in the same Chrome window.
 
 The harness never clicks or fills the user's Liepin tab. Mutating automation checks run against
 `fixture.html`; the owned tab then returns to Liepin for a read-only state check. Screenshots are
-written to a temporary directory and contain only the local fixture.
+written to a temporary directory and contain only the local fixture. The harness loads the production
+asset at `src/seektalent/opencli_browser/controlled_tab_lock.js` so later proofs cannot drift from the
+shipped overlay.
 
 Run from the repository root:
 

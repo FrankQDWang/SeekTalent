@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 import subprocess
 import time
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from urllib.parse import urlparse
 
 from seektalent.opencli_browser.contracts import (
@@ -20,11 +22,18 @@ from seektalent.opencli_browser.contracts import (
     OpenCliOwnedTab,
     OpenCliTabKind,
 )
+from seektalent.opencli_browser.controlled_tab_lock import (
+    CONTROLLED_TAB_HELPER_TIMEOUT_SECONDS,
+    install_script,
+    relock_script,
+    unlock_script,
+)
 from seektalent.opencli_browser.daemon_transport import (
     OpenCliDaemonAction,
     OpenCliDaemonClient,
     OpenCliDaemonResult,
 )
+from seektalent.opencli_browser.fault_isolation import isolated_call
 from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BOOTSTRAP_FAILED,
     OPENCLI_COMMAND_MISSING,
@@ -47,6 +56,8 @@ from seektalent.opencli_browser.runtime import (
 
 
 _SAFE_PAGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+_CONTROLLED_TAB_UNLOCK_OPERATIONS = frozenset({"click", "fill", "scroll"})
+_LOGGER = logging.getLogger(__name__)
 
 
 class OpenCliBrowserAutomation:
@@ -179,7 +190,8 @@ class OpenCliBrowserAutomation:
         )
         self._owned_tabs[result.page] = owned_tab
         self._daemon_page = result.page
-        return owned_tab
+        self._best_effort_install_lock(result.page, result.idle_deadline_at)
+        return self._owned_tabs[result.page]
 
     def status(self) -> OpenCliBrowserResult:
         if self._daemon is not None:
@@ -347,6 +359,8 @@ class OpenCliBrowserAutomation:
                 if self._control_scope is not None and result.page not in self._owned_tabs:
                     raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
                 self._daemon_page = result.page
+                self._remember_idle_deadline(result.page, result.idle_deadline_at)
+                self._best_effort_install_lock(result.page, result.idle_deadline_at)
             return _daemon_output(result)
         if command == "tab":
             return self._run_daemon_tab_command(args)
@@ -427,14 +441,66 @@ class OpenCliBrowserAutomation:
     def _daemon_operation(self, operation: str, params: Mapping[str, object], *, label: str) -> str:
         if self._control_scope is not None and self._daemon_page not in self._owned_tabs:
             raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
-        command_params = self._daemon_page_params(self._daemon_page)
+        page = self._daemon_page
+        command_params = self._daemon_page_params(page)
         command_params.update({"operation": operation, **params})
-        result = self._daemon_command("browser-operation", command_params, label=label)
+        if operation in _CONTROLLED_TAB_UNLOCK_OPERATIONS:
+            self._best_effort_lock_command(page, unlock_script(), label="tab-lock.unlock")
+        try:
+            result = self._daemon_command("browser-operation", command_params, label=label)
+            self._remember_idle_deadline(page, result.idle_deadline_at)
+        finally:
+            lock_result = self._best_effort_lock_command(page, relock_script(), label="tab-lock.relock")
+            lock_state = _string_key_mapping_or_none(lock_result.data) if lock_result is not None else None
+            if (
+                lock_result is not None
+                and lock_state is not None
+                and lock_state.get("installed") is False
+                and page is not None
+            ):
+                self._best_effort_install_lock(page, lock_result.idle_deadline_at)
         if result.page:
             if self._control_scope is not None and result.page not in self._owned_tabs:
                 raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
             self._daemon_page = result.page
         return _daemon_output(result)
+
+    def _best_effort_install_lock(self, page: str, deadline_at: int | None) -> None:
+        self._best_effort_lock_command(page, install_script(deadline_at), label="tab-lock.install")
+
+    def _best_effort_lock_command(
+        self,
+        page: str | None,
+        code: str,
+        *,
+        label: str,
+    ) -> OpenCliDaemonResult | None:
+        if page is None or page not in self._owned_tabs:
+            return None
+        params = self._daemon_page_params(page)
+        params.update({"operation": "evaluate", "code": code})
+
+        def run() -> OpenCliDaemonResult:
+            result = self._daemon_command(
+                "browser-operation",
+                params,
+                label=label,
+                timeout_seconds=CONTROLLED_TAB_HELPER_TIMEOUT_SECONDS,
+            )
+            self._remember_idle_deadline(page, result.idle_deadline_at)
+            return result
+
+        def report_failure(exc: Exception) -> None:
+            _LOGGER.warning("controlled_tab_lock_failed label=%s error=%s", label, type(exc).__name__)
+
+        return isolated_call(run, report_failure)
+
+    def _remember_idle_deadline(self, page: str | None, deadline_at: int | None) -> None:
+        if page is None or deadline_at is None:
+            return
+        owned_tab = self._owned_tabs.get(page)
+        if owned_tab is not None:
+            self._owned_tabs[page] = replace(owned_tab, idle_deadline_at=deadline_at)
 
     def _daemon_page_params(self, page: str | None) -> dict[str, object]:
         owned_tab = self._owned_tabs.get(page or "")
@@ -468,6 +534,7 @@ class OpenCliBrowserAutomation:
         params: Mapping[str, object],
         *,
         label: str,
+        timeout_seconds: float | None = None,
     ) -> OpenCliDaemonResult:
         daemon = self._daemon
         if daemon is None:
@@ -477,7 +544,11 @@ class OpenCliBrowserAutomation:
         ok = False
         safe_reason_code: str | None = None
         try:
-            result = daemon.command(action, params, timeout_seconds=self.config.timeout_seconds)
+            result = daemon.command(
+                action,
+                params,
+                timeout_seconds=self.config.timeout_seconds if timeout_seconds is None else timeout_seconds,
+            )
             ok = True
             return result
         except OpenCliBrowserError as exc:

@@ -230,6 +230,18 @@ def test_daemon_client_reuses_connection_and_sends_unique_deadlined_commands() -
     assert second.command_id != first.command_id
 
 
+def test_daemon_client_keeps_short_best_effort_commands_strictly_bounded() -> None:
+    connection = _Connection(status_payload=_status())
+    client = OpenCliDaemonClient(requirement=_requirement(), connection_factory=lambda *_args: connection)
+    client.verify_bridge()
+
+    client.command("browser-operation", {"operation": "evaluate"}, timeout_seconds=0.25)
+
+    assert connection.timeout == pytest.approx(0.3)
+    command = json.loads(connection.requests[-1][2] or b"{}")
+    assert command["timeout"] == 1
+
+
 def test_daemon_client_never_retries_unknown_command_result() -> None:
     connection = _Connection(status_payload=_status(), command_error=(503, "command_result_unknown"))
     client = OpenCliDaemonClient(requirement=_requirement(), connection_factory=lambda *_args: connection)
