@@ -8,6 +8,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Protocol
 
+from seektalent.browser_bridge_manifest import BrowserBridgeRequirement
 from seektalent.opencli_browser.contracts import (
     BrowserControlScope,
     OpenCliBrowserError,
@@ -27,6 +28,11 @@ OPENCLI_RECLAIM_CLOSE_TIMEOUT_SECONDS = 2.0
 
 _LIFECYCLE_QUEUE_CAPACITY = 256
 _LOGGER = logging.getLogger(__name__)
+_SHARED_LIFECYCLES: dict[
+    tuple[Path, BrowserBridgeRequirement],
+    BrowserControlLifecycle,
+] = {}
+_SHARED_LIFECYCLES_LOCK = threading.Lock()
 
 
 def browser_control_key(
@@ -106,6 +112,21 @@ class BrowserControlLifecycle:
             registry=BrowserControlRegistry(registry_path),
             closer=OpenCliDaemonOwnedTabCloser(daemon.new_connection()),
         )
+
+    @classmethod
+    def shared_from_daemon(
+        cls,
+        *,
+        registry_path: Path,
+        daemon: OpenCliDaemonClient,
+    ) -> BrowserControlLifecycle:
+        key = (registry_path.expanduser().resolve(strict=False), daemon.requirement)
+        with _SHARED_LIFECYCLES_LOCK:
+            lifecycle = _SHARED_LIFECYCLES.get(key)
+            if lifecycle is None:
+                lifecycle = cls.from_daemon(registry_path=key[0], daemon=daemon)
+                _SHARED_LIFECYCLES[key] = lifecycle
+        return lifecycle
 
     def record_scope(self, scope: BrowserControlScope) -> None:
         self._submit(lambda: self._registry.record_scope(scope))
