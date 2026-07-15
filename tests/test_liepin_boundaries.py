@@ -160,6 +160,7 @@ OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/opencli_browser/__init__.py",
     "src/seektalent/opencli_browser/contracts.py",
     "src/seektalent/opencli_browser/daemon_transport.py",
+    "src/seektalent/opencli_browser/lifecycle.py",
     "src/seektalent/opencli_browser/reason_codes.py",
     "src/seektalent/opencli_browser/runtime.py",
     "src/seektalent/opencli_browser/automation.py",

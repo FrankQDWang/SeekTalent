@@ -6,6 +6,32 @@ from typing import Literal, Protocol
 
 
 OpenCliWindowMode = Literal["foreground", "background"]
+OpenCliTabKind = Literal["search", "detail"]
+
+
+@dataclass(frozen=True)
+class BrowserControlScope:
+    scope_id: str
+    control_key: str
+    fence_token: int
+
+
+@dataclass(frozen=True)
+class BrowserHostTab:
+    page_id: str
+    url: str
+    window_id: int
+    active: bool
+    window_focused: bool
+
+
+@dataclass(frozen=True)
+class OpenCliOwnedTab:
+    tab_token: str
+    session: str
+    page_id: str
+    tab_kind: OpenCliTabKind
+    idle_deadline_at: int | None = None
 
 
 @dataclass(frozen=True)
