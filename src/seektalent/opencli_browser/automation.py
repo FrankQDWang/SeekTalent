@@ -14,6 +14,11 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserTiming,
     OpenCliBrowserTimingRecorder,
 )
+from seektalent.opencli_browser.daemon_transport import (
+    OpenCliDaemonAction,
+    OpenCliDaemonClient,
+    OpenCliDaemonResult,
+)
 from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BOOTSTRAP_FAILED,
     OPENCLI_COMMAND_MISSING,
@@ -43,13 +48,22 @@ class OpenCliBrowserAutomation:
         *,
         config: OpenCliBrowserConfig,
         commands: OpenCliCommandRunner | None = None,
+        daemon: OpenCliDaemonClient | None = None,
         timing_recorder: OpenCliBrowserTimingRecorder | None = None,
     ) -> None:
         self.config = config
         self.commands = commands or SubprocessOpenCliCommandRunner()
+        self._daemon = daemon
+        self._daemon_page: str | None = None
         self._timing_recorder = timing_recorder
 
     def status(self) -> OpenCliBrowserResult:
+        if self._daemon is not None:
+            try:
+                output = json.dumps(self._daemon.verify_bridge(), ensure_ascii=False, sort_keys=True)
+            except OpenCliBrowserError as exc:
+                return OpenCliBrowserResult(ok=False, action="status", safe_reason_code=exc.safe_reason_code)
+            return OpenCliBrowserResult(ok=True, action="status", private_output=output)
         try:
             output = self._run(tuple(self.config.command) + ("daemon", "status"))
         except OpenCliBrowserError as exc:
@@ -65,6 +79,8 @@ class OpenCliBrowserAutomation:
         return OpenCliBrowserResult(ok=True, action="status", private_output=output)
 
     def restart_daemon(self) -> OpenCliBrowserResult:
+        if self._daemon is not None:
+            self._daemon.close()
         try:
             output = self._run(tuple(self.config.command) + ("daemon", "restart"))
         except OpenCliBrowserError as exc:
@@ -105,6 +121,8 @@ class OpenCliBrowserAutomation:
     def click_ref(self, ref: str) -> str:
         if not _is_safe_page_id(ref):
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        if self._daemon is not None:
+            return self._daemon_operation("click", {"target": ref}, label="click")
         return self._run(tuple(self.config.command) + ("browser", self.config.session, "click", ref))
 
     def find_css(self, selector: str, *, limit: int, text_max: int) -> str:
@@ -114,6 +132,12 @@ class OpenCliBrowserAutomation:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         if text_max < 1 or text_max > 10_000:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        if self._daemon is not None:
+            return self._daemon_operation(
+                "find-css",
+                {"selector": selector, "limit": limit, "textMax": text_max},
+                label="find",
+            )
         return self._run(
             tuple(self.config.command)
             + (
@@ -132,6 +156,8 @@ class OpenCliBrowserAutomation:
     def readonly_eval(self, script: str) -> str:
         if not script.strip() or "\x00" in script:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        if self._daemon is not None:
+            return self._daemon_operation("evaluate", {"code": script}, label="eval")
         return self._run(tuple(self.config.command) + ("browser", self.config.session, "eval", script))
 
     def pace_before_action(self, action: str) -> None:
@@ -150,7 +176,140 @@ class OpenCliBrowserAutomation:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         args_tuple = tuple(args)
         _validate_command_shape(command, args_tuple)
+        if self._daemon is not None:
+            return self._run_daemon_browser_command(command, args_tuple)
         return self._run(tuple(self.config.command) + ("browser", self.config.session, command, *args_tuple))
+
+    def _run_daemon_browser_command(self, command: str, args: tuple[str, ...]) -> str:
+        if command == "state":
+            return self._daemon_operation("state", {}, label=command)
+        if command == "get":
+            return self._daemon_operation("get-url", {}, label=command)
+        if command == "find":
+            return self._daemon_semantic_find({"text": args[0]}, label=command)
+        if command == "click":
+            target = args[0] if len(args) == 1 else self._daemon_semantic_ref(args)
+            return self._daemon_operation("click", {"target": target}, label=command)
+        if command == "fill":
+            if len(args) == 2:
+                target, text = args
+            else:
+                target = self._daemon_semantic_ref(args)
+                text = args[-1]
+            return self._daemon_operation("fill", {"target": target, "text": text}, label=command)
+        if command == "scroll":
+            return self._daemon_operation(
+                "scroll",
+                {"direction": args[0], "amount": 500},
+                label=command,
+            )
+        if command == "wait":
+            wait_kind, value = args
+            wait_value: str | int = int(value) if wait_kind == "time" else value
+            return self._daemon_operation(
+                "wait",
+                {"waitKind": wait_kind, "waitValue": wait_value, "waitTimeout": 10},
+                label=command,
+            )
+        if command == "open":
+            page = args[1] if len(args) == 3 else self._daemon_page
+            url = args[-1]
+            params = self._daemon_page_params(page)
+            params["url"] = url
+            result = self._daemon_command("navigate", params, label=command)
+            if result.page:
+                self._daemon_page = result.page
+            return _daemon_output(result)
+        if command == "tab":
+            return self._run_daemon_tab_command(args)
+        raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+
+    def _run_daemon_tab_command(self, args: tuple[str, ...]) -> str:
+        operation = args[0]
+        params = self._daemon_page_params(None)
+        params["op"] = operation
+        if operation == "new":
+            params["url"] = args[1]
+        elif operation in {"select", "close"}:
+            params["page"] = args[1]
+        result = self._daemon_command("tabs", params, label="tab")
+        if operation == "select" and result.page:
+            self._daemon_page = result.page
+        elif operation == "close" and args[1] == self._daemon_page:
+            self._daemon_page = None
+        return _daemon_output(result)
+
+    def _daemon_semantic_ref(self, args: tuple[str, ...]) -> str:
+        if args[0] != "--role":
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        if args[2] == "--nth":
+            semantic = {"role": args[1]}
+            nth = int(args[3])
+        else:
+            semantic = {"role": args[1], args[2].removeprefix("--"): args[3]}
+            nth = 0
+        output = self._daemon_semantic_find(semantic, label="find")
+        try:
+            payload = json.loads(output)
+            entries = payload["entries"]
+            ref = entries[nth]["ref"]
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE) from exc
+        if not isinstance(ref, int) or ref < 1:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        return str(ref)
+
+    def _daemon_semantic_find(self, semantic: Mapping[str, str], *, label: str) -> str:
+        return self._daemon_operation(
+            "find-semantic",
+            {"semantic": dict(semantic), "limit": 50, "textMax": 120},
+            label=label,
+        )
+
+    def _daemon_operation(self, operation: str, params: Mapping[str, object], *, label: str) -> str:
+        command_params = self._daemon_page_params(self._daemon_page)
+        command_params.update({"operation": operation, **params})
+        result = self._daemon_command("browser-operation", command_params, label=label)
+        if result.page:
+            self._daemon_page = result.page
+        return _daemon_output(result)
+
+    def _daemon_page_params(self, page: str | None) -> dict[str, object]:
+        return {
+            "session": self.config.session,
+            "surface": "browser",
+            "windowMode": self.config.window_mode,
+            **({"page": page} if page else {}),
+        }
+
+    def _daemon_command(
+        self,
+        action: OpenCliDaemonAction,
+        params: Mapping[str, object],
+        *,
+        label: str,
+    ) -> OpenCliDaemonResult:
+        daemon = self._daemon
+        if daemon is None:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        argv = tuple(self.config.command) + ("browser", self.config.session, label)
+        started = time.perf_counter()
+        ok = False
+        safe_reason_code: str | None = None
+        try:
+            result = daemon.command(action, params, timeout_seconds=self.config.timeout_seconds)
+            ok = True
+            return result
+        except OpenCliBrowserError as exc:
+            safe_reason_code = exc.safe_reason_code
+            raise
+        finally:
+            self._record_timing(
+                argv=argv,
+                duration_ms=(time.perf_counter() - started) * 1000,
+                ok=ok,
+                safe_reason_code=safe_reason_code,
+            )
 
     def _run(self, argv: Sequence[str]) -> str:
         started = time.perf_counter()
@@ -266,6 +425,12 @@ def _validate_command_shape(command: str, args: tuple[str, ...]) -> None:
         raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
     if command == "tab" and args[0] in {"select", "close"} and not _is_safe_page_id(args[1]):
         raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+
+
+def _daemon_output(result: OpenCliDaemonResult) -> str:
+    if isinstance(result.data, str):
+        return result.data
+    return json.dumps(result.data, ensure_ascii=False, sort_keys=True)
 
 
 def _opencli_status_reason(output: str) -> str | None:

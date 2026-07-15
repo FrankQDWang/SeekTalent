@@ -21,6 +21,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
     OPENCLI_COMMAND_RESULT_UNKNOWN,
     OPENCLI_DAEMON_NOT_RUNNING,
+    OPENCLI_ERROR_CODE_TO_REASON,
     OPENCLI_EXTENSION_DISCONNECTED,
     OPENCLI_FORBIDDEN_COMMAND,
     OPENCLI_STATUS_UNAVAILABLE,
@@ -35,6 +36,7 @@ OPENCLI_BRIDGE_IMPLEMENTATION = "seektalent-opencli"
 OPENCLI_BRIDGE_PROTOCOL_MAJOR = 1
 REQUIRED_OPENCLI_BRIDGE_CAPABILITIES = frozenset(
     {
+        "browser.operations.v1",
         "control-fence.v1",
         "tab.close-verified.v1",
         "tab.create-in-existing-window.v1",
@@ -44,6 +46,7 @@ REQUIRED_OPENCLI_BRIDGE_CAPABILITIES = frozenset(
 )
 
 OpenCliDaemonAction = Literal[
+    "browser-operation",
     "exec",
     "navigate",
     "tabs",
@@ -52,7 +55,9 @@ OpenCliDaemonAction = Literal[
     "cdp",
     "control",
 ]
-_ALLOWED_DAEMON_ACTIONS = frozenset({"exec", "navigate", "tabs", "screenshot", "insert-text", "cdp", "control"})
+_ALLOWED_DAEMON_ACTIONS = frozenset(
+    {"browser-operation", "exec", "navigate", "tabs", "screenshot", "insert-text", "cdp", "control"}
+)
 _RESERVED_COMMAND_FIELDS = frozenset({"id", "action", "timeout", "deadlineAt", "contextId", "preferredContextId"})
 
 
@@ -210,6 +215,8 @@ class OpenCliDaemonClient:
             "profile_disconnected": OPENCLI_EXTENSION_DISCONNECTED,
             "command_result_unknown": OPENCLI_COMMAND_RESULT_UNKNOWN,
         }.get(error_code or "")
+        if reason is None and error_code is not None:
+            reason = OPENCLI_ERROR_CODE_TO_REASON.get(error_code.strip().lower().replace("-", "_"))
         if reason is None:
             reason = OPENCLI_STATUS_UNAVAILABLE
         if reason.startswith("opencli_bridge_"):
