@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections.abc import Callable
 
 from seektalent.core.retrieval.provider_contract import ProviderFirstPageExpansionResult, ProviderSearchContinuation, SearchRequest, SearchResult
 from seektalent.providers.liepin.client import liepin_resume_search_response_to_search_result
@@ -41,24 +42,51 @@ class LiepinOpenCliWorkerClient:
 
     def _handle_first_page_continuation_sync(self, **kwargs) -> ProviderFirstPageExpansionResult:
         with _OPENCLI_SEARCH_LOCK:
-            return self._retriever.handle_first_page_continuation_with_detail_open_claim_ledger(**kwargs)
+            return self._ready_retriever().handle_first_page_continuation_with_detail_open_claim_ledger(
+                **kwargs
+            )
+
     def __init__(
         self,
         *,
-        retriever: LiepinOpenCliResumeRetriever,
+        retriever: LiepinOpenCliResumeRetriever | None = None,
+        retriever_factory: Callable[[], LiepinOpenCliResumeRetriever] | None = None,
         connection_id: str,
         provider_account_hash: str,
     ) -> None:
+        if (retriever is None) == (retriever_factory is None):
+            raise ValueError("Liepin OpenCLI worker requires one retriever source.")
         self._retriever = retriever
+        self._retriever_factory = retriever_factory
+        self._retriever_lock = threading.Lock()
         self._connection_id = connection_id
         self._provider_account_hash = provider_account_hash
 
     async def ensure_ready(self, *, on_event=None) -> None:
         del on_event
         try:
-            await asyncio.to_thread(self._retriever.ensure_ready)
+            retriever = await asyncio.to_thread(self._ready_retriever)
+            await asyncio.to_thread(retriever.ensure_ready)
+        except LiepinWorkerModeError:
+            raise
         except RuntimeError as exc:
             raise LiepinWorkerModeError("Liepin OpenCLI worker is not ready.", code=str(exc)) from exc
+
+    def _ready_retriever(self) -> LiepinOpenCliResumeRetriever:
+        if self._retriever is not None:
+            return self._retriever
+        with self._retriever_lock:
+            if self._retriever is None:
+                factory = self._retriever_factory
+                if factory is None:
+                    raise LiepinWorkerModeError(
+                        "Liepin OpenCLI worker is not ready.",
+                        code="liepin_opencli_bootstrap_failed",
+                    )
+                self._retriever = factory()
+                self._retriever_factory = None
+        assert self._retriever is not None
+        return self._retriever
 
     async def search(
         self,
@@ -150,12 +178,13 @@ class LiepinOpenCliWorkerClient:
         detail_open_claim_context: DetailOpenClaimSearchContext | None = None,
     ):
         with _OPENCLI_SEARCH_LOCK:
+            retriever = self._ready_retriever()
             if detail_open_claim_context is not None:
-                return self._retriever._search_resumes_with_detail_open_claim_context(
+                return retriever._search_resumes_with_detail_open_claim_context(
                     request,
                     detail_open_claim_context=detail_open_claim_context,
                 )
-            return self._retriever.search_resumes(request)
+            return retriever.search_resumes(request)
 
     async def session_status(
         self,
@@ -166,8 +195,9 @@ class LiepinOpenCliWorkerClient:
         provider_account_hash: str | None = None,
     ) -> SessionStatus:
         del tenant, workspace
+        retriever = await asyncio.to_thread(self._ready_retriever)
         return await asyncio.to_thread(
-            self._retriever.session_status,
+            retriever.session_status,
             connection_id=connection_id or self._connection_id,
             provider_account_hash=provider_account_hash,
         )

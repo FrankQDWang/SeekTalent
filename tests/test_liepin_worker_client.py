@@ -133,6 +133,92 @@ def test_build_opencli_client_for_browser_backed_mode() -> None:
     assert isinstance(client, LiepinOpenCliWorkerClient)
 
 
+def test_opencli_runtime_setup_is_deferred_and_source_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    from seektalent import opencli_launcher
+
+    setup_threads: list[int] = []
+
+    def fail_setup():
+        setup_threads.append(threading.get_ident())
+        raise opencli_launcher.BootstrapError(
+            "opencli_offline_runtime_missing: reinstall required"
+        )
+
+    monkeypatch.setattr(opencli_launcher, "ensure_opencli_runtime", fail_setup)
+    client = build_liepin_worker_client(make_settings(liepin_worker_mode="opencli"))
+
+    assert setup_threads == []
+    with pytest.raises(LiepinWorkerModeError) as captured:
+        asyncio.run(client.ensure_ready())
+
+    assert captured.value.code == "liepin_opencli_command_missing"
+    assert str(captured.value) == "Liepin browser component is unavailable. Reinstall SeekTalent."
+    assert setup_threads and setup_threads[0] != threading.get_ident()
+
+
+def test_opencli_runtime_setup_wires_daemon_and_lifecycle_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from seektalent import opencli_launcher
+    from seektalent.opencli_browser import daemon_process, lifecycle
+
+    runtime = object()
+    daemon = SimpleNamespace(verify_bridge=lambda **_kwargs: {"ok": True})
+    lifecycle_marker = object()
+    runtime_calls: list[object] = []
+    daemon_calls: list[object] = []
+    lifecycle_calls: list[dict[str, object]] = []
+
+    def ensure_runtime():
+        runtime_calls.append(runtime)
+        return runtime
+
+    def connect_daemon(received_runtime):
+        daemon_calls.append(received_runtime)
+        return daemon
+
+    def build_lifecycle(**kwargs: object):
+        lifecycle_calls.append(kwargs)
+        return lifecycle_marker
+
+    monkeypatch.setattr(opencli_launcher, "ensure_opencli_runtime", ensure_runtime)
+    monkeypatch.setattr(daemon_process, "connect_installed_opencli_daemon", connect_daemon)
+    monkeypatch.setattr(lifecycle.BrowserControlLifecycle, "from_daemon", build_lifecycle)
+    settings = make_settings(liepin_worker_mode="opencli")
+    client = build_liepin_worker_client(settings)
+
+    asyncio.run(client.ensure_ready())
+    asyncio.run(client.ensure_ready())
+
+    assert runtime_calls == [runtime]
+    assert daemon_calls == [runtime]
+    assert lifecycle_calls == [
+        {
+            "registry_path": settings.project_root / ".seektalent" / "browser_control.sqlite3",
+            "daemon": daemon,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("opencli_daemon_not_running", "liepin_opencli_daemon_not_running"),
+        ("opencli_daemon_stale", "liepin_opencli_daemon_stale"),
+        ("opencli_extension_disconnected", "liepin_opencli_extension_disconnected"),
+        ("opencli_status_unavailable", "liepin_opencli_status_unavailable"),
+        ("opencli_bridge_build_mismatch", "liepin_opencli_bootstrap_failed"),
+    ],
+)
+def test_opencli_setup_errors_keep_source_safe_reason_codes(reason: str, expected: str) -> None:
+    from seektalent.opencli_browser.contracts import OpenCliBrowserError
+
+    error = liepin_client_module._liepin_opencli_setup_error(OpenCliBrowserError(reason))
+
+    assert error.code == expected
+    assert str(error) == "Liepin browser bridge is unavailable."
+
+
 def test_opencli_worker_ensure_ready_checks_runner_status() -> None:
     runner = StatusRunner(ok=True)
     client = LiepinOpenCliWorkerClient(
