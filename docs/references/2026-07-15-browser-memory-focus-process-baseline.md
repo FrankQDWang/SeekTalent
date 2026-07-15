@@ -12,7 +12,8 @@
 - 当前 Workbench 主路径在 Python 进程内执行 Liepin worker，但每个 OpenCLI 动作仍启动一次 Python launcher 和一次 Node CLI。只读 `daemon status` 的 p50/p95 为 150.3/154.9 ms，瞬时子进程树 RSS 中位数约 129.5 MiB。
 - 仓库仍有一条 Domi/Pi 工具路径会为每个动作再启动 Python helper。该路径同一只读动作的 p50/p95 为 986.1/1133.4 ms，瞬时子进程树 RSS 中位数约 227.1 MiB；它不是当前 Workbench Liepin provider 的主调用链，不能把这组数字冒充主路径基线。
 - OpenCLI daemon 常驻 RSS 约 55 MiB，未随 0 到 10 个 tab 明显增长。当前主要线性增长来自 Chrome renderer；逐动作 CLI 启动是独立的延迟和瞬时工作集问题。
-- macOS 已有足够证据确认 tab 增长和逐动作进程成本。Windows 8GB 必须在真实用户安装形态上补测 Private Bytes、Working Set、焦点和进程树后，才能关闭 #292 并最终决定 #293。
+- macOS 已有足够证据确认 tab 增长和逐动作进程成本。Windows 8GB 必须在真实用户安装形态上补测 Private Bytes、Working Set、焦点和进程树后，才能关闭 #292；它仍是发布门槛，但不再阻塞 #293 的传输决策。
+- OpenCLI daemon 已经提供 `POST /command`，不需要再增加一个 broker 进程。同一只读 `tab find` 经 Node CLI 的 p50/p95 为 147.2/169.2 ms；Python 复用 daemon HTTP 连接为 2.24/3.68 ms，且不启动子进程。第一阶段应把 fork daemon 协议正式化并由 SeekTalent 直连。
 
 ## 代码事实
 
@@ -74,8 +75,27 @@ Domi/Pi Node
 解释：
 
 - 仅移除 Python launcher 不能解决主要延迟，因为直接 Node CLI 的 p95 仍约 148 ms。
-- 常驻 broker 是否值得进入第一阶段，应比较“绕过逐动作 CLI”后的真实命令 p95、常驻 RSS和协议风险；不能只根据进程层数作结论。
+- 常驻 broker 是否值得进入第一阶段，应比较“绕过逐动作 CLI”后的真实命令 p95、常驻 RSS 和协议风险；不能只根据进程层数作结论。
 - 如果 Domi/Pi helper 不再属于生产入口，应删除或隔离该入口，而不是专门为一条废弃路径设计 broker。
+
+### 现有 daemon 直连对照
+
+OpenCLI daemon 本身就是 CLI 与扩展之间的常驻 broker。fork 当前已有 loopback-only `POST /command`、自定义 header、命令 id、绝对 deadline、同 id journal replay 和结构化 error code。对同一个只读 host discovery `tab find` 进行对照：
+
+| 路径 | 样本 | p50 | p95 | 每次动作新增子进程 |
+|---|---:|---:|---:|---:|
+| Node CLI -> daemon -> extension | 30 | 147.2 ms | 169.2 ms | 1 |
+| Python persistent HTTP -> daemon -> extension | 100 | 2.24 ms | 3.68 ms | 0 |
+
+因此 #293 的结论是：第一阶段替换逐动作 CLI，但不新增第二个 broker。应在 OpenCLI fork 中冻结一个受支持的 SeekTalent daemon command contract 和 capability，由 SeekTalent 维持 HTTP keep-alive 连接；CLI 只保留给安装、启动、诊断和人工调试。
+
+直接接入必须保留现有安全语义：
+
+- 每个逻辑动作使用唯一 command id 和绝对 deadline。
+- 只有协议允许的同 id transport replay 才能重发；`command_result_unknown` 等未知结果禁止自动重试。
+- capability/build/协议失配只禁用当前 Liepin source，不回退到逐动作 CLI，也不影响其他 source。
+- daemon 未运行时只允许启动配对离线 bundle 中的 daemon；禁止 npm/GitHub 下载。
+- SeekTalent 只开放自己所需的固定命令形状，不把任意 `eval` 或完整 OpenCLI 协议暴露给业务层。
 
 ## Tab 与 Chrome RSS 增长
 
@@ -153,10 +173,11 @@ Windows 实机数据未补齐前，#292 保持打开；不得把本机 32 GB mac
 
 - 第一阶段不得比当前主路径 p95 154.9 ms 更差。
 - broker 只有在主路径真实动作 p95 至少降低 50%，且新增常驻 Private Bytes/RSS 不高于 128 MiB、没有扩大故障域时，才算有效；否则先保留现状，避免用新协议换来无收益复杂度。
+- 现有 daemon 直连的只读命令 p95 为 3.68 ms、没有新增常驻进程，已超过 50% 收益门槛。生产接入仍需用搜索、详情采集和 close 的混合命令分布复核，p95 目标不高于 75 ms。
 - Domi/Pi helper 路径必须先确认是否仍是生产入口。若不是，删除生产接线比优化它更合适；若仍是入口，其 p95 不能继续维持约 1 秒。
 
 ## 对后续事项的约束
 
-- #293 先核实 Domi/Pi helper 的生产可达性，再用上述 50% 延迟收益和 128 MiB 常驻成本门槛决定 broker。
+- #293 采用现有 daemon 直连，不新增 broker 进程；Domi/Pi helper 的生产可达性继续由 #294 清理边界确认。
 - #294 只能合并与同一浏览器触点直接重叠的重复 allowlist/dispatch/依赖归属问题，不能夹带全仓 AISlop 整理。
 - #296 必须把 Windows 8GB 实机通过作为发布门槛，而不是在缺少数据时预先宣称“低配 Windows 已解决”。
