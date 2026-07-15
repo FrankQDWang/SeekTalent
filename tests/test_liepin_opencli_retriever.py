@@ -80,6 +80,9 @@ def test_expansion_rejects_coroutine_from_synchronous_runner_seam() -> None:
         def _begin_browser_control_scope(self) -> None:
             pass
 
+        def _finish_browser_control_scope(self) -> None:
+            pass
+
         async def _handle_liepin_first_page_continuation(self, **kwargs):
             del kwargs
             return {}
@@ -92,6 +95,9 @@ def test_expansion_rejects_coroutine_from_synchronous_runner_seam() -> None:
 def test_expansion_maps_successful_envelope_to_typed_provider_result() -> None:
     class Runner:
         def _begin_browser_control_scope(self) -> None:
+            pass
+
+        def _finish_browser_control_scope(self) -> None:
             pass
 
         def _handle_liepin_first_page_continuation(self, **kwargs):
@@ -171,9 +177,13 @@ class FakeOpenCliRunner:
     captured_ranks: list[int]
     artifact_root: Path
     scope_calls: int = 0
+    finish_calls: int = 0
 
     def _begin_browser_control_scope(self) -> None:
         self.scope_calls += 1
+
+    def _finish_browser_control_scope(self) -> None:
+        self.finish_calls += 1
 
     def status(self) -> OpenCliBrowserResult:
         return OpenCliBrowserResult(ok=True, action="status")
@@ -257,6 +267,7 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
     assert runner.captured_ranks == [1, 2]
     assert len(response.resumes) == 2
     assert runner.scope_calls == 1
+    assert runner.finish_calls == 1
     assert response.raw_candidate_count == 2
     assert "数据平台 Python resume 1" in response.resumes[0].normalized_text
     assert response.resumes[0].payload["sourceUrl"] == "https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-1"
@@ -846,6 +857,56 @@ def test_opencli_retriever_returns_blocked_reason_when_browser_not_ready(tmp_pat
         )
 
 
+def test_opencli_retriever_finishes_scope_when_search_raises(tmp_path: Path) -> None:
+    class ExplodingRunner(FakeOpenCliRunner):
+        def search_liepin_resumes(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            raise RuntimeError("primary search failed")
+
+    runner = ExplodingRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+
+    with pytest.raises(RuntimeError, match="primary search failed"):
+        LiepinOpenCliResumeRetriever(runner=runner).search_resumes(
+            LiepinOpenCliResumeRequest(
+                source_run_id="run-1",
+                keyword_query="Python",
+                query_terms=("Python",),
+                target_resumes=1,
+                max_cards=1,
+                max_pages=1,
+                requirement_sheet={"job_title": "Engineer"},
+            )
+        )
+
+    assert runner.scope_calls == 1
+    assert runner.finish_calls == 1
+
+
+def test_opencli_retriever_preserves_result_when_scope_finish_fails(tmp_path: Path) -> None:
+    class BrokenCleanupRunner(FakeOpenCliRunner):
+        def _finish_browser_control_scope(self) -> None:
+            self.finish_calls += 1
+            raise RuntimeError("cleanup failed")
+
+    runner = BrokenCleanupRunner(opened_refs=[], captured_ranks=[], artifact_root=tmp_path)
+
+    response = LiepinOpenCliResumeRetriever(runner=runner).search_resumes(
+        LiepinOpenCliResumeRequest(
+            source_run_id="run-1",
+            keyword_query="Python",
+            query_terms=("Python",),
+            target_resumes=1,
+            max_cards=1,
+            max_pages=1,
+            requirement_sheet={"job_title": "Engineer"},
+        )
+    )
+
+    assert len(response.resumes) == 1
+    assert runner.scope_calls == 1
+    assert runner.finish_calls == 1
+
+
 def test_opencli_retriever_allows_browser_command_to_start_stopped_daemon(tmp_path: Path) -> None:
     class StoppedDaemonRunner(FakeOpenCliRunner):
         recover_calls = 0
@@ -957,6 +1018,7 @@ def test_opencli_retriever_retries_search_after_extension_recovery(tmp_path: Pat
     assert runner.recover_calls == 1
     assert runner.search_calls == 2
     assert runner.scope_calls == 2
+    assert runner.finish_calls == 2
     assert len(response.resumes) == 2
 
 

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol, TypeVar, cast
 
+from seektalent.opencli_browser.fault_isolation import isolated_call
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
 from seektalent.core.retrieval.provider_contract import ProviderFirstPageExpansionResult, ProviderSearchContinuation
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
@@ -24,6 +26,8 @@ class LiepinResumeSearchSite(Protocol):
     def status(self): ...
 
     def _begin_browser_control_scope(self) -> None: ...
+
+    def _finish_browser_control_scope(self) -> None: ...
 
     def session_status_probe(
         self,
@@ -51,6 +55,8 @@ _RECOVERABLE_OPENCLI_READY_REASONS = {
     "liepin_opencli_daemon_stale",
     "liepin_opencli_status_unavailable",
 }
+_LOGGER = logging.getLogger(__name__)
+_T = TypeVar("_T")
 _PRIVATE_DETAIL_TRANSPORT_KEYS = frozenset(
     {
         "actiontraceref",
@@ -142,11 +148,16 @@ class LiepinOpenCliResumeRetriever:
         handler = getattr(self._runner, "_handle_liepin_first_page_continuation", None)
         if not callable(handler):
             raise LiepinFirstPageExpansionBoundaryError("liepin_opencli_private_expansion_route_unavailable")
-        self._runner._begin_browser_control_scope()
-        envelope = handler(continuation_ref=continuation.opaque_ref,
-            detail_open_claim_context=DetailOpenClaimSearchContext(
-                detail_open_claim_ledger=detail_open_claim_ledger,
-                logical_round_no=logical_round_no, query_instance_id=query_instance_id))
+        envelope = self._run_in_browser_control_scope(
+            lambda: handler(
+                continuation_ref=continuation.opaque_ref,
+                detail_open_claim_context=DetailOpenClaimSearchContext(
+                    detail_open_claim_ledger=detail_open_claim_ledger,
+                    logical_round_no=logical_round_no,
+                    query_instance_id=query_instance_id,
+                ),
+            )
+        )
         if inspect.isawaitable(envelope):
             close = getattr(envelope, "close", None)
             if callable(close):
@@ -186,12 +197,20 @@ class LiepinOpenCliResumeRetriever:
         search: Callable[[LiepinOpenCliResumeRequest], dict[str, object]],
     ) -> LiepinResumeSearchResponse:
         self.ensure_ready()
-        self._runner._begin_browser_control_scope()
-        envelope = search(request)
+        envelope = self._run_in_browser_control_scope(lambda: search(request))
         if _envelope_reason(envelope) in _RECOVERABLE_OPENCLI_READY_REASONS and self._recover_connection():
-            self._runner._begin_browser_control_scope()
-            envelope = search(request)
+            envelope = self._run_in_browser_control_scope(lambda: search(request))
         return _response_from_opencli_envelope(envelope)
+
+    def _run_in_browser_control_scope(self, action: Callable[[], _T]) -> _T:
+        try:
+            self._runner._begin_browser_control_scope()
+            return action()
+        finally:
+            isolated_call(self._runner._finish_browser_control_scope, self._report_cleanup_failure)
+
+    def _report_cleanup_failure(self, exc: Exception) -> None:
+        _LOGGER.warning("liepin_browser_scope_cleanup_failed error=%s", type(exc).__name__)
 
     def _search_liepin_resumes(self, request: LiepinOpenCliResumeRequest) -> dict[str, object]:
         return self._runner.search_liepin_resumes(
