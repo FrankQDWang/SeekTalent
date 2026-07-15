@@ -28,10 +28,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserTiming,
 )
 from seektalent.opencli_browser.lifecycle import browser_control_key
-from seektalent.opencli_browser.runtime import (
-    ALLOWED_BROWSER_COMMANDS,
-    FORBIDDEN_BROWSER_COMMANDS,
-)
+from seektalent.opencli_browser.runtime import ALLOWED_BROWSER_COMMANDS, FORBIDDEN_BROWSER_COMMANDS
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.opencli_filter_planning import (
@@ -59,10 +56,7 @@ from seektalent.providers.liepin.liepin_opencli_policy import (
 )
 from seektalent.providers.liepin.liepin_workflow_site import _LiepinSearchWorkflowSite
 from seektalent.providers.liepin.opencli_local_state import locked_json_update, opencli_state_lock
-from seektalent.providers.liepin.worker_contracts import (
-    OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
-    SessionStatus,
-)
+from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT, SessionStatus
 from seektalent.providers.liepin.liepin_state_machine import (
     LiepinStateSnapshot,
     LiepinTransition,
@@ -439,6 +433,10 @@ class LiepinSiteAdapter:
         self._host_page_id = None
         self._automation.activate_control_scope(self._site_config.control_key)
         self._host_page_id = self._select_liepin_host_tab().page_id
+
+    def _finish_browser_control_scope(self) -> None:
+        self._host_page_id = None
+        self._automation.finish_control_scope()
 
     def _select_liepin_host_tab(self) -> BrowserHostTab:
         try:

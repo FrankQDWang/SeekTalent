@@ -1,0 +1,17 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Submit Liepin managed-tab cleanup from every browser scope without waiting for registry I/O or Chrome close.",
+  "rationale": "The Liepin provider is a red-zone browser integration. This change preserves primary search and continuation results while moving ownership recording and exact tab close to a bounded background lifecycle; failures fall back to the extension idle alarm and never delay the run.",
+  "red_files": [
+    "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/providers/liepin/opencli_retriever.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-source-decoupling.sh",
+    "uv run pytest -q tests/test_opencli_browser_lifecycle.py tests/test_opencli_daemon_automation.py tests/test_opencli_daemon_transport.py tests/test_liepin_opencli_retriever.py",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools"
+  ]
+}

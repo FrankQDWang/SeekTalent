@@ -418,9 +418,13 @@ class _DeterministicPrivateClaimWorkflowRunner:
         self.opened_subjects: list[str] = []
         self.private_contexts: list[DetailOpenClaimSearchContext] = []
         self.scope_calls = 0
+        self.finish_calls = 0
 
     def _begin_browser_control_scope(self) -> None:
         self.scope_calls += 1
+
+    def _finish_browser_control_scope(self) -> None:
+        self.finish_calls += 1
 
     def status(self) -> OpenCliBrowserResult:
         return OpenCliBrowserResult(ok=True, action="status")
