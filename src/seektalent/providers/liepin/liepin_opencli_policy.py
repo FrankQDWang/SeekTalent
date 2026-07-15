@@ -13,10 +13,15 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_DAEMON_STALE,
     OPENCLI_EXTENSION_DISCONNECTED,
     OPENCLI_FORBIDDEN_COMMAND,
+    OPENCLI_HOST_PAGE_MISSING,
+    OPENCLI_HOST_TAB_NOT_FOUND,
+    OPENCLI_HOST_WINDOW_AMBIGUOUS,
+    OPENCLI_OWNED_TAB_MISSING,
     OPENCLI_SELECTOR_AMBIGUOUS,
     OPENCLI_SELECTOR_NOT_FOUND,
     OPENCLI_STALE_REF,
     OPENCLI_STATUS_UNAVAILABLE,
+    OPENCLI_STALE_CONTROL_FENCE,
     OPENCLI_TARGET_NOT_FOUND,
     OPENCLI_TIMEOUT,
     OPENCLI_WINDOW_POLICY_BLOCKED,
@@ -45,6 +50,11 @@ OPENCLI_TO_LIEPIN_REASON = {
     OPENCLI_SELECTOR_NOT_FOUND: "liepin_opencli_selector_not_found",
     OPENCLI_SELECTOR_AMBIGUOUS: "liepin_opencli_selector_ambiguous",
     OPENCLI_TARGET_NOT_FOUND: "liepin_opencli_target_not_found",
+    OPENCLI_HOST_TAB_NOT_FOUND: "liepin_host_tab_missing",
+    OPENCLI_HOST_PAGE_MISSING: "liepin_host_tab_missing",
+    OPENCLI_HOST_WINDOW_AMBIGUOUS: "liepin_host_window_ambiguous",
+    OPENCLI_OWNED_TAB_MISSING: "liepin_owned_tab_missing",
+    OPENCLI_STALE_CONTROL_FENCE: "liepin_opencli_stale_control_fence",
 }
 
 
