@@ -1232,7 +1232,11 @@ def test_liepin_detail_claim_ledger_keeps_non_concrete_worker_on_generic_search(
     assert "logical_round_no" not in worker.provider_contexts[0]
 
 
-async def _run_fixture_two_query_liepin_bundle(worker_client: FakeWorker | None = None):
+async def _run_fixture_two_query_liepin_bundle(
+    worker_client: FakeWorker | None = None,
+    *,
+    build_worker: bool = False,
+):
     return await run_liepin_logical_query_bundle(
         settings=make_settings(),
         runtime_run_id="runtime-run-1",
@@ -1273,7 +1277,7 @@ async def _run_fixture_two_query_liepin_bundle(worker_client: FakeWorker | None 
         ),
         source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
         liepin_context={"provider_account_hash": "acct_hash_123"},
-        worker_client=worker_client or FakeWorker(),
+        worker_client=None if build_worker else worker_client or FakeWorker(),
     )
 
 
@@ -1323,6 +1327,23 @@ def test_liepin_bundle_preserves_one_execution_outcome_per_logical_query() -> No
 
     assert [item.query_instance_id for item in result.query_execution_outcomes] == ["primary-1", "explore-1"]
     assert all(item.status in {"completed", "partial"} for item in result.query_execution_outcomes)
+
+
+def test_liepin_bundle_builds_one_worker_for_all_logical_queries(monkeypatch) -> None:
+    worker = FakeWorker()
+    build_calls: list[object] = []
+
+    def build_worker(settings):
+        build_calls.append(settings)
+        return worker
+
+    monkeypatch.setattr(runtime_lane, "build_liepin_worker_client", build_worker)
+
+    result = asyncio.run(_run_fixture_two_query_liepin_bundle(build_worker=True))
+
+    assert result.status in {"completed", "partial"}
+    assert len(build_calls) == 1
+    assert len(worker.search_calls) == 2
     assert {(item.query_instance_id, item.resume_id) for item in result.candidate_query_attributions} == {
         ("primary-1", "liepin-candidate-1"),
         ("explore-1", "liepin-candidate-1"),

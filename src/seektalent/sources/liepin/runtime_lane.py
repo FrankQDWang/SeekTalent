@@ -292,11 +292,14 @@ async def run_liepin_logical_query_bundle(
     worker_client: LiepinWorkerClient | None = None,
     detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
 ) -> RuntimeSourceLaneResult:
+    if not logical_queries:
+        raise ValueError("Liepin logical query bundle requires at least one logical query.")
     compiled_bundle = (
         compile_liepin_source_query_intents(source_query_intents) if source_query_intents is not None else None
     )
     compiled_queries = compiled_bundle.queries if compiled_bundle is not None else ()
     context = normalize_runtime_liepin_context(liepin_context)
+    bundle_worker_client = worker_client or build_liepin_worker_client(settings)
 
     async def run_logical_query(index: int, logical_query: LogicalQueryDispatch) -> RuntimeSourceLaneResult:
         logical_compiled_queries = tuple(
@@ -359,7 +362,7 @@ async def run_liepin_logical_query_bundle(
                     source_budget_policy=source_budget_policy,
                     source_context=context.to_runtime_payload(),
                 ),
-                worker_client=worker_client,
+                worker_client=bundle_worker_client,
                 compiled_search_request=compiled_request,
                 detail_open_claim_ledger=detail_open_claim_ledger,
             )
@@ -402,8 +405,7 @@ async def run_liepin_logical_query_bundle(
             if merged_result is None
             else merge_liepin_card_lane_results(merged_result, logical_result)
         )
-    if merged_result is None:
-        raise ValueError("Liepin logical query bundle requires at least one logical query.")
+    assert merged_result is not None
     return merged_result
 
 
