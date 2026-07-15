@@ -6,7 +6,13 @@ from collections.abc import Mapping, Sequence
 import pytest
 
 from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
-from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserError
+from seektalent.opencli_browser.contracts import (
+    BrowserControlScope,
+    OpenCliBrowserConfig,
+    OpenCliBrowserError,
+    OpenCliOwnedTab,
+    OpenCliTabKind,
+)
 from seektalent.opencli_browser.controlled_tab_lock import (
     CONTROLLED_TAB_HELPER_TIMEOUT_SECONDS,
     install_script,
@@ -104,7 +110,44 @@ class RecordingDaemon:
         raise AssertionError(f"unexpected daemon action: {action}")
 
 
-def automation(daemon: RecordingDaemon) -> OpenCliBrowserAutomation:
+class RecordingLifecycle:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.events: list[tuple[str, object]] = []
+
+    def _record(self, event: str, value: object) -> None:
+        self.events.append((event, value))
+        if self.fail:
+            raise RuntimeError("lifecycle failed")
+
+    def record_scope(self, scope: BrowserControlScope) -> None:
+        self._record("scope", scope)
+
+    def record_tab_allocation(
+        self,
+        scope: BrowserControlScope,
+        *,
+        tab_token: str,
+        session: str,
+        tab_kind: OpenCliTabKind,
+    ) -> None:
+        self._record("allocation", (scope, tab_token, session, tab_kind))
+
+    def record_owned_tab(self, scope: BrowserControlScope, tab: OpenCliOwnedTab) -> None:
+        self._record("owned", (scope, tab))
+
+    def record_idle_deadline(self, tab: OpenCliOwnedTab) -> None:
+        self._record("deadline", tab)
+
+    def request_reclaim(self, scope: BrowserControlScope, tabs: tuple[OpenCliOwnedTab, ...]) -> None:
+        self._record("reclaim", (scope, tabs))
+
+
+def automation(
+    daemon: RecordingDaemon,
+    *,
+    lifecycle: RecordingLifecycle | None = None,
+) -> OpenCliBrowserAutomation:
     return OpenCliBrowserAutomation(
         config=OpenCliBrowserConfig(
             command=("seektalent-opencli",),
@@ -114,6 +157,7 @@ def automation(daemon: RecordingDaemon) -> OpenCliBrowserAutomation:
         ),
         commands=NoSubprocessCommands(),
         daemon=daemon,  # type: ignore[arg-type]
+        lifecycle=lifecycle,
     )
 
 
@@ -210,6 +254,51 @@ def test_daemon_automation_creates_each_owned_tab_in_the_existing_host_window() 
     assert daemon.calls[-1][1]["session"] == owned_tabs[0].session
     assert daemon.calls[-1][1]["controlKey"] == "lane-key"
     assert daemon.calls[-1][1]["fenceToken"] == 7
+
+
+def test_owned_tab_lifecycle_is_recorded_and_finish_only_submits_background_reclaim() -> None:
+    daemon = RecordingDaemon()
+    lifecycle = RecordingLifecycle()
+    browser = automation(daemon, lifecycle=lifecycle)
+
+    scope = browser.activate_control_scope("lane-key")
+    tab = browser.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/search",
+        tab_kind="search",
+    )
+    daemon.calls.clear()
+
+    browser.finish_control_scope()
+
+    assert daemon.calls == []
+    assert [event for event, _value in lifecycle.events] == [
+        "scope",
+        "allocation",
+        "owned",
+        "deadline",
+        "reclaim",
+    ]
+    assert lifecycle.events[-1][1] == (scope, (tab,))
+    assert browser._control_scope is None  # noqa: SLF001
+    assert browser._owned_tabs == {}  # noqa: SLF001
+
+
+def test_lifecycle_failures_do_not_change_tab_creation_or_scope_finish() -> None:
+    daemon = RecordingDaemon()
+    lifecycle = RecordingLifecycle(fail=True)
+    browser = automation(daemon, lifecycle=lifecycle)
+
+    browser.activate_control_scope("lane-key")
+    tab = browser.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/search",
+        tab_kind="search",
+    )
+    browser.finish_control_scope()
+
+    assert tab.page_id == "owned-1"
+    assert [event for event, _value in lifecycle.events][-1] == "reclaim"
 
 
 def test_controlled_tab_lock_uses_dokobot_style_veil_and_double_line_countdown() -> None:

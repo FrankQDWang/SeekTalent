@@ -230,6 +230,29 @@ def test_daemon_client_reuses_connection_and_sends_unique_deadlined_commands() -
     assert second.command_id != first.command_id
 
 
+def test_daemon_client_can_create_an_independent_connection_for_background_cleanup() -> None:
+    connection = _Connection(status_payload=_status())
+
+    def factory(*_args: object) -> _Connection:
+        return connection
+
+    client = OpenCliDaemonClient(
+        requirement=_requirement(),
+        context_id="profile-1",
+        host="127.0.0.1",
+        port=19826,
+        connection_factory=factory,
+    )
+
+    background = client.new_connection()
+
+    assert background is not client
+    assert background.requirement == client.requirement
+    assert background.context_id == "profile-1"
+    assert background.host == "127.0.0.1"
+    assert background.port == 19826
+
+
 def test_daemon_client_keeps_short_best_effort_commands_strictly_bounded() -> None:
     connection = _Connection(status_payload=_status())
     client = OpenCliDaemonClient(requirement=_requirement(), connection_factory=lambda *_args: connection)

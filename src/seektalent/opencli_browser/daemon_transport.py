@@ -108,6 +108,15 @@ class OpenCliDaemonClient:
         with self._lock:
             self._drop_connection()
 
+    def new_connection(self) -> OpenCliDaemonClient:
+        return OpenCliDaemonClient(
+            requirement=self.requirement,
+            context_id=self.context_id,
+            host=self.host,
+            port=self.port,
+            connection_factory=self._connection_factory,
+        )
+
     def verify_bridge(self, *, timeout_seconds: float = 2.0) -> Mapping[str, object]:
         with self._lock:
             return self._verify_bridge(timeout_seconds=timeout_seconds)
