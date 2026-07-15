@@ -2,8 +2,8 @@
   "schema_version": "seektalent.major_refactor_goal.v1",
   "goal_id": "offline-distribution-2026-07",
   "change_type": "major_refactor",
-  "summary": "Add reproducible macOS Intel offline distribution and preserve its browser bridge decisions.",
-  "rationale": "The distribution workflow, build script, pinned constraints, installer, tests, and supporting decisions must land together so the generated bundle remains reproducible and reviewable.",
+  "summary": "Ship the reproducible macOS Intel distribution with a verified SeekTalent OpenCLI fork pair.",
+  "rationale": "The workflow, build script, installer, and tests must verify one pinned runtime and extension pair so user machines never fetch or combine browser bridge components themselves.",
   "touched_layers": [
     "governance",
     "docs",
@@ -11,8 +11,7 @@
     "other"
   ],
   "red_files": [
-    ".github/workflows/build-macos-intel-offline.yml",
-    "tools/check_pr_governance.py"
+    ".github/workflows/build-macos-intel-offline.yml"
   ],
   "verification": [
     "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
@@ -24,7 +23,7 @@
     "Manual ad hoc macOS Intel packaging steps"
   ],
   "risks": [
-    "The workflow must remain manual until its forked OpenCLI inputs and offline artifacts are production-ready.",
+    "The workflow remains manual and pins the exact SeekTalent OpenCLI fork commit used to build both bridge components.",
     "The generated bundle must be verified from the dist directory rather than trusting intermediate build files."
   ]
 }
