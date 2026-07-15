@@ -4,7 +4,13 @@ from __future__ import annotations
 LIEPIN_WORKER_SAFE_REASON_CODES = frozenset(
     {
         "liepin_opencli_backend_disabled",
+        "liepin_opencli_bridge_integrity_failed",
+        "liepin_opencli_bridge_wrong_implementation",
+        "liepin_opencli_bridge_build_mismatch",
+        "liepin_opencli_bridge_protocol_mismatch",
+        "liepin_opencli_bridge_capability_missing",
         "liepin_opencli_command_missing",
+        "liepin_opencli_command_result_unknown",
         "liepin_opencli_extension_disconnected",
         "liepin_opencli_daemon_not_running",
         "liepin_opencli_daemon_stale",

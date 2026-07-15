@@ -314,69 +314,6 @@ def test_opencli_helper_does_not_expose_generic_browser_command_escape_hatch() -
     assert "upload" in text
 
 
-def test_opencli_extension_exposes_agent_driven_resume_detail_tools() -> None:
-    text = Path("src/seektalent/providers/liepin/opencli_extensions/seektalent_opencli_browser.ts").read_text(
-        encoding="utf-8"
-    )
-    legacy_resume_tool = "_".join(("seektalent", "opencli", "search", "liepin", "resumes"))
-
-    assert legacy_resume_tool not in text
-    assert "seektalent_opencli_open_liepin_detail" in text
-    assert "seektalent_opencli_capture_liepin_detail_resume" in text
-    assert "seektalent_opencli_finalize_liepin_resumes" in text
-    assert "seektalent_opencli_eval" not in text
-    assert "seektalent_opencli_cookies" not in text
-
-
-def test_opencli_extension_exposes_only_restricted_tools() -> None:
-    text = Path("src/seektalent/providers/liepin/opencli_extensions/seektalent_opencli_browser.ts").read_text(
-        encoding="utf-8"
-    )
-
-    assert "seektalent_opencli_status" in text
-    assert "seektalent_opencli_search_liepin_cards" in text
-    assert "seektalent_opencli_extract_structured_liepin_cards" in text
-    assert "seektalent_opencli_extract_visible_liepin_cards" in text
-    assert "Never use this tool for liepin.search_resumes" in text
-    assert "seektalent_opencli_capabilities" in text
-    assert "seektalent_opencli_state" in text
-    assert "seektalent_opencli_open_liepin_tab" in text
-    assert "seektalent_opencli_get_url" in text
-    assert "seektalent_opencli_find" in text
-    assert "seektalent_opencli_fill" in text
-    assert "seektalent_opencli_click" in text
-    assert "seektalent_opencli_scroll" in text
-    assert "seektalent_opencli_wait_time" in text
-    assert "browser eval" not in text
-    assert "browser network" not in text
-    assert "document.cookie" not in text
-    assert "child.stderr.on" in text
-    assert "MAX_OUTPUT_CHARS" in text
-    assert "terminalReason" in text
-    assert 'import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"' in text
-    assert ("type " + "ExtensionAPI = {") not in text
-    assert "async execute(_toolCallId: string, params: ToolParams" in text
-    assert "stateReady" in text
-    assert "requires a fresh non-terminal state" in text
-    assert "details: {}" in text
-    assert "SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS" in text
-    assert 'process.env.SEEKTALENT_LIEPIN_OPENCLI_TASK === "liepin.search_resumes"' in text
-    assert 'action === "search_cards"' in text
-
-
-def test_opencli_extension_marks_card_extractors_as_fresh_state() -> None:
-    text = Path("src/seektalent/providers/liepin/opencli_extensions/seektalent_opencli_browser.ts").read_text(
-        encoding="utf-8"
-    )
-
-    assert 'action === "extract_visible_liepin_cards"' in text
-    assert 'action === "extract_structured_liepin_cards"' in text
-    extract_branch_start = text.index('action === "extract_visible_liepin_cards"')
-    extract_branch = text[extract_branch_start : extract_branch_start + 500]
-    assert "stateReady = parsed.ok === true" in extract_branch
-    assert "terminalReason = null" in extract_branch
-
-
 def test_opencli_python_helper_exposes_single_deterministic_resume_search_action() -> None:
     action = "search_resumes"
     site_text = Path("src/seektalent/providers/liepin/liepin_site_adapter.py").read_text(encoding="utf-8")

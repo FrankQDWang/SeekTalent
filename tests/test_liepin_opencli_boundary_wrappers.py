@@ -368,7 +368,13 @@ def test_liepin_opencli_policy_mapping_is_complete() -> None:
     from seektalent.providers.liepin.liepin_opencli_policy import OPENCLI_TO_LIEPIN_REASON
 
     assert OPENCLI_TO_LIEPIN_REASON == {
+        "opencli_bridge_integrity_failed": "liepin_opencli_bridge_integrity_failed",
+        "opencli_bridge_wrong_implementation": "liepin_opencli_bridge_wrong_implementation",
+        "opencli_bridge_build_mismatch": "liepin_opencli_bridge_build_mismatch",
+        "opencli_bridge_protocol_mismatch": "liepin_opencli_bridge_protocol_mismatch",
+        "opencli_bridge_capability_missing": "liepin_opencli_bridge_capability_missing",
         "opencli_command_missing": "liepin_opencli_command_missing",
+        "opencli_command_result_unknown": "liepin_opencli_command_result_unknown",
         "opencli_timeout": "liepin_opencli_timeout",
         "opencli_extension_disconnected": "liepin_opencli_extension_disconnected",
         "opencli_status_unavailable": "liepin_opencli_status_unavailable",
