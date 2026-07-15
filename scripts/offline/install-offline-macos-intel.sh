@@ -19,6 +19,58 @@ _seektalent_json_value() {
   "${python}" -c 'import json, pathlib, sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))[sys.argv[2]])' "${manifest}" "${key}"
 }
 
+_seektalent_verify_browser_bridge() {
+  local python="$1"
+  local bridge_manifest="$2"
+  local runtime_dir="$3"
+  local extension_dir="$4"
+  "${python}" - "${bridge_manifest}" "${runtime_dir}" "${extension_dir}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+manifest_path, runtime_dir, extension_dir = map(pathlib.Path, sys.argv[1:])
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+if manifest.get("schemaVersion") != "seektalent.browser_bridge_bundle.v1":
+    raise SystemExit("browser bridge schema mismatch")
+if manifest.get("implementation") != "seektalent-opencli":
+    raise SystemExit("browser bridge implementation mismatch")
+
+identity_path = runtime_dir / "node_modules" / "@jackwener" / "opencli" / "bridge-identity.json"
+identity = json.loads(identity_path.read_text(encoding="utf-8"))
+for key in ("implementation", "bridgeBuildId", "protocolVersion", "capabilities"):
+    if identity.get(key) != manifest.get(key):
+        raise SystemExit(f"runtime browser bridge identity mismatch: {key}")
+
+extension = manifest["extension"]
+actual_files = []
+for path in sorted(extension_dir.rglob("*")):
+    if path.is_symlink():
+        raise SystemExit(f"extension contains a symlink: {path}")
+    if not path.is_file():
+        continue
+    content = path.read_bytes()
+    actual_files.append(
+        {
+            "path": path.relative_to(extension_dir).as_posix(),
+            "size": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        }
+    )
+if actual_files != extension.get("files"):
+    raise SystemExit("extension file manifest mismatch")
+tree = "".join(f"{item['sha256']}  {item['path']}\n" for item in actual_files).encode()
+if hashlib.sha256(tree).hexdigest() != extension.get("treeSha256"):
+    raise SystemExit("extension tree hash mismatch")
+extension_manifest = extension_dir / "manifest.json"
+if hashlib.sha256(extension_manifest.read_bytes()).hexdigest() != extension.get("manifestSha256"):
+    raise SystemExit("extension manifest hash mismatch")
+if json.loads(extension_manifest.read_text(encoding="utf-8")).get("version") != extension.get("version"):
+    raise SystemExit("extension version mismatch")
+PY
+}
+
 _seektalent_offline_install() {
   local bundle_root
   bundle_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -78,10 +130,13 @@ _seektalent_offline_install() {
   fi
 
   local version opencli_version extension_version extension_sha256 expected_python_version
+  local browser_bridge_manifest browser_bridge_build_id
   version="$(_seektalent_json_value "${domi_python}" "${manifest}" "seektalent_version")" || return 1
   opencli_version="$(_seektalent_json_value "${domi_python}" "${manifest}" "opencli_version")" || return 1
   extension_version="$(_seektalent_json_value "${domi_python}" "${manifest}" "extension_version")" || return 1
   extension_sha256="$(_seektalent_json_value "${domi_python}" "${manifest}" "extension_sha256")" || return 1
+  browser_bridge_manifest="$(_seektalent_json_value "${domi_python}" "${manifest}" "browser_bridge_manifest")" || return 1
+  browser_bridge_build_id="$(_seektalent_json_value "${domi_python}" "${manifest}" "browser_bridge_build_id")" || return 1
   expected_python_version="$(_seektalent_json_value "${domi_python}" "${manifest}" "python_version")" || return 1
 
   local python_arch python_version
@@ -106,8 +161,9 @@ _seektalent_offline_install() {
   local pip_zipapp="${bundle_root}/tools/pip.pyz"
   local opencli_archive="${bundle_root}/opencli/opencli-${opencli_version}-runtime.zip"
   local extension_archive="${bundle_root}/chrome-extension/opencli-extension-v${extension_version}.zip"
+  local bridge_manifest_source="${bundle_root}/${browser_bridge_manifest}"
   local required_file
-  for required_file in "${app_wheel}" "${pip_zipapp}" "${opencli_archive}" "${extension_archive}"; do
+  for required_file in "${app_wheel}" "${pip_zipapp}" "${opencli_archive}" "${extension_archive}" "${bridge_manifest_source}"; do
     if [[ ! -f "${required_file}" ]]; then
       _seektalent_offline_fail "offline_resource_missing" "Required offline resource was not found: ${required_file}"
       return 1
@@ -126,9 +182,15 @@ _seektalent_offline_install() {
   local bin_dir="${install_root}/bin"
   local opencli_install_dir="${install_root}/opencli-runtime/opencli/${opencli_version}"
   local opencli_main="${opencli_install_dir}/node_modules/@jackwener/opencli/dist/src/main.js"
+  local opencli_stage_dir="${install_root}/opencli-runtime/opencli/${opencli_version}.stage.$$"
+  local opencli_stage_main="${opencli_stage_dir}/node_modules/@jackwener/opencli/dist/src/main.js"
+  local opencli_backup_dir="${install_root}/opencli-runtime/opencli/${opencli_version}.previous.$$"
   local extension_install_dir="${install_root}/chrome-extension/opencli"
   local extension_stage_dir="${install_root}/chrome-extension/opencli.stage.$$"
+  local extension_backup_dir="${install_root}/chrome-extension/opencli.previous.$$"
   local extension_manifest="${extension_stage_dir}/manifest.json"
+  local installed_bridge_manifest="${install_root}/browser-bridge/bridge-manifest.json"
+  local bridge_manifest_backup="${install_root}/browser-bridge/bridge-manifest.previous.$$"
 
   rm -rf "${prefix}"
   mkdir -p "${site_packages}" "${bin_dir}" || return 1
@@ -146,42 +208,87 @@ _seektalent_offline_install() {
       return 1
     }
 
-  rm -rf "${opencli_install_dir}"
-  mkdir -p "${opencli_install_dir}" || return 1
-  unzip -q "${opencli_archive}" -d "${opencli_install_dir}" || {
+  rm -rf "${opencli_stage_dir}" "${opencli_backup_dir}"
+  mkdir -p "${opencli_stage_dir}" || return 1
+  unzip -q "${opencli_archive}" -d "${opencli_stage_dir}" || {
+    rm -rf "${opencli_stage_dir}"
     _seektalent_offline_fail "opencli_offline_extract_failed" "Failed to extract the bundled OpenCLI runtime."
     return 1
   }
-  if [[ ! -f "${opencli_main}" ]]; then
+  if [[ ! -f "${opencli_stage_main}" ]]; then
+    rm -rf "${opencli_stage_dir}"
     _seektalent_offline_fail "opencli_offline_install_incomplete" "The bundled OpenCLI runtime did not contain the expected entrypoint."
     return 1
   fi
 
   rm -rf "${extension_stage_dir}"
-  mkdir -p "${extension_stage_dir}" || return 1
+  mkdir -p "${extension_stage_dir}" || {
+    rm -rf "${opencli_stage_dir}"
+    return 1
+  }
   if ! unzip -q "${extension_archive}" -d "${extension_stage_dir}"; then
-    rm -rf "${extension_stage_dir}"
+    rm -rf "${opencli_stage_dir}" "${extension_stage_dir}"
     _seektalent_offline_fail "opencli_extension_extract_failed" "Failed to extract the bundled Browser Bridge extension."
     return 1
   fi
   if [[ ! -f "${extension_manifest}" ]]; then
-    rm -rf "${extension_stage_dir}"
+    rm -rf "${opencli_stage_dir}" "${extension_stage_dir}"
     _seektalent_offline_fail "opencli_extension_manifest_missing" "The bundled Browser Bridge extension did not contain manifest.json."
     return 1
   fi
 
   local installed_extension_version
   installed_extension_version="$(_seektalent_json_value "${domi_python}" "${extension_manifest}" "version")" || {
-    rm -rf "${extension_stage_dir}"
+    rm -rf "${opencli_stage_dir}" "${extension_stage_dir}"
     return 1
   }
   if [[ "${installed_extension_version}" != "${extension_version}" ]]; then
-    rm -rf "${extension_stage_dir}"
+    rm -rf "${opencli_stage_dir}" "${extension_stage_dir}"
     _seektalent_offline_fail "opencli_extension_version_mismatch" "Expected Browser Bridge ${extension_version} but found ${installed_extension_version}."
     return 1
   fi
-  rm -rf "${extension_install_dir}"
-  mv "${extension_stage_dir}" "${extension_install_dir}" || return 1
+
+  if ! _seektalent_verify_browser_bridge \
+    "${domi_python}" "${bridge_manifest_source}" "${opencli_stage_dir}" "${extension_stage_dir}"; then
+    rm -rf "${opencli_stage_dir}" "${extension_stage_dir}"
+    _seektalent_offline_fail "browser_bridge_pair_mismatch" "The bundled runtime and extension did not match their bridge manifest."
+    return 1
+  fi
+  if [[ "$("${domi_node}" "${opencli_stage_main}" --version)" != "${opencli_version}" ]]; then
+    rm -rf "${opencli_stage_dir}" "${extension_stage_dir}"
+    _seektalent_offline_fail "opencli_offline_probe_failed" "The staged OpenCLI runtime failed its version probe."
+    return 1
+  fi
+
+  rm -rf "${opencli_backup_dir}" "${extension_backup_dir}"
+  rm -f "${bridge_manifest_backup}"
+  mkdir -p "$(dirname "${installed_bridge_manifest}")" || return 1
+  if [[ -d "${opencli_install_dir}" ]] && ! mv "${opencli_install_dir}" "${opencli_backup_dir}"; then
+    return 1
+  fi
+  if [[ -d "${extension_install_dir}" ]] && ! mv "${extension_install_dir}" "${extension_backup_dir}"; then
+    [[ ! -d "${opencli_backup_dir}" ]] || mv "${opencli_backup_dir}" "${opencli_install_dir}"
+    return 1
+  fi
+  if [[ -f "${installed_bridge_manifest}" ]] && ! mv "${installed_bridge_manifest}" "${bridge_manifest_backup}"; then
+    [[ ! -d "${extension_backup_dir}" ]] || mv "${extension_backup_dir}" "${extension_install_dir}"
+    [[ ! -d "${opencli_backup_dir}" ]] || mv "${opencli_backup_dir}" "${opencli_install_dir}"
+    return 1
+  fi
+
+  if ! mv "${opencli_stage_dir}" "${opencli_install_dir}" \
+    || ! mv "${extension_stage_dir}" "${extension_install_dir}" \
+    || ! cp "${bridge_manifest_source}" "${installed_bridge_manifest}"; then
+    rm -rf "${opencli_install_dir}" "${extension_install_dir}"
+    rm -f "${installed_bridge_manifest}"
+    [[ ! -d "${opencli_backup_dir}" ]] || mv "${opencli_backup_dir}" "${opencli_install_dir}"
+    [[ ! -d "${extension_backup_dir}" ]] || mv "${extension_backup_dir}" "${extension_install_dir}"
+    [[ ! -f "${bridge_manifest_backup}" ]] || mv "${bridge_manifest_backup}" "${installed_bridge_manifest}"
+    _seektalent_offline_fail "browser_bridge_switch_failed" "Failed to switch the verified browser bridge pair."
+    return 1
+  fi
+  rm -rf "${opencli_backup_dir}" "${extension_backup_dir}"
+  rm -f "${bridge_manifest_backup}"
 
   PYTHONPATH="${site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
     "${domi_python}" -m seektalent.domi_bootstrap \
@@ -216,14 +323,15 @@ _seektalent_offline_install() {
   echo "SeekTalent version: ${installed_version}"
   echo "OpenCLI version: ${installed_opencli_version}"
   echo "OpenCLI Browser Bridge version: ${installed_extension_version}"
+  echo "OpenCLI Browser Bridge build: ${browser_bridge_build_id}"
   echo "Chrome extension directory: ${extension_install_dir}"
   echo "Chrome setup: open chrome://extensions, enable Developer mode, and choose Load unpacked."
   echo "Run: export SEEKTALENT_DOMI_JWT='<new Domi JWT>'; seektalent workbench"
 }
 
 if _seektalent_offline_install; then
-  unset -f _seektalent_json_value _seektalent_offline_fail _seektalent_offline_install
+  unset -f _seektalent_verify_browser_bridge _seektalent_json_value _seektalent_offline_fail _seektalent_offline_install
   return 0
 fi
-unset -f _seektalent_json_value _seektalent_offline_fail _seektalent_offline_install
+unset -f _seektalent_verify_browser_bridge _seektalent_json_value _seektalent_offline_fail _seektalent_offline_install
 return 1

@@ -12,11 +12,17 @@ jobs:
     timeout-minutes: 30
     env:
       OPENCLI_VERSION: "1.8.6"
-      OPENCLI_EXTENSION_VERSION: "1.0.22"
-      OPENCLI_EXTENSION_SHA256: "9d2e3d053948beab5d97124aa79b1532d2122e33e461eca56cac113afd33207a"
+      OPENCLI_FORK_COMMIT: "ad9d327c971d475e308e71af32e5385cef281e91"
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+
+      - name: Check out the pinned SeekTalent OpenCLI fork
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          repository: FrankQDWang/OpenCLI
+          ref: ${{ env.OPENCLI_FORK_COMMIT }}
+          path: opencli-fork
 
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
@@ -26,10 +32,21 @@ jobs:
         with:
           node-version: "22.14.0"
 
+      - name: Build the paired SeekTalent browser bridge
+        working-directory: opencli-fork
+        run: |
+          npm ci --ignore-scripts
+          npm --prefix extension ci --ignore-scripts
+          npm run build:seektalent-bundle -- --out "$RUNNER_TEMP/opencli-browser-bridge"
+
       - name: Resolve release metadata
         run: |
           VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          OPENCLI_EXTENSION_VERSION="$(python -c 'import json, os, pathlib; print(json.loads((pathlib.Path(os.environ["RUNNER_TEMP"]) / "opencli-browser-bridge/bridge-manifest.json").read_text())["extension"]["version"])')"
+          OPENCLI_BRIDGE_BUILD_ID="$(python -c 'import json, os, pathlib; print(json.loads((pathlib.Path(os.environ["RUNNER_TEMP"]) / "opencli-browser-bridge/bridge-manifest.json").read_text())["bridgeBuildId"])')"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          echo "OPENCLI_EXTENSION_VERSION=${OPENCLI_EXTENSION_VERSION}" >> "$GITHUB_ENV"
+          echo "OPENCLI_BRIDGE_BUILD_ID=${OPENCLI_BRIDGE_BUILD_ID}" >> "$GITHUB_ENV"
           echo "BUNDLE_NAME=seektalent-offline-${VERSION}-macos-x86_64-py313" >> "$GITHUB_ENV"
 
       - name: Require native Intel runner
@@ -50,8 +67,7 @@ jobs:
             --output-dir dist \
             --version "$VERSION" \
             --opencli-version "$OPENCLI_VERSION" \
-            --extension-version "$OPENCLI_EXTENSION_VERSION" \
-            --extension-sha256 "$OPENCLI_EXTENSION_SHA256"
+            --opencli-bundle-dir "$RUNNER_TEMP/opencli-browser-bridge"
 
       - name: Verify archive and bundled checksums
         run: |
@@ -91,6 +107,10 @@ jobs:
           test -f "$EXTENSION_MANIFEST"
           test -f "$HOME/.seektalent/chrome-extension/opencli/dist/background.js"
           test "$("$DOMI_PYTHON" -c 'import json, pathlib, sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text())["version"])' "$EXTENSION_MANIFEST")" = "$OPENCLI_EXTENSION_VERSION"
+
+          BRIDGE_MANIFEST="$HOME/.seektalent/browser-bridge/bridge-manifest.json"
+          test -f "$BRIDGE_MANIFEST"
+          test "$("$DOMI_PYTHON" -c 'import json, pathlib, sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text())["bridgeBuildId"])' "$BRIDGE_MANIFEST")" = "$OPENCLI_BRIDGE_BUILD_ID"
 
           SITE_PACKAGES="$HOME/.seektalent/python-prefix/$VERSION/site-packages"
           PYTHONPATH="$SITE_PACKAGES" "$DOMI_PYTHON" - <<'PY'
