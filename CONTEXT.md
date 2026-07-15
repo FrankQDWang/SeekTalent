@@ -28,6 +28,10 @@ _Avoid_: Marker, lease file
 A browser tab that existed independently of the source run. SeekTalent may use the surrounding Chrome login state but never navigates, repurposes, or closes a user tab.
 _Avoid_: Borrowed tab, reusable tab
 
+**Host tab**:
+An existing `h.liepin.com` user tab used only to identify a host window. It remains a user tab and never becomes owned.
+_Avoid_: Selected tab, borrowed tab
+
 **Host window**:
 An existing user Chrome window in which SeekTalent may place owned tabs. SeekTalent does not own the host window and must never close it.
 _Avoid_: Owned window, automation window
