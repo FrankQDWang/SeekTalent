@@ -4,14 +4,20 @@ import sqlite3
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 
+from seektalent.browser_bridge_manifest import REQUIRED_BROWSER_BRIDGE_CAPABILITIES
 from seektalent.opencli_browser.contracts import (
     BrowserControlScope,
     OpenCliOwnedTab,
     OpenCliTabCloseResult,
 )
-from seektalent.opencli_browser.daemon_transport import OpenCliDaemonResult
+from seektalent.opencli_browser.daemon_transport import (
+    OpenCliBridgeRequirement,
+    OpenCliDaemonClient,
+    OpenCliDaemonResult,
+)
 from seektalent.opencli_browser.lifecycle import (
     OPENCLI_RECLAIM_CLOSE_TIMEOUT_SECONDS,
     BrowserControlLifecycle,
@@ -165,6 +171,35 @@ def test_registry_work_is_also_off_the_run_path(tmp_path: Path) -> None:
     assert elapsed < 0.05
     assert entered.wait(1)
     release.set()
+
+
+def test_shared_lifecycle_reuses_registry_and_bridge_build(tmp_path: Path) -> None:
+    requirement = OpenCliBridgeRequirement(
+        implementation="seektalent-opencli",
+        bridge_build_id="seektalent-opencli-1.8.6+test",
+        protocol_major=1,
+        protocol_minor=0,
+        capabilities=REQUIRED_BROWSER_BRIDGE_CAPABILITIES,
+    )
+    registry_path = tmp_path / "state" / ".." / "browser-control.sqlite3"
+
+    first = BrowserControlLifecycle.shared_from_daemon(
+        registry_path=registry_path,
+        daemon=OpenCliDaemonClient(requirement=requirement),
+    )
+    second = BrowserControlLifecycle.shared_from_daemon(
+        registry_path=registry_path.resolve(strict=False),
+        daemon=OpenCliDaemonClient(requirement=requirement),
+    )
+    upgraded = BrowserControlLifecycle.shared_from_daemon(
+        registry_path=registry_path,
+        daemon=OpenCliDaemonClient(
+            requirement=replace(requirement, bridge_build_id="seektalent-opencli-1.8.6+next")
+        ),
+    )
+
+    assert second is first
+    assert upgraded is not first
 
 
 def test_one_close_failure_does_not_stop_the_next_close(tmp_path: Path) -> None:
