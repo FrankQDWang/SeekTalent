@@ -1,15 +1,16 @@
 (() => {
-  const apiKey = "__seektalentControlledTabLockV1";
-  const requestedDeadline = Number(
-    window.__seektalentControlledTabLockDeadlineAt,
-  );
+  const lockName = "__seektalentControlledTabLockV1";
+  const deadlineName = "__seektalentControlledTabLockDeadlineAt";
+  const requestedDeadline = Number(window[deadlineName]);
+  delete window[deadlineName];
   const initialDeadline = Number.isFinite(requestedDeadline)
     ? requestedDeadline
     : Date.now() + 60_000;
 
-  const existing = window[apiKey];
+  const existing = window[lockName];
   if (existing && typeof existing.updateDeadline === "function") {
     existing.updateDeadline(initialDeadline);
+    existing.setAutomationActive(false);
     return existing.snapshot();
   }
 
@@ -171,9 +172,7 @@
 
   const api = {
     updateDeadline(nextDeadline) {
-      if (Number.isFinite(Number(nextDeadline))) {
-        deadlineAt = Number(nextDeadline);
-      }
+      if (Number.isFinite(Number(nextDeadline))) deadlineAt = Number(nextDeadline);
       render();
       return this.snapshot();
     },
@@ -192,10 +191,7 @@
         installed: !destroyed && host.isConnected,
         automationActive,
         captureMode,
-        remainingSeconds: Math.max(
-          0,
-          Math.ceil((deadlineAt - Date.now()) / 1000),
-        ),
+        remainingSeconds: Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000)),
       };
     },
     destroy() {
@@ -207,11 +203,11 @@
         window.removeEventListener(eventName, blockTrustedInput, true);
       }
       host.remove();
-      delete window[apiKey];
+      delete window[lockName];
     },
   };
 
-  window[apiKey] = api;
+  window[lockName] = api;
   render();
   return api.snapshot();
 })()

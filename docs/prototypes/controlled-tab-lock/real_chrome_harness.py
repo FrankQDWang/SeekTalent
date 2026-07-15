@@ -346,7 +346,9 @@ def main() -> int:
     repo_root = prototype_dir.parents[2]
     opencli_root = repo_root.parent / "OpenCLI"
     main_js = opencli_root / "dist" / "src" / "main.js"
-    overlay_source = (prototype_dir / "controlled_tab_lock.js").read_text(encoding="utf-8")
+    overlay_source = (
+        repo_root / "src" / "seektalent" / "opencli_browser" / "controlled_tab_lock.js"
+    ).read_text(encoding="utf-8")
     node = shutil.which("node")
     if node is None or not main_js.is_file():
         raise SystemExit("Build /Users/frankqdwang/Agents/OpenCLI before running this prototype")

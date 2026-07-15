@@ -36,6 +36,7 @@ OPENCLI_BRIDGE_IMPLEMENTATION = "seektalent-opencli"
 OPENCLI_BRIDGE_PROTOCOL_MAJOR = 1
 REQUIRED_OPENCLI_BRIDGE_CAPABILITIES = frozenset(
     {
+        "browser.operation-deadline.v1",
         "browser.operations.v1",
         "control-fence.v1",
         "tab.close-verified.v1",
@@ -140,7 +141,7 @@ class OpenCliDaemonClient:
                 "POST",
                 "/command",
                 body=body,
-                timeout_seconds=timeout_seconds + 1.0,
+                timeout_seconds=_command_response_timeout(timeout_seconds),
             )
             if payload.get("ok") is not True:
                 self._raise_command_error(status, payload)
@@ -232,6 +233,11 @@ class OpenCliDaemonClient:
                 connection.close()
             except OSError:
                 return
+
+
+def _command_response_timeout(command_timeout_seconds: float) -> float:
+    grace_seconds = min(1.0, max(0.05, command_timeout_seconds * 0.1))
+    return command_timeout_seconds + grace_seconds
 
 
 def load_bridge_requirement(path: Path) -> OpenCliBridgeRequirement:
