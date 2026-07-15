@@ -23,6 +23,8 @@ from seektalent.source_references import SourceReference
 class LiepinResumeSearchSite(Protocol):
     def status(self): ...
 
+    def _begin_browser_control_scope(self) -> None: ...
+
     def session_status_probe(
         self,
         *,
@@ -140,6 +142,7 @@ class LiepinOpenCliResumeRetriever:
         handler = getattr(self._runner, "_handle_liepin_first_page_continuation", None)
         if not callable(handler):
             raise LiepinFirstPageExpansionBoundaryError("liepin_opencli_private_expansion_route_unavailable")
+        self._runner._begin_browser_control_scope()
         envelope = handler(continuation_ref=continuation.opaque_ref,
             detail_open_claim_context=DetailOpenClaimSearchContext(
                 detail_open_claim_ledger=detail_open_claim_ledger,
@@ -183,8 +186,10 @@ class LiepinOpenCliResumeRetriever:
         search: Callable[[LiepinOpenCliResumeRequest], dict[str, object]],
     ) -> LiepinResumeSearchResponse:
         self.ensure_ready()
+        self._runner._begin_browser_control_scope()
         envelope = search(request)
         if _envelope_reason(envelope) in _RECOVERABLE_OPENCLI_READY_REASONS and self._recover_connection():
+            self._runner._begin_browser_control_scope()
             envelope = search(request)
         return _response_from_opencli_envelope(envelope)
 

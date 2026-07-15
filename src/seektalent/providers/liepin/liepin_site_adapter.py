@@ -21,11 +21,13 @@ from seektalent.providers.liepin.first_page_continuation import (
 
 from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 from seektalent.opencli_browser.contracts import (
+    BrowserHostTab,
     OpenCliBrowserConfig,
     OpenCliBrowserError,
     OpenCliBrowserResult,
     OpenCliBrowserTiming,
 )
+from seektalent.opencli_browser.lifecycle import browser_control_key
 from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
@@ -55,6 +57,7 @@ from seektalent.providers.liepin.liepin_opencli_policy import (
     liepin_error_from_opencli_error,
     liepin_result_from_opencli_result,
 )
+from seektalent.providers.liepin.liepin_workflow_site import _LiepinSearchWorkflowSite
 from seektalent.providers.liepin.opencli_local_state import locked_json_update, opencli_state_lock
 from seektalent.providers.liepin.worker_contracts import (
     OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
@@ -126,6 +129,11 @@ class LiepinOpenCliSiteConfig:
     lease_dir: Path | None = None
     artifact_root: Path | None = None
     detail_open_timeout_seconds: int = 90
+    control_key: str = browser_control_key(
+        source_kind="liepin",
+        browser_profile_id="local-chrome-profile",
+        provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+    )
 
 
 @dataclass(frozen=True)
@@ -175,6 +183,7 @@ _RECOVERABLE_TAB_REUSE_REASONS = {
 }
 
 _LIEPIN_SESSION_LOGIN_REQUIRED_REASONS = {
+    "liepin_host_tab_missing",
     "liepin_opencli_login_required",
     "liepin_opencli_identity_intercept",
     "liepin_opencli_risk_page",
@@ -222,6 +231,16 @@ def _opencli_safe_reason(reason: str | None, *, default: str) -> str:
     if clean and clean != "configured":
         return clean
     return default
+
+
+def _is_exact_liepin_host_candidate(candidate: BrowserHostTab) -> bool:
+    parsed = urlparse(candidate.url)
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname == "h.liepin.com"
+        and parsed.username is None
+        and parsed.password is None
+    )
 
 
 def _state_text_for_probe(result: OpenCliBrowserResult) -> str:
@@ -340,6 +359,7 @@ class LiepinSiteAdapter:
         self._browser_config = browser_config
         self._site_config = site_config
         self._automation = automation
+        self._host_page_id: str | None = None
         self._native_filter_clear_signatures_by_scope: dict[str, str] = {}
         self._continuation_store: LiepinFirstPageContinuationStore | None = None
 
@@ -413,6 +433,43 @@ class LiepinSiteAdapter:
     def status(self) -> OpenCliBrowserResult:
         return liepin_result_from_opencli_result(self._automation.status())
 
+    def _begin_browser_control_scope(self) -> None:
+        if not self._automation.daemon_enabled:
+            return
+        self._host_page_id = None
+        self._automation.activate_control_scope(self._site_config.control_key)
+        self._host_page_id = self._select_liepin_host_tab().page_id
+
+    def _select_liepin_host_tab(self) -> BrowserHostTab:
+        try:
+            candidates = self._automation.find_host_tabs("https://h.liepin.com/")
+        except OpenCliBrowserError as exc:
+            raise liepin_error_from_opencli_error(exc) from exc
+        safe_candidates = tuple(
+            candidate
+            for candidate in candidates
+            if _is_exact_liepin_host_candidate(candidate)
+        )
+        windows = {candidate.window_id for candidate in safe_candidates}
+        if not windows:
+            raise OpenCliBrowserError("liepin_host_tab_missing")
+        if len(windows) == 1:
+            selected_window = next(iter(windows))
+        else:
+            focused_windows = {
+                candidate.window_id for candidate in safe_candidates if candidate.window_focused
+            }
+            if len(focused_windows) != 1:
+                raise OpenCliBrowserError("liepin_host_window_ambiguous")
+            selected_window = next(iter(focused_windows))
+        window_candidates = tuple(
+            candidate for candidate in safe_candidates if candidate.window_id == selected_window
+        )
+        active_candidates = tuple(candidate for candidate in window_candidates if candidate.active)
+        if len(active_candidates) == 1:
+            return active_candidates[0]
+        return min(window_candidates, key=lambda candidate: (candidate.url, candidate.page_id))
+
     def session_status_probe(
         self,
         *,
@@ -429,6 +486,22 @@ class LiepinSiteAdapter:
                     status=_session_status_for_liepin_reason(reason),
                     safe_reason_code=reason,
                 )
+        if self._automation.daemon_enabled:
+            try:
+                self._select_liepin_host_tab()
+            except OpenCliBrowserError as exc:
+                reason = _opencli_safe_reason(exc.safe_reason_code, default="liepin_opencli_status_unavailable")
+                return _session_status(
+                    connection_id=connection_id,
+                    status=_session_status_for_liepin_reason(reason),
+                    safe_reason_code=reason,
+                )
+            return _session_status(
+                connection_id=connection_id,
+                status="ready",
+                provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+                safe_reason_code="configured",
+            )
         try:
             opened = self.open_liepin_tab(LIEPIN_RECRUITER_SEARCH_URL)
         except OpenCliBrowserError as exc:
@@ -605,6 +678,16 @@ class LiepinSiteAdapter:
 
     def open_liepin_tab(self, url: str) -> OpenCliBrowserResult:
         self._validate_start_url(url)
+        if self._automation.daemon_enabled:
+            page_id = self._open_new_liepin_tab(url=url)
+            if page_id is None:
+                raise OpenCliBrowserError("liepin_opencli_tab_response_malformed")
+            return OpenCliBrowserResult(
+                ok=True,
+                action="open_liepin_tab",
+                counts={"opened": 1},
+                private_output=page_id,
+            )
         lease = self._read_lease_for_reuse()
         if lease is not None:
             if str(lease.get("url") or "") == url:
@@ -2916,6 +2999,20 @@ class LiepinSiteAdapter:
         before_urls: Mapping[str, str] | None = None,
     ) -> str | None:
         self._validate_start_or_detail_url(url)
+        if self._automation.daemon_enabled:
+            host_page = self._host_page_id
+            if host_page is None:
+                raise OpenCliBrowserError("liepin_opencli_status_unavailable")
+            tab_kind = "detail" if _is_liepin_detail_url(url) else "search"
+            try:
+                owned_tab = self._automation.open_owned_tab(
+                    host_page=host_page,
+                    url=url,
+                    tab_kind=tab_kind,
+                )
+            except OpenCliBrowserError as exc:
+                raise liepin_error_from_opencli_error(exc) from exc
+            return owned_tab.page_id
         if before_urls is None:
             before_urls = self._tab_urls_before_open()
         try:
@@ -3503,155 +3600,6 @@ class LiepinSiteAdapter:
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         if not any(fragment in normalized for fragment in ALLOWED_CLICK_TARGET_FRAGMENTS):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-
-
-@dataclass(frozen=True)
-class _LiepinSearchWorkflowSite:
-    adapter: LiepinSiteAdapter
-
-    def save_liepin_first_page_continuation(self, **kwargs: object) -> ProviderSearchContinuation:
-        return self.adapter._save_liepin_first_page_continuation(**cast(dict, kwargs))
-
-    def load_liepin_first_page_continuation(self, opaque_ref: str):
-        return self.adapter._load_liepin_first_page_continuation(opaque_ref)
-
-    def discard_liepin_first_page_continuation(self, opaque_ref: str) -> None:
-        self.adapter._discard_liepin_first_page_continuation(opaque_ref)
-
-    def mark_liepin_first_page_candidate(self, *, opaque_ref: str, rank: int,
-        state: CandidateState) -> None:
-        self.adapter._mark_liepin_first_page_candidate(opaque_ref=opaque_ref, rank=rank, state=state)
-
-    def append_agent_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
-        self.adapter._append_agent_event(source_run_id, event)
-
-    def search_liepin_cards(
-        self,
-        *,
-        source_run_id: str,
-        query: str,
-        max_pages: int,
-        max_cards: int,
-        native_filters: Mapping[str, object] | None = None,
-    ) -> dict[str, object]:
-        return self.adapter.search_liepin_cards(
-            source_run_id=source_run_id,
-            query=query,
-            max_pages=max_pages,
-            max_cards=max_cards,
-            native_filters=native_filters,
-        )
-
-    def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
-        return self.adapter.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
-
-    def observe_liepin_search_state(self) -> OpenCliBrowserResult:
-        return self.adapter.state()
-
-    def observe_liepin_detail_state(self) -> OpenCliBrowserResult:
-        return self.adapter.state()
-
-    def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
-        return self.adapter._safe_liepin_detail_url_for_ref(ref)
-
-    def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
-        return self.adapter._open_liepin_detail(
-            source_run_id=source_run_id,
-            ref=ref,
-            rank=rank,
-            emit_events=False,
-        )
-
-    def open_liepin_detail_cached_url(
-        self,
-        *,
-        source_run_id: str,
-        ref: str,
-        rank: int,
-        detail_url: str,
-    ) -> OpenCliBrowserResult:
-        return self.adapter._open_liepin_detail_cached_url(
-            source_run_id=source_run_id,
-            ref=ref,
-            rank=rank,
-            detail_url=detail_url,
-            emit_events=False,
-        )
-
-    def wait_liepin_detail_ready(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
-        return self.adapter.wait_liepin_detail_ready(source_run_id=source_run_id, rank=rank)
-
-    def capture_liepin_detail_resume(
-        self,
-        *,
-        source_run_id: str,
-        rank: int,
-        require_ready: bool = True,
-    ) -> OpenCliBrowserResult:
-        if require_ready:
-            return self.adapter.capture_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
-        return self.adapter._capture_liepin_detail_resume(
-            source_run_id=source_run_id,
-            rank=rank,
-            require_ready=False,
-            emit_events=False,
-        )
-
-    def _capture_liepin_detail_resume_claim_aware(
-        self,
-        *,
-        source_run_id: str,
-        rank: int,
-        expected_provider_candidate_key_hash: str,
-        require_ready: bool = True,
-    ) -> OpenCliBrowserResult:
-        return self.adapter._capture_liepin_detail_resume_claim_aware(
-            source_run_id=source_run_id,
-            rank=rank,
-            expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
-            require_ready=require_ready,
-            emit_events=False,
-        )
-
-    def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
-        self.adapter._discard_collected_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
-
-    def restore_liepin_search_page(self) -> str | None:
-        return self.adapter._select_canonical_liepin_search_page()
-
-    def finalize_liepin_resumes(
-        self,
-        *,
-        source_run_id: str,
-        query: str,
-        max_pages: int,
-        max_cards: int,
-        cards_seen: int | None = None,
-        target_resumes: int | None = None,
-    ) -> dict[str, object]:
-        return self.adapter.finalize_liepin_resumes(
-            source_run_id=source_run_id,
-            query=query,
-            max_pages=max_pages,
-            max_cards=max_cards,
-            cards_seen=cards_seen,
-            target_resumes=target_resumes,
-        )
-
-    def blocked_resumes_envelope(
-        self,
-        *,
-        source_run_id: str,
-        query: str,
-        safe_reason_code: str | None,
-        cards_seen: int,
-    ) -> dict[str, object]:
-        return self.adapter._blocked_resumes_envelope(
-            source_run_id=source_run_id,
-            query=query,
-            safe_reason_code=safe_reason_code or "failed_provider_error",
-            cards_seen=cards_seen,
-        )
 
 
 def _is_role_button_command(args: tuple[str, ...]) -> bool:

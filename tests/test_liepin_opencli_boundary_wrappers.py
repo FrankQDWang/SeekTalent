@@ -381,6 +381,11 @@ def test_liepin_opencli_policy_mapping_is_complete() -> None:
         "opencli_selector_not_found": "liepin_opencli_selector_not_found",
         "opencli_selector_ambiguous": "liepin_opencli_selector_ambiguous",
         "opencli_target_not_found": "liepin_opencli_target_not_found",
+        "opencli_host_tab_not_found": "liepin_host_tab_missing",
+        "opencli_host_page_missing": "liepin_host_tab_missing",
+        "opencli_host_window_ambiguous": "liepin_host_window_ambiguous",
+        "opencli_owned_tab_missing": "liepin_owned_tab_missing",
+        "opencli_stale_control_fence": "liepin_opencli_stale_control_fence",
     }
 
 

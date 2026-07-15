@@ -77,6 +77,9 @@ def test_discard_readback_programmer_runtime_error_propagates() -> None:
 
 def test_expansion_rejects_coroutine_from_synchronous_runner_seam() -> None:
     class Runner:
+        def _begin_browser_control_scope(self) -> None:
+            pass
+
         async def _handle_liepin_first_page_continuation(self, **kwargs):
             del kwargs
             return {}
@@ -88,6 +91,9 @@ def test_expansion_rejects_coroutine_from_synchronous_runner_seam() -> None:
 
 def test_expansion_maps_successful_envelope_to_typed_provider_result() -> None:
     class Runner:
+        def _begin_browser_control_scope(self) -> None:
+            pass
+
         def _handle_liepin_first_page_continuation(self, **kwargs):
             del kwargs
             return {"status": "partial", "safe_reason_code": "expansion_partial",
@@ -164,6 +170,10 @@ class FakeOpenCliRunner:
     opened_refs: list[str]
     captured_ranks: list[int]
     artifact_root: Path
+    scope_calls: int = 0
+
+    def _begin_browser_control_scope(self) -> None:
+        self.scope_calls += 1
 
     def status(self) -> OpenCliBrowserResult:
         return OpenCliBrowserResult(ok=True, action="status")
@@ -246,6 +256,7 @@ def test_opencli_retriever_opens_only_target_ranked_details(tmp_path: Path) -> N
 
     assert runner.captured_ranks == [1, 2]
     assert len(response.resumes) == 2
+    assert runner.scope_calls == 1
     assert response.raw_candidate_count == 2
     assert "数据平台 Python resume 1" in response.resumes[0].normalized_text
     assert response.resumes[0].payload["sourceUrl"] == "https://h.liepin.com/resume/showresumedetail/?res_id_encode=test-1"
@@ -945,6 +956,7 @@ def test_opencli_retriever_retries_search_after_extension_recovery(tmp_path: Pat
 
     assert runner.recover_calls == 1
     assert runner.search_calls == 2
+    assert runner.scope_calls == 2
     assert len(response.resumes) == 2
 
 

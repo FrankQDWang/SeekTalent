@@ -1,0 +1,19 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Route Liepin browser runs through fenced managed tabs created in the user's existing logged-in Chrome window.",
+  "rationale": "The provider integration must reject missing or ambiguous Liepin host tabs without creating a new Chrome window, and each retry must start a fresh fenced browser scope. The existing workflow-site facade is moved unchanged out of the oversized site adapter so this feature does not increase that file's maintenance burden.",
+  "red_files": [
+    "src/seektalent/providers/liepin/liepin_opencli_policy.py",
+    "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/providers/liepin/liepin_workflow_site.py",
+    "src/seektalent/providers/liepin/opencli_retriever.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run pytest -q tests/test_liepin_opencli_host_selection.py tests/test_liepin_opencli_retriever.py tests/test_liepin_opencli_boundary_wrappers.py tests/test_liepin_opencli_browser.py tests/test_liepin_opencli_browser_window_policy.py tests/test_liepin_search_workflow.py",
+    "uv run ruff check src/seektalent/providers/liepin tests/test_liepin_opencli_host_selection.py tests/test_liepin_opencli_retriever.py tests/test_liepin_opencli_boundary_wrappers.py",
+    "uv run ty check src/seektalent/providers/liepin/liepin_opencli_policy.py src/seektalent/providers/liepin/liepin_site_adapter.py src/seektalent/providers/liepin/liepin_workflow_site.py src/seektalent/providers/liepin/opencli_retriever.py",
+    "uv run python tools/check_pr_governance.py --base origin/main"
+  ]
+}

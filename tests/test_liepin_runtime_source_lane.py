@@ -417,6 +417,10 @@ class _DeterministicPrivateClaimWorkflowRunner:
         self._empty = empty
         self.opened_subjects: list[str] = []
         self.private_contexts: list[DetailOpenClaimSearchContext] = []
+        self.scope_calls = 0
+
+    def _begin_browser_control_scope(self) -> None:
+        self.scope_calls += 1
 
     def status(self) -> OpenCliBrowserResult:
         return OpenCliBrowserResult(ok=True, action="status")
@@ -523,6 +527,7 @@ def test_zero_card_private_workflow_completes_logical_query_bundle_without_provi
     assert result.status == "completed"
     assert result.candidate_store_updates == {}
     assert result.raw_candidate_count == 0
+    assert runner.scope_calls == 1
     assert [(outcome.status, outcome.raw_candidate_count) for outcome in result.query_execution_outcomes] == [
         ("completed", 0)
     ]
@@ -1054,6 +1059,7 @@ def test_concrete_opencli_private_chain_opens_same_subject_once_across_queries_a
     )
     assert detail_key is not None
     assert runner.opened_subjects == [subject]
+    assert runner.scope_calls == 3
     assert len(runner.private_contexts) == 3
     assert all(context.detail_open_claim_ledger is ledger for context in runner.private_contexts)
     assert sorted(
