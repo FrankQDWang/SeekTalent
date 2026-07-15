@@ -9,8 +9,11 @@ from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from pathlib import Path
 
-from seektalent.opencli_browser.contracts import OpenCliBrowserError
-from seektalent.opencli_browser.daemon_transport import OpenCliBridgeRequirement, load_bridge_requirement
+from seektalent.browser_bridge_manifest import (
+    BrowserBridgeManifestError,
+    BrowserBridgeRequirement,
+    load_browser_bridge_requirement,
+)
 
 
 OPENCLI_PACKAGE = "@jackwener/opencli"
@@ -209,16 +212,18 @@ def _bridge_manifest_path(runtime_root: Path) -> Path:
     return runtime_root.parent / "browser-bridge" / "bridge-manifest.json"
 
 
-def _load_bridge_requirement(path: Path) -> OpenCliBridgeRequirement:
+def _load_bridge_requirement(path: Path) -> BrowserBridgeRequirement:
     try:
-        return load_bridge_requirement(path)
-    except OpenCliBrowserError as exc:
-        raise BootstrapError(f"{exc.safe_reason_code}: Reinstall the SeekTalent browser bridge") from exc
+        return load_browser_bridge_requirement(path)
+    except BrowserBridgeManifestError as exc:
+        raise BootstrapError(
+            f"opencli_bridge_{exc.code}: Reinstall the SeekTalent browser bridge"
+        ) from exc
 
 
 def _verify_runtime_bridge_identity(
     path: Path,
-    requirement: OpenCliBridgeRequirement,
+    requirement: BrowserBridgeRequirement,
 ) -> None:
     try:
         identity = json.loads(path.read_text(encoding="utf-8"))
