@@ -183,7 +183,7 @@ def test_opencli_runtime_setup_wires_daemon_and_lifecycle_once(
 
     monkeypatch.setattr(opencli_launcher, "ensure_opencli_runtime", ensure_runtime)
     monkeypatch.setattr(daemon_process, "connect_installed_opencli_daemon", connect_daemon)
-    monkeypatch.setattr(lifecycle.BrowserControlLifecycle, "from_daemon", build_lifecycle)
+    monkeypatch.setattr(lifecycle.BrowserControlLifecycle, "shared_from_daemon", build_lifecycle)
     settings = make_settings(liepin_worker_mode="opencli")
     client = build_liepin_worker_client(settings)
 
