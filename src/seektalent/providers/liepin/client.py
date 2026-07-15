@@ -398,7 +398,10 @@ def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
 
 def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerClient:
     from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
-    from seektalent.opencli_browser.contracts import OpenCliBrowserConfig
+    from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserError
+    from seektalent.opencli_browser.daemon_process import connect_installed_opencli_daemon
+    from seektalent.opencli_browser.lifecycle import BrowserControlLifecycle
+    from seektalent.opencli_launcher import BootstrapError, ensure_opencli_runtime
     from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
     from seektalent.providers.liepin.liepin_site_adapter import (
@@ -424,13 +427,24 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         artifact_root=settings.artifacts_path,
     )
 
-    return LiepinOpenCliWorkerClient(
-        retriever=LiepinOpenCliResumeRetriever(
+    def build_retriever() -> LiepinOpenCliResumeRetriever:
+        try:
+            runtime = ensure_opencli_runtime()
+            daemon = connect_installed_opencli_daemon(runtime)
+            lifecycle = BrowserControlLifecycle.from_daemon(
+                registry_path=settings.project_root / ".seektalent" / "browser_control.sqlite3",
+                daemon=daemon,
+            )
+        except (BootstrapError, OpenCliBrowserError) as exc:
+            raise _liepin_opencli_setup_error(exc) from exc
+        return LiepinOpenCliResumeRetriever(
             runner=LiepinSiteAdapter(
                 browser_config=browser_config,
                 site_config=site_config,
                 automation=OpenCliBrowserAutomation(
                     config=browser_config,
+                    daemon=daemon,
+                    lifecycle=lifecycle,
                     timing_recorder=LiepinOpenCliTimingRecorder(
                         artifact_root=site_config.artifact_root,
                         writes_local_debug_artifacts=(
@@ -439,10 +453,43 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
                     ),
                 ),
             )
-        ),
+        )
+
+    return LiepinOpenCliWorkerClient(
+        retriever_factory=build_retriever,
         connection_id="liepin-opencli",
         provider_account_hash="liepin-opencli-local",
     )
+
+
+def _liepin_opencli_setup_error(error: Exception) -> LiepinWorkerModeError:
+    from seektalent.opencli_browser.contracts import OpenCliBrowserError
+    from seektalent.opencli_launcher import BootstrapError
+
+    if isinstance(error, BootstrapError):
+        message = str(error)
+        if message.startswith(("domi_node_missing:", "opencli_offline_runtime_missing:")):
+            return LiepinWorkerModeError(
+                "Liepin browser component is unavailable. Reinstall SeekTalent.",
+                code="liepin_opencli_command_missing",
+            )
+        return LiepinWorkerModeError(
+            "Liepin browser component failed integrity checks. Reinstall SeekTalent.",
+            code="liepin_opencli_bootstrap_failed",
+        )
+    if isinstance(error, OpenCliBrowserError):
+        reason_codes = {
+            "opencli_daemon_not_running": "liepin_opencli_daemon_not_running",
+            "opencli_daemon_stale": "liepin_opencli_daemon_stale",
+            "opencli_extension_disconnected": "liepin_opencli_extension_disconnected",
+            "opencli_status_unavailable": "liepin_opencli_status_unavailable",
+        }
+        code = reason_codes.get(error.safe_reason_code, "liepin_opencli_bootstrap_failed")
+        return LiepinWorkerModeError(
+            "Liepin browser bridge is unavailable.",
+            code=code,
+        )
+    raise TypeError("Unsupported Liepin OpenCLI setup error.")
 
 
 def _default_http_json(

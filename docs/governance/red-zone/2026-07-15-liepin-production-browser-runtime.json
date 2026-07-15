@@ -1,0 +1,17 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Wire the Liepin worker to the installed OpenCLI runtime, verified daemon, and non-blocking managed-tab lifecycle.",
+  "rationale": "The production provider must use the offline-installed browser bridge without blocking the event loop during setup. Runtime, daemon, or extension failures remain source-safe Liepin errors, while successful runs retain exact tab ownership and background cleanup.",
+  "red_files": [
+    "src/seektalent/providers/liepin/client.py",
+    "src/seektalent/providers/liepin/opencli_worker_client.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-source-decoupling.sh",
+    "uv run pytest -q tests/test_liepin_worker_client.py tests/test_liepin_opencli_worker_client.py tests/test_liepin_runtime_source_lane.py",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools"
+  ]
+}
