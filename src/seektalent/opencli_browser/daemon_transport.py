@@ -262,27 +262,29 @@ def _validate_requirement(requirement: OpenCliBridgeRequirement) -> None:
 def validate_bridge_status(status: Mapping[str, object], requirement: OpenCliBridgeRequirement) -> None:
     if status.get("ok") is not True:
         raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
-    if status.get("extensionConnected") is not True:
-        raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED)
-    daemon_implementation = status.get("implementation")
-    extension_implementation = status.get("extensionImplementation")
-    if daemon_implementation != requirement.implementation or extension_implementation != requirement.implementation:
+    if status.get("implementation") != requirement.implementation:
         raise OpenCliBrowserError(OPENCLI_BRIDGE_WRONG_IMPLEMENTATION)
-    daemon_build = status.get("bridgeBuildId")
-    extension_build = status.get("extensionBridgeBuildId")
-    if daemon_build != requirement.bridge_build_id or extension_build != requirement.bridge_build_id:
+    if status.get("bridgeBuildId") != requirement.bridge_build_id:
         raise OpenCliBrowserError(OPENCLI_BRIDGE_BUILD_MISMATCH)
-    if not _compatible_protocol(status.get("protocolVersion"), requirement) or not _compatible_protocol(
-        status.get("extensionProtocolVersion"), requirement
-    ):
+    if not _compatible_protocol(status.get("protocolVersion"), requirement):
         raise OpenCliBrowserError(OPENCLI_BRIDGE_PROTOCOL_MISMATCH)
     daemon_capabilities = _string_set(status.get("capabilities"))
-    extension_capabilities = _string_set(status.get("extensionCapabilities"))
-    if daemon_capabilities is None or extension_capabilities is None:
+    if daemon_capabilities is None:
         raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
-    if not requirement.capabilities.issubset(daemon_capabilities) or not requirement.capabilities.issubset(
-        extension_capabilities
-    ):
+    if not requirement.capabilities.issubset(daemon_capabilities):
+        raise OpenCliBrowserError(OPENCLI_BRIDGE_CAPABILITY_MISSING)
+    if status.get("extensionConnected") is not True:
+        raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED)
+    if status.get("extensionImplementation") != requirement.implementation:
+        raise OpenCliBrowserError(OPENCLI_BRIDGE_WRONG_IMPLEMENTATION)
+    if status.get("extensionBridgeBuildId") != requirement.bridge_build_id:
+        raise OpenCliBrowserError(OPENCLI_BRIDGE_BUILD_MISMATCH)
+    if not _compatible_protocol(status.get("extensionProtocolVersion"), requirement):
+        raise OpenCliBrowserError(OPENCLI_BRIDGE_PROTOCOL_MISMATCH)
+    extension_capabilities = _string_set(status.get("extensionCapabilities"))
+    if extension_capabilities is None:
+        raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+    if not requirement.capabilities.issubset(extension_capabilities):
         raise OpenCliBrowserError(OPENCLI_BRIDGE_CAPABILITY_MISSING)
 
 

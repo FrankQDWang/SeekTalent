@@ -202,6 +202,16 @@ def test_validate_bridge_status_rejects_unpaired_daemon_or_extension(
     assert captured.value.safe_reason_code == reason
 
 
+def test_validate_bridge_status_reports_stale_daemon_before_disconnected_extension() -> None:
+    with pytest.raises(OpenCliBrowserError) as captured:
+        validate_bridge_status(
+            _status(extensionConnected=False, bridgeBuildId="stale-build"),
+            _requirement(),
+        )
+
+    assert captured.value.safe_reason_code == OPENCLI_BRIDGE_BUILD_MISMATCH
+
+
 def test_daemon_client_reuses_connection_and_sends_unique_deadlined_commands() -> None:
     connection = _Connection(status_payload=_status())
     factory_calls: list[tuple[str, int, float]] = []

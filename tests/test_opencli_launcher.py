@@ -347,7 +347,7 @@ def test_opencli_subprocess_env_excludes_provider_secrets(
     monkeypatch.setenv("SEEKTALENT_DOMI_LLM_BASE_URL", "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1")
     monkeypatch.setenv("SEEKTALENT_DOMI_LLM_CHANNEL", "seek_talent")
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "text-secret-key")
-    captured_env = opencli_launcher._opencli_subprocess_env(node_bin_dir=node.parent)
+    captured_env = opencli_launcher.opencli_subprocess_env(node_bin_dir=node.parent)
 
     assert "SEEKTALENT_DOMI_JWT" not in captured_env
     assert "SEEKTALENT_DOMI_LLM_BASE_URL" not in captured_env

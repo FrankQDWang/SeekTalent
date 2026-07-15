@@ -40,7 +40,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except BootstrapError as exc:
         print(f"SeekTalent OpenCLI bootstrap failed: {exc}", file=sys.stderr)
         return 127
-    env = _opencli_subprocess_env(node_bin_dir=runtime.node_bin_dir)
+    env = opencli_subprocess_env(node_bin_dir=runtime.node_bin_dir)
     completed = subprocess.run((str(runtime.node), str(runtime.opencli_main), *args), env=env, check=False)
     return completed.returncode
 
@@ -249,7 +249,7 @@ def _probe_opencli_cli(*, node: Path, opencli_main: Path, opencli_version: str) 
     try:
         completed = subprocess.run(
             (str(node), str(opencli_main), "--help"),
-            env=_opencli_subprocess_env(node_bin_dir=node.parent),
+            env=opencli_subprocess_env(node_bin_dir=node.parent),
             check=False,
             capture_output=True,
             text=True,
@@ -373,7 +373,7 @@ def _file_fingerprint(path: Path) -> dict[str, object]:
     }
 
 
-def _opencli_subprocess_env(*, node_bin_dir: Path) -> dict[str, str]:
+def opencli_subprocess_env(*, node_bin_dir: Path) -> dict[str, str]:
     env = os.environ.copy()
     for key in PROVIDER_SECRET_ENV_VARS:
         env.pop(key, None)
