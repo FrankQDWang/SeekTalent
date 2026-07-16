@@ -9,9 +9,9 @@ from seektalent import opencli_launcher
 from seektalent.opencli_browser.daemon_transport import REQUIRED_OPENCLI_BRIDGE_CAPABILITIES
 
 
-def test_managed_opencli_version_is_pinned_to_1_8_6() -> None:
+def test_managed_opencli_version_is_pinned_to_wtscli_0_1_0() -> None:
     assert opencli_launcher.OPENCLI_PACKAGE == "@jackwener/opencli"
-    assert opencli_launcher.OPENCLI_VERSION == "1.8.6"
+    assert opencli_launcher.OPENCLI_VERSION == "0.1.0"
 
 
 def test_ensure_opencli_runtime_rejects_without_domi_node_even_if_system_node_exists(
@@ -230,7 +230,7 @@ def test_installed_opencli_rejects_runtime_from_another_bridge_build(tmp_path: P
     )
     identity_path = opencli_launcher._opencli_bridge_identity_path(install_dir)
     identity = json.loads(identity_path.read_text(encoding="utf-8"))
-    identity["bridgeBuildId"] = "seektalent-opencli-1.8.6+stale"
+    identity["bridgeBuildId"] = "seektalent-opencli-0.1.0+stale"
     identity_path.write_text(json.dumps(identity), encoding="utf-8")
 
     with pytest.raises(opencli_launcher.BootstrapError, match="opencli_bridge_build_mismatch"):
@@ -254,7 +254,7 @@ def test_existing_opencli_must_be_executable_by_domi_node(
         probe_returncode=9,
     )
 
-    with pytest.raises(opencli_launcher.BootstrapError, match="OpenCLI 1\\.8\\.6 usability probe failed"):
+    with pytest.raises(opencli_launcher.BootstrapError, match="WTSCLI 0\\.1\\.0 usability probe failed"):
         opencli_launcher.ensure_opencli_runtime(root=tmp_path / "runtime")
 
 
@@ -367,7 +367,7 @@ def _write_managed_opencli(root: Path) -> Path:
     )
     bridge_identity = {
         "implementation": "seektalent-opencli",
-        "bridgeBuildId": "seektalent-opencli-1.8.6+test",
+        "bridgeBuildId": "seektalent-opencli-0.1.0+test",
         "protocolVersion": {"major": 1, "minor": 0},
         "capabilities": sorted(REQUIRED_OPENCLI_BRIDGE_CAPABILITIES),
     }

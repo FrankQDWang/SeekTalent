@@ -128,7 +128,7 @@ def load_browser_bridge_bundle(root: Path, *, opencli_version: str) -> BrowserBr
     if manifest.get("schemaVersion") != BROWSER_BRIDGE_SCHEMA_VERSION:
         raise RuntimeError("browser bridge manifest has the wrong schema version")
     if manifest.get("implementation") != BROWSER_BRIDGE_IMPLEMENTATION:
-        raise RuntimeError("browser bridge manifest is not the SeekTalent OpenCLI fork")
+        raise RuntimeError("browser bridge manifest is not the SeekTalent WTSCLI fork")
 
     fork_commit = _string(manifest.get("forkCommit"), label="fork commit")
     if not re.fullmatch(r"[0-9a-f]{40}", fork_commit):
@@ -148,7 +148,7 @@ def load_browser_bridge_bundle(root: Path, *, opencli_version: str) -> BrowserBr
 
     cli = _mapping(manifest.get("cli"), label="CLI metadata")
     if cli.get("version") != opencli_version:
-        raise RuntimeError(f"browser bridge CLI must be OpenCLI {opencli_version}")
+        raise RuntimeError(f"browser bridge CLI must be WTSCLI {opencli_version}")
     runtime_package = _bundle_path(root, cli.get("asset"), label="CLI asset")
     if not runtime_package.is_file():
         raise RuntimeError(f"browser bridge CLI asset was not found: {runtime_package}")
@@ -253,7 +253,7 @@ def write_readme(bundle_root: Path, *, version: str, opencli_version: str, exten
 
 目标平台：macOS Intel x86_64、Domi Python 3.13、Domi Node。
 
-本包包含 SeekTalent {version}、全部 macOS Intel Python 依赖、离线 pip、OpenCLI {opencli_version} 完整 runtime，以及 OpenCLI Browser Bridge {extension_version} Chrome 扩展。安装过程不会访问 PyPI、npm、GitHub 或 Chrome Web Store。
+本包包含 SeekTalent {version}、全部 macOS Intel Python 依赖、离线 pip、WTSCLI {opencli_version} 完整 runtime，以及 WTSCLI Browser Bridge {extension_version} Chrome 扩展。安装过程不会访问 PyPI、npm、GitHub 或 Chrome Web Store。
 
 前提：Domi 已安装，Chrome 已安装并登录猎聘。
 
@@ -285,7 +285,7 @@ seektalent workbench
 def build_bundle(args: argparse.Namespace) -> Path:
     repo_root = Path(__file__).resolve().parents[1]
     version = validate_version(args.version or project_version(repo_root), label="SeekTalent version")
-    opencli_version = validate_version(args.opencli_version, label="OpenCLI version")
+    opencli_version = validate_version(args.opencli_version, label="WTSCLI version")
     browser_bridge = load_browser_bridge_bundle(
         args.opencli_bundle_dir,
         opencli_version=opencli_version,
@@ -361,11 +361,11 @@ def build_bundle(args: argparse.Namespace) -> Path:
             or json.loads(bridge_identity.read_text(encoding="utf-8"))["bridgeBuildId"]
             != browser_bridge.bridge_build_id
         ):
-            raise RuntimeError("OpenCLI runtime is incomplete or has the wrong version")
+            raise RuntimeError("WTSCLI runtime is incomplete or has the wrong version")
         native_node_modules = sorted(runtime_root.rglob("*.node"))
         if native_node_modules:
             names = ", ".join(path.name for path in native_node_modules)
-            raise RuntimeError(f"OpenCLI runtime unexpectedly contains native Node modules: {names}")
+            raise RuntimeError(f"WTSCLI runtime unexpectedly contains native Node modules: {names}")
         run(["node", str(opencli_main), "--version"])
         zip_directory(
             runtime_root,
@@ -373,7 +373,7 @@ def build_bundle(args: argparse.Namespace) -> Path:
             include_root=False,
         )
 
-    extension_archive = bundle_root / "chrome-extension" / f"opencli-extension-v{extension_version}.zip"
+    extension_archive = bundle_root / "chrome-extension" / f"wtscli-extension-v{extension_version}.zip"
     zip_directory(browser_bridge.extension_dir, extension_archive, include_root=False)
     extension_sha256 = sha256(extension_archive)
     bridge_manifest = bundle_root / "opencli" / "bridge-manifest.json"
@@ -415,12 +415,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build the SeekTalent macOS Intel offline bundle.")
     parser.add_argument("--output-dir", type=Path, default=Path("dist"))
     parser.add_argument("--version")
-    parser.add_argument("--opencli-version", default="1.8.6")
+    parser.add_argument("--opencli-version", default="0.1.0")
     parser.add_argument(
         "--opencli-bundle-dir",
         type=Path,
         required=True,
-        help="Verified output from the SeekTalent OpenCLI fork's build:seektalent-bundle command.",
+        help="Verified output from the SeekTalent WTSCLI fork's build:seektalent-bundle command.",
     )
     return parser.parse_args()
 

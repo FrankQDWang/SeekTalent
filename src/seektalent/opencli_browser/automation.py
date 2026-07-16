@@ -618,7 +618,13 @@ class OpenCliBrowserAutomation:
             raise OpenCliBrowserError(OPENCLI_TIMEOUT) from exc
         except subprocess.CalledProcessError as exc:
             output = f"{getattr(exc, 'stdout', None) or getattr(exc, 'output', '') or ''}\n{exc.stderr or ''}"
-            if exc.returncode == 127 and "SeekTalent OpenCLI bootstrap failed:" in output:
+            if exc.returncode == 127 and any(
+                marker in output
+                for marker in (
+                    "SeekTalent WTSCLI bootstrap failed:",
+                    "SeekTalent OpenCLI bootstrap failed:",
+                )
+            ):
                 safe_reason_code = OPENCLI_BOOTSTRAP_FAILED
                 raise OpenCliBrowserError(OPENCLI_BOOTSTRAP_FAILED) from exc
             if "Extension" in output and ("not connected" in output or "disconnected" in output):

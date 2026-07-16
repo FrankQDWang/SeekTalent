@@ -17,7 +17,7 @@ from seektalent.browser_bridge_manifest import (
 
 
 OPENCLI_PACKAGE = "@jackwener/opencli"
-OPENCLI_VERSION = "1.8.6"
+OPENCLI_VERSION = "0.1.0"
 VERIFICATION_STAMP_SCHEMA_VERSION = "seektalent.opencli_runtime_verification.v1"
 VERIFICATION_STAMP_FILENAME = ".seektalent-opencli-verified.json"
 RUNTIME_ROOT = Path.home() / ".seektalent" / "opencli-runtime"
@@ -38,7 +38,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         runtime = ensure_opencli_runtime()
     except BootstrapError as exc:
-        print(f"SeekTalent OpenCLI bootstrap failed: {exc}", file=sys.stderr)
+        print(f"SeekTalent WTSCLI bootstrap failed: {exc}", file=sys.stderr)
         return 127
     env = opencli_subprocess_env(node_bin_dir=runtime.node_bin_dir)
     completed = subprocess.run((str(runtime.node), str(runtime.opencli_main), *args), env=env, check=False)
@@ -179,11 +179,11 @@ def _require_installed_opencli(install_dir: Path, *, opencli_version: str) -> Pa
     package_json = _opencli_package_json_path(install_dir)
     if not main.exists() or _package_version(package_json) != opencli_version:
         raise BootstrapError(
-            f"opencli_offline_runtime_missing: Reinstall SeekTalent to restore OpenCLI {opencli_version}"
+            f"opencli_offline_runtime_missing: Reinstall SeekTalent to restore WTSCLI {opencli_version}"
         )
     if not _opencli_bridge_identity_path(install_dir).is_file():
         raise BootstrapError(
-            "opencli_bridge_integrity_failed: Installed OpenCLI has no SeekTalent bridge identity"
+            "opencli_bridge_integrity_failed: Installed WTSCLI has no SeekTalent bridge identity"
         )
     return main
 
@@ -258,11 +258,11 @@ def _probe_opencli_cli(*, node: Path, opencli_main: Path, opencli_version: str) 
             timeout=20,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise BootstrapError(f"OpenCLI {opencli_version} usability probe failed") from exc
+        raise BootstrapError(f"WTSCLI {opencli_version} usability probe failed") from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
         suffix = f": {detail[:500]}" if detail else ""
-        raise BootstrapError(f"OpenCLI {opencli_version} usability probe failed{suffix}")
+        raise BootstrapError(f"WTSCLI {opencli_version} usability probe failed{suffix}")
 
 
 def _verification_stamp_path(install_dir: Path) -> Path:

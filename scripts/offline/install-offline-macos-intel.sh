@@ -160,7 +160,7 @@ _seektalent_offline_install() {
   local app_wheel="${wheelhouse}/seektalent-${version}-py3-none-any.whl"
   local pip_zipapp="${bundle_root}/tools/pip.pyz"
   local opencli_archive="${bundle_root}/opencli/opencli-${opencli_version}-runtime.zip"
-  local extension_archive="${bundle_root}/chrome-extension/opencli-extension-v${extension_version}.zip"
+  local extension_archive="${bundle_root}/chrome-extension/wtscli-extension-v${extension_version}.zip"
   local bridge_manifest_source="${bundle_root}/${browser_bridge_manifest}"
   local required_file
   for required_file in "${app_wheel}" "${pip_zipapp}" "${opencli_archive}" "${extension_archive}" "${bridge_manifest_source}"; do
@@ -212,12 +212,12 @@ _seektalent_offline_install() {
   mkdir -p "${opencli_stage_dir}" || return 1
   unzip -q "${opencli_archive}" -d "${opencli_stage_dir}" || {
     rm -rf "${opencli_stage_dir}"
-    _seektalent_offline_fail "opencli_offline_extract_failed" "Failed to extract the bundled OpenCLI runtime."
+    _seektalent_offline_fail "opencli_offline_extract_failed" "Failed to extract the bundled WTSCLI runtime."
     return 1
   }
   if [[ ! -f "${opencli_stage_main}" ]]; then
     rm -rf "${opencli_stage_dir}"
-    _seektalent_offline_fail "opencli_offline_install_incomplete" "The bundled OpenCLI runtime did not contain the expected entrypoint."
+    _seektalent_offline_fail "opencli_offline_install_incomplete" "The bundled WTSCLI runtime did not contain the expected entrypoint."
     return 1
   fi
 
@@ -256,7 +256,7 @@ _seektalent_offline_install() {
   fi
   if [[ "$("${domi_node}" "${opencli_stage_main}" --version)" != "${opencli_version}" ]]; then
     rm -rf "${opencli_stage_dir}" "${extension_stage_dir}"
-    _seektalent_offline_fail "opencli_offline_probe_failed" "The staged OpenCLI runtime failed its version probe."
+    _seektalent_offline_fail "opencli_offline_probe_failed" "The staged WTSCLI runtime failed its version probe."
     return 1
   fi
 
@@ -315,15 +315,15 @@ _seektalent_offline_install() {
     return 1
   fi
   if [[ "${installed_opencli_version}" != "${opencli_version}" ]]; then
-    _seektalent_offline_fail "opencli_offline_probe_failed" "Expected OpenCLI ${opencli_version} but found ${installed_opencli_version}."
+    _seektalent_offline_fail "opencli_offline_probe_failed" "Expected WTSCLI ${opencli_version} but found ${installed_opencli_version}."
     return 1
   fi
 
   echo "SeekTalent macOS Intel offline install ready."
   echo "SeekTalent version: ${installed_version}"
-  echo "OpenCLI version: ${installed_opencli_version}"
-  echo "OpenCLI Browser Bridge version: ${installed_extension_version}"
-  echo "OpenCLI Browser Bridge build: ${browser_bridge_build_id}"
+  echo "WTSCLI version: ${installed_opencli_version}"
+  echo "WTSCLI Browser Bridge version: ${installed_extension_version}"
+  echo "WTSCLI Browser Bridge build: ${browser_bridge_build_id}"
   echo "Chrome extension directory: ${extension_install_dir}"
   echo "Chrome setup: open chrome://extensions, enable Developer mode, and choose Load unpacked."
   echo "Run: export SEEKTALENT_DOMI_JWT='<new Domi JWT>'; seektalent workbench"

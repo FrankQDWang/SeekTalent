@@ -17,7 +17,7 @@ class BootstrapFailedCommands:
         raise subprocess.CalledProcessError(
             127,
             list(argv),
-            output="SeekTalent OpenCLI bootstrap failed: node is unavailable",
+            output="SeekTalent WTSCLI bootstrap failed: node is unavailable",
             stderr="",
         )
 

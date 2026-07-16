@@ -150,7 +150,7 @@ Required environment variables:
   SEEKTALENT_TEXT_LLM_API_KEY
 
 Default source:
-  Liepin through the local OpenCLI browser bridge. CTS is optional and only required when
+  Liepin through the local WTSCLI browser bridge. CTS is optional and only required when
   SEEKTALENT_PROVIDER_NAME=cts is set explicitly.
 
 Inputs:
@@ -1119,7 +1119,7 @@ def _inspect_payload() -> dict[str, object]:
                 "seektalent workbench --host 0.0.0.0 --lan --allowed-host recruiting.internal",
             ],
             "outputs": "Starts the local API server and serves the packaged Workbench frontend; preflight failures print reason_code diagnostics on stderr.",
-            "side_effects": "Uses the locally installed SeekTalent OpenCLI runtime and may create or update Workbench data under the configured workspace root; it does not download browser components.",
+            "side_effects": "Uses the locally installed SeekTalent WTSCLI runtime and may create or update Workbench data under the configured workspace root; it does not download browser components.",
         },
         "llm-prf-live-validate": {
             "description": "Run the manual live LLM PRF validation harness on checked input cases.",
@@ -1789,7 +1789,7 @@ def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
             raise
         _print_workbench_reason(
             "liepin_opencli_bootstrap_failed",
-            f"OpenCLI/Node 启动失败：{exc}",
+            f"WTSCLI/Node 启动失败：{exc}",
         )
         return False
 
@@ -1800,7 +1800,7 @@ def _workbench_managed_opencli_command(runtime: object, env: Mapping[str, str]) 
     node = getattr(runtime, "node", None) or env.get("SEEKTALENT_OPENCLI_NODE")
     opencli_main = getattr(runtime, "opencli_main", None)
     if node is None or opencli_main is None:
-        raise RuntimeError("OpenCLI runtime did not expose managed Node/main.js paths")
+        raise RuntimeError("WTSCLI runtime did not expose managed Node/main.js paths")
     return shlex.join((str(node), str(opencli_main)))
 
 
@@ -1931,24 +1931,24 @@ def _workbench_reason_message(reason: str) -> str:
         "liepin_opencli_login_required": "猎聘未登录。请在 Chrome 中打开猎聘并完成登录后重试。",
         "liepin_opencli_identity_intercept": "猎聘需要选择身份或企业。请在 Chrome 中处理后重试。",
         "liepin_opencli_risk_page": "猎聘风控或验证码阻断了自动化。请人工完成验证后重试。",
-        "liepin_opencli_extension_disconnected": "未检测到 Chrome 中的 OpenCLI 插件连接。请确认 Chrome 已启动、OpenCLI 插件已安装并启用，然后重试。",
-        "liepin_opencli_daemon_stale": "OpenCLI 浏览器桥接服务状态已过期。请重启 OpenCLI 插件或 Chrome 后重试。",
-        "liepin_opencli_daemon_not_running": "OpenCLI 浏览器桥接服务未运行。请打开 Chrome，并确认 OpenCLI 插件已连接后重试。",
-        "liepin_opencli_bootstrap_failed": "OpenCLI/Node 启动失败。",
-        "liepin_opencli_config_invalid": "SeekTalent OpenCLI 配置无效。",
+        "liepin_opencli_extension_disconnected": "未检测到 Chrome 中的 WTSCLI 插件连接。请确认 Chrome 已启动、WTSCLI 插件已安装并启用，然后重试。",
+        "liepin_opencli_daemon_stale": "WTSCLI 浏览器桥接服务状态已过期。请重启 WTSCLI 插件或 Chrome 后重试。",
+        "liepin_opencli_daemon_not_running": "WTSCLI 浏览器桥接服务未运行。请打开 Chrome，并确认 WTSCLI 插件已连接后重试。",
+        "liepin_opencli_bootstrap_failed": "WTSCLI/Node 启动失败。",
+        "liepin_opencli_config_invalid": "SeekTalent WTSCLI 配置无效。",
         "liepin_opencli_removed_config": "检测到已移除的 Liepin OpenCLI 清理配置。请删除旧的 tab 清理设置后重试。",
-        "liepin_opencli_helper_empty_output": "OpenCLI 浏览器 helper 没有返回结构化输出。",
-        "liepin_opencli_helper_invalid_input": "OpenCLI 浏览器 helper 收到了无效输入。",
-        "liepin_opencli_helper_invalid_output": "OpenCLI 浏览器 helper 返回了无效 JSON。",
-        "liepin_opencli_helper_output_too_large": "OpenCLI 浏览器 helper 输出超过安全传输上限。",
-        "liepin_opencli_malformed_state": "OpenCLI 浏览器桥接返回了无效的猎聘页面状态。",
-        "liepin_opencli_lease_malformed": "OpenCLI 浏览器租约状态无效。请删除过期的 SeekTalent OpenCLI 租约文件后重试。",
-        "liepin_opencli_owned_marker_malformed": "OpenCLI 浏览器受控标签页标记无效。请删除过期的 SeekTalent OpenCLI 租约文件后重试。",
-        "liepin_opencli_tab_response_malformed": "OpenCLI 浏览器标签页命令返回异常。请重启 OpenCLI/Chrome 后重试。",
+        "liepin_opencli_helper_empty_output": "WTSCLI 浏览器 helper 没有返回结构化输出。",
+        "liepin_opencli_helper_invalid_input": "WTSCLI 浏览器 helper 收到了无效输入。",
+        "liepin_opencli_helper_invalid_output": "WTSCLI 浏览器 helper 返回了无效 JSON。",
+        "liepin_opencli_helper_output_too_large": "WTSCLI 浏览器 helper 输出超过安全传输上限。",
+        "liepin_opencli_malformed_state": "WTSCLI 浏览器桥接返回了无效的猎聘页面状态。",
+        "liepin_opencli_lease_malformed": "WTSCLI 浏览器租约状态无效。请删除过期的 SeekTalent WTSCLI 租约文件后重试。",
+        "liepin_opencli_owned_marker_malformed": "WTSCLI 浏览器受控标签页标记无效。请删除过期的 SeekTalent WTSCLI 租约文件后重试。",
+        "liepin_opencli_tab_response_malformed": "WTSCLI 浏览器标签页命令返回异常。请重启 WTSCLI/Chrome 后重试。",
         "liepin_opencli_search_not_ready": "猎聘搜索页面未就绪。请确认当前 Chrome 可以正常打开猎聘人才搜索页。",
         "liepin_opencli_results_not_ready": "猎聘搜索结果尚未就绪。请确认页面加载完成后重试。",
-        "liepin_opencli_timeout": "OpenCLI 浏览器桥接响应超时。",
-    }.get(reason, "OpenCLI/猎聘启动前检查失败。")
+        "liepin_opencli_timeout": "WTSCLI 浏览器桥接响应超时。",
+    }.get(reason, "WTSCLI/猎聘启动前检查失败。")
 
 
 def _print_workbench_reason(reason: str, message: str, *, action: str | None = None) -> None:
