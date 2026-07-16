@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 30
     env:
       WTSCLI_VERSION: "0.1.0"
-      WTSCLI_FORK_COMMIT: "ca73704badbf5fc34ca17703267d6fddb041e2f8"
+      WTSCLI_FORK_COMMIT: "60ae80db9ed96a0813eea12d5e24aa8e5c6ec863"
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
