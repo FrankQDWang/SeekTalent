@@ -1,0 +1,17 @@
+{
+  "schema_version": "seektalent.red_zone_change.v1",
+  "change_type": "boundary_cleanup",
+  "summary": "Adapt Liepin city selection to delayed search suggestions without extending the normal path.",
+  "rationale": "The live Liepin picker updates its input value before replacing the previous suggestion list. This change accepts only a candidate matching the requested city, performs one bounded one-second re-observation before considering the overseas tab, and keeps an unverified required filter isolated to its logical query. The site-specific behavior is extracted from the oversized adapter into a focused module.",
+  "red_files": [
+    "src/seektalent/providers/liepin/liepin_city_picker.py",
+    "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/providers/liepin/opencli_filter_planning.py"
+  ],
+  "verification": [
+    "scripts/verify-red-zone.sh",
+    "uv run pytest -q tests/test_liepin_opencli_city_filter.py tests/test_liepin_opencli_filter_planning.py tests/test_liepin_runtime_source_lane.py",
+    "uv run ruff check src/seektalent/providers/liepin tests/test_liepin_opencli_city_filter.py tests/test_liepin_runtime_source_lane.py",
+    "uv run ty check src/seektalent/providers/liepin/liepin_city_picker.py src/seektalent/providers/liepin/liepin_site_adapter.py"
+  ]
+}

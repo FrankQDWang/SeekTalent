@@ -16,6 +16,7 @@ LIEPIN_FILTER_SECTION_LABELS = {
 RETRYABLE_NATIVE_FILTER_REASONS = frozenset(
     {
         "liepin_opencli_filter_unapplied",
+        "liepin_opencli_fill_verification_failed",
         "liepin_opencli_stale_ref",
         "liepin_opencli_selector_not_found",
         "liepin_opencli_status_unavailable",

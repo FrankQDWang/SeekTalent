@@ -1236,6 +1236,7 @@ async def _run_fixture_two_query_liepin_bundle(
     worker_client: FakeWorker | None = None,
     *,
     build_worker: bool = False,
+    opencli_serial: bool = False,
 ):
     return await run_liepin_logical_query_bundle(
         settings=make_settings(),
@@ -1276,7 +1277,10 @@ async def _run_fixture_two_query_liepin_bundle(
             ),
         ),
         source_budget_policy=RuntimeSourceBudgetPolicy(page_size=30, max_cards=30),
-        liepin_context={"provider_account_hash": "acct_hash_123"},
+        liepin_context={
+            "provider_account_hash": "acct_hash_123",
+            **({"backend_mode": "opencli"} if opencli_serial else {}),
+        },
         worker_client=None if build_worker else worker_client or FakeWorker(),
     )
 
@@ -1327,6 +1331,46 @@ def test_liepin_bundle_preserves_one_execution_outcome_per_logical_query() -> No
 
     assert [item.query_instance_id for item in result.query_execution_outcomes] == ["primary-1", "explore-1"]
     assert all(item.status in {"completed", "partial"} for item in result.query_execution_outcomes)
+
+
+def test_liepin_opencli_bundle_continues_after_one_query_fill_verification_failure() -> None:
+    class OneFillFailureWorker(FakeWorker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.query_ids: list[str] = []
+
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            self.query_ids.append(str(request.provider_context["query_instance_id"]))
+            if len(self.query_ids) == 1:
+                raise LiepinWorkerModeError(
+                    "Liepin city input could not be verified.",
+                    code="liepin_opencli_fill_verification_failed",
+                )
+            return await super().search(
+                request,
+                round_no=round_no,
+                trace_id=trace_id,
+                provider_account_hash=provider_account_hash,
+            )
+
+    worker = OneFillFailureWorker()
+    result = asyncio.run(
+        _run_fixture_two_query_liepin_bundle(
+            worker,
+            opencli_serial=True,
+        )
+    )
+
+    assert worker.query_ids == ["primary-1", "explore-1"]
+    assert [item.status for item in result.query_execution_outcomes] == ["blocked", "completed"]
+    assert result.status == "completed"
 
 
 def test_liepin_bundle_builds_one_worker_for_all_logical_queries(monkeypatch) -> None:
