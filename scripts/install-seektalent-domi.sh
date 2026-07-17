@@ -14,7 +14,7 @@ _seektalent_domi_fail() {
 }
 
 _seektalent_domi_install() {
-  local version="${1:-0.7.47}"
+  local version="${1:-0.7.48}"
   local domi_python="${DOMI_PYTHON:-}"
   local domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
 
