@@ -74,7 +74,10 @@ class ConnectionTracker:
 
 def _track_sqlite_connect(monkeypatch: pytest.MonkeyPatch, module: ModuleType) -> ConnectionTracker:
     tracker = ConnectionTracker()
-    monkeypatch.setattr(module.sqlite3, "connect", tracker.connect)
+    tracked_sqlite = ModuleType("tracked_sqlite3")
+    tracked_sqlite.__dict__.update(sqlite3.__dict__)
+    tracked_sqlite.connect = tracker.connect
+    monkeypatch.setattr(module, "sqlite3", tracked_sqlite)
     return tracker
 
 
