@@ -32,13 +32,13 @@ The current product shape is local-first:
 Recommended for end users:
 
 ```bash
-pipx install seektalent==0.7.31
+pipx install seektalent==0.7.49
 ```
 
 If you prefer a plain Python environment:
 
 ```bash
-pip install seektalent==0.7.31
+pip install seektalent==0.7.49
 ```
 
 ### Domi prepared-machine install
@@ -48,14 +48,14 @@ For the current Domi handoff mode, the user machine only needs Domi installed, C
 Windows PowerShell:
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.31/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.31
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.49/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.49
 seektalent workbench
 ```
 
 macOS shell:
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.31/scripts/install-seektalent-domi.sh") 0.7.31
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.49/scripts/install-seektalent-domi.sh") 0.7.49
 seektalent workbench
 ```
 
@@ -113,6 +113,24 @@ For source checkout development, use the repo-local OpenCLI/React launcher:
 ```bash
 scripts/start-dev-workbench.sh
 ```
+
+For production-package staging on macOS, install the published wheel into a fully isolated home:
+
+```bash
+scripts/install-seektalent-staging.sh 0.7.49
+# In chrome://extensions, load this unpacked extension first:
+# ~/.seektalent-staging/home/.seektalent/chrome-extension/opencli
+~/.seektalent-staging/bin/seektalent-staging --check
+~/.seektalent-staging/bin/seektalent-staging
+```
+
+This path runs the downloaded production wheel, packaged React frontend, production server flags, and the pinned
+WTSCLI browser bridge. It uses standalone Python/Node plus `SEEKTALENT_TEXT_LLM_*` configuration, rejects Domi
+runtime paths, and keeps all staging databases, browser-bridge state, caches, and generated secrets under
+`~/.seektalent-staging`. The WTSCLI Chrome extension is installed under
+`~/.seektalent-staging/home/.seektalent/chrome-extension/opencli`; load that directory as an unpacked Chrome
+extension before running `--check` or live Liepin testing. WTSCLI 0.1.0 still shares port `19825` with legacy OpenCLI, so Domi and
+staging browser bridges cannot run concurrently yet; staging fails closed if that port belongs to another bridge.
 
 The development launcher installs React dependencies with pnpm when needed, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at `apps/web-react/node_modules/.bin/opencli`, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` plus `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, then starts the backend on `127.0.0.1:8012` and the React Workbench on `127.0.0.1:5178`. The user still installs and connects the OpenCLI Chrome extension in their own Chrome profile. When OpenCLI is selected and ready, Liepin behavior is real local browser behavior, not fixture data.
 
@@ -174,7 +192,7 @@ seektalent inspect --json
 Recommended:
 
 ```bash
-pipx install seektalent==0.7.31
+pipx install seektalent==0.7.49
 ```
 
 This gives you the `seektalent` command directly.
@@ -182,7 +200,7 @@ This gives you the `seektalent` command directly.
 ### Python integrators
 
 ```bash
-pip install seektalent==0.7.31
+pip install seektalent==0.7.49
 ```
 
 Then:

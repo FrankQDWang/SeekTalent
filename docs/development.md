@@ -149,6 +149,32 @@ Build packaged Workbench assets before building release distributions:
 python scripts/build_packaged_workbench.py
 ```
 
+## Production-package staging
+
+Use staging when validating the published package without inheriting Domi's Python, Node, JWT, data directories,
+or long-running browser daemon:
+
+```bash
+scripts/install-seektalent-staging.sh 0.7.49
+# In chrome://extensions, load this unpacked extension first:
+# ~/.seektalent-staging/home/.seektalent/chrome-extension/opencli
+~/.seektalent-staging/bin/seektalent-staging --check
+~/.seektalent-staging/bin/seektalent-staging
+```
+
+The installer creates an isolated Python 3.13 environment, downloads the exact `seektalent==<version>` wheel from
+the configured package index, builds the release-pinned WTSCLI bridge, and installs its paired Chrome extension.
+The launcher calls the installed package's production environment builder and packaged UI server, then replaces
+only the Domi LLM adapter with the canonical `SEEKTALENT_TEXT_LLM_*` provider surface. Runtime mode and artifact
+output mode remain `prod`.
+
+Staging state is rooted at `~/.seektalent-staging`; the launcher changes `HOME` to its nested isolated home before
+Python starts. It rejects Node paths under Domi. Load
+`~/.seektalent-staging/home/.seektalent/chrome-extension/opencli` through `chrome://extensions` before running live
+Liepin cases or `--check`. WTSCLI 0.1.0 and legacy OpenCLI still share loopback port `19825`; until WTSCLI transport isolation is
+complete, Domi and staging browser bridges must not run concurrently. The staging launcher verifies port ownership
+and refuses to restart a foreign bridge.
+
 ## Domi Runtime Smoke
 
 ### Prepared-Machine Domi Workbench
@@ -158,14 +184,14 @@ Use this path when the machine already has Domi installed, Chrome is logged in t
 Windows PowerShell:
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.25
+Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.49/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.49
 seektalent workbench
 ```
 
 macOS shell:
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.sh") 0.7.25
+source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.49/scripts/install-seektalent-domi.sh") 0.7.49
 seektalent workbench
 ```
 
@@ -174,11 +200,11 @@ This path does not read Domi Electron storage and does not install a Chrome exte
 When validating from a source checkout, use the checked-in scripts directly:
 
 ```powershell
-. .\scripts\install-seektalent-domi.ps1; Install-SeekTalentDomi -Version 0.7.25
+. .\scripts\install-seektalent-domi.ps1; Install-SeekTalentDomi -Version 0.7.49
 ```
 
 ```bash
-source scripts/install-seektalent-domi.sh 0.7.25
+source scripts/install-seektalent-domi.sh 0.7.49
 ```
 
 Use this smoke only for validating the packaged Workbench shape inside the Domi-provided runtime on a local Mac with Domi installed.

@@ -11,6 +11,13 @@ FRONTEND_PORT="${SEEKTALENT_DEV_FRONTEND_PORT:-5178}"
 OPENCLI_CMD=(uv run python -m seektalent.opencli_launcher)
 OPENCLI_COMMAND_TEXT="uv run python -m seektalent.opencli_launcher"
 
+if [[ -z "${SEEKTALENT_OPENCLI_NODE:-}" && -z "${SEEKTALENT_DOMI_NODE:-}" && -z "${DOMI_NODE:-}" ]]; then
+  SEEKTALENT_OPENCLI_NODE="$(command -v node || true)"
+  if [[ -n "$SEEKTALENT_OPENCLI_NODE" ]]; then
+    export SEEKTALENT_OPENCLI_NODE
+  fi
+fi
+
 cd "$ROOT"
 
 PNPM_CMD=()
@@ -48,7 +55,10 @@ PY
     rm -f "$opencli_cmd_parts"
     exit 1
   fi
-  mapfile -d '' -t OPENCLI_CMD <"$opencli_cmd_parts"
+  OPENCLI_CMD=()
+  while IFS= read -r -d '' part; do
+    OPENCLI_CMD+=("$part")
+  done <"$opencli_cmd_parts"
   rm -f "$opencli_cmd_parts"
 fi
 
