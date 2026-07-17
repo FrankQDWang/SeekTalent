@@ -225,7 +225,7 @@ test("Workbench v2 renders submitted turns before slow POST responses finish", a
   ).toContainText("你好");
   await expect(
     page.getByRole("region", { name: "Agent transcript" }),
-  ).toContainText("正在思考");
+  ).toContainText("正在解析招聘需求，可安全刷新或关闭页面，任务不会重复创建。");
   await expect(page.getByRole("button", { name: "处理中" })).toHaveCount(0);
 
   const pendingCreateRoute = pendingRoutes.create;
