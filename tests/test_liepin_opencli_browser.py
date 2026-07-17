@@ -3278,6 +3278,208 @@ def test_search_liepin_cards_reobserves_search_ref_after_stale_submit(tmp_path: 
     } in trace["events"]
 
 
+def test_search_liepin_cards_recovers_search_surface_after_stale_ref_exhaustion(tmp_path: Path) -> None:
+    search_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    result_state = "[41]<button><span>城市</span></button>\n王** 男 40岁 工作14年 硕士 上海"
+    city_menu_state = "[41]<button><span>城市</span></button>\n[44]<label>上海</label>"
+    city_applied_state = "已选 上海\nid=resultList\n王** 男 40岁 工作14年 硕士 上海"
+    stale = subprocess.CalledProcessError(
+        1,
+        ["opencli"],
+        output='{"error":{"code":"stale_ref","message":"target disappeared"}}',
+    )
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                search_state,
+                search_state,
+                search_state,
+                search_state,
+                result_state,
+                city_menu_state,
+                city_applied_state,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): [stale, stale, stale, '{"clicked":true}'],
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "城市"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "44"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "2"): "{}",
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "3"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": "上海"},
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "29")) == 4
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "44")) == 1
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert {"action_kind": "recover_search_surface", "route_kind": "search"} in trace["events"]
+
+
+def test_search_liepin_cards_bounds_search_surface_recovery(tmp_path: Path) -> None:
+    search_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    stale = subprocess.CalledProcessError(
+        1,
+        ["opencli"],
+        output='{"error":{"code":"stale_ref","message":"target disappeared"}}',
+    )
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [search_state] * 6,
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): [stale] * 6,
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_stale_ref"
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "29")) == 6
+
+
+def test_search_liepin_cards_recovers_after_result_observation_stays_stale(tmp_path: Path) -> None:
+    search_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    result_state = "id=resultList\n王** 男 40岁 工作14年 硕士 上海"
+    stale = subprocess.CalledProcessError(
+        1,
+        ["opencli"],
+        output='{"error":{"code":"stale_ref","message":"target disappeared"}}',
+    )
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                search_state,
+                stale,
+                stale,
+                stale,
+                search_state,
+                result_state,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "succeeded"
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert {"action_kind": "recover_search_surface", "route_kind": "search"} in trace["events"]
+
+
+def test_search_liepin_cards_recovers_and_replays_city_after_filter_stale(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    search_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    result_state = "[41]<button><span>城市</span></button>\nid=resultList\n王** 男 40岁 工作14年 硕士 上海"
+    city_menu_state = "[41]<button><span>城市</span></button>\n[44]<label>上海</label>"
+    city_applied_state = "已选 上海\nid=resultList\n王** 男 40岁 工作14年 硕士 上海"
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                search_state,
+                result_state,
+                search_state,
+                result_state,
+                city_menu_state,
+                city_applied_state,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "--role", "button", "--name", "城市"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "44"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+        }
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+    applied_filters: list[dict[str, object]] = []
+    original_select_filter = runner._select_liepin_native_filter
+
+    def select_filter(*, filter_name, section, label, current_state, events):
+        applied_filters.append({"filter": filter_name, "section": section, "label": label})
+        if len(applied_filters) == 1:
+            raise OpenCliBrowserError("liepin_opencli_stale_ref")
+        return original_select_filter(
+            filter_name=filter_name,
+            section=section,
+            label=label,
+            current_state=current_state,
+            events=events,
+        )
+
+    monkeypatch.setattr(runner, "_select_liepin_native_filter", select_filter)
+
+    envelope = runner.search_liepin_cards(
+        source_run_id="run-1",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+        native_filters={"city": "上海"},
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert applied_filters == [
+        {"filter": "city", "section": "legacy", "label": "上海"},
+        {"filter": "city", "section": "legacy", "label": "上海"},
+    ]
+    assert ("opencli", "browser", "seektalent-liepin", "click", "44") in commands.calls
+    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    assert any(
+        event.get("action_kind") == "verify_native_filter"
+        and event.get("filter") == "city"
+        and event.get("ok") is True
+        for event in trace["events"]
+    )
+
+
 def test_search_liepin_cards_retries_transient_status_after_search_click(tmp_path: Path) -> None:
     state_before = (
         "<span>包含全部关键词</span>\n"

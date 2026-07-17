@@ -46,6 +46,12 @@ import type {
 } from "../lib/api/agentWorkbenchTypes";
 import { safeErrorMessage } from "../lib/api/client";
 import { queryKeys } from "../lib/query/keys";
+import {
+  clearPendingInitialTurn,
+  readPendingInitialTurn,
+  writePendingInitialTurn,
+  type PendingInitialTurn,
+} from "../lib/pendingInitialTurn";
 import { rootRoute } from "./root";
 
 export const conversationRoute = createRoute({
@@ -83,33 +89,64 @@ function NewConversationFlow() {
   const createConversationMutation = useCreateWorkbenchV2Conversation();
   const [homeErrorMessage, setHomeErrorMessage] = useState<string | null>(null);
   const [recoveredHomeMessage, setRecoveredHomeMessage] = useState("");
-  const [pendingInitialTurn, setPendingInitialTurn] = useState<{
-    idempotencyKey: string;
-    message: string;
-  } | null>(null);
+  const [pendingInitialTurn, setPendingInitialTurn] =
+    useState<PendingInitialTurn | null>(readPendingInitialTurn);
+  const recoveryStarted = useRef(false);
+
+  const runPendingInitialTurn = useCallback(
+    async (pending: PendingInitialTurn) => {
+      setPendingInitialTurn(pending);
+      try {
+        const result = await createConversationMutation.mutateAsync({
+          message: pending.message,
+          idempotencyKey: pending.idempotencyKey,
+        });
+        clearPendingInitialTurn(pending.idempotencyKey);
+        setPendingInitialTurn(null);
+        void navigate({
+          params: { conversationId: result.conversation.conversationId },
+          to: "/conversations/$conversationId",
+          replace: true,
+        });
+      } catch (error) {
+        setPendingInitialTurn(null);
+        setRecoveredHomeMessage(pending.message);
+        setHomeErrorMessage(safeWorkbenchV2ErrorMessage(error));
+        throw error;
+      }
+    },
+    [createConversationMutation, navigate],
+  );
+
+  useEffect(() => {
+    if (pendingInitialTurn === null || recoveryStarted.current) {
+      return;
+    }
+    recoveryStarted.current = true;
+    void runPendingInitialTurn(pendingInitialTurn).catch(() => undefined);
+  }, [pendingInitialTurn, runPendingInitialTurn]);
 
   const onHomeSubmit = async (input: HomeStartPanelSubmitInput) => {
     setHomeErrorMessage(null);
     setRecoveredHomeMessage("");
-    const idempotencyKey = createIdempotencyKey();
-    setPendingInitialTurn({ idempotencyKey, message: input.message });
-    try {
-      const result = await createConversationMutation.mutateAsync({
-        message: input.message,
-        idempotencyKey,
-      });
-      setPendingInitialTurn(null);
-      void navigate({
-        params: { conversationId: result.conversation.conversationId },
-        to: "/conversations/$conversationId",
-        replace: true,
-      });
-    } catch (error) {
-      setPendingInitialTurn(null);
+    const stored = readPendingInitialTurn();
+    const pending =
+      stored?.message === input.message
+        ? stored
+        : {
+            idempotencyKey: createIdempotencyKey(),
+            message: input.message,
+            startedAt: new Date().toISOString(),
+          };
+    if (!writePendingInitialTurn(pending)) {
       setRecoveredHomeMessage(input.message);
-      setHomeErrorMessage(safeWorkbenchV2ErrorMessage(error));
-      throw error;
+      setHomeErrorMessage(
+        "浏览器无法保存当前任务，请允许本地存储后再开始寻才。",
+      );
+      throw new Error("workbench_v2_pending_turn_storage_unavailable");
     }
+    recoveryStarted.current = true;
+    await runPendingInitialTurn(pending);
   };
 
   if (pendingInitialTurn !== null) {
@@ -121,6 +158,8 @@ function NewConversationFlow() {
               conversationId: "agentv2_pending",
               idempotencyKey: pendingInitialTurn.idempotencyKey,
               message: pendingInitialTurn.message,
+              statusSummary:
+                "正在解析招聘需求，可安全刷新或关闭页面，任务不会重复创建。",
               step: 1,
             })}
             submittingMessage
@@ -629,11 +668,13 @@ function optimisticTurnEvents({
   conversationId,
   idempotencyKey,
   message,
+  statusSummary = "正在思考",
   step,
 }: {
   conversationId: string;
   idempotencyKey: string;
   message: string;
+  statusSummary?: string;
   step: number;
 }): WorkbenchV2TranscriptEvent[] {
   const now = new Date().toISOString();
@@ -653,7 +694,7 @@ function optimisticTurnEvents({
       type: "assistant_status",
       role: "assistant",
       status: "running",
-      payload: { summary: "正在思考" },
+      payload: { summary: statusSummary },
       createdAt: now,
     },
   ];

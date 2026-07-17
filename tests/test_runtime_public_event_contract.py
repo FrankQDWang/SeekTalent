@@ -450,7 +450,7 @@ def test_runtime_public_event_preserves_source_neutral_identifier() -> None:
     assert event["sourceKind"] == "internal_referrals"
 
 
-def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_unavailable() -> None:
+def test_source_result_public_event_preserves_liepin_stale_reference_failure() -> None:
     from seektalent.source_adapters import public_source_reason_code
 
     event = make_runtime_public_event(
@@ -463,7 +463,7 @@ def test_source_result_public_event_maps_liepin_stale_ref_to_browser_backend_una
         safe_reason_code=public_source_reason_code("liepin_opencli_stale_ref"),
     )
 
-    assert event["safeReasonCode"] == "source_browser_backend_unavailable"
+    assert event["safeReasonCode"] == "source_browser_reference_stale"
 
 
 @pytest.mark.parametrize(

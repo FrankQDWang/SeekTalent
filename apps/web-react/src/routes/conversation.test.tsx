@@ -1,5 +1,67 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { optimisticRequirementActionEvents } from "./conversation";
+import {
+  clearPendingInitialTurn,
+  readPendingInitialTurn,
+  writePendingInitialTurn,
+} from "../lib/pendingInitialTurn";
+
+afterEach(() => {
+  localStorage.clear();
+  vi.restoreAllMocks();
+});
+
+describe("pending initial turn recovery", () => {
+  it("restores the same idempotency key after a page reload", () => {
+    const pending = {
+      idempotencyKey: "create-persisted",
+      message: "上海 AI 平台工程师",
+      startedAt: new Date().toISOString(),
+    };
+
+    writePendingInitialTurn(pending);
+
+    expect(readPendingInitialTurn()).toEqual(pending);
+    clearPendingInitialTurn("create-persisted");
+    expect(readPendingInitialTurn()).toBeNull();
+  });
+
+  it("ignores malformed pending state instead of inventing a new operation", () => {
+    localStorage.setItem(
+      "seektalent.workbench-v2.pending-initial-turn",
+      "{broken",
+    );
+
+    expect(readPendingInitialTurn()).toBeNull();
+    expect(
+      localStorage.getItem("seektalent.workbench-v2.pending-initial-turn"),
+    ).toBeNull();
+  });
+
+  it("removes expired pending state instead of unexpectedly restarting old work", () => {
+    writePendingInitialTurn({
+      idempotencyKey: "create-expired",
+      message: "一小时前的招聘需求",
+      startedAt: new Date(Date.now() - 60 * 60 * 1000 - 1).toISOString(),
+    });
+
+    expect(readPendingInitialTurn()).toBeNull();
+  });
+
+  it("reports when pending state cannot be persisted", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("storage disabled");
+    });
+
+    expect(
+      writePendingInitialTurn({
+        idempotencyKey: "create-unpersisted",
+        message: "上海 AI 平台工程师",
+        startedAt: new Date().toISOString(),
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("optimisticRequirementActionEvents", () => {
   it("shows supplemental requirement extraction immediately when confirming with text", () => {

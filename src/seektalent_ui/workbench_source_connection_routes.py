@@ -50,6 +50,7 @@ RECOVERABLE_LIEPIN_BROWSER_CHANNEL_CODES = frozenset(
         "liepin_opencli_status_unavailable",
         "liepin_opencli_timeout",
         "source_browser_backend_unavailable",
+        "source_browser_reference_stale",
         "source_browser_extension_disconnected",
         "source_browser_timeout",
     }

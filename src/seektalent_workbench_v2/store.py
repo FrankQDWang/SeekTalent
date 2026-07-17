@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,6 +14,9 @@ from seektalent_workbench_v2.models import (
     WorkbenchV2TranscriptEvent,
     WorkbenchV2TranscriptEventInput,
 )
+
+
+TURN_OPERATION_LEASE_DURATION = timedelta(minutes=5)
 
 
 class WorkbenchV2Store:
@@ -134,6 +137,88 @@ class WorkbenchV2Store:
             ).fetchall()
         return [_conversation_from_row(row) for row in rows]
 
+    def try_claim_turn_operation(
+        self,
+        *,
+        operation_key: str,
+        conversation_id: str,
+        owner_token: str,
+    ) -> str:
+        now = datetime.now(UTC)
+        now_iso = now.isoformat(timespec="microseconds")
+        lease_until = (now + TURN_OPERATION_LEASE_DURATION).isoformat(timespec="microseconds")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT status, lease_until FROM workbench_v2_turn_operations WHERE operation_key = ?",
+                (operation_key,),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    """
+                    INSERT INTO workbench_v2_turn_operations (
+                        operation_key, conversation_id, owner_token, status, lease_until, updated_at
+                    ) VALUES (?, ?, ?, 'running', ?, ?)
+                    """,
+                    (operation_key, conversation_id, owner_token, lease_until, now_iso),
+                )
+                conn.commit()
+                return "claimed"
+            if row["status"] == "completed":
+                conn.commit()
+                return "completed"
+            if row["lease_until"] <= now_iso:
+                conn.execute(
+                    """
+                    UPDATE workbench_v2_turn_operations
+                    SET owner_token = ?, lease_until = ?, updated_at = ?
+                    WHERE operation_key = ?
+                    """,
+                    (owner_token, lease_until, now_iso, operation_key),
+                )
+                conn.commit()
+                return "claimed"
+            conn.commit()
+            return "running"
+
+    def renew_turn_operation(self, *, operation_key: str, owner_token: str) -> bool:
+        now = datetime.now(UTC)
+        lease_until = (now + TURN_OPERATION_LEASE_DURATION).isoformat(timespec="microseconds")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                """
+                UPDATE workbench_v2_turn_operations
+                SET lease_until = ?, updated_at = ?
+                WHERE operation_key = ? AND owner_token = ? AND status = 'running'
+                """,
+                (lease_until, now.isoformat(timespec="microseconds"), operation_key, owner_token),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+
+    def complete_turn_operation(self, *, operation_key: str, owner_token: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                UPDATE workbench_v2_turn_operations
+                SET status = 'completed', updated_at = ?
+                WHERE operation_key = ? AND owner_token = ? AND status = 'running'
+                """,
+                (_now_iso(), operation_key, owner_token),
+            )
+            conn.commit()
+
+    def release_turn_operation(self, *, operation_key: str, owner_token: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "DELETE FROM workbench_v2_turn_operations WHERE operation_key = ? AND owner_token = ?",
+                (operation_key, owner_token),
+            )
+            conn.commit()
+
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
         conn.row_factory = sqlite3.Row
@@ -172,6 +257,15 @@ CREATE TABLE IF NOT EXISTS workbench_v2_idempotency (
     conversation_id TEXT NOT NULL REFERENCES workbench_v2_conversations(id) ON DELETE CASCADE,
     payload_digest TEXT NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workbench_v2_turn_operations (
+    operation_key TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES workbench_v2_conversations(id) ON DELETE CASCADE,
+    owner_token TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running','completed')),
+    lease_until TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_workbench_v2_events_conversation_step

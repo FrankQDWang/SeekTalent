@@ -145,6 +145,117 @@ test("starts clean v2 first-turn conversations without legacy JD routes", async 
     .toBeGreaterThanOrEqual(900);
 });
 
+test("recovers a pending first turn in a new tab with the same idempotency key", async ({
+  context,
+  page,
+}) => {
+  const createRequests: Record<string, unknown>[] = [];
+  const snapshot = v2FirstTurnSnapshot("agentv2_recovered");
+  let releaseFirstRequest: () => void = () => undefined;
+  const firstRequestGate = new Promise<void>((resolve) => {
+    releaseFirstRequest = resolve;
+  });
+
+  await context.route("**/api/agent/workbench/conversations", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { conversations: [] },
+    });
+  });
+  await context.route(
+    "**/api/agent/workbench/v2/conversations",
+    async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.fulfill({
+          contentType: "application/json",
+          json: { schemaVersion: "agent.workbench.v2.list", conversations: [] },
+        });
+        return;
+      }
+      createRequests.push(
+        route.request().postDataJSON() as Record<string, unknown>,
+      );
+      if (createRequests.length === 1) {
+        await firstRequestGate;
+        await route
+          .fulfill({
+            contentType: "application/json",
+            json: snapshot,
+            status: 201,
+          })
+          .catch(() => undefined);
+        return;
+      }
+      await route.fulfill({
+        contentType: "application/json",
+        json: snapshot,
+        status: 201,
+      });
+    },
+  );
+  await context.route(
+    "**/api/agent/workbench/v2/conversations/agentv2_recovered",
+    async (route) => {
+      await route.fulfill({ contentType: "application/json", json: snapshot });
+    },
+  );
+
+  await page.goto("/");
+  await page.getByLabel("消息、JD 或招聘需求").fill("上海 AI 平台工程师");
+  await page.getByLabel("消息、JD 或招聘需求").press("Enter");
+  await expect(
+    page.getByText(
+      "正在解析招聘需求，可安全刷新或关闭页面，任务不会重复创建。",
+    ),
+  ).toBeVisible();
+
+  const recoveredPage = await context.newPage();
+  failOnPageProblems(recoveredPage);
+  await recoveredPage.goto("/");
+
+  await expect.poll(() => createRequests.length).toBe(2);
+  expect(createRequests[1]?.idempotencyKey).toBe(
+    createRequests[0]?.idempotencyKey,
+  );
+  await expect(recoveredPage).toHaveURL(/\/conversations\/agentv2_recovered$/);
+  releaseFirstRequest();
+});
+
+test("does not start a first turn when browser persistence is unavailable", async ({
+  page,
+}) => {
+  let createRequestCount = 0;
+  await page.addInitScript(() => {
+    Storage.prototype.setItem = () => {
+      throw new DOMException("storage disabled");
+    };
+  });
+  await page.route("**/api/agent/workbench/conversations", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: { conversations: [] },
+    });
+  });
+  await page.route("**/api/agent/workbench/v2/conversations", async (route) => {
+    if (route.request().method() === "POST") {
+      createRequestCount += 1;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      json: { schemaVersion: "agent.workbench.v2.list", conversations: [] },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByLabel("消息、JD 或招聘需求").fill("上海 AI 平台工程师");
+  await page.getByLabel("消息、JD 或招聘需求").press("Enter");
+
+  await expect(page.getByRole("alert")).toContainText(
+    "浏览器无法保存当前任务，请允许本地存储后再开始寻才。",
+  );
+  expect(createRequestCount).toBe(0);
+});
+
 function v2FirstTurnSnapshot(conversationId: string) {
   return {
     schemaVersion: "agent.workbench.v2",

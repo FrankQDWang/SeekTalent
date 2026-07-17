@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from functools import partial
 from time import perf_counter
@@ -65,6 +67,7 @@ RUNTIME_STATUS_UNAVAILABLE_MESSAGE = "暂时无法读取运行状态，请稍后
 RUNTIME_RESULTS_UNAVAILABLE_MESSAGE = "暂时无法读取运行结果，请稍后重试。"
 SERVICE_BOUNDARY_ERRORS = (RuntimeControlError, RuntimeError, ValueError, TypeError, KeyError, AttributeError)
 logger = logging.getLogger(__name__)
+TURN_OPERATION_HEARTBEAT_SECONDS = 30.0
 
 
 class CandidateSummaryReadError(Exception):
@@ -169,20 +172,95 @@ class WorkbenchV2Service:
 
     async def create_conversation(self, message: str, idempotency_key: str | None) -> WorkbenchV2ConversationView:
         conversation = self.store.create_conversation(first_user_text=message, idempotency_key=idempotency_key)
-        self._raise_if_user_event_conflicts(
-            conversation.id,
-            message=message,
-            scope="create",
-            idempotency_key=idempotency_key,
-        )
-        if self._has_terminal_event(conversation.id, scope="create", idempotency_key=idempotency_key):
-            return self.get_conversation(conversation.id)
-        return await self._append_user_and_run_agent(
+        return await self._run_idempotent_turn(
             conversation_id=conversation.id,
             message=message,
             scope="create",
             idempotency_key=idempotency_key,
         )
+
+    async def _run_idempotent_turn(
+        self,
+        *,
+        conversation_id: str,
+        message: str,
+        scope: str,
+        idempotency_key: str | None,
+    ) -> WorkbenchV2ConversationView:
+        if idempotency_key is None:
+            return await self._append_user_and_run_agent(
+                conversation_id=conversation_id,
+                message=message,
+                scope=scope,
+                idempotency_key=None,
+            )
+        operation_key = f"{conversation_id}:{scope}:{idempotency_key}"
+        owner_token = uuid4().hex
+        while True:
+            claim = self.store.try_claim_turn_operation(
+                operation_key=operation_key,
+                conversation_id=conversation_id,
+                owner_token=owner_token,
+            )
+            if claim == "completed":
+                self._raise_if_user_event_conflicts(
+                    conversation_id,
+                    message=message,
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                )
+                return self.get_conversation(conversation_id)
+            if claim == "claimed":
+                break
+            await asyncio.sleep(0.05)
+        owner_task = asyncio.current_task()
+        heartbeat = asyncio.create_task(
+            self._renew_turn_operation_lease(
+                operation_key=operation_key,
+                owner_token=owner_token,
+                owner_task=owner_task,
+            )
+        )
+        try:
+            self._raise_if_user_event_conflicts(
+                conversation_id,
+                message=message,
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            if self._has_terminal_event(conversation_id, scope=scope, idempotency_key=idempotency_key):
+                result = self.get_conversation(conversation_id)
+            else:
+                result = await self._append_user_and_run_agent(
+                    conversation_id=conversation_id,
+                    message=message,
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                )
+            self.store.complete_turn_operation(operation_key=operation_key, owner_token=owner_token)
+            return result
+        except BaseException:
+            self.store.release_turn_operation(operation_key=operation_key, owner_token=owner_token)
+            raise
+        finally:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+
+    async def _renew_turn_operation_lease(
+        self,
+        *,
+        operation_key: str,
+        owner_token: str,
+        owner_task: asyncio.Task[object] | None,
+    ) -> None:
+        while True:
+            await asyncio.sleep(TURN_OPERATION_HEARTBEAT_SECONDS)
+            if self.store.renew_turn_operation(operation_key=operation_key, owner_token=owner_token):
+                continue
+            if owner_task is not None:
+                owner_task.cancel()
+            return
 
     async def submit_message(
         self,
@@ -190,15 +268,7 @@ class WorkbenchV2Service:
         message: str,
         idempotency_key: str | None,
     ) -> WorkbenchV2ConversationView:
-        self._raise_if_user_event_conflicts(
-            conversation_id,
-            message=message,
-            scope="submit",
-            idempotency_key=idempotency_key,
-        )
-        if self._has_terminal_event(conversation_id, scope="submit", idempotency_key=idempotency_key):
-            return self.get_conversation(conversation_id)
-        return await self._append_user_and_run_agent(
+        return await self._run_idempotent_turn(
             conversation_id=conversation_id,
             message=message,
             scope="submit",

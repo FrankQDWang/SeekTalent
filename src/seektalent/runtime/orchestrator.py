@@ -247,6 +247,7 @@ _T = TypeVar("_T")
 _PRIOR_CANDIDATE_FINALIZABLE_SOURCE_REASONS = frozenset(
     {
         "source_browser_backend_unavailable",
+        "source_browser_reference_stale",
         "source_browser_extension_disconnected",
         "source_browser_timeout",
     }

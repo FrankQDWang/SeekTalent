@@ -1330,8 +1330,41 @@ class LiepinSiteAdapter:
         max_cards: int,
         native_filters: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
+        first_attempt = self._search_liepin_cards_once(
+            source_run_id=source_run_id,
+            query=query,
+            max_pages=max_pages,
+            max_cards=max_cards,
+            native_filters=native_filters,
+            recovering_search_surface=False,
+        )
+        if first_attempt.get("safe_reason_code") != "liepin_opencli_stale_ref":
+            return first_attempt
+        return self._search_liepin_cards_once(
+            source_run_id=source_run_id,
+            query=query,
+            max_pages=max_pages,
+            max_cards=max_cards,
+            native_filters=native_filters,
+            recovering_search_surface=True,
+        )
+
+    def _search_liepin_cards_once(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        max_pages: int,
+        max_cards: int,
+        native_filters: Mapping[str, object] | None,
+        recovering_search_surface: bool,
+    ) -> dict[str, object]:
         safe_run_id = _safe_artifact_segment(source_run_id)
-        events: list[dict[str, object]] = []
+        events: list[dict[str, object]] = (
+            [{"action_kind": "recover_search_surface", "route_kind": "search"}]
+            if recovering_search_surface
+            else []
+        )
         pages_visited = 0
         try:
             self._validate_keyword_text(query)
@@ -1656,10 +1689,12 @@ class LiepinSiteAdapter:
 
             def observe_results_post_state() -> LiepinStateSnapshot:
                 nonlocal final_state
+                last_retry_reason = "liepin_opencli_status_unavailable"
                 for attempt_index in range(3):
                     try:
                         observed_state = self.state()
                     except OpenCliBrowserError as exc:
+                        last_retry_reason = exc.safe_reason_code
                         events.append(
                             {
                                 "action_kind": "observe_results_retry",
@@ -1702,6 +1737,7 @@ class LiepinSiteAdapter:
                                     }
                                 )
                             except OpenCliBrowserError as exc:
+                                last_retry_reason = exc.safe_reason_code
                                 events.append(
                                     {
                                         "action_kind": "observe_results_retry",
@@ -1722,6 +1758,7 @@ class LiepinSiteAdapter:
                         final_state = observed_state
                         return snapshot
                     if observed_state.safe_reason_code == "liepin_opencli_status_unavailable" and attempt_index < 2:
+                        last_retry_reason = observed_state.safe_reason_code
                         events.append(
                             {
                                 "action_kind": "observe_results_retry",
@@ -1734,7 +1771,7 @@ class LiepinSiteAdapter:
                 return LiepinStateSnapshot(
                     ok=False,
                     text="",
-                    safe_reason_code="liepin_opencli_status_unavailable",
+                    safe_reason_code=last_retry_reason,
                 )
 
             observe_results = self._run_liepin_transition(
@@ -2040,12 +2077,11 @@ class LiepinSiteAdapter:
                 )
             except OpenCliBrowserError as exc:
                 safe_reason_code = exc.safe_reason_code
-                if exc.safe_reason_code in {
+                if exc.safe_reason_code != "liepin_opencli_stale_ref" and exc.safe_reason_code in {
                     "liepin_opencli_filter_option_unavailable",
                     "liepin_opencli_filter_unapplied",
                     "liepin_opencli_selector_ambiguous",
                     "liepin_opencli_selector_not_found",
-                    "liepin_opencli_stale_ref",
                     "liepin_opencli_status_unavailable",
                     "liepin_opencli_target_not_found",
                     "liepin_opencli_timeout",

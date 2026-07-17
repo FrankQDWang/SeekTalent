@@ -5,12 +5,14 @@ import json
 import logging
 import inspect
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Sequence, get_args
 
 import pytest
 from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet
 import seektalent_workbench_v2.service as service_module
+import seektalent_workbench_v2.store as store_module
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.models import RuntimeRunRecord
 from seektalent_runtime_control.requirements import RequirementDraft, RequirementDraftItem, RequirementDraftSection
@@ -54,6 +56,30 @@ class FakeAgentLoop:
             }
         )
         return self.outputs.pop(0)
+
+
+class BlockingAgentLoop(FakeAgentLoop):
+    def __init__(self, output: WorkbenchV2AgentOutput) -> None:
+        super().__init__(output)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def run_turn(
+        self,
+        *,
+        conversation_id: str,
+        context_summary: str | None,
+        recent_events: Sequence[WorkbenchV2TranscriptEvent],
+        user_text: str,
+    ) -> WorkbenchV2AgentOutput:
+        self.started.set()
+        await self.release.wait()
+        return await super().run_turn(
+            conversation_id=conversation_id,
+            context_summary=context_summary,
+            recent_events=recent_events,
+            user_text=user_text,
+        )
 
 
 class FakeRuntimeService:
@@ -1426,6 +1452,64 @@ def test_create_replay_with_only_deduped_user_event_continues_turn(tmp_path: Pat
     assert payload["requirementForm"]["runtimeInput"] == runtime_input
 
 
+def test_concurrent_create_replay_runs_agent_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeDateTime:
+        current = datetime(2026, 7, 17, 4, 0, tzinfo=UTC)
+
+        @classmethod
+        def now(cls, tz: object) -> datetime:
+            assert tz is UTC
+            return cls.current
+
+    async def run_scenario() -> tuple[WorkbenchV2ConversationView, WorkbenchV2ConversationView, int]:
+        first_agent = BlockingAgentLoop(_agent_output(intent="chat", message="已收到招聘需求。"))
+        replay_agent = FakeAgentLoop(_agent_output(intent="chat", message="不应执行。"))
+        first_service = WorkbenchV2Service(
+            store=_store(tmp_path),
+            agent_loop=first_agent,
+            runtime_service=FakeRuntimeService(),
+        )
+        replay_service = WorkbenchV2Service(
+            store=_store(tmp_path),
+            agent_loop=replay_agent,
+            runtime_service=FakeRuntimeService(),
+        )
+        renewed = asyncio.Event()
+        original_renew = first_service.store.renew_turn_operation
+
+        def renew_turn_operation(*, operation_key: str, owner_token: str) -> bool:
+            result = original_renew(operation_key=operation_key, owner_token=owner_token)
+            renewed.set()
+            return result
+
+        monkeypatch.setattr(first_service.store, "renew_turn_operation", renew_turn_operation)
+
+        first = asyncio.create_task(first_service.create_conversation("上海 AI 平台工程师", "same-create"))
+        await first_agent.started.wait()
+        await renewed.wait()
+        renewed.clear()
+        FakeDateTime.current = datetime(2026, 7, 17, 4, 4, 59, tzinfo=UTC)
+        await renewed.wait()
+        FakeDateTime.current = datetime(2026, 7, 17, 4, 5, 1, tzinfo=UTC)
+        replay = asyncio.create_task(replay_service.create_conversation("上海 AI 平台工程师", "same-create"))
+        await asyncio.sleep(0)
+        first_agent.release.set()
+        first_view, replay_view = await asyncio.gather(first, replay)
+        return first_view, replay_view, len(first_agent.calls) + len(replay_agent.calls)
+
+    monkeypatch.setattr(service_module, "TURN_OPERATION_HEARTBEAT_SECONDS", 0.001)
+    monkeypatch.setattr(store_module, "datetime", FakeDateTime)
+    monkeypatch.setattr(store_module, "TURN_OPERATION_LEASE_DURATION", timedelta(minutes=5))
+
+    first_view, replay_view, call_count = asyncio.run(run_scenario())
+
+    assert first_view.conversation.conversationId == replay_view.conversation.conversationId
+    assert call_count == 1
+
+
 def test_submit_replay_with_only_deduped_user_event_continues_turn(tmp_path: Path) -> None:
     store = _store(tmp_path)
     conversation = store.create_conversation(first_user_text="你好", idempotency_key="create-submit-replay")
@@ -1470,6 +1554,20 @@ def test_submit_idempotency_conflicts_when_replayed_message_changes(tmp_path: Pa
         asyncio.run(service.submit_message(conversation.id, "另一个补充需求", idempotency_key="submit-conflict"))
 
     assert service.agent_loop.calls == []
+
+
+def test_completed_submit_rejects_replay_with_different_message(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    conversation = store.create_conversation(first_user_text="你好", idempotency_key="create-completed-conflict")
+    agent = FakeAgentLoop(_agent_output(intent="chat", message="已记录补充需求。"))
+    service = WorkbenchV2Service(store=store, agent_loop=agent, runtime_service=FakeRuntimeService())
+
+    asyncio.run(service.submit_message(conversation.id, "原始补充需求", idempotency_key="submit-completed"))
+
+    with pytest.raises(ValueError, match="workbench_v2_idempotency_conflict"):
+        asyncio.run(service.submit_message(conversation.id, "另一个补充需求", idempotency_key="submit-completed"))
+
+    assert len(agent.calls) == 1
 
 
 def test_extract_failure_appends_terminal_error_without_request_failure(tmp_path: Path) -> None:

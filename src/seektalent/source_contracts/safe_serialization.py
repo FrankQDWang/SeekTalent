@@ -49,6 +49,7 @@ _SAFE_REASON_CODES = {
     "provider_rank_preserved",
     "source_age_filter_unsupported",
     "source_browser_backend_unavailable",
+    "source_browser_reference_stale",
     "source_browser_timeout",
     "source_card_candidate",
     "source_detail_candidate",

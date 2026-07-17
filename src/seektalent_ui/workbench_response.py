@@ -489,6 +489,7 @@ def source_runtime_warning_message(reason_code: str) -> str | None:
     if reason_code in {
         "source_browser_timeout",
         "source_browser_backend_unavailable",
+        "source_browser_reference_stale",
         "source_browser_extension_disconnected",
         "source_browser_policy_blocked",
         "source_risk_or_verification_required",

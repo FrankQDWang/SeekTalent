@@ -47,6 +47,7 @@ _PUBLIC_SOURCE_REASON_CODES = {
     "source_account_mismatch",
     "source_browser_timeout",
     "source_browser_backend_unavailable",
+    "source_browser_reference_stale",
     "source_browser_extension_disconnected",
     "source_browser_policy_blocked",
     "source_risk_or_verification_required",
@@ -457,6 +458,8 @@ def _failure_reason(reason: str | None, *, source_label: str, blocked: bool) -> 
         return f"{source_label}浏览器桥扩展未连接，请确认扩展已连接后重试。"
     if reason == "source_browser_backend_unavailable":
         return f"{source_label}浏览器桥暂不可用，系统会先尝试恢复连接；如果仍失败，请稍后重试。"
+    if reason == "source_browser_reference_stale":
+        return f"{source_label}页面引用持续失效，系统已尝试重开搜索页；请刷新猎聘页面后重试。"
     if reason in {"source_filter_unavailable", "source_filter_partial", "source_filter_unsupported"}:
         return f"{source_label}筛选条件未成功应用，请刷新页面后重试。"
     if reason == "source_browser_timeout":
