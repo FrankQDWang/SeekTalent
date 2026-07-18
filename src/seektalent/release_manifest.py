@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import PurePosixPath
-from typing import Annotated, Literal, LiteralString, Self
+from typing import Annotated, Literal, LiteralString, Self, TypeVar
 
 import rfc8785
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -658,11 +658,34 @@ class ReleaseManifestV1(StrictModel):
     ) -> Self:
         if isinstance(obj, Mapping):
             raise ReleaseManifestError(ReleaseManifestReason.RAW_INPUT_REQUIRED)
-        return super().model_validate(
+        return BaseModel.model_validate.__func__(
+            cls,
             obj,
             strict=strict,
             extra=extra,
             from_attributes=from_attributes,
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
+
+    @classmethod
+    def model_validate_json(
+        cls,
+        json_data: str | bytes | bytearray,
+        *,
+        strict: bool | None = None,
+        extra: Literal["allow", "ignore", "forbid"] | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        by_name: bool | None = None,
+    ) -> Self:
+        if not isinstance(json_data, bytes):
+            raise ReleaseManifestError(ReleaseManifestReason.RAW_INPUT_REQUIRED)
+        # Pydantic-compatible arguments cannot weaken strictness or extra-field rejection at this boundary.
+        return _parse_release_manifest_bytes(
+            cls,
+            json_data,
             context=context,
             by_alias=by_alias,
             by_name=by_name,
@@ -752,9 +775,48 @@ def same_manifest_identity_conflict(existing: ReleaseManifestV1, candidate: Rele
 def parse_release_manifest(raw: bytes) -> ReleaseManifestV1:
     if not isinstance(raw, bytes):
         raise ReleaseManifestError(ReleaseManifestReason.RAW_INPUT_REQUIRED)
+    return _parse_release_manifest_bytes(ReleaseManifestV1, raw)
+
+
+ReleaseManifestModel = TypeVar("ReleaseManifestModel", bound=ReleaseManifestV1)
+
+
+def _parse_release_manifest_bytes(
+    model_cls: type[ReleaseManifestModel],
+    raw: bytes,
+    *,
+    context: object | None = None,
+    by_alias: bool | None = None,
+    by_name: bool | None = None,
+) -> ReleaseManifestModel:
     _strict_json_loads(raw)
+    return _validate_release_manifest_schema(
+        model_cls,
+        raw,
+        context=context,
+        by_alias=by_alias,
+        by_name=by_name,
+    )
+
+
+def _validate_release_manifest_schema(
+    model_cls: type[ReleaseManifestModel],
+    raw: bytes,
+    *,
+    context: object | None,
+    by_alias: bool | None,
+    by_name: bool | None,
+) -> ReleaseManifestModel:
     try:
-        return ReleaseManifestV1.model_validate_json(raw, strict=True)
+        return BaseModel.model_validate_json.__func__(
+            model_cls,
+            raw,
+            strict=True,
+            extra="forbid",
+            context=context,
+            by_alias=by_alias,
+            by_name=by_name,
+        )
     except ValidationError as exc:
         first = exc.errors(include_url=False, include_context=False)[0]
         error_type = str(first["type"])

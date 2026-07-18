@@ -617,5 +617,30 @@ def test_public_boundary_rejects_dict_bypass_but_typed_construction_is_explicit(
         canonical_release_manifest_bytes(payload)  # type: ignore[arg-type]
 
 
+def test_direct_model_validate_json_uses_duplicate_aware_bytes_boundary() -> None:
+    payload = _manifest_payload(TARGETS[0])
+    raw = _raw(payload)
+    duplicate = b'{"schema_version":"invalid",' + raw[1:]
+
+    with pytest.raises(ReleaseManifestError) as raised:
+        ReleaseManifestV1.model_validate_json(duplicate, strict=True)
+
+    assert raised.value.reason == ReleaseManifestReason.DUPLICATE_KEY
+
+
+@pytest.mark.parametrize("raw", ["{}", bytearray(b"{}")])
+def test_direct_model_validate_json_rejects_non_bytes(raw: str | bytearray) -> None:
+    with pytest.raises(ReleaseManifestError) as raised:
+        ReleaseManifestV1.model_validate_json(raw, strict=True)
+
+    assert raised.value.reason == ReleaseManifestReason.RAW_INPUT_REQUIRED
+
+
+def test_direct_model_validate_json_matches_parse_release_manifest() -> None:
+    raw = _raw(_manifest_payload(TARGETS[2]))
+
+    assert ReleaseManifestV1.model_validate_json(raw, strict=True) == parse_release_manifest(raw)
+
+
 def test_existing_storage_canonical_json_behavior_is_unchanged() -> None:
     assert canonical_json({"b": 2, "a": 1}) == '{"a":1,"b":2}'
