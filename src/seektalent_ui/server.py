@@ -245,18 +245,23 @@ def create_app(
 async def _lifespan(app: FastAPI):
     runner = getattr(app.state, "workflow_start_outbox_runner", None)
     extraction_runner = getattr(app.state, "requirement_extraction_outbox_runner", None)
-    if runner is not None:
-        runner.start()
-        runner.wake()
-    if extraction_runner is not None:
-        extraction_runner.start()
+    runtime_runner = getattr(app.state, "workbench_v2_runtime_runner", None)
     try:
+        if runtime_runner is not None:
+            runtime_runner.start()
+        if runner is not None:
+            runner.start()
+            runner.wake()
+        if extraction_runner is not None:
+            extraction_runner.start()
         yield
     finally:
         if extraction_runner is not None:
             extraction_runner.stop()
         if runner is not None:
             runner.stop()
+        if runtime_runner is not None:
+            runtime_runner.stop()
 
 
 def _install_custom_openapi(app: FastAPI) -> None:

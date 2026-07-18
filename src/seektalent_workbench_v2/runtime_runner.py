@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
+from collections.abc import Callable
 from uuid import uuid4
 
 from seektalent_runtime_control.errors import RuntimeControlError
@@ -14,6 +16,11 @@ from seektalent_runtime_control.worker import RuntimeExecutionWorker
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_POLL_INTERVAL_SECONDS = 1.0
+DEFAULT_RECOVERY_INTERVAL_SECONDS = 30.0
+DEFAULT_STOP_TIMEOUT_SECONDS = 5.0
+_EXPECTED_RUNNER_ERRORS = (RuntimeControlError, RuntimeError, ValueError, TypeError, OSError)
+
 
 class WorkbenchV2RuntimeQueueRunner:
     def __init__(
@@ -21,50 +28,97 @@ class WorkbenchV2RuntimeQueueRunner:
         *,
         store: RuntimeControlStore,
         executor: WorkflowRuntimeExecutor,
-        worker_count: int = 1,
+        poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
+        recovery_interval_seconds: float = DEFAULT_RECOVERY_INTERVAL_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
+        if poll_interval_seconds <= 0:
+            raise ValueError("poll_interval_seconds must be positive")
+        if recovery_interval_seconds <= 0:
+            raise ValueError("recovery_interval_seconds must be positive")
         self.store = store
         self.executor = executor
-        self.worker_count = worker_count
+        self.poll_interval_seconds = poll_interval_seconds
+        self.recovery_interval_seconds = recovery_interval_seconds
+        self._monotonic = monotonic
         self._lock = threading.Lock()
-        self._threads: list[threading.Thread] = []
+        self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._wake_event.clear()
+            self._thread = threading.Thread(
+                target=self._run_in_thread,
+                name="seektalent-workbench-v2-runtime-runner",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def stop(self, *, timeout: float = DEFAULT_STOP_TIMEOUT_SECONDS) -> None:
+        self._stop_event.set()
+        self._wake_event.set()
+        with self._lock:
+            thread = self._thread
+        if thread is None or not thread.is_alive():
+            return
+        thread.join(timeout=max(0.0, timeout))
+        if thread.is_alive():
+            logger.warning(
+                "workbench v2 runtime runner did not stop within %.3f seconds; active execution remains lease-governed",
+                timeout,
+            )
 
     def wake(self, runtime_run_id: str | None = None) -> None:
-        with self._lock:
-            self._threads = [thread for thread in self._threads if thread.is_alive()]
-            while len(self._threads) < self.worker_count:
-                self._start_thread(runtime_run_id=runtime_run_id)
+        del runtime_run_id
+        self._wake_event.set()
 
-    def _start_thread(self, *, runtime_run_id: str | None) -> None:
-        thread = threading.Thread(
-            target=self._run_until_idle,
-            kwargs={"runtime_run_id": runtime_run_id},
-            name=f"seektalent-workbench-v2-runtime-runner-{len(self._threads) + 1}",
-            daemon=True,
-        )
-        self._threads.append(thread)
-        thread.start()
+    def _run_in_thread(self) -> None:
+        asyncio.run(self._run_loop())
 
-    def _run_until_idle(self, *, runtime_run_id: str | None) -> None:
-        asyncio.run(self._drain_queue(runtime_run_id=runtime_run_id))
-
-    async def _drain_queue(self, *, runtime_run_id: str | None) -> None:
-        RuntimeRecoveryService(store=self.store).recover_start_timeouts(resume_recoverable=False)
+    async def _run_loop(self) -> None:
+        recovery = RuntimeRecoveryService(store=self.store)
         worker = RuntimeExecutionWorker(
             store=self.store,
             executor=self.executor,
             executor_id_factory=lambda: f"workbenchv2_{uuid4().hex[:12]}",
         )
-        if runtime_run_id is not None:
+        next_recovery_at = 0.0
+        while not self._stop_event.is_set():
+            now = self._monotonic()
+            if now >= next_recovery_at:
+                try:
+                    recovery.recover_start_timeouts(resume_recoverable=False)
+                except _EXPECTED_RUNNER_ERRORS as exc:
+                    logger.warning(
+                        "workbench v2 runtime recovery failed: %s: %s",
+                        type(exc).__name__,
+                        exc,
+                    )
+                next_recovery_at = now + self.recovery_interval_seconds
+
+            if self._stop_event.is_set():
+                break
             try:
-                await worker.run_once(runtime_run_id=runtime_run_id)
-            except (RuntimeControlError, RuntimeError, ValueError, TypeError, OSError) as exc:
-                logger.warning("workbench v2 runtime queue drain failed: %s: %s", type(exc).__name__, exc)
-            return
-        while True:
-            try:
-                if await worker.run_once() is None:
-                    return
-            except (RuntimeControlError, RuntimeError, ValueError, TypeError, OSError) as exc:
-                logger.warning("workbench v2 runtime queue drain failed: %s: %s", type(exc).__name__, exc)
+                runtime_run = await worker.run_once()
+            except _EXPECTED_RUNNER_ERRORS as exc:
+                logger.warning(
+                    "workbench v2 runtime poll failed: %s: %s",
+                    type(exc).__name__,
+                    exc,
+                )
+                self._wait_for_work()
                 continue
+            if runtime_run is not None:
+                continue
+            self._wait_for_work()
+
+    def _wait_for_work(self) -> None:
+        if self._stop_event.is_set():
+            return
+        self._wake_event.wait(self.poll_interval_seconds)
+        self._wake_event.clear()
