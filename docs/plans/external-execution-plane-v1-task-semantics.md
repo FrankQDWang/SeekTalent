@@ -78,7 +78,7 @@ A **run** is one durable execution of an approved product intent. It owns:
 
 - one immutable `runtime_run_id`;
 - one frozen input/requirement revision;
-- selected and required source scope;
+- acceptance-frozen required/optional source scope and required/optional product capabilities/stages;
 - run-control state;
 - zero or one current product outcome;
 - attempt history;
@@ -200,11 +200,13 @@ stateDiagram-v2
     queued --> failed: unrecoverable invariant
 
     starting --> running: executor started
+    starting --> resume_requested: fenced recovery gate
     starting --> needs_attention: concrete user action required
     starting --> cancellation_requested: cancel requested
     starting --> failed: unrecoverable failure
 
     running --> pause_requested: pause requested
+    running --> resume_requested: fenced recovery gate
     running --> needs_attention: concrete user action required
     running --> cancellation_requested: cancel requested
     running --> completed: terminal success commit
@@ -244,10 +246,12 @@ stateDiagram-v2
 | `queued` | `cancelled` | Cancellation commits before any attempt owns the run. |
 | `queued` | `failed` | Durable input or storage invariant prevents execution. |
 | `starting` | `running` | Active fenced attempt confirms executor start. |
+| `starting` | `resume_requested` | Main recovery has irreversibly invalidated the old lease/fence, validated the checkpoint and other authorities, observed that cancel did not win, and either resolved ambiguous effects or parks them under `reconcile_first`. |
 | `starting` | `needs_attention` | A concrete user action is known and checkpointed. |
 | `starting` | `cancellation_requested` | Cancellation accepted while attempt is active. |
 | `starting` | `failed` | Failure is terminal under section 11. |
 | `running` | `pause_requested` | Pause command accepted. |
+| `running` | `resume_requested` | Main recovery has irreversibly invalidated the old lease/fence, validated the checkpoint and other authorities, observed that cancel and pending pause did not win, and either resolved ambiguous effects or parks them under `reconcile_first`. |
 | `running` | `needs_attention` | User-action state commits at a safe boundary. |
 | `running` | `cancellation_requested` | Cancellation command accepted. |
 | `running` | `completed` | Terminal outcome and coverage commit atomically. |
@@ -280,11 +284,13 @@ Idempotent replay may return the already committed state without emitting a new 
 | `starting` to `running` | active fenced executor | stale attempt, sidecar lifecycle observer |
 | request to `pause_requested`, `resume_requested`, or `cancellation_requested` | main-owned lifecycle command service with command idempotency and state preconditions | source adapter, browser extension, Failure Envelope |
 | safe-boundary transition to `paused`, `needs_attention`, or `cancelled` | active fenced executor in the atomic boundary commit, or main recovery service after proving no active executor | unfenced worker code, sidecar journal alone |
-| recovery to `resume_requested` | main-owned recovery service after checkpoint, retry posture, and authority validation | sidecar restart loop, client retry |
+| `starting`/`running` recovery to `resume_requested` | main-owned recovery service after the old lease/fence is durably `expired`, `released`, or `revoked`; checkpoint and all other authorities validate; cancel has not won; no pending pause must be applied; every ambiguous effect is reconciled or durably remains `reconcile_first` | active or stale executor, sidecar restart loop, client retry, diagnostic journal by itself |
 | terminal `completed` or `failed` | active fenced finalizer in the terminal transaction; main recovery service may commit `failed` after authority is revoked | stale attempt, UI, delayed source response |
 | no-owner cancellation to `cancelled` | main-owned lifecycle command service or recovery service | source adapter, sidecar process |
 
 The sidecar reports lifecycle and reconciliation facts. It never directly transitions a run.
+
+`resume_requested` is also the only non-terminal parking state for crash recovery from `starting` or `running`. If any source operation remains `reconcile_first`, the run stays `resume_requested` and is ineligible for claim; it does not silently remain `running`, enter `needs_attention`, or traverse an unlisted edge. A conclusive reconciliation result or proved `safe_retry` removes that claim blocker. `pause_requested` is different: after old-authority invalidation, main first applies `cancel > pause > resume`; cancel moves through the listed cancellation edge, otherwise the pending pause commits `paused`. Recovery must not bypass it through `resume_requested`.
 
 ### 6.4 State/outcome invariants
 
@@ -334,15 +340,18 @@ The same start idempotency key with the same canonical start intent returns the 
 
 ## 8. Non-terminal recovery and new attempts
 
-A new attempt in the same run is allowed only when all of the following are true:
+Main recovery may move `starting` or `running` to `resume_requested` only when all of the following are true:
 
 1. the run is non-terminal;
-2. no active, unexpired attempt fence exists;
+2. the old lease/fence is durably and irreversibly `expired`, `released`, or `revoked`;
 3. the latest checkpoint uses a registered safe boundary and passes schema validation;
 4. compact candidate truth referenced by the checkpoint is committed and internally consistent;
-5. every ambiguous external operation is reconciled or remains blocked in `reconcile_first`;
+5. every ambiguous external operation is either conclusively reconciled or durably retains `RetryPosture = reconcile_first`;
 6. profile binding generation, browser control fence, and other current authorities are valid;
-7. cancellation has not won command precedence.
+7. cancellation has not won command precedence;
+8. the run-control state is not `pause_requested`; after a crash in that state, main applies `cancel > pause > resume` and commits cancellation or `paused` instead.
+
+This recovery transition does not itself authorize a new attempt. While any operation remains `reconcile_first`, the run is parked in `resume_requested`, retains no active runtime fence, and the claim query must exclude it. A new attempt in the same run is allowed only after every ambiguity has become a conclusive observed fact or a proved `safe_retry`, and the checkpoint, authority, and cancellation conditions above still hold at claim time.
 
 Claiming the run atomically:
 
@@ -389,9 +398,25 @@ The token becomes invalid when any of these commits:
 - successful claim of a newer attempt;
 - administrative invalidation after a proven invariant violation.
 
-Revocation is monotonic. Clock rollback cannot revive it.
+Revocation is irreversible. Clock rollback cannot revive it.
 
-### 9.4 Late-write rejection
+### 9.4 Store-authoritative lease validity
+
+The current store persists UTC ISO lease expiry and irreversible lease status; it does not persist a cross-process monotonic clock or a durable time high-watermark. This contract does not pretend otherwise.
+
+The implementable v1 authority rule is:
+
+- the lease row must still be durably `active`;
+- run, attempt, lease, token, and expected run/checkpoint revision must match in the same transaction;
+- main storage code, not the executor or diagnostic producer, obtains the UTC decision time used for lease validation;
+- the durable UTC `lease_expires_at` must be later than that store-observed decision time;
+- renewal expiry is computed by main storage from its decision time and a bounded lease duration; executor-supplied `occurred_at`, `observed_at`, heartbeat time, or proposed expiry is never authority;
+- expiry uses a conditional `active -> expired` update and revokes the fence in the same transaction;
+- `expired`, `released`, and `revoked` rows have no transition back to `active`, including after process restart or wall-clock rollback.
+
+A wall-clock rollback while a lease is still durably `active` may delay UTC expiry, but it cannot authorize a competing attempt or revive a non-active fence; this is a bounded liveness/health concern, not permission to infer time from executor events. A future durable high-watermark may reduce that delay, but it is neither claimed as current code nor required to explain v1 safety.
+
+### 9.5 Late-write rejection
 
 A durable executor write succeeds only if one conditional transaction proves:
 
@@ -400,7 +425,7 @@ run is non-terminal
 AND attempt is active
 AND attempt number matches
 AND fence token matches
-AND lease is not expired according to monotonic stored time
+AND the store-observed UTC decision time is before durable lease_expires_at
 AND expected run/checkpoint revision matches when required
 ```
 
@@ -459,7 +484,9 @@ Cleanup, browser release, telemetry export, and artifact retention run afterward
 3. A crash or disconnect after dispatch intent but before a conclusive observation is `reconciliation_unknown` plus `reconcile_first`.
 4. Reconciliation may promote to `safe_retry` only after proving the operation did not happen, or to `no_retry` after observing a conclusive result.
 5. Bounded infrastructure recovery exhaustion is terminal `failed`; it never becomes `needs_attention` merely to keep the run visible.
-6. `needs_attention` requires one concrete action whose completion can resume the same run from a safe checkpoint.
+6. `needs_attention` requires one concrete action whose completion is necessary to finish the frozen required objective and can resume the same run from a safe checkpoint.
+7. Optional source/capability failure or user action cannot downgrade or block an already complete required objective; it remains an optional coverage warning or explicit optional continuation.
+8. A capability or stage is required only if acceptance froze it as required. Recovery/finalization cannot reclassify it after observing success or failure.
 
 ### 11.2 Matrix
 
@@ -467,20 +494,23 @@ Cleanup, browser release, telemetry export, and artifact retention run afterward
 |---|---|---|---|---|
 | Local crash before source dispatch; checkpoint valid | unchanged | `safe_retry` | `resume_requested`, then new attempt | none |
 | Transport disconnect or deadline before dispatch intent commits | unchanged | `safe_retry` | recover from the last safe checkpoint | none |
-| Dispatch may have occurred; result unknown | `reconciliation_unknown` | `reconcile_first` | stay non-terminal while bounded reconciliation runs | none |
-| Transport disconnect or deadline after dispatch intent | `reconciliation_unknown` | `reconcile_first` | do not redispatch; query durable sidecar facts | none |
-| Main or sidecar crashes with an operation in flight | derived from the last durable dispatch/observation fact | `safe_retry` before intent; otherwise `reconcile_first` | recover according to the durable boundary, not process exit type | none |
+| Dispatch may have occurred; result unknown | `reconciliation_unknown` | `reconcile_first` | after old-fence invalidation, park in `resume_requested`; do not claim | none |
+| Transport disconnect or deadline after dispatch intent | `reconciliation_unknown` | `reconcile_first` | after old-fence invalidation, park in `resume_requested`; do not redispatch; query durable sidecar facts | none |
+| Main or sidecar crashes with an operation in flight | derived from the last durable dispatch/observation fact | `safe_retry` before intent; otherwise `reconcile_first` | guarded `starting`/`running -> resume_requested`; park there while reconciliation blocks | none |
 | Reconciliation proves dispatch did not occur | prior fact retained until retry | `safe_retry` | new attempt may continue | none |
 | Reconciliation observes completed operation | `completed` or `partial` | `no_retry` | commit observed facts, continue/finalize | derived in section 12 |
-| Login, CAPTCHA, permission, or binding action is concretely required | `user_action_required` | `no_retry` until action is satisfied | safe checkpoint, release fence, `needs_attention` | `needs_attention` |
-| Source/runtime version cannot execute required contract | `incompatible` | `no_retry` | continue other sources or finalize | `degraded_with_results` or `failed` |
+| Login, CAPTCHA, permission, or binding action is concretely required for the frozen required objective | `user_action_required` | `no_retry` until action is satisfied | safe checkpoint, release fence, `needs_attention` | `needs_attention` |
+| Optional source needs user action after the frozen required objective is complete | `user_action_required` | `no_retry` unless the user explicitly chooses optional continuation | do not block or downgrade finalization | success derived from required coverage, plus warning |
+| Source/runtime version cannot execute a required contract | `incompatible` | `no_retry` | continue other sources or finalize required coverage | `degraded_with_results` with usable committed results; otherwise `failed` |
 | Source completes with zero candidates | `completed` | `no_retry` | record empty coverage | `succeeded_empty` if required objective is covered |
-| Source commits some candidates but cannot finish scope | `partial` | `no_retry` or `reconcile_first` from external facts | continue or intentionally finalize | `degraded_with_results` only with committed usable results |
+| Required source commits some candidates but cannot finish scope | `partial` | `no_retry` or `reconcile_first` from external facts | continue or intentionally finalize | `degraded_with_results` only with committed usable results |
+| Optional source is partial while the frozen required objective is complete | `partial` | derived from its external facts | do not block or downgrade finalization | success derived from required coverage, plus warning |
 | User cancels before claim or while paused/needs-attention | `cancelled` for unfinished operations | `no_retry` | `cancelled` immediately | `cancelled` |
 | User cancels during active execution | pending until safe boundary/reconciliation | `no_retry` | `cancellation_requested`, then `cancelled` | `cancelled` |
 | Runtime/sidecar restart budget exhausted | existing source fact | `no_retry` | `failed` | `failed` |
 | Checkpoint missing, corrupt, unsupported, or internally inconsistent | existing source fact | `no_retry` | `failed` | `failed` |
-| Non-critical LLM step fails after usable candidate truth is committed | no source disposition rewrite | `no_retry` for that model call | finalize only if the product result remains truthful | `degraded_with_results`; otherwise `failed` |
+| Truly optional/non-critical LLM capability fails while the frozen required objective remains complete | no source disposition rewrite | `no_retry` for that model call | preserve completed required capability/source coverage | normal success outcome plus warning |
+| Acceptance-frozen required product capability/stage fails | no source disposition rewrite; update its independent required-capability coverage | `no_retry` for that model call | finalize from required capability plus source coverage | `degraded_with_results` only with usable committed candidates; otherwise `failed` |
 | Cleanup fails after terminal business commit | unchanged | `no_retry` | no run-state rewrite | unchanged terminal outcome |
 
 ### 11.3 Reconcile-first procedure
@@ -492,8 +522,8 @@ Without defining the Source Port wire shape, main applies this fixed procedure:
 3. Reject facts from a stale run attempt or stale runtime/profile/browser authority.
 4. If the journal proves a conclusive operation result, commit the corresponding source disposition and set `no_retry`.
 5. If the journal proves no dispatch occurred, revalidate every current authority and then, and only then, set `safe_retry`.
-6. If facts are missing, contradictory, outside the retained journal range, or cannot prove non-occurrence, remain `reconcile_first`.
-7. When bounded reconciliation is exhausted, finalize from committed candidate truth: `degraded_with_results` when usable results exist, otherwise `failed`.
+6. If facts are missing, contradictory, outside the retained journal range, or cannot prove non-occurrence, retain `RetryPosture = reconcile_first`; crash recovery parks the run in `resume_requested` with no active fence and the claim query excludes it.
+7. When bounded reconciliation is exhausted, finalize from the frozen required objective and committed candidate truth: incomplete required coverage plus usable results is `degraded_with_results`; incomplete required coverage without usable results is `failed`; optional-only uncertainty remains a warning on the normal success outcome.
 
 An empty journal lookup alone is not proof that an external side effect did not occur. The Source Port must provide enough durable evidence to distinguish “not dispatched” from “journal fact unavailable”; section 16 constrains that contract without defining its DTO.
 
@@ -507,7 +537,7 @@ A valid `needs_attention` commit contains, without defining a wire schema here:
 - the checkpoint from which completion can resume;
 - no active runtime attempt fence.
 
-The state is invalid for generic timeouts, retries exhausted, unknown errors, daemon crashes, packaging failures, or unsupported code paths. If no user action can deterministically advance the same run, the state is not `needs_attention`.
+The state is invalid for generic timeouts, retries exhausted, unknown errors, daemon crashes, packaging failures, unsupported code paths, or an optional source/capability action after the frozen required objective is complete. If no user action is necessary to deterministically advance the required objective in the same run, the state is not `needs_attention`.
 
 When the action is satisfied, the control plane revalidates all authorities and moves to `resume_requested`. The worker creates a new attempt; the old attempt never returns.
 
@@ -518,10 +548,14 @@ When the action is satisfied, the control plane revalidates all authorities and 
 Final outcome is derived from immutable finalization inputs:
 
 - required source set and optional source set frozen at acceptance;
+- required product capability/stage set and optional capability/stage set frozen at acceptance;
 - each source's final `SourceOperationDisposition`;
+- independent required product capability/stage coverage; capability failure never rewrites a source disposition;
 - committed compact candidate count and usability gate;
 - unresolved user action or reconciliation state;
 - cancellation precedence.
+
+The **frozen required objective** is the union of acceptance-frozen required sources and required product capabilities/stages. Required/optional classification is immutable for the run: finalization cannot promote a failed optional LLM step into a required path to manufacture degradation, and cannot demote a failed required stage to preserve success.
 
 UI event counts, raw browser rows, temporary files, and uncommitted in-memory candidates are not outcome inputs.
 
@@ -530,7 +564,7 @@ UI event counts, raw browser rows, temporary files, and uncommitted in-memory ca
 Apply in this order:
 
 1. accepted cancellation → `cancelled`;
-2. concrete resumable user action → `needs_attention`;
+2. concrete resumable user action necessary to complete the frozen required objective → `needs_attention`;
 3. active reconciliation or authorized same-run retry → no terminal outcome;
 4. all required work conclusively covered → success mapping;
 5. incomplete required work with usable committed candidates → degradation mapping;
@@ -538,16 +572,19 @@ Apply in this order:
 
 ### 12.3 Matrix
 
-| Required-source coverage | Optional-source coverage | Committed usable candidates | Outcome |
+| Required-source coverage | Required product capability/stage coverage | Committed usable candidates | Outcome |
 |---|---|---:|---|
-| Every required source `completed`; at least one result | any conclusive optional facts | > 0 | `succeeded_with_results` |
-| Every required source `completed`; all required results empty | any conclusive optional facts | 0 | `succeeded_empty` |
-| At least one required source `partial`, `failed`, `incompatible`, or unresolved after bounded reconciliation | any | > 0 | `degraded_with_results` |
-| Required source scope incomplete | any | 0 | `failed` |
-| Required source is `user_action_required` and action is resumable | any | any | `needs_attention` |
+| Every required source `completed`; at least one result | complete | > 0 | `succeeded_with_results` |
+| Every required source `completed`; all required results empty | complete | 0 | `succeeded_empty` |
+| At least one required source `partial`, `failed`, `incompatible`, or unresolved after bounded reconciliation | complete or incomplete | > 0 | `degraded_with_results` |
+| Required sources complete | at least one acceptance-frozen required capability/stage incomplete or failed | > 0 | `degraded_with_results` |
+| Any part of the frozen required objective incomplete | any incomplete required coverage | 0 | `failed` |
+| A required source or required capability/stage is `user_action_required` and its action is resumable | action blocks required objective | any | `needs_attention` |
+| Frozen required objective complete; only optional source/capability needs action or failed | complete | > 0 | `succeeded_with_results` plus optional coverage warning/continuation |
+| Frozen required objective complete; only optional source/capability needs action or failed | complete | 0 | `succeeded_empty` plus optional coverage warning/continuation |
 | Cancellation wins | any | any | `cancelled` |
 
-Optional-source failure alone does not downgrade a fully satisfied required objective. It remains a coverage warning. If the product promise marks that source required, its failure follows the required-source rows above.
+Optional-source or optional-capability failure alone does not downgrade a fully satisfied required objective. Optional `user_action_required` is a coverage warning or user-chosen continuation, not `needs_attention`. If acceptance froze that source/capability as required, it follows the required-objective rows above.
 
 `partial` never means success by itself. Only candidates committed at a safe boundary count toward `degraded_with_results`. A partial source with zero usable committed candidates contributes to `failed` when required coverage is incomplete.
 
@@ -558,7 +595,7 @@ Optional-source failure alone does not downgrade a fully satisfied required obje
 | `succeeded_with_results` | Freeze the terminal committed candidate set. | Show final results and complete required coverage. |
 | `succeeded_empty` | Freeze an empty terminal candidate set and complete coverage. | Show “search completed, no matching candidates”; never show an infrastructure error. |
 | `degraded_with_results` | Freeze only candidates committed at safe checkpoints. | Show usable results plus incomplete required-source coverage; never imply full coverage. |
-| `needs_attention` | Preserve committed candidates and the resumable checkpoint; remain mutable through a future attempt. | Show current partial progress and exactly one action; never render as terminal or still running. |
+| `needs_attention` | Preserve committed candidates and the resumable checkpoint; remain mutable through a future attempt. | Show current partial progress and exactly one action required to complete the frozen required objective; never render as terminal or still running. |
 | `failed` | Retain evidence-safe committed candidates for audit/support and possible explicit linked-rerun import. | Show failure and incomplete coverage. Do not present retained candidates as a successful finalized list. |
 | `cancelled` | Retain evidence-safe committed candidates and coverage as cancellation-time facts. | Show cancelled and, if useful, a labelled retained-progress count; never relabel it degraded success. |
 
@@ -625,7 +662,9 @@ Implementation is not complete until deterministic fault injection proves each i
 - crash after attempt insert but before state/event commit leaves no partial claim;
 - expired attempt cannot heartbeat, checkpoint, write candidates, append output, apply a command, or finalize;
 - a newer attempt with the same `executor_id` still rejects the older token;
-- clock rollback cannot extend or revive a revoked fence;
+- executor-supplied `occurred_at`, `observed_at`, heartbeat time, or proposed expiry cannot extend lease authority;
+- after lease/fence expiry, release, or revocation commits, restart with wall clock moved backward cannot restore `active` or accept the old token;
+- restart plus wall-clock rollback while a lease row is still `active` may delay its durable UTC expiry, but cannot create a second attempt, change its token/revision, or bypass reconciliation;
 - terminal state prevents all future claims.
 
 ### 14.3 Checkpoint crash points
@@ -638,6 +677,10 @@ Implementation is not complete until deterministic fault injection proves each i
 
 ### 14.4 External-effect recovery
 
+- an expired/released/revoked old fence plus a valid checkpoint is required before main recovery can move `starting` or `running` to `resume_requested`;
+- invalid checkpoint, invalid profile/browser authority, winning cancel, or still-active old fence forbids that recovery edge;
+- unresolved `reconcile_first` parks the run in `resume_requested` with no active fence and prevents worker claim until reconciliation becomes conclusive or proves `safe_retry`;
+- crash in `pause_requested` applies `cancel > pause > resume`: cancel follows cancellation edges, otherwise the run becomes `paused`, never `resume_requested`;
 - crash before dispatch intent permits safe retry;
 - crash after dispatch intent and before observation cannot dispatch again;
 - reconciliation observing completion does not repeat the operation;
@@ -658,14 +701,17 @@ Implementation is not complete until deterministic fault injection proves each i
 Generate command, crash, lease-expiry, reconciliation, and source-result sequences and assert:
 
 - every stored state/outcome pair is valid under section 6.4;
+- every actual state change is one edge listed in sections 6.1 and 6.2; recovery cannot create an implicit edge or self-transition;
 - terminal states have no outgoing transition;
 - at most one active fence exists per run;
 - attempt numbers are strictly increasing and never reused;
 - candidate truth visible from a checkpoint is monotonic by committed revision;
 - `safe_retry` is unreachable directly from `reconciliation_unknown` without a reconciliation proof;
-- `needs_attention` always has one action and no active fence;
-- `degraded_with_results` always has at least one usable committed candidate;
-- `succeeded_empty` has complete required coverage and zero committed usable candidates;
+- `needs_attention` always has one action necessary for the frozen required objective and no active fence; optional-only action can never reach it;
+- `degraded_with_results` always has at least one usable committed candidate and at least one incomplete acceptance-frozen required source/capability/stage;
+- `succeeded_with_results` and `succeeded_empty` always have complete frozen required objective coverage, regardless of optional warnings;
+- `succeeded_empty` has zero committed usable candidates;
+- failed optional LLM/source coverage cannot be reclassified as required after acceptance, and failed required coverage cannot be reclassified as optional;
 - cancellation precedence is invariant under command reordering and idempotent replay.
 
 ### 14.7 Crash timeline
@@ -674,9 +720,9 @@ Generate command, crash, lease-expiry, reconciliation, and source-result sequenc
 |---|---|---|
 | T0: start request received | no accepted fact | Client may replay the same start key. |
 | T1: acceptance transaction committed | `queued`, intent digest, initial event/projection | Run exists and is discoverable; replay returns it. |
-| T2: claim transaction committed | `starting`, active attempt/fence, claimed checkpoint | Only that fence may advance the run. |
-| T3: source dispatch intent committed | operation may cross external boundary | Recovery is `reconcile_first`; redispatch is forbidden. |
-| T4: conclusive source observation committed | source disposition is known | Recovery continues from the observed fact and does not repeat the operation. |
+| T2: claim transaction committed | `starting`, active attempt/fence, claimed checkpoint | Only that fence may advance the run. Recovery cannot use `resume_requested` until the fence is durably non-active. |
+| T3: source dispatch intent committed | operation may cross external boundary | After old-fence invalidation, recovery parks the run in `resume_requested` plus `reconcile_first`; worker claim and redispatch are forbidden. |
+| T4: conclusive source observation committed | source disposition is known | Reconciliation removes the claim blocker; recovery continues from the observed fact and does not repeat the operation. |
 | T5: safe checkpoint transaction committed | checkpoint, candidate truth, coverage, boundary event agree | A new attempt may resume from this exact boundary when authorities permit. |
 | T6: terminal transaction committed | outcome, coverage, finalization, event, fence revocation agree | Run is immutable; any further work requires a linked new run. |
 
@@ -706,12 +752,14 @@ A crash between two points is interpreted only from the earlier committed point.
 | `RuntimeRunRecord` and `runtime_control_runs` | Add product outcome, immutable terminal revision, canonical intent digest, and rerun lineage. |
 | `RuntimeExecutorLease` and lease table | Add opaque attempt fence token storage and conditional validation on every executor mutation. |
 | `(executor_id, attempt_no)` authorization | Retain as metadata; require token as actual capability. |
+| Executor-provided heartbeat/expiry timestamps | Main storage computes lease validity and renewal from store-observed UTC plus durable UTC expiry; diagnostic producer times are never authority. |
+| FSM/recovery mismatch | Add the guarded `starting`/`running` to `resume_requested` recovery edges, park `reconcile_first` there, and prohibit bypassing `pause_requested`. |
 | `create_run` plus separate queued event | Commit acceptance, event, snapshot, lineage, and intent digest atomically. |
 | Lifecycle command application across multiple store calls | Commit checkpoint/candidate truth/command/state/event/fence release atomically. |
 | Executor finalization plus later lease release | Commit outcome/coverage/finalization/event/fence revocation atomically. |
 | Production `resume_recoverable=False` path | Enable same-run recovery only after crash, fence, checkpoint, and continuous-worker gates pass. |
 | Ad hoc checkpoint names | Register and validate the three v1 safe boundaries; treat unknown names as non-recoverable. |
-| Runtime/public coverage mappings | Make `ProductOutcome` canonical and apply section 12. |
+| Runtime/public coverage mappings | Freeze required sources and required product capabilities/stages at acceptance, make `ProductOutcome` canonical, and apply section 12 without rewriting source disposition for model failures. |
 | UI run projection | Render pause, cancellation, `needs_attention`, and terminal outcomes without collapsing them into running/failed. |
 | Idempotency lookup | Compare canonical intent/command digest and reject key reuse with changed content. |
 
@@ -757,19 +805,20 @@ This document authorizes no broad rewrite. Implementation should land in bounded
 5. production recovery enablement after continuous-worker and reconciliation prerequisites;
 6. deletion of legacy retry and status projections after all callers migrate.
 
-Issue #322 remains the owner of diagnostic Failure Envelope semantics. Source Port work remains the owner of source wire DTOs and external-operation evidence transport. Runtime topology remains the owner of sidecar lifecycle and worker supervision. This document owns only the durable task semantics that those components must obey.
+Issue #322 and PR #333 remain the owners of diagnostic event ordering, Failure Envelope, receipts, Operation Evidence, and support/fault evidence. Their `occurred_at`/`observed_at`, journal events, and boundary facts may inform reconciliation, but cannot validate a lease, grant `safe_retry`, transition a run, classify required coverage, or choose `ProductOutcome`. Source Port work remains the owner of source wire DTOs and external-operation evidence transport. Runtime topology remains the owner of sidecar lifecycle and worker supervision. This document owns only the durable task semantics that those components must obey.
 
 ## 18. Acceptance checklist for #324
 
 - [x] Four namespaces are closed and non-overlapping.
-- [x] Complete run-control transition graph is frozen.
+- [x] Complete run-control graph, including guarded `starting`/`running -> resume_requested`, `reconcile_first` parking, and `cancel > pause > resume`, is consistent across graph, table, trigger ownership, and tests.
 - [x] Terminal immutability and linked rerun behavior are explicit.
 - [x] Same-run recovery is limited to new attempts on non-terminal runs.
 - [x] Checkpoint and compact candidate truth atomicity is frozen.
-- [x] `runtime_attempt_fence_token` authority and late-write rejection are frozen.
+- [x] `runtime_attempt_fence_token`, store-authoritative durable UTC lease validity, irreversible non-active states, and restart/wall-clock-rollback tests are frozen without claiming a current durable high-watermark.
 - [x] Pause, resume, cancellation, `needs_attention`, and `partial` semantics are explicit.
 - [x] Reconcile-before-safe-retry is mandatory.
-- [x] Failure-to-state and coverage-to-outcome matrices are explicit.
+- [x] Failure-to-state and coverage-to-outcome matrices use the immutable acceptance-frozen required objective; optional action/failure remains warning or continuation.
 - [x] Crash and property-test obligations cover every durable boundary.
 - [x] Preserve, migrate, and delete mappings are grounded in current code.
 - [x] Failure Envelope, receipt schema, Source Port wire DTO, and runtime implementation remain out of scope.
+- [x] PR #333 diagnostic ownership is preserved: diagnostic time/evidence never becomes task-transition, retry, lease, or outcome authority.
