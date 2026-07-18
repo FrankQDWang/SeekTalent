@@ -1,0 +1,32 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "offline-distribution-2026-07",
+  "change_type": "major_refactor",
+  "summary": "Add the strict Release Manifest v1 data boundary and canonical identity core.",
+  "rationale": "The first External Execution Plane implementation slice needs one typed, fail-closed manifest contract before signature, build closure, or installer work can consume release metadata.",
+  "touched_layers": [
+    "dependencies",
+    "other"
+  ],
+  "red_files": [
+    "pyproject.toml"
+  ],
+  "verification": [
+    "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
+    "uv run ruff check scripts/build_offline_macos_intel.py tests/test_build_offline_macos_intel.py tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py tests/test_build_offline_macos_intel.py tests/test_pr_governance.py",
+    "uv run python tools/check_pr_governance.py --base origin/main"
+  ],
+  "deletion_targets": [
+    "Hand-written release canonicalization and untyped manifest parsing paths"
+  ],
+  "risks": [
+    "Later R1b signature verification must consume these exact canonical bytes without adding a second parser or canonicalizer.",
+    "Filesystem closure and installer behavior remain intentionally outside this pure-data R1a slice."
+  ],
+  "dependency_files": [
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "dependency_rationale": "RFC 8785 number and string canonicalization is delegated to the pinned pure-Python rfc8785 0.1.4 implementation instead of being reimplemented locally."
+}
