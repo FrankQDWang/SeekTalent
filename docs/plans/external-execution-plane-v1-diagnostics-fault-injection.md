@@ -9,7 +9,7 @@ Tracks: #322
 - `e522f51c`：External Execution Plane v1 可靠性契约；
 - `f28bc529`：External Execution Plane v1 runtime topology；
 - GitHub issue #322 当前 body；
-- Draft PR #332 final head `9aa6988264942dd761d405c7ee591d43abf019a9`：task semantics ownership boundary，仅作合并前交叉复核输入；
+- PR #332 已进入 main，merge commit `edfb9b370be8b09abbd5f4484d677a98dd33afc4`：task semantics ownership boundary，作为已完成的交叉复核输入；
 - 当前 `code/schema/tests/build/release scripts`。文档与代码冲突时，以代码为准。
 
 ## 1. 结论与边界
