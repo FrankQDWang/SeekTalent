@@ -19,11 +19,10 @@ Apply this to the default branch, currently `main`.
 For the fast direct-main workflow, keep only these checks as required if a ruleset is enabled:
 
 - `quality-python`
-- `workbench-contract`
 
-The Python Quality and Workbench Contract workflows include `pull_request`, `push`, and `merge_group` triggers. `quality-python` runs a trimmed hard gate on direct `main` pushes, including privacy and agent-safety quick diff scans. `workbench-contract` runs on direct `main` pushes only when Workbench-relevant paths changed.
+`quality-python` is the only automatic code gate. It runs one short job for static quality, architecture imports, Workbench schema consistency, and privacy/agent-safety diff scans. It intentionally excludes pytest and frontend verification.
 
-Do not require `pr-governance` for direct-main iteration. It remains available for manual or PR-shape review. Do not require CodeQL for fast direct-main iteration; keep it non-blocking or scheduled unless repository policy changes.
+Do not require `workbench-contract`, `pr-governance`, or CodeQL for fast direct-main iteration. Workbench Contract and Governance are manual-only; CodeQL is weekly or manual.
 
 If the existing `main` protection still requires the legacy `test` status, remove that requirement after this governance branch lands. `quality-python` is now the stable Python aggregate check.
 

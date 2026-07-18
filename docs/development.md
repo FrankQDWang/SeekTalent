@@ -85,13 +85,12 @@ Passing paths or test ids to `scripts/test-fast.sh` does this automatically.
 Direct `main` pushes use a trimmed fast-iteration CI shape:
 
 - `quality-python`
-- `workbench-contract`
 
-`quality-python` is an aggregate check over architecture import checks, Ruff, ty, pytest, Workbench schema validation, and push-time privacy/agent-safety quick diff scans. It intentionally does not run the Tach baseline as a default hard gate; use `uv run python tools/check_tach_baseline.py` for architecture drift checks when working on source boundaries or red-zone architecture.
+`quality-python` is one fast job covering architecture imports, Ruff, ty, Workbench schema validation, and privacy/agent-safety diff scans. It does not run pytest or frontend tests; coding agents run focused tests locally before publishing changes. Documentation-only changes do not start this workflow. Use `uv run python tools/check_tach_baseline.py` locally for architecture drift checks when working on source boundaries or red-zone architecture.
 
-`workbench-contract` runs only when Workbench-relevant paths changed, including on direct `main` pushes. Do not force a full Workbench contract run only because the event is `push`.
+`workbench-contract` is manual-only. Run it explicitly for release candidates or when remote macOS frontend evidence is needed; normal frontend verification stays local.
 
-`pr-governance` is advisory/manual for the direct-main workflow. Use it when you want PR-shape feedback, file-count/layer-spread review, or red-zone manifest validation; do not treat it as a required direct-push gate. CodeQL runs in its own workflow for Python and JavaScript/TypeScript and should remain non-blocking for fast direct-main iteration or run on its scheduled cadence.
+`pr-governance` is manual-only. Use it when you explicitly want PR-shape feedback, file-count/layer-spread review, or red-zone manifest validation. CodeQL runs weekly or manually for Python and JavaScript/TypeScript instead of running on every push or PR.
 
 ## Test Typing
 

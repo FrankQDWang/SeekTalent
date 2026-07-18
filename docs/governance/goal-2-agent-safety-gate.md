@@ -138,8 +138,8 @@ Confirmation state: pending owner verification. On 2026-06-09, `gh api repos/Fra
 - Block branch deletions.
 - Require status checks:
   - `quality-python`
-  - `workbench-contract`
-  - `pr-governance`
+
+Workbench Contract and Governance are manual workflows. CodeQL runs weekly or manually; none of them should block direct-main iteration.
 
 ### Required Secret Settings
 

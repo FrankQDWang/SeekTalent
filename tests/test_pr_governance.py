@@ -1660,18 +1660,14 @@ def test_ci_pr_governance_bootstrap_requires_label_and_proposed_gate() -> None:
     assert "Release\\ *" not in workflow
 
 
-def test_ci_workflows_resolve_merge_group_base_before_pull_request_base() -> None:
+def test_manual_heavy_workflows_can_compare_selected_branch_to_main() -> None:
     for workflow_path in (
         ".github/workflows/governance.yml",
         ".github/workflows/workbench-contract.yml",
-        ".github/workflows/python-quality.yml",
     ):
         workflow = (PROJECT_ROOT / workflow_path).read_text(encoding="utf-8")
 
-        assert (
-            'for candidate in "$MERGE_GROUP_BASE_SHA" "$PULL_REQUEST_BASE_SHA" '
-            '"$PUSH_BEFORE_SHA" "origin/${GITHUB_BASE_REF:-main}" "origin/main"; do'
-        ) in workflow
+        assert '"origin/main"' in workflow
 
 
 def test_ci_ty_check_covers_governance_tools() -> None:

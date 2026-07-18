@@ -32,10 +32,33 @@ def test_workbench_contract_ci_does_not_use_slow_pnpm_cache_post_step():
 def test_python_quality_uses_slim_direct_main_gate():
     workflow = (ROOT / ".github/workflows/python-quality.yml").read_text(encoding="utf-8")
 
+    assert "python -m pytest" not in workflow
+    assert "jobs:\n  quality-python:" in workflow
     assert "tools/check_arch_imports.py" in workflow
     assert "tools/check_tach_baseline.py" not in workflow
     assert "tools/check_privacy_gate.py --base" in workflow
     assert "tools/check_agent_safety_gate.py --base" in workflow
+
+
+def test_expensive_remote_checks_are_manual_or_scheduled_only():
+    workbench = (ROOT / ".github/workflows/workbench-contract.yml").read_text(encoding="utf-8")
+    governance = (ROOT / ".github/workflows/governance.yml").read_text(encoding="utf-8")
+    codeql = (ROOT / ".github/workflows/codeql.yml").read_text(encoding="utf-8")
+
+    workbench_triggers = workbench.split("permissions:", 1)[0]
+    governance_triggers = governance.split("permissions:", 1)[0]
+    codeql_triggers = codeql.split("permissions:", 1)[0]
+
+    assert "workflow_dispatch:" in workbench_triggers
+    assert "push:" not in workbench_triggers
+    assert "pull_request:" not in workbench_triggers
+    assert "workflow_dispatch:" in governance_triggers
+    assert "pull_request:" not in governance_triggers
+    assert "merge_group:" not in governance_triggers
+    assert "workflow_dispatch:" in codeql_triggers
+    assert "schedule:" in codeql_triggers
+    assert "push:" not in codeql_triggers
+    assert "pull_request:" not in codeql_triggers
 
 
 def test_verify_workbench_supports_python_preflight_skip_mode():
