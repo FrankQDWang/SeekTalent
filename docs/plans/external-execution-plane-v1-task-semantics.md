@@ -130,7 +130,7 @@ The target main-owned source-operation ledger contains at least:
 | `source_id`, `operation_kind` | Frozen source and typed operation such as `verify_session`, search, or detail retrieval. |
 | `canonical_request_hash`, `idempotency_key` | Same key/same hash replays; same key/different hash conflicts. |
 | `accepted_requirement_revision_id` | Exact active requirement revision used when this operation was accepted. |
-| `runtime_attempt_no`, `runtime_attempt_authority_ref` | Attempt that received execution authority; reference is safe metadata, never the raw database capability. |
+| `runtime_attempt_no`, `runtime_attempt_authority_ref` | Attempt that received execution authority; reference is safe metadata/hash, never the raw bearer fence token. |
 | `operation_phase` | Main-known `accepted`, `dispatch_intent`, `observed`, `reconciled`, or `main_committed` progression. |
 | `dispatch_intent_ref` | Main's durable knowledge of dispatch intent; absence never proves the side effect did not occur. |
 | `conclusive_observation_ref` | Authenticated immutable result/evidence reference when a conclusive observation exists. |
@@ -192,7 +192,7 @@ no_retry | safe_retry | reconcile_first
 It answers only: **what execution action is currently authorized?**
 
 - `no_retry`: no automatic repeat is authorized.
-- `safe_retry`: a repeat is authorized because non-occurrence or idempotent safety was proved and all current authorities are valid.
+- `safe_retry`: reconciliation proved non-occurrence or operation-specific idempotent safety; the later claim must still validate every current authority before any repeat begins.
 - `reconcile_first`: a repeat is forbidden until reconciliation resolves the external effect.
 
 `RetryPosture` is the sole retry authority. A source result's `retryable` boolean, an HTTP status, an exception class, a Failure Envelope, or a sidecar crash cannot grant retry permission.
@@ -263,7 +263,7 @@ stateDiagram-v2
     needs_attention --> failed: action or saved state is no longer usable
 
     resume_requested --> starting: new attempt claimed
-    resume_requested --> cancellation_requested: cancel requested
+    resume_requested --> needs_attention: reconciliation requires user action
     resume_requested --> cancelled: cancel before claim
     resume_requested --> failed: checkpoint cannot be recovered
 
@@ -282,12 +282,12 @@ stateDiagram-v2
 | `queued` | `cancelled` | Cancellation commits before any attempt owns the run. |
 | `queued` | `failed` | Durable input or storage invariant prevents execution. |
 | `starting` | `running` | Active fenced attempt confirms executor start. |
-| `starting` | `resume_requested` | Main recovery has irreversibly invalidated the old lease/fence, validated the checkpoint and other authorities, observed that cancel did not win, and either resolved ambiguous effects or parks them under `reconcile_first`. |
+| `starting` | `resume_requested` | Main recovery has irreversibly invalidated the old lease/fence, validated the checkpoint, observed that cancel did not win, and authenticated the recorded historical evidence needed to reconcile or durably park `reconcile_first`. Current profile/browser authority is a later claim gate, not a parking precondition. |
 | `starting` | `needs_attention` | A concrete user action is known and checkpointed. |
 | `starting` | `cancellation_requested` | Cancellation accepted while attempt is active. |
 | `starting` | `failed` | Failure is terminal under section 11. |
 | `running` | `pause_requested` | Pause command accepted. |
-| `running` | `resume_requested` | Main recovery has irreversibly invalidated the old lease/fence, validated the checkpoint and other authorities, observed that cancel and pending pause did not win, and either resolved ambiguous effects or parks them under `reconcile_first`. |
+| `running` | `resume_requested` | Main recovery has irreversibly invalidated the old lease/fence, validated the checkpoint, observed that cancel and pending pause did not win, and authenticated the recorded historical evidence needed to reconcile or durably park `reconcile_first`. Current profile/browser authority is a later claim gate, not a parking precondition. |
 | `running` | `needs_attention` | User-action state commits at a safe boundary. |
 | `running` | `cancellation_requested` | Cancellation command accepted. |
 | `running` | `completed` | Terminal outcome and coverage commit atomically. |
@@ -302,9 +302,9 @@ stateDiagram-v2
 | `needs_attention` | `resume_requested` | The named action is satisfied and authorities are revalidated. |
 | `needs_attention` | `cancelled` | User cancels while no executor owns the run. |
 | `needs_attention` | `failed` | The action/checkpoint can no longer produce a valid continuation. |
-| `resume_requested` | `starting` | A new attempt claims the committed checkpoint. |
-| `resume_requested` | `cancellation_requested` | Active claimant receives cancellation. |
-| `resume_requested` | `cancelled` | Cancellation wins before claim. |
+| `resume_requested` | `starting` | The atomic claim revalidates the checkpoint and every current runtime/profile/browser authority, proves no operation remains `reconcile_first`, and creates the new attempt/lease/fence. |
+| `resume_requested` | `needs_attention` | No-owner reconciliation identifies one concrete user action necessary to complete the frozen required objective and atomically commits action/outcome/minimal Failure Envelope truth. |
+| `resume_requested` | `cancelled` | No-owner expected-revision cancellation proves no active fence and commits terminal cancellation directly. |
 | `resume_requested` | `failed` | Checkpoint validation fails. |
 | `cancellation_requested` | `cancelled` | Cancellation is observed at a safe boundary or recovery proves no active executor. |
 
@@ -317,15 +317,18 @@ Idempotent replay may return the already committed state without emitting a new 
 | acceptance to `queued` | main-owned acceptance service inside the acceptance transaction | Workbench/UI read model, sidecar, source adapter |
 | `queued`/`resume_requested` to `starting` | main-owned worker claim transaction | executor before claim, UI wake thread, sidecar journal |
 | `starting` to `running` | active fenced executor | stale attempt, sidecar lifecycle observer |
-| request to `pause_requested`, `resume_requested`, or `cancellation_requested` | main-owned lifecycle command service with command idempotency and state preconditions | source adapter, browser extension, Failure Envelope |
+| request to `pause_requested`, `resume_requested`, `cancellation_requested`, or direct no-owner `cancelled` | main-owned lifecycle command service with command idempotency and state preconditions; cancel in `resume_requested` uses direct no-owner CAS | source adapter, browser extension, Failure Envelope |
 | safe-boundary transition to `paused`, `needs_attention`, or `cancelled` | active fenced executor in the atomic boundary commit, or main recovery service after proving no active executor | unfenced worker code, sidecar journal alone |
-| `starting`/`running` recovery to `resume_requested` | main-owned recovery service after the old lease/fence is durably `expired`, `released`, or `revoked`; checkpoint and all other authorities validate; cancel has not won; no pending pause must be applied; every ambiguous effect is reconciled or durably remains `reconcile_first` | active or stale executor, sidecar restart loop, client retry, diagnostic journal by itself |
+| `starting`/`running` recovery to `resume_requested` | main-owned recovery service after the old lease/fence is durably `expired`, `released`, or `revoked`; checkpoint validates; cancel has not won; no pending pause must be applied; recorded historical evidence authenticates; ambiguity may durably remain `reconcile_first` | active or stale executor, sidecar restart loop, client retry, diagnostic journal by itself |
+| `resume_requested` reconciliation to `needs_attention` | main-owned no-owner recovery transaction with expected-revision CAS, proof of no active fence, and one concrete action necessary for the frozen required objective | sidecar, stale executor, optional-only action, Workbench/UI read model |
 | active-owner terminal commit | active fenced finalizer with matching expected run/operation revisions | stale attempt, UI, delayed source response |
-| no-owner terminal commit | main-owned control/recovery transaction with expected-revision CAS and proof that no active runtime fence exists; used by queued/paused/needs-attention cancellation and recovery failure | sidecar, diagnostic journal, any transaction that merely assumes the lease is gone |
+| no-owner terminal commit | main-owned control/recovery transaction with expected-revision CAS and proof that no active runtime fence exists; used by queued/paused/`resume_requested`/needs-attention cancellation and recovery failure | sidecar, diagnostic journal, any transaction that merely assumes the lease is gone |
 
 The sidecar reports lifecycle and reconciliation facts. It never directly transitions a run.
 
-`resume_requested` is also the only non-terminal parking state for crash recovery from `starting` or `running`. If any source operation remains `reconcile_first`, the run stays `resume_requested` and is ineligible for claim; it does not silently remain `running`, enter `needs_attention`, or traverse an unlisted edge. A conclusive reconciliation result or proved `safe_retry` removes that claim blocker. `pause_requested` is different: after old-authority invalidation, main first applies `cancel > pause > resume`; cancel moves through the listed cancellation edge, otherwise the pending pause commits `paused`. Recovery must not bypass it through `resume_requested`.
+`resume_requested` is the no-owner parking state for crash recovery from `starting` or `running`. If any source operation remains `reconcile_first`, the run stays there and is ineligible for claim. Reading authenticated immutable history uses the profile/browser generations recorded with that history; it does not require the current profile/browser authority to be usable. A conclusive reconciliation result or proved `safe_retry` removes the ambiguity blocker. If reconciliation instead identifies one concrete user action necessary for the frozen required objective, main follows the listed `resume_requested -> needs_attention` edge. `pause_requested` is different: after old-authority invalidation, main first applies `cancel > pause > resume`; cancel follows the listed cancellation edge, otherwise the pending pause commits `paused`. Recovery must not bypass it through `resume_requested`.
+
+`resume_requested` never has an active fence. Cancellation therefore goes directly to `cancelled` through the no-owner CAS; there is no legal `resume_requested -> cancellation_requested` window. The atomic claim moves `resume_requested -> starting` while creating the active attempt/lease/fence, after which active-owner cancellation uses `starting -> cancellation_requested`.
 
 Once cancellation is durably accepted, `cancellation_requested` has exactly one outgoing edge: `cancelled`. Reconciliation may preserve `reconciliation_unknown` source evidence, but exhaustion cannot rewrite the user's cancellation as `failed` or any success outcome.
 
@@ -385,12 +388,13 @@ Main recovery may move `starting` or `running` to `resume_requested` only when a
 2. the old lease/fence is durably and irreversibly `expired`, `released`, or `revoked`;
 3. the latest checkpoint uses a registered safe boundary and passes schema validation;
 4. compact candidate truth referenced by the checkpoint is committed and internally consistent;
-5. every ambiguous external operation is either conclusively reconciled or durably retains `RetryPosture = reconcile_first`;
-6. profile binding generation, browser control fence, and other current authorities are valid;
-7. cancellation has not won command precedence;
-8. the run-control state is not `pause_requested`; after a crash in that state, main applies `cancel > pause > resume` and commits cancellation or `paused` instead.
+5. historical source facts are authenticated against the operation/request/attempt and the profile/browser generations recorded when those facts were journaled; an ambiguity may durably retain `RetryPosture = reconcile_first`;
+6. cancellation has not won command precedence;
+7. the run-control state is not `pause_requested`; after a crash in that state, main applies `cancel > pause > resume` and commits cancellation or `paused` instead.
 
-This recovery transition does not itself authorize a new attempt. While any operation remains `reconcile_first`, the run is parked in `resume_requested`, retains no active runtime fence, and the claim query must exclude it. A new attempt in the same run is allowed only after every ambiguity has become a conclusive observed fact or a proved `safe_retry`, and the checkpoint, authority, and cancellation conditions above still hold at claim time.
+This parking transition does not require a currently usable profile/browser binding and does not authorize a new attempt or side effect. While any operation remains `reconcile_first`, the run retains no active runtime fence and the claim query excludes it. Reconciliation may read authenticated immutable history from an old generation. It may commit a conclusive fact, prove `safe_retry`, or atomically move to `needs_attention` when a concrete user action is necessary for the frozen required objective.
+
+A new attempt in the same run is allowed only when the atomic claim proves all of the following: the run is still non-terminal and `resume_requested`; no operation remains `reconcile_first`; the newest checkpoint/candidate truth still validates; cancellation has not won; current runtime/profile/browser authorities are usable for the next operation; and the expected run/checkpoint/operation revisions still match. Invalid current authority blocks claim or becomes the concrete `needs_attention` action; it does not leave the run pretending to have an active executor.
 
 Claiming the run atomically:
 
@@ -407,17 +411,17 @@ Failure of any item leaves no partial claim.
 
 ### 9.1 Authority
 
-The token is an opaque, high-entropy capability minted by the main runtime-control store. It is bound to one `(runtime_run_id, attempt_no, lease_id)` and is never derived from executor identity, thread identity, or a predictable counter.
+`runtime_attempt_fence_token` is the one and only runtime-attempt bearer fence capability. It is opaque, high entropy, minted by main, bound to one `(runtime_run_id, attempt_no)`, and never derived from executor identity, thread identity, or a predictable counter.
 
-The main store and main-controlled commit adapter hold and validate the database-write capability. Main delegates one operation/attempt plus unforgeable authorization material, bound to the operation ID and canonical request hash, to the single owning executor or sidecar request. That delegated material proves request provenance but never grants the sidecar direct access to main SQLite; all business writes return through the main-controlled commit adapter, which presents the current database capability and expected revisions.
+Every Source Port request carries that same token through the authenticated transport owned by #325, only to the owning executor/sidecar request. Request acceptance and every resulting commit additionally bind and validate the token against the exact `operation_id`, canonical request hash, active lease, expected revisions, and current run/attempt. There is no second delegated authorization material or parallel database token.
 
-#325 must freeze authenticated transport and replay protection for the delegated operation-bound authorization material. That material is not the reusable main database capability and cannot authorize arbitrary main writes. Browser/provider code receives neither form of authority. Logs, UI events, Failure Envelopes, sidecar journals, and support bundles contain only safe authority references/hashes.
+The bearer token is usable only through main-controlled bounded commit APIs. Possessing it gives the sidecar no SQLite connection, arbitrary SQL access, or permission to commit another operation/hash/revision. The authenticated Source Port transport terminates token exposure at the owning executor/sidecar request; provider and browser code do not receive or reuse it, and none of those components can bypass the commit API. #325 freezes token transport confidentiality/authentication, replay protection, and request scoping. Logs, UI events, Failure Envelopes, sidecar journals, and support bundles contain only safe token references/hashes.
 
 `runtime_attempt_fence_token`, `profile_binding_generation`, and controller-only `control_key + browser_control_fence_token` are separate least-privilege authorities. They are never copied into one generic fence field, substituted for one another, or used outside their storage, profile-binding, and browser-command boundaries.
 
 ### 9.2 Mutations requiring the token
 
-Every executor-originated business mutation must pass through the main-controlled commit adapter and requires the active database token, including:
+Every executor-originated business mutation must pass through a main-controlled bounded commit API and requires the active `runtime_attempt_fence_token`, including:
 
 - heartbeat and lease renewal;
 - control event append and same-SQLite snapshot/outbox update;
@@ -429,7 +433,7 @@ Every executor-originated business mutation must pass through the main-controlle
 - product outcome and terminal completion;
 - source-operation ledger observation/reconciliation/main-commit updates.
 
-The sidecar may append its own private immutable command journal under its own authority, but it cannot write main events, ledger rows, candidates, checkpoints, outcomes, or outbox rows.
+Each bounded commit verifies active lease, run/attempt, token, exact operation/request hash, and expected revisions in one main transaction. The sidecar may append its own private immutable command journal under its own authority, but it cannot write main events, ledger rows, candidates, checkpoints, outcomes, or outbox rows or obtain a main SQLite connection.
 
 Control-plane user commands do not borrow an executor token. They use their own idempotency and state preconditions.
 
@@ -539,7 +543,9 @@ Large private artifacts may commit separately, but their absence cannot invalida
 
 ### 10.5 `needs_attention` and action resolution
 
-Entering `needs_attention` is one transaction that commits the active action, current `ProductOutcome = needs_attention`, safe checkpoint and candidate truth, a locally durable minimal #322 Failure Envelope row and non-dangling reference, state/event/same-SQLite snapshot, and active fence release. The minimal envelope/ref is local business truth required by this transaction; failure to export an optional diagnostic event cannot block or roll it back.
+Entering `needs_attention` is one transaction that commits the active action, current `ProductOutcome = needs_attention`, safe checkpoint and candidate truth, a locally durable minimal #322 Failure Envelope row and non-dangling reference, state/event/same-SQLite snapshot, and active fence release or proof that no fence exists. This applies equally to active safe-boundary entry and no-owner `resume_requested -> needs_attention` reconciliation.
+
+The synchronous minimal row is written when the main business transaction invokes the #322-owned schema/validator and main diagnostics transaction participant inside the same main SQLite transaction domain. Runtime-control does not define a second Failure Envelope schema or diagnostic store. Journal event, Operation Evidence, and support projection are asynchronous follow-up outputs; their failure cannot block or roll back the business truth and minimal envelope/ref.
 
 Resolving the action to resume is one no-owner, expected-revision transaction that:
 
@@ -574,6 +580,8 @@ The authorized transaction commits:
 - source-operation main-commit references and any active-action replacement;
 - a locally durable minimal Failure Envelope row and non-dangling reference for `failed`;
 - active lease/fence revocation when an active finalizer exists.
+
+The failure row uses the same #322-owned schema/validator and main diagnostics transaction participant defined in section 10.5; runtime-control does not create or own a parallel envelope store.
 
 If cancellation was accepted, unresolved or exhausted reconciliation evidence remains durably unknown but the terminal state/outcome is `cancelled`; it cannot become `failed`.
 
@@ -622,13 +630,14 @@ Cleanup, browser release, telemetry export, and artifact retention run afterward
 Without defining the Source Port wire shape, main applies this fixed procedure:
 
 1. Load the durable source operation identity and its last dispatch/observation state from main truth.
-2. Query the sidecar journal for facts bound to that operation identity and current source/profile/browser generations.
+2. Query the sidecar journal for facts bound to that operation identity and the source/profile/browser generations recorded when those facts were journaled. Current-generation usability is not required for this historical read.
 3. Admit an immutable fact that was durably journaled while its mutation authority was valid when operation identity, request hash, attempt, source, profile/browser generations, and producer authenticity match. Its attempt may now be stale; that changes write authority, not historical truth.
 4. Reject facts authored after revocation, facts whose authority-at-journal-time cannot be proved, mutable claims, and any operation/request/generation mismatch. The old attempt cannot commit, redispatch, or choose retry; current main recovery authority alone may apply the evidence through an expected-revision ledger transaction.
 5. If the journal proves a conclusive operation result, commit the corresponding source disposition and set `no_retry`.
-6. If the journal proves no dispatch occurred, revalidate every current authority and then, and only then, set `safe_retry`.
+6. If the journal proves no dispatch occurred, set `safe_retry` for that operation. Do not claim or begin a new side effect until the later atomic claim revalidates every current runtime/profile/browser authority and expected revision.
 7. If facts are missing, contradictory, outside the retained journal range, or cannot prove non-occurrence, retain `RetryPosture = reconcile_first`; crash recovery parks the run in `resume_requested` with no active fence and the claim query excludes it.
-8. When bounded reconciliation is exhausted, first apply cancellation precedence. If cancellation was accepted, preserve unknown source evidence and use the no-owner terminal transaction to commit `cancelled`. Otherwise finalize from the frozen required objective and committed candidate truth: incomplete required coverage plus usable results is `degraded_with_results`; incomplete required coverage without usable results is `failed`; optional-only uncertainty remains a warning on the normal success outcome.
+8. If reconciliation identifies one concrete user action necessary to complete the frozen required objective, use the no-owner expected-revision transaction to commit `resume_requested -> needs_attention` with action/outcome/minimal Failure Envelope truth.
+9. When bounded reconciliation is exhausted, first apply cancellation precedence. If cancellation was accepted, preserve unknown source evidence and use the no-owner terminal transaction to commit `cancelled`. Otherwise finalize from the frozen required objective and committed candidate truth: incomplete required coverage plus usable results is `degraded_with_results`; incomplete required coverage without usable results is `failed`; optional-only uncertainty remains a warning on the normal success outcome.
 
 An empty journal lookup alone is not proof that an external side effect did not occur. The Source Port must provide enough durable evidence to distinguish “not dispatched” from “journal fact unavailable”; section 16 constrains that contract without defining its DTO.
 
@@ -762,7 +771,8 @@ A later cancel supersedes pending pause/resume. Idempotency keys are bound to th
 
 ### 13.4 Cancellation
 
-- queued, paused, and `needs_attention` runs cancel through the no-owner expected-revision terminal transaction after proving no active fence;
+- queued, paused, `resume_requested`, and `needs_attention` runs cancel through the no-owner expected-revision terminal transaction after proving no active fence;
+- `resume_requested` cancellation commits directly to `cancelled`; it never waits in `cancellation_requested` because claim has not created an owner;
 - active runs enter `cancellation_requested` and stop at a safe boundary;
 - an active fenced finalizer may commit cancellation at a safe boundary; if the executor is lost, main recovery may use the no-owner path only after irreversibly invalidating the old fence;
 - if an external operation is ambiguous, cancellation reconciles it for historical source truth, but bounded exhaustion preserves unknown evidence and still finalizes `cancelled`;
@@ -793,8 +803,8 @@ Implementation is not complete until deterministic fault injection proves each i
 - executor-supplied `occurred_at`, `observed_at`, heartbeat time, or proposed expiry cannot extend lease authority;
 - after lease/fence expiry, release, or revocation commits, restart with wall clock moved backward cannot restore `active` or accept the old token;
 - restart plus wall-clock rollback while a lease row is still `active` may delay its durable UTC expiry, but cannot create a second attempt, change its token/revision, or bypass reconciliation;
-- delegated sidecar request authorization cannot be replayed for another operation, request hash, attempt, profile generation, or browser generation;
-- browser/profile authority cannot substitute for the runtime database token, and the sidecar cannot write main SQLite directly;
+- the single Source Port `runtime_attempt_fence_token` cannot be replayed for another run, attempt, operation, canonical request hash, or expected revision, and #325 transport tests cover confidentiality/authentication and replay rejection;
+- browser/profile authority cannot substitute for `runtime_attempt_fence_token`, the runtime token cannot substitute for browser/profile authority, and the sidecar cannot write main SQLite directly or bypass the bounded commit API;
 - no-owner terminal compare-and-swap fails if the expected run revision changed or any active fence exists;
 - terminal state prevents all future claims.
 
@@ -814,8 +824,10 @@ Implementation is not complete until deterministic fault injection proves each i
 - outbox redelivery retains the same operation identity and request hash; acknowledgement/delivery marking never deletes the only dispatch intent;
 - `main_commit_ref`, source coverage, checkpoint pointer, and candidate truth are all visible together or not at all;
 - an expired/released/revoked old fence plus a valid checkpoint is required before main recovery can move `starting` or `running` to `resume_requested`;
-- invalid checkpoint, invalid profile/browser authority, winning cancel, or still-active old fence forbids that recovery edge;
+- invalid checkpoint, winning cancel, pending pause, unauthenticated historical evidence, or still-active old fence forbids the parking edge; unusable current profile/browser authority alone does not;
 - unresolved `reconcile_first` parks the run in `resume_requested` with no active fence and prevents worker claim until reconciliation becomes conclusive or proves `safe_retry`;
+- `resume_requested` cancel uses no-owner CAS directly to `cancelled` and cannot become stuck in `cancellation_requested`;
+- `resume_requested` reconciliation that finds a required concrete user action atomically commits action/outcome/minimal envelope and moves to `needs_attention` without an executor fence;
 - crash in `pause_requested` applies `cancel > pause > resume`: cancel follows cancellation edges, otherwise the run becomes `paused`, never `resume_requested`;
 - crash before dispatch intent permits safe retry;
 - crash after dispatch intent and before observation cannot dispatch again;
@@ -825,11 +837,11 @@ Implementation is not complete until deterministic fault injection proves each i
 - stale mutation, evidence authored after revocation, and operation/request/profile/browser generation mismatches are rejected;
 - cancellation accepted before reconciliation exhaustion preserves unknown evidence and ends `cancelled`, never `failed`;
 - restart budget exhaustion is terminal `failed`, never `needs_attention`;
-- stale browser/profile/runtime authority prevents retry even when the operation itself is retry-safe.
+- unusable current runtime/profile/browser authority prevents claim and every new side effect even when the operation is `safe_retry`; it does not prevent authenticated historical reconciliation or no-owner parking.
 
 ### 14.5 Action and finalization crash points
 
-- entering `needs_attention` atomically commits action/outcome/checkpoint/minimal Failure Envelope ref/event and fence release;
+- entering `needs_attention` atomically commits action/outcome/checkpoint/minimal Failure Envelope ref/event and fence release or proof that no active fence exists;
 - action resolution atomically retains action history, clears the current action and `needs_attention` outcome, and commits `resume_requested`;
 - cancelling/failing from `needs_attention` atomically replaces the outcome and clears the active action;
 - optional diagnostic export failure cannot roll back or block the minimal envelope/ref and business-state transaction;
@@ -846,6 +858,7 @@ Generate command, crash, lease-expiry, reconciliation, and source-result sequenc
 
 - every stored state/outcome pair is valid under section 6.4;
 - every actual state change is one edge listed in sections 6.1 and 6.2; recovery cannot create an implicit edge or self-transition;
+- `resume_requested` has no active fence, cancel reaches `cancelled` directly, and no sequence contains `resume_requested -> cancellation_requested`;
 - terminal states have no outgoing transition;
 - at most one active fence exists per run;
 - attempt numbers are strictly increasing and never reused;
@@ -853,6 +866,7 @@ Generate command, crash, lease-expiry, reconciliation, and source-result sequenc
 - every source operation has monotonic ledger/reconciliation revisions and at most one `main_commit_ref`;
 - `safe_retry` is unreachable directly from `reconciliation_unknown` without a reconciliation proof;
 - `needs_attention` always has one action necessary for the frozen required objective and no active fence; optional-only action can never reach it;
+- authenticated reconciliation may reach `resume_requested -> needs_attention` only through the no-owner atomic action transaction;
 - `degraded_with_results` always has at least one usable committed candidate and at least one incomplete acceptance-frozen required source/capability/stage;
 - `succeeded_with_results` and `succeeded_empty` always have complete frozen required objective coverage, regardless of optional warnings;
 - `succeeded_empty` has zero committed usable candidates;
@@ -940,6 +954,7 @@ A crash between two points is interpreted only from the earlier committed point.
 Issue #325 may choose transport and DTO details, but its contract must make these #324 invariants possible:
 
 - main can assign a stable operation identity and distinguish dispatch intent, conclusive observation, and reconciliation uncertainty;
+- every Source Port request carries the same main-minted `runtime_attempt_fence_token`, and authenticated transport/replay protection preserves its run/attempt plus operation/request-hash scope without introducing another authorization material;
 - dispatch intent is durable before an external side effect can begin;
 - sidecar reconciliation facts remain queryable after process restart within a declared retention boundary;
 - absence inside a proved-complete journal range is distinguishable from unavailable or truncated journal history;
@@ -958,14 +973,14 @@ Implementation must not land schema, FSM, ledger, fencing, atomic transitions, a
 
 1. **Source-operation ledger foundation:** add only operation identity/request idempotency, the five ledger phases, dispatch outbox, expected revisions, and ledger/outbox crash tests. Do not change outcome/FSM behavior in this slice.
 2. **Historical-evidence reconciliation:** read authenticated sidecar history, distinguish stale mutation from admissible facts, add reconciliation revisions/postures, and prove no duplicate dispatch.
-3. **Fence delegation and commit adapter:** add the database capability, operation-bound delegated authorization, conditional main writes, late-write rejection, and authority-separation tests.
+3. **Fence transport and bounded commit API:** add the single `runtime_attempt_fence_token` to authenticated Source Port transport, bind request/commit validation to run/attempt/operation/hash/revisions, enforce conditional main writes and late-write rejection, and test replay/scope plus browser/profile authority separation.
 4. **Atomic transition boundaries:** separately migrate start acceptance, lifecycle command acceptance, source main commit/checkpoint, action entry/resolution, and the two terminal-authority transactions, with fault injection at every statement.
 5. **Checkpoint and requirement lineage hardening:** delete newest-checkpoint fallback, register safe boundaries, add immutable accepted base plus amendment lineage, and prove atomic activation.
 6. **Source-lane migration:** preserve Liepin partial/reasons, exhaustively map `blocked`, remove retry authority from lane booleans, and validate all mapping families including unknown reasons.
 7. **Outcome/FSM hard cut:** add canonical `ProductOutcome`, `needs_attention` lifecycle, linked rerun, cancellation-only terminal edge, and migrate the Workbench/UI read model.
 8. **Recovery enablement and legacy deletion:** enable continuous recovery only after every prior crash/property gate passes; then remove old retry/status compatibility fields and dead paths.
 
-Issue #322 and PR #333 remain the owners of diagnostic event ordering, Failure Envelope schema, receipts, Operation Evidence, and support/fault evidence. The minimal Failure Envelope/ref required by a main business commit is local durable truth; optional diagnostic event export may follow and cannot block that commit. Diagnostic `occurred_at`/`observed_at`, journal events, and boundary facts may inform reconciliation, but cannot validate a lease, grant `safe_retry`, transition a run, classify required coverage, or choose `ProductOutcome`. Source Port work remains the owner of source wire DTOs, authenticated wire protection, and external-operation evidence transport. Runtime topology remains the owner of sidecar lifecycle and worker supervision. This document owns only the durable task semantics that those components must obey.
+Issue #322 and PR #333 remain the owners of diagnostic event ordering, Failure Envelope schema/validator, the main diagnostics transaction participant, receipts, Operation Evidence, and support/fault evidence. Main business transactions synchronously use that participant in the same main SQLite transaction domain for the required minimal Failure Envelope row/ref; runtime-control does not create a second schema or store. Journal event, Operation Evidence, and support projection remain asynchronous and cannot block business truth. Diagnostic `occurred_at`/`observed_at`, journal events, and boundary facts may inform reconciliation, but cannot validate a lease, grant `safe_retry`, transition a run, classify required coverage, or choose `ProductOutcome`. Source Port work remains the owner of source wire DTOs, authenticated token transport/replay protection, and external-operation evidence transport. Runtime topology remains the owner of sidecar lifecycle and worker supervision. This document owns only the durable task semantics that those components must obey.
 
 ## 18. Document and cross-review acceptance for #324
 
@@ -974,7 +989,7 @@ Issue #322 and PR #333 remain the owners of diagnostic event ordering, Failure E
 - [x] Terminal immutability and linked rerun behavior are explicit.
 - [x] Same-run recovery is limited to new attempts on non-terminal runs.
 - [x] Main-owned source-operation ledger/outbox phases and checkpoint/candidate/main-commit atomicity are frozen without claiming current implementation.
-- [x] `runtime_attempt_fence_token`, store-authoritative durable UTC lease validity, irreversible non-active states, and restart/wall-clock-rollback tests are frozen without claiming a current durable high-watermark.
+- [x] The single Source Port `runtime_attempt_fence_token`, bounded commit API scope, store-authoritative durable UTC lease validity, irreversible non-active states, and restart/wall-clock-rollback tests are frozen without a second delegated authorization or a claimed current durable high-watermark.
 - [x] Stale mutation authority is separated from authenticated immutable historical evidence.
 - [x] Active-fenced and no-owner terminal authorities, cancellation precedence, `needs_attention` action resolution, minimal Failure Envelope refs, and `partial` semantics are explicit.
 - [x] Command acceptance and requirement amendment activation are atomic, with immutable base revision and durable lineage.
@@ -988,7 +1003,7 @@ Issue #322 and PR #333 remain the owners of diagnostic event ordering, Failure E
 Implementation remains deliberately incomplete until these gates are delivered:
 
 - [ ] Source-operation ledger/outbox schema, migrations, and crash tests.
-- [ ] Fence delegation, main commit adapter, CAS enforcement, and late-write tests.
+- [ ] Single-token transport/scope validation, bounded main commit API, CAS enforcement, and late-write tests.
 - [ ] Atomic acceptance/command/checkpoint/action/terminal transactions.
 - [ ] Exact-newest checkpoint validation and atomic requirement amendment lineage.
 - [ ] Exhaustive source-lane migration and `ProductOutcome`/FSM hard cut.
