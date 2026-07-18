@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import unicodedata
 from collections.abc import Mapping
@@ -13,6 +12,8 @@ from typing import Annotated, Literal, LiteralString, Self, TypeVar
 import rfc8785
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from pydantic_core import PydanticCustomError
+
+from seektalent.strict_json import StrictJsonError, strict_json_object_loads
 
 
 MAX_SAFE_INTEGER = (1 << 53) - 1
@@ -833,67 +834,9 @@ def _validate_release_manifest_schema(
 
 def _strict_json_loads(raw: bytes) -> object:
     try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        raise ReleaseManifestError(ReleaseManifestReason.INVALID_UTF8) from None
-    if text.startswith("\ufeff"):
-        raise ReleaseManifestError(ReleaseManifestReason.INVALID_UTF8)
-
-    def reject_duplicates(pairs: list[tuple[str, object]]) -> dict[str, object]:
-        result: dict[str, object] = {}
-        for key, value in pairs:
-            if key in result:
-                raise ReleaseManifestError(ReleaseManifestReason.DUPLICATE_KEY, (key,))
-            result[key] = value
-        return result
-
-    def reject_float(_: str) -> float:
-        raise ReleaseManifestError(ReleaseManifestReason.ILLEGAL_NUMBER)
-
-    def reject_constant(_: str) -> float:
-        raise ReleaseManifestError(ReleaseManifestReason.ILLEGAL_NUMBER)
-
-    def parse_integer(value: str) -> int:
-        if value == "-0":
-            raise ReleaseManifestError(ReleaseManifestReason.ILLEGAL_NUMBER)
-        parsed = int(value)
-        if parsed < -MAX_SAFE_INTEGER or parsed > MAX_SAFE_INTEGER:
-            raise ReleaseManifestError(ReleaseManifestReason.ILLEGAL_NUMBER)
-        return parsed
-
-    try:
-        payload = json.loads(
-            text,
-            object_pairs_hook=reject_duplicates,
-            parse_float=reject_float,
-            parse_int=parse_integer,
-            parse_constant=reject_constant,
-        )
-    except ReleaseManifestError:
-        raise
-    except (json.JSONDecodeError, RecursionError):
-        raise ReleaseManifestError(ReleaseManifestReason.INVALID_JSON) from None
-    if not isinstance(payload, dict):
-        raise ReleaseManifestError(ReleaseManifestReason.ROOT_NOT_OBJECT)
-    _validate_raw_json_value(payload)
-    return payload
-
-
-def _validate_raw_json_value(value: object) -> None:
-    if isinstance(value, str):
-        try:
-            _validate_unicode(value)
-        except PydanticCustomError:
-            raise ReleaseManifestError(ReleaseManifestReason.INVALID_UNICODE) from None
-    elif isinstance(value, dict):
-        for key, child in value.items():
-            if not isinstance(key, str):
-                raise ReleaseManifestError(ReleaseManifestReason.INVALID_JSON)
-            _validate_raw_json_value(key)
-            _validate_raw_json_value(child)
-    elif isinstance(value, list):
-        for child in value:
-            _validate_raw_json_value(child)
+        return strict_json_object_loads(raw)
+    except StrictJsonError as exc:
+        raise ReleaseManifestError(ReleaseManifestReason(exc.reason.value), exc.location) from None
 
 
 def _validate_manifest_ordering(manifest: ReleaseManifestV1) -> None:
