@@ -43,6 +43,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_ERROR_CODE_TO_REASON,
     OPENCLI_EXTENSION_DISCONNECTED,
     OPENCLI_FORBIDDEN_COMMAND,
+    OPENCLI_PAGE_NOT_READY,
     OPENCLI_STATUS_UNAVAILABLE,
     OPENCLI_TIMEOUT,
 )
@@ -249,6 +250,34 @@ class OpenCliBrowserAutomation:
     def get_url(self) -> OpenCliBrowserResult:
         output = self.run_browser_command("get", ("url",))
         return OpenCliBrowserResult(ok=True, action="get_url", private_output=output)
+
+    def wait_for_page_url(
+        self,
+        *,
+        timeout_seconds: float,
+        poll_seconds: float = 0.1,
+    ) -> OpenCliBrowserResult:
+        if timeout_seconds <= 0 or timeout_seconds > self.config.timeout_seconds or poll_seconds <= 0:
+            raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
+        deadline = time.monotonic() + timeout_seconds
+        last_url = ""
+        while True:
+            last_url = self.get_url().private_output.strip()
+            if _is_web_page_url(last_url):
+                return OpenCliBrowserResult(
+                    ok=True,
+                    action="wait_for_page_url",
+                    private_output=last_url,
+                )
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                return OpenCliBrowserResult(
+                    ok=False,
+                    action="wait_for_page_url",
+                    safe_reason_code=OPENCLI_PAGE_NOT_READY,
+                    private_output=last_url,
+                )
+            time.sleep(min(poll_seconds, remaining_seconds))
 
     def find(self, *, query: str) -> OpenCliBrowserResult:
         output = self.run_browser_command("find", (query,))
@@ -722,6 +751,14 @@ def _daemon_output(result: OpenCliDaemonResult) -> str:
     if isinstance(result.data, str):
         return result.data
     return json.dumps(result.data, ensure_ascii=False, sort_keys=True)
+
+
+def _is_web_page_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
 
 
 def _opencli_status_reason(output: str) -> str | None:

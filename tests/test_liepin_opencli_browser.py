@@ -395,6 +395,7 @@ def _runner(
     allowed_click_refs: tuple[str, ...] = (),
     lease_dir: Path | None = None,
     detail_open_timeout_seconds: int = 5,
+    search_navigation_timeout_seconds: float = 10.0,
     pacing_enabled: bool = False,
     pacing_min_ms: int = 0,
     pacing_max_ms: int = 0,
@@ -414,6 +415,7 @@ def _runner(
         lease_dir=lease_dir,
         artifact_root=lease_dir,
         detail_open_timeout_seconds=detail_open_timeout_seconds,
+        search_navigation_timeout_seconds=search_navigation_timeout_seconds,
     )
     return LiepinSiteAdapter(
         browser_config=browser_config,
@@ -3000,6 +3002,77 @@ def test_search_liepin_cards_success_path_uses_state_conditions_not_fixed_time_w
         for call in commands.calls
         if len(call) >= 6 and call[:4] == ("opencli", "browser", "seektalent-liepin", "wait") and call[4] == "time"
     ] == []
+
+
+def test_search_liepin_cards_waits_for_new_search_tab_url_before_failing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("seektalent.opencli_browser.automation.time.sleep", lambda _: None)
+    state_before = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    state_after_search = "id=resultList\n王** 男 34岁 工作5年 硕士 上海"
+    get_url_call = ("opencli", "browser", "seektalent-liepin", "get", "url")
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            get_url_call: ["", "about:blank", *([LIEPIN_SEARCH_URL] * 10)],
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                state_after_search,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-delayed-search-url",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "succeeded"
+    first_state_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "state"))
+    assert len([call for call in commands.calls[:first_state_index] if call == get_url_call]) >= 3
+
+
+def test_search_liepin_cards_bounds_new_search_tab_url_wait(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delays: list[float] = []
+    moments = iter((0.0, 0.0, 1.0, 2.0, 3.0))
+    monkeypatch.setattr("seektalent.opencli_browser.automation.time.monotonic", lambda: next(moments))
+    monkeypatch.setattr("seektalent.opencli_browser.automation.time.sleep", delays.append)
+    get_url_call = ("opencli", "browser", "seektalent-liepin", "get", "url")
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            get_url_call: [""] * 10,
+        }
+    )
+
+    envelope = _runner(
+        commands,
+        lease_dir=tmp_path,
+        search_navigation_timeout_seconds=3.0,
+    ).search_liepin_cards(
+        source_run_id="run-search-url-timeout",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_search_not_ready"
+    assert delays == [0.1] * 3
 
 
 def test_search_liepin_cards_waits_for_result_evidence_after_stale_search_form(tmp_path: Path) -> None:

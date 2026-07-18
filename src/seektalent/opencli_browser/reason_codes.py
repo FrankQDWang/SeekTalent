@@ -25,6 +25,7 @@ OPENCLI_HOST_PAGE_MISSING = "opencli_host_page_missing"
 OPENCLI_HOST_WINDOW_AMBIGUOUS = "opencli_host_window_ambiguous"
 OPENCLI_OWNED_TAB_MISSING = "opencli_owned_tab_missing"
 OPENCLI_STALE_CONTROL_FENCE = "opencli_stale_control_fence"
+OPENCLI_PAGE_NOT_READY = "opencli_page_not_ready"
 
 OPENCLI_ERROR_CODE_TO_REASON = {
     "bound_tab_mutation_blocked": OPENCLI_WINDOW_POLICY_BLOCKED,

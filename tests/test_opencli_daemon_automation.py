@@ -18,7 +18,7 @@ from seektalent.opencli_browser.controlled_tab_lock import (
     install_script,
 )
 from seektalent.opencli_browser.daemon_transport import OpenCliDaemonResult
-from seektalent.opencli_browser.reason_codes import OPENCLI_SELECTOR_NOT_FOUND
+from seektalent.opencli_browser.reason_codes import OPENCLI_PAGE_NOT_READY, OPENCLI_SELECTOR_NOT_FOUND
 
 
 class NoSubprocessCommands:
@@ -254,6 +254,84 @@ def test_daemon_automation_creates_each_owned_tab_in_the_existing_host_window() 
     assert daemon.calls[-1][1]["session"] == owned_tabs[0].session
     assert daemon.calls[-1][1]["controlKey"] == "lane-key"
     assert daemon.calls[-1][1]["fenceToken"] == 7
+
+
+def test_daemon_automation_waits_for_owned_page_navigation_url() -> None:
+    class DelayedUrlDaemon(RecordingDaemon):
+        urls = ["", "about:blank", "https://h.liepin.com/search/getConditionItem#session"]
+
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            if action == "browser-operation" and params.get("operation") == "get-url":
+                payload = dict(params)
+                self.calls.append((action, payload, timeout_seconds))
+                return OpenCliDaemonResult(
+                    "get-url-1",
+                    data=self.urls.pop(0),
+                    page=str(payload["page"]),
+                )
+            return super().command(action, params, timeout_seconds=timeout_seconds)
+
+    daemon = DelayedUrlDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    browser.open_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/search/getConditionItem#session",
+        tab_kind="search",
+    )
+
+    result = browser.wait_for_page_url(timeout_seconds=1, poll_seconds=0.001)
+
+    assert result.ok is True
+    assert result.private_output == "https://h.liepin.com/search/getConditionItem#session"
+    get_url_calls = [
+        params
+        for action, params, _timeout in daemon.calls
+        if action == "browser-operation" and params.get("operation") == "get-url"
+    ]
+    assert len(get_url_calls) == 3
+
+
+def test_daemon_automation_reports_explicit_page_not_ready_at_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BlankUrlDaemon(RecordingDaemon):
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            if action == "browser-operation" and params.get("operation") == "get-url":
+                payload = dict(params)
+                self.calls.append((action, payload, timeout_seconds))
+                return OpenCliDaemonResult("get-url-1", data="", page=str(payload["page"]))
+            return super().command(action, params, timeout_seconds=timeout_seconds)
+
+    moments = iter((0.0, 0.0, 1.0, 2.0))
+    delays: list[float] = []
+    monkeypatch.setattr("seektalent.opencli_browser.automation.time.monotonic", lambda: next(moments))
+    monkeypatch.setattr("seektalent.opencli_browser.automation.time.sleep", delays.append)
+    browser = automation(BlankUrlDaemon())
+    browser.activate_control_scope("lane-key")
+    browser.open_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/search/getConditionItem#session",
+        tab_kind="search",
+    )
+
+    result = browser.wait_for_page_url(timeout_seconds=2, poll_seconds=0.1)
+
+    assert result.ok is False
+    assert result.safe_reason_code == OPENCLI_PAGE_NOT_READY
+    assert delays == [0.1, 0.1]
 
 
 def test_owned_tab_lifecycle_is_recorded_and_finish_only_submits_background_reclaim() -> None:

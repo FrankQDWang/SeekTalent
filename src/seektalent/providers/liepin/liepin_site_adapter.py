@@ -10,7 +10,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import urlparse
@@ -28,6 +28,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserTiming,
 )
 from seektalent.opencli_browser.lifecycle import browser_control_key
+from seektalent.opencli_browser.reason_codes import OPENCLI_PAGE_NOT_READY
 from seektalent.opencli_browser.runtime import ALLOWED_BROWSER_COMMANDS, FORBIDDEN_BROWSER_COMMANDS
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
 from seektalent.providers.liepin.liepin_city_picker import find_liepin_city_filter_option
@@ -122,6 +123,7 @@ class LiepinOpenCliSiteConfig:
     lease_dir: Path | None = None
     artifact_root: Path | None = None
     detail_open_timeout_seconds: int = 90
+    search_navigation_timeout_seconds: float = 10.0
     control_key: str = browser_control_key(
         source_kind="liepin",
         browser_profile_id="local-chrome-profile",
@@ -182,6 +184,8 @@ _LIEPIN_SESSION_LOGIN_REQUIRED_REASONS = {
     "liepin_opencli_risk_page",
     "liepin_opencli_unknown_modal",
 }
+
+_SEARCH_URL_POLL_SECONDS = 0.1
 
 _SessionStatusValue = Literal["missing", "login_required", "ready", "revoked"]
 
@@ -1379,7 +1383,26 @@ class LiepinSiteAdapter:
 
             def observe_after_open_search() -> LiepinStateSnapshot:
                 nonlocal open_post_snapshot
-                open_post_snapshot = _snapshot_from_result(self.get_url())
+                waited = self._automation.wait_for_page_url(
+                    timeout_seconds=self._site_config.search_navigation_timeout_seconds,
+                    poll_seconds=_SEARCH_URL_POLL_SECONDS,
+                )
+                if waited.safe_reason_code == OPENCLI_PAGE_NOT_READY:
+                    waited = replace(waited, safe_reason_code="liepin_opencli_search_not_ready")
+                else:
+                    waited = liepin_result_from_opencli_result(waited)
+                self._touch_lease()
+                open_post_snapshot = _snapshot_from_result(waited)
+                if open_post_snapshot.ok and open_post_snapshot.url is not None:
+                    terminal_reason = classify_liepin_state(url=open_post_snapshot.url, text="")
+                    if terminal_reason is not None:
+                        open_post_snapshot = LiepinStateSnapshot(
+                            ok=False,
+                            text=open_post_snapshot.text,
+                            url=open_post_snapshot.url,
+                            safe_reason_code=terminal_reason,
+                            observation=open_post_snapshot.observation,
+                        )
                 return open_post_snapshot
 
             opened = self._run_liepin_transition(

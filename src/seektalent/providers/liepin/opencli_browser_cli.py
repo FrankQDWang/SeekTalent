@@ -82,6 +82,9 @@ def _runner_from_env() -> LiepinSiteAdapter:
         detail_open_timeout_seconds=int(
             os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS") or "90"
         ),
+        search_navigation_timeout_seconds=float(
+            os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_SEARCH_NAVIGATION_TIMEOUT_SECONDS") or "10"
+        ),
         allowed_click_refs=_json_tuple(
             os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_CLICK_REFS_JSON"),
             default=(),

@@ -423,6 +423,7 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         allowed_hosts=settings.liepin_opencli_allowed_hosts,
         allowed_start_urls=settings.liepin_opencli_allowed_start_urls,
         detail_open_timeout_seconds=settings.liepin_opencli_detail_open_timeout_seconds,
+        search_navigation_timeout_seconds=settings.liepin_opencli_search_navigation_timeout_seconds,
         lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
         artifact_root=settings.artifacts_path,
     )

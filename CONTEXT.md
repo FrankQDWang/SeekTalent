@@ -20,6 +20,10 @@ _Avoid_: Tab lock, source run
 A browser tab that SeekTalent created inside a host window for one browser control scope and may therefore close. An existing user tab can never become an owned tab.
 _Avoid_: Managed tab, automation tab
 
+**Page navigation readiness**:
+The browser boundary condition reached when an owned tab reports a concrete HTTP(S) URL before its monotonic deadline. Tab allocation never implies navigation readiness; the provider validates the returned URL against its own allowed surface before issuing page actions.
+_Avoid_: Tab created, page loaded
+
 **Owned tab record**:
 A short-lived ownership claim linking an owned tab to its browser control scope, OpenCLI session, and exact page identity. It is supporting evidence and never authorizes closing a tab without matching browser-side ownership.
 _Avoid_: Marker, lease file

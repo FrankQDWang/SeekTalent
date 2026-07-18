@@ -53,6 +53,7 @@ def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.Mo
     assert settings.liepin_opencli_max_cards_per_task == 20
     assert settings.liepin_opencli_timeout_seconds == 900
     assert settings.liepin_opencli_detail_open_timeout_seconds == 90
+    assert settings.liepin_opencli_search_navigation_timeout_seconds == 10.0
     assert settings.liepin_opencli_pacing_enabled is True
     assert settings.liepin_opencli_pacing_min_ms == 700
     assert settings.liepin_opencli_pacing_max_ms == 1800
@@ -162,6 +163,7 @@ def test_liepin_opencli_backend_validates_json_and_budget(monkeypatch: pytest.Mo
     monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_MAX_ACTIONS_PER_TASK", "12")
     monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_MAX_PAGES_PER_TASK", "1")
     monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_MAX_CARDS_PER_TASK", "10")
+    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_SEARCH_NAVIGATION_TIMEOUT_SECONDS", "12.5")
 
     settings = AppSettings(_env_file=None)
 
@@ -171,6 +173,14 @@ def test_liepin_opencli_backend_validates_json_and_budget(monkeypatch: pytest.Mo
     assert settings.liepin_opencli_max_actions_per_task == 12
     assert settings.liepin_opencli_max_pages_per_task == 1
     assert settings.liepin_opencli_max_cards_per_task == 10
+    assert settings.liepin_opencli_search_navigation_timeout_seconds == 12.5
+
+    with pytest.raises(ValueError, match="must not exceed OpenCLI timeout"):
+        AppSettings(
+            _env_file=None,
+            liepin_opencli_timeout_seconds=10,
+            liepin_opencli_search_navigation_timeout_seconds=11,
+        )
 
 
 def test_liepin_opencli_backend_rejects_empty_start_urls(monkeypatch: pytest.MonkeyPatch) -> None:
