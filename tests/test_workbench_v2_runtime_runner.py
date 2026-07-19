@@ -220,7 +220,7 @@ def test_lifespan_attempts_all_cleanup_and_propagates_cleanup_errors(
 
 def test_cold_sqlite_queue_is_consumed_without_route_wake(tmp_path) -> None:
     store = _runtime_store(tmp_path)
-    _enqueue_run(store, "runtime-cold", created_at="2026-07-18T00:00:00.000000Z")
+    _accept_run(store, "runtime-cold", created_at="2026-07-18T00:00:00.000000Z")
     executor = _RecordingExecutor(store)
     runner = WorkbenchV2RuntimeQueueRunner(store=store, executor=executor, poll_interval_seconds=0.01)
 
@@ -234,6 +234,12 @@ def test_cold_sqlite_queue_is_consumed_without_route_wake(tmp_path) -> None:
 
 def test_idle_poller_finds_later_sqlite_run_without_wake(tmp_path) -> None:
     store = _runtime_store(tmp_path)
+    _create_unaccepted_run(
+        store,
+        "runtime-half-accepted",
+        status="queued",
+        created_at="2026-07-18T00:00:00.000000Z",
+    )
     observed_store = _ObservedStore(store)
     executor = _RecordingExecutor(store)
     runner = WorkbenchV2RuntimeQueueRunner(
@@ -244,22 +250,30 @@ def test_idle_poller_finds_later_sqlite_run_without_wake(tmp_path) -> None:
 
     runner.start()
     _assert_set(observed_store.empty_poll_completed)
-    _enqueue_run(store, "runtime-lost-wake", created_at="2026-07-18T00:00:01.000000Z")
+    assert store.get_run("runtime-half-accepted").status == "queued"
+    assert store.list_active_executor_leases() == []
+
+    _accept_run(store, "runtime-lost-wake", created_at="2026-07-18T00:00:01.000000Z")
     _assert_set(executor.completed)
     runner.stop()
 
     assert executor.calls == ["runtime-lost-wake"]
+    assert store.get_run("runtime-half-accepted").status == "queued"
+    assert all(
+        lease.runtime_run_id != "runtime-half-accepted"
+        for lease in store.list_active_executor_leases()
+    )
 
 
 def test_busy_worker_consumes_second_run_enqueued_without_wake(tmp_path) -> None:
     store = _runtime_store(tmp_path)
-    _enqueue_run(store, "runtime-first", created_at="2026-07-18T00:00:00.000000Z")
+    _accept_run(store, "runtime-first", created_at="2026-07-18T00:00:00.000000Z")
     executor = _BlockingFirstExecutor(store)
     runner = WorkbenchV2RuntimeQueueRunner(store=store, executor=executor, poll_interval_seconds=0.01)
 
     runner.start()
     _assert_set(executor.first_started)
-    _enqueue_run(store, "runtime-second", created_at="2026-07-18T00:00:01.000000Z")
+    _accept_run(store, "runtime-second", created_at="2026-07-18T00:00:01.000000Z")
     executor.release_first.set()
     _assert_set(executor.completed)
     runner.stop()
@@ -269,8 +283,8 @@ def test_busy_worker_consumes_second_run_enqueued_without_wake(tmp_path) -> None
 
 def test_real_sqlite_claim_preserves_fifo_for_fully_accepted_runs(tmp_path) -> None:
     store = _runtime_store(tmp_path)
-    _enqueue_run(store, "runtime-a", created_at="2026-07-18T00:00:00.000000Z")
-    _enqueue_run(store, "runtime-b", created_at="2026-07-18T00:00:01.000000Z")
+    _accept_run(store, "runtime-a", created_at="2026-07-18T00:00:00.000000Z")
+    _accept_run(store, "runtime-b", created_at="2026-07-18T00:00:01.000000Z")
     executor = _RecordingExecutor(store, expected_calls=2)
     runner = WorkbenchV2RuntimeQueueRunner(store=store, executor=executor, poll_interval_seconds=0.01)
 
@@ -553,7 +567,7 @@ def test_periodic_recovery_always_disables_recoverable_resume(
 
 def test_expired_recoverable_lease_fails_closed_in_runner(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = _runtime_store(tmp_path)
-    _create_nonqueued_run(store, "runtime-expired", status="running", created_at="2026-06-08T00:00:00.000000Z")
+    _create_unaccepted_run(store, "runtime-expired", status="running", created_at="2026-06-08T00:00:00.000000Z")
     store.acquire_executor_lease(
         runtime_run_id="runtime-expired",
         executor_id="executor-expired",
@@ -672,7 +686,7 @@ def test_stop_deadline_linearizes_before_blocked_claim_without_creating_lease(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     store = _runtime_store(tmp_path)
-    _enqueue_run(store, "runtime-stop-boundary", created_at="2026-07-18T00:00:00.000000Z")
+    _accept_run(store, "runtime-stop-boundary", created_at="2026-07-18T00:00:00.000000Z")
     executor = _RecordingExecutor(store)
     runner = WorkbenchV2RuntimeQueueRunner(store=store, executor=executor, poll_interval_seconds=60)
     claim_lock = _BlockingClaimLock()
@@ -756,7 +770,7 @@ def _runtime_store(tmp_path) -> RuntimeControlStore:
     return store
 
 
-def _enqueue_run(
+def _accept_run(
     store: RuntimeControlStore,
     runtime_run_id: str,
     *,
@@ -810,7 +824,7 @@ def _enqueue_run(
     return run
 
 
-def _create_nonqueued_run(
+def _create_unaccepted_run(
     store: RuntimeControlStore,
     runtime_run_id: str,
     *,
