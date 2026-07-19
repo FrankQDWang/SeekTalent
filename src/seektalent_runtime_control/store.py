@@ -48,6 +48,14 @@ from seektalent_runtime_control.requirements import (
     RequirementDraft,
     ReviewItem,
 )
+from seektalent_runtime_control.run_acceptance import (
+    RUN_ACCEPTANCE_JOINS,
+    accepted_run_row,
+    existing_run_for_start,
+    insert_run,
+    normalize_run_record,
+    validate_run_acceptance,
+)
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
@@ -132,58 +140,58 @@ class RuntimeControlStore:
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
 
     def create_run(self, run: RuntimeRunRecord) -> RuntimeRunRecord:
-        stored = _normalize_run_record(run)
+        stored = normalize_run_record(run)
         with self._connect() as conn, conn:
-            existing_by_intent = _run_row_by_run_intent(conn, stored.run_intent_id)
-            existing_by_start_key = _run_row_by_start_idempotency_key(conn, stored.start_idempotency_key)
-            if existing_by_intent is not None and existing_by_start_key is not None:
-                if existing_by_intent["runtime_run_id"] != existing_by_start_key["runtime_run_id"]:
-                    raise RuntimeControlError("runtime_run_start_idempotency_conflict")
-                return _run_from_row(existing_by_intent)
-            if existing_by_intent is not None:
-                return _run_from_row(existing_by_intent)
-            if existing_by_start_key is not None:
-                return _run_from_row(existing_by_start_key)
+            existing = existing_run_for_start(conn, stored)
+            if existing is not None:
+                return _run_from_row(existing)
             try:
-                conn.execute(
-                    """
-                    INSERT INTO runtime_control_runs (
-                        runtime_run_id, run_intent_id, start_idempotency_key, run_kind,
-                        agent_conversation_id, workbench_session_id,
-                        approved_requirement_revision_id, status, current_stage, current_round,
-                        latest_checkpoint_id, latest_event_seq, source_ids_json, stop_reason_code,
-                        created_at, updated_at, completed_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        stored.runtime_run_id,
-                        stored.run_intent_id,
-                        stored.start_idempotency_key,
-                        stored.run_kind,
-                        stored.agent_conversation_id,
-                        stored.workbench_session_id,
-                        stored.approved_requirement_revision_id,
-                        stored.status,
-                        stored.current_stage,
-                        stored.current_round,
-                        stored.latest_checkpoint_id,
-                        stored.latest_event_seq,
-                        _json(stored.source_ids),
-                        stored.stop_reason_code,
-                        stored.created_at,
-                        stored.updated_at,
-                        stored.completed_at,
-                    ),
-                )
+                insert_run(conn, stored)
             except sqlite3.IntegrityError:
-                existing = _run_row_by_run_intent(conn, stored.run_intent_id)
-                if existing is None:
-                    existing = _run_row_by_start_idempotency_key(conn, stored.start_idempotency_key)
+                existing = existing_run_for_start(conn, stored)
                 if existing is not None:
                     return _run_from_row(existing)
                 raise
         return stored
+
+    def accept_run(
+        self,
+        run: RuntimeRunRecord,
+        *,
+        initial_event: RuntimeControlEventInput,
+        snapshot: RuntimeRunSnapshot,
+    ) -> RuntimeRunRecord:
+        """Commit a new run and its initial acceptance evidence atomically."""
+        stored = normalize_run_record(run)
+        validate_run_acceptance(stored, initial_event=initial_event, snapshot=snapshot)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing = existing_run_for_start(conn, stored)
+                if existing is not None:
+                    accepted = accepted_run_row(conn, existing["runtime_run_id"])
+                    if accepted is None:
+                        raise RuntimeControlError("runtime_run_acceptance_incomplete")
+                    conn.commit()
+                    return _run_from_row(accepted)
+                insert_run(conn, stored)
+                _append_event_in_transaction(
+                    conn,
+                    initial_event,
+                    snapshot=snapshot,
+                    run_status="queued",
+                    stop_reason_code=None,
+                    completed_at=None,
+                    latest_checkpoint_id=None,
+                )
+                accepted = accepted_run_row(conn, stored.runtime_run_id)
+                if accepted is None:
+                    raise RuntimeControlError("runtime_run_acceptance_incomplete")
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return _run_from_row(accepted)
 
     def get_run(self, runtime_run_id: str) -> RuntimeRunRecord:
         with self._connect() as conn:
@@ -2907,7 +2915,9 @@ def _next_runnable_run_row(
         f"""
         SELECT run.*
         FROM runtime_control_runs AS run
+        {RUN_ACCEPTANCE_JOINS}
         WHERE {' AND '.join(clauses)}
+          AND run.latest_event_seq > 0
           AND NOT EXISTS (
             SELECT 1
             FROM runtime_control_executor_leases AS lease
@@ -3879,16 +3889,6 @@ def _sync_candidate_truth_from_checkpoint(conn: sqlite3.Connection, checkpoint: 
                 revision.created_at,
             ),
         )
-
-
-def _normalize_run_record(run: RuntimeRunRecord) -> RuntimeRunRecord:
-    return run.model_copy(
-        update={
-            "run_intent_id": run.run_intent_id or run.runtime_run_id,
-            "start_idempotency_key": run.start_idempotency_key or run.run_intent_id or run.runtime_run_id,
-            "run_kind": run.run_kind or "primary",
-        }
-    )
 
 
 def _run_from_row(row: sqlite3.Row) -> RuntimeRunRecord:

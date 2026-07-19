@@ -1554,7 +1554,7 @@ def test_payload_guards_reject_oversized_event_and_artifact_large_stage_output(t
 
 def test_claim_next_runnable_run_updates_run_lease_snapshot_and_claim_event(tmp_path: Path) -> None:
     store = _initialized_store(tmp_path)
-    store.create_run(_run(runtime_run_id="runtime_run_claim_1", status="queued"))
+    _accept_queued_run(store, _run(runtime_run_id="runtime_run_claim_1", status="queued"))
     store.create_run(_run(runtime_run_id="runtime_run_claim_2", run_intent_id="intent_2", status="running"))
 
     claim = store.claim_next_runnable_run(
@@ -1572,22 +1572,37 @@ def test_claim_next_runnable_run_updates_run_lease_snapshot_and_claim_event(tmp_
     assert claim.lease.executor_id == "executor_claim"
     assert claim.lease.attempt_no == 1
     assert claim.claimed_event.event_type == "runtime_worker_claimed"
-    assert claim.claimed_event.event_seq == 1
+    assert claim.claimed_event.event_seq == 2
     assert claim.claimed_event.stage == "starting"
     assert claim.claimed_event.visibility == "developer"
 
     stored_run = store.get_run("runtime_run_claim_1")
     assert stored_run.status == "starting"
     assert stored_run.current_stage == "starting"
-    assert stored_run.latest_event_seq == 1
+    assert stored_run.latest_event_seq == 2
     snapshot = store.get_snapshot(runtime_run_id="runtime_run_claim_1")
     assert snapshot is not None
     assert snapshot.status == "starting"
     assert snapshot.current_stage == "starting"
-    assert snapshot.latest_event_seq == 1
+    assert snapshot.latest_event_seq == 2
     assert snapshot.snapshot["executorId"] == "executor_claim"
 
-    store.create_run(_run(runtime_run_id="runtime_run_resume_claim", status="resume_requested"))
+    _accept_queued_run(store, _run(runtime_run_id="runtime_run_resume_claim"))
+    store.update_run_status(
+        runtime_run_id="runtime_run_resume_claim",
+        status="starting",
+        updated_at="2026-06-17T00:00:11.000000Z",
+    )
+    store.update_run_status(
+        runtime_run_id="runtime_run_resume_claim",
+        status="running",
+        updated_at="2026-06-17T00:00:12.000000Z",
+    )
+    store.update_run_status(
+        runtime_run_id="runtime_run_resume_claim",
+        status="resume_requested",
+        updated_at="2026-06-17T00:00:13.000000Z",
+    )
     resume_claim = store.claim_next_runnable_run(
         executor_id="executor_resume_claim",
         claimed_at="2026-06-17T00:00:20.000000Z",
@@ -1600,7 +1615,7 @@ def test_claim_next_runnable_run_updates_run_lease_snapshot_and_claim_event(tmp_
 
 def test_concurrent_claims_never_return_same_run_or_lease_attempt(tmp_path: Path) -> None:
     store = _initialized_store(tmp_path)
-    store.create_run(_run(runtime_run_id="runtime_run_concurrent_claim", status="queued"))
+    _accept_queued_run(store, _run(runtime_run_id="runtime_run_concurrent_claim", status="queued"))
     worker_count = 8
     barrier = Barrier(worker_count)
 
@@ -1669,6 +1684,37 @@ def _initialized_store(tmp_path: Path):
     store = _store_for_path(tmp_path)
     store.initialize()
     return store
+
+
+def _accept_queued_run(store, run):
+    from seektalent_runtime_control.models import RuntimeControlEventInput, RuntimeRunSnapshot
+
+    return store.accept_run(
+        run,
+        initial_event=RuntimeControlEventInput(
+            event_id=f"rtevt_queued_{run.runtime_run_id}",
+            runtime_run_id=run.runtime_run_id,
+            event_type="runtime_run_queued",
+            stage="queued",
+            round_no=None,
+            source_id=None,
+            status="queued",
+            summary="workflow run queued",
+            payload={"runIntentId": run.run_intent_id},
+            idempotency_key=f"runtime-run-queued:{run.runtime_run_id}",
+            workbench_event_global_seq=None,
+            created_at="2026-06-17T00:00:01.000000Z",
+        ),
+        snapshot=RuntimeRunSnapshot(
+            runtime_run_id=run.runtime_run_id,
+            status="queued",
+            current_stage="queued",
+            current_round=None,
+            latest_event_seq=0,
+            snapshot={"workflowInput": {"sourceIds": list(run.source_ids)}},
+            updated_at="2026-06-17T00:00:01.000000Z",
+        ),
+    )
 
 
 def _run(
