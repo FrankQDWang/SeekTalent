@@ -30,6 +30,7 @@ from seektalent_runtime_control.checkpoint_recovery import (
     RuntimeCheckpointValidationContext,
     RuntimeRecoveryDecision,
     RuntimeRecoveryPlan,
+    RuntimeRecoverySettlement,
     decide_expired_lease_recovery,
     validate_recoverable_checkpoint,
 )
@@ -77,6 +78,7 @@ MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
 _RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND = "runtime_stage_output"
 _RUNTIME_STAGE_OUTPUT_ARTIFACT_DIR = "runtime_control_artifacts/stage_outputs"
 _TERMINAL_RUN_STATUSES = ("cancelled", "completed", "failed")
+_LEASE_ONLY_CLEANUP_RUN_STATUSES = (*_TERMINAL_RUN_STATUSES, "queued", "paused", "resume_requested")
 _REQUIRED_STAGE_OUTPUT_KINDS = {
     "audit",
     "audit_summary",
@@ -512,7 +514,7 @@ class RuntimeControlStore:
         now: str,
         resume_recoverable: bool,
         fault_injector: Callable[[str], None] | None = None,
-    ) -> RuntimeRecoveryDecision | None:
+    ) -> RuntimeRecoverySettlement | None:
         """Atomically expire and settle one active or legacy-stranded lease."""
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -522,7 +524,7 @@ class RuntimeControlStore:
                     conn.commit()
                     return None
                 run_row = _run_row(conn, lease_row["runtime_run_id"])
-                if run_row is None or run_row["status"] in _TERMINAL_RUN_STATUSES:
+                if run_row is None:
                     conn.commit()
                     return None
                 if lease_row["status"] == "active":
@@ -543,9 +545,14 @@ class RuntimeControlStore:
                     return None
                 _inject_recovery_fault(fault_injector, "after_lease_update")
 
+                if run_row["status"] in _LEASE_ONLY_CLEANUP_RUN_STATUSES:
+                    conn.commit()
+                    _inject_recovery_fault(fault_injector, "after_commit")
+                    return RuntimeRecoverySettlement(decision=None)
+
                 checkpoint = (
                     None
-                    if run_row["status"] == "cancellation_requested"
+                    if run_row["status"] in {"cancellation_requested", "pause_requested"}
                     else _recoverable_checkpoint_from_run_row(conn, run_row)
                 )
                 plan = decide_expired_lease_recovery(
@@ -553,7 +560,12 @@ class RuntimeControlStore:
                     checkpoint=checkpoint,
                     resume_recoverable=resume_recoverable,
                 )
-                _append_recovery_expiry_event(conn, lease_row=lease_row, run_row=run_row, now=now)
+                expiry_event = _append_recovery_expiry_event(
+                    conn,
+                    lease_row=lease_row,
+                    run_row=run_row,
+                    now=now,
+                )
                 _inject_recovery_fault(fault_injector, "after_first_event")
                 _append_recovery_decision_event(
                     conn,
@@ -561,6 +573,7 @@ class RuntimeControlStore:
                     run_row=run_row,
                     checkpoint=checkpoint,
                     plan=plan,
+                    after_event_seq=expiry_event.event_seq,
                     now=now,
                 )
                 _inject_recovery_fault(fault_injector, "before_run_transition")
@@ -599,14 +612,17 @@ class RuntimeControlStore:
                         run_row["status"],
                     ),
                 )
+                _inject_recovery_fault(fault_injector, "after_run_transition")
                 conn.commit()
             except Exception:
                 conn.rollback()
                 raise
         _inject_recovery_fault(fault_injector, "after_commit")
-        return RuntimeRecoveryDecision(
-            runtime_run_id=run_row["runtime_run_id"],
-            reason_code=plan.reason_code,
+        return RuntimeRecoverySettlement(
+            decision=RuntimeRecoveryDecision(
+                runtime_run_id=run_row["runtime_run_id"],
+                reason_code=plan.reason_code,
+            )
         )
 
     def save_requirement_draft(
@@ -2973,31 +2989,45 @@ def _append_event_in_transaction(
     return _event_from_row(stored)
 
 
-def _next_recovery_lease_row(conn: sqlite3.Connection, *, now: str) -> sqlite3.Row | None:
+def _next_recovery_lease_row(
+    conn: sqlite3.Connection,
+    *,
+    now: str,
+) -> sqlite3.Row | None:
     return conn.execute(
         """
         SELECT lease.*
         FROM runtime_control_executor_leases AS lease
         JOIN runtime_control_runs AS run
           ON run.runtime_run_id = lease.runtime_run_id
-        WHERE run.status IN ('starting', 'running', 'cancellation_requested')
-          AND NOT EXISTS (
-            SELECT 1
-            FROM runtime_control_events AS settled_event
-            WHERE settled_event.runtime_run_id = lease.runtime_run_id
-              AND settled_event.idempotency_key =
-                  'runtime-recovery:' || lease.lease_id || ':decision'
+        WHERE (
+            lease.status = 'active'
+            AND lease.lease_expires_at <= ?
+            AND run.status IN (
+              'queued', 'starting', 'running', 'pause_requested', 'paused',
+              'resume_requested', 'cancellation_requested', 'cancelled', 'completed', 'failed'
+            )
           )
-          AND (
-            (lease.status = 'active' AND lease.lease_expires_at <= ?)
-            OR (
-              lease.status = 'expired'
-              AND NOT EXISTS (
-                SELECT 1
-                FROM runtime_control_executor_leases AS active
-                WHERE active.runtime_run_id = lease.runtime_run_id
-                  AND active.status = 'active'
-              )
+          OR (
+            lease.status = 'expired'
+            AND run.status IN ('starting', 'running', 'cancellation_requested')
+            AND lease.attempt_no = (
+              SELECT MAX(latest_attempt.attempt_no)
+              FROM runtime_control_executor_leases AS latest_attempt
+              WHERE latest_attempt.runtime_run_id = lease.runtime_run_id
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM runtime_control_executor_leases AS active
+              WHERE active.runtime_run_id = lease.runtime_run_id
+                AND active.status = 'active'
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM runtime_control_events AS settled_event
+              WHERE settled_event.runtime_run_id = lease.runtime_run_id
+                AND settled_event.idempotency_key =
+                    'runtime-recovery:' || lease.lease_id || ':decision'
             )
           )
         ORDER BY
@@ -3031,14 +3061,13 @@ def _recoverable_checkpoint_from_run_row(
             checkpoint_id=checkpoint_id,
             reason_code=RUNTIME_CHECKPOINT_RUN_MISMATCH,
         )
-    checkpoint = _checkpoint_from_row_or_failure(checkpoint_row)
+    checkpoint = _recoverable_checkpoint_from_row_or_failure(checkpoint_row)
     if isinstance(checkpoint, RuntimeCheckpointLoadFailure):
         return checkpoint
-    raw_source_ids = _json_list(run_row["source_ids_json"])
-    run_source_ids = tuple(item for item in raw_source_ids if isinstance(item, str))
+    run_source_ids, run_source_ids_valid = _strict_run_source_ids(run_row["source_ids_json"])
     candidate_truth_valid = (
         _candidate_truth_matches_checkpoint(conn, checkpoint)
-        if checkpoint.safe_boundary == "runtime_candidate_checkpoint"
+        if checkpoint.safe_boundary in {"runtime_candidate_checkpoint", "after_round_controller"}
         else True
     )
     invalid_reason = validate_recoverable_checkpoint(
@@ -3048,6 +3077,7 @@ def _recoverable_checkpoint_from_run_row(
             run_stage=run_row["current_stage"],
             run_round_no=run_row["current_round"],
             run_source_ids=run_source_ids,
+            run_source_ids_valid=run_source_ids_valid,
             candidate_truth_valid=candidate_truth_valid,
         ),
     )
@@ -3072,43 +3102,90 @@ def _candidate_truth_matches_checkpoint(
         )
     except (TypeError, ValueError, ValidationError):
         return False
+    expected_identity_ids = {identity.identity_id for identity in truth.identities}
+    expected_evidence_ids = {evidence.evidence_id for evidence in truth.evidence}
+    expected_revisions = {revision.revision for revision in truth.finalization_revisions}
+    stored_identity_ids = {
+        row["identity_id"]
+        for row in conn.execute(
+            "SELECT identity_id FROM runtime_control_candidate_identities WHERE runtime_run_id = ?",
+            (checkpoint.runtime_run_id,),
+        ).fetchall()
+    }
+    stored_evidence_ids = {
+        row["evidence_id"]
+        for row in conn.execute(
+            "SELECT evidence_id FROM runtime_control_candidate_evidence WHERE runtime_run_id = ?",
+            (checkpoint.runtime_run_id,),
+        ).fetchall()
+    }
+    stored_revisions = {
+        row["revision"]
+        for row in conn.execute(
+            """
+            SELECT revision
+            FROM runtime_control_candidate_finalization_revisions
+            WHERE runtime_run_id = ?
+            """,
+            (checkpoint.runtime_run_id,),
+        ).fetchall()
+    }
+    if (
+        stored_identity_ids != expected_identity_ids
+        or stored_evidence_ids != expected_evidence_ids
+        or stored_revisions != expected_revisions
+    ):
+        return False
     for identity in truth.identities:
         row = conn.execute(
             """
-            SELECT payload_hash, updated_at
+            SELECT *
             FROM runtime_control_candidate_identities
             WHERE runtime_run_id = ? AND identity_id = ?
             """,
             (identity.runtime_run_id, identity.identity_id),
         ).fetchone()
-        if row is None or row["payload_hash"] != identity.payload_hash or row["updated_at"] != identity.updated_at:
+        if row is None or not _candidate_identity_row_has_strict_shapes(row):
+            return False
+        try:
+            stored_identity = _candidate_identity_from_row(row)
+        except (json.JSONDecodeError, TypeError, ValueError, ValidationError, IndexError, KeyError):
+            return False
+        if stored_identity != identity:
             return False
     for evidence in truth.evidence:
         row = conn.execute(
             """
-            SELECT payload_hash, updated_at
+            SELECT *
             FROM runtime_control_candidate_evidence
             WHERE runtime_run_id = ? AND evidence_id = ?
             """,
             (evidence.runtime_run_id, evidence.evidence_id),
         ).fetchone()
-        if row is None or row["payload_hash"] != evidence.payload_hash or row["updated_at"] != evidence.updated_at:
+        if row is None or not _candidate_evidence_row_has_strict_shapes(row):
+            return False
+        try:
+            stored_evidence = _candidate_evidence_from_row(row)
+        except (json.JSONDecodeError, TypeError, ValueError, ValidationError, IndexError, KeyError):
+            return False
+        if stored_evidence != evidence:
             return False
     for revision in truth.finalization_revisions:
         row = conn.execute(
             """
-            SELECT payload_hash, source_checkpoint_id, created_at
+            SELECT *
             FROM runtime_control_candidate_finalization_revisions
             WHERE runtime_run_id = ? AND revision = ?
             """,
             (revision.runtime_run_id, revision.revision),
         ).fetchone()
-        if (
-            row is None
-            or row["payload_hash"] != revision.payload_hash
-            or row["source_checkpoint_id"] != checkpoint.checkpoint_id
-            or row["created_at"] != revision.created_at
-        ):
+        if row is None or not _candidate_finalization_row_has_strict_shapes(row):
+            return False
+        try:
+            stored_revision = _candidate_finalization_revision_from_row(row)
+        except (json.JSONDecodeError, TypeError, ValueError, ValidationError, IndexError, KeyError):
+            return False
+        if stored_revision != revision or stored_revision.source_checkpoint_id != checkpoint.checkpoint_id:
             return False
     return True
 
@@ -3119,10 +3196,11 @@ def _append_recovery_expiry_event(
     lease_row: sqlite3.Row,
     run_row: sqlite3.Row,
     now: str,
-) -> None:
-    if _matching_legacy_expiry_event_exists(conn, lease_row=lease_row):
-        return
-    _append_event_in_transaction(
+) -> RuntimeControlEvent:
+    legacy_event = _matching_legacy_expiry_event(conn, lease_row=lease_row)
+    if legacy_event is not None:
+        return legacy_event
+    return _append_event_in_transaction(
         conn,
         RuntimeControlEventInput(
             event_id=_recovery_event_id(lease_row["lease_id"], "lease-expired"),
@@ -3157,8 +3235,25 @@ def _append_recovery_decision_event(
     run_row: sqlite3.Row,
     checkpoint: RuntimeCheckpoint | RuntimeCheckpointLoadFailure | None,
     plan: RuntimeRecoveryPlan,
+    after_event_seq: int,
     now: str,
 ) -> None:
+    paired_event = _paired_legacy_decision_event(
+        conn,
+        lease_row=lease_row,
+        after_event_seq=after_event_seq,
+    )
+    if paired_event is not None:
+        if (
+            paired_event.event_type == plan.event_type
+            and paired_event.status == plan.event_status
+            and _legacy_decision_payload_matches(
+                paired_event.payload,
+                lease_row=lease_row,
+                plan=plan,
+            )
+        ):
+            return
     payload: dict[str, object] = {
         "reasonCode": plan.reason_code,
         "leaseId": lease_row["lease_id"],
@@ -3201,16 +3296,17 @@ def _append_recovery_decision_event(
     )
 
 
-def _matching_legacy_expiry_event_exists(
+def _matching_legacy_expiry_event(
     conn: sqlite3.Connection,
     *,
     lease_row: sqlite3.Row,
-) -> bool:
+) -> RuntimeControlEvent | None:
     rows = conn.execute(
         """
-        SELECT payload_json
+        SELECT *
         FROM runtime_control_events
         WHERE runtime_run_id = ? AND event_type = 'runtime_executor_lease_expired'
+        ORDER BY event_seq DESC
         """,
         (lease_row["runtime_run_id"],),
     ).fetchall()
@@ -3222,8 +3318,98 @@ def _matching_legacy_expiry_event_exists(
             payload.get("executorId") == lease_row["executor_id"]
             and payload.get("attemptNo") == lease_row["attempt_no"]
         ):
-            return True
-    return False
+            return _event_from_row(row)
+    return None
+
+
+def _paired_legacy_decision_event(
+    conn: sqlite3.Connection,
+    *,
+    lease_row: sqlite3.Row,
+    after_event_seq: int,
+) -> RuntimeControlEvent | None:
+    rows = conn.execute(
+        """
+        SELECT decision.*
+        FROM runtime_control_events AS decision
+        WHERE decision.runtime_run_id = ?
+          AND decision.event_seq > ?
+          AND decision.event_seq < COALESCE(
+            (
+              SELECT MIN(boundary.event_seq)
+              FROM runtime_control_events AS boundary
+              WHERE boundary.runtime_run_id = decision.runtime_run_id
+                AND boundary.event_type = 'runtime_executor_lease_expired'
+                AND boundary.event_seq > ?
+            ),
+            9223372036854775807
+          )
+          AND decision.event_type IN (
+            'runtime_executor_crashed',
+            'runtime_executor_start_failed',
+            'runtime_run_cancelled',
+            'runtime_checkpoint_restore_failed',
+            'runtime_checkpoint_restored'
+          )
+          AND decision.idempotency_key IS NULL
+        ORDER BY decision.event_seq ASC
+        """,
+        (lease_row["runtime_run_id"], after_event_seq, after_event_seq),
+    ).fetchall()
+    for row in rows:
+        payload = _recovery_event_payload(row["payload_json"])
+        if payload is not None and _legacy_decision_event_belongs_to_lease(
+            row["event_type"],
+            payload,
+            lease_row=lease_row,
+        ):
+            return _event_from_row(row)
+    return None
+
+
+def _legacy_decision_event_belongs_to_lease(
+    event_type: str,
+    payload: dict[str, object],
+    *,
+    lease_row: sqlite3.Row,
+) -> bool:
+    for key, expected in (
+        ("leaseId", lease_row["lease_id"]),
+        ("attemptNo", lease_row["attempt_no"]),
+    ):
+        if key in payload and payload[key] != expected:
+            return False
+    executor_id = payload.get("executorId")
+    if event_type in {
+        "runtime_executor_crashed",
+        "runtime_executor_start_failed",
+        "runtime_run_cancelled",
+    }:
+        return executor_id == lease_row["executor_id"]
+    return executor_id is None or executor_id == lease_row["executor_id"]
+
+
+def _legacy_decision_payload_matches(
+    payload: dict[str, object],
+    *,
+    lease_row: sqlite3.Row,
+    plan: RuntimeRecoveryPlan,
+) -> bool:
+    if not _legacy_decision_event_belongs_to_lease(
+        plan.event_type,
+        payload,
+        lease_row=lease_row,
+    ):
+        return False
+    reason_code = payload.get("reasonCode")
+    if plan.event_type == "runtime_checkpoint_restored":
+        if reason_code is not None and reason_code != plan.reason_code:
+            return False
+    elif reason_code != plan.reason_code:
+        return False
+    if plan.checkpoint_id is None:
+        return "checkpointId" not in payload
+    return payload.get("checkpointId") == plan.checkpoint_id
 
 
 def _recovery_event_payload(value: str) -> dict[str, object] | None:
@@ -4332,7 +4518,9 @@ def _checkpoint_from_row(row: sqlite3.Row) -> RuntimeCheckpoint:
     )
 
 
-def _checkpoint_from_row_or_failure(row: sqlite3.Row) -> RuntimeCheckpoint | RuntimeCheckpointLoadFailure:
+def _recoverable_checkpoint_from_row_or_failure(
+    row: sqlite3.Row,
+) -> RuntimeCheckpoint | RuntimeCheckpointLoadFailure:
     checkpoint_id = row["checkpoint_id"]
     if row["schema_version"] != RUNTIME_CHECKPOINT_SCHEMA_VERSION:
         return RuntimeCheckpointLoadFailure(
@@ -4340,12 +4528,103 @@ def _checkpoint_from_row_or_failure(row: sqlite3.Row) -> RuntimeCheckpoint | Run
             reason_code=RUNTIME_CHECKPOINT_SCHEMA_UNSUPPORTED,
         )
     try:
-        return _checkpoint_from_row(row)
+        run_state = _strict_json_object(row["run_state_json"])
+        source_plan = _strict_json_object(row["source_plan_json"])
+        pending_commands = _strict_json_object_list(row["pending_commands_json"])
+        return RuntimeCheckpoint(
+            checkpoint_id=checkpoint_id,
+            runtime_run_id=row["runtime_run_id"],
+            stage=row["stage"],
+            round_no=row["round_no"],
+            safe_boundary=row["safe_boundary"],
+            run_state=run_state,
+            source_plan=source_plan,
+            pending_commands=pending_commands,
+            artifact_manifest_ref=row["artifact_manifest_ref"],
+            schema_version=row["schema_version"],
+            created_at=row["created_at"],
+        )
     except (json.JSONDecodeError, TypeError, ValueError, ValidationError):
         return RuntimeCheckpointLoadFailure(
             checkpoint_id=checkpoint_id,
             reason_code=RUNTIME_CHECKPOINT_CORRUPT,
         )
+
+
+def _strict_json_object(value: str) -> dict[str, object]:
+    payload = json.loads(value)
+    if not isinstance(payload, dict):
+        raise ValueError("runtime_checkpoint_json_object_required")
+    return payload
+
+
+def _strict_json_object_list(value: str) -> list[dict[str, object]]:
+    payload = json.loads(value)
+    if not isinstance(payload, list) or not all(isinstance(item, dict) for item in payload):
+        raise ValueError("runtime_checkpoint_json_object_list_required")
+    return payload
+
+
+def _strict_json_string_list(value: str) -> list[str]:
+    payload = json.loads(value)
+    if not isinstance(payload, list) or not all(
+        isinstance(item, str) and item for item in payload
+    ):
+        raise ValueError("runtime_json_string_list_required")
+    return payload
+
+
+def _strict_run_source_ids(value: str) -> tuple[tuple[str, ...], bool]:
+    try:
+        return tuple(_strict_json_string_list(value)), True
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return (), False
+
+
+def _candidate_identity_row_has_strict_shapes(row: sqlite3.Row) -> bool:
+    try:
+        for column in (
+            "merged_resume_ids_json",
+            "source_evidence_ids_json",
+            "equivalent_latest_resume_ids_json",
+            "display_source_evidence_ids_json",
+            "conflicting_resume_ids_json",
+            "incomparable_resume_ids_json",
+            "safe_reason_codes_json",
+        ):
+            _strict_json_string_list(row[column])
+    except (json.JSONDecodeError, TypeError, ValueError, IndexError, KeyError):
+        return False
+    return True
+
+
+def _candidate_evidence_row_has_strict_shapes(row: sqlite3.Row) -> bool:
+    try:
+        source_references = _strict_json_object_list(row["source_references_json"])
+        _strict_json_object(row["payload_json"])
+        for raw_reference in source_references:
+            reference = SourceReference.model_validate(raw_reference)
+            if reference.model_dump(mode="json") != raw_reference:
+                return False
+    except (
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+        ValidationError,
+        IndexError,
+        KeyError,
+    ):
+        return False
+    return True
+
+
+def _candidate_finalization_row_has_strict_shapes(row: sqlite3.Row) -> bool:
+    try:
+        _strict_json_string_list(row["candidate_identity_ids_json"])
+        _strict_json_object(row["coverage_summary_json"])
+    except (json.JSONDecodeError, TypeError, ValueError, IndexError, KeyError):
+        return False
+    return True
 
 
 def _snapshot_from_row(row: sqlite3.Row) -> RuntimeRunSnapshot:

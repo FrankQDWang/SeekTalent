@@ -23,14 +23,15 @@ class RuntimeRecoveryService:
         now = self.now()
         decisions: list[RuntimeRecoveryDecision] = []
         for _ in range(100):
-            decision = self.store.settle_next_expired_executor_lease(
+            settlement = self.store.settle_next_expired_executor_lease(
                 now=now,
                 resume_recoverable=resume_recoverable,
                 fault_injector=self.fault_injector,
             )
-            if decision is None:
+            if settlement is None:
                 break
-            decisions.append(decision)
+            if settlement.decision is not None:
+                decisions.append(settlement.decision)
         return decisions
 
 

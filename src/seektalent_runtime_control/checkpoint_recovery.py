@@ -26,6 +26,7 @@ class RuntimeCheckpointValidationContext:
     run_stage: str
     run_round_no: int | None
     run_source_ids: tuple[str, ...]
+    run_source_ids_valid: bool
     candidate_truth_valid: bool
 
 
@@ -33,6 +34,11 @@ class RuntimeCheckpointValidationContext:
 class RuntimeRecoveryDecision:
     runtime_run_id: str
     reason_code: str
+
+
+@dataclass(frozen=True)
+class RuntimeRecoverySettlement:
+    decision: RuntimeRecoveryDecision | None
 
 
 @dataclass(frozen=True)
@@ -49,14 +55,11 @@ SafeBoundaryValidator = Callable[[RuntimeCheckpoint, RuntimeCheckpointValidation
 
 
 def _before_source_dispatch_is_valid(
-    checkpoint: RuntimeCheckpoint,
-    context: RuntimeCheckpointValidationContext,
+    _checkpoint: RuntimeCheckpoint,
+    _context: RuntimeCheckpointValidationContext,
 ) -> bool:
-    return (
-        _checkpoint_matches_run(checkpoint, context)
-        and _round_marker_matches(checkpoint)
-        and checkpoint.pending_commands == []
-    )
+    """Fail closed until main SQLite has positive source-dispatch evidence."""
+    return False
 
 
 def _runtime_candidate_checkpoint_is_valid(
@@ -74,6 +77,7 @@ def _after_round_controller_is_valid(
         _checkpoint_matches_run(checkpoint, context)
         and checkpoint.round_no is not None
         and _round_marker_matches(checkpoint)
+        and context.candidate_truth_valid
     )
 
 
@@ -109,6 +113,14 @@ def decide_expired_lease_recovery(
             event_type="runtime_run_cancelled",
             event_status="completed",
             summary="run cancelled after executor lease expired",
+        )
+    if run_status == "pause_requested":
+        return RuntimeRecoveryPlan(
+            reason_code="runtime_pause_after_executor_lost",
+            target_status="failed",
+            event_type="runtime_executor_crashed",
+            event_status="failed",
+            summary="executor lease expired before the pending pause reached a safe boundary",
         )
     if isinstance(checkpoint, RuntimeCheckpointLoadFailure):
         return RuntimeRecoveryPlan(
@@ -168,6 +180,7 @@ def _checkpoint_matches_run(
                 and checkpoint.round_no == context.run_round_no
             )
         )
+        and context.run_source_ids_valid
         and isinstance(source_ids, list)
         and all(isinstance(source_id, str) and source_id for source_id in source_ids)
         and tuple(source_ids) == context.run_source_ids
