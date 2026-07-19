@@ -68,10 +68,23 @@ from seektalent_runtime_control.run_acceptance import (
     normalize_run_record,
     validate_run_acceptance,
 )
+from seektalent_runtime_control.source_operations import (
+    AcceptedSourceOperation,
+    SourceDispatchMetadata,
+    SourceOperationRecord,
+    dispatch_ack_matches,
+    dispatch_matches_acceptance,
+    dispatch_matches_operation,
+    operation_matches_acceptance,
+    source_dispatch_from_row,
+    source_operation_from_row,
+    validate_source_dispatch_ack,
+    validate_source_operation_acceptance,
+)
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 7
+RUNTIME_CONTROL_SCHEMA_VERSION = 8
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -125,26 +138,40 @@ class RuntimeControlStore:
                     store_name="runtime-control",
                     now=_migration_now(),
                 )
-            with conn:
-                if version in {1, 2, 3, 4, 5, 6}:
-                    run_ordered_migrations(
-                        conn,
-                        from_version=version,
-                        to_version=RUNTIME_CONTROL_SCHEMA_VERSION,
-                        migrations={
-                            1: SQLiteMigrationStep(1, 2, _migrate_v1_to_v2),
-                            2: SQLiteMigrationStep(2, 3, _migrate_v2_to_v3),
-                            3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
-                            4: SQLiteMigrationStep(4, 5, _migrate_v4_to_v5),
-                            5: SQLiteMigrationStep(5, 6, _migrate_v5_to_v6),
-                            6: SQLiteMigrationStep(6, 7, _migrate_v6_to_v7),
-                        },
-                        store_name="runtime-control",
-                    )
-                else:
-                    _create_schema(conn)
-                    conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
+            if version in {1, 2, 3, 4, 5, 6}:
+                run_ordered_migrations(
+                    conn,
+                    from_version=version,
+                    to_version=7,
+                    migrations={
+                        1: SQLiteMigrationStep(1, 2, _migrate_v1_to_v2),
+                        2: SQLiteMigrationStep(2, 3, _migrate_v2_to_v3),
+                        3: SQLiteMigrationStep(3, 4, _migrate_v3_to_v4),
+                        4: SQLiteMigrationStep(4, 5, _migrate_v4_to_v5),
+                        5: SQLiteMigrationStep(5, 6, _migrate_v5_to_v6),
+                        6: SQLiteMigrationStep(6, 7, _migrate_v6_to_v7),
+                    },
+                    store_name="runtime-control",
+                )
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
+                conn.commit()
+                version = 7
+            if version == 7:
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    _migrate_v7_to_v8(conn)
+                    conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
+                    run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
+                    conn.commit()
+                except (SQLiteMigrationError, sqlite3.Error):
+                    conn.rollback()
+                    raise
+            else:
+                with conn:
+                    _create_schema(conn)
+                    _create_source_operation_schema(conn)
+                    conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
+                    run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
 
     def create_run(self, run: RuntimeRunRecord) -> RuntimeRunRecord:
         stored = normalize_run_record(run)
@@ -236,6 +263,309 @@ class RuntimeControlStore:
         with self._connect() as conn:
             row = _run_row_by_start_idempotency_key(conn, start_idempotency_key)
         return _run_from_row(row) if row is not None else None
+
+    def accept_source_operation(
+        self,
+        *,
+        runtime_run_id: str,
+        operation_id: str,
+        source_id: str,
+        operation_kind: str,
+        canonical_request_hash: str,
+        idempotency_key: str,
+        accepted_requirement_revision_id: str,
+        runtime_attempt_no: int,
+        runtime_attempt_authority_ref: str,
+        outbox_id: str,
+        dispatch_intent_id: str,
+        dispatch_intent_revision: int,
+        dispatch_intent_digest: str,
+        dispatch_authorization_ordinal: int,
+        source_operation_acceptance_ref: str,
+        expected_ledger_revision: int,
+        expected_reconciliation_revision: int,
+        fault_injector: Callable[[str], None] | None = None,
+    ) -> AcceptedSourceOperation:
+        validate_source_operation_acceptance(
+            runtime_run_id=runtime_run_id,
+            operation_id=operation_id,
+            source_id=source_id,
+            operation_kind=operation_kind,
+            canonical_request_hash=canonical_request_hash,
+            idempotency_key=idempotency_key,
+            accepted_requirement_revision_id=accepted_requirement_revision_id,
+            runtime_attempt_no=runtime_attempt_no,
+            runtime_attempt_authority_ref=runtime_attempt_authority_ref,
+            outbox_id=outbox_id,
+            dispatch_intent_id=dispatch_intent_id,
+            dispatch_intent_revision=dispatch_intent_revision,
+            dispatch_intent_digest=dispatch_intent_digest,
+            dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+            source_operation_acceptance_ref=source_operation_acceptance_ref,
+            expected_ledger_revision=expected_ledger_revision,
+            expected_reconciliation_revision=expected_reconciliation_revision,
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                run_row = _run_row(conn, runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError("runtime_run_not_found")
+                operation_by_id = _source_operation_row(conn, runtime_run_id, operation_id)
+                operation_by_key = _source_operation_row_by_idempotency(conn, runtime_run_id, idempotency_key)
+                operation = None
+                dispatch = None
+                if operation_by_id is not None:
+                    operation, dispatch = _source_operation_pair(conn, operation_by_id)
+                if operation_by_key is not None and (
+                    operation_by_id is None or operation_by_key["operation_id"] != operation_by_id["operation_id"]
+                ):
+                    _source_operation_pair(conn, operation_by_key)
+                if operation is not None and dispatch is not None:
+                    if operation.idempotency_key != idempotency_key:
+                        raise RuntimeControlError("identity_conflict")
+                    if operation.canonical_request_hash != canonical_request_hash:
+                        raise RuntimeControlError("idempotency_conflict")
+                    if operation_by_key is None or operation_by_key["operation_id"] != operation_id:
+                        raise RuntimeControlError("source_operation_acceptance_incomplete")
+                    if not operation_matches_acceptance(
+                        operation,
+                        operation_id=operation_id,
+                        source_id=source_id,
+                        operation_kind=operation_kind,
+                        canonical_request_hash=canonical_request_hash,
+                        idempotency_key=idempotency_key,
+                        accepted_requirement_revision_id=accepted_requirement_revision_id,
+                        runtime_attempt_no=runtime_attempt_no,
+                        runtime_attempt_authority_ref=runtime_attempt_authority_ref,
+                    ):
+                        raise RuntimeControlError("identity_conflict")
+                    if not dispatch_matches_acceptance(
+                        dispatch,
+                        outbox_id=outbox_id,
+                        canonical_request_hash=canonical_request_hash,
+                        dispatch_intent_id=dispatch_intent_id,
+                        dispatch_intent_revision=dispatch_intent_revision,
+                        dispatch_intent_digest=dispatch_intent_digest,
+                        dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+                        source_operation_acceptance_ref=source_operation_acceptance_ref,
+                        expected_ledger_revision=expected_ledger_revision,
+                        expected_reconciliation_revision=expected_reconciliation_revision,
+                    ):
+                        raise RuntimeControlError("identity_conflict")
+                    conn.commit()
+                    _inject_source_operation_fault(fault_injector, "after_commit")
+                    return AcceptedSourceOperation(operation=operation, dispatch=dispatch)
+                if operation_by_key is not None:
+                    raise RuntimeControlError("idempotency_conflict")
+                if _source_dispatch_row_for_operation(conn, runtime_run_id, operation_id) is not None:
+                    raise RuntimeControlError("source_operation_acceptance_incomplete")
+                if run_row["status"] not in {"starting", "running"}:
+                    raise RuntimeControlError("source_operation_run_not_dispatchable")
+                if run_row["approved_requirement_revision_id"] != accepted_requirement_revision_id:
+                    raise RuntimeControlError("source_operation_requirement_revision_mismatch")
+                if _source_dispatch_identity_exists(conn, outbox_id, dispatch_intent_id):
+                    raise RuntimeControlError("identity_conflict")
+
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_source_operations (
+                        runtime_run_id, operation_id, source_id, operation_kind,
+                        canonical_request_hash, idempotency_key,
+                        accepted_requirement_revision_id, runtime_attempt_no,
+                        runtime_attempt_authority_ref, operation_phase, dispatch_intent_ref,
+                        conclusive_observation_ref, source_operation_disposition, retry_posture,
+                        reconciliation_revision, main_commit_ref, ledger_revision
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'accepted', NULL, NULL, NULL,
+                            'no_retry', 0, NULL, 1)
+                    """,
+                    (
+                        runtime_run_id,
+                        operation_id,
+                        source_id,
+                        operation_kind,
+                        canonical_request_hash,
+                        idempotency_key,
+                        accepted_requirement_revision_id,
+                        runtime_attempt_no,
+                        runtime_attempt_authority_ref,
+                    ),
+                )
+                _inject_source_operation_fault(fault_injector, "after_operation_insert")
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_source_dispatch_outbox (
+                        outbox_id, runtime_run_id, operation_id, canonical_request_hash,
+                        dispatch_intent_id, dispatch_intent_revision, dispatch_intent_digest,
+                        dispatch_authorization_ordinal, source_operation_acceptance_ref,
+                        expected_ledger_revision, expected_reconciliation_revision,
+                        status, outbox_revision, accepted_sidecar_generation,
+                        accepted_sidecar_journal_revision, ack_ref, ack_kind, acknowledged_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, NULL, NULL, NULL, NULL, NULL)
+                    """,
+                    (
+                        outbox_id,
+                        runtime_run_id,
+                        operation_id,
+                        canonical_request_hash,
+                        dispatch_intent_id,
+                        dispatch_intent_revision,
+                        dispatch_intent_digest,
+                        dispatch_authorization_ordinal,
+                        source_operation_acceptance_ref,
+                        expected_ledger_revision,
+                        expected_reconciliation_revision,
+                    ),
+                )
+                _inject_source_operation_fault(fault_injector, "after_outbox_insert")
+                operation_row = _source_operation_row(conn, runtime_run_id, operation_id)
+                dispatch_row = _source_dispatch_row_for_operation(conn, runtime_run_id, operation_id)
+                if operation_row is None or dispatch_row is None:
+                    raise RuntimeControlError("source_operation_acceptance_incomplete")
+                operation = source_operation_from_row(operation_row)
+                dispatch = source_dispatch_from_row(dispatch_row)
+                conn.commit()
+                _inject_source_operation_fault(fault_injector, "after_commit")
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return AcceptedSourceOperation(operation=operation, dispatch=dispatch)
+
+    def get_source_operation(self, runtime_run_id: str, operation_id: str) -> SourceOperationRecord:
+        with self._connect() as conn:
+            row = _source_operation_row(conn, runtime_run_id, operation_id)
+        if row is None:
+            raise RuntimeControlLookupError("source_operation_not_found")
+        return source_operation_from_row(row)
+
+    def list_pending_source_dispatches(self, limit: int = 100) -> list[SourceDispatchMetadata]:
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("source_dispatch_limit_invalid")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_source_dispatch_outbox
+                WHERE status = 'pending'
+                ORDER BY outbox_id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            dispatches = []
+            for row in rows:
+                dispatch = source_dispatch_from_row(row)
+                _require_source_dispatch_operation(conn, dispatch)
+                dispatches.append(dispatch)
+        return dispatches
+
+    def record_source_dispatch_ack(
+        self,
+        *,
+        runtime_run_id: str,
+        operation_id: str,
+        outbox_id: str,
+        canonical_request_hash: str,
+        dispatch_intent_id: str,
+        dispatch_intent_revision: int,
+        dispatch_intent_digest: str,
+        dispatch_authorization_ordinal: int,
+        expected_outbox_revision: int,
+        accepted_sidecar_generation: int,
+        accepted_sidecar_journal_revision: int,
+        ack_ref: str,
+        ack_kind: str,
+        acknowledged_at: str,
+    ) -> SourceDispatchMetadata:
+        validate_source_dispatch_ack(
+            runtime_run_id=runtime_run_id,
+            operation_id=operation_id,
+            outbox_id=outbox_id,
+            canonical_request_hash=canonical_request_hash,
+            dispatch_intent_id=dispatch_intent_id,
+            dispatch_intent_revision=dispatch_intent_revision,
+            dispatch_intent_digest=dispatch_intent_digest,
+            dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+            expected_outbox_revision=expected_outbox_revision,
+            accepted_sidecar_generation=accepted_sidecar_generation,
+            accepted_sidecar_journal_revision=accepted_sidecar_journal_revision,
+            ack_ref=ack_ref,
+            ack_kind=ack_kind,
+            acknowledged_at=acknowledged_at,
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT * FROM runtime_control_source_dispatch_outbox WHERE outbox_id = ?",
+                    (outbox_id,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeControlLookupError("source_dispatch_not_found")
+                dispatch = source_dispatch_from_row(row)
+                _require_source_dispatch_operation(conn, dispatch)
+                if (
+                    dispatch.runtime_run_id != runtime_run_id
+                    or dispatch.operation_id != operation_id
+                    or dispatch.canonical_request_hash != canonical_request_hash
+                    or dispatch.dispatch_intent_id != dispatch_intent_id
+                    or dispatch.dispatch_intent_revision != dispatch_intent_revision
+                    or dispatch.dispatch_intent_digest != dispatch_intent_digest
+                    or dispatch.dispatch_authorization_ordinal != dispatch_authorization_ordinal
+                ):
+                    raise RuntimeControlError("source_dispatch_identity_conflict")
+                if dispatch.status == "acknowledged":
+                    if expected_outbox_revision != 1:
+                        raise RuntimeControlError("source_dispatch_outbox_revision_conflict")
+                    if dispatch_ack_matches(
+                        dispatch,
+                        accepted_sidecar_generation=accepted_sidecar_generation,
+                        accepted_sidecar_journal_revision=accepted_sidecar_journal_revision,
+                        ack_ref=ack_ref,
+                        ack_kind=ack_kind,
+                        acknowledged_at=acknowledged_at,
+                    ):
+                        conn.commit()
+                        return dispatch
+                    raise RuntimeControlError("source_dispatch_ack_conflict")
+                if dispatch.outbox_revision != expected_outbox_revision:
+                    raise RuntimeControlError("source_dispatch_outbox_revision_conflict")
+                if dispatch.status != "pending":
+                    raise RuntimeControlError("source_dispatch_ack_conflict")
+                updated = conn.execute(
+                    """
+                    UPDATE runtime_control_source_dispatch_outbox
+                    SET status = 'acknowledged', outbox_revision = outbox_revision + 1,
+                        accepted_sidecar_generation = ?, accepted_sidecar_journal_revision = ?,
+                        ack_ref = ?, ack_kind = ?, acknowledged_at = ?
+                    WHERE outbox_id = ? AND status = 'pending' AND outbox_revision = ?
+                    """,
+                    (
+                        accepted_sidecar_generation,
+                        accepted_sidecar_journal_revision,
+                        ack_ref,
+                        ack_kind,
+                        acknowledged_at,
+                        outbox_id,
+                        expected_outbox_revision,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise RuntimeControlError("source_dispatch_outbox_revision_conflict")
+                updated_row = conn.execute(
+                    "SELECT * FROM runtime_control_source_dispatch_outbox WHERE outbox_id = ?",
+                    (outbox_id,),
+                ).fetchone()
+                if updated_row is None:
+                    raise RuntimeControlError("source_operation_acceptance_incomplete")
+                dispatch = source_dispatch_from_row(updated_row)
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return dispatch
 
     def link_workbench_session(
         self,
@@ -2802,6 +3132,103 @@ def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
     _ensure_candidate_evidence_source_references_column(conn)
 
 
+def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    _create_source_operation_schema(conn)
+
+
+_SOURCE_OPERATION_SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS runtime_control_source_operations (
+      runtime_run_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      operation_kind TEXT NOT NULL,
+      canonical_request_hash TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      accepted_requirement_revision_id TEXT NOT NULL,
+      runtime_attempt_no INTEGER NOT NULL,
+      runtime_attempt_authority_ref TEXT NOT NULL,
+      operation_phase TEXT NOT NULL,
+      dispatch_intent_ref TEXT,
+      conclusive_observation_ref TEXT,
+      source_operation_disposition TEXT,
+      retry_posture TEXT NOT NULL,
+      reconciliation_revision INTEGER NOT NULL,
+      main_commit_ref TEXT,
+      ledger_revision INTEGER NOT NULL,
+      PRIMARY KEY(runtime_run_id, operation_id),
+      UNIQUE(runtime_run_id, idempotency_key),
+      CHECK (source_id = 'liepin'),
+      CHECK (operation_kind IN ('verify_session', 'search', 'cards', 'details', 'continuation', 'cleanup')),
+      CHECK (operation_phase IN ('accepted', 'dispatch_intent', 'observed', 'reconciled', 'main_committed')),
+      CHECK (source_operation_disposition IS NULL OR source_operation_disposition IN (
+        'completed', 'partial', 'user_action_required', 'incompatible', 'failed',
+        'cancelled', 'reconciliation_unknown'
+      )),
+      CHECK (retry_posture IN ('no_retry', 'safe_retry', 'reconcile_first')),
+      CHECK (runtime_attempt_no > 0),
+      CHECK (reconciliation_revision >= 0),
+      CHECK (ledger_revision > 0)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS runtime_control_source_dispatch_outbox (
+      outbox_id TEXT PRIMARY KEY,
+      runtime_run_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      canonical_request_hash TEXT NOT NULL,
+      dispatch_intent_id TEXT NOT NULL,
+      dispatch_intent_revision INTEGER NOT NULL,
+      dispatch_intent_digest TEXT NOT NULL,
+      dispatch_authorization_ordinal INTEGER NOT NULL,
+      source_operation_acceptance_ref TEXT NOT NULL,
+      expected_ledger_revision INTEGER NOT NULL,
+      expected_reconciliation_revision INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      outbox_revision INTEGER NOT NULL,
+      accepted_sidecar_generation INTEGER,
+      accepted_sidecar_journal_revision INTEGER,
+      ack_ref TEXT,
+      ack_kind TEXT,
+      acknowledged_at TEXT,
+      UNIQUE(runtime_run_id, operation_id, dispatch_authorization_ordinal),
+      UNIQUE(runtime_run_id, dispatch_intent_id),
+      CHECK (dispatch_intent_revision > 0),
+      CHECK (dispatch_authorization_ordinal = 1),
+      CHECK (expected_ledger_revision = 1),
+      CHECK (expected_reconciliation_revision = 0),
+      CHECK (status IN ('pending', 'acknowledged')),
+      CHECK (outbox_revision > 0),
+      CHECK (accepted_sidecar_generation IS NULL OR accepted_sidecar_generation > 0),
+      CHECK (accepted_sidecar_journal_revision IS NULL OR accepted_sidecar_journal_revision > 0),
+      CHECK (ack_kind IS NULL OR ack_kind IN (
+        'new_logical_operation', 'new_dispatch_authorization', 'same_intent_replay'
+      )),
+      CHECK (
+        (status = 'pending' AND outbox_revision = 1
+          AND accepted_sidecar_generation IS NULL
+          AND accepted_sidecar_journal_revision IS NULL
+          AND ack_ref IS NULL AND ack_kind IS NULL AND acknowledged_at IS NULL)
+        OR
+        (status = 'acknowledged' AND outbox_revision = 2
+          AND accepted_sidecar_generation IS NOT NULL
+          AND accepted_sidecar_journal_revision IS NOT NULL
+          AND ack_ref IS NOT NULL AND ack_kind IS NOT NULL AND acknowledged_at IS NOT NULL)
+      )
+    )
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_runtime_source_dispatch_pending
+      ON runtime_control_source_dispatch_outbox(status, outbox_id)
+    """,
+)
+
+
+def _create_source_operation_schema(conn: sqlite3.Connection) -> None:
+    for statement in _SOURCE_OPERATION_SCHEMA_STATEMENTS:
+        conn.execute(statement)
+
+
 def _ensure_candidate_evidence_source_references_column(conn: sqlite3.Connection) -> None:
     if not _table_exists(conn, "runtime_control_candidate_evidence"):
         return
@@ -3432,11 +3859,108 @@ def _inject_recovery_fault(
         fault_injector(point)
 
 
+def _inject_source_operation_fault(fault_injector: Callable[[str], None] | None, point: str) -> None:
+    if fault_injector is not None:
+        fault_injector(point)
+
+
 def _run_row(conn: sqlite3.Connection, runtime_run_id: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
         (runtime_run_id,),
     ).fetchone()
+
+
+def _source_operation_row(
+    conn: sqlite3.Connection,
+    runtime_run_id: str,
+    operation_id: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_source_operations
+        WHERE runtime_run_id = ? AND operation_id = ?
+        """,
+        (runtime_run_id, operation_id),
+    ).fetchone()
+
+
+def _source_operation_row_by_idempotency(
+    conn: sqlite3.Connection,
+    runtime_run_id: str,
+    idempotency_key: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_source_operations
+        WHERE runtime_run_id = ? AND idempotency_key = ?
+        """,
+        (runtime_run_id, idempotency_key),
+    ).fetchone()
+
+
+def _source_operation_pair(
+    conn: sqlite3.Connection,
+    operation_row: sqlite3.Row,
+) -> tuple[SourceOperationRecord, SourceDispatchMetadata]:
+    operation = source_operation_from_row(operation_row)
+    dispatch_row = _source_dispatch_row_for_operation(conn, operation.runtime_run_id, operation.operation_id)
+    if dispatch_row is None:
+        raise RuntimeControlError("source_operation_acceptance_incomplete")
+    dispatch = source_dispatch_from_row(dispatch_row)
+    _require_source_dispatch_operation(conn, dispatch)
+    return operation, dispatch
+
+
+def _require_source_dispatch_operation(
+    conn: sqlite3.Connection,
+    dispatch: SourceDispatchMetadata,
+) -> SourceOperationRecord:
+    if _run_row(conn, dispatch.runtime_run_id) is None:
+        raise RuntimeControlError("source_operation_acceptance_incomplete")
+    operation_row = _source_operation_row(conn, dispatch.runtime_run_id, dispatch.operation_id)
+    if operation_row is None:
+        raise RuntimeControlError("source_operation_acceptance_incomplete")
+    operation = source_operation_from_row(operation_row)
+    if not dispatch_matches_operation(dispatch, operation):
+        raise RuntimeControlError("source_operation_acceptance_incomplete")
+    return operation
+
+
+def _source_dispatch_row_for_operation(
+    conn: sqlite3.Connection,
+    runtime_run_id: str,
+    operation_id: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_source_dispatch_outbox
+        WHERE runtime_run_id = ? AND operation_id = ? AND dispatch_authorization_ordinal = 1
+        """,
+        (runtime_run_id, operation_id),
+    ).fetchone()
+
+
+def _source_dispatch_identity_exists(
+    conn: sqlite3.Connection,
+    outbox_id: str,
+    dispatch_intent_id: str,
+) -> bool:
+    return (
+        conn.execute(
+            """
+            SELECT 1
+            FROM runtime_control_source_dispatch_outbox
+            WHERE outbox_id = ? OR dispatch_intent_id = ?
+            LIMIT 1
+            """,
+            (outbox_id, dispatch_intent_id),
+        ).fetchone()
+        is not None
+    )
 
 
 def _run_row_by_run_intent(conn: sqlite3.Connection, run_intent_id: str | None) -> sqlite3.Row | None:
