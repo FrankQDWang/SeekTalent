@@ -44,10 +44,110 @@ def test_store_initializes_empty_db_and_reopens_idempotently(tmp_path: Path) -> 
         "runtime_control_checkpoints",
         "runtime_control_executor_leases",
         "runtime_control_events",
+        "runtime_control_source_operations",
+        "runtime_control_source_dispatch_outbox",
         "runtime_control_snapshots",
         "runtime_control_artifact_refs",
         "runtime_control_final_summaries",
     } <= tables
+
+
+def test_populated_v7_migrates_to_v8_with_readable_backup_and_reopens(tmp_path: Path) -> None:
+    from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION, RuntimeControlStore
+
+    db_path = tmp_path / "runtime_control.sqlite3"
+    store = RuntimeControlStore(db_path)
+    store.initialize()
+    _accept_run(store, _queued_run("runtime_run_v7"))
+    _downgrade_fixture_to_v7(db_path)
+
+    store.initialize()
+    store.initialize()
+
+    backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
+    assert len(backups) == 1
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 8
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        pending_index = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_runtime_source_dispatch_pending'"
+        ).fetchone()
+    assert "runtime_control_source_operations" in tables
+    assert "runtime_control_source_dispatch_outbox" in tables
+    assert pending_index == (1,)
+
+    with sqlite3.connect(f"file:{backups[0]}?mode=ro", uri=True) as backup:
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert backup.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
+        assert backup.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
+        backup_tables = {row[0] for row in backup.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "runtime_control_source_operations" not in backup_tables
+    assert "runtime_control_source_dispatch_outbox" not in backup_tables
+
+
+@pytest.mark.parametrize("completed_statements", [1, 2, 3])
+def test_v7_to_v8_statement_failure_rolls_back_ddl_and_user_version(
+    tmp_path: Path,
+    monkeypatch,
+    completed_statements: int,
+) -> None:
+    import seektalent_runtime_control.store as store_module
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    db_path = tmp_path / "runtime_control.sqlite3"
+    store = RuntimeControlStore(db_path)
+    store.initialize()
+    _accept_run(store, _queued_run("runtime_run_v7_failure"))
+    _downgrade_fixture_to_v7(db_path)
+    statements = store_module._SOURCE_OPERATION_SCHEMA_STATEMENTS
+    monkeypatch.setattr(
+        store_module,
+        "_SOURCE_OPERATION_SCHEMA_STATEMENTS",
+        (*statements[:completed_statements], "CREATE TABL injected_invalid_statement"),
+    )
+
+    with pytest.raises(sqlite3.OperationalError):
+        store.initialize()
+
+    _assert_v7_without_source_schema(db_path)
+    monkeypatch.setattr(store_module, "_SOURCE_OPERATION_SCHEMA_STATEMENTS", statements)
+    store.initialize()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+
+
+@pytest.mark.parametrize("completed_statements", [1, 2, 3])
+def test_real_v1_to_v8_source_schema_failure_stops_at_clean_v7(
+    tmp_path: Path,
+    monkeypatch,
+    completed_statements: int,
+) -> None:
+    import seektalent_runtime_control.store as store_module
+    from seektalent_runtime_control.store import RuntimeControlStore
+    from tests.test_runtime_control_event_contract import _create_v1_runtime_db
+
+    db_path = tmp_path / "runtime_control_v1.sqlite3"
+    _create_v1_runtime_db(db_path)
+    statements = store_module._SOURCE_OPERATION_SCHEMA_STATEMENTS
+    monkeypatch.setattr(
+        store_module,
+        "_SOURCE_OPERATION_SCHEMA_STATEMENTS",
+        (*statements[:completed_statements], "CREATE TABL injected_invalid_statement"),
+    )
+
+    with pytest.raises(sqlite3.OperationalError):
+        RuntimeControlStore(db_path).initialize()
+
+    _assert_v7_without_source_schema(db_path)
+    assert len(list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))) == 1
+    monkeypatch.setattr(store_module, "_SOURCE_OPERATION_SCHEMA_STATEMENTS", statements)
+    RuntimeControlStore(db_path).initialize()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
 
 
 def test_approved_requirement_can_record_amendment_lineage_without_draft(tmp_path: Path) -> None:
@@ -628,3 +728,22 @@ def _accept_run(store, run):
             updated_at="2026-06-08T00:00:01Z",
         ),
     )
+
+
+def _downgrade_fixture_to_v7(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE runtime_control_source_dispatch_outbox")
+        conn.execute("DROP TABLE runtime_control_source_operations")
+        conn.execute("PRAGMA user_version = 7")
+
+
+def _assert_v7_without_source_schema(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        indexes = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
+    assert "runtime_control_source_operations" not in tables
+    assert "runtime_control_source_dispatch_outbox" not in tables
+    assert "idx_runtime_source_dispatch_pending" not in indexes
