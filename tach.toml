@@ -105,6 +105,10 @@ path = "seektalent.source_contracts"
 depends_on = []
 
 [[modules]]
+path = "seektalent.source_port"
+depends_on = []
+
+[[modules]]
 path = "seektalent.source_adapters"
 depends_on = [
   "seektalent.core",
