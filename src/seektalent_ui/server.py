@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import secrets
+import sys
 from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -60,6 +62,9 @@ from seektalent_ui.workbench_paths import agent_workbench_stream_db_path, workbe
 from seektalent_ui.workbench_observability import correlation_id_from_request
 from seektalent_ui.workbench_store import WorkbenchStore
 from seektalent_ui.workflow_start_outbox_runner import RequirementExtractionOutboxRunner, WorkflowStartOutboxRunner
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -256,12 +261,24 @@ async def _lifespan(app: FastAPI):
             extraction_runner.start()
         yield
     finally:
-        if extraction_runner is not None:
-            extraction_runner.stop()
-        if runner is not None:
-            runner.stop()
-        if runtime_runner is not None:
-            runtime_runner.stop()
+        body_error = sys.exception()
+        cleanup_errors: list[Exception] = []
+        for name, lifespan_runner in (
+            ("requirement extraction runner", extraction_runner),
+            ("workflow start runner", runner),
+            ("Workbench v2 runtime runner", runtime_runner),
+        ):
+            if lifespan_runner is None:
+                continue
+            try:
+                lifespan_runner.stop()
+            except (RuntimeError, ValueError, TypeError, OSError) as exc:
+                logger.exception("%s failed during application lifespan cleanup", name)
+                cleanup_errors.append(exc)
+        if cleanup_errors and body_error is None:
+            if len(cleanup_errors) == 1:
+                raise cleanup_errors[0]
+            raise ExceptionGroup("application lifespan cleanup failed", cleanup_errors)
 
 
 def _install_custom_openapi(app: FastAPI) -> None:
