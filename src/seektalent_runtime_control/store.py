@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
@@ -22,6 +21,18 @@ from seektalent.sqlite_migrations import (
     run_sqlite_integrity_checks,
 )
 from seektalent_runtime_control.candidates import candidate_truth_from_run_state
+from seektalent_runtime_control.checkpoint_recovery import (
+    RUNTIME_CHECKPOINT_CORRUPT,
+    RUNTIME_CHECKPOINT_MISSING,
+    RUNTIME_CHECKPOINT_RUN_MISMATCH,
+    RUNTIME_CHECKPOINT_SCHEMA_UNSUPPORTED,
+    RuntimeCheckpointLoadFailure,
+    RuntimeCheckpointValidationContext,
+    RuntimeRecoveryDecision,
+    RuntimeRecoveryPlan,
+    decide_expired_lease_recovery,
+    validate_recoverable_checkpoint,
+)
 from seektalent_runtime_control.clock import max_iso_timestamp, timestamp_lte
 from seektalent_runtime_control.errors import RuntimeControlError, RuntimeControlLookupError
 from seektalent_runtime_control.fsm import require_run_transition
@@ -82,12 +93,6 @@ _REQUIRED_STAGE_OUTPUT_KINDS = {
     "runtime_public_finalization",
     "shortlist",
 }
-
-
-@dataclass(frozen=True)
-class RuntimeCheckpointLoadFailure:
-    checkpoint_id: str
-    reason_code: str
 
 
 class RuntimeControlStore:
@@ -373,22 +378,42 @@ class RuntimeControlStore:
         heartbeat_at: str,
         lease_expires_at: str,
     ) -> RuntimeExecutorLease:
-        with self._connect() as conn, conn:
-            lease_row = _require_active_executor(conn, runtime_run_id, executor_id, attempt_no=attempt_no)
-            stored_heartbeat_at = max_iso_timestamp(heartbeat_at, lease_row["heartbeat_at"], lease_row["acquired_at"])
-            stored_lease_expires_at = max_iso_timestamp(lease_expires_at, lease_row["lease_expires_at"])
-            conn.execute(
-                """
-                UPDATE runtime_control_executor_leases
-                SET heartbeat_at = ?, lease_expires_at = ?
-                WHERE lease_id = ?
-                """,
-                (stored_heartbeat_at, stored_lease_expires_at, lease_row["lease_id"]),
-            )
-            updated = conn.execute(
-                "SELECT * FROM runtime_control_executor_leases WHERE lease_id = ?",
-                (lease_row["lease_id"],),
-            ).fetchone()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                lease_row = _require_active_executor(
+                    conn,
+                    runtime_run_id,
+                    executor_id,
+                    attempt_no=attempt_no,
+                )
+                if timestamp_lte(lease_row["lease_expires_at"], heartbeat_at):
+                    raise RuntimeControlError("runtime_executor_lease_expired")
+                stored_heartbeat_at = max_iso_timestamp(
+                    heartbeat_at,
+                    lease_row["heartbeat_at"],
+                    lease_row["acquired_at"],
+                )
+                stored_lease_expires_at = max_iso_timestamp(
+                    lease_expires_at,
+                    lease_row["lease_expires_at"],
+                )
+                conn.execute(
+                    """
+                    UPDATE runtime_control_executor_leases
+                    SET heartbeat_at = ?, lease_expires_at = ?
+                    WHERE lease_id = ? AND status = 'active'
+                    """,
+                    (stored_heartbeat_at, stored_lease_expires_at, lease_row["lease_id"]),
+                )
+                updated = conn.execute(
+                    "SELECT * FROM runtime_control_executor_leases WHERE lease_id = ?",
+                    (lease_row["lease_id"],),
+                ).fetchone()
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
         return _lease_from_row(updated)
 
     def release_executor_lease(
@@ -480,6 +505,109 @@ class RuntimeControlStore:
             )
             for row in rows
         ]
+
+    def settle_next_expired_executor_lease(
+        self,
+        *,
+        now: str,
+        resume_recoverable: bool,
+        fault_injector: Callable[[str], None] | None = None,
+    ) -> RuntimeRecoveryDecision | None:
+        """Atomically expire and settle one active or legacy-stranded lease."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                lease_row = _next_recovery_lease_row(conn, now=now)
+                if lease_row is None:
+                    conn.commit()
+                    return None
+                run_row = _run_row(conn, lease_row["runtime_run_id"])
+                if run_row is None or run_row["status"] in _TERMINAL_RUN_STATUSES:
+                    conn.commit()
+                    return None
+                if lease_row["status"] == "active":
+                    updated = conn.execute(
+                        """
+                        UPDATE runtime_control_executor_leases
+                        SET status = 'expired', released_at = ?,
+                            reason_code = 'runtime_executor_lease_expired'
+                        WHERE lease_id = ? AND status = 'active' AND lease_expires_at <= ?
+                        """,
+                        (now, lease_row["lease_id"], now),
+                    )
+                    if updated.rowcount != 1:
+                        conn.commit()
+                        return None
+                elif _active_lease_row(conn, lease_row["runtime_run_id"]) is not None:
+                    conn.commit()
+                    return None
+                _inject_recovery_fault(fault_injector, "after_lease_update")
+
+                checkpoint = (
+                    None
+                    if run_row["status"] == "cancellation_requested"
+                    else _recoverable_checkpoint_from_run_row(conn, run_row)
+                )
+                plan = decide_expired_lease_recovery(
+                    run_status=run_row["status"],
+                    checkpoint=checkpoint,
+                    resume_recoverable=resume_recoverable,
+                )
+                _append_recovery_expiry_event(conn, lease_row=lease_row, run_row=run_row, now=now)
+                _inject_recovery_fault(fault_injector, "after_first_event")
+                _append_recovery_decision_event(
+                    conn,
+                    lease_row=lease_row,
+                    run_row=run_row,
+                    checkpoint=checkpoint,
+                    plan=plan,
+                    now=now,
+                )
+                _inject_recovery_fault(fault_injector, "before_run_transition")
+                require_run_transition(run_row["status"], plan.target_status)
+                checkpoint_stage = (
+                    checkpoint.stage
+                    if isinstance(checkpoint, RuntimeCheckpoint)
+                    and plan.target_status == "resume_requested"
+                    else run_row["current_stage"]
+                )
+                checkpoint_round = (
+                    checkpoint.round_no
+                    if isinstance(checkpoint, RuntimeCheckpoint)
+                    and plan.target_status == "resume_requested"
+                    else run_row["current_round"]
+                )
+                terminal = plan.target_status in _TERMINAL_RUN_STATUSES
+                conn.execute(
+                    """
+                    UPDATE runtime_control_runs
+                    SET status = ?, current_stage = ?, current_round = ?, updated_at = ?,
+                        stop_reason_code = CASE WHEN ? THEN ? ELSE stop_reason_code END,
+                        completed_at = CASE WHEN ? THEN COALESCE(completed_at, ?) ELSE completed_at END
+                    WHERE runtime_run_id = ? AND status = ?
+                    """,
+                    (
+                        plan.target_status,
+                        checkpoint_stage,
+                        checkpoint_round,
+                        now,
+                        terminal,
+                        plan.reason_code,
+                        terminal,
+                        now,
+                        run_row["runtime_run_id"],
+                        run_row["status"],
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        _inject_recovery_fault(fault_injector, "after_commit")
+        return RuntimeRecoveryDecision(
+            runtime_run_id=run_row["runtime_run_id"],
+            reason_code=plan.reason_code,
+        )
 
     def save_requirement_draft(
         self,
@@ -1381,23 +1509,10 @@ class RuntimeControlStore:
         runtime_run_id: str,
     ) -> RuntimeCheckpoint | RuntimeCheckpointLoadFailure | None:
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM runtime_control_checkpoints
-                WHERE runtime_run_id = ?
-                ORDER BY created_at DESC, rowid DESC
-                """,
-                (runtime_run_id,),
-            ).fetchall()
-        first_failure: RuntimeCheckpointLoadFailure | None = None
-        for row in rows:
-            checkpoint = _checkpoint_from_row_or_failure(row)
-            if isinstance(checkpoint, RuntimeCheckpoint):
-                return checkpoint
-            if first_failure is None:
-                first_failure = checkpoint
-        return first_failure
+            run_row = _run_row(conn, runtime_run_id)
+            if run_row is None:
+                raise RuntimeControlLookupError("runtime_run_not_found")
+            return _recoverable_checkpoint_from_run_row(conn, run_row)
 
     def get_checkpoint(self, *, runtime_run_id: str, checkpoint_id: str) -> RuntimeCheckpoint | None:
         with self._connect() as conn:
@@ -2858,6 +2973,279 @@ def _append_event_in_transaction(
     return _event_from_row(stored)
 
 
+def _next_recovery_lease_row(conn: sqlite3.Connection, *, now: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT lease.*
+        FROM runtime_control_executor_leases AS lease
+        JOIN runtime_control_runs AS run
+          ON run.runtime_run_id = lease.runtime_run_id
+        WHERE run.status IN ('starting', 'running', 'cancellation_requested')
+          AND NOT EXISTS (
+            SELECT 1
+            FROM runtime_control_events AS settled_event
+            WHERE settled_event.runtime_run_id = lease.runtime_run_id
+              AND settled_event.idempotency_key =
+                  'runtime-recovery:' || lease.lease_id || ':decision'
+          )
+          AND (
+            (lease.status = 'active' AND lease.lease_expires_at <= ?)
+            OR (
+              lease.status = 'expired'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM runtime_control_executor_leases AS active
+                WHERE active.runtime_run_id = lease.runtime_run_id
+                  AND active.status = 'active'
+              )
+            )
+          )
+        ORDER BY
+          CASE lease.status WHEN 'active' THEN 0 ELSE 1 END,
+          lease.lease_expires_at ASC,
+          lease.attempt_no DESC
+        LIMIT 1
+        """,
+        (now,),
+    ).fetchone()
+
+
+def _recoverable_checkpoint_from_run_row(
+    conn: sqlite3.Connection,
+    run_row: sqlite3.Row,
+) -> RuntimeCheckpoint | RuntimeCheckpointLoadFailure | None:
+    checkpoint_id = run_row["latest_checkpoint_id"]
+    if checkpoint_id is None:
+        return None
+    checkpoint_row = conn.execute(
+        "SELECT * FROM runtime_control_checkpoints WHERE checkpoint_id = ?",
+        (checkpoint_id,),
+    ).fetchone()
+    if checkpoint_row is None:
+        return RuntimeCheckpointLoadFailure(
+            checkpoint_id=checkpoint_id,
+            reason_code=RUNTIME_CHECKPOINT_MISSING,
+        )
+    if checkpoint_row["runtime_run_id"] != run_row["runtime_run_id"]:
+        return RuntimeCheckpointLoadFailure(
+            checkpoint_id=checkpoint_id,
+            reason_code=RUNTIME_CHECKPOINT_RUN_MISMATCH,
+        )
+    checkpoint = _checkpoint_from_row_or_failure(checkpoint_row)
+    if isinstance(checkpoint, RuntimeCheckpointLoadFailure):
+        return checkpoint
+    raw_source_ids = _json_list(run_row["source_ids_json"])
+    run_source_ids = tuple(item for item in raw_source_ids if isinstance(item, str))
+    candidate_truth_valid = (
+        _candidate_truth_matches_checkpoint(conn, checkpoint)
+        if checkpoint.safe_boundary == "runtime_candidate_checkpoint"
+        else True
+    )
+    invalid_reason = validate_recoverable_checkpoint(
+        checkpoint,
+        RuntimeCheckpointValidationContext(
+            run_status=run_row["status"],
+            run_stage=run_row["current_stage"],
+            run_round_no=run_row["current_round"],
+            run_source_ids=run_source_ids,
+            candidate_truth_valid=candidate_truth_valid,
+        ),
+    )
+    if invalid_reason is not None:
+        return RuntimeCheckpointLoadFailure(
+            checkpoint_id=checkpoint_id,
+            reason_code=invalid_reason,
+        )
+    return checkpoint
+
+
+def _candidate_truth_matches_checkpoint(
+    conn: sqlite3.Connection,
+    checkpoint: RuntimeCheckpoint,
+) -> bool:
+    try:
+        truth = candidate_truth_from_run_state(
+            runtime_run_id=checkpoint.runtime_run_id,
+            run_state=checkpoint.run_state,
+            source_checkpoint_id=checkpoint.checkpoint_id,
+            observed_at=checkpoint.created_at,
+        )
+    except (TypeError, ValueError, ValidationError):
+        return False
+    for identity in truth.identities:
+        row = conn.execute(
+            """
+            SELECT payload_hash, updated_at
+            FROM runtime_control_candidate_identities
+            WHERE runtime_run_id = ? AND identity_id = ?
+            """,
+            (identity.runtime_run_id, identity.identity_id),
+        ).fetchone()
+        if row is None or row["payload_hash"] != identity.payload_hash or row["updated_at"] != identity.updated_at:
+            return False
+    for evidence in truth.evidence:
+        row = conn.execute(
+            """
+            SELECT payload_hash, updated_at
+            FROM runtime_control_candidate_evidence
+            WHERE runtime_run_id = ? AND evidence_id = ?
+            """,
+            (evidence.runtime_run_id, evidence.evidence_id),
+        ).fetchone()
+        if row is None or row["payload_hash"] != evidence.payload_hash or row["updated_at"] != evidence.updated_at:
+            return False
+    for revision in truth.finalization_revisions:
+        row = conn.execute(
+            """
+            SELECT payload_hash, source_checkpoint_id, created_at
+            FROM runtime_control_candidate_finalization_revisions
+            WHERE runtime_run_id = ? AND revision = ?
+            """,
+            (revision.runtime_run_id, revision.revision),
+        ).fetchone()
+        if (
+            row is None
+            or row["payload_hash"] != revision.payload_hash
+            or row["source_checkpoint_id"] != checkpoint.checkpoint_id
+            or row["created_at"] != revision.created_at
+        ):
+            return False
+    return True
+
+
+def _append_recovery_expiry_event(
+    conn: sqlite3.Connection,
+    *,
+    lease_row: sqlite3.Row,
+    run_row: sqlite3.Row,
+    now: str,
+) -> None:
+    if _matching_legacy_expiry_event_exists(conn, lease_row=lease_row):
+        return
+    _append_event_in_transaction(
+        conn,
+        RuntimeControlEventInput(
+            event_id=_recovery_event_id(lease_row["lease_id"], "lease-expired"),
+            runtime_run_id=run_row["runtime_run_id"],
+            event_type="runtime_executor_lease_expired",
+            stage=run_row["current_stage"],
+            round_no=run_row["current_round"],
+            source_id=None,
+            status="failed",
+            summary="executor lease expired",
+            payload={
+                "leaseId": lease_row["lease_id"],
+                "executorId": lease_row["executor_id"],
+                "attemptNo": lease_row["attempt_no"],
+            },
+            visibility="developer",
+            idempotency_key=f"runtime-recovery:{lease_row['lease_id']}:lease-expired",
+            created_at=now,
+        ),
+        snapshot=None,
+        run_status=None,
+        stop_reason_code=None,
+        completed_at=None,
+        latest_checkpoint_id=None,
+    )
+
+
+def _append_recovery_decision_event(
+    conn: sqlite3.Connection,
+    *,
+    lease_row: sqlite3.Row,
+    run_row: sqlite3.Row,
+    checkpoint: RuntimeCheckpoint | RuntimeCheckpointLoadFailure | None,
+    plan: RuntimeRecoveryPlan,
+    now: str,
+) -> None:
+    payload: dict[str, object] = {
+        "reasonCode": plan.reason_code,
+        "leaseId": lease_row["lease_id"],
+        "executorId": lease_row["executor_id"],
+        "attemptNo": lease_row["attempt_no"],
+    }
+    if plan.checkpoint_id is not None:
+        payload["checkpointId"] = plan.checkpoint_id
+    event_stage = (
+        checkpoint.stage
+        if isinstance(checkpoint, RuntimeCheckpoint) and plan.target_status == "resume_requested"
+        else run_row["current_stage"]
+    )
+    event_round = (
+        checkpoint.round_no
+        if isinstance(checkpoint, RuntimeCheckpoint) and plan.target_status == "resume_requested"
+        else run_row["current_round"]
+    )
+    _append_event_in_transaction(
+        conn,
+        RuntimeControlEventInput(
+            event_id=_recovery_event_id(lease_row["lease_id"], "decision"),
+            runtime_run_id=run_row["runtime_run_id"],
+            event_type=plan.event_type,
+            stage=event_stage,
+            round_no=event_round,
+            source_id=None,
+            status=plan.event_status,
+            summary=plan.summary,
+            payload=payload,
+            visibility="developer",
+            idempotency_key=f"runtime-recovery:{lease_row['lease_id']}:decision",
+            created_at=now,
+        ),
+        snapshot=None,
+        run_status=None,
+        stop_reason_code=None,
+        completed_at=None,
+        latest_checkpoint_id=None,
+    )
+
+
+def _matching_legacy_expiry_event_exists(
+    conn: sqlite3.Connection,
+    *,
+    lease_row: sqlite3.Row,
+) -> bool:
+    rows = conn.execute(
+        """
+        SELECT payload_json
+        FROM runtime_control_events
+        WHERE runtime_run_id = ? AND event_type = 'runtime_executor_lease_expired'
+        """,
+        (lease_row["runtime_run_id"],),
+    ).fetchall()
+    for row in rows:
+        payload = _recovery_event_payload(row["payload_json"])
+        if payload is None:
+            continue
+        if (
+            payload.get("executorId") == lease_row["executor_id"]
+            and payload.get("attemptNo") == lease_row["attempt_no"]
+        ):
+            return True
+    return False
+
+
+def _recovery_event_payload(value: str) -> dict[str, object] | None:
+    try:
+        return _json_object(value)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+
+
+def _recovery_event_id(lease_id: str, kind: str) -> str:
+    digest = sha256(f"{lease_id}:{kind}".encode()).hexdigest()[:24]
+    return f"rtevt_recovery_{digest}"
+
+
+def _inject_recovery_fault(
+    fault_injector: Callable[[str], None] | None,
+    point: str,
+) -> None:
+    if fault_injector is not None:
+        fault_injector(point)
+
+
 def _run_row(conn: sqlite3.Connection, runtime_run_id: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
@@ -3949,14 +4337,14 @@ def _checkpoint_from_row_or_failure(row: sqlite3.Row) -> RuntimeCheckpoint | Run
     if row["schema_version"] != RUNTIME_CHECKPOINT_SCHEMA_VERSION:
         return RuntimeCheckpointLoadFailure(
             checkpoint_id=checkpoint_id,
-            reason_code="runtime_checkpoint_schema_unsupported",
+            reason_code=RUNTIME_CHECKPOINT_SCHEMA_UNSUPPORTED,
         )
     try:
         return _checkpoint_from_row(row)
     except (json.JSONDecodeError, TypeError, ValueError, ValidationError):
         return RuntimeCheckpointLoadFailure(
             checkpoint_id=checkpoint_id,
-            reason_code="runtime_checkpoint_corrupt",
+            reason_code=RUNTIME_CHECKPOINT_CORRUPT,
         )
 
 
