@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import threading
 import uuid
+from collections.abc import Callable
 from datetime import timedelta
 
 from seektalent.config import AppSettings
@@ -35,6 +37,48 @@ LEASE_HEARTBEAT_SECONDS = 10.0
 NOTE_WRITER_HEARTBEAT_SECONDS = float(NOTE_WRITER_TICK_SECONDS)
 RUNTIME_WORKER_COUNT = 2
 LIEPIN_DETAIL_WORKER_COUNT = 1
+# Note generation is non-critical; process-control BaseExceptions still escape.
+_BACKGROUND_NOTE_WRITER_ERRORS: tuple[type[Exception], ...] = (Exception,)
+
+logger = logging.getLogger(__name__)
+
+
+class WorkbenchNoteWriterRunner:
+    def __init__(self, *, tick: Callable[[WorkbenchUser, str], None]) -> None:
+        self._tick = tick
+        self._lock = threading.Lock()
+        self._pending: dict[str, WorkbenchUser] = {}
+        self._thread: threading.Thread | None = None
+
+    def wake(self, *, user: WorkbenchUser, session_id: str) -> None:
+        with self._lock:
+            self._pending[session_id] = user
+            if self._thread is not None:
+                return
+            thread = threading.Thread(
+                target=self._run_until_idle,
+                name="seektalent-workbench-note-writer-runner",
+                daemon=True,
+            )
+            self._thread = thread
+            try:
+                thread.start()
+            except Exception:
+                self._thread = None
+                raise
+
+    def _run_until_idle(self) -> None:
+        while True:
+            with self._lock:
+                if not self._pending:
+                    self._thread = None
+                    return
+                session_id = next(iter(self._pending))
+                user = self._pending.pop(session_id)
+            try:
+                self._tick(user, session_id)
+            except _BACKGROUND_NOTE_WRITER_ERRORS:
+                logger.warning("Workbench note writer background tick failed.")
 
 
 class WorkbenchJobRunner:
@@ -46,6 +90,7 @@ class WorkbenchJobRunner:
         runtime_factory: RuntimeFactory,
         runtime_control_store: RuntimeControlStore | None = None,
         liepin_worker_client: LiepinWorkerClient | None = None,
+        workbench_note_writer_agent_factory: Callable[[], object] | None = None,
     ) -> None:
         self.store = store
         self.settings = settings
@@ -56,7 +101,13 @@ class WorkbenchJobRunner:
         self.lease_duration = LEASE_DURATION
         self.heartbeat_interval_seconds = LEASE_HEARTBEAT_SECONDS
         self.note_writer_heartbeat_interval_seconds = NOTE_WRITER_HEARTBEAT_SECONDS
-        self.note_writer = WorkbenchNoteWriter(store=store, settings=settings, lease_owner=f"{self.owner_id}:note-writer")
+        self.note_writer = WorkbenchNoteWriter(
+            store=store,
+            settings=settings,
+            lease_owner=f"{self.owner_id}:note-writer",
+            agent_factory=workbench_note_writer_agent_factory,
+        )
+        self._note_writer_runner = WorkbenchNoteWriterRunner(tick=self._run_note_writer_tick)
         self._lock = threading.Lock()
         self._runtime_threads: list[threading.Thread] = []
         self._liepin_detail_threads: list[threading.Thread] = []
@@ -230,10 +281,6 @@ class WorkbenchJobRunner:
         stop_heartbeat = threading.Event()
         heartbeat_thread = self._start_runtime_lease_heartbeat(context=context, stop_event=stop_heartbeat)
         try:
-            self._tick_note_writer_for_session(
-                user=self._user_for_session(context.session),
-                session_id=context.session.session_id,
-            )
             self.store.append_workbench_event(
                 tenant_id=DEFAULT_TENANT_ID,
                 workspace_id=context.session.workspace_id,
@@ -269,10 +316,6 @@ class WorkbenchJobRunner:
             self.store.fail_runtime_sourcing_job(
                 context=context,
                 error_message=_runtime_sourcing_error_message(exc),
-            )
-            self._tick_note_writer_for_session(
-                user=self._user_for_session(context.session),
-                session_id=context.session.session_id,
             )
             return
         finally:
@@ -492,9 +535,12 @@ class WorkbenchJobRunner:
 
     def _tick_note_writer_for_session(self, *, user: WorkbenchUser, session_id: str) -> None:
         try:
-            self.note_writer.tick_session(user=user, session_id=session_id)
+            self._note_writer_runner.wake(user=user, session_id=session_id)
         except Exception:  # noqa: BLE001
             return
+
+    def _run_note_writer_tick(self, user: WorkbenchUser, session_id: str) -> None:
+        self.note_writer.tick_session(user=user, session_id=session_id)
 
 
 def _safe_event_suffix(value: str) -> str:

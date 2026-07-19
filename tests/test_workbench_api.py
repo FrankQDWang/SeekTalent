@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 import time
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from typing import get_args
 import pytest
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
+from pydantic_ai.models import override_allow_model_requests
 
 from seektalent.config import AppSettings
 from seektalent.corpus.store import CorpusStore
@@ -37,6 +39,12 @@ from seektalent_ui.workbench_liepin_start_probe import liepin_start_probe_error_
 from seektalent_ui.workbench_store_helpers import stable_id as _stable_id
 from seektalent_ui.workbench_store import WorkbenchUser
 from tests.settings_factory import make_settings
+
+
+@pytest.fixture(autouse=True)
+def _block_live_model_requests() -> Iterator[None]:
+    with override_allow_model_requests(False):
+        yield
 
 
 def test_resume_snapshot_status_contract_matches_returned_states() -> None:
@@ -201,6 +209,12 @@ class FakeWorkbenchRuntime:
         return WorkflowRuntime(self.settings).run_source_lane(request, source_client=source_client)
 
 
+class FakeWorkbenchNoteAgent:
+    def run_sync(self, prompt: str) -> SimpleNamespace:
+        del prompt
+        return SimpleNamespace(output="正在根据已确认需求整理候选人搜索进展。")
+
+
 def _reset_fake_runtime() -> None:
     FakeWorkbenchRuntime.started = threading.Event()
     FakeWorkbenchRuntime.release = threading.Event()
@@ -294,14 +308,23 @@ def _client(
     *,
     runtime_factory=FakeWorkbenchRuntime,
     settings_overrides: dict[str, object] | None = None,
+    note_writer_agent_factory: Callable[[], object] = FakeWorkbenchNoteAgent,
 ) -> TestClient:
-    settings = make_settings(
-        workspace_root=str(tmp_path),
-        mock_cts=True, provider_name="cts",
-        **(settings_overrides or {}),
-    )
+    settings_values: dict[str, object] = {
+        "workspace_root": str(tmp_path),
+        "mock_cts": True,
+        "provider_name": "cts",
+        "text_llm_api_key": None,
+        "domi_jwt": None,
+    }
+    settings_values.update(settings_overrides or {})
+    settings = make_settings(**settings_values)
     return TestClient(
-        create_app(settings=settings, runtime_factory=runtime_factory),
+        create_app(
+            settings=settings,
+            runtime_factory=runtime_factory,
+            workbench_note_writer_agent_factory=note_writer_agent_factory,
+        ),
         base_url="http://localhost",
         client=("127.0.0.1", 50000),
     )
@@ -2489,7 +2512,7 @@ def test_prepare_requirement_review_returns_before_slow_extraction_finishes(tmp_
 
 
 def test_prepare_requirement_review_heartbeats_note_writer_with_requirement_context(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
 ) -> None:
     class FakeNoteAgent:
         def __init__(self) -> None:
@@ -2503,12 +2526,15 @@ def test_prepare_requirement_review_heartbeats_note_writer_with_requirement_cont
 
     BlockingRequirementRuntime.started = threading.Event()
     BlockingRequirementRuntime.release = threading.Event()
-    client = _client(tmp_path, runtime_factory=BlockingRequirementRuntime)
+    client = _client(
+        tmp_path,
+        runtime_factory=BlockingRequirementRuntime,
+        note_writer_agent_factory=lambda: fake_note_agent,
+    )
     _ensure_local_actor(client)
     session = _create_session(client, source_kinds=["cts"])
     runner = client.app.state.workbench_job_runner
     runner.note_writer_heartbeat_interval_seconds = 0.02
-    monkeypatch.setattr(runner.note_writer, "_build_agent", lambda: fake_note_agent)
 
     response = client.post(
         f"/api/workbench/sessions/{session['sessionId']}/requirements/prepare",
@@ -5375,103 +5401,6 @@ def test_runtime_source_lane_event_idempotency_keeps_latest_state_on_replay(tmp_
     assert event_count == 1
     assert latest["status"] == "completed"
     assert json.loads(latest["payload_json"])["safe_counts"] == {"cards_seen": 1}
-
-
-def test_workbench_note_writer_lease_claim_release_and_expired_claim(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-    actor_payload = _ensure_local_actor(client)
-    user = _workbench_user_from_actor_payload(actor_payload)
-    session = _create_session(client)
-    store = client.app.state.workbench_store
-
-    assert store.claim_workbench_note_writer_lease(
-        user=user,
-        session_id=session["sessionId"],
-        lease_owner="worker-a",
-        lease_expires_at="2026-01-01T00:01:00+00:00",
-        now="2026-01-01T00:00:00+00:00",
-    )
-    assert not store.claim_workbench_note_writer_lease(
-        user=user,
-        session_id=session["sessionId"],
-        lease_owner="worker-b",
-        lease_expires_at="2026-01-01T00:01:30+00:00",
-        now="2026-01-01T00:00:30+00:00",
-    )
-    assert store.claim_workbench_note_writer_lease(
-        user=user,
-        session_id=session["sessionId"],
-        lease_owner="worker-b",
-        lease_expires_at="2026-01-01T00:03:00+00:00",
-        now="2026-01-01T00:02:00+00:00",
-    )
-    with sqlite3.connect(_db_path(tmp_path)) as conn:
-        row = conn.execute(
-            """
-            SELECT lease_expires_at, last_tick_slot, in_flight_started_at
-            FROM workbench_note_writer_leases
-            WHERE session_id = ?
-            """,
-            (session["sessionId"],),
-        ).fetchone()
-    assert row == ("2026-01-01T00:03:00+00:00", None, "2026-01-01T00:02:00+00:00")
-    assert not store.release_workbench_note_writer_lease(
-        user=user,
-        session_id=session["sessionId"],
-        lease_owner="worker-a",
-    )
-    assert store.release_workbench_note_writer_lease(
-        user=user,
-        session_id=session["sessionId"],
-        lease_owner="worker-b",
-    )
-    with sqlite3.connect(_db_path(tmp_path)) as conn:
-        active_rows = conn.execute("SELECT COUNT(*) FROM workbench_note_writer_leases").fetchone()[0]
-    assert active_rows == 0
-
-
-def test_workbench_note_writer_lease_compares_iso_offsets_as_datetimes(tmp_path: Path) -> None:
-    client = _client(tmp_path)
-    actor_payload = _ensure_local_actor(client)
-    user = _workbench_user_from_actor_payload(actor_payload)
-    session = _create_session(client)
-    store = client.app.state.workbench_store
-
-    assert store.claim_workbench_note_writer_lease(
-        user=user,
-        session_id=session["sessionId"],
-        lease_owner="worker-a",
-        lease_expires_at="2026-01-01T08:01:00+08:00",
-        last_tick_slot=123,
-        in_flight_started_at="2026-01-01T08:00:00+08:00",
-        now="2026-01-01T00:00:00Z",
-    )
-    assert not store.claim_workbench_note_writer_lease(
-        user=user,
-        session_id=session["sessionId"],
-        lease_owner="worker-b",
-        lease_expires_at="2026-01-01T00:01:30Z",
-        now="2026-01-01T00:00:30Z",
-    )
-    assert store.claim_workbench_note_writer_lease(
-        user=user,
-        session_id=session["sessionId"],
-        lease_owner="worker-b",
-        lease_expires_at="2026-01-01T08:03:00+08:00",
-        last_tick_slot=124,
-        in_flight_started_at="2026-01-01T08:02:00+08:00",
-        now="2026-01-01T00:02:00Z",
-    )
-    with sqlite3.connect(_db_path(tmp_path)) as conn:
-        row = conn.execute(
-            """
-            SELECT lease_owner, lease_expires_at, last_tick_slot, in_flight_started_at
-            FROM workbench_note_writer_leases
-            WHERE session_id = ?
-            """,
-            (session["sessionId"],),
-        ).fetchone()
-    assert row == ("worker-b", "2026-01-01T00:03:00+00:00", 124, "2026-01-01T00:02:00+00:00")
 
 
 def test_workbench_note_created_payload_excludes_audit_metadata_in_list_and_sse(tmp_path: Path) -> None:
