@@ -126,29 +126,6 @@ class WorkflowRuntimeExecutor:
             approved_requirement_revision_id=approved_requirement.approved_requirement_revision_id,
             run_kind=run_kind_value,
         )
-        run = self.store.create_run(
-            RuntimeRunRecord(
-                runtime_run_id=runtime_run_id,
-                run_intent_id=intent_id,
-                start_idempotency_key=start_idempotency_key or intent_id,
-                run_kind=run_kind_value,
-                agent_conversation_id=conversation_id,
-                workbench_session_id=workbench_session_id,
-                approved_requirement_revision_id=approved_requirement.approved_requirement_revision_id,
-                status="queued",
-                current_stage="queued",
-                current_round=None,
-                latest_checkpoint_id=None,
-                latest_event_seq=0,
-                source_ids=list(source_ids),
-                stop_reason_code=None,
-                created_at=created_at,
-                updated_at=created_at,
-                completed_at=None,
-            )
-        )
-        if run.latest_event_seq > 0:
-            return run
         queued_at = self.now()
         workflow_input: dict[str, object] = {
             "jobTitle": job_title,
@@ -158,23 +135,43 @@ class WorkflowRuntimeExecutor:
         }
         if source_context is not None:
             workflow_input["sourceContext"] = source_context
-        self.store.append_event(
-            _event(
-                runtime_run_id=run.runtime_run_id,
+        run = RuntimeRunRecord(
+            runtime_run_id=runtime_run_id,
+            run_intent_id=intent_id,
+            start_idempotency_key=start_idempotency_key or intent_id,
+            run_kind=run_kind_value,
+            agent_conversation_id=conversation_id,
+            workbench_session_id=workbench_session_id,
+            approved_requirement_revision_id=approved_requirement.approved_requirement_revision_id,
+            status="queued",
+            current_stage="queued",
+            current_round=None,
+            latest_checkpoint_id=None,
+            latest_event_seq=0,
+            source_ids=list(source_ids),
+            stop_reason_code=None,
+            created_at=created_at,
+            updated_at=created_at,
+            completed_at=None,
+        )
+        return self.store.accept_run(
+            run,
+            initial_event=_event(
+                runtime_run_id=runtime_run_id,
                 event_type="runtime_run_queued",
                 stage="queued",
                 status="queued",
                 summary="workflow run queued",
                 payload={
-                    "runIntentId": run.run_intent_id,
-                    "runKind": run.run_kind,
+                    "runIntentId": intent_id,
+                    "runKind": run_kind_value,
                     "sourceIds": list(source_ids),
                 },
                 created_at=queued_at,
-                idempotency_key=f"runtime-run-queued:{run.runtime_run_id}",
+                idempotency_key=f"runtime-run-queued:{runtime_run_id}",
             ),
             snapshot=RuntimeRunSnapshot(
-                runtime_run_id=run.runtime_run_id,
+                runtime_run_id=runtime_run_id,
                 status="queued",
                 current_stage="queued",
                 current_round=None,
@@ -183,7 +180,6 @@ class WorkflowRuntimeExecutor:
                 updated_at=queued_at,
             ),
         )
-        return self.store.get_run(run.runtime_run_id)
 
     async def execute_claimed_run(
         self,

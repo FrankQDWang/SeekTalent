@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event
 import sqlite3
 from pathlib import Path
 
@@ -111,6 +111,241 @@ def test_missing_runtime_run_is_lookup_error(tmp_path: Path) -> None:
     assert isinstance(exc_info.value, RuntimeControlError)
     assert isinstance(exc_info.value, LookupError)
     assert exc_info.value.reason_code == "runtime_run_not_found"
+
+
+def test_accept_run_commits_acceptance_once_and_preserves_typed_start_conflict(tmp_path: Path) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    first = _queued_run("runtime_run_first", run_intent_id="intent_first", start_key="start_first")
+
+    accepted = _accept_run(store, first)
+    replayed = _accept_run(
+        store,
+        _queued_run("runtime_run_replay", run_intent_id="intent_first", start_key="start_first"),
+    )
+
+    assert accepted.runtime_run_id == replayed.runtime_run_id == "runtime_run_first"
+    assert accepted.latest_event_seq == replayed.latest_event_seq == 1
+    assert store.get_snapshot(runtime_run_id=accepted.runtime_run_id) is not None
+    assert len(store.list_events(runtime_run_id=accepted.runtime_run_id, after_seq=0, limit=10).events) == 1
+
+    claim = store.claim_next_runnable_run(
+        executor_id="executor_first",
+        claimed_at="2026-06-08T00:00:02Z",
+        lease_expires_at="2026-06-08T00:01:02Z",
+        runtime_run_id=accepted.runtime_run_id,
+    )
+    assert claim is not None
+    replayed_starting = _accept_run(
+        store,
+        _queued_run("runtime_run_replay_starting", run_intent_id="intent_first", start_key="start_first"),
+    )
+    assert replayed_starting.status == "starting"
+    assert len(store.list_events(runtime_run_id=accepted.runtime_run_id, after_seq=0, limit=10).events) == 2
+    store.update_run_status(
+        runtime_run_id=accepted.runtime_run_id,
+        status="failed",
+        updated_at="2026-06-08T00:00:03Z",
+        completed_at="2026-06-08T00:00:03Z",
+    )
+    replayed_terminal = _accept_run(
+        store,
+        _queued_run("runtime_run_replay_terminal", run_intent_id="intent_first", start_key="start_first"),
+    )
+    assert replayed_terminal.status == "failed"
+    assert len(store.list_events(runtime_run_id=accepted.runtime_run_id, after_seq=0, limit=10).events) == 2
+
+    _accept_run(
+        store,
+        _queued_run("runtime_run_second", run_intent_id="intent_second", start_key="start_second"),
+    )
+    with pytest.raises(RuntimeControlError) as exc_info:
+        _accept_run(
+            store,
+            _queued_run("runtime_run_conflict", run_intent_id="intent_first", start_key="start_second"),
+        )
+
+    assert exc_info.value.reason_code == "runtime_run_start_idempotency_conflict"
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 3
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_snapshots").fetchone()[0] == 2
+
+
+def test_accept_run_rejects_incomplete_initial_evidence(tmp_path: Path) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+    from seektalent_runtime_control.models import RuntimeRunSnapshot
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    run = _queued_run("runtime_run_invalid_acceptance")
+    event = _queued_event(run)
+    snapshot = RuntimeRunSnapshot(
+        runtime_run_id=run.runtime_run_id,
+        status="queued",
+        current_stage="queued",
+        current_round=None,
+        latest_event_seq=0,
+        snapshot={"workflowInput": {}},
+        updated_at="2026-06-08T00:00:01Z",
+    )
+    invalid_evidence = (
+        (event.model_copy(update={"status": "pending"}), snapshot),
+        (event.model_copy(update={"idempotency_key": "wrong-key"}), snapshot),
+        (event, snapshot.model_copy(update={"latest_event_seq": 1})),
+    )
+
+    for initial_event, initial_snapshot in invalid_evidence:
+        with pytest.raises(RuntimeControlError) as exc_info:
+            store.accept_run(run, initial_event=initial_event, snapshot=initial_snapshot)
+        assert exc_info.value.reason_code == "runtime_run_acceptance_invalid"
+
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 0
+
+
+def test_accept_run_rolls_back_run_event_and_snapshot_on_snapshot_failure(tmp_path: Path) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlLookupError
+    from seektalent_runtime_control.models import RuntimeRunSnapshot
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    run = _queued_run("runtime_run_rollback")
+
+    with pytest.raises(TypeError):
+        store.accept_run(
+            run,
+            initial_event=_queued_event(run),
+            snapshot=RuntimeRunSnapshot(
+                runtime_run_id=run.runtime_run_id,
+                status="queued",
+                current_stage="queued",
+                current_round=None,
+                latest_event_seq=0,
+                snapshot={"workflowInput": {"notJsonSerializable": object()}},
+                updated_at="2026-06-08T00:00:01Z",
+            ),
+        )
+
+    with pytest.raises(RuntimeControlLookupError):
+        store.get_run(run.runtime_run_id)
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_snapshots").fetchone()[0] == 0
+
+
+def test_claim_skips_half_accepted_rows_and_claims_accepted_runs_fifo(tmp_path: Path) -> None:
+    from seektalent_runtime_control.models import RuntimeRunSnapshot
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    latest_seq_zero = _queued_run("runtime_run_zero", created_at="2026-06-08T00:00:00Z")
+    store.create_run(latest_seq_zero)
+
+    missing_snapshot = _queued_run("runtime_run_no_snapshot", created_at="2026-06-08T00:00:01Z")
+    store.create_run(missing_snapshot)
+    store.append_event(_queued_event(missing_snapshot))
+
+    missing_initial_event = _queued_run("runtime_run_no_initial", created_at="2026-06-08T00:00:02Z")
+    store.create_run(missing_initial_event)
+    store.append_event(
+        _queued_event(missing_initial_event).model_copy(update={"event_type": "runtime_progress"}),
+        snapshot=RuntimeRunSnapshot(
+            runtime_run_id=missing_initial_event.runtime_run_id,
+            status="queued",
+            current_stage="queued",
+            current_round=None,
+            latest_event_seq=0,
+            snapshot={"workflowInput": {"jobTitle": "incomplete"}},
+            updated_at="2026-06-08T00:00:02Z",
+        ),
+    )
+
+    first = _queued_run("runtime_run_accepted_first", created_at="2026-06-08T00:00:03Z")
+    second = _queued_run("runtime_run_accepted_second", created_at="2026-06-08T00:00:04Z")
+    _accept_run(store, first)
+    _accept_run(store, second)
+
+    first_claim = store.claim_next_runnable_run(
+        executor_id="executor_first",
+        claimed_at="2026-06-08T00:01:00Z",
+        lease_expires_at="2026-06-08T00:02:00Z",
+    )
+    second_claim = store.claim_next_runnable_run(
+        executor_id="executor_second",
+        claimed_at="2026-06-08T00:01:01Z",
+        lease_expires_at="2026-06-08T00:02:01Z",
+    )
+
+    assert first_claim is not None
+    assert second_claim is not None
+    assert first_claim.runtime_run.runtime_run_id == first.runtime_run_id
+    assert second_claim.runtime_run.runtime_run_id == second.runtime_run_id
+    assert (
+        store.claim_next_runnable_run(
+            executor_id="executor_none",
+            claimed_at="2026-06-08T00:01:02Z",
+            lease_expires_at="2026-06-08T00:02:02Z",
+        )
+        is None
+    )
+    assert store.get_run(latest_seq_zero.runtime_run_id).status == "queued"
+    assert store.get_run(missing_snapshot.runtime_run_id).status == "queued"
+    assert store.get_run(missing_initial_event.runtime_run_id).status == "queued"
+
+
+def test_uncommitted_acceptance_is_invisible_then_claimable_without_wake(tmp_path: Path, monkeypatch) -> None:
+    import seektalent_runtime_control.store as store_module
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    run = _queued_run("runtime_run_barrier")
+    snapshot_entered = Event()
+    allow_snapshot = Event()
+    replace_snapshot = store_module._replace_snapshot
+
+    def wait_before_snapshot(*args, **kwargs) -> None:
+        snapshot_entered.set()
+        if not allow_snapshot.wait(timeout=5):
+            raise TimeoutError("snapshot barrier was not released")
+        replace_snapshot(*args, **kwargs)
+
+    monkeypatch.setattr(store_module, "_replace_snapshot", wait_before_snapshot)
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_accept_run, store, run)
+        assert snapshot_entered.wait(timeout=5)
+        try:
+            with sqlite3.connect(store.path) as reader:
+                assert reader.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 0
+                assert reader.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 0
+                assert reader.execute("SELECT COUNT(*) FROM runtime_control_snapshots").fetchone()[0] == 0
+            locked_store = RuntimeControlStore(store.path, busy_timeout_ms=0)
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                locked_store.claim_next_runnable_run(
+                    executor_id="executor_before_commit",
+                    claimed_at="2026-06-08T00:00:02Z",
+                    lease_expires_at="2026-06-08T00:01:02Z",
+                )
+        finally:
+            allow_snapshot.set()
+        accepted = future.result(timeout=5)
+
+    claim = store.claim_next_runnable_run(
+        executor_id="executor_after_commit",
+        claimed_at="2026-06-08T00:00:03Z",
+        lease_expires_at="2026-06-08T00:01:03Z",
+    )
+    assert accepted.latest_event_seq == 1
+    assert claim is not None
+    assert claim.runtime_run.runtime_run_id == run.runtime_run_id
 
 
 def test_event_writes_are_ordered_and_gap_detected(tmp_path: Path) -> None:
@@ -326,3 +561,70 @@ def test_event_write_rolls_back_insert_when_snapshot_json_fails(tmp_path: Path) 
 
     assert store.get_run("runtime_run_rollback").latest_event_seq == 0
     assert store.list_events(runtime_run_id="runtime_run_rollback", after_seq=0, limit=10).events == []
+
+
+def _queued_run(
+    runtime_run_id: str,
+    *,
+    run_intent_id: str | None = None,
+    start_key: str | None = None,
+    created_at: str = "2026-06-08T00:00:00Z",
+):
+    from seektalent_runtime_control.models import RuntimeRunRecord
+
+    return RuntimeRunRecord(
+        runtime_run_id=runtime_run_id,
+        run_intent_id=run_intent_id or f"intent_{runtime_run_id}",
+        start_idempotency_key=start_key or f"start_{runtime_run_id}",
+        run_kind="primary",
+        agent_conversation_id="agent_conv_test",
+        workbench_session_id=None,
+        approved_requirement_revision_id="reqapproved_test",
+        status="queued",
+        current_stage="queued",
+        current_round=None,
+        latest_checkpoint_id=None,
+        latest_event_seq=0,
+        source_ids=["source_a"],
+        stop_reason_code=None,
+        created_at=created_at,
+        updated_at=created_at,
+        completed_at=None,
+    )
+
+
+def _queued_event(run):
+    from seektalent_runtime_control.models import RuntimeControlEventInput
+
+    return RuntimeControlEventInput(
+        event_id=f"event_{run.runtime_run_id}",
+        runtime_run_id=run.runtime_run_id,
+        event_type="runtime_run_queued",
+        stage="queued",
+        round_no=None,
+        source_id=None,
+        status="queued",
+        summary="workflow run queued",
+        payload={"runIntentId": run.run_intent_id},
+        idempotency_key=f"runtime-run-queued:{run.runtime_run_id}",
+        workbench_event_global_seq=None,
+        created_at="2026-06-08T00:00:01Z",
+    )
+
+
+def _accept_run(store, run):
+    from seektalent_runtime_control.models import RuntimeRunSnapshot
+
+    return store.accept_run(
+        run,
+        initial_event=_queued_event(run),
+        snapshot=RuntimeRunSnapshot(
+            runtime_run_id=run.runtime_run_id,
+            status="queued",
+            current_stage="queued",
+            current_round=None,
+            latest_event_seq=0,
+            snapshot={"workflowInput": {"jobTitle": "Backend Engineer", "sourceIds": ["source_a"]}},
+            updated_at="2026-06-08T00:00:01Z",
+        ),
+    )

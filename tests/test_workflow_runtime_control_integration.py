@@ -8,6 +8,60 @@ from seektalent.progress import ProgressEvent
 from seektalent.runtime.public_events import make_runtime_public_event
 
 
+def test_enqueue_uses_atomic_acceptance_and_replays_without_duplicate_event(tmp_path: Path, monkeypatch) -> None:
+    from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    run_ids = iter(("runtime_run_acceptance", "runtime_run_replay"))
+    executor = WorkflowRuntimeExecutor(
+        store=store,
+        runtime_factory=object,
+        runtime_run_id_factory=lambda: next(run_ids),
+        now=_clock(
+            "2026-06-17T00:00:00.000000Z",
+            "2026-06-17T00:00:01.000000Z",
+            "2026-06-17T00:00:02.000000Z",
+            "2026-06-17T00:00:03.000000Z",
+        ),
+    )
+
+    def unexpected_legacy_write(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("enqueue must use RuntimeControlStore.accept_run")
+
+    monkeypatch.setattr(store, "create_run", unexpected_legacy_write)
+    monkeypatch.setattr(store, "append_event", unexpected_legacy_write)
+    kwargs = {
+        "conversation_id": "agent_conv_acceptance",
+        "workbench_session_id": "workbench_acceptance",
+        "approved_requirement": _approved_requirement(),
+        "job_title": "Senior Python Engineer",
+        "jd_text": "Build search systems.",
+        "notes": None,
+        "source_ids": ["cts"],
+        "run_intent_id": "intent_acceptance",
+        "start_idempotency_key": "start_acceptance",
+    }
+
+    accepted = executor.enqueue_workflow_run(**kwargs)
+    replayed = executor.enqueue_workflow_run(**kwargs)
+
+    assert accepted.runtime_run_id == replayed.runtime_run_id == "runtime_run_acceptance"
+    assert accepted.latest_event_seq == replayed.latest_event_seq == 1
+    events = store.list_events(runtime_run_id=accepted.runtime_run_id, after_seq=0, limit=10).events
+    assert [event.event_type for event in events] == ["runtime_run_queued"]
+    snapshot = store.get_snapshot(runtime_run_id=accepted.runtime_run_id)
+    assert snapshot is not None
+    assert snapshot.snapshot["workflowInput"] == {
+        "jobTitle": "Senior Python Engineer",
+        "jdText": "Build search systems.",
+        "notes": "",
+        "sourceIds": ["cts"],
+    }
+
+
 def test_executor_progress_callback_persists_public_events_and_stage_outputs_without_artifact_reads(
     tmp_path: Path,
 ) -> None:
