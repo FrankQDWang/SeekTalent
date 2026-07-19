@@ -81,13 +81,21 @@ from seektalent_runtime_control.source_operations import (
     validate_source_dispatch_ack,
     validate_source_operation_acceptance,
 )
+from seektalent_runtime_control.source_reconciliation import (
+    SourceOperationReconciliationDecision,
+    SourceOperationReconciliationRecord,
+    source_reconciliation_from_row,
+    source_reconciliation_matches_decision,
+    validate_source_operation_reconciliation_decision,
+)
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 8
+RUNTIME_CONTROL_SCHEMA_VERSION = 9
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
+_SQLITE_INTEGER_MAX = 2**63 - 1
 _RUNTIME_STAGE_OUTPUT_ARTIFACT_KIND = "runtime_stage_output"
 _RUNTIME_STAGE_OUTPUT_ARTIFACT_DIR = "runtime_control_artifacts/stage_outputs"
 _TERMINAL_RUN_STATUSES = ("cancelled", "completed", "failed")
@@ -156,10 +164,14 @@ class RuntimeControlStore:
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                 conn.commit()
                 version = 7
-            if version == 7:
+            if version in {7, 8}:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
-                    _migrate_v7_to_v8(conn)
+                    if version == 7:
+                        _migrate_v7_to_v8(conn)
+                        conn.execute("PRAGMA user_version = 8")
+                        version = 8
+                    _migrate_v8_to_v9(conn)
                     conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
@@ -170,6 +182,7 @@ class RuntimeControlStore:
                 with conn:
                     _create_schema(conn)
                     _create_source_operation_schema(conn)
+                    _create_source_reconciliation_schema(conn)
                     conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
 
@@ -439,6 +452,143 @@ class RuntimeControlStore:
         if row is None:
             raise RuntimeControlLookupError("source_operation_not_found")
         return source_operation_from_row(row)
+
+    def commit_no_owner_source_reconciliation(
+        self,
+        decision: SourceOperationReconciliationDecision,
+        fault_injector: Callable[[str], None] | None = None,
+    ) -> SourceOperationReconciliationRecord:
+        """Commit a closed main-authored reconciliation when no executor owns the run."""
+        validate_source_operation_reconciliation_decision(decision)
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                existing_row = _source_reconciliation_row(conn, decision.reconciliation_id)
+                if existing_row is not None:
+                    existing = source_reconciliation_from_row(existing_row)
+                    if not source_reconciliation_matches_decision(existing, decision):
+                        raise RuntimeControlError("source_reconciliation_idempotency_conflict")
+                    conn.commit()
+                    _inject_source_reconciliation_fault(fault_injector, "after_commit")
+                    return existing
+
+                run_row = _run_row(conn, decision.runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError("runtime_run_not_found")
+                if run_row["status"] != "resume_requested":
+                    raise RuntimeControlError("source_reconciliation_run_not_resumable")
+                if _run_has_active_executor_lease(conn, decision.runtime_run_id):
+                    raise RuntimeControlError("source_reconciliation_owner_conflict")
+
+                operation_row = _source_operation_row(conn, decision.runtime_run_id, decision.operation_id)
+                if operation_row is None:
+                    raise RuntimeControlLookupError("source_operation_not_found")
+                operation, _dispatch = _source_operation_pair(conn, operation_row)
+                if not _source_operation_matches_reconciliation(operation, decision):
+                    raise RuntimeControlError("source_reconciliation_identity_conflict")
+                if operation.operation_phase == "main_committed" or operation.main_commit_ref is not None:
+                    raise RuntimeControlError("source_reconciliation_main_commit_conflict")
+                if (
+                    operation.ledger_revision != decision.expected_ledger_revision
+                    or operation.reconciliation_revision != decision.expected_reconciliation_revision
+                ):
+                    raise RuntimeControlError("source_reconciliation_revision_conflict")
+                if (
+                    operation.ledger_revision == _SQLITE_INTEGER_MAX
+                    or operation.reconciliation_revision == _SQLITE_INTEGER_MAX
+                ):
+                    raise RuntimeControlError("source_reconciliation_revision_overflow")
+                _require_source_reconciliation_transition(operation, decision)
+
+                committed_ledger_revision = operation.ledger_revision + 1
+                committed_reconciliation_revision = operation.reconciliation_revision + 1
+                updated = conn.execute(
+                    """
+                    UPDATE runtime_control_source_operations
+                    SET operation_phase = 'reconciled',
+                        dispatch_intent_ref = ?,
+                        conclusive_observation_ref = ?,
+                        source_operation_disposition = ?,
+                        retry_posture = ?,
+                        reconciliation_revision = ?,
+                        ledger_revision = ?
+                    WHERE runtime_run_id = ? AND operation_id = ?
+                      AND operation_phase != 'main_committed' AND main_commit_ref IS NULL
+                      AND ledger_revision = ? AND reconciliation_revision = ?
+                    """,
+                    (
+                        decision.dispatch_intent_ref,
+                        decision.conclusive_observation_ref,
+                        decision.source_operation_disposition,
+                        decision.retry_posture,
+                        committed_reconciliation_revision,
+                        committed_ledger_revision,
+                        decision.runtime_run_id,
+                        decision.operation_id,
+                        decision.expected_ledger_revision,
+                        decision.expected_reconciliation_revision,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise RuntimeControlError("source_reconciliation_revision_conflict")
+                _inject_source_reconciliation_fault(fault_injector, "after_operation_update")
+
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_source_reconciliations (
+                        reconciliation_id, runtime_run_id, operation_id, source_id,
+                        operation_kind, canonical_request_hash, idempotency_key,
+                        accepted_requirement_revision_id, runtime_attempt_no,
+                        runtime_attempt_authority_ref, history_result_ref,
+                        history_result_digest, decision_kind, history_outcome,
+                        history_conclusion, dispatch_intent_ref,
+                        conclusive_observation_ref, source_operation_disposition,
+                        retry_posture, expected_ledger_revision,
+                        expected_reconciliation_revision, committed_at,
+                        committed_operation_phase, committed_ledger_revision,
+                        committed_reconciliation_revision
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            'reconciled', ?, ?)
+                    """,
+                    (
+                        decision.reconciliation_id,
+                        decision.runtime_run_id,
+                        decision.operation_id,
+                        decision.source_id,
+                        decision.operation_kind,
+                        decision.canonical_request_hash,
+                        decision.idempotency_key,
+                        decision.accepted_requirement_revision_id,
+                        decision.runtime_attempt_no,
+                        decision.runtime_attempt_authority_ref,
+                        decision.history_result_ref,
+                        decision.history_result_digest,
+                        decision.decision_kind,
+                        decision.history_outcome,
+                        decision.history_conclusion,
+                        decision.dispatch_intent_ref,
+                        decision.conclusive_observation_ref,
+                        decision.source_operation_disposition,
+                        decision.retry_posture,
+                        decision.expected_ledger_revision,
+                        decision.expected_reconciliation_revision,
+                        decision.committed_at,
+                        committed_ledger_revision,
+                        committed_reconciliation_revision,
+                    ),
+                )
+                _inject_source_reconciliation_fault(fault_injector, "after_reconciliation_insert")
+                committed_row = _source_reconciliation_row(conn, decision.reconciliation_id)
+                if committed_row is None:
+                    raise RuntimeControlError("source_reconciliation_commit_incomplete")
+                committed = source_reconciliation_from_row(committed_row)
+                conn.commit()
+                _inject_source_reconciliation_fault(fault_injector, "after_commit")
+            except Exception:
+                conn.rollback()
+                raise
+        return committed
 
     def list_pending_source_dispatches(self, limit: int = 100) -> list[SourceDispatchMetadata]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
@@ -3136,6 +3286,10 @@ def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
     _create_source_operation_schema(conn)
 
 
+def _migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
+    _create_source_reconciliation_schema(conn)
+
+
 _SOURCE_OPERATION_SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS runtime_control_source_operations (
@@ -3226,6 +3380,108 @@ _SOURCE_OPERATION_SCHEMA_STATEMENTS = (
 
 def _create_source_operation_schema(conn: sqlite3.Connection) -> None:
     for statement in _SOURCE_OPERATION_SCHEMA_STATEMENTS:
+        conn.execute(statement)
+
+
+_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS = (
+    """
+    CREATE TABLE IF NOT EXISTS runtime_control_source_reconciliations (
+      reconciliation_id TEXT PRIMARY KEY,
+      runtime_run_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      operation_kind TEXT NOT NULL,
+      canonical_request_hash TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      accepted_requirement_revision_id TEXT NOT NULL,
+      runtime_attempt_no INTEGER NOT NULL,
+      runtime_attempt_authority_ref TEXT NOT NULL,
+      history_result_ref TEXT NOT NULL,
+      history_result_digest TEXT NOT NULL,
+      history_outcome TEXT NOT NULL,
+      history_conclusion TEXT,
+      decision_kind TEXT NOT NULL,
+      dispatch_intent_ref TEXT,
+      conclusive_observation_ref TEXT,
+      source_operation_disposition TEXT,
+      retry_posture TEXT NOT NULL,
+      expected_ledger_revision INTEGER NOT NULL,
+      expected_reconciliation_revision INTEGER NOT NULL,
+      committed_at TEXT NOT NULL,
+      committed_operation_phase TEXT NOT NULL,
+      committed_ledger_revision INTEGER NOT NULL,
+      committed_reconciliation_revision INTEGER NOT NULL,
+      UNIQUE(runtime_run_id, operation_id, committed_reconciliation_revision),
+      CHECK (source_id = 'liepin'),
+      CHECK (operation_kind IN ('verify_session', 'search', 'cards', 'details', 'continuation', 'cleanup')),
+      CHECK (history_outcome IN ('matched', 'not_found', 'history_unavailable')),
+      CHECK (history_conclusion IS NULL OR history_conclusion IN (
+        'accepted_no_dispatch', 'dispatch_not_observed', 'observed_result', 'observed_failure'
+      )),
+      CHECK (decision_kind IN ('no_dispatch_proved', 'unresolved', 'conclusive_observation')),
+      CHECK (source_operation_disposition IS NULL OR source_operation_disposition IN (
+        'completed', 'partial', 'user_action_required', 'incompatible', 'failed',
+        'cancelled', 'reconciliation_unknown'
+      )),
+      CHECK (retry_posture IN ('no_retry', 'safe_retry', 'reconcile_first')),
+      CHECK (runtime_attempt_no > 0),
+      CHECK (expected_ledger_revision > 0),
+      CHECK (expected_reconciliation_revision >= 0),
+      CHECK (committed_operation_phase = 'reconciled'),
+      CHECK (committed_ledger_revision = expected_ledger_revision + 1),
+      CHECK (committed_reconciliation_revision = expected_reconciliation_revision + 1),
+      CHECK (
+        (
+          decision_kind = 'no_dispatch_proved'
+          AND (
+            (history_outcome = 'not_found' AND history_conclusion IS NULL)
+            OR (history_outcome = 'matched' AND history_conclusion = 'accepted_no_dispatch')
+          )
+          AND dispatch_intent_ref IS NULL
+          AND conclusive_observation_ref IS NULL
+          AND retry_posture = 'safe_retry'
+        )
+        OR (
+          decision_kind = 'unresolved'
+          AND (
+            (history_outcome = 'history_unavailable' AND history_conclusion IS NULL)
+            OR (
+              history_outcome = 'matched'
+              AND history_conclusion = 'dispatch_not_observed'
+              AND dispatch_intent_ref IS NOT NULL
+            )
+          )
+          AND conclusive_observation_ref IS NULL
+          AND source_operation_disposition = 'reconciliation_unknown'
+          AND retry_posture = 'reconcile_first'
+        )
+        OR (
+          decision_kind = 'conclusive_observation'
+          AND history_outcome = 'matched'
+          AND history_conclusion IN ('observed_result', 'observed_failure')
+          AND dispatch_intent_ref IS NOT NULL
+          AND conclusive_observation_ref IS NOT NULL
+          AND source_operation_disposition IN ('completed', 'partial', 'incompatible', 'failed')
+          AND retry_posture = 'no_retry'
+        )
+      )
+    )
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS runtime_control_source_reconciliations_no_update
+    BEFORE UPDATE ON runtime_control_source_reconciliations
+    BEGIN SELECT RAISE(ABORT, 'runtime_control_source_reconciliations_immutable'); END
+    """,
+    """
+    CREATE TRIGGER IF NOT EXISTS runtime_control_source_reconciliations_no_delete
+    BEFORE DELETE ON runtime_control_source_reconciliations
+    BEGIN SELECT RAISE(ABORT, 'runtime_control_source_reconciliations_immutable'); END
+    """,
+)
+
+
+def _create_source_reconciliation_schema(conn: sqlite3.Connection) -> None:
+    for statement in _SOURCE_RECONCILIATION_SCHEMA_STATEMENTS:
         conn.execute(statement)
 
 
@@ -3864,6 +4120,14 @@ def _inject_source_operation_fault(fault_injector: Callable[[str], None] | None,
         fault_injector(point)
 
 
+def _inject_source_reconciliation_fault(
+    fault_injector: Callable[[str], None] | None,
+    point: str,
+) -> None:
+    if fault_injector is not None:
+        fault_injector(point)
+
+
 def _run_row(conn: sqlite3.Connection, runtime_run_id: str) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
@@ -3899,6 +4163,102 @@ def _source_operation_row_by_idempotency(
         """,
         (runtime_run_id, idempotency_key),
     ).fetchone()
+
+
+def _source_reconciliation_row(
+    conn: sqlite3.Connection,
+    reconciliation_id: str,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_source_reconciliations
+        WHERE reconciliation_id = ?
+        """,
+        (reconciliation_id,),
+    ).fetchone()
+
+
+def _run_has_active_executor_lease(conn: sqlite3.Connection, runtime_run_id: str) -> bool:
+    return (
+        conn.execute(
+            """
+            SELECT 1
+            FROM runtime_control_executor_leases
+            WHERE runtime_run_id = ? AND status = 'active'
+            LIMIT 1
+            """,
+            (runtime_run_id,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _source_operation_matches_reconciliation(
+    operation: SourceOperationRecord,
+    decision: SourceOperationReconciliationDecision,
+) -> bool:
+    return (
+        operation.runtime_run_id == decision.runtime_run_id
+        and operation.operation_id == decision.operation_id
+        and operation.source_id == decision.source_id
+        and operation.operation_kind == decision.operation_kind
+        and operation.canonical_request_hash == decision.canonical_request_hash
+        and operation.idempotency_key == decision.idempotency_key
+        and operation.accepted_requirement_revision_id == decision.accepted_requirement_revision_id
+        and operation.runtime_attempt_no == decision.runtime_attempt_no
+        and operation.runtime_attempt_authority_ref == decision.runtime_attempt_authority_ref
+    )
+
+
+def _require_source_reconciliation_transition(
+    operation: SourceOperationRecord,
+    decision: SourceOperationReconciliationDecision,
+) -> None:
+    if operation.retry_posture == "safe_retry":
+        raise RuntimeControlError("source_reconciliation_transition_conflict")
+    if (
+        operation.retry_posture == "no_retry"
+        and operation.conclusive_observation_ref is not None
+        and operation.source_operation_disposition is not None
+    ):
+        raise RuntimeControlError("source_reconciliation_transition_conflict")
+    if (
+        operation.dispatch_intent_ref is not None
+        and operation.dispatch_intent_ref != decision.dispatch_intent_ref
+    ):
+        raise RuntimeControlError("source_reconciliation_transition_conflict")
+    if (
+        operation.conclusive_observation_ref is not None
+        and operation.conclusive_observation_ref != decision.conclusive_observation_ref
+    ):
+        raise RuntimeControlError("source_reconciliation_transition_conflict")
+
+    current_disposition = operation.source_operation_disposition
+    target_disposition = decision.source_operation_disposition
+    if current_disposition not in {None, "reconciliation_unknown", target_disposition}:
+        raise RuntimeControlError("source_reconciliation_transition_conflict")
+
+    if decision.decision_kind == "no_dispatch_proved":
+        if operation.dispatch_intent_ref is not None or operation.conclusive_observation_ref is not None:
+            raise RuntimeControlError("source_reconciliation_transition_conflict")
+        if current_disposition != target_disposition:
+            raise RuntimeControlError("source_reconciliation_transition_conflict")
+    elif decision.decision_kind == "unresolved":
+        if operation.conclusive_observation_ref is not None:
+            raise RuntimeControlError("source_reconciliation_transition_conflict")
+        if (
+            decision.history_outcome == "history_unavailable"
+            and decision.dispatch_intent_ref != operation.dispatch_intent_ref
+        ):
+            raise RuntimeControlError("source_reconciliation_transition_conflict")
+        if current_disposition not in {None, "reconciliation_unknown"}:
+            raise RuntimeControlError("source_reconciliation_transition_conflict")
+    elif decision.decision_kind == "conclusive_observation":
+        if current_disposition not in {None, "reconciliation_unknown", target_disposition}:
+            raise RuntimeControlError("source_reconciliation_transition_conflict")
+    else:
+        raise RuntimeControlError("source_reconciliation_decision_kind_invalid")
 
 
 def _source_operation_pair(
@@ -4021,6 +4381,15 @@ def _next_runnable_run_row(
             FROM runtime_control_executor_leases AS lease
             WHERE lease.runtime_run_id = run.runtime_run_id
               AND lease.status = 'active'
+          )
+          AND (
+            run.status != 'resume_requested'
+            OR NOT EXISTS (
+              SELECT 1
+              FROM runtime_control_source_operations AS source_operation
+              WHERE source_operation.runtime_run_id = run.runtime_run_id
+                AND source_operation.retry_posture = 'reconcile_first'
+            )
           )
         ORDER BY run.created_at ASC, run.runtime_run_id ASC
         LIMIT 1

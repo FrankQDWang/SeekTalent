@@ -1,0 +1,41 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add the T1b3b main-owned no-owner source reconciliation CAS and resume claim blocker.",
+  "rationale": "Issue #350 adds schema v9 and one direct RuntimeControlStore transaction because the existing store owns runtime-control SQLite migrations, executor leases, source-operation heads, and BEGIN IMMEDIATE claim serialization. The bounded transaction records every closed main-authored decision in an immutable ledger, advances both operation revisions atomically, and parks only resume-requested runs whose source operation remains reconcile-first. Raw source history remains outside the mutation boundary and production recovery remains disabled.",
+  "touched_layers": [
+    "other"
+  ],
+  "red_files": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "RuntimeControlStore already owns runtime-control schema initialization, ordered migrations, source-operation rows, executor leases, and claim transactions. T1b3b extends that stable storage facade with one bounded v9 schema and no-owner CAS; moving transaction ownership or compressing unrelated code would obscure the atomic owner and revision gates. Store decomposition remains separate governance work.",
+  "deletion_targets": [
+    "source-operation recovery decisions that are not durably correlated to their complete main-authored inputs",
+    "resume claims that can race past a durable reconcile-first source-operation head",
+    "reconciliation retries that can clear or replace previously committed dispatch, observation, or disposition truth"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "env -u SEEKTALENT_TEXT_LLM_API_KEY uv run pytest",
+    "uv run --group dev python -m pytest -p no:tach tests/test_runtime_control_source_reconciliation.py tests/test_runtime_control_store.py tests/test_runtime_control_source_operations.py tests/test_runtime_control_event_contract.py -q",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_privacy_gate.py",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main"
+  ],
+  "risks": [
+    "Existing populated v8 databases must preserve source-operation and dispatch-outbox rows while leaving no partial v9 objects after an injected DDL failure.",
+    "Exact replay must return the immutable original record before owner gates without allowing a changed decision to bypass idempotency checks.",
+    "No-owner CAS and resume claim must remain serialized without treating wall-clock lease expiry as absence of an active owner.",
+    "This storage boundary does not authenticate raw source history, authorize redispatch, commit run outcomes, or enable production automatic recovery."
+  ]
+}

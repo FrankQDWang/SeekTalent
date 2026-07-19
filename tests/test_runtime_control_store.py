@@ -46,13 +46,14 @@ def test_store_initializes_empty_db_and_reopens_idempotently(tmp_path: Path) -> 
         "runtime_control_events",
         "runtime_control_source_operations",
         "runtime_control_source_dispatch_outbox",
+        "runtime_control_source_reconciliations",
         "runtime_control_snapshots",
         "runtime_control_artifact_refs",
         "runtime_control_final_summaries",
     } <= tables
 
 
-def test_populated_v7_migrates_to_v8_with_readable_backup_and_reopens(tmp_path: Path) -> None:
+def test_populated_v7_migrates_to_v9_with_readable_backup_and_reopens(tmp_path: Path) -> None:
     from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION, RuntimeControlStore
 
     db_path = tmp_path / "runtime_control.sqlite3"
@@ -67,7 +68,7 @@ def test_populated_v7_migrates_to_v8_with_readable_backup_and_reopens(tmp_path: 
     backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
     assert len(backups) == 1
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 8
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 9
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
@@ -76,6 +77,7 @@ def test_populated_v7_migrates_to_v8_with_readable_backup_and_reopens(tmp_path: 
         ).fetchone()
     assert "runtime_control_source_operations" in tables
     assert "runtime_control_source_dispatch_outbox" in tables
+    assert "runtime_control_source_reconciliations" in tables
     assert pending_index == (1,)
 
     with sqlite3.connect(f"file:{backups[0]}?mode=ro", uri=True) as backup:
@@ -115,7 +117,7 @@ def test_v7_to_v8_statement_failure_rolls_back_ddl_and_user_version(
     monkeypatch.setattr(store_module, "_SOURCE_OPERATION_SCHEMA_STATEMENTS", statements)
     store.initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
 
 
 @pytest.mark.parametrize("completed_statements", [1, 2, 3])
@@ -145,9 +147,116 @@ def test_real_v1_to_v8_source_schema_failure_stops_at_clean_v7(
     monkeypatch.setattr(store_module, "_SOURCE_OPERATION_SCHEMA_STATEMENTS", statements)
     RuntimeControlStore(db_path).initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
+
+
+def test_populated_v8_migrates_to_v9_with_readable_backup_and_reopens(tmp_path: Path) -> None:
+    from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION, RuntimeControlStore
+
+    db_path = tmp_path / "runtime_control.sqlite3"
+    store = RuntimeControlStore(db_path)
+    store.initialize()
+    _accept_run(store, _queued_run("runtime_run_v8"))
+    store.update_run_status(
+        runtime_run_id="runtime_run_v8",
+        status="starting",
+        updated_at="2026-07-19T00:00:02Z",
+    )
+    store.accept_source_operation(**_source_operation_acceptance("runtime_run_v8"))
+    _downgrade_fixture_to_v8(db_path)
+
+    store.initialize()
+    store.initialize()
+
+    backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
+    assert len(backups) == 1
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 9
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_reconciliations").fetchone()[0] == 0
+
+    with sqlite3.connect(f"file:{backups[0]}?mode=ro", uri=True) as backup:
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert backup.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
+        backup_tables = {row[0] for row in backup.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert "runtime_control_source_reconciliations" not in backup_tables
+
+
+@pytest.mark.parametrize("completed_statements", [1, 2, 3])
+def test_v8_to_v9_statement_failure_rolls_back_ddl_and_user_version(
+    tmp_path: Path,
+    monkeypatch,
+    completed_statements: int,
+) -> None:
+    import seektalent_runtime_control.store as store_module
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    db_path = tmp_path / "runtime_control.sqlite3"
+    store = RuntimeControlStore(db_path)
+    store.initialize()
+    _accept_run(store, _queued_run("runtime_run_v8_failure"))
+    _downgrade_fixture_to_v8(db_path)
+    statements = store_module._SOURCE_RECONCILIATION_SCHEMA_STATEMENTS
+    monkeypatch.setattr(
+        store_module,
+        "_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS",
+        (*statements[:completed_statements], "CREATE TABL injected_invalid_statement"),
+    )
+
+    with pytest.raises(sqlite3.OperationalError):
+        store.initialize()
+
+    _assert_v8_without_reconciliation_schema(db_path)
+    monkeypatch.setattr(store_module, "_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS", statements)
+    store.initialize()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
+
+
+def test_v7_to_v9_second_phase_failure_rolls_back_both_source_schemas(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import seektalent_runtime_control.store as store_module
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    db_path = tmp_path / "runtime_control.sqlite3"
+    store = RuntimeControlStore(db_path)
+    store.initialize()
+    _accept_run(store, _queued_run("runtime_run_v7_second_phase_failure"))
+    _downgrade_fixture_to_v7(db_path)
+    statements = store_module._SOURCE_RECONCILIATION_SCHEMA_STATEMENTS
+    monkeypatch.setattr(
+        store_module,
+        "_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS",
+        (statements[0], "CREATE TABL injected_invalid_statement"),
+    )
+
+    with pytest.raises(sqlite3.OperationalError):
+        store.initialize()
+
+    _assert_v7_without_source_schema(db_path)
+    backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
+    assert len(backups) == 1
+    with sqlite3.connect(f"file:{backups[0]}?mode=ro", uri=True) as backup:
+        assert backup.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert backup.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
+
+    monkeypatch.setattr(store_module, "_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS", statements)
+    store.initialize()
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {
+        "runtime_control_source_operations",
+        "runtime_control_source_dispatch_outbox",
+        "runtime_control_source_reconciliations",
+    } <= tables
 
 
 def test_approved_requirement_can_record_amendment_lineage_without_draft(tmp_path: Path) -> None:
@@ -732,9 +841,16 @@ def _accept_run(store, run):
 
 def _downgrade_fixture_to_v7(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE runtime_control_source_reconciliations")
         conn.execute("DROP TABLE runtime_control_source_dispatch_outbox")
         conn.execute("DROP TABLE runtime_control_source_operations")
         conn.execute("PRAGMA user_version = 7")
+
+
+def _downgrade_fixture_to_v8(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE runtime_control_source_reconciliations")
+        conn.execute("PRAGMA user_version = 8")
 
 
 def _assert_v7_without_source_schema(db_path: Path) -> None:
@@ -747,3 +863,42 @@ def _assert_v7_without_source_schema(db_path: Path) -> None:
     assert "runtime_control_source_operations" not in tables
     assert "runtime_control_source_dispatch_outbox" not in tables
     assert "idx_runtime_source_dispatch_pending" not in indexes
+
+
+def _assert_v8_without_reconciliation_schema(db_path: Path) -> None:
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        objects = {
+            (row[0], row[1])
+            for row in conn.execute(
+                "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'trigger')"
+            )
+        }
+        assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
+    assert ("table", "runtime_control_source_operations") in objects
+    assert ("table", "runtime_control_source_dispatch_outbox") in objects
+    assert ("table", "runtime_control_source_reconciliations") not in objects
+    assert ("trigger", "runtime_control_source_reconciliations_no_update") not in objects
+    assert ("trigger", "runtime_control_source_reconciliations_no_delete") not in objects
+
+
+def _source_operation_acceptance(runtime_run_id: str) -> dict[str, object]:
+    return {
+        "runtime_run_id": runtime_run_id,
+        "operation_id": "source_operation_v8",
+        "source_id": "liepin",
+        "operation_kind": "search",
+        "canonical_request_hash": "a" * 64,
+        "idempotency_key": "source-key-v8",
+        "accepted_requirement_revision_id": "reqapproved_test",
+        "runtime_attempt_no": 1,
+        "runtime_attempt_authority_ref": "runtime_attempt_authority_ref_v8",
+        "outbox_id": "source_outbox_v8",
+        "dispatch_intent_id": "dispatch_intent_v8",
+        "dispatch_intent_revision": 1,
+        "dispatch_intent_digest": "b" * 64,
+        "dispatch_authorization_ordinal": 1,
+        "source_operation_acceptance_ref": "source_acceptance_ref_v8",
+        "expected_ledger_revision": 1,
+        "expected_reconciliation_revision": 0,
+    }
