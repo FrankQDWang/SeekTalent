@@ -7,6 +7,7 @@ from typing import Annotated, Literal, TypeAlias
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
 
+JSON_SAFE_INTEGER = 2**53 - 1
 SQLITE_MAX_INTEGER = 2**63 - 1
 
 OperationKind: TypeAlias = Literal[
@@ -85,15 +86,15 @@ Opaque96 = Annotated[str, Field(strict=True), AfterValidator(_bounded_text(max_b
 Opaque128 = Annotated[str, Field(strict=True), AfterValidator(_bounded_text(max_bytes=128))]
 Opaque256 = Annotated[str, Field(strict=True), AfterValidator(_bounded_text(max_bytes=256))]
 Sha256 = Annotated[str, Field(strict=True), AfterValidator(_sha256)]
-PositiveSqliteInteger = Annotated[int, Field(strict=True, ge=1, le=SQLITE_MAX_INTEGER)]
-NonNegativeSqliteInteger = Annotated[int, Field(strict=True, ge=0, le=SQLITE_MAX_INTEGER)]
+PositiveJsonInteger = Annotated[int, Field(strict=True, ge=1, le=JSON_SAFE_INTEGER)]
+NonNegativeJsonInteger = Annotated[int, Field(strict=True, ge=0, le=JSON_SAFE_INTEGER)]
 ExactIntegerOne = Annotated[Literal[1], BeforeValidator(_literal_one)]
 ExactTrue = Annotated[Literal[True], BeforeValidator(_literal_true)]
 ExactFalse = Annotated[Literal[False], BeforeValidator(_literal_false)]
 
 
 class _HistoryModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always", strict=True)
 
 
 class ExactAuthorizationSelector(_HistoryModel):
@@ -119,13 +120,13 @@ class SourceHistoryQueryV1(_HistoryModel):
     operation_kind: OperationKind
     idempotency_key: Opaque128
     request_hash: Sha256
-    attempt_no: PositiveSqliteInteger
+    attempt_no: PositiveJsonInteger
     authorization_selector: AuthorizationSelector
-    accepted_generation_hint: PositiveSqliteInteger | None = None
-    searched_first_generation: PositiveSqliteInteger
-    searched_last_generation: PositiveSqliteInteger
-    expected_source_operation_ledger_revision: PositiveSqliteInteger
-    expected_reconciliation_revision: NonNegativeSqliteInteger
+    accepted_generation_hint: PositiveJsonInteger | None = None
+    searched_first_generation: PositiveJsonInteger
+    searched_last_generation: PositiveJsonInteger
+    expected_source_operation_ledger_revision: PositiveJsonInteger
+    expected_reconciliation_revision: NonNegativeJsonInteger
 
     @model_validator(mode="after")
     def validate_generation_range(self) -> SourceHistoryQueryV1:
@@ -146,13 +147,13 @@ class _QueryResultBase(_HistoryModel):
     operation_kind: OperationKind
     idempotency_key: Opaque128
     request_hash: Sha256
-    attempt_no: PositiveSqliteInteger
+    attempt_no: PositiveJsonInteger
     authorization_selector: AuthorizationSelector
-    accepted_generation_hint: PositiveSqliteInteger | None = None
-    searched_first_generation: PositiveSqliteInteger
-    searched_last_generation: PositiveSqliteInteger
-    expected_source_operation_ledger_revision: PositiveSqliteInteger
-    expected_reconciliation_revision: NonNegativeSqliteInteger
+    accepted_generation_hint: PositiveJsonInteger | None = None
+    searched_first_generation: PositiveJsonInteger
+    searched_last_generation: PositiveJsonInteger
+    expected_source_operation_ledger_revision: PositiveJsonInteger
+    expected_reconciliation_revision: NonNegativeJsonInteger
 
     @model_validator(mode="after")
     def validate_echoed_generation_range(self) -> _QueryResultBase:
@@ -166,8 +167,8 @@ class _QueryResultBase(_HistoryModel):
 
 
 class _CompleteCoverageResult(_QueryResultBase):
-    oldest_retained_generation: PositiveSqliteInteger
-    newest_known_generation: PositiveSqliteInteger
+    oldest_retained_generation: PositiveJsonInteger
+    newest_known_generation: PositiveJsonInteger
     history_complete: ExactTrue
     history_truncated: ExactFalse
 
@@ -190,18 +191,18 @@ class _AcceptedFactBase(_HistoryModel):
     operation_kind: OperationKind
     idempotency_key: Opaque128
     request_hash: Sha256
-    attempt_no: PositiveSqliteInteger
+    attempt_no: PositiveJsonInteger
     accepted_requirement_revision_id: Opaque96
     runtime_attempt_fence_ref: Sha256
-    accepted_generation: PositiveSqliteInteger
-    accepted_journal_revision: PositiveSqliteInteger
-    head_generation: PositiveSqliteInteger
-    head_journal_revision: PositiveSqliteInteger
+    accepted_generation: PositiveJsonInteger
+    accepted_journal_revision: PositiveJsonInteger
+    head_generation: PositiveJsonInteger
+    head_journal_revision: PositiveJsonInteger
     dispatch_authorization_ordinal: ExactIntegerOne
     authorized_dispatch_intent_id: Opaque96
-    authorized_dispatch_intent_revision: PositiveSqliteInteger
+    authorized_dispatch_intent_revision: PositiveJsonInteger
     authorized_dispatch_intent_digest: Sha256
-    profile_binding_generation: PositiveSqliteInteger
+    profile_binding_generation: PositiveJsonInteger
     browser_control_scope_id: Opaque96 | None = None
     controller_fence_ref: Sha256 | None = None
 
@@ -230,8 +231,8 @@ class AcceptedNoDispatchFact(_AcceptedFactBase):
 
 class _DispatchedFactBase(_AcceptedFactBase):
     durable_dispatch_intent_ref: Opaque256
-    dispatch_intent_generation: PositiveSqliteInteger
-    dispatch_intent_journal_revision: PositiveSqliteInteger
+    dispatch_intent_generation: PositiveJsonInteger
+    dispatch_intent_journal_revision: PositiveJsonInteger
 
     @model_validator(mode="after")
     def validate_dispatch_head(self) -> _DispatchedFactBase:
@@ -257,8 +258,8 @@ class DispatchNotObservedFact(_DispatchedFactBase):
 
 
 class _ObservedFactBase(_DispatchedFactBase):
-    observation_generation: PositiveSqliteInteger
-    observation_journal_revision: PositiveSqliteInteger
+    observation_generation: PositiveJsonInteger
+    observation_journal_revision: PositiveJsonInteger
 
     @model_validator(mode="after")
     def validate_observation_head(self) -> _ObservedFactBase:
@@ -328,8 +329,8 @@ class SourceHistoryNotFound(_CompleteCoverageResult):
 class SourceHistoryIdentityConflict(_QueryResultBase):
     outcome: Literal["identity_conflict"]
     conflict_reasons: tuple[IdentityConflictReason, ...]
-    oldest_retained_generation: PositiveSqliteInteger | None = None
-    newest_known_generation: PositiveSqliteInteger | None = None
+    oldest_retained_generation: PositiveJsonInteger | None = None
+    newest_known_generation: PositiveJsonInteger | None = None
 
     @model_validator(mode="after")
     def validate_conflicts(self) -> SourceHistoryIdentityConflict:
@@ -349,8 +350,8 @@ class SourceHistoryIdentityConflict(_QueryResultBase):
 class SourceHistoryUnavailable(_QueryResultBase):
     outcome: Literal["history_unavailable"]
     reason: HistoryUnavailableReason
-    oldest_retained_generation: PositiveSqliteInteger | None = None
-    newest_known_generation: PositiveSqliteInteger | None = None
+    oldest_retained_generation: PositiveJsonInteger | None = None
+    newest_known_generation: PositiveJsonInteger | None = None
 
     @model_validator(mode="after")
     def validate_unavailable_bounds(self) -> SourceHistoryUnavailable:

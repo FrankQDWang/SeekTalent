@@ -11,6 +11,7 @@ import pytest
 
 from seektalent.source_port.history_contract import (
     ExactAuthorizationSelector,
+    JSON_SAFE_INTEGER,
     SQLITE_MAX_INTEGER,
     SourceHistoryIdentityConflict,
     SourceHistoryMatched,
@@ -810,9 +811,9 @@ def test_phase_replays_require_original_predecessor_and_return_phase_revision(tm
 
 
 def test_sparse_maximum_generation_range_fails_without_materializing_the_span(tmp_path: Path) -> None:
-    harness = _harness(tmp_path, 1, SQLITE_MAX_INTEGER)
+    harness = _harness(tmp_path, 1, JSON_SAFE_INTEGER)
 
-    result = harness.query(_query(first_generation=1, last_generation=SQLITE_MAX_INTEGER))
+    result = harness.query(_query(first_generation=1, last_generation=JSON_SAFE_INTEGER))
 
     assert isinstance(result, SourceHistoryUnavailable)
     assert result.reason == "retention_gap"
