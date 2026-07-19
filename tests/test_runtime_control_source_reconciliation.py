@@ -122,6 +122,19 @@ def test_three_closed_decisions_commit_immutable_head_and_record(tmp_path: Path,
             conn.execute("DELETE FROM runtime_control_source_reconciliations")
 
 
+def test_v9_legacy_operation_without_expectation_remains_reconcilable(tmp_path: Path) -> None:
+    store = _store_with_operation(tmp_path)
+    with sqlite3.connect(store.path) as conn:
+        conn.execute("DROP TABLE runtime_control_source_operation_admission_expectations")
+        conn.execute("PRAGMA user_version = 9")
+    store.initialize()
+
+    record = store.commit_no_owner_source_reconciliation(_decision())
+
+    assert record.committed_ledger_revision == 2
+    assert store.get_source_operation("runtime_run_1", "source_operation_1").retry_posture == "safe_retry"
+
+
 def test_unknown_head_can_be_resolved_without_replacing_dispatch_truth(tmp_path: Path) -> None:
     store = _store_with_operation(tmp_path)
     first = _unresolved_decision(
@@ -600,6 +613,10 @@ def _acceptance() -> dict[str, object]:
         "accepted_requirement_revision_id": "reqapproved_1",
         "runtime_attempt_no": 1,
         "runtime_attempt_authority_ref": "runtime_attempt_authority_ref_1",
+        "runtime_attempt_fence_ref": "c" * 64,
+        "profile_binding_generation": 1,
+        "browser_control_scope_id": None,
+        "controller_fence_ref": None,
         "outbox_id": "source_outbox_1",
         "dispatch_intent_id": "dispatch_intent_1",
         "dispatch_intent_revision": 1,

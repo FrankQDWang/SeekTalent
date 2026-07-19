@@ -1,0 +1,41 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Persist the T2a2a main-owned source-operation admission expectation snapshot atomically.",
+  "rationale": "Issue #356 adds schema v10 and extends the existing source-operation acceptance transaction because RuntimeControlStore already owns runtime-control migrations, operation identity, and the dispatch outbox. A dedicated immutable 1:1 table preserves exact Source Port admission expectations without guessing values for legacy operations or granting raw history mutation authority. The bounded store.py change keeps operation, expectation, and outbox writes and integrity reads inside one BEGIN IMMEDIATE boundary.",
+  "touched_layers": [
+    "other"
+  ],
+  "red_files": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "RuntimeControlStore already owns ordered SQLite migrations, source-operation acceptance, pending dispatch reads, and acknowledgement CAS. T2a2a adds one focused v10 table and the integrity checks required by those existing transaction paths; splitting this invariant into a new storage abstraction would increase indirection and transaction-boundary risk. Store decomposition remains separate governance work.",
+  "deletion_targets": [
+    "source-operation dispatch that lacks a durable main-owned admission expectation",
+    "legacy migration behavior that invents Source Port fence or profile-binding facts",
+    "exact acceptance replay that ignores changed fence, binding-generation, or browser-correlation expectations"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run --group dev python -m pytest -p no:tach tests/test_runtime_control_source_operations.py tests/test_runtime_control_source_reconciliation.py tests/test_runtime_control_store.py tests/test_runtime_control_event_contract.py -q",
+    "uv run --group dev ruff check src/seektalent_runtime_control/source_operations.py src/seektalent_runtime_control/store.py tests/test_runtime_control_source_operations.py tests/test_runtime_control_source_reconciliation.py tests/test_runtime_control_store.py tests/test_runtime_control_event_contract.py",
+    "uv run --group dev ty check src/seektalent_runtime_control/source_operations.py src/seektalent_runtime_control/store.py",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_privacy_gate.py",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base codex/issue-354-authenticated-history-frames",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base codex/issue-354-authenticated-history-frames",
+    "uv run --group dev python tools/check_pr_governance.py --base codex/issue-354-authenticated-history-frames"
+  ],
+  "risks": [
+    "Existing v9 operations intentionally migrate without expectation rows and must remain readable for diagnosis while replay, pending dispatch, and acknowledgement fail closed.",
+    "Operation, expectation, and outbox rows must commit or roll back together across statement failure, acknowledgement loss, replay, and concurrency races.",
+    "SHA-256, nullable opaque identifiers, Unicode byte limits, and profile binding generations must reject coercion and values outside the JSON-safe integer domain.",
+    "This snapshot is main-owned expected input only; it does not authenticate history, verify a sidecar origin, authorize retry, mutate reconciliation, or enable production recovery."
+  ]
+}
