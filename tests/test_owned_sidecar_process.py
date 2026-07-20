@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import io
 import json
 import os
@@ -25,7 +26,6 @@ import seektalent.owned_sidecar_process as owned_process
 from seektalent.installed_release import (
     AuthenticatedInstalledSidecarLaunch,
     InstalledReleaseError,
-    InstalledSidecarExecutableResolution,
     admit_installed_sidecar_launch,
 )
 from seektalent.owned_sidecar_process import spawn_owned_sidecar
@@ -149,6 +149,14 @@ def test_spawn_rejects_caller_fabricated_admission_before_popen(
     assert calls == []
 
 
+def test_authenticated_admission_copy_preserves_one_factory_capability(
+    resolution: AuthenticatedInstalledSidecarLaunch,
+) -> None:
+    assert copy.copy(resolution) is resolution
+    assert copy.deepcopy(resolution) is resolution
+    assert not hasattr(installed_release, "_FACTORY_ADMISSIONS")
+
+
 def test_invalid_lifecycle_timeout_has_no_fake_process_or_group_signal_side_effect(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -226,46 +234,31 @@ def test_windows_spawn_uses_bounded_creation_contract(
     _close_process_streams(process)
 
 
+@pytest.mark.parametrize("working_directory_kind", ["missing", "file", "symlink"])
 def test_spawn_rejects_invalid_fixed_working_directory_before_popen(
-    resolution: InstalledSidecarExecutableResolution,
-    tmp_path: Path,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     monkeypatch: pytest.MonkeyPatch,
+    working_directory_kind: str,
 ) -> None:
-    missing_slot = tmp_path / "missing-slot"
-    file_slot = tmp_path / "file-slot"
-    file_slot.mkdir()
-    (file_slot / "release").write_text("not a directory", encoding="utf-8")
-    other_release = tmp_path / "other-release"
-    other_release.mkdir()
-    invalid = [
-        replace(
-            resolution.resolution,
-            slot_root=missing_slot,
-            manifest_path=missing_slot / "release" / "release-manifest.json",
-        ),
-        replace(
-            resolution.resolution,
-            slot_root=file_slot,
-            manifest_path=file_slot / "release" / "release-manifest.json",
-        ),
-        replace(
-            resolution.resolution,
-            manifest_path=other_release / "release-manifest.json",
-        ),
-    ]
+    release_directory = resolution.manifest_path.parent
+    original_directory = release_directory.with_name("original-release")
+    release_directory.rename(original_directory)
+    if working_directory_kind == "file":
+        release_directory.write_text("not a directory", encoding="utf-8")
+    elif working_directory_kind == "symlink":
+        release_directory.symlink_to(original_directory, target_is_directory=True)
     calls: list[object] = []
     monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
 
-    for candidate in invalid:
-        with pytest.raises(TypeError):
-            spawn_owned_sidecar(candidate)
+    with pytest.raises(ValueError):
+        spawn_owned_sidecar(resolution)
 
     assert calls == []
 
 
 @requires_native_probe
 def test_binary_roundtrip_and_stderr_remain_separate(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
     stdout_value = b"\x00protocol\xff"
@@ -285,7 +278,7 @@ def test_binary_roundtrip_and_stderr_remain_separate(
 
 @requires_native_probe
 def test_spawn_cwd_is_fixed_when_main_has_different_ambient_cwd(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -307,7 +300,7 @@ def test_spawn_cwd_is_fixed_when_main_has_different_ambient_cwd(
 
 @requires_native_probe
 def test_concurrent_drain_handles_stdout_and_stderr_above_pipe_capacity(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
     size = 2 * 1024 * 1024
@@ -336,7 +329,7 @@ def test_concurrent_drain_handles_stdout_and_stderr_above_pipe_capacity(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX descriptor inheritance")
 def test_inheritable_sentinel_fd_does_not_enter_child(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
 ) -> None:
     assert fcntl is not None
     source_fd = os.open(PROBE, os.O_RDONLY)
@@ -356,7 +349,7 @@ def test_inheritable_sentinel_fd_does_not_enter_child(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX CLOEXEC inspection")
 def test_parent_pipe_endpoints_are_non_inheritable(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
 
@@ -371,7 +364,7 @@ def test_parent_pipe_endpoints_are_non_inheritable(
 
 @requires_native_probe
 def test_close_stdin_delivers_eof_and_child_exit_closes_readers(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
     process.close_stdin()
@@ -385,7 +378,7 @@ def test_close_stdin_delivers_eof_and_child_exit_closes_readers(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX direct-child reaping")
-def test_clean_exit_waits_and_reaps_direct_child(resolution: InstalledSidecarExecutableResolution) -> None:
+def test_clean_exit_waits_and_reaps_direct_child(resolution: AuthenticatedInstalledSidecarLaunch) -> None:
     process = spawn_owned_sidecar(resolution)
     process.protocol_writer.write(b"EXIT 7\n")
     process.protocol_writer.flush()
@@ -400,7 +393,7 @@ def test_clean_exit_waits_and_reaps_direct_child(resolution: InstalledSidecarExe
 @pytest.mark.parametrize("method", ["terminate", "kill"])
 @pytest.mark.skipif(os.name != "posix", reason="POSIX direct-child reaping")
 def test_terminate_and_kill_wait_and_reap(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     method: str,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
@@ -415,7 +408,7 @@ def test_terminate_and_kill_wait_and_reap(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-session ownership")
 def test_spawned_process_is_direct_child_and_process_group_leader(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
     process.protocol_writer.write(b"IDENTITY\n")
@@ -437,7 +430,7 @@ def test_spawned_process_is_direct_child_and_process_group_leader(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX owned process-group signaling")
 def test_terminate_signals_owned_process_group(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     tmp_path: Path,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
@@ -460,7 +453,7 @@ def test_terminate_signals_owned_process_group(
 @pytest.mark.skipif(os.name != "posix", reason="POSIX retained process-group ownership")
 @pytest.mark.parametrize("method", ["terminate", "kill"])
 def test_group_signal_reaches_grandchild_after_direct_child_exits(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     method: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -502,7 +495,7 @@ def test_group_signal_reaches_grandchild_after_direct_child_exits(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX retained process-group ownership")
 def test_lifecycle_lock_prevents_wait_from_reaping_during_group_signal(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
@@ -564,22 +557,15 @@ def test_lifecycle_lock_prevents_wait_from_reaping_during_group_signal(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX parent descriptor accounting")
 def test_spawn_failure_and_repeated_spawn_do_not_leak_parent_fds(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
 ) -> None:
     before = len(os.listdir("/dev/fd"))
-    missing = installed_release.InstalledSidecarExecutableResolution(
-        slot_root=resolution.slot_root,
-        manifest_path=resolution.manifest_path,
-        executable_path=resolution.slot_root / "missing",
-        manifest_id=resolution.manifest_id,
-        manifest_sha256=resolution.manifest_sha256,
-        product_build_id=resolution.product_build_id,
-        target=resolution.target,
-        executable_size_bytes=0,
-        executable_sha256="0" * 64,
-    )
-    with pytest.raises(TypeError):
-        spawn_owned_sidecar(missing)
+    executable = resolution.executable_path
+    moved_executable = executable.with_name("temporarily-missing-sidecar")
+    executable.rename(moved_executable)
+    with pytest.raises(OSError):
+        spawn_owned_sidecar(resolution)
+    moved_executable.rename(executable)
     for _ in range(20):
         process = spawn_owned_sidecar(resolution)
         process.close_stdin()
@@ -591,7 +577,7 @@ def test_spawn_failure_and_repeated_spawn_do_not_leak_parent_fds(
 
 @requires_native_probe
 def test_wait_requires_a_finite_positive_timeout(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
     try:
@@ -607,7 +593,7 @@ def test_wait_requires_a_finite_positive_timeout(
 @pytest.mark.parametrize(("timeout", "error"), INVALID_TIMEOUTS)
 @requires_native_probe
 def test_terminate_and_kill_reject_invalid_timeout_before_signaling(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     monkeypatch: pytest.MonkeyPatch,
     method: str,
     timeout: object,
@@ -635,7 +621,7 @@ def test_terminate_and_kill_reject_invalid_timeout_before_signaling(
 
 @requires_native_probe
 def test_terminate_normalizes_timeout_once_and_reuses_it_for_fallback_kill(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
@@ -672,7 +658,7 @@ def test_terminate_normalizes_timeout_once_and_reuses_it_for_fallback_kill(
 
 @requires_native_probe
 def test_kill_propagates_wait_timeout_expired(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     process = spawn_owned_sidecar(resolution)
