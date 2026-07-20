@@ -12,6 +12,7 @@ import pytest
 REQUEST_HASH = "a" * 64
 DISPATCH_DIGEST = "b" * 64
 SQLITE_INTEGER_MAX = 2**63 - 1
+JSON_SAFE_INTEGER_MAX = 2**53 - 1
 LONE_SURROGATE = json.loads(r'"\ud800"')
 
 
@@ -21,6 +22,13 @@ def test_acceptance_commits_initial_ledger_and_pending_dispatch_atomically(tmp_p
     accepted = store.accept_source_operation(**_acceptance())
 
     assert accepted.operation == store.get_source_operation("runtime_run_1", "source_operation_1")
+    assert accepted.expectation == store.get_source_operation_admission_expectation(
+        "runtime_run_1", "source_operation_1"
+    )
+    assert accepted.expectation.runtime_attempt_fence_ref == "c" * 64
+    assert accepted.expectation.profile_binding_generation == 1
+    assert accepted.expectation.browser_control_scope_id is None
+    assert accepted.expectation.controller_fence_ref is None
     assert accepted.operation.operation_phase == "accepted"
     assert accepted.operation.ledger_revision == 1
     assert accepted.operation.reconciliation_revision == 0
@@ -37,11 +45,18 @@ def test_acceptance_commits_initial_ledger_and_pending_dispatch_atomically(tmp_p
     assert accepted.dispatch.expected_reconciliation_revision == 0
 
 
-def test_operation_insert_fault_rolls_back_operation_and_outbox(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "fault_point",
+    ["after_operation_insert", "after_expectation_insert", "after_outbox_insert"],
+)
+def test_acceptance_statement_fault_rolls_back_all_three_rows(
+    tmp_path: Path,
+    fault_point: str,
+) -> None:
     store = _store_with_run(tmp_path)
 
     def fail_after_operation(point: str) -> None:
-        if point == "after_operation_insert":
+        if point == fault_point:
             raise sqlite3.OperationalError("injected source-operation fault")
 
     with pytest.raises(sqlite3.OperationalError, match="injected source-operation fault"):
@@ -49,10 +64,18 @@ def test_operation_insert_fault_rolls_back_operation_and_outbox(tmp_path: Path) 
 
     with sqlite3.connect(store.path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations"
+            ).fetchone()[0]
+            == 0
+        )
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 0
 
 
 def test_commit_ack_loss_exact_replay_returns_same_rows(tmp_path: Path) -> None:
+    from seektalent_runtime_control.store import RuntimeControlStore
+
     store = _store_with_run(tmp_path)
 
     def lose_ack(point: str) -> None:
@@ -62,11 +85,22 @@ def test_commit_ack_loss_exact_replay_returns_same_rows(tmp_path: Path) -> None:
     with pytest.raises(ConnectionError, match="acknowledgement loss"):
         store.accept_source_operation(**_acceptance(), fault_injector=lose_ack)
 
-    replayed = store.accept_source_operation(**_acceptance())
-    assert replayed.operation == store.get_source_operation("runtime_run_1", "source_operation_1")
-    assert store.list_pending_source_dispatches() == [replayed.dispatch]
+    reopened = RuntimeControlStore(store.path)
+    reopened.initialize()
+    replayed = reopened.accept_source_operation(**_acceptance())
+    assert replayed.operation == reopened.get_source_operation("runtime_run_1", "source_operation_1")
+    assert replayed.expectation == reopened.get_source_operation_admission_expectation(
+        "runtime_run_1", "source_operation_1"
+    )
+    assert reopened.list_pending_source_dispatches() == [replayed.dispatch]
     with sqlite3.connect(store.path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations"
+            ).fetchone()[0]
+            == 1
+        )
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 1
 
 
@@ -88,6 +122,10 @@ def test_commit_ack_loss_exact_replay_returns_same_rows(tmp_path: Path) -> None:
         ({"operation_kind": "cards"}, "identity_conflict"),
         ({"runtime_attempt_no": 2}, "identity_conflict"),
         ({"runtime_attempt_authority_ref": "runtime_attempt_authority_ref_2"}, "identity_conflict"),
+        ({"runtime_attempt_fence_ref": "d" * 64}, "identity_conflict"),
+        ({"profile_binding_generation": 2}, "identity_conflict"),
+        ({"browser_control_scope_id": "browser_scope_2"}, "identity_conflict"),
+        ({"controller_fence_ref": "d" * 64}, "identity_conflict"),
         ({"outbox_id": "source_outbox_2"}, "identity_conflict"),
         ({"dispatch_intent_id": "dispatch_intent_2"}, "identity_conflict"),
         ({"dispatch_intent_revision": 2}, "identity_conflict"),
@@ -116,6 +154,12 @@ def test_exact_replay_and_identity_conflict_matrix(
 
     with sqlite3.connect(store.path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations"
+            ).fetchone()[0]
+            == 1
+        )
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 1
 
 
@@ -221,7 +265,40 @@ def test_existing_operation_with_mismatched_outbox_fails_closed(tmp_path: Path) 
     assert exc_info.value.reason_code == "source_operation_acceptance_incomplete"
 
 
-@pytest.mark.parametrize("corruption", ["missing_parent", "missing", "request_hash_mismatch"])
+@pytest.mark.parametrize("corruption", ["missing", "runtime_attempt_fence_ref_mismatch"])
+def test_acceptance_replay_requires_original_expectation(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+
+    store = _store_with_run(tmp_path)
+    store.accept_source_operation(**_acceptance())
+    with sqlite3.connect(store.path) as conn:
+        _disable_expectation_immutability(conn)
+        if corruption == "missing":
+            conn.execute("DELETE FROM runtime_control_source_operation_admission_expectations")
+        else:
+            conn.execute(
+                """
+                UPDATE runtime_control_source_operation_admission_expectations
+                SET runtime_attempt_fence_ref = ?
+                """,
+                ("d" * 64,),
+            )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        store.accept_source_operation(**_acceptance())
+
+    assert exc_info.value.reason_code == (
+        "source_operation_acceptance_incomplete" if corruption == "missing" else "identity_conflict"
+    )
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["missing_parent", "missing", "request_hash_mismatch", "missing_expectation", "invalid_expectation"],
+)
 def test_pending_read_and_ack_fail_closed_when_operation_pair_is_invalid(
     tmp_path: Path,
     corruption: str,
@@ -235,6 +312,18 @@ def test_pending_read_and_ack_fail_closed_when_operation_pair_is_invalid(
             conn.execute("DELETE FROM runtime_control_runs")
         elif corruption == "missing":
             conn.execute("DELETE FROM runtime_control_source_operations")
+        elif corruption == "missing_expectation":
+            _disable_expectation_immutability(conn)
+            conn.execute("DELETE FROM runtime_control_source_operation_admission_expectations")
+        elif corruption == "invalid_expectation":
+            _disable_expectation_immutability(conn)
+            conn.execute("PRAGMA ignore_check_constraints = ON")
+            conn.execute(
+                """
+                UPDATE runtime_control_source_operation_admission_expectations
+                SET runtime_attempt_fence_ref = 'invalid'
+                """
+            )
         else:
             conn.execute(
                 "UPDATE runtime_control_source_operations SET canonical_request_hash = ?",
@@ -258,6 +347,55 @@ def test_pending_read_and_ack_fail_closed_when_operation_pair_is_invalid(
             """
         ).fetchone()
     assert outbox == ("pending", 1, None, None, None, None, None)
+
+
+def test_admission_expectation_rows_are_immutable(tmp_path: Path) -> None:
+    store = _store_with_run(tmp_path)
+    accepted = store.accept_source_operation(**_acceptance())
+
+    with sqlite3.connect(store.path) as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="source_operation_admission_expectation_immutable"):
+            conn.execute(
+                """
+                UPDATE runtime_control_source_operation_admission_expectations
+                SET profile_binding_generation = 2
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="source_operation_admission_expectation_immutable"):
+            conn.execute("DELETE FROM runtime_control_source_operation_admission_expectations")
+        with pytest.raises(sqlite3.IntegrityError, match="source_operation_admission_expectation_immutable"):
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO runtime_control_source_operation_admission_expectations (
+                    runtime_run_id, operation_id, runtime_attempt_fence_ref,
+                    profile_binding_generation, browser_control_scope_id, controller_fence_ref
+                )
+                VALUES ('runtime_run_1', 'source_operation_1', ?, 2, NULL, NULL)
+                """,
+                ("d" * 64,),
+            )
+
+    assert store.get_source_operation_admission_expectation(
+        "runtime_run_1", "source_operation_1"
+    ) == accepted.expectation
+
+
+def test_expectation_getter_distinguishes_missing_operation_from_incomplete_acceptance(tmp_path: Path) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError, RuntimeControlLookupError
+
+    store = _store_with_run(tmp_path)
+    with pytest.raises(RuntimeControlLookupError) as missing_operation:
+        store.get_source_operation_admission_expectation("runtime_run_1", "source_operation_missing")
+    assert missing_operation.value.reason_code == "source_operation_not_found"
+
+    store.accept_source_operation(**_acceptance())
+    with sqlite3.connect(store.path) as conn:
+        _disable_expectation_immutability(conn)
+        conn.execute("DELETE FROM runtime_control_source_operation_admission_expectations")
+
+    with pytest.raises(RuntimeControlError) as incomplete:
+        store.get_source_operation_admission_expectation("runtime_run_1", "source_operation_1")
+    assert incomplete.value.reason_code == "source_operation_acceptance_incomplete"
 
 
 def test_new_acceptance_rejects_scoped_orphan_outbox_before_insert(tmp_path: Path) -> None:
@@ -613,6 +751,83 @@ def test_closed_fields_hashes_and_opaque_refs_fail_closed(
     assert exc_info.value.reason_code == reason_code
 
 
+@pytest.mark.parametrize(
+    ("changes", "reason_code"),
+    [
+        ({"runtime_attempt_fence_ref": ""}, "source_operation_runtime_attempt_fence_ref_invalid"),
+        ({"runtime_attempt_fence_ref": "C" * 64}, "source_operation_runtime_attempt_fence_ref_invalid"),
+        ({"runtime_attempt_fence_ref": "c" * 63}, "source_operation_runtime_attempt_fence_ref_invalid"),
+        ({"runtime_attempt_fence_ref": True}, "source_operation_runtime_attempt_fence_ref_invalid"),
+        ({"runtime_attempt_fence_ref": LONE_SURROGATE}, "source_operation_runtime_attempt_fence_ref_invalid"),
+        ({"profile_binding_generation": 0}, "source_operation_profile_binding_generation_invalid"),
+        ({"profile_binding_generation": -1}, "source_operation_profile_binding_generation_invalid"),
+        ({"profile_binding_generation": True}, "source_operation_profile_binding_generation_invalid"),
+        ({"profile_binding_generation": 1.0}, "source_operation_profile_binding_generation_invalid"),
+        (
+            {"profile_binding_generation": JSON_SAFE_INTEGER_MAX + 1},
+            "source_operation_profile_binding_generation_invalid",
+        ),
+        ({"browser_control_scope_id": ""}, "source_operation_browser_control_scope_id_invalid"),
+        ({"browser_control_scope_id": "x" * 97}, "source_operation_browser_control_scope_id_invalid"),
+        ({"browser_control_scope_id": "界" * 33}, "source_operation_browser_control_scope_id_invalid"),
+        ({"browser_control_scope_id": True}, "source_operation_browser_control_scope_id_invalid"),
+        ({"browser_control_scope_id": 1.0}, "source_operation_browser_control_scope_id_invalid"),
+        ({"browser_control_scope_id": LONE_SURROGATE}, "source_operation_browser_control_scope_id_invalid"),
+        ({"browser_control_scope_id": "scope\x7finside"}, "source_operation_browser_control_scope_id_invalid"),
+        ({"browser_control_scope_id": "scope\x90inside"}, "source_operation_browser_control_scope_id_invalid"),
+        ({"controller_fence_ref": ""}, "source_operation_controller_fence_ref_invalid"),
+        ({"controller_fence_ref": "D" * 64}, "source_operation_controller_fence_ref_invalid"),
+        ({"controller_fence_ref": "d" * 63}, "source_operation_controller_fence_ref_invalid"),
+        ({"controller_fence_ref": False}, "source_operation_controller_fence_ref_invalid"),
+        ({"controller_fence_ref": LONE_SURROGATE}, "source_operation_controller_fence_ref_invalid"),
+    ],
+)
+def test_admission_expectation_fields_are_strict(
+    tmp_path: Path,
+    changes: dict[str, object],
+    reason_code: str,
+) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+
+    values = _acceptance()
+    values.update(changes)
+    store = _store_with_run(tmp_path)
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        store.accept_source_operation(**values)
+
+    assert exc_info.value.reason_code == reason_code
+
+
+def test_nullable_expectations_accept_none_and_bounded_unicode_scope(tmp_path: Path) -> None:
+    store = _store_with_run(tmp_path)
+    first = store.accept_source_operation(
+        **_acceptance(
+            profile_binding_generation=JSON_SAFE_INTEGER_MAX,
+            browser_control_scope_id="浏览器-scope-1",
+            controller_fence_ref="d" * 64,
+        )
+    )
+
+    assert first.expectation.profile_binding_generation == JSON_SAFE_INTEGER_MAX
+    assert first.expectation.browser_control_scope_id == "浏览器-scope-1"
+    assert first.expectation.controller_fence_ref == "d" * 64
+
+    _add_run(store, runtime_run_id="runtime_run_2")
+    second = store.accept_source_operation(
+        **_acceptance(
+            runtime_run_id="runtime_run_2",
+            operation_id="source_operation_2",
+            idempotency_key="source-key-2",
+            outbox_id="source_outbox_2",
+            dispatch_intent_id="dispatch_intent_2",
+            source_operation_acceptance_ref="source_acceptance_ref_2",
+        )
+    )
+    assert second.expectation.browser_control_scope_id is None
+    assert second.expectation.controller_fence_ref is None
+
+
 def test_sqlite_integer_max_is_accepted_for_persisted_positive_fields(tmp_path: Path) -> None:
     from seektalent_runtime_control.source_operations import validate_source_dispatch_ack
 
@@ -691,6 +906,10 @@ def _acceptance(**changes: object) -> dict[str, object]:
         "accepted_requirement_revision_id": "reqapproved_1",
         "runtime_attempt_no": 1,
         "runtime_attempt_authority_ref": "runtime_attempt_authority_ref_1",
+        "runtime_attempt_fence_ref": "c" * 64,
+        "profile_binding_generation": 1,
+        "browser_control_scope_id": None,
+        "controller_fence_ref": None,
         "outbox_id": "source_outbox_1",
         "dispatch_intent_id": "dispatch_intent_1",
         "dispatch_intent_revision": 1,
@@ -733,3 +952,16 @@ def _new_acceptance() -> dict[str, object]:
         dispatch_intent_id="dispatch_intent_2",
         source_operation_acceptance_ref="source_acceptance_ref_2",
     )
+
+
+def _disable_expectation_immutability(conn: sqlite3.Connection) -> None:
+    triggers = conn.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'trigger'
+          AND tbl_name = 'runtime_control_source_operation_admission_expectations'
+        """
+    ).fetchall()
+    for (trigger_name,) in triggers:
+        conn.execute(f'DROP TRIGGER "{trigger_name}"')

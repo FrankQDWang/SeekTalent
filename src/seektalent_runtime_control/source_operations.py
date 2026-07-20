@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 import sqlite3
+import unicodedata
 from typing import Literal, NamedTuple
 
 from seektalent_runtime_control.errors import RuntimeControlError
@@ -44,6 +45,7 @@ RETRY_POSTURES = frozenset({"no_retry", "safe_retry", "reconcile_first"})
 SOURCE_DISPATCH_ACK_KINDS = frozenset({"new_logical_operation", "new_dispatch_authorization", "same_intent_replay"})
 _LOWERCASE_SHA256 = re.compile(r"[0-9a-f]{64}")
 _SQLITE_INTEGER_MAX = 2**63 - 1
+_JSON_SAFE_INTEGER_MAX = 2**53 - 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +67,16 @@ class SourceOperationRecord:
     reconciliation_revision: int
     main_commit_ref: str | None
     ledger_revision: int
+
+
+@dataclass(frozen=True, slots=True)
+class SourceOperationAdmissionExpectation:
+    runtime_run_id: str
+    operation_id: str
+    runtime_attempt_fence_ref: str
+    profile_binding_generation: int
+    browser_control_scope_id: str | None
+    controller_fence_ref: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +103,7 @@ class SourceDispatchMetadata:
 
 class AcceptedSourceOperation(NamedTuple):
     operation: SourceOperationRecord
+    expectation: SourceOperationAdmissionExpectation
     dispatch: SourceDispatchMetadata
 
 
@@ -105,6 +118,10 @@ def validate_source_operation_acceptance(
     accepted_requirement_revision_id: str,
     runtime_attempt_no: int,
     runtime_attempt_authority_ref: str,
+    runtime_attempt_fence_ref: str,
+    profile_binding_generation: int,
+    browser_control_scope_id: str | None,
+    controller_fence_ref: str | None,
     outbox_id: str,
     dispatch_intent_id: str,
     dispatch_intent_revision: int,
@@ -125,6 +142,14 @@ def validate_source_operation_acceptance(
     _require_opaque(accepted_requirement_revision_id, "accepted_requirement_revision_id", max_bytes=96)
     _require_positive(runtime_attempt_no, "runtime_attempt_no")
     _require_opaque(runtime_attempt_authority_ref, "runtime_attempt_authority_ref", max_bytes=256)
+    validate_source_operation_admission_expectation(
+        runtime_run_id=runtime_run_id,
+        operation_id=operation_id,
+        runtime_attempt_fence_ref=runtime_attempt_fence_ref,
+        profile_binding_generation=profile_binding_generation,
+        browser_control_scope_id=browser_control_scope_id,
+        controller_fence_ref=controller_fence_ref,
+    )
     _require_opaque(outbox_id, "outbox_id", max_bytes=96)
     _require_opaque(dispatch_intent_id, "dispatch_intent_id", max_bytes=96)
     _require_positive(dispatch_intent_revision, "dispatch_intent_revision")
@@ -145,6 +170,25 @@ def validate_source_operation_acceptance(
         expected=0,
         reason_code="source_operation_expected_reconciliation_revision_invalid",
     )
+
+
+def validate_source_operation_admission_expectation(
+    *,
+    runtime_run_id: str,
+    operation_id: str,
+    runtime_attempt_fence_ref: str,
+    profile_binding_generation: int,
+    browser_control_scope_id: str | None,
+    controller_fence_ref: str | None,
+) -> None:
+    _require_opaque(runtime_run_id, "runtime_run_id", max_bytes=96)
+    _require_opaque(operation_id, "operation_id", max_bytes=96)
+    _require_sha256(runtime_attempt_fence_ref, "runtime_attempt_fence_ref")
+    _require_positive_json_safe(profile_binding_generation, "profile_binding_generation")
+    if browser_control_scope_id is not None:
+        _require_wire_opaque(browser_control_scope_id, "browser_control_scope_id", max_bytes=96)
+    if controller_fence_ref is not None:
+        _require_sha256(controller_fence_ref, "controller_fence_ref")
 
 
 def validate_source_dispatch_ack(
@@ -230,6 +274,19 @@ def source_dispatch_from_row(row: sqlite3.Row) -> SourceDispatchMetadata:
     )
 
 
+def source_operation_admission_expectation_from_row(
+    row: sqlite3.Row,
+) -> SourceOperationAdmissionExpectation:
+    return SourceOperationAdmissionExpectation(
+        runtime_run_id=row["runtime_run_id"],
+        operation_id=row["operation_id"],
+        runtime_attempt_fence_ref=row["runtime_attempt_fence_ref"],
+        profile_binding_generation=row["profile_binding_generation"],
+        browser_control_scope_id=row["browser_control_scope_id"],
+        controller_fence_ref=row["controller_fence_ref"],
+    )
+
+
 def operation_matches_acceptance(
     operation: SourceOperationRecord,
     *,
@@ -251,6 +308,29 @@ def operation_matches_acceptance(
         and operation.accepted_requirement_revision_id == accepted_requirement_revision_id
         and operation.runtime_attempt_no == runtime_attempt_no
         and operation.runtime_attempt_authority_ref == runtime_attempt_authority_ref
+    )
+
+
+def expectation_matches_operation(
+    expectation: SourceOperationAdmissionExpectation,
+    operation: SourceOperationRecord,
+) -> bool:
+    return expectation.runtime_run_id == operation.runtime_run_id and expectation.operation_id == operation.operation_id
+
+
+def expectation_matches_acceptance(
+    expectation: SourceOperationAdmissionExpectation,
+    *,
+    runtime_attempt_fence_ref: str,
+    profile_binding_generation: int,
+    browser_control_scope_id: str | None,
+    controller_fence_ref: str | None,
+) -> bool:
+    return (
+        expectation.runtime_attempt_fence_ref == runtime_attempt_fence_ref
+        and expectation.profile_binding_generation == profile_binding_generation
+        and expectation.browser_control_scope_id == browser_control_scope_id
+        and expectation.controller_fence_ref == controller_fence_ref
     )
 
 
@@ -313,7 +393,7 @@ def dispatch_ack_matches(
     )
 
 
-def _require_opaque(value: object, field: str, *, max_bytes: int) -> None:
+def _require_opaque(value: object, field: str, *, max_bytes: int) -> str:
     reason_code = f"source_operation_{field}_invalid"
     if not isinstance(value, str) or not value or value != value.strip():
         raise RuntimeControlError(reason_code)
@@ -323,6 +403,13 @@ def _require_opaque(value: object, field: str, *, max_bytes: int) -> None:
         raise RuntimeControlError(reason_code) from None
     if len(encoded) > max_bytes or any(ord(character) < 32 for character in value):
         raise RuntimeControlError(reason_code)
+    return value
+
+
+def _require_wire_opaque(value: object, field: str, *, max_bytes: int) -> None:
+    validated = _require_opaque(value, field, max_bytes=max_bytes)
+    if any(unicodedata.category(character) == "Cc" for character in validated):
+        raise RuntimeControlError(f"source_operation_{field}_invalid")
 
 
 def _require_sha256(value: object, field: str) -> None:
@@ -332,6 +419,11 @@ def _require_sha256(value: object, field: str) -> None:
 
 def _require_positive(value: object, field: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _SQLITE_INTEGER_MAX:
+        raise RuntimeControlError(f"source_operation_{field}_invalid")
+
+
+def _require_positive_json_safe(value: object, field: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _JSON_SAFE_INTEGER_MAX:
         raise RuntimeControlError(f"source_operation_{field}_invalid")
 
 
