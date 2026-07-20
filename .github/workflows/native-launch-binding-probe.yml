@@ -22,7 +22,7 @@ jobs:
           - name: windows-2025 x64
             runner: windows-2025
             expected_os: Windows
-            expected_arch: AMD64
+            expected_arch: x86_64
           - name: macos-15 arm64
             runner: macos-15
             expected_os: Darwin
@@ -42,7 +42,7 @@ jobs:
           python-version: "3.12"
 
       - name: Assert native runner identity
-        run: python -c "import platform; assert platform.system() == '${{ matrix.expected_os }}'; assert platform.machine().lower() == '${{ matrix.expected_arch }}'"
+        run: python -c "import platform; machine = {'amd64': 'x86_64', 'x86_64': 'x86_64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine().lower()); assert platform.system() == '${{ matrix.expected_os }}'; assert machine == '${{ matrix.expected_arch }}'"
 
       - name: Run native probe
         shell: python
