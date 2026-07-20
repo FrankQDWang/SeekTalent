@@ -11,6 +11,8 @@ INSTALLED_BOUNDARY_MODULES = {
     "installed_filesystem.py": "seektalent.installed_filesystem",
     "installed_release.py": "seektalent.installed_release",
     "installed_slot.py": "seektalent.installed_slot",
+    "windows_installed_binding.py": "seektalent.windows_installed_binding",
+    "windows_native_files.py": "seektalent.windows_native_files",
 }
 SLOT_LAYOUT_NAMES = {
     "INSTALLATION_ID_RELATIVE_PATH",
@@ -58,6 +60,18 @@ def _installed_boundary_failures(path: Path) -> list[tuple[int, str]]:
             continue
         if path.name == "installed_filesystem.py" and node.module.startswith("seektalent"):
             failures.append((node.lineno, f"filesystem layer imports {node.module}"))
+        if (
+            path.name == "windows_installed_binding.py"
+            and node.module.startswith("seektalent")
+            and node.module
+            not in {
+                "seektalent.installed_filesystem",
+                "seektalent.windows_native_files",
+            }
+        ):
+            failures.append((node.lineno, f"Windows opened-object layer imports {node.module}"))
+        if path.name == "windows_native_files.py" and node.module.startswith("seektalent"):
+            failures.append((node.lineno, f"Win32 primitive layer imports {node.module}"))
         if path.name == "installed_release.py" and node.module == "seektalent.installed_slot":
             failures.append((node.lineno, "release layer imports slot lifecycle"))
         if path.name == "installed_slot.py" and node.module == "seektalent.installed_release":

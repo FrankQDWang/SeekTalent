@@ -16,6 +16,10 @@ from seektalent.installed_slot import (
     InstalledSlotError,
     _InstalledSidecarLeaseState,
 )
+from seektalent.windows_installed_binding import (
+    WindowsLaunchBindingError,
+    WindowsLaunchBindingReason,
+)
 
 
 @dataclass(slots=True)
@@ -121,6 +125,11 @@ def spawn_owned_sidecar(lease: InstalledSidecarLaunchLease) -> OwnedSidecarProce
     lease_state = lease._take_for_spawn()
     process: subprocess.Popen[bytes] | None = None
     try:
+        if os.name == "nt":
+            raise WindowsLaunchBindingError(
+                WindowsLaunchBindingReason.LAUNCH_BINDING_UNSUPPORTED,
+                lease_state.admission.executable_path,
+            )
         resolution = lease_state.admission.resolution
         executable = resolution.executable_path
         if not executable.is_absolute():
@@ -141,20 +150,6 @@ def spawn_owned_sidecar(lease: InstalledSidecarLaunchLease) -> OwnedSidecarProce
                 env=_bounded_environment(),
                 pass_fds=(),
                 start_new_session=True,
-            )
-        elif os.name == "nt":
-            process = subprocess.Popen(
-                [str(executable)],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
-                text=False,
-                bufsize=0,
-                close_fds=True,
-                cwd=str(working_directory),
-                env=_bounded_environment(),
-                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"),
             )
         else:
             raise OSError(f"unsupported process platform: {os.name}")

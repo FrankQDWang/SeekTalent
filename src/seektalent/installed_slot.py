@@ -28,10 +28,16 @@ from seektalent.installed_release import (
     AuthenticatedInstalledSidecarLaunch,
     InstalledSidecarExecutableResolution,
     admit_installed_sidecar_launch,
+    admit_windows_opened_sidecar_launch,
 )
 from seektalent.release_manifest import ProductBuildId, Sha256
 from seektalent.release_signing import ReleaseManifestTrustPolicyV1
 from seektalent.strict_json import StrictJsonError, strict_json_object_loads
+from seektalent.windows_installed_binding import (
+    WindowsLaunchBindingError,
+    WindowsOpenedInstalledRelease,
+    acquire_windows_opened_installed_release,
+)
 
 
 INSTALLATION_ID_RELATIVE_PATH = Path("control/installation-id")
@@ -308,6 +314,7 @@ class _InstalledSidecarLeaseState:
     admission: AuthenticatedInstalledSidecarLaunch
     identity: InstalledSlotIdentity
     slot_lock: _NativeSlotLock
+    windows_opened_release: WindowsOpenedInstalledRelease | None = None
     released: bool = False
     transferred: bool = False
 
@@ -315,7 +322,23 @@ class _InstalledSidecarLeaseState:
         if self.released:
             return
         self.released = True
-        self.slot_lock.close()
+        failures: list[BaseException] = []
+        if self.windows_opened_release is not None:
+            try:
+                self.windows_opened_release.close()
+            except WindowsLaunchBindingError as exc:
+                failures.append(exc)
+        try:
+            self.slot_lock.close()
+        except InstalledSlotError as exc:
+            failures.append(exc)
+        if failures:
+            primary = failures[0]
+            for failure in failures[1:]:
+                primary.add_note(
+                    f"installed sidecar lease cleanup failed: {type(failure).__name__}: {failure}"
+                )
+            raise primary
 
 
 _LIVE_LAUNCH_LEASES: dict[
@@ -399,7 +422,7 @@ def _new_launch_lease(state: _InstalledSidecarLeaseState) -> InstalledSidecarLau
         entry = _LIVE_LAUNCH_LEASES.get(lease_id)
         if entry is not None and entry[0] is reference:
             _LIVE_LAUNCH_LEASES.pop(lease_id, None)
-            with suppress(InstalledSlotError):
+            with suppress(InstalledSlotError, WindowsLaunchBindingError):
                 entry[1].close()
 
     reference = weakref.ref(lease, remove_if_unclaimed)
@@ -438,6 +461,7 @@ def acquire_installed_sidecar_launch_lease(
     slot_root = root / SLOT_ROOT_RELATIVE_PATHS[initial_identity.physical_slot]
     _require_concrete_slot_root(root, slot_root)
     slot_lock = _acquire_slot_lock(root, initial_identity.physical_slot)
+    windows_opened_release: WindowsOpenedInstalledRelease | None = None
     try:
         with _brief_control_lock(root):
             current_installation_id = _read_installation_id(root)
@@ -455,7 +479,16 @@ def acquire_installed_sidecar_launch_lease(
                 )
             _require_pointer_installation(reread_identity, current_installation_id)
 
-        admission = admit_installed_sidecar_launch(slot_root, trust_policy, verification_time)
+        if os.name == "nt":
+            windows_opened_release = acquire_windows_opened_installed_release(root, slot_root)
+            admission = admit_windows_opened_sidecar_launch(
+                slot_root,
+                windows_opened_release,
+                trust_policy,
+                verification_time,
+            )
+        else:
+            admission = admit_installed_sidecar_launch(slot_root, trust_policy, verification_time)
         if (
             admission.product_build_id != initial_identity.product_build_id
             or admission.manifest_sha256 != initial_identity.release_manifest_sha256
@@ -466,10 +499,24 @@ def acquire_installed_sidecar_launch_lease(
                 admission=admission,
                 identity=initial_identity,
                 slot_lock=slot_lock,
+                windows_opened_release=windows_opened_release,
             )
         )
-    except BaseException:
-        slot_lock.close()
+    except BaseException as primary:
+        cleanup_failures: list[BaseException] = []
+        if windows_opened_release is not None:
+            try:
+                windows_opened_release.close()
+            except WindowsLaunchBindingError as exc:
+                cleanup_failures.append(exc)
+        try:
+            slot_lock.close()
+        except InstalledSlotError as exc:
+            cleanup_failures.append(exc)
+        for failure in cleanup_failures:
+            primary.add_note(
+                f"installed sidecar acquisition cleanup failed: {type(failure).__name__}: {failure}"
+            )
         raise
 
 

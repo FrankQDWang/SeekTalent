@@ -4,6 +4,7 @@ import os
 import platform
 import stat
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,7 @@ from seektalent.release_signing import (
     parse_release_manifest_signature,
     verify_release_manifest_signature,
 )
+from seektalent.windows_installed_binding import WindowsOpenedInstalledRelease
 
 
 INSTALLED_MANIFEST_RELATIVE_PATH = Path("release/release-manifest.json")
@@ -160,14 +162,54 @@ def admit_installed_sidecar_launch(
 ) -> AuthenticatedInstalledSidecarLaunch:
     """Authenticate and inspect the fixed installed sidecar launch identity."""
     root = _validate_slot_root(slot_root)
+    return _admit_installed_sidecar_launch(
+        root,
+        trust_policy,
+        verification_time,
+        read_regular=lambda path, limit: _read_stable_regular_file(root, path, limit=limit),
+        inspect_executable=lambda path, file_ref: _inspect_executable(root, path, file_ref),
+    )
+
+
+def admit_windows_opened_sidecar_launch(
+    slot_root: Path,
+    opened_release: WindowsOpenedInstalledRelease,
+    trust_policy: ReleaseManifestTrustPolicyV1,
+    verification_time: datetime,
+) -> AuthenticatedInstalledSidecarLaunch:
+    """Authenticate one Windows release exclusively through its live opened objects."""
+    root = _validate_slot_root(slot_root)
+    opened_release.require_slot_root(root)
+    return _admit_installed_sidecar_launch(
+        root,
+        trust_policy,
+        verification_time,
+        read_regular=opened_release.read_regular,
+        inspect_executable=lambda path, file_ref: opened_release.inspect_executable(
+            path,
+            expected_size=file_ref.size_bytes,
+            expected_sha256=file_ref.sha256,
+            limit=MAX_INSTALLED_SIDECAR_BYTES,
+        ),
+    )
+
+
+def _admit_installed_sidecar_launch(
+    root: Path,
+    trust_policy: ReleaseManifestTrustPolicyV1,
+    verification_time: datetime,
+    *,
+    read_regular: Callable[[Path, int], bytes],
+    inspect_executable: Callable[[Path, FileRefV1], str],
+) -> AuthenticatedInstalledSidecarLaunch:
     manifest_path = root / INSTALLED_MANIFEST_RELATIVE_PATH
     signature_path = root / INSTALLED_SIGNATURE_RELATIVE_PATH
-    manifest = parse_release_manifest(_read_stable_regular_file(root, manifest_path, limit=MAX_INSTALLED_MANIFEST_BYTES))
+    manifest = parse_release_manifest(read_regular(manifest_path, MAX_INSTALLED_MANIFEST_BYTES))
     signature = parse_release_manifest_signature(
-        _read_stable_regular_file(root, signature_path, limit=MAX_INSTALLED_MANIFEST_BYTES)
+        read_regular(signature_path, MAX_INSTALLED_MANIFEST_BYTES)
     )
     verified = verify_release_manifest_signature(signature, manifest, trust_policy, verification_time)
-    resolution = _resolve_installed_sidecar_executable(root, manifest)
+    resolution = _resolve_installed_sidecar_executable(root, manifest, inspect_executable)
 
     main = next((item for item in manifest.components if item.component_id == "main_application"), None)
     sidecar = next((item for item in manifest.components if item.component_id == SIDECAR_COMPONENT_ID), None)
@@ -205,17 +247,23 @@ def resolve_installed_sidecar_executable(slot_root: Path) -> InstalledSidecarExe
     manifest_path = root / INSTALLED_MANIFEST_RELATIVE_PATH
     manifest_bytes = _read_stable_regular_file(root, manifest_path, limit=MAX_INSTALLED_MANIFEST_BYTES)
     manifest = parse_release_manifest(manifest_bytes)
-    return _resolve_installed_sidecar_executable(root, manifest)
+    return _resolve_installed_sidecar_executable(
+        root,
+        manifest,
+        lambda path, file_ref: _inspect_executable(root, path, file_ref),
+    )
 
 
 def _resolve_installed_sidecar_executable(
-    root: Path, manifest: ReleaseManifestV1
+    root: Path,
+    manifest: ReleaseManifestV1,
+    inspect_executable: Callable[[Path, FileRefV1], str],
 ) -> InstalledSidecarExecutableResolution:
     manifest_path = root / INSTALLED_MANIFEST_RELATIVE_PATH
     _require_host_match(manifest.target)
     component, file_ref = _select_sidecar_file(manifest)
     executable_path = root / manifest.payload_root / component.root_path / file_ref.path
-    executable_digest = _inspect_executable(root, executable_path, file_ref)
+    executable_digest = inspect_executable(executable_path, file_ref)
     return InstalledSidecarExecutableResolution(
         slot_root=root,
         manifest_path=manifest_path,
