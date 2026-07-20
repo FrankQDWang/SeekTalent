@@ -12,6 +12,7 @@ from seektalent.source_port.history_contract import (
     AcceptedNoDispatchFact,
     DispatchNotObservedFact,
     ExactAuthorizationSelector,
+    JSON_SAFE_INTEGER,
     ObservedFailureFact,
     ObservedResultFact,
     SQLITE_MAX_INTEGER,
@@ -97,7 +98,7 @@ def test_query_is_strict_closed_and_frozen() -> None:
         ("attempt_no", True),
         ("attempt_no", 1.0),
         ("attempt_no", 0),
-        ("attempt_no", SQLITE_MAX_INTEGER + 1),
+        ("attempt_no", JSON_SAFE_INTEGER + 1),
         ("searched_first_generation", False),
         ("expected_reconciliation_revision", -1),
         ("request_hash", "A" * 64),
@@ -115,6 +116,14 @@ def test_query_rejects_invalid_scalar_boundaries(field: str, value: object) -> N
 
     with pytest.raises(ValidationError):
         SourceHistoryQueryV1(**payload)
+
+
+def test_history_wire_integer_domain_is_jcs_safe_without_narrowing_sqlite_storage() -> None:
+    query = SourceHistoryQueryV1(**{**_query_values(), "attempt_no": JSON_SAFE_INTEGER})
+
+    assert query.attempt_no == 2**53 - 1
+    assert SQLITE_MAX_INTEGER == 2**63 - 1
+    assert JSON_SAFE_INTEGER < SQLITE_MAX_INTEGER
 
 
 @pytest.mark.parametrize(
