@@ -5,12 +5,11 @@ import os
 import platform
 import stat
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
-from weakref import WeakSet
 
 from seektalent.release_manifest import (
     ComponentV1,
@@ -32,7 +31,6 @@ INSTALLED_MANIFEST_RELATIVE_PATH = Path("release/release-manifest.json")
 INSTALLED_SIGNATURE_RELATIVE_PATH = Path("release/signatures/release-manifest.sig")
 SIDECAR_COMPONENT_ID = "liepin_execution_sidecar"
 _ADMISSION_FACTORY_TOKEN = object()
-_FACTORY_ADMISSIONS: WeakSet[AuthenticatedInstalledSidecarLaunch] = WeakSet()
 _HASH_CHUNK_SIZE = 1024 * 1024
 # A release manifest is metadata, not payload. One MiB leaves ample room for
 # file closure while bounding strict-JSON parser input and transient memory.
@@ -104,6 +102,7 @@ class AuthenticatedInstalledSidecarLaunch:
     signer_key_id: str
     trust_policy_id: str
     trust_policy_revision: int
+    _factory_token: object = field(init=False, repr=False, compare=False)
 
     @property
     def slot_root(self) -> Path:
@@ -154,9 +153,17 @@ class AuthenticatedInstalledSidecarLaunch:
         object.__setattr__(self, "signer_key_id", signer_key_id)
         object.__setattr__(self, "trust_policy_id", trust_policy_id)
         object.__setattr__(self, "trust_policy_revision", trust_policy_revision)
+        object.__setattr__(self, "_factory_token", _factory_token)
 
     def _is_factory_admission(self) -> bool:
-        return self in _FACTORY_ADMISSIONS
+        return self._factory_token is _ADMISSION_FACTORY_TOKEN
+
+    def __copy__(self) -> AuthenticatedInstalledSidecarLaunch:
+        return self
+
+    def __deepcopy__(self, memo: dict[int, object]) -> AuthenticatedInstalledSidecarLaunch:
+        del memo
+        return self
 
 
 def admit_installed_sidecar_launch(
@@ -193,7 +200,6 @@ def admit_installed_sidecar_launch(
         trust_policy_revision=verified.trust_policy_revision,
         _factory_token=_ADMISSION_FACTORY_TOKEN,
     )
-    _FACTORY_ADMISSIONS.add(admission)
     return admission
 
 
