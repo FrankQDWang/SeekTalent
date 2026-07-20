@@ -4,6 +4,7 @@ import copy
 import ctypes
 import os
 import pickle
+import stat
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,12 @@ def _executable_path(slot_root: Path) -> Path:
 
 def _acquire(root: Path):
     return acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
+
+
+def _make_executable_writable(slot_root: Path) -> Path:
+    executable = _executable_path(slot_root)
+    executable.chmod(stat.S_IREAD | stat.S_IWRITE)
+    return executable
 
 
 def _open_writer(path: Path) -> tuple[object, int]:
@@ -79,6 +86,7 @@ def test_windows_admission_uses_live_opened_objects_and_spawn_is_blocked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, slot_root = _install_active_slot(tmp_path, monkeypatch)
+    _make_executable_writable(slot_root)
     path_reader_calls: list[Path] = []
     executable_inspector_calls: list[Path] = []
     popen_calls: list[object] = []
@@ -153,7 +161,7 @@ def test_preexisting_executable_writer_fails_before_child_and_releases_slot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, slot_root = _install_active_slot(tmp_path, monkeypatch)
-    executable = _executable_path(slot_root)
+    executable = _make_executable_writable(slot_root)
     api, writer = _open_writer(executable)
     try:
         with pytest.raises(WindowsLaunchBindingError) as raised:
