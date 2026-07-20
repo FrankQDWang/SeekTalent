@@ -401,6 +401,12 @@ def _windows_file_identity(kernel32, handle) -> dict[str, int | str]:
     }
 
 
+def _windows_normalized_path(path: str) -> str:
+    if path.startswith("\\\\?\\"):
+        path = path[4:]
+    return path.replace("/", "\\").casefold()
+
+
 def _windows_create_suspended(
     kernel32,
     executable: Path,
@@ -441,11 +447,16 @@ def _windows_create_suspended(
             child_identity = _windows_file_identity(kernel32, child_image_handle)
         finally:
             kernel32.CloseHandle(child_image_handle)
-        expected_path = str(executable.resolve()).casefold()
-        if child_image_path.casefold() != expected_path or child_identity != expected_identity:
+        expected_path = _windows_normalized_path(str(expected_identity["final_path"]))
+        observed_path = _windows_normalized_path(child_image_path)
+        if observed_path != expected_path or child_identity != expected_identity:
             kernel32.TerminateProcess(process.process, 1)
             kernel32.WaitForSingleObject(process.process, 10_000)
-            raise ProbeFailure("suspended Windows child image did not match the admitted path and file identity")
+            raise ProbeFailure(
+                "suspended Windows child image did not match the admitted path and file identity: "
+                f"expected_path={expected_path!r}, observed_path={observed_path!r}, "
+                f"expected_identity={expected_identity!r}, observed_identity={child_identity!r}"
+            )
         if kernel32.ResumeThread(process.thread) == 0xFFFFFFFF:
             raise ProbeFailure(f"ResumeThread failed: {_windows_last_error()}")
         wait_result = kernel32.WaitForSingleObject(process.process, 10_000)
@@ -460,6 +471,7 @@ def _windows_create_suspended(
             raise ProbeFailure(f"GetExitCodeProcess failed: {_windows_last_error()}")
         return {
             "child_image_path": child_image_path,
+            "admitted_final_path": str(expected_identity["final_path"]),
             "child_file_id": str(child_identity["file_id"]),
             "child_exit_code": int(exit_code.value),
             "created_suspended": True,
