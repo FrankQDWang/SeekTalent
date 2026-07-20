@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 
@@ -23,10 +23,12 @@ else:
 
 import seektalent.installed_release as installed_release
 import seektalent.owned_sidecar_process as owned_process
-from seektalent.installed_release import (
-    AuthenticatedInstalledSidecarLaunch,
-    InstalledReleaseError,
-    admit_installed_sidecar_launch,
+from seektalent.installed_release import AuthenticatedInstalledSidecarLaunch, InstalledReleaseError
+from seektalent.installed_slot import (
+    ActiveSlotPointerV1,
+    InstalledSidecarLaunchLease,
+    acquire_installed_sidecar_launch_lease,
+    canonical_active_slot_pointer_bytes,
 )
 from seektalent.owned_sidecar_process import spawn_owned_sidecar
 from tests.test_installed_release import _install_slot
@@ -90,9 +92,16 @@ def _fake_owned_process(*, process_group_id: int | None = None) -> tuple[owned_p
 
 
 @pytest.fixture
-def resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AuthenticatedInstalledSidecarLaunch:
+def lease_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[], InstalledSidecarLaunchLease]:
     probe = f"#!{sys.executable}\nexec(open({str(PROBE)!r}, 'rb').read())\n".encode()
-    slot_root, _, _ = _install_slot(tmp_path, monkeypatch, executable_bytes=probe)
+    source_slot, _, _ = _install_slot(tmp_path, monkeypatch, executable_bytes=probe)
+    installation_root = tmp_path / "installation"
+    slot_root = installation_root / "slots" / "A"
+    slot_root.parent.mkdir(parents=True)
+    source_slot.rename(slot_root)
     manifest_path = slot_root / "release" / "release-manifest.json"
     manifest = parse_release_manifest(manifest_path.read_bytes())
     _, signature_payload = _signed(manifest)
@@ -100,60 +109,85 @@ def resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Authenticated
     manifest_path.parent.joinpath("signatures", "release-manifest.sig").write_text(
         __import__("json").dumps(signature_payload, separators=(",", ":")), encoding="utf-8"
     )
-    return admit_installed_sidecar_launch(slot_root, _policy(), VERIFICATION_TIME)
+    control = installation_root / "control"
+    control.mkdir()
+    control.joinpath("installation-id").write_bytes(b"test-installation-1")
+    control.joinpath("active-slot.lock").write_bytes(b"0")
+    control.joinpath("slot-A.lock").write_bytes(b"0")
+    control.joinpath("slot-B.lock").write_bytes(b"0")
+    pointer = ActiveSlotPointerV1.model_construct(
+        schema_version="seektalent.active-slot/v1",
+        installation_id="test-installation-1",
+        physical_slot="A",
+        pointer_generation=1,
+        product_build_id=manifest.product_build_id,
+        release_manifest_sha256=installed_release.release_manifest_digest(manifest),
+        committed_at="2026-07-20T12:00:00Z",
+    )
+    control.joinpath("active-slot.json").write_bytes(canonical_active_slot_pointer_bytes(pointer))
+
+    return lambda: acquire_installed_sidecar_launch_lease(installation_root, _policy(), VERIFICATION_TIME)
+
+
+@pytest.fixture
+def lease(lease_factory: Callable[[], InstalledSidecarLaunchLease]) -> InstalledSidecarLaunchLease:
+    return lease_factory()
 
 
 def _close_process_streams(process: owned_process.OwnedSidecarProcess) -> None:
+    if process.poll() is None:
+        process.kill(5)
     process.close_stdin()
     process.close_readers()
 
 
-def test_spawn_requires_typed_resolution_before_popen(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_spawn_requires_live_typed_lease_before_popen(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[object] = []
     monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     with pytest.raises(TypeError):
-        spawn_owned_sidecar(Path("/tmp/not-a-resolution"))  # type: ignore[arg-type]
+        spawn_owned_sidecar(Path("/tmp/not-a-lease"))  # type: ignore[arg-type]
 
     assert calls == []
 
 
 def test_spawn_rejects_caller_fabricated_admission_before_popen(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    admission = lease.admission
     calls: list[object] = []
     monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
     with pytest.raises(TypeError):
         AuthenticatedInstalledSidecarLaunch(
-            resolution=resolution.resolution,
-            manifest_id=resolution.manifest_id,
-            manifest_sha256=resolution.manifest_sha256,
-            product_build_id=resolution.product_build_id,
-            main_application_build_id=resolution.main_application_build_id,
-            main_application_tree_sha256=resolution.main_application_tree_sha256,
-            sidecar_build_id=resolution.sidecar_build_id,
-            sidecar_tree_sha256=resolution.sidecar_tree_sha256,
-            sidecar_executable_sha256=resolution.sidecar_executable_sha256,
-            source_port_protocol=resolution.source_port_protocol,
-            signer_key_id=resolution.signer_key_id,
-            trust_policy_id=resolution.trust_policy_id,
-            trust_policy_revision=resolution.trust_policy_revision,
+            resolution=admission.resolution,
+            manifest_id=admission.manifest_id,
+            manifest_sha256=admission.manifest_sha256,
+            product_build_id=admission.product_build_id,
+            main_application_build_id=admission.main_application_build_id,
+            main_application_tree_sha256=admission.main_application_tree_sha256,
+            sidecar_build_id=admission.sidecar_build_id,
+            sidecar_tree_sha256=admission.sidecar_tree_sha256,
+            sidecar_executable_sha256=admission.sidecar_executable_sha256,
+            source_port_protocol=admission.source_port_protocol,
+            signer_key_id=admission.signer_key_id,
+            trust_policy_id=admission.trust_policy_id,
+            trust_policy_revision=admission.trust_policy_revision,
         )
     with pytest.raises(TypeError):
-        spawn_owned_sidecar({"resolution": resolution.resolution})  # type: ignore[arg-type]
+        spawn_owned_sidecar({"resolution": lease.resolution})  # type: ignore[arg-type]
     with pytest.raises(TypeError):
-        spawn_owned_sidecar(resolution.resolution)  # type: ignore[arg-type]
+        spawn_owned_sidecar(lease.resolution)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
-        replace(resolution, manifest_id="caller-forged")
+        replace(lease, manifest_id="caller-forged")
     assert calls == []
 
 
 def test_authenticated_admission_copy_preserves_one_factory_capability(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
 ) -> None:
-    assert copy.copy(resolution) is resolution
-    assert copy.deepcopy(resolution) is resolution
+    assert copy.copy(lease.admission) is lease.admission
+    assert copy.deepcopy(lease.admission) is lease.admission
     assert not hasattr(installed_release, "_FACTORY_ADMISSIONS")
 
 
@@ -189,7 +223,7 @@ def test_invalid_lifecycle_timeout_has_no_fake_process_or_group_signal_side_effe
 
 
 def test_windows_spawn_uses_bounded_creation_contract(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -214,12 +248,12 @@ def test_windows_spawn_uses_bounded_creation_contract(
         context.setenv("SystemRoot", "C:\\Windows")
         context.setenv("ATTACKER_ENV", "must-not-propagate")
 
-        process = spawn_owned_sidecar(resolution)
+        process = spawn_owned_sidecar(lease)
 
     kwargs = captured["kwargs"]
     assert isinstance(kwargs, dict)
-    assert captured["args"] == ([str(resolution.executable_path)],)
-    assert kwargs["cwd"] == str(resolution.manifest_path.parent)
+    assert captured["args"] == ([str(lease.executable_path)],)
+    assert kwargs["cwd"] == str(lease.manifest_path.parent)
     assert kwargs["env"] == {"SystemRoot": "C:\\Windows"}
     assert kwargs["creationflags"] == creation_flag
     assert kwargs["close_fds"] is True
@@ -236,11 +270,11 @@ def test_windows_spawn_uses_bounded_creation_contract(
 
 @pytest.mark.parametrize("working_directory_kind", ["missing", "file", "symlink"])
 def test_spawn_rejects_invalid_fixed_working_directory_before_popen(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     monkeypatch: pytest.MonkeyPatch,
     working_directory_kind: str,
 ) -> None:
-    release_directory = resolution.manifest_path.parent
+    release_directory = lease.manifest_path.parent
     original_directory = release_directory.with_name("original-release")
     release_directory.rename(original_directory)
     if working_directory_kind == "file":
@@ -251,16 +285,16 @@ def test_spawn_rejects_invalid_fixed_working_directory_before_popen(
     monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     with pytest.raises(ValueError):
-        spawn_owned_sidecar(resolution)
+        spawn_owned_sidecar(lease)
 
     assert calls == []
 
 
 @requires_native_probe
 def test_binary_roundtrip_and_stderr_remain_separate(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     stdout_value = b"\x00protocol\xff"
     stderr_value = b"diagnostic-only\n"
     process.protocol_writer.write(b"ECHO " + base64.b64encode(stdout_value) + b"\n")
@@ -278,20 +312,20 @@ def test_binary_roundtrip_and_stderr_remain_separate(
 
 @requires_native_probe
 def test_spawn_cwd_is_fixed_when_main_has_different_ambient_cwd(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ambient = tmp_path / "ambient"
     ambient.mkdir()
     monkeypatch.chdir(ambient)
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     process.protocol_writer.write(b"IDENTITY\n")
     process.protocol_writer.flush()
     identity = json.loads(process.protocol_reader.readline())
 
     assert Path.cwd() == ambient
-    assert identity["cwd"] == str(resolution.manifest_path.parent)
+    assert identity["cwd"] == str(lease.manifest_path.parent)
 
     process.close_stdin()
     assert process.wait(5) == 0
@@ -300,9 +334,9 @@ def test_spawn_cwd_is_fixed_when_main_has_different_ambient_cwd(
 
 @requires_native_probe
 def test_concurrent_drain_handles_stdout_and_stderr_above_pipe_capacity(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     size = 2 * 1024 * 1024
     process.protocol_writer.write(f"FLOOD {size}\n".encode())
     process.close_stdin()
@@ -329,7 +363,7 @@ def test_concurrent_drain_handles_stdout_and_stderr_above_pipe_capacity(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX descriptor inheritance")
 def test_inheritable_sentinel_fd_does_not_enter_child(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
 ) -> None:
     assert fcntl is not None
     source_fd = os.open(PROBE, os.O_RDONLY)
@@ -337,7 +371,7 @@ def test_inheritable_sentinel_fd_does_not_enter_child(
     os.close(source_fd)
     os.set_inheritable(sentinel_fd, True)
     try:
-        process = spawn_owned_sidecar(resolution)
+        process = spawn_owned_sidecar(lease)
         process.protocol_writer.write(f"FD {sentinel_fd}\n".encode())
         process.close_stdin()
         assert process.protocol_reader.readline() == b"CLOSED\n"
@@ -349,9 +383,9 @@ def test_inheritable_sentinel_fd_does_not_enter_child(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX CLOEXEC inspection")
 def test_parent_pipe_endpoints_are_non_inheritable(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
 
     assert not os.get_inheritable(process.protocol_writer.fileno())
     assert not os.get_inheritable(process.protocol_reader.fileno())
@@ -364,9 +398,9 @@ def test_parent_pipe_endpoints_are_non_inheritable(
 
 @requires_native_probe
 def test_close_stdin_delivers_eof_and_child_exit_closes_readers(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     process.close_stdin()
 
     assert process.protocol_reader.read() == b"EOF\n"
@@ -378,8 +412,8 @@ def test_close_stdin_delivers_eof_and_child_exit_closes_readers(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX direct-child reaping")
-def test_clean_exit_waits_and_reaps_direct_child(resolution: AuthenticatedInstalledSidecarLaunch) -> None:
-    process = spawn_owned_sidecar(resolution)
+def test_clean_exit_waits_and_reaps_direct_child(lease: InstalledSidecarLaunchLease) -> None:
+    process = spawn_owned_sidecar(lease)
     process.protocol_writer.write(b"EXIT 7\n")
     process.protocol_writer.flush()
 
@@ -393,10 +427,10 @@ def test_clean_exit_waits_and_reaps_direct_child(resolution: AuthenticatedInstal
 @pytest.mark.parametrize("method", ["terminate", "kill"])
 @pytest.mark.skipif(os.name != "posix", reason="POSIX direct-child reaping")
 def test_terminate_and_kill_wait_and_reap(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     method: str,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     return_code = getattr(process, method)(5)
 
     assert return_code < 0
@@ -408,9 +442,9 @@ def test_terminate_and_kill_wait_and_reap(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process-session ownership")
 def test_spawned_process_is_direct_child_and_process_group_leader(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     process.protocol_writer.write(b"IDENTITY\n")
     process.protocol_writer.flush()
     identity = json.loads(process.protocol_reader.readline())
@@ -418,8 +452,8 @@ def test_spawned_process_is_direct_child_and_process_group_leader(
     assert identity["parent_pid"] == os.getpid()
     assert identity["pid"] == process.pid
     assert identity["process_group"] == process.pid
-    assert identity["argv"] == [str(resolution.executable_path)]
-    assert identity["cwd"] == str(resolution.manifest_path.parent)
+    assert identity["argv"] == [str(lease.executable_path)]
+    assert identity["cwd"] == str(lease.manifest_path.parent)
     assert set(identity["env"]) <= {"LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
     assert not hasattr(process, "process")
 
@@ -430,10 +464,10 @@ def test_spawned_process_is_direct_child_and_process_group_leader(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX owned process-group signaling")
 def test_terminate_signals_owned_process_group(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     tmp_path: Path,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     marker = tmp_path / "grandchild-signal"
     process.protocol_writer.write(b"GRANDCHILD " + base64.b64encode(str(marker).encode()) + b"\n")
     process.protocol_writer.flush()
@@ -453,12 +487,12 @@ def test_terminate_signals_owned_process_group(
 @pytest.mark.skipif(os.name != "posix", reason="POSIX retained process-group ownership")
 @pytest.mark.parametrize("method", ["terminate", "kill"])
 def test_group_signal_reaches_grandchild_after_direct_child_exits(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     method: str,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     marker = tmp_path / "parent-exited"
     process.protocol_writer.write(b"ORPHAN " + base64.b64encode(str(marker).encode()) + b"\n")
     process.protocol_writer.flush()
@@ -495,10 +529,10 @@ def test_group_signal_reaches_grandchild_after_direct_child_exits(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX retained process-group ownership")
 def test_lifecycle_lock_prevents_wait_from_reaping_during_group_signal(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     signal_entered = threading.Event()
     release_signal = threading.Event()
     wait_finished = threading.Event()
@@ -557,17 +591,18 @@ def test_lifecycle_lock_prevents_wait_from_reaping_during_group_signal(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX parent descriptor accounting")
 def test_spawn_failure_and_repeated_spawn_do_not_leak_parent_fds(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
 ) -> None:
     before = len(os.listdir("/dev/fd"))
-    executable = resolution.executable_path
+    executable = lease.executable_path
     moved_executable = executable.with_name("temporarily-missing-sidecar")
     executable.rename(moved_executable)
     with pytest.raises(OSError):
-        spawn_owned_sidecar(resolution)
+        spawn_owned_sidecar(lease)
     moved_executable.rename(executable)
     for _ in range(20):
-        process = spawn_owned_sidecar(resolution)
+        process = spawn_owned_sidecar(lease_factory())
         process.close_stdin()
         assert process.wait(5) == 0
         process.close_readers()
@@ -577,9 +612,9 @@ def test_spawn_failure_and_repeated_spawn_do_not_leak_parent_fds(
 
 @requires_native_probe
 def test_wait_requires_a_finite_positive_timeout(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     try:
         for timeout in (None, True, 0, -1, float("inf")):
             with pytest.raises((TypeError, ValueError)):
@@ -593,13 +628,13 @@ def test_wait_requires_a_finite_positive_timeout(
 @pytest.mark.parametrize(("timeout", "error"), INVALID_TIMEOUTS)
 @requires_native_probe
 def test_terminate_and_kill_reject_invalid_timeout_before_signaling(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     monkeypatch: pytest.MonkeyPatch,
     method: str,
     timeout: object,
     error: type[Exception],
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     group_signals: list[tuple[int, signal.Signals]] = []
     try:
         with monkeypatch.context() as context:
@@ -621,10 +656,10 @@ def test_terminate_and_kill_reject_invalid_timeout_before_signaling(
 
 @requires_native_probe
 def test_terminate_normalizes_timeout_once_and_reuses_it_for_fallback_kill(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     normalized_inputs: list[float] = []
     wait_timeouts: list[float | None] = []
     original_bounded_timeout = owned_process._bounded_timeout
@@ -658,10 +693,10 @@ def test_terminate_normalizes_timeout_once_and_reuses_it_for_fallback_kill(
 
 @requires_native_probe
 def test_kill_propagates_wait_timeout_expired(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    lease: InstalledSidecarLaunchLease,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    process = spawn_owned_sidecar(resolution)
+    process = spawn_owned_sidecar(lease)
     try:
         with monkeypatch.context() as context:
             context.setattr(
@@ -684,18 +719,22 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
     production_files = [
         path
         for path in (project_root / "src").rglob("*.py")
-        if path.name not in {"installed_release.py", "owned_sidecar_process.py"}
+        if path.name not in {"installed_filesystem.py", "installed_release.py", "installed_slot.py", "owned_sidecar_process.py"}
     ]
     references = [
         path
         for path in production_files
-        if "installed_release" in path.read_text(encoding="utf-8")
+        if "installed_filesystem" in path.read_text(encoding="utf-8")
+        or "installed_release" in path.read_text(encoding="utf-8")
+        or "installed_slot" in path.read_text(encoding="utf-8")
         or "owned_sidecar_process" in path.read_text(encoding="utf-8")
     ]
     pyproject = (project_root / "pyproject.toml").read_text(encoding="utf-8")
 
     assert references == []
+    assert "installed_filesystem" not in pyproject
     assert "installed_release" not in pyproject
+    assert "installed_slot" not in pyproject
     assert "owned_sidecar_process" not in pyproject
 
 

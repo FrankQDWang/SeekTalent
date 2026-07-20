@@ -1,0 +1,44 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "offline-distribution-2026-07",
+  "change_type": "major_refactor",
+  "summary": "Make a strict active installed-slot pointer and lifecycle lease the only production-unreachable sidecar spawn capability.",
+  "rationale": "Issue #366 adds one bounded installed-release boundary: installed_filesystem owns stable path and descriptor evidence, a canonical active pointer selects a concrete A/B position, and a non-copyable live lease holds that slot through direct-child reap. If failed-spawn cleanup cannot confirm reap, its explicit error owner retains the child and lease until reap succeeds. Native CI proves real cooperative lock conflict on every existing Windows and macOS launch-binding host. The slice preserves production caller count zero and does not add packaging, runtime, browser, provider, CLI, handshake, or remote-service composition.",
+  "touched_layers": [
+    "governance",
+    "docs",
+    "tests",
+    "other"
+  ],
+  "red_files": [
+    ".github/workflows/native-launch-binding-probe.yml",
+    "tools/check_arch_imports.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
+    "uv run ruff check scripts/build_offline_macos_intel.py tests/test_build_offline_macos_intel.py tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py tests/test_build_offline_macos_intel.py tests/test_pr_governance.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "uv run --group dev python -m pytest tests/test_installed_slot_lease.py tests/test_owned_sidecar_process.py tests/test_installed_release_admission.py tests/test_native_launch_binding_probe.py -q",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_source_boundaries.py",
+    "uv run --group dev python tools/check_tach_baseline.py",
+    "scripts/verify-red-zone.sh",
+    "uv run --group dev python -m pytest -q"
+  ],
+  "deletion_targets": [
+    "spawn paths that accept a bare authenticated admission instead of a live installed-slot lease",
+    "the claim that bounded physical A/B positions are durable slot identities",
+    "native workflow evidence that omits the active-slot lease contract"
+  ],
+  "risks": [
+    "The lease is a cooperative lifecycle boundary; it does not claim macOS writable-slot protection against a non-cooperating same-UID process.",
+    "Windows full-chain share-deny launch binding, macOS codesign/authenticity, a packaged sidecar, suspended child evidence, handshake, and authenticated history admission remain separate production-unreachable slices.",
+    "No runtime, provider, browser, CLI, configuration, or production caller imports this boundary."
+  ]
+}

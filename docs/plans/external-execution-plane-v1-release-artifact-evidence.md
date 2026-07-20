@@ -164,6 +164,9 @@ INSTALL_ROOT/
   control/
     installation-id
     active-slot.json
+    active-slot.lock
+    slot-A.lock
+    slot-B.lock
     previous-slot.json
     activation-journal.jsonl
     install.lock
@@ -217,12 +220,12 @@ PROFILE_ROOT (external)
 
 Slot规则：
 
-- `A/B` 是固定slot identity；每个slot最多一个完整release payload，不按version散落可变子目录。
-- `active-slot.json` 和 `previous-slot.json` 包含slot、`product_build_id`、manifest digest、pointer generation和committed timestamp；使用same-directory temp + fsync + atomic replace。
-- Slot内release在验证后immutable；任何运行时写入slot都使startup integrity失败。
-- 同一时间只有active slot可以获得normal product lifecycle lock。Inactive slot只允许updater在exclusive install/data lock、old generation已drained且user acceptance关闭时启动一个有界activation-verification generation；它不得接受用户operation、建立第二browser controller或越过验证所需的声明边界。
-- Previous slot在新release完成activation commit前不得删除；commit后至少保留到release policy声明的rollback window结束。
-- Slot cleanup只删除inactive binary payload，不删除`DATA_ROOT`或`PROFILE_ROOT`。
+- `A/B` 只是有界、可复用的physical storage position，不是logical identity。每次activation的`InstalledSlotIdentity = installation_id + physical_slot + pointer_generation + product_build_id + release_manifest_sha256`永不复用；每个physical slot同一时间最多一个完整release payload，不按version散落可变子目录。
+- `active-slot.json` 是bytes-only、duplicate-aware、unknown-field-forbidden且RFC 8785 canonical的`seektalent.active-slot/v1` pointer；它显式包含schema ID、installation ID、physical slot、strict positive generation、`product_build_id`、manifest digest和UTC committed time。不得从目录名、mtime、当前manifest或ambient state补默认值。它使用same-directory temp + fsync + atomic replace；`previous-slot.json`保留rollback selection facts，但不授予launch authority。
+- Main先短暂持有`active-slot.lock`读取stable pointer，取得对应`slot-A.lock`或`slot-B.lock`的non-blocking exclusive lifecycle lease，再重读pointer identity，最后才读取manifest/signature/content并完成signed admission。pointer change、identity mismatch、lease conflict或admission failure都在child creation前fail closed。
+- Slot内release在验证后immutable；任何运行时写入slot都使startup integrity失败。lease是cooperating installer/updater lifecycle boundary，不是对same-UID非合作进程的security claim；macOS仍需后续installer ownership/signing与suspended PID evidence。
+- `installed_filesystem.py`拥有stable path-chain/descriptor snapshot evidence；`installed_release.py`与`installed_slot.py`只单向依赖它，后者只依赖release的public admission/type而不读取其private filesystem state。成功spawn后`OwnedSidecarProcess`独占live lease，直到direct child退出并reap；Popen、pipe或pre-spawn validation failure会关闭所有endpoint并kill/reap后释放。若cleanup不能确认reap，则`SidecarSpawnCleanupError`显式持有child与lease，调用方只能通过其`reap()`确认reap后释放；bare admission、mapping、copy、replace、pickle或已释放lease不能创建child。
+- Inactive physical slot只能在zero live leases、rollback/retention policy允许后清理或重新stage；running child对应payload不得mutate、replace、reuse或delete。Previous slot在新release完成activation commit前不得删除；commit后至少保留到release policy声明的rollback window结束。Slot cleanup只删除inactive binary payload，不删除`DATA_ROOT`或`PROFILE_ROOT`。
 
 ### 4.4 Data、profile 与 authority rotation
 
