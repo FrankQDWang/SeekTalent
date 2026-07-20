@@ -249,6 +249,9 @@ class ReleaseManifestTrustPolicyV1:
         key_ids = tuple(key.key_id for key in self.keys)
         if len(key_ids) != len(set(key_ids)):
             raise ReleaseSigningError(ReleaseSigningReason.INVALID_TRUST_POLICY)
+        public_keys = tuple(key.public_key for key in self.keys)
+        if len(public_keys) != len(set(public_keys)):
+            raise ReleaseSigningError(ReleaseSigningReason.INVALID_TRUST_POLICY)
         if type(self.revoked_key_ids) is not frozenset or any(
             not isinstance(key_id, str) or IDENTIFIER_RE.fullmatch(key_id) is None
             for key_id in self.revoked_key_ids

@@ -352,6 +352,19 @@ def test_unknown_and_revoked_keys_have_distinct_fail_closed_reasons() -> None:
     _assert_verify_reason(signature, manifest, revoked_policy, ReleaseSigningReason.REVOKED_KEY)
 
 
+def test_policy_rejects_duplicate_public_key_aliases_that_could_bypass_key_id_revocation() -> None:
+    with pytest.raises(ReleaseSigningError) as raised:
+        _policy(
+            keys=(
+                _trust_key(key_id="rfc8032-test-key-1"),
+                _trust_key(key_id="alias-for-same-key"),
+            ),
+            revoked_key_ids=frozenset({"rfc8032-test-key-1"}),
+        )
+
+    assert raised.value.reason == ReleaseSigningReason.INVALID_TRUST_POLICY
+
+
 @pytest.mark.parametrize("verification_time", [VALID_FROM, VALID_UNTIL])
 def test_key_validity_window_boundaries_are_inclusive(verification_time: datetime) -> None:
     manifest = _manifest()
