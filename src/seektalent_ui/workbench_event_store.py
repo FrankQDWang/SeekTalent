@@ -470,8 +470,15 @@ class WorkbenchEventStore:
                     """,
                     (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, session_id),
                 ).fetchone()
-                if row is not None and row["lease_owner"] != safe_owner and _parse_iso(row["lease_expires_at"]) > now_at:
-                    return False
+                if row is not None:
+                    if _parse_iso(row["lease_expires_at"]) > now_at:
+                        return False
+                    persisted_tick_slot = row["last_tick_slot"]
+                    if (
+                        persisted_tick_slot is not None
+                        and (last_tick_slot is None or last_tick_slot <= persisted_tick_slot)
+                    ):
+                        return False
                 if row is None:
                     conn.execute(
                         """
@@ -496,6 +503,7 @@ class WorkbenchEventStore:
                         ),
                     )
                     return True
+                next_tick_slot = last_tick_slot if last_tick_slot is not None else row["last_tick_slot"]
                 conn.execute(
                     """
                     UPDATE workbench_note_writer_leases
@@ -509,7 +517,7 @@ class WorkbenchEventStore:
                     (
                         safe_owner,
                         safe_expires_at,
-                        last_tick_slot,
+                        next_tick_slot,
                         safe_in_flight_started_at,
                         safe_now,
                         DEFAULT_TENANT_ID,
@@ -531,15 +539,27 @@ class WorkbenchEventStore:
             if not safe_owner:
                 raise ValueError("Workbench note writer lease owner is required.")
             self._initialize()
+            released_at, _ = _canonical_note_writer_lease_time(_now_iso())
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 cursor = conn.execute(
                     """
-                    DELETE FROM workbench_note_writer_leases
+                    UPDATE workbench_note_writer_leases
+                    SET lease_expires_at = ?,
+                        in_flight_started_at = NULL,
+                        updated_at = ?
                     WHERE tenant_id = ? AND workspace_id = ? AND user_id = ?
                       AND session_id = ? AND lease_owner = ?
                     """,
-                    (DEFAULT_TENANT_ID, user.workspace_id, user.user_id, session_id, safe_owner),
+                    (
+                        released_at,
+                        released_at,
+                        DEFAULT_TENANT_ID,
+                        user.workspace_id,
+                        user.user_id,
+                        session_id,
+                        safe_owner,
+                    ),
                 )
                 return cursor.rowcount > 0
 

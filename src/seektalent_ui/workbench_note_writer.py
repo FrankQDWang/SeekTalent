@@ -27,6 +27,9 @@ from seektalent_ui.workbench_store import (
 
 NOTE_WRITER_LEASE_SECONDS = 30
 NOTE_WRITER_TICK_SECONDS = 15
+NOTE_WRITER_TIMEOUT_SECONDS = 10.0
+# Capture ordinary provider failures for the caller without swallowing process-control BaseExceptions.
+_AGENT_CALL_ERRORS: tuple[type[Exception], ...] = (Exception,)
 TECHNICAL_TERMS = (
     "runtime",
     "controller",
@@ -62,6 +65,10 @@ NUMBER_PATTERN = re.compile(r"\d+")
 
 
 class WorkbenchNoteValidationError(ValueError):
+    pass
+
+
+class WorkbenchNoteWriterBusyError(RuntimeError):
     pass
 
 
@@ -192,10 +199,23 @@ class WorkbenchNoteWriter:
         store: WorkbenchStore,
         settings: AppSettings,
         lease_owner: str | None = None,
+        agent_factory: Callable[[], object] | None = None,
+        timeout_seconds: float = NOTE_WRITER_TIMEOUT_SECONDS,
     ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("Workbench note writer timeout must be greater than zero.")
         self.store = store
         self.settings = settings
         self.lease_owner = lease_owner or f"note-writer-{uuid.uuid4().hex[:12]}"
+        self.agent_factory = agent_factory
+        self.timeout_seconds = timeout_seconds
+        self._agent_call_lock = threading.Lock()
+        self._agent_call_thread: threading.Thread | None = None
+
+    @property
+    def agent_call_in_flight(self) -> bool:
+        with self._agent_call_lock:
+            return self._agent_call_thread is not None
 
     def tick_session(
         self,
@@ -232,8 +252,22 @@ class WorkbenchNoteWriter:
             except WorkbenchNoteValidationError:
                 self._record_note_writer_drop(user=user, session_id=session_id, reason_code="note_validation_failed")
                 return None
-            except (RuntimeError, TypeError, ValueError) as exc:
-                self._record_note_writer_failure(user=user, session_id=session_id, exc=exc)
+            except WorkbenchNoteWriterBusyError:
+                self._record_note_writer_drop(user=user, session_id=session_id, reason_code="note_writer_busy")
+                return None
+            except TimeoutError:
+                self._record_note_writer_failure(
+                    user=user,
+                    session_id=session_id,
+                    reason_code="note_writer_timeout",
+                )
+                raise
+            except Exception:
+                self._record_note_writer_failure(
+                    user=user,
+                    session_id=session_id,
+                    reason_code="note_writer_unexpected_error",
+                )
                 raise
             if _is_duplicate_recent_note(note_text, context):
                 return None
@@ -265,8 +299,7 @@ class WorkbenchNoteWriter:
             payload={"reasonCode": reason_code},
         )
 
-    def _record_note_writer_failure(self, *, user: WorkbenchUser, session_id: str, exc: Exception) -> None:
-        del exc
+    def _record_note_writer_failure(self, *, user: WorkbenchUser, session_id: str, reason_code: str) -> None:
         self.store.append_workbench_event(
             tenant_id=DEFAULT_TENANT_ID,
             workspace_id=user.workspace_id,
@@ -276,27 +309,69 @@ class WorkbenchNoteWriter:
             source_kind=None,
             event_name="workbench_note_writer_failed",
             schema_version="workbench_note_writer_event_v1",
-            payload={"reasonCode": "note_writer_unexpected_error"},
+            payload={"reasonCode": reason_code},
         )
 
     def _run_agent(self, context: Mapping[str, object]) -> str:
         prompt = _render_note_prompt(context)
+        return self._run_agent_call(lambda: self._call_agent(prompt))
+
+    def _call_agent(self, prompt: str) -> str:
         agent = self._build_agent()
         run_sync = getattr(agent, "run_sync", None)
         if callable(run_sync):
-            return _run_agent_call(lambda: run_sync(prompt))
+            return _resolve_agent_result(run_sync(prompt))
         run = getattr(agent, "run")
-        return _run_agent_call(lambda: run(prompt))
+        return _resolve_agent_result(run(prompt))
 
-    def _build_agent(self) -> Agent[None, str]:
+    def _run_agent_call(self, factory: Callable[[], str]) -> str:
+        results: list[str] = []
+        errors: list[Exception] = []
+        completed = threading.Event()
+
+        def target() -> None:
+            try:
+                results.append(factory())
+            except _AGENT_CALL_ERRORS as exc:
+                errors.append(exc)
+            finally:
+                with self._agent_call_lock:
+                    if self._agent_call_thread is threading.current_thread():
+                        self._agent_call_thread = None
+                completed.set()
+
+        with self._agent_call_lock:
+            if self._agent_call_thread is not None:
+                raise WorkbenchNoteWriterBusyError("Workbench note writer call is already in flight.")
+            thread = threading.Thread(target=target, name="seektalent-workbench-note-agent", daemon=True)
+            self._agent_call_thread = thread
+            try:
+                thread.start()
+            except Exception:
+                self._agent_call_thread = None
+                raise
+
+        if not completed.wait(self.timeout_seconds):
+            raise TimeoutError(f"Workbench note writer call timed out after {self.timeout_seconds:g}s.")
+        if errors:
+            raise errors[0]
+        if not results:
+            raise RuntimeError("Workbench note writer call returned no result.")
+        return results[0]
+
+    def _build_agent(self) -> object:
+        if self.agent_factory is not None:
+            return self.agent_factory()
         prompt = PromptRegistry(self.settings.prompt_dir).load("workbench_note_writer")
         config = resolve_stage_model_config(self.settings, stage="workbench_note_writer")
-        model = build_model(config)
+        model = build_model(config, provider_max_retries=0)
+        model_settings = build_model_settings(config)
+        model_settings["timeout"] = self.timeout_seconds
         return Agent(
             model=model,
             output_type=str,
             system_prompt=prompt.content,
-            model_settings=build_model_settings(config),
+            model_settings=model_settings,
             retries=0,
             output_retries=0,
         )
@@ -315,30 +390,6 @@ async def _await_object(awaitable: Awaitable[object]) -> object:
     return await awaitable
 
 
-def _run_agent_call(factory: Callable[[], object]) -> str:
-    if _has_running_loop():
-        return _run_agent_call_in_thread(factory)
-    return _resolve_agent_result(factory())
-
-
-def _run_agent_call_in_thread(factory: Callable[[], object]) -> str:
-    results: list[str] = []
-    errors: list[BaseException] = []
-
-    def target() -> None:
-        try:
-            results.append(_resolve_agent_result(factory()))
-        except BaseException as exc:  # noqa: BLE001
-            errors.append(exc)
-
-    thread = threading.Thread(target=target, name="seektalent-workbench-note-agent", daemon=True)
-    thread.start()
-    thread.join()
-    if errors:
-        raise errors[0]
-    return results[0]
-
-
 def _resolve_agent_result(result: object) -> str:
     if inspect.isawaitable(result):
         result = asyncio.run(_await_object(result))
@@ -350,14 +401,6 @@ def _resolve_agent_result(result: object) -> str:
 
 def _recent_note_exists_for_key(events: list[WorkbenchEvent], idempotency_key: str) -> bool:
     return any(event.idempotency_key == idempotency_key for event in events)
-
-
-def _has_running_loop() -> bool:
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return False
-    return True
 
 
 def _safe_source_run(run: WorkbenchSourceRun) -> dict[str, object]:

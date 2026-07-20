@@ -5,7 +5,7 @@ import logging
 import os
 import secrets
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -74,6 +74,7 @@ def create_app(
     network_guard: NetworkGuard | None = None,
     dev_mode_env_diagnostics: DevModeStatus | None = None,
     serve_frontend: bool = False,
+    workbench_note_writer_agent_factory: Callable[[], object] | None = None,
 ) -> FastAPI:
     app_settings = settings or AppSettings()
     reject_unsafe_liepin_control_plane(app_settings)
@@ -135,6 +136,7 @@ def create_app(
         settings=app_settings,
         runtime_factory=runtime_factory,
         runtime_control_store=runtime_control_store,
+        workbench_note_writer_agent_factory=workbench_note_writer_agent_factory,
     )
     app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
