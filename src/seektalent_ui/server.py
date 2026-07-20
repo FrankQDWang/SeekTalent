@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import secrets
-from collections.abc import Mapping
+import sys
+from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -62,6 +64,9 @@ from seektalent_ui.workbench_store import WorkbenchStore
 from seektalent_ui.workflow_start_outbox_runner import RequirementExtractionOutboxRunner, WorkflowStartOutboxRunner
 
 
+logger = logging.getLogger(__name__)
+
+
 def create_app(
     settings: AppSettings | None = None,
     *,
@@ -69,6 +74,7 @@ def create_app(
     network_guard: NetworkGuard | None = None,
     dev_mode_env_diagnostics: DevModeStatus | None = None,
     serve_frontend: bool = False,
+    workbench_note_writer_agent_factory: Callable[[], object] | None = None,
 ) -> FastAPI:
     app_settings = settings or AppSettings()
     reject_unsafe_liepin_control_plane(app_settings)
@@ -130,6 +136,7 @@ def create_app(
         settings=app_settings,
         runtime_factory=runtime_factory,
         runtime_control_store=runtime_control_store,
+        workbench_note_writer_agent_factory=workbench_note_writer_agent_factory,
     )
     app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
@@ -245,18 +252,35 @@ def create_app(
 async def _lifespan(app: FastAPI):
     runner = getattr(app.state, "workflow_start_outbox_runner", None)
     extraction_runner = getattr(app.state, "requirement_extraction_outbox_runner", None)
-    if runner is not None:
-        runner.start()
-        runner.wake()
-    if extraction_runner is not None:
-        extraction_runner.start()
+    runtime_runner = getattr(app.state, "workbench_v2_runtime_runner", None)
     try:
+        if runtime_runner is not None:
+            runtime_runner.start()
+        if runner is not None:
+            runner.start()
+            runner.wake()
+        if extraction_runner is not None:
+            extraction_runner.start()
         yield
     finally:
-        if extraction_runner is not None:
-            extraction_runner.stop()
-        if runner is not None:
-            runner.stop()
+        body_error = sys.exception()
+        cleanup_errors: list[Exception] = []
+        for name, lifespan_runner in (
+            ("requirement extraction runner", extraction_runner),
+            ("workflow start runner", runner),
+            ("Workbench v2 runtime runner", runtime_runner),
+        ):
+            if lifespan_runner is None:
+                continue
+            try:
+                lifespan_runner.stop()
+            except (RuntimeError, ValueError, TypeError, OSError) as exc:
+                logger.exception("%s failed during application lifespan cleanup", name)
+                cleanup_errors.append(exc)
+        if cleanup_errors and body_error is None:
+            if len(cleanup_errors) == 1:
+                raise cleanup_errors[0]
+            raise ExceptionGroup("application lifespan cleanup failed", cleanup_errors)
 
 
 def _install_custom_openapi(app: FastAPI) -> None:

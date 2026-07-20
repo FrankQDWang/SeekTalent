@@ -1,0 +1,36 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add the T1b2 main-owned source-operation acceptance and dispatch-outbox metadata foundation.",
+  "rationale": "Issue #346 adds schema v8 and four direct RuntimeControlStore transaction/read methods because the existing store is the stable owner of runtime-control SQLite migrations and atomic business writes. The implementation remains metadata-only and keeps typed records, validation, row conversion, and replay comparison in a focused source_operations module. RuntimeControlStore is already oversized; this bounded slice adds the required schema and transaction responsibility without introducing indirection solely to satisfy a line threshold. Store decomposition remains separate governance work.",
+  "touched_layers": [
+    "other"
+  ],
+  "red_files": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "RuntimeControlStore already owns runtime-control schema initialization, ordered migrations, and BEGIN IMMEDIATE transaction boundaries. T1b2 extends that stable storage facade with one bounded schema and transaction surface; moving transaction ownership or compressing unrelated code would obscure the crash-atomic acceptance contract. A later dedicated cleanup may split the existing oversized store without widening issue #346.",
+  "deletion_targets": [
+    "source dispatch acceptance without durable main-owned operation identity and initial authorization metadata",
+    "schema upgrades that can persist partial v8 source-operation DDL while user_version remains 7",
+    "ambiguous source-operation replay behavior across identity, idempotency, and acknowledgement races"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run --group dev python -m pytest -p no:tach tests/test_runtime_control_source_operations.py tests/test_runtime_control_store.py tests/test_runtime_control_event_contract.py -q",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main"
+  ],
+  "risks": [
+    "Existing v1 through v7 SQLite files must preserve prior rows and leave no partial v8 source-operation objects after an injected v8 DDL failure.",
+    "Exact replay must compare immutable acceptance and initial authorization metadata without resetting later ledger or acknowledgement heads.",
+    "This metadata foundation does not implement wire payload reconstruction, Source Port authentication, fence validation, redispatch, reconciliation, or production recovery."
+  ]
+}

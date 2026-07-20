@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -50,6 +52,20 @@ class FakeLoopSensitiveSyncAgent(FakeSyncAgent):
             return super().run_sync(prompt)
         else:
             raise RuntimeError("run_sync called inside a running event loop")
+
+
+class BlockingSyncAgent:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def run_sync(self, prompt: str):
+        del prompt
+        self.calls += 1
+        self.started.set()
+        self.release.wait(timeout=5)
+        return SimpleNamespace(output="正在根据已确认需求整理候选人搜索进展。")
 
 
 def _store(tmp_path: Path) -> WorkbenchStore:
@@ -405,6 +421,86 @@ def test_model_failure_is_not_swallowed(tmp_path: Path, monkeypatch: pytest.Monk
         writer.tick_session(user=user, session_id=session.session_id, now=1_700_000_000.0)
 
     assert store.list_recent_workbench_notes(user=user, session_id=session.session_id) == []
+
+
+def test_timeout_is_bounded_persists_tick_watermark_and_discards_late_result(tmp_path: Path) -> None:
+    store, user, session = _user_and_session(tmp_path)
+    agent = BlockingSyncAgent()
+    writer = WorkbenchNoteWriter(
+        store=store,
+        settings=_settings(tmp_path),
+        lease_owner="test-worker",
+        agent_factory=lambda: agent,
+        timeout_seconds=0.02,
+    )
+    tick_at = 1_700_000_000.0
+
+    started_at = time.monotonic()
+    with pytest.raises(TimeoutError, match="note writer"):
+        writer.tick_session(user=user, session_id=session.session_id, now=tick_at)
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.5
+    assert agent.started.is_set()
+    assert agent.calls == 1
+    assert writer.tick_session(user=user, session_id=session.session_id, now=tick_at) is None
+    assert writer.tick_session(user=user, session_id=session.session_id, now=tick_at + 16) is None
+    assert agent.calls == 1
+    events = store.list_recent_session_events(
+        user=user,
+        session_id=session.session_id,
+        event_prefix="workbench_note_writer_",
+    )
+    assert [event.event_name for event in events] == [
+        "workbench_note_writer_failed",
+        "workbench_note_writer_dropped",
+    ]
+    assert events[0].payload == {"reasonCode": "note_writer_timeout"}
+    assert events[1].payload == {"reasonCode": "note_writer_busy"}
+    with sqlite3.connect(store.db_path) as conn:
+        lease = conn.execute(
+            "SELECT last_tick_slot, in_flight_started_at FROM workbench_note_writer_leases WHERE session_id = ?",
+            (session.session_id,),
+        ).fetchone()
+    assert lease == (int((tick_at + 16) // 15), None)
+
+    agent.release.set()
+    deadline = time.time() + 1
+    while time.time() < deadline and writer.agent_call_in_flight:
+        time.sleep(0.01)
+    assert not writer.agent_call_in_flight
+    assert store.list_recent_workbench_notes(user=user, session_id=session.session_id) == []
+
+
+def test_build_agent_disables_provider_retries_and_sets_request_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_build_model(config, *, provider_max_retries=None):
+        captured["config"] = config
+        captured["provider_max_retries"] = provider_max_retries
+        return object()
+
+    class CapturingAgent:
+        def __init__(self, **kwargs) -> None:
+            captured["agent_kwargs"] = kwargs
+
+    monkeypatch.setattr("seektalent_ui.workbench_note_writer.build_model", fake_build_model)
+    monkeypatch.setattr("seektalent_ui.workbench_note_writer.Agent", CapturingAgent)
+    writer = WorkbenchNoteWriter(
+        store=_store(tmp_path),
+        settings=_settings(tmp_path),
+        timeout_seconds=7.5,
+    )
+
+    writer._build_agent()
+
+    assert captured["provider_max_retries"] == 0
+    agent_kwargs = captured["agent_kwargs"]
+    assert isinstance(agent_kwargs, dict)
+    assert agent_kwargs["model_settings"]["timeout"] == 7.5
 
 
 def test_run_agent_type_error_is_recorded_safely_and_reraised(

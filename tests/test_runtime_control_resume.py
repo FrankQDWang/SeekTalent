@@ -287,6 +287,7 @@ def _executor_leases(store: RuntimeControlStore) -> list[dict[str, object]]:
 
 def _insert_corrupt_checkpoint(store: RuntimeControlStore, *, runtime_run_id: str) -> None:
     with store._connect() as conn, conn:
+        checkpoint_id = f"checkpoint-corrupt-{runtime_run_id}"
         conn.execute(
             """
             INSERT INTO runtime_control_checkpoints (
@@ -297,11 +298,15 @@ def _insert_corrupt_checkpoint(store: RuntimeControlStore, *, runtime_run_id: st
             VALUES (?, ?, 'round', 1, 'after_round_controller', '{not json', '{}', '[]', NULL, ?, ?)
             """,
             (
-                f"checkpoint-corrupt-{runtime_run_id}",
+                checkpoint_id,
                 runtime_run_id,
                 "runtime-control-checkpoint/v1",
                 "2026-06-17T01:00:10.500000Z",
             ),
+        )
+        conn.execute(
+            "UPDATE runtime_control_runs SET latest_checkpoint_id = ? WHERE runtime_run_id = ?",
+            (checkpoint_id, runtime_run_id),
         )
 
 
