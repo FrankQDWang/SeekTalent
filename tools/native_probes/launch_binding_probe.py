@@ -442,13 +442,18 @@ def _windows_create_suspended(
         if not kernel32.QueryFullProcessImageNameW(process.process, 0, image_buffer, ctypes.byref(image_length)):
             raise ProbeFailure(f"QueryFullProcessImageNameW failed: {_windows_last_error()}")
         child_image_path = image_buffer.value
-        child_image_handle = _windows_handle(kernel32, executable, desired_access=0x80000000)
+        child_image = Path(child_image_path)
+        if not child_image.is_absolute():
+            kernel32.TerminateProcess(process.process, 1)
+            kernel32.WaitForSingleObject(process.process, 10_000)
+            raise ProbeFailure("QueryFullProcessImageNameW returned a non-absolute path")
+        child_image_handle = _windows_handle(kernel32, child_image, desired_access=0x80000000)
         try:
             child_identity = _windows_file_identity(kernel32, child_image_handle)
         finally:
             kernel32.CloseHandle(child_image_handle)
         expected_path = _windows_normalized_path(str(expected_identity["final_path"]))
-        observed_path = _windows_normalized_path(child_image_path)
+        observed_path = _windows_normalized_path(str(child_identity["final_path"]))
         if observed_path != expected_path or child_identity != expected_identity:
             kernel32.TerminateProcess(process.process, 1)
             kernel32.WaitForSingleObject(process.process, 10_000)
