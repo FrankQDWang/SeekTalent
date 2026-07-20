@@ -22,9 +22,16 @@ else:
 
 import seektalent.installed_release as installed_release
 import seektalent.owned_sidecar_process as owned_process
-from seektalent.installed_release import InstalledReleaseError, InstalledSidecarExecutableResolution
+from seektalent.installed_release import (
+    AuthenticatedInstalledSidecarLaunch,
+    InstalledReleaseError,
+    InstalledSidecarExecutableResolution,
+    admit_installed_sidecar_launch,
+)
 from seektalent.owned_sidecar_process import spawn_owned_sidecar
-from seektalent.release_manifest import TargetV1
+from tests.test_installed_release import _install_slot
+from tests.test_release_signing import VERIFICATION_TIME, _policy, _signed
+from seektalent.release_manifest import parse_release_manifest
 
 
 PROBE = Path(__file__).parent / "support" / "owned_sidecar_probe.py"
@@ -83,27 +90,17 @@ def _fake_owned_process(*, process_group_id: int | None = None) -> tuple[owned_p
 
 
 @pytest.fixture
-def resolution(tmp_path: Path) -> InstalledSidecarExecutableResolution:
-    (tmp_path / "release").mkdir()
-    executable = tmp_path / "installed sidecar probe"
-    executable.write_text(f"#!{sys.executable}\nexec(open({str(PROBE)!r}, 'rb').read())\n", encoding="utf-8")
-    executable.chmod(0o500)
-    return InstalledSidecarExecutableResolution(
-        slot_root=tmp_path,
-        manifest_path=tmp_path / "release" / "release-manifest.json",
-        executable_path=executable,
-        manifest_id="test-manifest",
-        manifest_sha256="0" * 64,
-        product_build_id="st1-" + "0" * 32,
-        target=TargetV1(
-            os="macos",
-            arch="arm64",
-            min_os_build="13.0",
-            max_os_build="15.9",
-        ),
-        executable_size_bytes=executable.stat().st_size,
-        executable_sha256="1" * 64,
+def resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AuthenticatedInstalledSidecarLaunch:
+    probe = f"#!{sys.executable}\nexec(open({str(PROBE)!r}, 'rb').read())\n".encode()
+    slot_root, _, _ = _install_slot(tmp_path, monkeypatch, executable_bytes=probe)
+    manifest_path = slot_root / "release" / "release-manifest.json"
+    manifest = parse_release_manifest(manifest_path.read_bytes())
+    _, signature_payload = _signed(manifest)
+    manifest_path.parent.joinpath("signatures").mkdir()
+    manifest_path.parent.joinpath("signatures", "release-manifest.sig").write_text(
+        __import__("json").dumps(signature_payload, separators=(",", ":")), encoding="utf-8"
     )
+    return admit_installed_sidecar_launch(slot_root, _policy(), VERIFICATION_TIME)
 
 
 def _close_process_streams(process: owned_process.OwnedSidecarProcess) -> None:
@@ -118,6 +115,37 @@ def test_spawn_requires_typed_resolution_before_popen(monkeypatch: pytest.Monkey
     with pytest.raises(TypeError):
         spawn_owned_sidecar(Path("/tmp/not-a-resolution"))  # type: ignore[arg-type]
 
+    assert calls == []
+
+
+def test_spawn_rejects_caller_fabricated_admission_before_popen(
+    resolution: AuthenticatedInstalledSidecarLaunch,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[object] = []
+    monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
+    with pytest.raises(TypeError):
+        AuthenticatedInstalledSidecarLaunch(
+            resolution=resolution.resolution,
+            manifest_id=resolution.manifest_id,
+            manifest_sha256=resolution.manifest_sha256,
+            product_build_id=resolution.product_build_id,
+            main_application_build_id=resolution.main_application_build_id,
+            main_application_tree_sha256=resolution.main_application_tree_sha256,
+            sidecar_build_id=resolution.sidecar_build_id,
+            sidecar_tree_sha256=resolution.sidecar_tree_sha256,
+            sidecar_executable_sha256=resolution.sidecar_executable_sha256,
+            source_port_protocol=resolution.source_port_protocol,
+            signer_key_id=resolution.signer_key_id,
+            trust_policy_id=resolution.trust_policy_id,
+            trust_policy_revision=resolution.trust_policy_revision,
+        )
+    with pytest.raises(TypeError):
+        spawn_owned_sidecar({"resolution": resolution.resolution})  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        spawn_owned_sidecar(resolution.resolution)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        replace(resolution, manifest_id="caller-forged")
     assert calls == []
 
 
@@ -153,7 +181,7 @@ def test_invalid_lifecycle_timeout_has_no_fake_process_or_group_signal_side_effe
 
 
 def test_windows_spawn_uses_bounded_creation_contract(
-    resolution: InstalledSidecarExecutableResolution,
+    resolution: AuthenticatedInstalledSidecarLaunch,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: dict[str, object] = {}
@@ -211,17 +239,17 @@ def test_spawn_rejects_invalid_fixed_working_directory_before_popen(
     other_release.mkdir()
     invalid = [
         replace(
-            resolution,
+            resolution.resolution,
             slot_root=missing_slot,
             manifest_path=missing_slot / "release" / "release-manifest.json",
         ),
         replace(
-            resolution,
+            resolution.resolution,
             slot_root=file_slot,
             manifest_path=file_slot / "release" / "release-manifest.json",
         ),
         replace(
-            resolution,
+            resolution.resolution,
             manifest_path=other_release / "release-manifest.json",
         ),
     ]
@@ -229,7 +257,7 @@ def test_spawn_rejects_invalid_fixed_working_directory_before_popen(
     monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
 
     for candidate in invalid:
-        with pytest.raises(ValueError):
+        with pytest.raises(TypeError):
             spawn_owned_sidecar(candidate)
 
     assert calls == []
@@ -550,7 +578,7 @@ def test_spawn_failure_and_repeated_spawn_do_not_leak_parent_fds(
         executable_size_bytes=0,
         executable_sha256="0" * 64,
     )
-    with pytest.raises(OSError):
+    with pytest.raises(TypeError):
         spawn_owned_sidecar(missing)
     for _ in range(20):
         process = spawn_owned_sidecar(resolution)
