@@ -1,0 +1,42 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "offline-distribution-2026-07",
+  "change_type": "major_refactor",
+  "summary": "Add the production-unreachable installed sidecar resolver and main-owned direct-child stdio primitive.",
+  "rationale": "Issue #358 adds two narrow OS boundaries below future Source Port composition. installed_release.py owns fixed installed-manifest selection and point-in-time host/content inspection. owned_sidecar_process.py owns only direct-child creation, three independent anonymous stdio pipes, and the lifecycle needed to signal and reap that child. Keeping these boundaries in two direct modules avoids mixing release filesystem checks with mutable process ownership or introducing a supervisor abstraction before handshake and production composition exist.",
+  "touched_layers": [
+    "other"
+  ],
+  "red_files": [
+    "src/seektalent/installed_release.py",
+    "src/seektalent/owned_sidecar_process.py"
+  ],
+  "deletion_targets": [
+    "future installed-sidecar lookup that accepts caller-selected manifest paths, component IDs, PATH, or environment fallback",
+    "future sidecar spawning that accepts a bare executable path or merges stderr into the stdout protocol stream",
+    "unowned child-process lifecycle paths that signal without waiting and reaping the direct child"
+  ],
+  "verification": [
+    "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
+    "uv run ruff check scripts/build_offline_macos_intel.py tests/test_build_offline_macos_intel.py tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py tests/test_build_offline_macos_intel.py tests/test_pr_governance.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "uv run --group dev pytest -p no:tach tests/test_installed_release.py tests/test_owned_sidecar_process.py -q",
+    "uv run --group dev ruff check src/seektalent/installed_release.py src/seektalent/owned_sidecar_process.py tests/test_installed_release.py tests/test_owned_sidecar_process.py tests/support/owned_sidecar_probe.py",
+    "uv run --group dev ty check src/seektalent/installed_release.py src/seektalent/owned_sidecar_process.py",
+    "uv run --group dev python tools/check_tach_baseline.py",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_source_boundaries.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev pytest"
+  ],
+  "risks": [
+    "The installed manifest remains unsigned because PR #339 is outside this slice; this resolver must not be treated as release authorization or peer authentication.",
+    "The inspected executable can still be replaced between resolver return and Popen. Immutable-slot lifecycle locking and OS-specific opened-object execution binding remain required follow-up work.",
+    "On POSIX, the leader PID pins process-group identity only until poll or wait reaps it. Post-reap child-tree cleanup requires a stronger OS-specific ownership handle and is not claimed by this primitive.",
+    "Only macOS arm64 native process and pipe behavior is exercised in this worktree. Windows x86_64 handle/process-group behavior and macOS x86_64 behavior remain unproved until their native matrices run.",
+    "The primitive intentionally has no drain thread, supervisor, handshake, journal, real sidecar, provider, browser, runtime, CLI, config, or production caller."
+  ]
+}
