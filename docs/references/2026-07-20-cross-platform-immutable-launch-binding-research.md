@@ -229,7 +229,7 @@ Failures before OS process creation remain no-child/no-`Popen`. Failures after s
 
 ## 7. Minimum native probe matrix
 
-The probe must be tiny, deterministic, production-unreachable, and report structured results. It should compile on the native runner rather than emulate a host.
+The probe must be tiny, deterministic, production-unreachable, and report structured results. Every artifact records native architecture, OS release/build, and Python implementation/version/build so a result remains attributable to its runner. It should compile on the native runner rather than emulate a host.
 
 ### 7.1 Windows x64 (`windows-2025`, local NTFS)
 
@@ -262,9 +262,13 @@ Repeat the essential matrix on a Windows 11 x64 self-hosted or release-test mach
 | Non-writable installer-owned slot, unprivileged mutation attempts | Write/rename/delete fail. Run under a genuinely unprivileged identity; GitHub runner passwordless admin capability must not be confused with the tested child identity. |
 | Native `posix_spawn` with `POSIX_SPAWN_START_SUSPENDED`; sidecar's first instruction writes a marker | Marker is absent before explicit resume. |
 | Suspended dynamic `SecCode` check: expected signer/requirement versus altered, ad-hoc, wrong-signer binary | Expected child passes; every mismatch is killed/reaped before the user-space marker appears. |
-| 1,000 bounded path replace/start races under per-user slot | Must reproduce risk before the stronger layers; do not claim the advisory lease stopped a non-cooperating attacker. |
+| Raw concurrent path replace/start under a per-user writable slot | **No-go as required CI automation.** A 2026-07-20 arm64 macOS 15.6.1 observation left one child in `_dyld_start`, PPID 1, state `UE`, after a raw concurrent replace/start; `SIGKILL` did not reap it. Do not repeat this probe or claim a process group/supervisor solves an uninterruptible kernel wait. The deterministic single replacement reproducer remains required; it proves the path-based risk without creating an unreapable child. |
 
 Run API-semantic rows on both Intel and arm64. The immediate decision requires GitHub Intel evidence; the final release matrix retains separate `macos-x86_64` and `macos-arm64` artifact rows.
+
+### 7.3 2026-07-20 macOS race correction
+
+The prior 1,000-iteration raw concurrent macOS path race is withdrawn from the required automated matrix because the native observation above made the probe itself non-deterministic and capable of polluting a developer machine or hosted runner. This is a **no-go finding**, not a claim that the race is safe or a weakening of the threat boundary: a per-user writable macOS slot has no strict pre-spawn binding guarantee. Required deterministic macOS evidence is instead the open-FD/path replacement red reproducer, advisory-lock limit, cooperative immutable-slot activation/rollback/delete lease, and suspended Security.framework PID gate. Strict macOS assurance remains ordered behind installer ownership/non-writability plus exact signed-PID evidence; production remains unreachable.
 
 ## 8. Acceptance matrix for the next implementation slice
 

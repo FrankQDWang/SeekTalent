@@ -32,7 +32,7 @@ jobs:
             expected_os: Darwin
             expected_arch: x86_64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v5
@@ -75,6 +75,8 @@ jobs:
       - run: uv sync --locked --group dev
 
       - name: Assert deterministic native evidence contract
+        env:
+          SEEKTALENT_NATIVE_LAUNCH_BINDING_EVIDENCE: native-launch-binding-evidence.json
         run: uv run --group dev python -m pytest tests/test_native_launch_binding_probe.py -q
 
       - name: Upload native evidence
