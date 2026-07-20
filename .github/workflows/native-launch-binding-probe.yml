@@ -42,7 +42,18 @@ jobs:
           python-version: "3.12"
 
       - name: Assert native runner identity
-        run: python -c "import platform; machine = {'amd64': 'x86_64', 'x86_64': 'x86_64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine().lower()); assert platform.system() == '${{ matrix.expected_os }}'; assert machine == '${{ matrix.expected_arch }}'"
+        shell: python
+        run: |
+          import platform
+
+          machine = {
+              "amd64": "x86_64",
+              "x86_64": "x86_64",
+              "aarch64": "arm64",
+              "arm64": "arm64",
+          }.get(platform.machine().lower())
+          assert platform.system() == "${{ matrix.expected_os }}"
+          assert machine == "${{ matrix.expected_arch }}"
 
       - name: Run native probe
         shell: python
