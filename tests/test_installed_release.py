@@ -4,11 +4,13 @@ import copy
 import errno
 import os
 import socket
+import sys
 import tempfile
 import time
 from collections.abc import Callable
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -122,11 +124,46 @@ def test_current_host_platform_maps_supported_native_names(
     monkeypatch.setattr(installed_release.platform, "system", lambda: system)
     monkeypatch.setattr(installed_release.platform, "machine", lambda: machine)
     monkeypatch.setattr(installed_release.platform, "mac_ver", lambda: (version, ("", "", ""), ""))
-    monkeypatch.setattr(installed_release.platform, "win32_ver", lambda: ("", version, "", ""))
+    monkeypatch.setattr(
+        sys,
+        "getwindowsversion",
+        lambda: SimpleNamespace(platform_version=tuple(int(part) for part in version.split("."))),
+        raising=False,
+    )
 
     actual = installed_release._current_host_platform()
 
     assert (actual.os, actual.arch, actual.build) == expected
+
+
+def test_windows_host_detection_does_not_invoke_ambient_commands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(installed_release.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(installed_release.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(
+        sys,
+        "getwindowsversion",
+        lambda: SimpleNamespace(platform_version=(10, 0, 26100)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        installed_release.platform,
+        "win32_ver",
+        lambda: pytest.fail("Windows host detection must not invoke ambient commands"),
+    )
+    monkeypatch.setattr(
+        "subprocess.check_output",
+        lambda *args, **kwargs: pytest.fail("Windows host detection must not spawn subprocesses"),
+    )
+
+    actual = installed_release._current_host_platform()
+
+    assert (actual.os, actual.arch, actual.build) == (
+        "windows",
+        "x86_64",
+        (10, 0, 26100, 0),
+    )
 
 
 @pytest.mark.parametrize(
@@ -146,7 +183,12 @@ def test_current_host_platform_rejects_unknown_os_arch_or_build(
     monkeypatch.setattr(installed_release.platform, "system", lambda: system)
     monkeypatch.setattr(installed_release.platform, "machine", lambda: machine)
     monkeypatch.setattr(installed_release.platform, "mac_ver", lambda: (version, ("", "", ""), ""))
-    monkeypatch.setattr(installed_release.platform, "win32_ver", lambda: ("", version, "", ""))
+    monkeypatch.setattr(
+        sys,
+        "getwindowsversion",
+        lambda: SimpleNamespace(platform_version=version),
+        raising=False,
+    )
 
     with pytest.raises(InstalledReleaseError) as raised:
         installed_release._current_host_platform()
@@ -616,6 +658,39 @@ def test_resolver_classifies_open_permission_denied_as_file_access_denied(
     assert isinstance(raised.value.__cause__, PermissionError)
 
 
+@pytest.mark.parametrize(
+    "target",
+    ["manifest_parent", "manifest", "executable_parent", "executable"],
+)
+def test_resolver_classifies_lstat_permission_denied_as_file_access_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    slot_root, executable, _ = _install_slot(tmp_path, monkeypatch)
+    denied_path = {
+        "manifest_parent": slot_root / "release",
+        "manifest": slot_root / "release" / "release-manifest.json",
+        "executable_parent": executable.parent,
+        "executable": executable,
+    }[target]
+    original_lstat = installed_release.os.lstat
+
+    def permission_denied(path: os.PathLike[str] | str) -> os.stat_result:
+        if Path(path) == denied_path:
+            raise PermissionError(errno.EACCES, "permission denied", str(path))
+        return original_lstat(path)
+
+    monkeypatch.setattr(installed_release.os, "lstat", permission_denied)
+
+    with pytest.raises(InstalledReleaseError) as raised:
+        resolve_installed_sidecar_executable(slot_root)
+
+    assert raised.value.reason == InstalledReleaseReason.FILE_ACCESS_DENIED
+    assert raised.value.path == denied_path
+    assert isinstance(raised.value.__cause__, PermissionError)
+
+
 def test_resolver_rejects_manifest_changed_during_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -659,12 +734,36 @@ def test_resolver_does_not_read_path_environment_or_spawn_subprocess(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    slot_root, executable, _ = _install_slot(tmp_path, monkeypatch)
-    monkeypatch.setenv("PATH", str(tmp_path / "attacker"))
-    popen_calls: list[object] = []
-    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: popen_calls.append((args, kwargs)))
+    current_host_platform = installed_release._current_host_platform
+    slot_root, executable, _ = _install_slot(tmp_path, monkeypatch, target=TARGETS[0])
+    monkeypatch.setattr(installed_release, "_current_host_platform", current_host_platform)
+    monkeypatch.setattr(installed_release.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(installed_release.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(
+        sys,
+        "getwindowsversion",
+        lambda: SimpleNamespace(platform_version=(10, 0, 26100)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        installed_release.platform,
+        "win32_ver",
+        lambda: pytest.fail("resolver must not invoke ambient commands"),
+    )
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *args, **kwargs: pytest.fail("resolver must not spawn subprocesses"),
+    )
+
+    class ForbiddenEnvironment(dict[str, str]):
+        def __getitem__(self, key: str) -> str:
+            pytest.fail(f"resolver must not read environment variable {key}")
+
+        def get(self, key: str, default: str | None = None) -> str | None:
+            pytest.fail(f"resolver must not read environment variable {key}")
+
+    monkeypatch.setattr(installed_release.os, "environ", ForbiddenEnvironment())
 
     resolution = resolve_installed_sidecar_executable(slot_root)
 
     assert resolution.executable_path == executable
-    assert popen_calls == []

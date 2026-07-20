@@ -4,6 +4,7 @@ import errno
 import os
 import platform
 import stat
+import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
@@ -174,7 +175,7 @@ def _current_host_platform() -> _HostPlatform:
         raw_build = platform.mac_ver()[0]
     elif system == "Windows":
         host_os = "windows"
-        raw_build = platform.win32_ver()[1]
+        raw_build = _windows_platform_build()
     else:
         raise InstalledReleaseError(InstalledReleaseReason.HOST_UNSUPPORTED)
     arch = {
@@ -190,6 +191,26 @@ def _current_host_platform() -> _HostPlatform:
     except ValueError as exc:
         raise InstalledReleaseError(InstalledReleaseReason.HOST_UNSUPPORTED) from exc
     return _HostPlatform(os=host_os, arch=arch, build=build)
+
+
+def _windows_platform_build() -> str:
+    get_windows_version = getattr(sys, "getwindowsversion", None)
+    if get_windows_version is None:
+        raise InstalledReleaseError(InstalledReleaseReason.HOST_UNSUPPORTED)
+    try:
+        platform_version = get_windows_version().platform_version
+    except (AttributeError, OSError) as exc:
+        raise InstalledReleaseError(InstalledReleaseReason.HOST_UNSUPPORTED) from exc
+    if (
+        not isinstance(platform_version, tuple)
+        or not 2 <= len(platform_version) <= 4
+        or any(
+            isinstance(part, bool) or not isinstance(part, int) or part < 0
+            for part in platform_version
+        )
+    ):
+        raise InstalledReleaseError(InstalledReleaseReason.HOST_UNSUPPORTED)
+    return ".".join(str(part) for part in platform_version)
 
 
 def _parse_build(value: str) -> tuple[int, int, int, int]:
@@ -314,6 +335,11 @@ def _snapshot_path_chain(root: Path, path: Path) -> tuple[_PathSnapshot, ...]:
         try:
             value = os.lstat(current)
         except OSError as exc:
+            if _is_permission_error(exc):
+                raise InstalledReleaseError(
+                    InstalledReleaseReason.FILE_ACCESS_DENIED,
+                    current,
+                ) from exc
             raise InstalledReleaseError(InstalledReleaseReason.NOT_REGULAR_FILE, current) from exc
         if _is_link_like(current, value):
             raise InstalledReleaseError(InstalledReleaseReason.SYMLINK, current)
@@ -344,9 +370,13 @@ def _open_readonly(path: Path) -> int:
     try:
         return os.open(path, flags)
     except OSError as exc:
-        if isinstance(exc, PermissionError) or exc.errno in {errno.EACCES, errno.EPERM}:
+        if _is_permission_error(exc):
             raise InstalledReleaseError(InstalledReleaseReason.FILE_ACCESS_DENIED, path) from exc
         raise InstalledReleaseError(InstalledReleaseReason.PATH_CHANGED, path) from exc
+
+
+def _is_permission_error(error: OSError) -> bool:
+    return isinstance(error, PermissionError) or error.errno in {errno.EACCES, errno.EPERM}
 
 
 def _is_link_like(path: Path, value: os.stat_result) -> bool:
