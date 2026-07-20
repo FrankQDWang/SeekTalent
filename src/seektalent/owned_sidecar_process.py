@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import IO
 
 from seektalent.installed_release import (
+    AuthenticatedInstalledSidecarLaunch,
     INSTALLED_MANIFEST_RELATIVE_PATH,
     InstalledSidecarExecutableResolution,
 )
@@ -99,10 +100,11 @@ class OwnedSidecarProcess:
         self.close_stderr_reader()
 
 
-def spawn_owned_sidecar(resolution: InstalledSidecarExecutableResolution) -> OwnedSidecarProcess:
+def spawn_owned_sidecar(admission: AuthenticatedInstalledSidecarLaunch) -> OwnedSidecarProcess:
     """Spawn the resolved absolute executable without adding arguments or secrets."""
-    if not isinstance(resolution, InstalledSidecarExecutableResolution):
-        raise TypeError("resolution must be InstalledSidecarExecutableResolution")
+    if not isinstance(admission, AuthenticatedInstalledSidecarLaunch) or not admission._is_factory_admission():
+        raise TypeError("admission must be AuthenticatedInstalledSidecarLaunch")
+    resolution = admission.resolution
     executable = resolution.executable_path
     if not executable.is_absolute():
         raise ValueError("resolved executable path must be absolute")

@@ -6,22 +6,33 @@ import platform
 import stat
 import sys
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
+from weakref import WeakSet
 
 from seektalent.release_manifest import (
     ComponentV1,
     FileRefV1,
+    ProtocolFactV1,
     ReleaseManifestV1,
     TargetV1,
     parse_release_manifest,
     release_manifest_digest,
 )
+from seektalent.release_signing import (
+    ReleaseManifestTrustPolicyV1,
+    parse_release_manifest_signature,
+    verify_release_manifest_signature,
+)
 
 
 INSTALLED_MANIFEST_RELATIVE_PATH = Path("release/release-manifest.json")
+INSTALLED_SIGNATURE_RELATIVE_PATH = Path("release/signatures/release-manifest.sig")
 SIDECAR_COMPONENT_ID = "liepin_execution_sidecar"
+_ADMISSION_FACTORY_TOKEN = object()
+_FACTORY_ADMISSIONS: WeakSet[AuthenticatedInstalledSidecarLaunch] = WeakSet()
 _HASH_CHUNK_SIZE = 1024 * 1024
 # A release manifest is metadata, not payload. One MiB leaves ample room for
 # file closure while bounding strict-JSON parser input and transient memory.
@@ -76,6 +87,116 @@ class InstalledSidecarExecutableResolution:
     executable_sha256: str
 
 
+@dataclass(frozen=True, slots=True, weakref_slot=True, init=False)
+class AuthenticatedInstalledSidecarLaunch:
+    """Launch admission derived exclusively from one verified installed manifest."""
+
+    resolution: InstalledSidecarExecutableResolution
+    manifest_id: str
+    manifest_sha256: str
+    product_build_id: str
+    main_application_build_id: str
+    main_application_tree_sha256: str
+    sidecar_build_id: str
+    sidecar_tree_sha256: str
+    sidecar_executable_sha256: str
+    source_port_protocol: ProtocolFactV1
+    signer_key_id: str
+    trust_policy_id: str
+    trust_policy_revision: int
+
+    @property
+    def slot_root(self) -> Path:
+        return self.resolution.slot_root
+
+    @property
+    def manifest_path(self) -> Path:
+        return self.resolution.manifest_path
+
+    @property
+    def executable_path(self) -> Path:
+        return self.resolution.executable_path
+
+    @property
+    def target(self) -> TargetV1:
+        return self.resolution.target
+
+    def __init__(
+        self,
+        *,
+        resolution: InstalledSidecarExecutableResolution,
+        manifest_id: str,
+        manifest_sha256: str,
+        product_build_id: str,
+        main_application_build_id: str,
+        main_application_tree_sha256: str,
+        sidecar_build_id: str,
+        sidecar_tree_sha256: str,
+        sidecar_executable_sha256: str,
+        source_port_protocol: ProtocolFactV1,
+        signer_key_id: str,
+        trust_policy_id: str,
+        trust_policy_revision: int,
+        _factory_token: object | None = None,
+    ) -> None:
+        if _factory_token is not _ADMISSION_FACTORY_TOKEN:
+            raise TypeError("AuthenticatedInstalledSidecarLaunch is factory-only")
+        object.__setattr__(self, "resolution", resolution)
+        object.__setattr__(self, "manifest_id", manifest_id)
+        object.__setattr__(self, "manifest_sha256", manifest_sha256)
+        object.__setattr__(self, "product_build_id", product_build_id)
+        object.__setattr__(self, "main_application_build_id", main_application_build_id)
+        object.__setattr__(self, "main_application_tree_sha256", main_application_tree_sha256)
+        object.__setattr__(self, "sidecar_build_id", sidecar_build_id)
+        object.__setattr__(self, "sidecar_tree_sha256", sidecar_tree_sha256)
+        object.__setattr__(self, "sidecar_executable_sha256", sidecar_executable_sha256)
+        object.__setattr__(self, "source_port_protocol", source_port_protocol)
+        object.__setattr__(self, "signer_key_id", signer_key_id)
+        object.__setattr__(self, "trust_policy_id", trust_policy_id)
+        object.__setattr__(self, "trust_policy_revision", trust_policy_revision)
+
+    def _is_factory_admission(self) -> bool:
+        return self in _FACTORY_ADMISSIONS
+
+
+def admit_installed_sidecar_launch(
+    slot_root: Path,
+    trust_policy: ReleaseManifestTrustPolicyV1,
+    verification_time: datetime,
+) -> AuthenticatedInstalledSidecarLaunch:
+    """Authenticate and inspect the fixed installed sidecar launch identity."""
+    root = _validate_slot_root(slot_root)
+    manifest_path = root / INSTALLED_MANIFEST_RELATIVE_PATH
+    signature_path = root / INSTALLED_SIGNATURE_RELATIVE_PATH
+    manifest = parse_release_manifest(_read_stable_regular_file(root, manifest_path))
+    signature = parse_release_manifest_signature(_read_stable_regular_file(root, signature_path))
+    verified = verify_release_manifest_signature(signature, manifest, trust_policy, verification_time)
+    resolution = _resolve_installed_sidecar_executable(root, manifest)
+
+    main = next((item for item in manifest.components if item.component_id == "main_application"), None)
+    sidecar = next((item for item in manifest.components if item.component_id == SIDECAR_COMPONENT_ID), None)
+    if main is None or sidecar is None:
+        raise InstalledReleaseError(InstalledReleaseReason.SIDECAR_DECLARATION_INVALID, manifest_path)
+    admission = AuthenticatedInstalledSidecarLaunch(
+        resolution=resolution,
+        manifest_id=manifest.manifest_id,
+        manifest_sha256=verified.release_manifest_sha256,
+        product_build_id=manifest.product_build_id,
+        main_application_build_id=main.build_id,
+        main_application_tree_sha256=main.tree_sha256,
+        sidecar_build_id=sidecar.build_id,
+        sidecar_tree_sha256=sidecar.tree_sha256,
+        sidecar_executable_sha256=resolution.executable_sha256,
+        source_port_protocol=manifest.compatibility.main_sidecar.source_port_protocol,
+        signer_key_id=verified.signer_key_id,
+        trust_policy_id=verified.trust_policy_id,
+        trust_policy_revision=verified.trust_policy_revision,
+        _factory_token=_ADMISSION_FACTORY_TOKEN,
+    )
+    _FACTORY_ADMISSIONS.add(admission)
+    return admission
+
+
 @dataclass(frozen=True, slots=True)
 class _HostPlatform:
     os: str
@@ -114,6 +235,13 @@ def resolve_installed_sidecar_executable(slot_root: Path) -> InstalledSidecarExe
     manifest_path = root / INSTALLED_MANIFEST_RELATIVE_PATH
     manifest_bytes = _read_stable_regular_file(root, manifest_path)
     manifest = parse_release_manifest(manifest_bytes)
+    return _resolve_installed_sidecar_executable(root, manifest)
+
+
+def _resolve_installed_sidecar_executable(
+    root: Path, manifest: ReleaseManifestV1
+) -> InstalledSidecarExecutableResolution:
+    manifest_path = root / INSTALLED_MANIFEST_RELATIVE_PATH
     _require_host_match(manifest.target)
     component, file_ref = _select_sidecar_file(manifest)
     executable_path = root / manifest.payload_root / component.root_path / file_ref.path
