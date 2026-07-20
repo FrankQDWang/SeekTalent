@@ -14,8 +14,9 @@ from typing import Literal, cast
 import pytest
 
 import seektalent.installed_release as installed_release
+import seektalent.installed_slot as installed_slot
 import seektalent.owned_sidecar_process as owned_process
-from seektalent.installed_release import (
+from seektalent.installed_slot import (
     ActiveSlotPointerError,
     ActiveSlotPointerReason,
     ActiveSlotPointerV1,
@@ -32,20 +33,55 @@ from tests.test_installed_release import _install_slot
 from tests.test_release_signing import VERIFICATION_TIME, _policy, _signed
 
 
+class _CloseFailsOnce(io.BytesIO):
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self._message = message
+        self._failed = False
+
+    def close(self) -> None:
+        super().close()
+        if not self._failed:
+            self._failed = True
+            raise OSError(self._message)
+
+
 class _FakePopen:
-    def __init__(self, *, missing_pipe: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        missing_pipe: bool = False,
+        close_failure_stream: str | None = None,
+        kill_failure: OSError | None = None,
+        wait_failure: OSError | None = None,
+        wait_failure_reaps: bool = True,
+        kill_sets_returncode: bool = True,
+    ) -> None:
         self.args = ["fake-sidecar"]
         self.pid = 12345
         self.returncode: int | None = None
         self.stdin = None if missing_pipe else io.BytesIO()
         self.stdout = io.BytesIO()
         self.stderr = io.BytesIO()
+        if close_failure_stream is not None:
+            setattr(self, close_failure_stream, _CloseFailsOnce(f"{close_failure_stream} close failed"))
+        self.kill_failure = kill_failure
+        self.wait_failure = wait_failure
+        self.wait_failure_reaps = wait_failure_reaps
+        self.kill_sets_returncode = kill_sets_returncode
+        self.kill_calls = 0
+        self.wait_calls = 0
 
     def poll(self) -> int | None:
         return self.returncode
 
     def wait(self, timeout: float | None = None) -> int:
         del timeout
+        self.wait_calls += 1
+        if self.wait_failure is not None:
+            if self.wait_failure_reaps:
+                self.returncode = 0
+            raise self.wait_failure
         self.returncode = 0
         return self.returncode
 
@@ -53,7 +89,11 @@ class _FakePopen:
         self.returncode = 0
 
     def kill(self) -> None:
-        self.returncode = 0
+        self.kill_calls += 1
+        if self.kill_failure is not None:
+            raise self.kill_failure
+        if self.kill_sets_returncode:
+            self.returncode = 0
 
 
 class _TimeoutOncePopen(_FakePopen):
@@ -92,7 +132,7 @@ def _pointer_for(
 
 
 def _write_pointer(root: Path, pointer: ActiveSlotPointerV1) -> None:
-    (root / installed_release.ACTIVE_SLOT_POINTER_RELATIVE_PATH).write_bytes(
+    (root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH).write_bytes(
         canonical_active_slot_pointer_bytes(pointer)
     )
 
@@ -191,7 +231,7 @@ def test_pointer_identity_mismatch_and_pointer_swap_fail_before_popen(
 ) -> None:
     calls: list[object] = []
     monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
-    pointer_path = installed_root / installed_release.ACTIVE_SLOT_POINTER_RELATIVE_PATH
+    pointer_path = installed_root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH
     pointer = parse_active_slot_pointer(pointer_path.read_bytes())
     _write_pointer(
         installed_root,
@@ -202,18 +242,106 @@ def test_pointer_identity_mismatch_and_pointer_swap_fail_before_popen(
     assert raised.value.reason == InstalledSlotReason.SLOT_IDENTITY_MISMATCH
 
     _write_pointer(installed_root, pointer)
-    original = installed_release._acquire_slot_lock
+    original = installed_slot._acquire_slot_lock
 
-    def acquire_then_switch(root: Path, physical_slot: str) -> installed_release._NativeSlotLock:
+    def acquire_then_switch(root: Path, physical_slot: str) -> installed_slot._NativeSlotLock:
         lock = original(root, cast(Literal["A", "B"], physical_slot))
         _write_pointer(installed_root, pointer.model_copy(update={"pointer_generation": 2}))
         return lock
 
-    monkeypatch.setattr(installed_release, "_acquire_slot_lock", acquire_then_switch)
+    monkeypatch.setattr(installed_slot, "_acquire_slot_lock", acquire_then_switch)
     with pytest.raises(InstalledSlotError) as raised:
         _acquire(installed_root)
     assert raised.value.reason == InstalledSlotReason.ACTIVE_SLOT_POINTER_CHANGED
     assert calls == []
+
+
+def test_installation_id_change_after_slot_lease_fails_closed_and_releases_lock(
+    installed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pointer_path = installed_root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH
+    installation_id_path = installed_root / installed_slot.INSTALLATION_ID_RELATIVE_PATH
+    original_pointer = parse_active_slot_pointer(pointer_path.read_bytes())
+    original_installation_id = installation_id_path.read_bytes()
+    original_acquire = installed_slot._acquire_slot_lock
+    original_admit = installed_slot.admit_installed_sidecar_launch
+    admissions: list[object] = []
+    popen_calls: list[object] = []
+    monkeypatch.setattr(
+        installed_slot,
+        "admit_installed_sidecar_launch",
+        lambda *args: (admissions.append(args), original_admit(*args))[1],
+    )
+    monkeypatch.setattr(
+        owned_process.subprocess,
+        "Popen",
+        lambda *args, **kwargs: popen_calls.append((args, kwargs)),
+    )
+
+    def acquire_then_change_installation(
+        root: Path,
+        physical_slot: str,
+    ) -> installed_slot._NativeSlotLock:
+        lock = original_acquire(root, cast(Literal["A", "B"], physical_slot))
+        installation_id_path.write_bytes(b"other-installation")
+        return lock
+
+    monkeypatch.setattr(installed_slot, "_acquire_slot_lock", acquire_then_change_installation)
+    with pytest.raises(InstalledSlotError) as raised:
+        _acquire(installed_root)
+    assert raised.value.reason == InstalledSlotReason.SLOT_IDENTITY_MISMATCH
+    assert admissions == []
+    assert popen_calls == []
+
+    installation_id_path.write_bytes(original_installation_id)
+    _write_pointer(installed_root, original_pointer)
+    monkeypatch.setattr(installed_slot, "_acquire_slot_lock", original_acquire)
+    released_lock = installed_slot._acquire_slot_lock(installed_root, "A")
+    released_lock.close()
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"pointer_generation": 2},
+        {"physical_slot": "B"},
+        {"product_build_id": "st1-" + "f" * 32},
+        {"release_manifest_sha256": "f" * 64},
+    ],
+)
+def test_pointer_identity_fact_change_after_slot_lease_fails_before_admission(
+    installed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    update: dict[str, object],
+) -> None:
+    pointer_path = installed_root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH
+    original_pointer = parse_active_slot_pointer(pointer_path.read_bytes())
+    original_acquire = installed_slot._acquire_slot_lock
+    admissions: list[object] = []
+    monkeypatch.setattr(
+        installed_slot,
+        "admit_installed_sidecar_launch",
+        lambda *args: admissions.append(args),
+    )
+
+    def acquire_then_change_pointer(
+        root: Path,
+        physical_slot: str,
+    ) -> installed_slot._NativeSlotLock:
+        lock = original_acquire(root, cast(Literal["A", "B"], physical_slot))
+        _write_pointer(installed_root, original_pointer.model_copy(update=update))
+        return lock
+
+    monkeypatch.setattr(installed_slot, "_acquire_slot_lock", acquire_then_change_pointer)
+    with pytest.raises(InstalledSlotError) as raised:
+        _acquire(installed_root)
+    assert raised.value.reason == InstalledSlotReason.ACTIVE_SLOT_POINTER_CHANGED
+    assert admissions == []
+
+    monkeypatch.setattr(installed_slot, "_acquire_slot_lock", original_acquire)
+    released_lock = installed_slot._acquire_slot_lock(installed_root, "A")
+    released_lock.close()
 
 
 def test_admitted_release_must_match_pointer_identity_before_popen(
@@ -222,7 +350,7 @@ def test_admitted_release_must_match_pointer_identity_before_popen(
 ) -> None:
     calls: list[object] = []
     monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
-    pointer_path = installed_root / installed_release.ACTIVE_SLOT_POINTER_RELATIVE_PATH
+    pointer_path = installed_root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH
     pointer = parse_active_slot_pointer(pointer_path.read_bytes())
     _write_pointer(installed_root, pointer.model_copy(update={"product_build_id": "st1-" + "f" * 32}))
 
@@ -239,7 +367,7 @@ def test_invalid_active_pointer_has_causal_failure_and_never_spawns(
     monkeypatch: pytest.MonkeyPatch,
     mutation: str,
 ) -> None:
-    pointer_path = installed_root / installed_release.ACTIVE_SLOT_POINTER_RELATIVE_PATH
+    pointer_path = installed_root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH
     original = pointer_path.read_bytes()
     if mutation == "duplicate":
         pointer_path.write_bytes(b'{"schema_version":"seektalent.active-slot/v1",' + original[1:])
@@ -254,6 +382,56 @@ def test_invalid_active_pointer_has_causal_failure_and_never_spawns(
         _acquire(installed_root)
 
     assert raised.value.reason == InstalledSlotReason.ACTIVE_SLOT_POINTER_INVALID
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("expected", "replacement"),
+    [
+        (b'"pointer_generation":1', b'"pointer_generation":0'),
+        (b'"physical_slot":"A"', b'"physical_slot":"C"'),
+        (
+            b'"release_manifest_sha256":"',
+            b'"release_manifest_sha256":"not-a-digest-',
+        ),
+    ],
+)
+def test_invalid_pointer_identity_facts_fail_before_admission(
+    installed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expected: bytes,
+    replacement: bytes,
+) -> None:
+    pointer_path = installed_root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH
+    original = pointer_path.read_bytes()
+    pointer_path.write_bytes(original.replace(expected, replacement, 1))
+    admissions: list[object] = []
+    monkeypatch.setattr(installed_slot, "admit_installed_sidecar_launch", lambda *args: admissions.append(args))
+
+    with pytest.raises(InstalledSlotError) as raised:
+        _acquire(installed_root)
+
+    assert raised.value.reason == InstalledSlotReason.ACTIVE_SLOT_POINTER_INVALID
+    assert admissions == []
+
+
+def test_pointer_product_build_mismatch_fails_after_admission_before_popen(
+    installed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pointer_path = installed_root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH
+    pointer = parse_active_slot_pointer(pointer_path.read_bytes())
+    _write_pointer(
+        installed_root,
+        pointer.model_copy(update={"product_build_id": "st1-" + "f" * 32}),
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    with pytest.raises(InstalledSlotError) as raised:
+        _acquire(installed_root)
+
+    assert raised.value.reason == InstalledSlotReason.SLOT_IDENTITY_MISMATCH
     assert calls == []
 
 
@@ -306,10 +484,10 @@ def test_live_lease_conflicts_until_owned_child_is_reaped(
 def test_pointer_can_switch_to_b_while_a_remains_leased(
     installed_root: Path,
 ) -> None:
-    slot_a = installed_root / installed_release.SLOT_ROOT_RELATIVE_PATHS["A"]
-    slot_b = installed_root / installed_release.SLOT_ROOT_RELATIVE_PATHS["B"]
+    slot_a = installed_root / installed_slot.SLOT_ROOT_RELATIVE_PATHS["A"]
+    slot_b = installed_root / installed_slot.SLOT_ROOT_RELATIVE_PATHS["B"]
     shutil.copytree(slot_a, slot_b)
-    pointer_path = installed_root / installed_release.ACTIVE_SLOT_POINTER_RELATIVE_PATH
+    pointer_path = installed_root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH
     pointer_a = parse_active_slot_pointer(pointer_path.read_bytes())
     lease_a = _acquire(installed_root)
 
@@ -323,12 +501,12 @@ def test_pointer_can_switch_to_b_while_a_remains_leased(
     assert lease_a.identity != lease_b.identity
 
     with pytest.raises(InstalledSlotError) as raised:
-        installed_release._acquire_slot_lock(installed_root, "A")
+        installed_slot._acquire_slot_lock(installed_root, "A")
     assert raised.value.reason == InstalledSlotReason.SLOT_LEASE_CONFLICT
 
     lease_b.close()
     lease_a.close()
-    released_lock = installed_release._acquire_slot_lock(installed_root, "A")
+    released_lock = installed_slot._acquire_slot_lock(installed_root, "A")
     released_lock.close()
 
 
@@ -361,24 +539,126 @@ def test_spawn_failure_reaps_or_closes_then_releases_slot_lease(
     next_lease.close()
 
 
-def test_pipe_cleanup_error_still_releases_the_consumed_lease(
+def test_pipe_close_failure_reaps_child_before_releasing_the_consumed_lease(
     installed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    fake = _FakePopen(missing_pipe=True, close_failure_stream="stdout")
     monkeypatch.setattr(
         owned_process.subprocess,
         "Popen",
-        lambda *args, **kwargs: _FakePopen(missing_pipe=True),
+        lambda *args, **kwargs: fake,
     )
-    monkeypatch.setattr(
-        owned_process,
-        "_reap_failed_spawn",
-        lambda *args: (_ for _ in ()).throw(OSError("reap failed")),
-    )
+    monkeypatch.setattr(owned_process, "_signal_process_group", lambda *_: fake.kill())
 
-    with pytest.raises(OSError, match="reap failed"):
+    with pytest.raises(RuntimeError, match="three stdio pipes") as raised:
+        spawn_owned_sidecar(_acquire(installed_root))
+    assert any("stdout close failed" in note for note in raised.value.__notes__)
+    assert fake.kill_calls == 1
+    assert fake.wait_calls == 1
+    assert fake.returncode == 0
+    assert fake.stdout.closed
+    assert fake.stderr.closed
+
+    next_lease = _acquire(installed_root)
+    next_lease.close()
+
+
+@pytest.mark.parametrize("failure", ["kill", "wait"])
+def test_failed_spawn_cleanup_error_is_diagnostic_after_reap(
+    installed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    fake = _FakePopen(
+        missing_pipe=True,
+        kill_failure=OSError("kill failed") if failure == "kill" else None,
+        wait_failure=OSError("wait failed") if failure == "wait" else None,
+    )
+    monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(owned_process, "_signal_process_group", lambda *_: fake.kill())
+
+    with pytest.raises(RuntimeError, match="three stdio pipes") as raised:
         spawn_owned_sidecar(_acquire(installed_root))
 
+    assert fake.kill_calls == 1
+    assert fake.wait_calls == 1
+    assert fake.returncode == 0
+    assert any(f"{failure} failed" in note for note in raised.value.__notes__)
+    next_lease = _acquire(installed_root)
+    next_lease.close()
+
+
+def test_confirmed_reap_keeps_its_fact_when_slot_release_fails(
+    installed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakePopen(
+        missing_pipe=True,
+        wait_failure=OSError("wait failed"),
+        wait_failure_reaps=False,
+        kill_sets_returncode=False,
+    )
+    monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(owned_process, "_signal_process_group", lambda *_: fake.kill())
+    with pytest.raises(owned_process.SidecarSpawnCleanupError) as raised:
+        spawn_owned_sidecar(_acquire(installed_root))
+    cleanup_error = raised.value
+
+    fake.wait_failure = None
+    fake.kill_sets_returncode = True
+    original_unlock = installed_slot._unlock_native_slot_lock
+    monkeypatch.setattr(
+        installed_slot,
+        "_unlock_native_slot_lock",
+        lambda *args: (_ for _ in ()).throw(OSError("unlock failed")),
+    )
+    with pytest.raises(InstalledSlotError) as release_failure:
+        cleanup_error.reap()
+    assert release_failure.value.reason == InstalledSlotReason.SLOT_RELEASE_FAILED
+    assert cleanup_error.direct_child_reaped is True
+    assert cleanup_error.lease_released is True
+
+    monkeypatch.setattr(installed_slot, "_unlock_native_slot_lock", original_unlock)
+    next_lease = _acquire(installed_root)
+    next_lease.close()
+
+
+def test_unreaped_failed_spawn_retains_explicit_lease_owner_until_retry_succeeds(
+    installed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakePopen(
+        missing_pipe=True,
+        wait_failure=OSError("wait failed"),
+        wait_failure_reaps=False,
+        kill_sets_returncode=False,
+    )
+    monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(owned_process, "_signal_process_group", lambda *_: fake.kill())
+
+    with pytest.raises(owned_process.SidecarSpawnCleanupError) as raised:
+        spawn_owned_sidecar(_acquire(installed_root))
+
+    cleanup_error = raised.value
+    assert cleanup_error.direct_child_reaped is False
+    assert fake.kill_calls == 1
+    assert fake.wait_calls == 1
+    with pytest.raises(InstalledSlotError) as lease_conflict:
+        _acquire(installed_root)
+    assert lease_conflict.value.reason == InstalledSlotReason.SLOT_LEASE_CONFLICT
+
+    assert cleanup_error.reap() is False
+    assert cleanup_error.direct_child_reaped is False
+    assert fake.wait_calls == 2
+    with pytest.raises(InstalledSlotError) as retry_conflict:
+        _acquire(installed_root)
+    assert retry_conflict.value.reason == InstalledSlotReason.SLOT_LEASE_CONFLICT
+
+    fake.wait_failure = None
+    fake.kill_sets_returncode = True
+    assert cleanup_error.reap() is True
+    assert cleanup_error.direct_child_reaped is True
     next_lease = _acquire(installed_root)
     next_lease.close()
 
@@ -407,9 +687,9 @@ def test_release_failure_never_restores_lease_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lease = _acquire(installed_root)
-    original_unlock = installed_release._unlock_native_slot_lock
+    original_unlock = installed_slot._unlock_native_slot_lock
     monkeypatch.setattr(
-        installed_release,
+        installed_slot,
         "_unlock_native_slot_lock",
         lambda *args: (_ for _ in ()).throw(OSError("unlock failed")),
     )
@@ -423,7 +703,7 @@ def test_release_failure_never_restores_lease_authority(
         spawn_owned_sidecar(lease)
     assert calls == []
 
-    monkeypatch.setattr(installed_release, "_unlock_native_slot_lock", original_unlock)
+    monkeypatch.setattr(installed_slot, "_unlock_native_slot_lock", original_unlock)
     next_lease = _acquire(installed_root)
     next_lease.close()
 
@@ -433,7 +713,7 @@ def test_release_failure_never_restores_lease_authority(
     reason="native cooperative lock evidence is only claimed on Windows and macOS",
 )
 def test_native_cross_process_slot_lock_conflicts(installed_root: Path) -> None:
-    lock_path = installed_root / installed_release.SLOT_LOCK_RELATIVE_PATHS["A"]
+    lock_path = installed_root / installed_slot.SLOT_LOCK_RELATIVE_PATHS["A"]
     if os.name == "nt":
         program = (
             "import msvcrt, os, sys; f=os.open(sys.argv[1], os.O_RDWR); "

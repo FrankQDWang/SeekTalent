@@ -10,10 +10,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO
 
-from seektalent.installed_release import (
-    INSTALLED_MANIFEST_RELATIVE_PATH,
+from seektalent.installed_release import INSTALLED_MANIFEST_RELATIVE_PATH, InstalledSidecarExecutableResolution
+from seektalent.installed_slot import (
     InstalledSidecarLaunchLease,
-    InstalledSidecarExecutableResolution,
+    InstalledSlotError,
     _InstalledSidecarLeaseState,
 )
 
@@ -169,12 +169,27 @@ def spawn_owned_sidecar(lease: InstalledSidecarLaunchLease) -> OwnedSidecarProce
             _process_group_id=process.pid if os.name == "posix" else None,
             _lease_state=lease_state,
         )
-    except BaseException:
-        try:
-            if process is not None:
-                _reap_failed_spawn(process, process.pid if os.name == "posix" else None)
-        finally:
-            lease_state.close()
+    except BaseException as primary_error:
+        cleanup_failures: tuple[BaseException, ...] = ()
+        reaped = process is None
+        if process is not None:
+            cleanup = _reap_failed_spawn(process, process.pid if os.name == "posix" else None)
+            cleanup_failures = cleanup.failures
+            reaped = cleanup.reaped
+        if reaped:
+            try:
+                lease_state.close()
+            except InstalledSlotError as cleanup_error:
+                cleanup_failures += (cleanup_error,)
+        else:
+            if process is None:
+                raise AssertionError("unreaped failed spawn requires a direct child")
+            owner = _UnreapedFailedSpawn(process, process.pid if os.name == "posix" else None, lease_state)
+            raise SidecarSpawnCleanupError(primary_error, owner, cleanup_failures) from primary_error
+        for cleanup_error in cleanup_failures:
+            primary_error.add_note(
+                f"failed spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
+            )
         raise
 
 
@@ -241,9 +256,93 @@ def _signal_process_group(process_group_id: int, sig: signal.Signals) -> None:
         return
 
 
-def _reap_failed_spawn(process: subprocess.Popen[bytes], process_group_id: int | None) -> None:
+@dataclass(frozen=True, slots=True)
+class _FailedSpawnCleanup:
+    failures: tuple[BaseException, ...]
+    reaped: bool
+
+
+@dataclass(slots=True)
+class _UnreapedFailedSpawn:
+    process: subprocess.Popen[bytes]
+    process_group_id: int | None
+    lease_state: _InstalledSidecarLeaseState
+    child_reaped: bool = False
+    lease_released: bool = False
+
+    def reap(self) -> _FailedSpawnCleanup:
+        cleanup = _reap_failed_spawn(self.process, self.process_group_id)
+        if cleanup.reaped:
+            self.child_reaped = True
+        if self.child_reaped and not self.lease_released:
+            try:
+                self.lease_state.close()
+            finally:
+                self.lease_released = self.lease_state.released
+        return cleanup
+
+
+class SidecarSpawnCleanupError(RuntimeError):
+    """A failed spawn whose direct child needs explicit reaping before slot release."""
+
+    def __init__(
+        self,
+        primary_error: BaseException,
+        owner: _UnreapedFailedSpawn,
+        cleanup_failures: tuple[BaseException, ...],
+    ) -> None:
+        self.primary_error = primary_error
+        self._owner = owner
+        super().__init__("failed sidecar spawn cleanup could not confirm direct-child reap")
+        self.add_note(f"primary failed spawn error: {type(primary_error).__name__}: {primary_error}")
+        for cleanup_error in cleanup_failures:
+            self.add_note(
+                f"failed spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
+            )
+
+    @property
+    def direct_child_reaped(self) -> bool:
+        return self._owner.child_reaped
+
+    @property
+    def lease_released(self) -> bool:
+        return self._owner.lease_released
+
+    def reap(self) -> bool:
+        """Retry the explicit cleanup owner once; release the lease only after reap."""
+        cleanup = self._owner.reap()
+        for cleanup_error in cleanup.failures:
+            self.add_note(
+                f"failed spawn cleanup retry: {type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        return cleanup.reaped
+
+
+def _reap_failed_spawn(
+    process: subprocess.Popen[bytes],
+    process_group_id: int | None,
+) -> _FailedSpawnCleanup:
+    """Close every endpoint, then kill and reap before a failed spawn releases its lease."""
+    failures: list[BaseException] = []
     for stream in (process.stdin, process.stdout, process.stderr):
         if stream is not None:
-            stream.close()
-    _kill_owned_process(process, process_group_id)
-    process.wait()
+            try:
+                stream.close()
+            except OSError as exc:
+                failures.append(exc)
+    try:
+        _kill_owned_process(process, process_group_id)
+    except OSError as exc:
+        failures.append(exc)
+    try:
+        process.wait()
+    except (OSError, subprocess.SubprocessError) as exc:
+        failures.append(exc)
+        try:
+            reaped = process.poll() is not None
+        except (OSError, subprocess.SubprocessError) as poll_error:
+            failures.append(poll_error)
+            reaped = False
+    else:
+        reaped = True
+    return _FailedSpawnCleanup(tuple(failures), reaped)

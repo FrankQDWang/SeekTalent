@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 
 import seektalent.installed_release as installed_release
+import seektalent.installed_filesystem as installed_filesystem
 from seektalent.installed_release import (
     InstalledReleaseError,
     InstalledReleaseReason,
@@ -724,10 +725,10 @@ def test_windows_junction_is_treated_as_link_like(
     directory = tmp_path / "directory"
     directory.mkdir()
     value = os.lstat(directory)
-    monkeypatch.setattr(installed_release.os, "name", "nt")
-    monkeypatch.setattr(installed_release.os.path, "isjunction", lambda _: True)
+    monkeypatch.setattr(installed_filesystem.os, "name", "nt")
+    monkeypatch.setattr(installed_filesystem.os.path, "isjunction", lambda _: True)
 
-    assert installed_release._is_link_like(directory, value)
+    assert installed_filesystem._is_link_like(directory, value)
 
 
 def test_resolver_does_not_read_path_environment_or_spawn_subprocess(

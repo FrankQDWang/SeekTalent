@@ -3,7 +3,7 @@
   "goal_id": "offline-distribution-2026-07",
   "change_type": "major_refactor",
   "summary": "Make a strict active installed-slot pointer and lifecycle lease the only production-unreachable sidecar spawn capability.",
-  "rationale": "Issue #366 adds one bounded installed-release boundary: a canonical active pointer selects a concrete A/B position, a non-copyable live lease holds that slot through direct-child reap, and native CI proves real cooperative lock conflict on every existing Windows and macOS launch-binding host. It preserves production caller count zero and does not add packaging, runtime, browser, provider, CLI, handshake, or remote-service composition.",
+  "rationale": "Issue #366 adds one bounded installed-release boundary: installed_filesystem owns stable path and descriptor evidence, a canonical active pointer selects a concrete A/B position, and a non-copyable live lease holds that slot through direct-child reap. If failed-spawn cleanup cannot confirm reap, its explicit error owner retains the child and lease until reap succeeds. Native CI proves real cooperative lock conflict on every existing Windows and macOS launch-binding host. The slice preserves production caller count zero and does not add packaging, runtime, browser, provider, CLI, handshake, or remote-service composition.",
   "touched_layers": [
     "governance",
     "docs",
@@ -11,7 +11,8 @@
     "other"
   ],
   "red_files": [
-    ".github/workflows/native-launch-binding-probe.yml"
+    ".github/workflows/native-launch-binding-probe.yml",
+    "tools/check_arch_imports.py"
   ],
   "verification": [
     "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
