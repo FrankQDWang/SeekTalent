@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import platform
 import stat
@@ -21,6 +22,12 @@ from seektalent.release_manifest import (
 INSTALLED_MANIFEST_RELATIVE_PATH = Path("release/release-manifest.json")
 SIDECAR_COMPONENT_ID = "liepin_execution_sidecar"
 _HASH_CHUNK_SIZE = 1024 * 1024
+# A release manifest is metadata, not payload. One MiB leaves ample room for
+# file closure while bounding strict-JSON parser input and transient memory.
+MAX_INSTALLED_MANIFEST_BYTES = 1024 * 1024
+# The sidecar is one desktop executable. 512 MiB leaves packaging headroom
+# while bounding point-in-time hashing when installed content is untrusted.
+MAX_INSTALLED_SIDECAR_BYTES = 512 * 1024 * 1024
 
 
 class InstalledReleaseReason(StrEnum):
@@ -34,6 +41,8 @@ class InstalledReleaseReason(StrEnum):
     TARGET_MISMATCH = "target_mismatch"
     SIDECAR_DECLARATION_INVALID = "sidecar_declaration_invalid"
     FILE_SIZE_MISMATCH = "file_size_mismatch"
+    FILE_SIZE_LIMIT_EXCEEDED = "file_size_limit_exceeded"
+    FILE_ACCESS_DENIED = "file_access_denied"
     FILE_MODE_MISMATCH = "file_mode_mismatch"
     FILE_DIGEST_MISMATCH = "file_digest_mismatch"
 
@@ -198,22 +207,20 @@ def _inspect_executable(root: Path, path: Path, file_ref: FileRefV1) -> str:
     _require_regular_single_link(final)
     if final.size != file_ref.size_bytes:
         raise InstalledReleaseError(InstalledReleaseReason.FILE_SIZE_MISMATCH, path)
-    if os.name == "posix" and final.mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) == 0:
-        raise InstalledReleaseError(InstalledReleaseReason.FILE_MODE_MISMATCH, path)
+    if os.name == "posix":
+        _require_effective_executable(path, final)
 
     descriptor = _open_readonly(path)
     try:
         opened = _PathSnapshot.from_stat(path, os.fstat(descriptor))
         _require_same_snapshot(final, opened)
-        digest = sha256()
-        while chunk := os.read(descriptor, _HASH_CHUNK_SIZE):
-            digest.update(chunk)
+        _require_size_within_limit(opened, MAX_INSTALLED_SIDECAR_BYTES)
+        actual_digest = _hash_exact_snapshot(descriptor, opened.size, path)
         after_read = _PathSnapshot.from_stat(path, os.fstat(descriptor))
         _require_same_snapshot(opened, after_read)
     finally:
         os.close(descriptor)
     _require_path_chain_unchanged(before, _snapshot_path_chain(root, path))
-    actual_digest = digest.hexdigest()
     if actual_digest != file_ref.sha256:
         raise InstalledReleaseError(InstalledReleaseReason.FILE_DIGEST_MISMATCH, path)
     return actual_digest
@@ -224,18 +231,71 @@ def _read_stable_regular_file(root: Path, path: Path) -> bytes:
     final = before[-1]
     _require_regular_single_link(final)
     descriptor = _open_readonly(path)
-    chunks: list[bytes] = []
     try:
         opened = _PathSnapshot.from_stat(path, os.fstat(descriptor))
         _require_same_snapshot(final, opened)
-        while chunk := os.read(descriptor, _HASH_CHUNK_SIZE):
-            chunks.append(chunk)
+        _require_size_within_limit(opened, MAX_INSTALLED_MANIFEST_BYTES)
+        content = _read_exact_snapshot(descriptor, opened.size, path)
         after_read = _PathSnapshot.from_stat(path, os.fstat(descriptor))
         _require_same_snapshot(opened, after_read)
     finally:
         os.close(descriptor)
     _require_path_chain_unchanged(before, _snapshot_path_chain(root, path))
-    return b"".join(chunks)
+    return content
+
+
+def _require_effective_executable(path: Path, snapshot: _PathSnapshot) -> None:
+    if snapshot.mode & (stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH) == 0:
+        raise InstalledReleaseError(InstalledReleaseReason.FILE_MODE_MISMATCH, path)
+    supports_effective_ids = getattr(os, "supports_effective_ids", set())
+    if os.access not in supports_effective_ids:
+        raise InstalledReleaseError(InstalledReleaseReason.FILE_MODE_MISMATCH, path)
+    try:
+        allowed = os.access(path, os.X_OK, effective_ids=True)
+    except (NotImplementedError, OSError, TypeError) as exc:
+        raise InstalledReleaseError(InstalledReleaseReason.FILE_MODE_MISMATCH, path) from exc
+    if not allowed:
+        raise InstalledReleaseError(InstalledReleaseReason.FILE_MODE_MISMATCH, path)
+
+
+def _require_size_within_limit(snapshot: _PathSnapshot, limit: int) -> None:
+    if snapshot.size > limit:
+        raise InstalledReleaseError(InstalledReleaseReason.FILE_SIZE_LIMIT_EXCEEDED, snapshot.path)
+
+
+def _read_exact_snapshot(descriptor: int, size: int, path: Path) -> bytes:
+    content = bytearray()
+    remaining = size
+    while remaining:
+        chunk = _read_descriptor(descriptor, min(remaining, _HASH_CHUNK_SIZE), path)
+        if not chunk:
+            raise InstalledReleaseError(InstalledReleaseReason.PATH_CHANGED, path)
+        content.extend(chunk)
+        remaining -= len(chunk)
+    if _read_descriptor(descriptor, 1, path):
+        raise InstalledReleaseError(InstalledReleaseReason.PATH_CHANGED, path)
+    return bytes(content)
+
+
+def _hash_exact_snapshot(descriptor: int, size: int, path: Path) -> str:
+    digest = sha256()
+    remaining = size
+    while remaining:
+        chunk = _read_descriptor(descriptor, min(remaining, _HASH_CHUNK_SIZE), path)
+        if not chunk:
+            raise InstalledReleaseError(InstalledReleaseReason.PATH_CHANGED, path)
+        digest.update(chunk)
+        remaining -= len(chunk)
+    if _read_descriptor(descriptor, 1, path):
+        raise InstalledReleaseError(InstalledReleaseReason.PATH_CHANGED, path)
+    return digest.hexdigest()
+
+
+def _read_descriptor(descriptor: int, size: int, path: Path) -> bytes:
+    try:
+        return os.read(descriptor, size)
+    except OSError as exc:
+        raise InstalledReleaseError(InstalledReleaseReason.PATH_CHANGED, path) from exc
 
 
 def _snapshot_path_chain(root: Path, path: Path) -> tuple[_PathSnapshot, ...]:
@@ -284,6 +344,8 @@ def _open_readonly(path: Path) -> int:
     try:
         return os.open(path, flags)
     except OSError as exc:
+        if isinstance(exc, PermissionError) or exc.errno in {errno.EACCES, errno.EPERM}:
+            raise InstalledReleaseError(InstalledReleaseReason.FILE_ACCESS_DENIED, path) from exc
         raise InstalledReleaseError(InstalledReleaseReason.PATH_CHANGED, path) from exc
 
 

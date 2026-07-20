@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import errno
 import os
 import socket
 import tempfile
@@ -372,6 +373,91 @@ def test_resolver_rejects_missing_posix_execute_bit(tmp_path: Path, monkeypatch:
     assert raised.value.reason == InstalledReleaseReason.FILE_MODE_MISMATCH
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX effective executable access")
+def test_resolver_rejects_owned_file_not_executable_by_effective_user(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot_root, executable, _ = _install_slot(tmp_path, monkeypatch)
+    executable.chmod(0o401)
+    assert not os.access(executable, os.X_OK, effective_ids=True)
+
+    with pytest.raises(InstalledReleaseError) as raised:
+        resolve_installed_sidecar_executable(slot_root)
+
+    assert raised.value.reason == InstalledReleaseReason.FILE_MODE_MISMATCH
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX effective executable access")
+def test_resolver_fails_closed_when_effective_access_checks_are_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot_root, _, _ = _install_slot(tmp_path, monkeypatch)
+    monkeypatch.setattr(installed_release.os, "supports_effective_ids", set())
+
+    with pytest.raises(InstalledReleaseError) as raised:
+        resolve_installed_sidecar_executable(slot_root)
+
+    assert raised.value.reason == InstalledReleaseReason.FILE_MODE_MISMATCH
+
+
+def test_resolver_rejects_sparse_manifest_over_product_limit_before_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot_root, _, _ = _install_slot(tmp_path, monkeypatch)
+    manifest = slot_root / "release" / "release-manifest.json"
+    with manifest.open("r+b") as stream:
+        stream.truncate(installed_release.MAX_INSTALLED_MANIFEST_BYTES + 1)
+    manifest_inode = manifest.stat().st_ino
+    original_read = installed_release.os.read
+
+    def reject_manifest_read(descriptor: int, size: int) -> bytes:
+        if os.fstat(descriptor).st_ino == manifest_inode:
+            pytest.fail("oversized manifest must be rejected before reading")
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(installed_release.os, "read", reject_manifest_read)
+
+    with pytest.raises(InstalledReleaseError) as raised:
+        resolve_installed_sidecar_executable(slot_root)
+
+    assert raised.value.reason == InstalledReleaseReason.FILE_SIZE_LIMIT_EXCEEDED
+
+
+def test_resolver_rejects_sparse_sidecar_over_product_limit_before_hash(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot_root, executable, payload = _install_slot(tmp_path, monkeypatch)
+    component = _sidecar_component(payload)
+    files = component["files"]
+    assert isinstance(files, list) and isinstance(files[0], dict)
+    files[0]["size_bytes"] = installed_release.MAX_INSTALLED_SIDECAR_BYTES + 1
+    files[0]["sha256"] = "0" * 64
+    _recalculate(payload)
+    (slot_root / "release" / "release-manifest.json").write_bytes(_raw(payload))
+    executable.chmod(0o700)
+    with executable.open("r+b") as stream:
+        stream.truncate(installed_release.MAX_INSTALLED_SIDECAR_BYTES + 1)
+    executable.chmod(0o500)
+    executable_inode = executable.stat().st_ino
+    original_read = installed_release.os.read
+
+    def reject_executable_read(descriptor: int, size: int) -> bytes:
+        if os.fstat(descriptor).st_ino == executable_inode:
+            pytest.fail("oversized sidecar must be rejected before hashing")
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(installed_release.os, "read", reject_executable_read)
+
+    with pytest.raises(InstalledReleaseError) as raised:
+        resolve_installed_sidecar_executable(slot_root)
+
+    assert raised.value.reason == InstalledReleaseReason.FILE_SIZE_LIMIT_EXCEEDED
+
+
 @pytest.mark.parametrize(
     ("content", "reason"),
     [
@@ -437,6 +523,40 @@ def test_resolver_rejects_executable_changed_during_hash(
 
 
 @pytest.mark.parametrize("target", ["manifest", "executable"])
+def test_resolver_stops_at_open_snapshot_size_when_file_keeps_growing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    slot_root, executable, _ = _install_slot(tmp_path, monkeypatch)
+    target_path = slot_root / "release" / "release-manifest.json" if target == "manifest" else executable
+    if target == "executable":
+        target_path.chmod(0o700)
+    target_inode = target_path.stat().st_ino
+    original_read = installed_release.os.read
+    matching_reads = 0
+
+    def growing_read(descriptor: int, size: int) -> bytes:
+        nonlocal matching_reads
+        chunk = original_read(descriptor, size)
+        if chunk and os.fstat(descriptor).st_ino == target_inode:
+            matching_reads += 1
+            if matching_reads > 8:
+                pytest.fail("reader did not stop at the opened snapshot size")
+            with target_path.open("ab") as stream:
+                stream.write(b"x")
+        return chunk
+
+    monkeypatch.setattr(installed_release.os, "read", growing_read)
+
+    with pytest.raises(InstalledReleaseError) as raised:
+        resolve_installed_sidecar_executable(slot_root)
+
+    assert raised.value.reason == InstalledReleaseReason.PATH_CHANGED
+    assert matching_reads == 2
+
+
+@pytest.mark.parametrize("target", ["manifest", "executable"])
 def test_lstat_to_open_fifo_swap_fails_without_blocking(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -464,6 +584,36 @@ def test_lstat_to_open_fifo_swap_fails_without_blocking(
 
     assert raised.value.reason == InstalledReleaseReason.PATH_CHANGED
     assert time.monotonic() - started < 1
+
+
+@pytest.mark.parametrize("target", ["manifest", "executable"])
+def test_resolver_classifies_open_permission_denied_as_file_access_denied(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+) -> None:
+    slot_root, executable, _ = _install_slot(tmp_path, monkeypatch)
+    denied_path = slot_root / "release" / "release-manifest.json" if target == "manifest" else executable
+    original_open = installed_release.os.open
+
+    def permission_denied(
+        path: os.PathLike[str] | str,
+        flags: int,
+        *args: object,
+        **kwargs: object,
+    ) -> int:
+        if Path(path) == denied_path:
+            raise PermissionError(errno.EACCES, "permission denied", str(path))
+        return original_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(installed_release.os, "open", permission_denied)
+
+    with pytest.raises(InstalledReleaseError) as raised:
+        resolve_installed_sidecar_executable(slot_root)
+
+    assert raised.value.reason == InstalledReleaseReason.FILE_ACCESS_DENIED
+    assert raised.value.path == denied_path
+    assert isinstance(raised.value.__cause__, PermissionError)
 
 
 def test_resolver_rejects_manifest_changed_during_read(

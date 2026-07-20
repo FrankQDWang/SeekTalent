@@ -36,6 +36,7 @@ def main() -> int:
         elif command == b"IDENTITY":
             identity = {
                 "argv": sys.argv,
+                "cwd": os.getcwd(),
                 "env": dict(os.environ),
                 "parent_pid": os.getppid(),
                 "pid": os.getpid(),
