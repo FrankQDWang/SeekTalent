@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import IO
 
 from seektalent.installed_release import (
-    AuthenticatedInstalledSidecarLaunch,
     INSTALLED_MANIFEST_RELATIVE_PATH,
+    InstalledSidecarLaunchLease,
     InstalledSidecarExecutableResolution,
+    _InstalledSidecarLeaseState,
 )
 
 
@@ -32,6 +33,7 @@ class OwnedSidecarProcess:
     protocol_reader: IO[bytes]
     stderr_reader: IO[bytes]
     _process_group_id: int | None
+    _lease_state: _InstalledSidecarLeaseState | None = field(default=None, repr=False)
     _lifecycle_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     @property
@@ -41,7 +43,6 @@ class OwnedSidecarProcess:
     @property
     def returncode(self) -> int | None:
         with self._lifecycle_lock:
-            self._clear_process_group_if_exited_locked()
             return self._process.returncode
 
     def close_stdin(self) -> None:
@@ -50,10 +51,7 @@ class OwnedSidecarProcess:
 
     def poll(self) -> int | None:
         with self._lifecycle_lock:
-            return_code = self._process.poll()
-            if return_code is not None:
-                self._process_group_id = None
-            return return_code
+            return self._poll_locked()
 
     def wait(self, timeout: float) -> int:
         normalized_timeout = _bounded_timeout(timeout)
@@ -81,11 +79,27 @@ class OwnedSidecarProcess:
     def _wait_locked(self, timeout: float) -> int:
         return_code = self._process.wait(timeout=timeout)
         self._process_group_id = None
+        self._release_lease_locked()
         return return_code
 
     def _clear_process_group_if_exited_locked(self) -> None:
         if self._process.returncode is not None:
             self._process_group_id = None
+            self._release_lease_locked()
+
+    def _poll_locked(self) -> int | None:
+        return_code = self._process.poll()
+        if return_code is not None:
+            self._process_group_id = None
+            self._release_lease_locked()
+        return return_code
+
+    def _release_lease_locked(self) -> None:
+        state = self._lease_state
+        if state is None:
+            return
+        self._lease_state = None
+        state.close()
 
     def close_protocol_reader(self) -> None:
         if not self.protocol_reader.closed:
@@ -100,58 +114,68 @@ class OwnedSidecarProcess:
         self.close_stderr_reader()
 
 
-def spawn_owned_sidecar(admission: AuthenticatedInstalledSidecarLaunch) -> OwnedSidecarProcess:
-    """Spawn the resolved absolute executable without adding arguments or secrets."""
-    if not isinstance(admission, AuthenticatedInstalledSidecarLaunch) or not admission._is_factory_admission():
-        raise TypeError("admission must be AuthenticatedInstalledSidecarLaunch")
-    resolution = admission.resolution
-    executable = resolution.executable_path
-    if not executable.is_absolute():
-        raise ValueError("resolved executable path must be absolute")
-    working_directory = _installed_release_working_directory(resolution)
+def spawn_owned_sidecar(lease: InstalledSidecarLaunchLease) -> OwnedSidecarProcess:
+    """Spawn one authenticated sidecar while transferring its live slot lease to the child."""
+    if not isinstance(lease, InstalledSidecarLaunchLease):
+        raise TypeError("lease must be InstalledSidecarLaunchLease")
+    lease_state = lease._take_for_spawn()
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        resolution = lease_state.admission.resolution
+        executable = resolution.executable_path
+        if not executable.is_absolute():
+            raise ValueError("resolved executable path must be absolute")
+        working_directory = _installed_release_working_directory(resolution)
 
-    if os.name == "posix":
-        process: subprocess.Popen[bytes] = subprocess.Popen(
-            [str(executable)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            text=False,
-            bufsize=0,
-            close_fds=True,
-            cwd=str(working_directory),
-            env=_bounded_environment(),
-            pass_fds=(),
-            start_new_session=True,
-        )
-    elif os.name == "nt":
-        process = subprocess.Popen(
-            [str(executable)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            text=False,
-            bufsize=0,
-            close_fds=True,
-            cwd=str(working_directory),
-            env=_bounded_environment(),
-            creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"),
-        )
-    else:
-        raise OSError(f"unsupported process platform: {os.name}")
+        if os.name == "posix":
+            process = subprocess.Popen(
+                [str(executable)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                text=False,
+                bufsize=0,
+                close_fds=True,
+                cwd=str(working_directory),
+                env=_bounded_environment(),
+                pass_fds=(),
+                start_new_session=True,
+            )
+        elif os.name == "nt":
+            process = subprocess.Popen(
+                [str(executable)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                text=False,
+                bufsize=0,
+                close_fds=True,
+                cwd=str(working_directory),
+                env=_bounded_environment(),
+                creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP"),
+            )
+        else:
+            raise OSError(f"unsupported process platform: {os.name}")
 
-    if process.stdin is None or process.stdout is None or process.stderr is None:
-        _reap_failed_spawn(process, process.pid if os.name == "posix" else None)
-        raise RuntimeError("subprocess did not create all three stdio pipes")
-    return OwnedSidecarProcess(
-        _process=process,
-        protocol_writer=process.stdin,
-        protocol_reader=process.stdout,
-        stderr_reader=process.stderr,
-        _process_group_id=process.pid if os.name == "posix" else None,
-    )
+        if process.stdin is None or process.stdout is None or process.stderr is None:
+            raise RuntimeError("subprocess did not create all three stdio pipes")
+        return OwnedSidecarProcess(
+            _process=process,
+            protocol_writer=process.stdin,
+            protocol_reader=process.stdout,
+            stderr_reader=process.stderr,
+            _process_group_id=process.pid if os.name == "posix" else None,
+            _lease_state=lease_state,
+        )
+    except BaseException:
+        try:
+            if process is not None:
+                _reap_failed_spawn(process, process.pid if os.name == "posix" else None)
+        finally:
+            lease_state.close()
+        raise
 
 
 def _installed_release_working_directory(

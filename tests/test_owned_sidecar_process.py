@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 
@@ -25,8 +25,11 @@ import seektalent.installed_release as installed_release
 import seektalent.owned_sidecar_process as owned_process
 from seektalent.installed_release import (
     AuthenticatedInstalledSidecarLaunch,
+    ActiveSlotPointerV1,
     InstalledReleaseError,
-    admit_installed_sidecar_launch,
+    InstalledSidecarLaunchLease,
+    acquire_installed_sidecar_launch_lease,
+    canonical_active_slot_pointer_bytes,
 )
 from seektalent.owned_sidecar_process import spawn_owned_sidecar
 from tests.test_installed_release import _install_slot
@@ -90,9 +93,16 @@ def _fake_owned_process(*, process_group_id: int | None = None) -> tuple[owned_p
 
 
 @pytest.fixture
-def resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> AuthenticatedInstalledSidecarLaunch:
+def lease_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[], InstalledSidecarLaunchLease]:
     probe = f"#!{sys.executable}\nexec(open({str(PROBE)!r}, 'rb').read())\n".encode()
-    slot_root, _, _ = _install_slot(tmp_path, monkeypatch, executable_bytes=probe)
+    source_slot, _, _ = _install_slot(tmp_path, monkeypatch, executable_bytes=probe)
+    installation_root = tmp_path / "installation"
+    slot_root = installation_root / "slots" / "A"
+    slot_root.parent.mkdir(parents=True)
+    source_slot.rename(slot_root)
     manifest_path = slot_root / "release" / "release-manifest.json"
     manifest = parse_release_manifest(manifest_path.read_bytes())
     _, signature_payload = _signed(manifest)
@@ -100,10 +110,34 @@ def resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Authenticated
     manifest_path.parent.joinpath("signatures", "release-manifest.sig").write_text(
         __import__("json").dumps(signature_payload, separators=(",", ":")), encoding="utf-8"
     )
-    return admit_installed_sidecar_launch(slot_root, _policy(), VERIFICATION_TIME)
+    control = installation_root / "control"
+    control.mkdir()
+    control.joinpath("installation-id").write_bytes(b"test-installation-1")
+    control.joinpath("active-slot.lock").write_bytes(b"0")
+    control.joinpath("slot-A.lock").write_bytes(b"0")
+    control.joinpath("slot-B.lock").write_bytes(b"0")
+    pointer = ActiveSlotPointerV1.model_construct(
+        schema_version="seektalent.active-slot/v1",
+        installation_id="test-installation-1",
+        physical_slot="A",
+        pointer_generation=1,
+        product_build_id=manifest.product_build_id,
+        release_manifest_sha256=installed_release.release_manifest_digest(manifest),
+        committed_at="2026-07-20T12:00:00Z",
+    )
+    control.joinpath("active-slot.json").write_bytes(canonical_active_slot_pointer_bytes(pointer))
+
+    return lambda: acquire_installed_sidecar_launch_lease(installation_root, _policy(), VERIFICATION_TIME)
+
+
+@pytest.fixture
+def resolution(lease_factory: Callable[[], InstalledSidecarLaunchLease]) -> InstalledSidecarLaunchLease:
+    return lease_factory()
 
 
 def _close_process_streams(process: owned_process.OwnedSidecarProcess) -> None:
+    if process.poll() is None:
+        process.kill(5)
     process.close_stdin()
     process.close_readers()
 
@@ -119,26 +153,27 @@ def test_spawn_requires_typed_resolution_before_popen(monkeypatch: pytest.Monkey
 
 
 def test_spawn_rejects_caller_fabricated_admission_before_popen(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    resolution: InstalledSidecarLaunchLease,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    admission = resolution.admission
     calls: list[object] = []
     monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: calls.append((args, kwargs)))
     with pytest.raises(TypeError):
         AuthenticatedInstalledSidecarLaunch(
-            resolution=resolution.resolution,
-            manifest_id=resolution.manifest_id,
-            manifest_sha256=resolution.manifest_sha256,
-            product_build_id=resolution.product_build_id,
-            main_application_build_id=resolution.main_application_build_id,
-            main_application_tree_sha256=resolution.main_application_tree_sha256,
-            sidecar_build_id=resolution.sidecar_build_id,
-            sidecar_tree_sha256=resolution.sidecar_tree_sha256,
-            sidecar_executable_sha256=resolution.sidecar_executable_sha256,
-            source_port_protocol=resolution.source_port_protocol,
-            signer_key_id=resolution.signer_key_id,
-            trust_policy_id=resolution.trust_policy_id,
-            trust_policy_revision=resolution.trust_policy_revision,
+            resolution=admission.resolution,
+            manifest_id=admission.manifest_id,
+            manifest_sha256=admission.manifest_sha256,
+            product_build_id=admission.product_build_id,
+            main_application_build_id=admission.main_application_build_id,
+            main_application_tree_sha256=admission.main_application_tree_sha256,
+            sidecar_build_id=admission.sidecar_build_id,
+            sidecar_tree_sha256=admission.sidecar_tree_sha256,
+            sidecar_executable_sha256=admission.sidecar_executable_sha256,
+            source_port_protocol=admission.source_port_protocol,
+            signer_key_id=admission.signer_key_id,
+            trust_policy_id=admission.trust_policy_id,
+            trust_policy_revision=admission.trust_policy_revision,
         )
     with pytest.raises(TypeError):
         spawn_owned_sidecar({"resolution": resolution.resolution})  # type: ignore[arg-type]
@@ -150,10 +185,10 @@ def test_spawn_rejects_caller_fabricated_admission_before_popen(
 
 
 def test_authenticated_admission_copy_preserves_one_factory_capability(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    resolution: InstalledSidecarLaunchLease,
 ) -> None:
-    assert copy.copy(resolution) is resolution
-    assert copy.deepcopy(resolution) is resolution
+    assert copy.copy(resolution.admission) is resolution.admission
+    assert copy.deepcopy(resolution.admission) is resolution.admission
     assert not hasattr(installed_release, "_FACTORY_ADMISSIONS")
 
 
@@ -557,7 +592,8 @@ def test_lifecycle_lock_prevents_wait_from_reaping_during_group_signal(
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX parent descriptor accounting")
 def test_spawn_failure_and_repeated_spawn_do_not_leak_parent_fds(
-    resolution: AuthenticatedInstalledSidecarLaunch,
+    resolution: InstalledSidecarLaunchLease,
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
 ) -> None:
     before = len(os.listdir("/dev/fd"))
     executable = resolution.executable_path
@@ -567,7 +603,7 @@ def test_spawn_failure_and_repeated_spawn_do_not_leak_parent_fds(
         spawn_owned_sidecar(resolution)
     moved_executable.rename(executable)
     for _ in range(20):
-        process = spawn_owned_sidecar(resolution)
+        process = spawn_owned_sidecar(lease_factory())
         process.close_stdin()
         assert process.wait(5) == 0
         process.close_readers()

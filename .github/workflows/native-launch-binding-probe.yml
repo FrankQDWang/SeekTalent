@@ -7,6 +7,10 @@ on:
       - ".github/workflows/native-launch-binding-probe.yml"
       - "tools/native_probes/**"
       - "tests/test_native_launch_binding_probe.py"
+      - "tests/test_installed_slot_lease.py"
+      - "src/seektalent/installed_release.py"
+      - "src/seektalent/owned_sidecar_process.py"
+      - "docs/plans/external-execution-plane-v1-release-artifact-evidence.md"
       - "docs/decisions/**"
 
 permissions:
@@ -78,6 +82,9 @@ jobs:
         env:
           SEEKTALENT_NATIVE_LAUNCH_BINDING_EVIDENCE: native-launch-binding-evidence.json
         run: uv run --group dev python -m pytest tests/test_native_launch_binding_probe.py -q
+
+      - name: Assert native active-slot lifecycle lease
+        run: uv run --group dev python -m pytest tests/test_installed_slot_lease.py -q
 
       - name: Upload native evidence
         uses: actions/upload-artifact@v4
