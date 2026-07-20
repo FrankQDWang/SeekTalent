@@ -244,6 +244,12 @@ def test_signature_parser_reuses_duplicate_aware_strict_json_boundary(
     _assert_parse_reason(raw, reason)
 
 
+def test_signature_parser_maps_excessive_json_nesting_to_stable_failure() -> None:
+    nested = b'{"unknown":' + b'{"value":' * 1_200 + b"null" + b"}" * 1_200 + b"}"
+
+    _assert_parse_reason(nested, ReleaseSigningReason.INVALID_JSON)
+
+
 def test_signature_parser_rejects_unknown_fields_and_unsupported_contract_values() -> None:
     manifest = _manifest()
     _, payload = _signed(manifest)

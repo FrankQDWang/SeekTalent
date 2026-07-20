@@ -65,7 +65,10 @@ def strict_json_object_loads(raw: bytes) -> dict[str, object]:
         raise StrictJsonError(StrictJsonReason.INVALID_JSON) from None
     if not isinstance(payload, dict):
         raise StrictJsonError(StrictJsonReason.ROOT_NOT_OBJECT)
-    _validate_json_value(payload)
+    try:
+        _validate_json_value(payload)
+    except RecursionError:
+        raise StrictJsonError(StrictJsonReason.INVALID_JSON) from None
     return payload
 
 
