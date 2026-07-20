@@ -401,12 +401,6 @@ def _windows_file_identity(kernel32, handle) -> dict[str, int | str]:
     }
 
 
-def _windows_normalized_path(path: str) -> str:
-    if path.startswith("\\\\?\\"):
-        path = path[4:]
-    return path.replace("/", "\\").casefold()
-
-
 def _windows_create_suspended(
     kernel32,
     executable: Path,
@@ -452,14 +446,12 @@ def _windows_create_suspended(
             child_identity = _windows_file_identity(kernel32, child_image_handle)
         finally:
             kernel32.CloseHandle(child_image_handle)
-        expected_path = _windows_normalized_path(str(expected_identity["final_path"]))
-        observed_path = _windows_normalized_path(str(child_identity["final_path"]))
-        if observed_path != expected_path or child_identity != expected_identity:
+        if child_identity != expected_identity:
             kernel32.TerminateProcess(process.process, 1)
             kernel32.WaitForSingleObject(process.process, 10_000)
             raise ProbeFailure(
                 "suspended Windows child image did not match the admitted path and file identity: "
-                f"expected_path={expected_path!r}, observed_path={observed_path!r}, "
+                f"raw_process_image_path={child_image_path!r}, "
                 f"expected_identity={expected_identity!r}, observed_identity={child_identity!r}"
             )
         if kernel32.ResumeThread(process.thread) == 0xFFFFFFFF:
@@ -475,8 +467,9 @@ def _windows_create_suspended(
         if not kernel32.GetExitCodeProcess(process.process, ctypes.byref(exit_code)):
             raise ProbeFailure(f"GetExitCodeProcess failed: {_windows_last_error()}")
         return {
-            "child_image_path": child_image_path,
+            "raw_process_image_path": child_image_path,
             "admitted_final_path": str(expected_identity["final_path"]),
+            "observed_final_path": str(child_identity["final_path"]),
             "child_file_id": str(child_identity["file_id"]),
             "child_exit_code": int(exit_code.value),
             "created_suspended": True,
@@ -580,25 +573,32 @@ def _windows_preexisting_writer(root: Path) -> dict[str, object]:
     generic_read = 0x80000000
     generic_write = 0x40000000
     open_existing = 3
+    file_share_read = 0x00000001
     file_share_read_write = 0x00000003
     payload = root / "preexisting-writer.bin"
     payload.write_bytes(b"original")
     writer = kernel32.CreateFileW(str(payload), generic_write, file_share_read_write, None, open_existing, 0, None)
     if writer == wintypes.HANDLE(-1).value:
         raise ProbeFailure(f"could not create simulated preexisting writer: {_windows_last_error()}")
-    lease = _windows_handle(kernel32, payload, desired_access=generic_read)
     try:
-        bytes_written = wintypes.DWORD()
-        payload_bytes = ctypes.create_string_buffer(b"changed")
-        write_succeeded = bool(
-            kernel32.WriteFile(writer, payload_bytes, len(payload_bytes.raw) - 1, ctypes.byref(bytes_written), None)
+        lease = kernel32.CreateFileW(
+            str(payload),
+            generic_read,
+            file_share_read,
+            None,
+            open_existing,
+            0,
+            None,
         )
+        if lease != wintypes.HANDLE(-1).value:
+            kernel32.CloseHandle(lease)
+            raise ProbeFailure("share-deny lease unexpectedly coexisted with a preexisting writer")
+        error = _windows_last_error()
     finally:
-        kernel32.CloseHandle(lease)
         kernel32.CloseHandle(writer)
-    if not write_succeeded or bytes_written.value != 7:
-        raise ProbeFailure("simulated preexisting Windows writer did not retain write authority")
-    return {"preexisting_writer_can_mutate_after_lease": True}
+    if error != 32:
+        raise ProbeFailure(f"preexisting writer did not produce ERROR_SHARING_VIOLATION: {error}")
+    return {"preexisting_writer_causes_share_mode_conflict": True, "error": error}
 
 
 def _windows_probe(root: Path) -> dict[str, object]:

@@ -66,11 +66,16 @@ def test_native_launch_binding_probe_records_host_semantics() -> None:
         assert lease["delete_while_leased"]["succeeded"] is False
         assert lease["create_process_under_file_lease"]["created_suspended"] is True
         assert lease["create_process_under_file_lease"]["child_exit_code"] == 0
+        assert lease["create_process_under_file_lease"]["admitted_final_path"] == lease[
+            "create_process_under_file_lease"
+        ]["observed_final_path"]
+        assert lease["create_process_under_file_lease"]["raw_process_image_path"]
         assert lease["replace_after_release"]["succeeded"] is True
         components = result["evidence"]["createfile_component_leases"]
         assert all(outcome["succeeded"] is False for outcome in components.values())
         assert result["evidence"]["preexisting_writer_limit"] == {
-            "preexisting_writer_can_mutate_after_lease": True
+            "preexisting_writer_causes_share_mode_conflict": True,
+            "error": 32,
         }
 
 

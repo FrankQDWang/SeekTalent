@@ -40,7 +40,7 @@ The probe's macOS Security.framework case validates an Apple-signed `/bin/sleep`
 | --- | --- | --- | --- |
 | Cooperating update, rollback, cleanup | Lease plus immutable slot | Same | In scope |
 | Normal product process starts a new write/delete/rename | Covered for all lease-held local components | Covered only when installer ownership denies it | In scope as stated |
-| Non-cooperating same-UID process | Limited to Windows objects protected by complete share-deny coverage; pre-existing writable handles remain residual | Not a strict pre-spawn guarantee for a per-user writable slot | Never claim updater locking is a security boundary |
+| Non-cooperating same-UID process | Limited to Windows objects protected by complete share-deny coverage; a pre-existing writer yields `executable_share_mode_conflict` and no child, while destructive denial of service remains possible | Not a strict pre-spawn guarantee for a per-user writable slot | Never claim updater locking is a security boundary |
 | Admin/root, kernel/filter driver, physical disk | Out of scope | Out of scope | Authority exceeds the process boundary |
 | Network/removable/nonstandard filesystem | Not supported until separately probed | Not supported until separately probed | Fail closed |
 
