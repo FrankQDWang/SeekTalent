@@ -1703,6 +1703,23 @@ def test_windows_polling_boundary_acks_a_legal_idle_pipe_without_cancellation(
         assert transport.close() is True
 
 
+def test_windows_polling_uses_select_for_socket_protocol_streams(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader_socket, writer_socket = socket.socketpair()
+    reader = reader_socket.makefile("rb", buffering=0)
+    reader_socket.close()
+    try:
+        with monkeypatch.context() as context:
+            context.setattr(handshake.os, "name", "nt")
+            assert handshake._windows_pipe_status(reader) == (False, False)
+            writer_socket.sendall(b"protocol-byte")
+            assert handshake._windows_pipe_status(reader) == (False, True)
+    finally:
+        reader.close()
+        writer_socket.close()
+
+
 def test_windows_polling_boundary_maps_peek_failure_to_typed_pipe_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

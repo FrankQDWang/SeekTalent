@@ -7,8 +7,10 @@ import hmac
 import math
 import os
 import queue
+import select
 import selectors
 import secrets
+import socket
 import threading
 import time
 from dataclasses import dataclass, field
@@ -977,6 +979,11 @@ def _cancel_windows_synchronous_read(thread_id: int | None) -> bool:
 def _windows_pipe_status(stream: IO[bytes]) -> tuple[bool, bool]:
     if os.name != "nt":
         return False, False
+    if isinstance(stream, socket.SocketIO):
+        readable, _, exceptional = select.select([stream], [], [stream], 0)
+        if exceptional:
+            raise OSError("socket protocol pipe reported an exceptional condition")
+        return False, bool(readable)
     try:
         import ctypes
         import msvcrt
