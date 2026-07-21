@@ -1,0 +1,44 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "offline-distribution-2026-07",
+  "change_type": "major_refactor",
+  "summary": "Bind Windows signed installed admission to live share-denied filesystem objects and block child creation until the suspended native adapter exists.",
+  "rationale": "Issue #368 is the first of two deliberately split Windows launch-binding slices. It adds one Windows-only native owner for local-NTFS path components, manifest, detached signature, and sidecar executable handles; signed admission reads and hashes those same open objects. The existing live installed-slot lease owns the native handles. Windows spawn then fails closed before Popen until #369 provides suspended CreateProcessW and child-image identity. macOS behavior and production composition remain unchanged.",
+  "touched_layers": [
+    "governance",
+    "docs",
+    "tests",
+    "other"
+  ],
+  "red_files": [
+    ".github/workflows/native-launch-binding-probe.yml",
+    "tools/check_arch_imports.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
+    "uv run ruff check scripts/build_offline_macos_intel.py tests/test_build_offline_macos_intel.py tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py tests/test_build_offline_macos_intel.py tests/test_pr_governance.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "uv run --group dev python -m pytest tests/test_windows_installed_binding.py tests/test_installed_release.py tests/test_installed_release_admission.py tests/test_installed_slot_lease.py tests/test_owned_sidecar_process.py -q",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_source_boundaries.py",
+    "uv run --group dev python tools/check_tach_baseline.py",
+    "scripts/verify-red-zone.sh",
+    "uv run --group dev python -m pytest -q"
+  ],
+  "deletion_targets": [
+    "Windows path-only signed admission whose inspected descriptors close before child creation",
+    "Windows subprocess.Popen fallback before suspended child-image binding exists",
+    "caller-fabricated or serialized Windows native handle authority"
+  ],
+  "risks": [
+    "This slice intentionally makes Windows child creation unavailable until #369; production caller count is already zero.",
+    "GitHub Windows Server 2025 proves local-NTFS API semantics but not Windows 10/11 installer, Defender, filter-driver, or enterprise-policy behavior.",
+    "Authenticode, complete packaged payload closure, and workflow session authority remain later independent gates."
+  ]
+}

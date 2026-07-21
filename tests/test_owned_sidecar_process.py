@@ -34,12 +34,16 @@ from seektalent.owned_sidecar_process import spawn_owned_sidecar
 from tests.test_installed_release import _install_slot
 from tests.test_release_signing import VERIFICATION_TIME, _policy, _signed
 from seektalent.release_manifest import parse_release_manifest
+from seektalent.windows_installed_binding import (
+    WindowsLaunchBindingError,
+    WindowsLaunchBindingReason,
+)
 
 
 PROBE = Path(__file__).parent / "support" / "owned_sidecar_probe.py"
 requires_native_probe = pytest.mark.skipif(
     os.name == "nt",
-    reason="Windows native executable/handle matrix is explicitly unproved in issue #358",
+    reason="Windows child creation is intentionally fail-closed until issue #369",
 )
 INVALID_TIMEOUTS = [
     pytest.param(None, TypeError, id="none"),
@@ -222,50 +226,27 @@ def test_invalid_lifecycle_timeout_has_no_fake_process_or_group_signal_side_effe
     assert group_signals == []
 
 
-def test_windows_spawn_uses_bounded_creation_contract(
+def test_windows_spawn_fails_closed_until_suspended_binding_exists(
     lease: InstalledSidecarLaunchLease,
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
-    fake = _FakePopen()
-    fake_process = cast(subprocess.Popen[bytes], fake)
-    creation_flag = 0x00000200
-
-    def popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return fake_process
+    calls: list[object] = []
 
     with monkeypatch.context() as context:
         context.setattr(owned_process.os, "name", "nt")
         context.setattr(
             owned_process.subprocess,
-            "CREATE_NEW_PROCESS_GROUP",
-            creation_flag,
-            raising=False,
+            "Popen",
+            lambda *args, **kwargs: calls.append((args, kwargs)),
         )
-        context.setattr(owned_process.subprocess, "Popen", popen)
-        context.setenv("SystemRoot", "C:\\Windows")
-        context.setenv("ATTACKER_ENV", "must-not-propagate")
+        with pytest.raises(WindowsLaunchBindingError) as raised:
+            spawn_owned_sidecar(lease)
 
-        process = spawn_owned_sidecar(lease)
-
-    kwargs = captured["kwargs"]
-    assert isinstance(kwargs, dict)
-    assert captured["args"] == ([str(lease.executable_path)],)
-    assert kwargs["cwd"] == str(lease.manifest_path.parent)
-    assert kwargs["env"] == {"SystemRoot": "C:\\Windows"}
-    assert kwargs["creationflags"] == creation_flag
-    assert kwargs["close_fds"] is True
-    assert kwargs["shell"] is False
-    assert kwargs["text"] is False
-    assert kwargs["stdin"] is subprocess.PIPE
-    assert kwargs["stdout"] is subprocess.PIPE
-    assert kwargs["stderr"] is subprocess.PIPE
-    assert "pass_fds" not in kwargs
-    assert "start_new_session" not in kwargs
-    assert process._process is fake_process
-    _close_process_streams(process)
+    assert raised.value.reason == WindowsLaunchBindingReason.LAUNCH_BINDING_UNSUPPORTED
+    assert calls == []
+    next_lease = lease_factory()
+    next_lease.close()
 
 
 @pytest.mark.parametrize("working_directory_kind", ["missing", "file", "symlink"])
@@ -719,7 +700,15 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
     production_files = [
         path
         for path in (project_root / "src").rglob("*.py")
-        if path.name not in {"installed_filesystem.py", "installed_release.py", "installed_slot.py", "owned_sidecar_process.py"}
+        if path.name
+        not in {
+            "installed_filesystem.py",
+            "installed_release.py",
+            "installed_slot.py",
+            "owned_sidecar_process.py",
+            "windows_installed_binding.py",
+            "windows_native_files.py",
+        }
     ]
     references = [
         path
@@ -728,6 +717,8 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
         or "installed_release" in path.read_text(encoding="utf-8")
         or "installed_slot" in path.read_text(encoding="utf-8")
         or "owned_sidecar_process" in path.read_text(encoding="utf-8")
+        or "windows_installed_binding" in path.read_text(encoding="utf-8")
+        or "windows_native_files" in path.read_text(encoding="utf-8")
     ]
     pyproject = (project_root / "pyproject.toml").read_text(encoding="utf-8")
 
@@ -736,6 +727,8 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
     assert "installed_release" not in pyproject
     assert "installed_slot" not in pyproject
     assert "owned_sidecar_process" not in pyproject
+    assert "windows_installed_binding" not in pyproject
+    assert "windows_native_files" not in pyproject
 
 
 def test_resolver_failure_occurs_before_any_popen(

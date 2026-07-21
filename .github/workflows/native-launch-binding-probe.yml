@@ -8,7 +8,11 @@ on:
       - "tools/native_probes/**"
       - "tests/test_native_launch_binding_probe.py"
       - "tests/test_installed_slot_lease.py"
+      - "tests/test_windows_installed_binding.py"
+      - "src/seektalent/windows_installed_binding.py"
+      - "src/seektalent/windows_native_files.py"
       - "src/seektalent/installed_release.py"
+      - "src/seektalent/installed_slot.py"
       - "src/seektalent/owned_sidecar_process.py"
       - "docs/plans/external-execution-plane-v1-release-artifact-evidence.md"
       - "docs/decisions/**"
@@ -84,7 +88,16 @@ jobs:
         run: uv run --group dev python -m pytest tests/test_native_launch_binding_probe.py -q
 
       - name: Assert native active-slot lifecycle lease
+        if: runner.os != 'Windows'
         run: uv run --group dev python -m pytest tests/test_installed_slot_lease.py -q
+
+      - name: Assert Windows opened-object admission binding
+        if: runner.os == 'Windows'
+        run: >-
+          uv run --group dev python -m pytest
+          tests/test_windows_installed_binding.py
+          tests/test_installed_slot_lease.py::test_native_cross_process_slot_lock_conflicts
+          -q
 
       - name: Upload native evidence
         uses: actions/upload-artifact@v4
