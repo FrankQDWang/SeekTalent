@@ -107,6 +107,38 @@ def test_resolver_accepts_each_target_at_inclusive_build_bounds(
     assert resolution.manifest_path == slot_root / "release" / "release-manifest.json"
 
 
+def test_resolver_rejects_tampered_sidecar_support_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot_root, _, payload = _install_slot(tmp_path, monkeypatch)
+    component = _sidecar_component(payload)
+    files = component["files"]
+    assert isinstance(files, list)
+    support = b"sidecar support payload\n"
+    files.append(
+        {
+            "path": "runtime-support.bin",
+            "size_bytes": len(support),
+            "sha256": sha256(support).hexdigest(),
+            "mode_class": "regular_readonly",
+            "executable": False,
+        }
+    )
+    _recalculate(payload)
+    manifest_path = slot_root / "release" / "release-manifest.json"
+    manifest_path.write_bytes(_raw(payload))
+    support_path = slot_root / "release" / str(component["root_path"]) / "runtime-support.bin"
+    support_path.write_bytes(support)
+
+    resolve_installed_sidecar_executable(slot_root)
+
+    support_path.write_bytes(b"x" * len(support))
+    with pytest.raises(InstalledReleaseError) as raised:
+        resolve_installed_sidecar_executable(slot_root)
+    assert raised.value.reason == InstalledReleaseReason.FILE_DIGEST_MISMATCH
+
+
 @pytest.mark.parametrize(
     ("system", "machine", "version", "expected"),
     [

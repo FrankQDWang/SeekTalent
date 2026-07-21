@@ -34,6 +34,7 @@ eval = [
 
 [dependency-groups]
 dev = [
+    "pyinstaller==6.21.0",
     "pytest>=8.4.2",
     "pytest-xdist>=3.8.0",
     "ruff>=0.14.0",

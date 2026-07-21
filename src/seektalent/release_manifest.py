@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
@@ -726,37 +726,106 @@ class ReleaseManifestV1(StrictModel):
 
 
 def declared_component_tree_digest(component: ComponentV1) -> str:
-    content = "".join(f"{file.sha256}  {file.path}\n" for file in component.files)
+    return declared_component_tree_digest_from_files(
+        (file.path, file.sha256) for file in component.files
+    )
+
+
+def declared_component_tree_digest_from_files(files: Iterable[tuple[str, str]]) -> str:
+    """Return the canonical component tree digest for declared ``(path, sha256)`` files."""
+    content = "".join(f"{digest}  {path}\n" for path, digest in files)
     return sha256(content.encode("utf-8")).hexdigest()
 
 
 def declared_payload_tree_digest(manifest: ReleaseManifestV1) -> str:
-    entries = sorted(
+    return declared_payload_tree_digest_from_files(
         (f"{component.root_path}/{file.path}", file.sha256)
         for component in manifest.components
         for file in component.files
     )
+
+
+def declared_payload_tree_digest_from_files(files: Iterable[tuple[str, str]]) -> str:
+    """Return the canonical payload tree digest for declared ``(path, sha256)`` files."""
+    entries = sorted(files)
     content = "".join(f"{digest}  {path}\n" for path, digest in entries)
     return sha256(content.encode("utf-8")).hexdigest()
 
 
 def product_build_identity_bytes(manifest: ReleaseManifestV1) -> bytes:
+    return product_build_identity_bytes_from_parts(
+        build_recipe_digest=manifest.build_recipe.digest,
+        component_build_identities=(
+            (component.component_id, component.build_id) for component in manifest.components
+        ),
+        dependency_input_digests=(item.sha256 for item in manifest.dependency_inputs),
+        product_version=manifest.product_version,
+        source_revision=manifest.source_revision,
+        target_os=manifest.target.os,
+        target_arch=manifest.target.arch,
+    )
+
+
+def product_build_identity_bytes_from_parts(
+    *,
+    build_recipe_digest: str,
+    component_build_identities: Iterable[tuple[str, str]],
+    dependency_input_digests: Iterable[str],
+    product_version: str,
+    source_revision: str,
+    target_os: str,
+    target_arch: str,
+) -> bytes:
+    """Serialize the immutable product-build identity shared by manifest construction and validation."""
     identity = {
-        "build_recipe_digest": manifest.build_recipe.digest,
+        "build_recipe_digest": build_recipe_digest,
         "component_build_identities": [
-            {"build_id": component.build_id, "component_id": component.component_id}
-            for component in manifest.components
+            {"build_id": build_id, "component_id": component_id}
+            for component_id, build_id in component_build_identities
         ],
-        "dependency_input_digests": [item.sha256 for item in manifest.dependency_inputs],
-        "product_version": manifest.product_version,
-        "source_revision": manifest.source_revision,
-        "target": {"arch": manifest.target.arch, "os": manifest.target.os},
+        "dependency_input_digests": list(dependency_input_digests),
+        "product_version": product_version,
+        "source_revision": source_revision,
+        "target": {"arch": target_arch, "os": target_os},
     }
     return rfc8785.dumps(identity)
 
 
 def expected_product_build_id(manifest: ReleaseManifestV1) -> str:
-    return f"st1-{sha256(product_build_identity_bytes(manifest)).hexdigest()[:32]}"
+    return expected_product_build_id_from_parts(
+        build_recipe_digest=manifest.build_recipe.digest,
+        component_build_identities=(
+            (component.component_id, component.build_id) for component in manifest.components
+        ),
+        dependency_input_digests=(item.sha256 for item in manifest.dependency_inputs),
+        product_version=manifest.product_version,
+        source_revision=manifest.source_revision,
+        target_os=manifest.target.os,
+        target_arch=manifest.target.arch,
+    )
+
+
+def expected_product_build_id_from_parts(
+    *,
+    build_recipe_digest: str,
+    component_build_identities: Iterable[tuple[str, str]],
+    dependency_input_digests: Iterable[str],
+    product_version: str,
+    source_revision: str,
+    target_os: str,
+    target_arch: str,
+) -> str:
+    """Derive a product build ID from immutable construction inputs."""
+    identity = product_build_identity_bytes_from_parts(
+        build_recipe_digest=build_recipe_digest,
+        component_build_identities=component_build_identities,
+        dependency_input_digests=dependency_input_digests,
+        product_version=product_version,
+        source_revision=source_revision,
+        target_os=target_os,
+        target_arch=target_arch,
+    )
+    return f"st1-{sha256(identity).hexdigest()[:32]}"
 
 
 def canonical_release_manifest_bytes(manifest: ReleaseManifestV1) -> bytes:
