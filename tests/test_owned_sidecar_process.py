@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, cast
+from typing import IO, Callable, cast
 
 import pytest
 
@@ -82,6 +82,19 @@ class _FakePopen:
 
     def kill(self) -> None:
         self.kill_calls += 1
+
+
+class _RetryableCloseStream:
+    def __init__(self, failures: int | None) -> None:
+        self._failures = failures
+        self.close_calls = 0
+        self.closed = False
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self._failures is None or self.close_calls <= self._failures:
+            raise OSError("injected stream close failure")
+        self.closed = True
 
 
 def _fake_owned_process(*, process_group_id: int | None = None) -> tuple[owned_process.OwnedSidecarProcess, _FakePopen]:
@@ -313,16 +326,26 @@ def test_spawn_cwd_is_fixed_when_main_has_different_ambient_cwd(
     ambient.mkdir()
     monkeypatch.chdir(ambient)
     process = spawn_owned_sidecar(lease)
-    process.protocol_writer.write(b"IDENTITY\n")
-    process.protocol_writer.flush()
-    identity = json.loads(process.protocol_reader.readline())
+    line: list[bytes] = []
+    reader = threading.Thread(target=lambda: line.append(process.protocol_reader.readline()), daemon=True)
+    try:
+        process.protocol_writer.write(b"IDENTITY\n")
+        process.protocol_writer.flush()
+        reader.start()
+        reader.join(timeout=1)
+        assert not reader.is_alive(), "sidecar did not return its identity before the test deadline"
+        identity = json.loads(line[0])
 
-    assert Path.cwd() == ambient
-    assert identity["cwd"] == str(lease.manifest_path.parent)
+        assert Path.cwd() == ambient
+        assert identity["cwd"] == str(lease.manifest_path.parent)
 
-    process.close_stdin()
-    assert process.wait(5) == 0
-    process.close_readers()
+        process.close_stdin()
+        assert process.wait(5) == 0
+    finally:
+        if process.poll() is None:
+            process.kill(1)
+        process.close_readers()
+        reader.join(timeout=1)
 
 
 @requires_native_probe
@@ -718,6 +741,8 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
             "installed_release.py",
             "installed_slot.py",
             "owned_sidecar_process.py",
+            "sidecar_bootstrap.py",
+            "sidecar_readiness.py",
             "windows_installed_binding.py",
             "windows_native_files.py",
             "windows_sidecar_process.py",
@@ -778,3 +803,143 @@ def test_non_effective_executable_fails_in_resolver_before_popen(
 
     assert raised.value.reason == installed_release.InstalledReleaseReason.FILE_MODE_MISMATCH
     assert calls == []
+
+
+def test_unreaped_readiness_cleanup_keeps_the_original_posix_group_for_its_retry(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    fake = _FakePopen()
+    process = owned_process.OwnedSidecarProcess(
+        _process=cast(subprocess.Popen[bytes], fake),
+        protocol_writer=fake.stdin,
+        protocol_reader=fake.stdout,
+        stderr_reader=fake.stderr,
+        _process_group_id=43210,
+        _lease_state=lease._take_for_spawn(),
+    )
+    signals: list[tuple[int, signal.Signals]] = []
+    attempts = 0
+
+    def wait(*, timeout: float | None = None) -> int:
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        if attempts == 1:
+            raise subprocess.TimeoutExpired("sidecar", 1)
+        fake.returncode = 0
+        return 0
+
+    monkeypatch.setattr(fake, "wait", wait)
+    monkeypatch.setattr(
+        owned_process,
+        "_signal_process_group",
+        lambda process_group_id, sig: signals.append((process_group_id, sig)),
+    )
+
+    cleanup_error = process._cleanup_after_handshake_failure(RuntimeError("readiness failed"))
+
+    assert isinstance(cleanup_error, owned_process.SidecarSpawnCleanupError)
+    assert cleanup_error.direct_child_reaped is False
+    assert signals == [(43210, signal.SIGKILL)]
+    assert cleanup_error.reap() is True
+    assert cleanup_error.direct_child_reaped is True
+    assert cleanup_error.lease_released is True
+    assert signals == [(43210, signal.SIGKILL), (43210, signal.SIGKILL)]
+    lease_factory().close()
+
+
+def test_windows_lease_cleanup_failure_retains_primary_error_and_can_retry() -> None:
+    class _LeaseState:
+        released = False
+
+        def __init__(self) -> None:
+            self.close_attempts = 0
+
+        def close(self) -> None:
+            self.close_attempts += 1
+            if self.close_attempts == 1:
+                raise WindowsLaunchBindingError(WindowsLaunchBindingReason.NATIVE_HANDLE_RELEASE_FAILED)
+            self.released = True
+
+    fake = _FakePopen()
+    lease_state = _LeaseState()
+    process = owned_process.OwnedSidecarProcess(
+        _process=cast(subprocess.Popen[bytes], fake),
+        protocol_writer=fake.stdin,
+        protocol_reader=fake.stdout,
+        stderr_reader=fake.stderr,
+        _process_group_id=None,
+        _lease_state=cast(owned_process._InstalledSidecarLeaseState, lease_state),
+    )
+    primary = RuntimeError("typed-readiness-primary")
+
+    cleanup_error = process._cleanup_after_handshake_failure(primary)
+
+    assert isinstance(cleanup_error, owned_process.SidecarSpawnCleanupError)
+    assert cleanup_error.primary_error is primary
+    assert cleanup_error.direct_child_reaped is True
+    assert cleanup_error.lease_released is False
+    assert cleanup_error.reap() is True
+    assert cleanup_error.lease_released is True
+
+
+def test_reaped_handshake_cleanup_retains_only_unclosed_pipes_until_each_closes() -> None:
+    fake = _FakePopen()
+    first = _RetryableCloseStream(1)
+    second = _RetryableCloseStream(2)
+    process = owned_process.OwnedSidecarProcess(
+        _process=cast(subprocess.Popen[bytes], fake),
+        protocol_writer=cast(IO[bytes], first),
+        protocol_reader=cast(IO[bytes], second),
+        stderr_reader=fake.stderr,
+        _process_group_id=None,
+    )
+
+    cleanup_error = process._cleanup_after_handshake_failure(RuntimeError("readiness failed"))
+
+    assert isinstance(cleanup_error, owned_process.SidecarSpawnCleanupError)
+    assert cleanup_error.direct_child_reaped is True
+    assert cleanup_error.lease_released is True
+    assert first.close_calls == 1
+    assert second.close_calls == 1
+    assert cleanup_error.reap() is False
+    assert first.closed is True
+    assert second.closed is False
+    assert first.close_calls == 2
+    assert second.close_calls == 2
+    assert cleanup_error.reap() is True
+    assert second.closed is True
+    assert second.close_calls == 3
+
+
+def test_permanently_unclosed_pipe_stays_in_abandoned_cleanup_maintenance() -> None:
+    fake = _FakePopen()
+    stuck = _RetryableCloseStream(None)
+    process = owned_process.OwnedSidecarProcess(
+        _process=cast(subprocess.Popen[bytes], fake),
+        protocol_writer=cast(IO[bytes], stuck),
+        protocol_reader=fake.stdout,
+        stderr_reader=fake.stderr,
+        _process_group_id=None,
+    )
+    cleanup_error = process._cleanup_after_handshake_failure(RuntimeError("readiness failed"))
+
+    assert isinstance(cleanup_error, owned_process.SidecarSpawnCleanupError)
+    owner_id = owned_process._spawn_cleanup_owner_id(cleanup_error)
+    try:
+        cleanup_error.abandon()
+        result = None
+        for _ in range(owned_process.FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS - 1):
+            result = owned_process.maintain_abandoned_sidecar_spawns()
+        assert result is not None
+        assert result.terminal >= 1
+        assert cleanup_error.cleanup_terminally_failed is True
+        assert stuck.closed is False
+    finally:
+        # This test intentionally reaches an unrecoverable synthetic state;
+        # remove its test-only owner so later custodian tests see only owners
+        # that they created.
+        with owned_process._SPAWN_CLEANUP_OWNERS_LOCK:
+            owned_process._SPAWN_CLEANUP_OWNERS.pop(owner_id, None)

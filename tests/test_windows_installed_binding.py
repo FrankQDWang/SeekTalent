@@ -5,6 +5,7 @@ import ctypes
 import os
 import pickle
 import stat
+import weakref
 from pathlib import Path
 
 import pytest
@@ -65,6 +66,59 @@ def _open_writer(path: Path) -> tuple[object, int]:
     )
     assert handle != wintypes.HANDLE(-1).value
     return api, int(handle)
+
+
+def test_windows_opened_release_retains_each_handle_until_close_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "held"
+    identity = windows_native.WindowsFileIdentity(
+        final_path=str(path),
+        volume_serial_number=1,
+        file_id=b"x" * 16,
+        size=0,
+        link_count=1,
+        creation_time=1,
+        last_write_time=1,
+        change_time=1,
+        file_attributes=0,
+        directory=False,
+    )
+    key = "held"
+    state = windows_binding._WindowsOpenedReleaseState(
+        tmp_path,
+        tmp_path,
+        {key: windows_binding._OpenedWindowsObject(path, 123, identity)},
+        [key],
+    )
+    authority = object.__new__(WindowsOpenedInstalledRelease)
+    windows_binding._LIVE_BINDINGS[id(authority)] = (weakref.ref(authority), state)
+    attempts = 0
+
+    def fail_once_then_close(handle: int) -> None:
+        nonlocal attempts
+        assert handle == 123
+        attempts += 1
+        if attempts == 1:
+            raise OSError("injected CloseHandle failure")
+
+    monkeypatch.setattr(windows_binding, "close_windows_handle", fail_once_then_close)
+
+    with pytest.raises(WindowsLaunchBindingError) as raised:
+        authority.close()
+
+    assert raised.value.reason is WindowsLaunchBindingReason.NATIVE_HANDLE_RELEASE_FAILED
+    assert state.closed is False
+    assert key in state.opened
+    assert windows_binding._binding_state(authority) is state
+
+    authority.close()
+
+    assert state.closed is True
+    assert state.opened == {}
+    with pytest.raises(TypeError):
+        windows_binding._binding_state(authority)
 
 
 def _create_directory_symlink(link: Path, target: Path) -> None:

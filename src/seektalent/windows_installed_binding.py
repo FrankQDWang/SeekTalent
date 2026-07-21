@@ -210,21 +210,25 @@ class _WindowsOpenedReleaseState:
     def close(self) -> None:
         if self.closed:
             return
-        self.closed = True
         failures: list[OSError] = []
         for key in reversed(self.order):
-            opened = self.opened.pop(key)
+            opened = self.opened.get(key)
+            if opened is None:
+                continue
             try:
                 close_windows_handle(opened.handle)
             except OSError as exc:
                 failures.append(exc)
-        self.order.clear()
+            else:
+                self.opened.pop(key, None)
+        self.order = [key for key in self.order if key in self.opened]
         if failures:
             raise WindowsLaunchBindingError(
                 WindowsLaunchBindingReason.NATIVE_HANDLE_RELEASE_FAILED,
                 self.slot_root,
                 winerror=windows_error_code(failures[0]),
             )
+        self.closed = True
 
 
 _LIVE_BINDINGS: dict[
@@ -263,9 +267,11 @@ class WindowsOpenedInstalledRelease:
         )
 
     def close(self) -> None:
-        entry = _LIVE_BINDINGS.pop(id(self), None)
+        entry = _LIVE_BINDINGS.get(id(self))
         if entry is not None and entry[0]() is self:
             entry[1].close()
+            if entry[1].closed:
+                _LIVE_BINDINGS.pop(id(self), None)
 
     def __copy__(self) -> Never:
         raise TypeError("WindowsOpenedInstalledRelease cannot be copied")

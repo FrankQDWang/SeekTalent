@@ -11,6 +11,7 @@ on:
       - "tests/test_windows_installed_binding.py"
       - "tests/test_windows_sidecar_process.py"
       - "tests/test_packaged_sidecar_artifact.py"
+      - "tests/test_sidecar_readiness.py"
       - "tools/build_packaged_sidecar.py"
       - "src/seektalent/windows_installed_binding.py"
       - "src/seektalent/windows_native_files.py"
@@ -22,6 +23,9 @@ on:
       - "src/seektalent/release_manifest.py"
       - "src/seektalent/release_signing.py"
       - "src/seektalent/sidecar_bootstrap.py"
+      - "src/seektalent/sidecar_child_session.py"
+      - "src/seektalent/sidecar_handshake_protocol.py"
+      - "src/seektalent/sidecar_readiness.py"
       - "pyproject.toml"
       - "uv.lock"
       - "docs/plans/external-execution-plane-v1-release-artifact-evidence.md"
@@ -97,7 +101,7 @@ jobs:
           SEEKTALENT_NATIVE_LAUNCH_BINDING_EVIDENCE: native-launch-binding-evidence.json
         run: uv run --group dev python -m pytest tests/test_native_launch_binding_probe.py -q
 
-      - name: Build and launch test-only packaged sidecar artifact
+      - name: Build and verify test-only packaged sidecar four-step handshake artifact
         env:
           PYTHONNOUSERSITE: "1"
         run: uv run --group dev python -m pytest tests/test_packaged_sidecar_artifact.py -q
@@ -113,6 +117,20 @@ jobs:
           tests/test_windows_installed_binding.py
           tests/test_windows_sidecar_process.py
           tests/test_installed_slot_lease.py::test_native_cross_process_slot_lock_conflicts
+          -q
+
+      - name: Assert Windows sidecar polling transport lifecycle
+        if: runner.os == 'Windows'
+        run: >-
+          uv run --group dev python -m pytest
+          tests/test_sidecar_readiness.py::test_windows_reader_cancel_uses_thread_terminate_and_never_claims_failed_stop
+          tests/test_sidecar_readiness.py::test_windows_polling_boundary_acks_a_legal_idle_pipe_without_cancellation
+          tests/test_sidecar_readiness.py::test_windows_polling_boundary_maps_peek_failure_to_typed_pipe_failure
+          tests/test_sidecar_readiness.py::test_windows_polling_boundary_waits_for_bytes_consumed_before_enqueue
+          tests/test_sidecar_readiness.py::test_sidecar_rejects_every_main_ready_pipeline_tail_before_sidecar_ready
+          tests/test_sidecar_readiness.py::test_child_result_close_cancels_its_reader_while_the_peer_stays_open
+          tests/test_sidecar_readiness.py::test_collecting_child_result_cancels_its_reader_while_the_peer_stays_open
+          tests/test_sidecar_readiness.py::test_child_result_close_unblocks_a_concurrent_parent_eof_wait
           -q
 
       - name: Upload native evidence
