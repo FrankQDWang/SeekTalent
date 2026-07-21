@@ -167,7 +167,7 @@ def admit_installed_sidecar_launch(
         trust_policy,
         verification_time,
         read_regular=lambda path, limit: _read_stable_regular_file(root, path, limit=limit),
-        inspect_file=lambda path, file_ref: _inspect_sidecar_file(root, path, file_ref),
+        inspect_file=lambda path, file_ref: _inspect_executable(root, path, file_ref),
     )
 
 
@@ -193,7 +193,7 @@ def admit_windows_opened_sidecar_launch(
                 limit=MAX_INSTALLED_SIDECAR_BYTES,
             )
             if file_ref.executable
-            else _inspect_sidecar_file(root, path, file_ref)
+            else _inspect_executable(root, path, file_ref)
         ),
     )
 
@@ -254,7 +254,7 @@ def resolve_installed_sidecar_executable(slot_root: Path) -> InstalledSidecarExe
     return _resolve_installed_sidecar_executable(
         root,
         manifest,
-        lambda path, file_ref: _inspect_sidecar_file(root, path, file_ref),
+        lambda path, file_ref: _inspect_executable(root, path, file_ref),
     )
 
 
@@ -379,7 +379,7 @@ def _parse_build(value: str) -> tuple[int, int, int, int]:
     return numbers[0], numbers[1], numbers[2], numbers[3]
 
 
-def _inspect_sidecar_file(root: Path, path: Path, file_ref: FileRefV1) -> str:
+def _inspect_executable(root: Path, path: Path, file_ref: FileRefV1) -> str:
     before = _snapshot_path_chain(root, path)
     final = before[-1]
     _require_regular_single_link(final)
