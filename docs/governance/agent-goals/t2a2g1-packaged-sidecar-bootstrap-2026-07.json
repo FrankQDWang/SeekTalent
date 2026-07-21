@@ -1,0 +1,50 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "offline-distribution-2026-07",
+  "change_type": "major_refactor",
+  "summary": "Build and exercise one native PyInstaller-onedir sidecar bootstrap through the existing signed installed-slot launch boundary.",
+  "rationale": "Issue #372 adds only a production-unreachable packaged bootstrap. The build tool emits an internal test-only release manifest and detached Ed25519 signature, while existing public admission derives product, main, sidecar, executable-hash, and protocol facts from that verified manifest. The resolver now checks every declared onedir sidecar file before launch; Windows retains its prior opened-executable and suspended-child binding. No browser, WTSCLI, journal, operation DTO, production routing, handshake, or platform-production-signing path is introduced.",
+  "touched_layers": [
+    "dependencies",
+    "governance",
+    "other"
+  ],
+  "red_files": [
+    ".github/workflows/native-launch-binding-probe.yml",
+    "tools/build_packaged_sidecar.py"
+  ],
+  "dependency_files": [
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "dependency_rationale": "PyInstaller 6.21.0 is pinned only in the development build toolchain so each native CI runner can build the self-contained onedir bootstrap; it is not a runtime dependency of the packaged child.",
+  "deletion_targets": [
+    "fixture or system-Python sidecar launch evidence presented as a packaged artifact",
+    "caller-supplied product, main, sidecar, artifact-hash, or protocol identity at the launch boundary",
+    "unsigned, wheel, dual-runtime, browser, WTSCLI, journal, and handshake paths in the packaged bootstrap slice"
+  ],
+  "verification": [
+    "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
+    "uv run ruff check scripts/build_offline_macos_intel.py tests/test_build_offline_macos_intel.py tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py tests/test_build_offline_macos_intel.py tests/test_pr_governance.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "uv run --group dev python -m pytest -p no:tach tests/test_installed_release.py tests/test_installed_release_admission.py tests/test_installed_slot_lease.py tests/test_owned_sidecar_process.py tests/test_windows_installed_binding.py tests/test_windows_sidecar_process.py tests/test_packaged_sidecar_artifact.py -q",
+    "uv run --group dev ruff check src tests tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev tach check",
+    "uv run --group dev python tools/check_tach_baseline.py",
+    "uv run --group dev python tools/check_source_boundaries.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "uv run --group dev python -m pytest -q"
+  ],
+  "risks": [
+    "The CI signer is an intentionally public test-only Ed25519 key; it is neither Apple Developer ID/notarization nor Windows Authenticode and cannot be promoted to a production trust policy.",
+    "macOS runtime-image authenticity and installer-owned immutable slots remain later production gates; this slice verifies the entire declared onedir tree immediately before launch and preserves the existing Windows executable-object binding.",
+    "The bootstrap has no authenticated peer or workflow authority. The four-step handshake and all production callers remain separate work."
+  ]
+}

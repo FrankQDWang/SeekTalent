@@ -167,7 +167,7 @@ def admit_installed_sidecar_launch(
         trust_policy,
         verification_time,
         read_regular=lambda path, limit: _read_stable_regular_file(root, path, limit=limit),
-        inspect_executable=lambda path, file_ref: _inspect_executable(root, path, file_ref),
+        inspect_file=lambda path, file_ref: _inspect_sidecar_file(root, path, file_ref),
     )
 
 
@@ -185,11 +185,15 @@ def admit_windows_opened_sidecar_launch(
         trust_policy,
         verification_time,
         read_regular=opened_release.read_regular,
-        inspect_executable=lambda path, file_ref: opened_release.inspect_executable(
-            path,
-            expected_size=file_ref.size_bytes,
-            expected_sha256=file_ref.sha256,
-            limit=MAX_INSTALLED_SIDECAR_BYTES,
+        inspect_file=lambda path, file_ref: (
+            opened_release.inspect_executable(
+                path,
+                expected_size=file_ref.size_bytes,
+                expected_sha256=file_ref.sha256,
+                limit=MAX_INSTALLED_SIDECAR_BYTES,
+            )
+            if file_ref.executable
+            else _inspect_sidecar_file(root, path, file_ref)
         ),
     )
 
@@ -200,7 +204,7 @@ def _admit_installed_sidecar_launch(
     verification_time: datetime,
     *,
     read_regular: Callable[[Path, int], bytes],
-    inspect_executable: Callable[[Path, FileRefV1], str],
+    inspect_file: Callable[[Path, FileRefV1], str],
 ) -> AuthenticatedInstalledSidecarLaunch:
     manifest_path = root / INSTALLED_MANIFEST_RELATIVE_PATH
     signature_path = root / INSTALLED_SIGNATURE_RELATIVE_PATH
@@ -209,7 +213,7 @@ def _admit_installed_sidecar_launch(
         read_regular(signature_path, MAX_INSTALLED_MANIFEST_BYTES)
     )
     verified = verify_release_manifest_signature(signature, manifest, trust_policy, verification_time)
-    resolution = _resolve_installed_sidecar_executable(root, manifest, inspect_executable)
+    resolution = _resolve_installed_sidecar_executable(root, manifest, inspect_file)
 
     main = next((item for item in manifest.components if item.component_id == "main_application"), None)
     sidecar = next((item for item in manifest.components if item.component_id == SIDECAR_COMPONENT_ID), None)
@@ -250,20 +254,27 @@ def resolve_installed_sidecar_executable(slot_root: Path) -> InstalledSidecarExe
     return _resolve_installed_sidecar_executable(
         root,
         manifest,
-        lambda path, file_ref: _inspect_executable(root, path, file_ref),
+        lambda path, file_ref: _inspect_sidecar_file(root, path, file_ref),
     )
 
 
 def _resolve_installed_sidecar_executable(
     root: Path,
     manifest: ReleaseManifestV1,
-    inspect_executable: Callable[[Path, FileRefV1], str],
+    inspect_file: Callable[[Path, FileRefV1], str],
 ) -> InstalledSidecarExecutableResolution:
     manifest_path = root / INSTALLED_MANIFEST_RELATIVE_PATH
     _require_host_match(manifest.target)
     component, file_ref = _select_sidecar_file(manifest)
     executable_path = root / manifest.payload_root / component.root_path / file_ref.path
-    executable_digest = inspect_executable(executable_path, file_ref)
+    executable_digest: str | None = None
+    for declared_file in component.files:
+        path = root / manifest.payload_root / component.root_path / declared_file.path
+        digest = inspect_file(path, declared_file)
+        if declared_file.path == file_ref.path:
+            executable_digest = digest
+    if executable_digest is None:
+        raise InstalledReleaseError(InstalledReleaseReason.SIDECAR_DECLARATION_INVALID, executable_path)
     return InstalledSidecarExecutableResolution(
         slot_root=root,
         manifest_path=manifest_path,
@@ -368,13 +379,13 @@ def _parse_build(value: str) -> tuple[int, int, int, int]:
     return numbers[0], numbers[1], numbers[2], numbers[3]
 
 
-def _inspect_executable(root: Path, path: Path, file_ref: FileRefV1) -> str:
+def _inspect_sidecar_file(root: Path, path: Path, file_ref: FileRefV1) -> str:
     before = _snapshot_path_chain(root, path)
     final = before[-1]
     _require_regular_single_link(final)
     if final.size != file_ref.size_bytes:
         raise InstalledReleaseError(InstalledReleaseReason.FILE_SIZE_MISMATCH, path)
-    if os.name == "posix":
+    if file_ref.executable and os.name == "posix":
         _require_effective_executable(path, final)
 
     descriptor = _open_readonly(path)

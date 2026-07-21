@@ -1,0 +1,230 @@
+from __future__ import annotations
+
+import json
+import os
+import platform
+import subprocess
+from pathlib import Path
+
+import pytest
+
+import seektalent.installed_release as installed_release
+import seektalent.installed_slot as installed_slot
+import seektalent.owned_sidecar_process as owned_process
+from seektalent.installed_slot import ActiveSlotPointerV1, acquire_installed_sidecar_launch_lease
+from seektalent.owned_sidecar_process import spawn_owned_sidecar
+from seektalent.release_manifest import parse_release_manifest, release_manifest_digest
+from tools.build_packaged_sidecar import (
+    TEST_ONLY_SIGNING_SEED,
+    TEST_ONLY_VERIFICATION_TIME,
+    build_packaged_sidecar,
+    test_only_trust_policy as _test_only_trust_policy,
+)
+
+
+pytestmark = pytest.mark.skipif(
+    platform.system() not in {"Darwin", "Windows"},
+    reason="the packaged sidecar artifact has native Windows/macOS targets only",
+)
+
+
+def _install_active_artifact(tmp_path: Path) -> Path:
+    built_slot = build_packaged_sidecar(tmp_path / "built-slot", TEST_ONLY_SIGNING_SEED)
+    root = tmp_path / "installation"
+    slot_root = root / "slots" / "A"
+    slot_root.parent.mkdir(parents=True)
+    built_slot.rename(slot_root)
+
+    manifest = parse_release_manifest(
+        (slot_root / installed_release.INSTALLED_MANIFEST_RELATIVE_PATH).read_bytes()
+    )
+    control = root / "control"
+    control.mkdir()
+    control.joinpath("installation-id").write_text("packaged-artifact-test", encoding="ascii")
+    control.joinpath("active-slot.lock").write_bytes(b"0")
+    control.joinpath("slot-A.lock").write_bytes(b"0")
+    control.joinpath("slot-B.lock").write_bytes(b"0")
+    pointer = ActiveSlotPointerV1.model_construct(
+        schema_version="seektalent.active-slot/v1",
+        installation_id="packaged-artifact-test",
+        physical_slot="A",
+        pointer_generation=1,
+        product_build_id=manifest.product_build_id,
+        release_manifest_sha256=release_manifest_digest(manifest),
+        committed_at="2026-07-21T12:00:00Z",
+    )
+    control.joinpath("active-slot.json").write_bytes(installed_slot.canonical_active_slot_pointer_bytes(pointer))
+    return root
+
+
+def _acquire(root: Path):
+    return acquire_installed_sidecar_launch_lease(root, _test_only_trust_policy(), TEST_ONLY_VERIFICATION_TIME)
+
+
+def _sidecar_files(slot_root: Path) -> tuple[tuple[Path, ...], Path]:
+    manifest = parse_release_manifest(
+        (slot_root / installed_release.INSTALLED_MANIFEST_RELATIVE_PATH).read_bytes()
+    )
+    sidecar = next(item for item in manifest.components if item.component_id == "liepin_execution_sidecar")
+    root = slot_root / manifest.payload_root / sidecar.root_path
+    return (
+        tuple(root / item.path for item in sidecar.files),
+        root / sidecar.entrypoints[0],
+    )
+
+
+def _assert_no_child_start(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    started: list[object] = []
+
+    def fail_if_spawned(*args: object, **kwargs: object) -> object:
+        started.append((args, kwargs))
+        raise AssertionError("tampered package reached child creation")
+
+    monkeypatch.setattr(owned_process, "spawn_owned_sidecar", fail_if_spawned)
+    with pytest.raises(Exception):
+        lease = _acquire(root)
+        owned_process.spawn_owned_sidecar(lease)
+    assert started == []
+
+
+def test_packaged_artifact_launches_from_verified_active_slot_and_exits_on_parent_eof(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _install_active_artifact(tmp_path)
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path / "ambient-source-must-not-be-used"))
+
+    lease = _acquire(root)
+    admission = lease.admission
+    assert admission.manifest_id.startswith("test-only-packaged-sidecar-")
+    assert admission.trust_policy_id == "test-only-packaged-sidecar-policy-v1"
+    assert admission.source_port_protocol.protocol_id == "seektalent-source-port"
+    manifest = parse_release_manifest(
+        (root / "slots" / "A" / installed_release.INSTALLED_MANIFEST_RELATIVE_PATH).read_bytes()
+    )
+    main = next(item for item in manifest.components if item.component_id == "main_application")
+    sidecar = next(item for item in manifest.components if item.component_id == "liepin_execution_sidecar")
+    assert (admission.product_build_id, admission.main_application_build_id, admission.sidecar_build_id) == (
+        manifest.product_build_id,
+        main.build_id,
+        sidecar.build_id,
+    )
+    assert admission.source_port_protocol == manifest.compatibility.main_sidecar.source_port_protocol
+    assert admission.executable_path.is_relative_to(root / "slots" / "A")
+
+    process = spawn_owned_sidecar(lease)
+    process.protocol_writer.write(b"bootstrap pipe ownership only\n")
+    process.protocol_writer.flush()
+    process.close_stdin()
+    assert process.wait(5) == 0
+    process.close_readers()
+
+    retry = _acquire(root)
+    retry.close()
+
+
+def test_packaged_artifact_exits_after_early_parent_eof(tmp_path: Path) -> None:
+    root = _install_active_artifact(tmp_path)
+
+    process = spawn_owned_sidecar(_acquire(root))
+    process.close_stdin()
+    assert process.wait(5) == 0
+    process.close_readers()
+    retry = _acquire(root)
+    retry.close()
+
+
+def test_packaged_artifact_lifecycle_terminate_and_kill_release_the_active_slot(tmp_path: Path) -> None:
+    root = _install_active_artifact(tmp_path)
+
+    terminated = spawn_owned_sidecar(_acquire(root))
+    assert terminated.terminate(5) != 0
+    terminated.close_stdin()
+    terminated.close_readers()
+    retry_after_terminate = _acquire(root)
+    retry_after_terminate.close()
+
+    killed = spawn_owned_sidecar(_acquire(root))
+    assert killed.kill(5) != 0
+    killed.close_stdin()
+    killed.close_readers()
+    retry_after_kill = _acquire(root)
+    retry_after_kill.close()
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["entrypoint", "payload", "manifest", "signature", "pointer", "build", "hash", "platform"],
+)
+def test_packaged_artifact_tampering_fails_before_owned_spawn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+) -> None:
+    root = _install_active_artifact(tmp_path)
+    slot_root = root / "slots" / "A"
+    manifest_path = slot_root / installed_release.INSTALLED_MANIFEST_RELATIVE_PATH
+
+    if tamper == "entrypoint":
+        _, executable = _sidecar_files(slot_root)
+        executable.write_bytes(executable.read_bytes() + b"tampered")
+    elif tamper == "payload":
+        payload_files, executable = _sidecar_files(slot_root)
+        payload = next(path for path in payload_files if path != executable)
+        payload.write_bytes(payload.read_bytes() + b"tampered")
+    elif tamper == "manifest":
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["channel"] = "candidate"
+        manifest_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    elif tamper == "signature":
+        signature_path = slot_root / installed_release.INSTALLED_SIGNATURE_RELATIVE_PATH
+        payload = json.loads(signature_path.read_text(encoding="utf-8"))
+        signature = payload["signature"]
+        payload["signature"] = ("A" if signature[0] != "A" else "B") + signature[1:]
+        signature_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    elif tamper == "pointer":
+        pointer_path = root / installed_slot.ACTIVE_SLOT_POINTER_RELATIVE_PATH
+        pointer_path.write_bytes(pointer_path.read_bytes() + b" ")
+    elif tamper == "build":
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        sidecar = next(item for item in payload["components"] if item["component_id"] == "liepin_execution_sidecar")
+        sidecar["build_id"] = "test-only-replaced-sidecar-build"
+        manifest_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    elif tamper == "hash":
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        sidecar = next(item for item in payload["components"] if item["component_id"] == "liepin_execution_sidecar")
+        sidecar["files"][0]["sha256"] = "0" * 64
+        manifest_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+    else:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        payload["target"]["arch"] = "x86_64" if platform.machine().lower() == "arm64" else "arm64"
+        manifest_path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+
+    _assert_no_child_start(root, monkeypatch)
+
+
+def test_packaged_artifact_is_not_a_python_source_or_network_launcher(tmp_path: Path) -> None:
+    root = _install_active_artifact(tmp_path)
+    slot_root = root / "slots" / "A"
+    files, executable = _sidecar_files(slot_root)
+
+    assert executable.is_file()
+    assert len(files) > 1
+    assert all(path.is_relative_to(slot_root / "release") for path in files)
+    assert not any(path.suffix == ".py" for path in files)
+    assert not os.environ.get("SEEKTALENT_PACKAGED_SIDECAR_NETWORK")
+
+    environment = {"PATH": os.environ.get("PATH", "")}
+    if os.name == "nt":
+        environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
+    direct = subprocess.run(
+        [str(executable)],
+        cwd=executable.parent,
+        input=b"",
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+        check=False,
+    )
+    assert direct.returncode == 0, direct.stderr.decode("utf-8", errors="replace")

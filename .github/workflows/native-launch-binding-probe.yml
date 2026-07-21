@@ -10,12 +10,17 @@ on:
       - "tests/test_installed_slot_lease.py"
       - "tests/test_windows_installed_binding.py"
       - "tests/test_windows_sidecar_process.py"
+      - "tests/test_packaged_sidecar_artifact.py"
+      - "tools/build_packaged_sidecar.py"
       - "src/seektalent/windows_installed_binding.py"
       - "src/seektalent/windows_native_files.py"
       - "src/seektalent/windows_sidecar_process.py"
       - "src/seektalent/installed_release.py"
       - "src/seektalent/installed_slot.py"
       - "src/seektalent/owned_sidecar_process.py"
+      - "src/seektalent/sidecar_bootstrap.py"
+      - "pyproject.toml"
+      - "uv.lock"
       - "docs/plans/external-execution-plane-v1-release-artifact-evidence.md"
       - "docs/decisions/**"
 
@@ -88,6 +93,11 @@ jobs:
         env:
           SEEKTALENT_NATIVE_LAUNCH_BINDING_EVIDENCE: native-launch-binding-evidence.json
         run: uv run --group dev python -m pytest tests/test_native_launch_binding_probe.py -q
+
+      - name: Build and launch test-only packaged sidecar artifact
+        env:
+          PYTHONNOUSERSITE: "1"
+        run: uv run --group dev python -m pytest tests/test_packaged_sidecar_artifact.py -q
 
       - name: Assert native active-slot lifecycle lease
         if: runner.os != 'Windows'
