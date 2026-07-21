@@ -295,18 +295,15 @@ class _NativeSlotLock:
         descriptor = self.descriptor
         if descriptor is None:
             return
-        self.descriptor = None
-        failure: OSError | None = None
         try:
             _unlock_native_slot_lock(descriptor, self.platform)
         except OSError as exc:
-            failure = exc
+            raise InstalledSlotError(InstalledSlotReason.SLOT_RELEASE_FAILED, self.path) from exc
         try:
             os.close(descriptor)
         except OSError as exc:
-            failure = failure or exc
-        if failure is not None:
-            raise InstalledSlotError(InstalledSlotReason.SLOT_RELEASE_FAILED, self.path) from failure
+            raise InstalledSlotError(InstalledSlotReason.SLOT_RELEASE_FAILED, self.path) from exc
+        self.descriptor = None
 
 
 @dataclass(slots=True)
@@ -317,21 +314,26 @@ class _InstalledSidecarLeaseState:
     windows_opened_release: WindowsOpenedInstalledRelease | None = None
     released: bool = False
     transferred: bool = False
+    closing: bool = False
 
     def close(self) -> None:
         if self.released:
             return
-        self.released = True
+        self.closing = True
         failures: list[BaseException] = []
-        if self.windows_opened_release is not None:
+        opened_release = self.windows_opened_release
+        if opened_release is not None:
             try:
-                self.windows_opened_release.close()
+                opened_release.close()
             except WindowsLaunchBindingError as exc:
                 failures.append(exc)
-        try:
-            self.slot_lock.close()
-        except InstalledSlotError as exc:
-            failures.append(exc)
+            else:
+                self.windows_opened_release = None
+        if self.slot_lock.descriptor is not None:
+            try:
+                self.slot_lock.close()
+            except InstalledSlotError as exc:
+                failures.append(exc)
         if failures:
             primary = failures[0]
             for failure in failures[1:]:
@@ -339,6 +341,9 @@ class _InstalledSidecarLeaseState:
                     f"installed sidecar lease cleanup failed: {type(failure).__name__}: {failure}"
                 )
             raise primary
+        if self.windows_opened_release is not None or self.slot_lock.descriptor is not None:
+            raise AssertionError("successful lease close retained a native resource")
+        self.released = True
 
 
 _LIVE_LAUNCH_LEASES: dict[
@@ -383,9 +388,11 @@ class InstalledSidecarLaunchLease:
         return self._admission.executable_path
 
     def close(self) -> None:
-        state = _pop_live_lease_state(self)
+        state = _live_lease_state(self)
         if state is not None:
             state.close()
+            if state.released:
+                _LIVE_LAUNCH_LEASES.pop(id(self), None)
 
     def __enter__(self) -> Self:
         if _find_live_lease_state(self) is None:
@@ -405,9 +412,10 @@ class InstalledSidecarLaunchLease:
         raise TypeError("InstalledSidecarLaunchLease cannot be serialized")
 
     def _take_for_spawn(self) -> _InstalledSidecarLeaseState:
-        state = _pop_live_lease_state(self)
-        if state is None or state.released or state.transferred:
+        state = _find_live_lease_state(self)
+        if state is None or state.released or state.transferred or state.closing:
             raise TypeError("lease must be a live factory InstalledSidecarLaunchLease")
+        _LIVE_LAUNCH_LEASES.pop(id(self), None)
         state.transferred = True
         return state
 
@@ -442,6 +450,13 @@ def _pop_live_lease_state(lease: object) -> _InstalledSidecarLeaseState | None:
     if entry is None or entry[0]() is not lease:
         return None
     _LIVE_LAUNCH_LEASES.pop(id(lease), None)
+    return entry[1]
+
+
+def _live_lease_state(lease: object) -> _InstalledSidecarLeaseState | None:
+    entry = _LIVE_LAUNCH_LEASES.get(id(lease))
+    if entry is None or entry[0]() is not lease:
+        return None
     return entry[1]
 
 

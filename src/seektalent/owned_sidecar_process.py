@@ -169,8 +169,28 @@ class OwnedSidecarProcess:
         state = self._lease_state
         if state is None:
             return
-        self._lease_state = None
         state.close()
+        if not state.released:
+            raise AssertionError("successful lease close did not confirm native resource disposition")
+        self._lease_state = None
+
+    def _retain_reaped_cleanup(self, primary_error: BaseException) -> "SidecarSpawnCleanupError":
+        """Move a reaped child with an unreleased lease into its one retry capability."""
+        with self._lifecycle_lock:
+            if self._process.returncode is None:
+                raise AssertionError("reaped cleanup retention requires a confirmed child exit")
+            lease_state = self._lease_state
+            if lease_state is None:
+                raise AssertionError("reaped cleanup retention lost its lifecycle lease")
+            self._lease_state = None
+            owner = _UnreapedOwnedSidecar(
+                self._process,
+                None,
+                (self.protocol_writer, self.protocol_reader, self.stderr_reader),
+                lease_state,
+                child_reaped=True,
+            )
+            return _new_sidecar_spawn_cleanup_error(primary_error, owner, ())
 
     def close_protocol_reader(self) -> None:
         if not self.protocol_reader.closed:

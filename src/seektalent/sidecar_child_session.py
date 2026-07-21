@@ -78,7 +78,8 @@ class SidecarHandshakeResult:
             state.history.feed(chunk)
 
     def close(self) -> None:
-        _result_state(self).transport.close()
+        if not _result_state(self).transport.close():
+            raise SidecarReadinessError(SidecarReadinessReason.PIPE_IO_FAILURE)
         _discard_result(self)
 
     def __copy__(self) -> Never:

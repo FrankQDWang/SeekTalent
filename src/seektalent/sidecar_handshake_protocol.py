@@ -7,6 +7,7 @@ import hmac
 import math
 import os
 import queue
+import selectors
 import secrets
 import threading
 import time
@@ -24,6 +25,7 @@ HANDSHAKE_VERSION = 1
 MAX_HANDSHAKE_FRAME_BYTES = 64 * 1024
 DEFAULT_HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _READ_QUEUE_CHUNKS = 16
+_READER_CLOSE_SECONDS = 1.0
 _HANDSHAKE_PROOF_DOMAIN = b"seektalent-sidecar-readiness-proof/v1"
 _HANDSHAKE_KEY_DOMAIN = b"seektalent-sidecar-readiness-hkdf/v1"
 _MAIN_TO_SIDECAR = b"main-to-sidecar"
@@ -123,47 +125,209 @@ class _ProtocolTransport:
         self._buffer = bytearray()
         self._eof = False
         self._closed = threading.Event()
+        self._reader_stopped = threading.Event()
+        self._state_lock = threading.Lock()
         self._write_lock = threading.Lock()
+        self._boundary_requests: queue.Queue[queue.Queue[tuple[bool, BaseException | None]]] = queue.Queue()
+        self._reader_error: BaseException | None = None
+        self._reader_descriptor: int | None = None
+        self._wake_reader_descriptor: int | None = None
+        self._wake_writer_descriptor: int | None = None
 
-        def enqueue(item: bytes | BaseException | None) -> None:
-            while not self._closed.is_set():
-                try:
-                    self._items.put(item, timeout=0.05)
-                except queue.Full:
-                    if self._closed.is_set():
-                        return
-                else:
-                    return
+        try:
+            descriptor = reader_stream.fileno()
+        except (AttributeError, OSError, ValueError):
+            descriptor = None
+        if descriptor is not None and os.name == "posix":
+            wake_reader, wake_writer = os.pipe()
+            os.set_blocking(descriptor, False)
+            os.set_blocking(wake_reader, False)
+            os.set_blocking(wake_writer, False)
+            self._reader_descriptor = descriptor
+            self._wake_reader_descriptor = wake_reader
+            self._wake_writer_descriptor = wake_writer
 
-        def read() -> None:
-            try:
-                descriptor = reader_stream.fileno()
-            except (AttributeError, OSError, ValueError):
-                read_chunk = getattr(reader_stream, "read1", reader_stream.read)
-            else:
-                def read_chunk(size: int) -> bytes:
-                    return os.read(descriptor, size)
-            try:
-                while not self._closed.is_set():
-                    chunk = read_chunk(4096)
-                    if not chunk:
-                        enqueue(None)
-                        return
-                    enqueue(chunk)
-            except (OSError, ValueError) as exc:
-                enqueue(exc)
-
-        self._reader_thread = threading.Thread(target=read, daemon=True)
+        self._reader_thread = threading.Thread(target=self._read, daemon=True)
         self._reader_thread.start()
 
-    def close(self) -> None:
+    @property
+    def reader_stopped(self) -> bool:
+        return self._reader_stopped.is_set() and not self._reader_thread.is_alive()
+
+    def close(self) -> bool:
         self._closed.set()
+        self._wake_reader()
+        if os.name == "nt":
+            _cancel_windows_synchronous_read(self._reader_thread.native_id)
+        if self._reader_descriptor is None and os.name != "nt":
+            try:
+                self._reader_stream.close()
+            except (OSError, ValueError):
+                self._closed.set()
+        self._reader_thread.join(timeout=_READER_CLOSE_SECONDS)
         for stream in (self._reader_stream, self._writer_stream):
             try:
                 if not stream.closed:
                     stream.close()
             except (OSError, ValueError):
                 self._closed.set()
+        self._close_wakeup_descriptors()
+        return self.reader_stopped
+
+    def require_ready_handoff_liveness(self, deadline: float, process: _ProcessProbe) -> None:
+        """Confirm the reader observed no EOF/error at the post-SidecarReady handoff."""
+        if process.poll() is not None:
+            _fail(SidecarReadinessReason.CHILD_EXIT)
+        if self._reader_descriptor is not None:
+            response: queue.Queue[tuple[bool, BaseException | None]] = queue.Queue(maxsize=1)
+            self._boundary_requests.put(response)
+            self._wake_reader()
+            while True:
+                eof, reader_error = self._reader_state()
+                if eof or reader_error is not None:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._raise_timed_out_or_exited(process, handshake=True)
+                try:
+                    eof, reader_error = response.get(timeout=min(remaining, 0.05))
+                    break
+                except queue.Empty:
+                    if self._reader_stopped.is_set():
+                        eof, reader_error = self._reader_state()
+                        if not eof and reader_error is None:
+                            _fail(SidecarReadinessReason.PIPE_IO_FAILURE)
+        else:
+            eof, reader_error = self._reader_state()
+            if os.name == "nt" and _windows_pipe_is_disconnected(self._reader_stream):
+                eof = True
+        if reader_error is not None:
+            _fail(SidecarReadinessReason.PIPE_IO_FAILURE)
+        if eof:
+            _fail(SidecarReadinessReason.EOF)
+        if process.poll() is not None:
+            _fail(SidecarReadinessReason.CHILD_EXIT)
+
+    def _read(self) -> None:
+        try:
+            if self._reader_descriptor is not None:
+                self._read_posix()
+            else:
+                self._read_blocking()
+        except (OSError, ValueError) as exc:
+            self._set_reader_error(exc)
+            self._enqueue(exc)
+        finally:
+            self._reader_stopped.set()
+
+    def _read_posix(self) -> None:
+        descriptor = self._reader_descriptor
+        wake_reader = self._wake_reader_descriptor
+        if descriptor is None or wake_reader is None:
+            raise AssertionError("POSIX reader requires its pipe and wakeup descriptors")
+        with selectors.DefaultSelector() as selector:
+            selector.register(descriptor, selectors.EVENT_READ, "pipe")
+            selector.register(wake_reader, selectors.EVENT_READ, "wake")
+            while not self._closed.is_set():
+                events = selector.select()
+                saw_wake = False
+                for key, _ in events:
+                    if key.data == "pipe":
+                        if not self._drain_posix_pipe(descriptor):
+                            return
+                    else:
+                        saw_wake = True
+                        self._drain_wakeup()
+                if saw_wake:
+                    self._drain_posix_pipe(descriptor)
+                    self._answer_boundary_requests()
+                    if self._reader_state()[0]:
+                        return
+
+    def _read_blocking(self) -> None:
+        read_chunk = getattr(self._reader_stream, "read1", self._reader_stream.read)
+        while not self._closed.is_set():
+            chunk = read_chunk(4096)
+            if not chunk:
+                self._set_eof()
+                self._enqueue(None)
+                return
+            self._enqueue(chunk)
+
+    def _drain_posix_pipe(self, descriptor: int) -> bool:
+        while not self._closed.is_set():
+            try:
+                chunk = os.read(descriptor, 4096)
+            except BlockingIOError:
+                return True
+            if not chunk:
+                self._set_eof()
+                self._enqueue(None)
+                return False
+            self._enqueue(chunk)
+        return False
+
+    def _enqueue(self, item: bytes | BaseException | None) -> None:
+        while not self._closed.is_set():
+            try:
+                self._items.put(item, timeout=0.05)
+            except queue.Full:
+                if self._closed.is_set():
+                    return
+            else:
+                return
+
+    def _set_eof(self) -> None:
+        with self._state_lock:
+            self._eof = True
+
+    def _set_reader_error(self, error: BaseException) -> None:
+        with self._state_lock:
+            self._reader_error = error
+
+    def _reader_state(self) -> tuple[bool, BaseException | None]:
+        with self._state_lock:
+            return self._eof, self._reader_error
+
+    def _wake_reader(self) -> None:
+        descriptor = self._wake_writer_descriptor
+        if descriptor is None:
+            return
+        try:
+            os.write(descriptor, b"x")
+        except (BlockingIOError, OSError):
+            return
+
+    def _drain_wakeup(self) -> None:
+        descriptor = self._wake_reader_descriptor
+        if descriptor is None:
+            return
+        while True:
+            try:
+                if not os.read(descriptor, 4096):
+                    return
+            except BlockingIOError:
+                return
+
+    def _answer_boundary_requests(self) -> None:
+        state = self._reader_state()
+        while True:
+            try:
+                response = self._boundary_requests.get_nowait()
+            except queue.Empty:
+                return
+            response.put(state)
+
+    def _close_wakeup_descriptors(self) -> None:
+        for attribute in ("_wake_reader_descriptor", "_wake_writer_descriptor"):
+            descriptor = getattr(self, attribute)
+            if descriptor is None:
+                continue
+            try:
+                os.close(descriptor)
+            except OSError:
+                self._closed.set()
+            setattr(self, attribute, None)
 
     def write_handshake(self, payload: dict[str, object], deadline: float) -> bytes:
         body = _canonical_payload(payload)
@@ -216,6 +380,8 @@ class _ProtocolTransport:
         return chunk
 
     def _append_next(self, deadline: float, process: _ProcessProbe | None, *, handshake: bool) -> None:
+        if self._closed.is_set():
+            _fail(SidecarReadinessReason.EOF)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             self._raise_timed_out_or_exited(process, handshake=handshake)
@@ -303,8 +469,7 @@ def perform_main_handshake(
         b"sidecar_ready",
         (main_hello_raw, sidecar_hello_raw, main_ready_raw),
     )
-    if process.poll() is not None:
-        _fail(SidecarReadinessReason.CHILD_EXIT)
+    transport.require_ready_handoff_liveness(deadline, process)
 
     session_id = _required_string(main_hello, "session_id")
     main_to_sidecar_key, sidecar_to_main_key = _derive_direction_keys(
@@ -633,6 +798,50 @@ def _validated_timeout(value: float) -> float:
 
 def _length_prefixed(value: bytes) -> bytes:
     return len(value).to_bytes(4, "big") + value
+
+
+def _cancel_windows_synchronous_read(thread_id: int | None) -> None:
+    """Cancel the reader's blocking ReadFile without closing its pipe from another thread."""
+    if os.name != "nt" or thread_id is None:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        thread = kernel32.OpenThread(0x0010, False, thread_id)
+        if not thread:
+            return
+        try:
+            kernel32.CancelSynchronousIo(wintypes.HANDLE(thread))
+        finally:
+            kernel32.CloseHandle(wintypes.HANDLE(thread))
+    except (AttributeError, OSError):
+        return
+
+
+def _windows_pipe_is_disconnected(stream: IO[bytes]) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        available = wintypes.DWORD()
+        handle = wintypes.HANDLE(msvcrt.get_osfhandle(stream.fileno()))
+        if ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe(
+            handle,
+            None,
+            0,
+            None,
+            ctypes.byref(available),
+            None,
+        ):
+            return False
+        return ctypes.get_last_error() in {109, 233}
+    except (AttributeError, OSError, ValueError):
+        return False
 
 
 def _fail(reason: SidecarReadinessReason) -> Never:

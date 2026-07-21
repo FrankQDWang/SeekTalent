@@ -106,7 +106,10 @@ class ReadySidecarSession:
         try:
             return_code = state.process.kill(timeout)
         except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as primary_error:
-            cleanup_error = state.process._cleanup_after_handshake_failure(primary_error)
+            if state.process.returncode is not None and state.process._lease_state is not None:
+                cleanup_error = state.process._retain_reaped_cleanup(primary_error)
+            else:
+                cleanup_error = state.process._cleanup_after_handshake_failure(primary_error)
             if cleanup_error is not None:
                 state.cleanup_error = cleanup_error
                 raise SidecarReadinessError(
@@ -116,7 +119,8 @@ class ReadySidecarSession:
             return_code = state.process.returncode
             if return_code is None:
                 raise AssertionError("successful ready-session cleanup has no child return code")
-        state.transport.close()
+        if not state.transport.close():
+            raise SidecarReadinessError(SidecarReadinessReason.PIPE_IO_FAILURE)
         _discard_ready_state(self)
         return return_code
 
@@ -283,7 +287,8 @@ def _finish_ready_close(session: ReadySidecarSession, state: _ReadySidecarState)
     return_code = state.process.returncode
     if return_code is None:
         raise AssertionError("reaped ready-session cleanup has no child return code")
-    state.transport.close()
+    if not state.transport.close():
+        raise SidecarReadinessError(SidecarReadinessReason.PIPE_IO_FAILURE)
     _discard_ready_state(session)
     return return_code
 

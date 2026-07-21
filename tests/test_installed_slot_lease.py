@@ -617,9 +617,11 @@ def test_confirmed_reap_keeps_its_fact_when_slot_release_fails(
         cleanup_error.reap()
     assert release_failure.value.reason == InstalledSlotReason.SLOT_RELEASE_FAILED
     assert cleanup_error.direct_child_reaped is True
-    assert cleanup_error.lease_released is True
+    assert cleanup_error.lease_released is False
 
     monkeypatch.setattr(installed_slot, "_unlock_native_slot_lock", original_unlock)
+    assert cleanup_error.reap() is True
+    assert cleanup_error.lease_released is True
     next_lease = _acquire(installed_root)
     next_lease.close()
 
@@ -704,6 +706,7 @@ def test_release_failure_never_restores_lease_authority(
     assert calls == []
 
     monkeypatch.setattr(installed_slot, "_unlock_native_slot_lock", original_unlock)
+    lease.close()
     next_lease = _acquire(installed_root)
     next_lease.close()
 
