@@ -106,10 +106,12 @@ def build_packaged_sidecar(slot_root: Path, test_signing_seed: bytes) -> Path:
         raise FileExistsError(slot_root)
     target = _native_target()
     source_revision = _source_revision()
+    _write_test_only_component_placeholders(slot_root)
+    embedded_identity = _embedded_identity_payload(slot_root, target, source_revision)
     sidecar_root = slot_root / "release" / "bin" / "sidecar"
     with tempfile.TemporaryDirectory(prefix="seektalent-sidecar-build-") as temporary:
         temporary_root = Path(temporary)
-        _run_pyinstaller(temporary_root)
+        _run_pyinstaller(temporary_root, embedded_identity)
         artifact_dir = temporary_root / "dist" / "seektalent-sidecar-bootstrap"
         shutil.copytree(artifact_dir, sidecar_root)
 
@@ -117,8 +119,15 @@ def build_packaged_sidecar(slot_root: Path, test_signing_seed: bytes) -> Path:
     executable_path = sidecar_root / executable_name
     if not executable_path.is_file():
         raise RuntimeError(f"PyInstaller did not produce {executable_name}")
-    _write_test_only_component_placeholders(slot_root)
-    payload = _manifest_payload(slot_root, target, source_revision, executable_name)
+    payload = _manifest_payload(
+        slot_root,
+        target,
+        source_revision,
+        executable_name,
+        sidecar_build_id=str(embedded_identity["sidecar_build_id"]),
+    )
+    if payload["product_build_id"] != embedded_identity["product_build_id"]:
+        raise AssertionError("embedded sidecar product identity drifted from the release manifest")
     manifest = parse_release_manifest(_json_bytes(payload))
     manifest_path = slot_root / "release" / "release-manifest.json"
     manifest_path.write_bytes(canonical_release_manifest_bytes(manifest))
@@ -126,7 +135,12 @@ def build_packaged_sidecar(slot_root: Path, test_signing_seed: bytes) -> Path:
     return slot_root
 
 
-def _run_pyinstaller(temporary_root: Path) -> None:
+def _run_pyinstaller(temporary_root: Path, embedded_identity: dict[str, object]) -> None:
+    identity_module = temporary_root / "sidecar_embedded_identity.py"
+    identity_module.write_text(
+        f"SIDECAR_HANDSHAKE_IDENTITY = {embedded_identity!r}\n",
+        encoding="utf-8",
+    )
     completed = subprocess.run(
         [
             sys.executable,
@@ -143,6 +157,10 @@ def _run_pyinstaller(temporary_root: Path) -> None:
             str(temporary_root / "work"),
             "--specpath",
             str(temporary_root / "spec"),
+            "--paths",
+            str(temporary_root),
+            "--hidden-import",
+            "sidecar_embedded_identity",
             str(Path(__file__).resolve().parents[1] / "src" / "seektalent" / "sidecar_bootstrap.py"),
         ],
         check=False,
@@ -191,9 +209,23 @@ def _manifest_payload(
     target: dict[str, str],
     source_revision: str,
     executable_name: str,
+    *,
+    sidecar_build_id: str,
 ) -> dict[str, object]:
     components = [
-        _component_payload(slot_root, target, source_revision, component_id, kind, root, dependencies, independent, names, executable_name)
+        _component_payload(
+            slot_root,
+            target,
+            source_revision,
+            component_id,
+            kind,
+            root,
+            dependencies,
+            independent,
+            names,
+            executable_name,
+            sidecar_build_id=sidecar_build_id,
+        )
         for component_id, kind, root, dependencies, independent, names in _COMPONENT_SPECS
     ]
     components.sort(key=lambda component: str(component["component_id"]))
@@ -205,7 +237,7 @@ def _manifest_payload(
         "product_version": "0.7.49",
         "product_build_id": "st1-00000000000000000000000000000000",
         "source_revision": source_revision,
-        "source_tree_digest": _digest_file(Path(__file__).resolve().parents[1] / "src" / "seektalent" / "sidecar_bootstrap.py"),
+        "source_tree_digest": _sidecar_source_digest(),
         "build_recipe": {
             "recipe_id": "test-only-pyinstaller-onedir-v1",
             "revision": "pyinstaller-6.21.0",
@@ -250,20 +282,7 @@ def _manifest_payload(
         for component in components
         for item in _mappings(component["files"])
     )
-    recipe = _mapping(payload["build_recipe"])
-    dependencies = _mappings(payload["dependency_inputs"])
-    product_build_id = expected_product_build_id_from_parts(
-        build_recipe_digest=str(recipe["digest"]),
-        component_build_identities=(
-            (str(component["component_id"]), str(component["build_id"]))
-            for component in components
-        ),
-        dependency_input_digests=(str(item["sha256"]) for item in dependencies),
-        product_version=str(payload["product_version"]),
-        source_revision=str(payload["source_revision"]),
-        target_os=str(target["os"]),
-        target_arch=str(target["arch"]),
-    )
+    product_build_id = _product_build_id(components, target, source_revision)
     payload["product_build_id"] = product_build_id
     payload["manifest_id"] = build_test_only_manifest_id(product_build_id)
     compatibility = _mapping(payload["compatibility"])
@@ -285,6 +304,8 @@ def _component_payload(
     platform_independent: bool,
     names: tuple[str, ...],
     executable_name: str,
+    *,
+    sidecar_build_id: str,
 ) -> dict[str, object]:
     root = slot_root / "release" / root_path
     if component_id == "liepin_execution_sidecar":
@@ -295,7 +316,11 @@ def _component_payload(
     tree_sha256 = declared_component_tree_digest_from_files(
         (str(item["path"]), str(item["sha256"])) for item in files
     )
-    build_id = f"test-only-{component_id}-{tree_sha256[:16]}"
+    build_id = (
+        sidecar_build_id
+        if component_id == "liepin_execution_sidecar"
+        else f"test-only-{component_id}-{tree_sha256[:16]}"
+    )
     entrypoints = [executable_name] if component_id == "liepin_execution_sidecar" else [str(item["path"]) for item in files if item["executable"]]
     return {
         "component_id": component_id,
@@ -314,6 +339,80 @@ def _component_payload(
         "code_signature_ref": "test-only-detached-manifest-signature" if entrypoints else None,
         "build_provenance_ref": f"test-only-{component_id}-build",
     }
+
+
+def _embedded_identity_payload(
+    slot_root: Path,
+    target: dict[str, str],
+    source_revision: str,
+) -> dict[str, object]:
+    sidecar_build_id = f"test-only-liepin_execution_sidecar-source-{_sidecar_source_digest()[:16]}"
+    components = [
+        _component_payload(
+            slot_root,
+            target,
+            source_revision,
+            component_id,
+            kind,
+            root,
+            dependencies,
+            independent,
+            names,
+            "seektalent-sidecar-bootstrap.exe" if target["os"] == "windows" else "seektalent-sidecar-bootstrap",
+            sidecar_build_id=sidecar_build_id,
+        )
+        for component_id, kind, root, dependencies, independent, names in _COMPONENT_SPECS
+        if component_id != "liepin_execution_sidecar"
+    ]
+    components.append({"component_id": "liepin_execution_sidecar", "build_id": sidecar_build_id})
+    main_build_id = next(
+        str(component["build_id"])
+        for component in components
+        if component["component_id"] == "main_application"
+    )
+    protocol = _mapping(_mapping(_compatibility_payload()["main_sidecar"])["source_port_protocol"])
+    capabilities = protocol["capabilities"]
+    if not isinstance(capabilities, list) or any(not isinstance(item, str) for item in capabilities):
+        raise TypeError("test-only source-port capabilities must be a string list")
+    return {
+        "product_build_id": _product_build_id(components, target, source_revision),
+        "sidecar_build_id": sidecar_build_id,
+        "protocol_id": protocol["protocol_id"],
+        "protocol_major": protocol["major"],
+        "protocol_min_minor": protocol["min_minor"],
+        "protocol_max_minor": protocol["max_minor"],
+        "protocol_capabilities": tuple(capabilities),
+        "expected_main_application_build_id": main_build_id,
+    }
+
+
+def _product_build_id(
+    components: list[dict[str, object]],
+    target: dict[str, str],
+    source_revision: str,
+) -> str:
+    return expected_product_build_id_from_parts(
+        build_recipe_digest=_digest_file(Path(__file__).resolve()),
+        component_build_identities=(
+            (str(component["component_id"]), str(component["build_id"]))
+            for component in sorted(components, key=lambda item: str(item["component_id"]))
+        ),
+        dependency_input_digests=(_digest_file(Path(__file__).resolve().parents[1] / "uv.lock"),),
+        product_version="0.7.49",
+        source_revision=source_revision,
+        target_os=str(target["os"]),
+        target_arch=str(target["arch"]),
+    )
+
+
+def _sidecar_source_digest() -> str:
+    root = Path(__file__).resolve().parents[1] / "src" / "seektalent"
+    return sha256(
+        b"".join(
+            path.name.encode("ascii") + b"\x00" + path.read_bytes()
+            for path in (root / "sidecar_bootstrap.py", root / "sidecar_readiness.py")
+        )
+    ).hexdigest()
 
 
 def _artifact_file_payloads(root: Path, executable_name: str) -> list[dict[str, object]]:

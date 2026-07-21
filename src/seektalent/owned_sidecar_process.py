@@ -184,6 +184,40 @@ class OwnedSidecarProcess:
         self.close_protocol_reader()
         self.close_stderr_reader()
 
+    def _cleanup_after_handshake_failure(
+        self,
+        primary_error: BaseException,
+    ) -> SidecarSpawnCleanupError | None:
+        """Retain exact child cleanup authority when readiness cannot confirm a reap."""
+        with self._lifecycle_lock:
+            streams = (self.protocol_writer, self.protocol_reader, self.stderr_reader)
+            cleanup = _reap_owned_child(self._process, self._process_group_id, streams)
+            cleanup_failures = cleanup.failures
+            self._process_group_id = None
+            lease_state = self._lease_state
+            if cleanup.reaped and lease_state is not None:
+                try:
+                    lease_state.close()
+                except InstalledSlotError as cleanup_error:
+                    cleanup_failures += (cleanup_error,)
+                else:
+                    self._lease_state = None
+                    return None
+            elif cleanup.reaped:
+                return None
+
+            if lease_state is None:
+                raise AssertionError("unreaped readiness cleanup lost its lifecycle lease")
+            self._lease_state = None
+            owner = _UnreapedOwnedSidecar(
+                self._process,
+                None,
+                streams,
+                lease_state,
+                child_reaped=cleanup.reaped,
+            )
+            return _new_sidecar_spawn_cleanup_error(primary_error, owner, cleanup_failures)
+
     def __copy__(self) -> Never:
         raise TypeError("OwnedSidecarProcess cannot be copied")
 
@@ -420,6 +454,29 @@ class _UnreapedFailedSpawn:
 
 
 @dataclass(slots=True)
+class _UnreapedOwnedSidecar:
+    """The original child and lease retained after a failed readiness handshake."""
+
+    process: _OwnedChildProcess
+    process_group_id: int | None
+    streams: tuple[IO[bytes], IO[bytes], IO[bytes]]
+    lease_state: _InstalledSidecarLeaseState
+    child_reaped: bool = False
+    lease_released: bool = False
+
+    def reap(self) -> _FailedSpawnCleanup:
+        cleanup = _reap_owned_child(self.process, self.process_group_id, self.streams)
+        if cleanup.reaped:
+            self.child_reaped = True
+        if self.child_reaped and not self.lease_released:
+            try:
+                self.lease_state.close()
+            finally:
+                self.lease_released = self.lease_state.released
+        return cleanup
+
+
+@dataclass(slots=True)
 class _UnreapedWindowsFailedSpawn:
     owner: _WindowsPendingOwner
     child_reaped: bool = False
@@ -447,7 +504,7 @@ class _CleanupRetryState(Enum):
 
 @dataclass(slots=True)
 class _FailedSpawnCleanupCapability:
-    owner: _UnreapedFailedSpawn | _UnreapedWindowsFailedSpawn
+    owner: _UnreapedFailedSpawn | _UnreapedOwnedSidecar | _UnreapedWindowsFailedSpawn
     native_attempts: int = 1
     state: _CleanupRetryState = _CleanupRetryState.ACTIVE
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -584,7 +641,7 @@ class SidecarSpawnCleanupError(RuntimeError):
 
 def _new_sidecar_spawn_cleanup_error(
     primary_error: BaseException,
-    owner: _UnreapedFailedSpawn | _UnreapedWindowsFailedSpawn,
+    owner: _UnreapedFailedSpawn | _UnreapedOwnedSidecar | _UnreapedWindowsFailedSpawn,
     cleanup_failures: tuple[BaseException, ...],
 ) -> SidecarSpawnCleanupError:
     error = RuntimeError.__new__(SidecarSpawnCleanupError)
@@ -629,13 +686,25 @@ def _reap_failed_spawn(
     process_group_id: int | None,
 ) -> _FailedSpawnCleanup:
     """Close every endpoint, then kill and reap before a failed spawn releases its lease."""
+    return _reap_owned_child(
+        process,
+        process_group_id,
+        tuple(stream for stream in (process.stdin, process.stdout, process.stderr) if stream is not None),
+    )
+
+
+def _reap_owned_child(
+    process: _OwnedChildProcess,
+    process_group_id: int | None,
+    streams: tuple[IO[bytes], ...],
+) -> _FailedSpawnCleanup:
+    """Close every endpoint, then kill and reap an already-owned direct child."""
     failures: list[BaseException] = []
-    for stream in (process.stdin, process.stdout, process.stderr):
-        if stream is not None:
-            try:
-                stream.close()
-            except OSError as exc:
-                failures.append(exc)
+    for stream in streams:
+        try:
+            stream.close()
+        except (OSError, ValueError) as exc:
+            failures.append(exc)
     try:
         _kill_owned_process(process, process_group_id)
     except OSError as exc:

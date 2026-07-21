@@ -1,17 +1,27 @@
-"""Minimal packaged sidecar process boundary.
-
-The bootstrap deliberately owns no product behavior. It keeps only its
-inherited stdin pipe open and exits when the parent closes that pipe.
-"""
+"""Packaged sidecar bootstrap with no product operation authority."""
 
 from __future__ import annotations
 
 import sys
+from importlib import import_module
+
+from seektalent.sidecar_readiness import (
+    SidecarHandshakeIdentity,
+    SidecarReadinessError,
+    serve_sidecar_handshake,
+)
 
 
 def main() -> int:
-    while sys.stdin.buffer.read(64 * 1024):
-        pass
+    try:
+        identity_module = import_module("sidecar_embedded_identity")
+        identity_payload = getattr(identity_module, "SIDECAR_HANDSHAKE_IDENTITY")
+        if not isinstance(identity_payload, dict):
+            return 70
+        identity = SidecarHandshakeIdentity(**identity_payload)
+        serve_sidecar_handshake(sys.stdin.buffer, sys.stdout.buffer, identity)
+    except (SidecarReadinessError, TypeError, ValueError):
+        return 70
     return 0
 
 

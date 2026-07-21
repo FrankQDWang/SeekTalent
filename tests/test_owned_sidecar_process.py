@@ -718,6 +718,8 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
             "installed_release.py",
             "installed_slot.py",
             "owned_sidecar_process.py",
+            "sidecar_bootstrap.py",
+            "sidecar_readiness.py",
             "windows_installed_binding.py",
             "windows_native_files.py",
             "windows_sidecar_process.py",

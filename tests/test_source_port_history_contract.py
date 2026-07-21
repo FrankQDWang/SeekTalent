@@ -467,7 +467,7 @@ def test_contract_rejects_fake_authority_and_escape_hatches(forbidden_field: str
         SourceHistoryQueryV1(**_query_values(), **{forbidden_field: True})
 
 
-def test_source_port_contract_has_neutral_import_closure_and_no_production_caller() -> None:
+def test_source_port_contract_has_neutral_import_closure_and_no_business_caller() -> None:
     tree = ast.parse(CONTRACT_PATH.read_text(encoding="utf-8"))
     imported_modules = {
         node.module if isinstance(node, ast.ImportFrom) else alias.name
@@ -485,7 +485,8 @@ def test_source_port_contract_has_neutral_import_closure_and_no_production_calle
         source = path.read_text(encoding="utf-8")
         if "seektalent.source_port" in source:
             production_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    assert production_callers == []
+    # Readiness is an uncalled transport primitive; #375 deliberately reuses this contract.
+    assert production_callers == ["src/seektalent/sidecar_readiness.py"]
 
     completed = subprocess.run(
         [

@@ -669,7 +669,7 @@ def test_errors_and_repr_do_not_leak_key_tag_body_or_internal_exception(caplog: 
     assert error.__context__ is None
 
 
-def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_production_caller() -> None:
+def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_business_caller() -> None:
     tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
     imported_modules = {
         node.module if isinstance(node, ast.ImportFrom) else alias.name
@@ -698,7 +698,8 @@ def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_produ
         source = path.read_text(encoding="utf-8")
         if "authenticated_history_frames" in source:
             production_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    assert production_callers == []
+    # Readiness is an uncalled transport primitive; #375 deliberately reuses this kernel.
+    assert production_callers == ["src/seektalent/sidecar_readiness.py"]
 
     runner = (PROJECT_ROOT / "src" / "seektalent_workbench_v2" / "runtime_runner.py").read_text(encoding="utf-8")
     pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")

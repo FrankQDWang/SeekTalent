@@ -15,6 +15,7 @@ import seektalent.owned_sidecar_process as owned_process
 from seektalent.installed_filesystem import InstalledReleaseError, InstalledReleaseReason
 from seektalent.installed_slot import ActiveSlotPointerV1, acquire_installed_sidecar_launch_lease
 from seektalent.owned_sidecar_process import spawn_owned_sidecar
+from seektalent.sidecar_readiness import spawn_ready_sidecar
 from seektalent.release_manifest import parse_release_manifest, release_manifest_digest
 from tools.build_packaged_sidecar import (
     TEST_ONLY_SIGNING_SEED,
@@ -90,7 +91,7 @@ def _assert_no_child_start(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert started == []
 
 
-def test_packaged_artifact_launches_from_verified_active_slot_and_exits_on_parent_eof(
+def test_packaged_artifact_completes_readiness_from_verified_active_slot(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -122,12 +123,13 @@ def test_packaged_artifact_launches_from_verified_active_slot_and_exits_on_paren
         Path(__file__).resolve().parents[1] / "tools" / "build_packaged_sidecar.py"
     )
 
-    process = spawn_owned_sidecar(lease)
-    process.protocol_writer.write(b"bootstrap pipe ownership only\n")
-    process.protocol_writer.flush()
-    process.close_stdin()
-    assert process.wait(5) == 0
-    process.close_readers()
+    session = spawn_ready_sidecar(lease, timeout=5)
+    assert session.process.pid > 0
+    assert session.session_id
+    assert session.new_history_session().closed is False
+    session.process.close_stdin()
+    assert session.process.wait(5) == 0
+    session.process.close_readers()
 
     retry = _acquire(root)
     retry.close()
@@ -138,7 +140,7 @@ def test_packaged_artifact_exits_after_early_parent_eof(tmp_path: Path) -> None:
 
     process = spawn_owned_sidecar(_acquire(root))
     process.close_stdin()
-    assert process.wait(5) == 0
+    assert process.wait(5) == 70
     process.close_readers()
     retry = _acquire(root)
     retry.close()
@@ -251,6 +253,8 @@ def test_packaged_artifact_is_not_a_python_source_or_network_launcher(tmp_path: 
     assert len(files) > 1
     assert all(path.is_relative_to(slot_root / "release") for path in files)
     assert not any(path.suffix == ".py" for path in files)
+    cryptography_files = [path for path in files if "cryptography" in path.parts]
+    assert not cryptography_files
     assert not os.environ.get("SEEKTALENT_PACKAGED_SIDECAR_NETWORK")
 
     environment = {
@@ -270,7 +274,7 @@ def test_packaged_artifact_is_not_a_python_source_or_network_launcher(tmp_path: 
         timeout=10,
         check=False,
     )
-    assert direct.returncode == 0, direct.stderr.decode("utf-8", errors="replace")
+    assert direct.returncode == 70, direct.stderr.decode("utf-8", errors="replace")
 
 
 def _digest_file(path: Path) -> str:
