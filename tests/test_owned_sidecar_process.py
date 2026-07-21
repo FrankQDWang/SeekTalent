@@ -326,16 +326,26 @@ def test_spawn_cwd_is_fixed_when_main_has_different_ambient_cwd(
     ambient.mkdir()
     monkeypatch.chdir(ambient)
     process = spawn_owned_sidecar(lease)
-    process.protocol_writer.write(b"IDENTITY\n")
-    process.protocol_writer.flush()
-    identity = json.loads(process.protocol_reader.readline())
+    line: list[bytes] = []
+    reader = threading.Thread(target=lambda: line.append(process.protocol_reader.readline()), daemon=True)
+    try:
+        process.protocol_writer.write(b"IDENTITY\n")
+        process.protocol_writer.flush()
+        reader.start()
+        reader.join(timeout=1)
+        assert not reader.is_alive(), "sidecar did not return its identity before the test deadline"
+        identity = json.loads(line[0])
 
-    assert Path.cwd() == ambient
-    assert identity["cwd"] == str(lease.manifest_path.parent)
+        assert Path.cwd() == ambient
+        assert identity["cwd"] == str(lease.manifest_path.parent)
 
-    process.close_stdin()
-    assert process.wait(5) == 0
-    process.close_readers()
+        process.close_stdin()
+        assert process.wait(5) == 0
+    finally:
+        if process.poll() is None:
+            process.kill(1)
+        process.close_readers()
+        reader.join(timeout=1)
 
 
 @requires_native_probe

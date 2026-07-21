@@ -7,6 +7,7 @@ import io
 import json
 import os
 import pickle
+import queue
 import socket
 import subprocess
 import threading
@@ -15,7 +16,7 @@ import weakref
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
-from typing import Callable
+from typing import Callable, cast
 
 import pytest
 from cryptography.hazmat.primitives.hashes import SHA256
@@ -642,6 +643,89 @@ def test_sidecar_rejects_every_main_ready_pipeline_tail_before_sidecar_ready(
     lease.close()
 
 
+def test_pre_ready_boundary_prioritizes_buffered_bytes_over_an_eof_sentinel() -> None:
+    transport = handshake._ProtocolTransport(io.BytesIO(), io.BytesIO())
+    try:
+        transport._buffer.extend(b"early-history-byte")
+        transport._set_eof()
+        transport._items.put_nowait(None)
+        with pytest.raises(readiness.SidecarReadinessError) as raised:
+            transport.require_clean_pre_ready_boundary(time.monotonic() + 1)
+        assert raised.value.reason is readiness.SidecarReadinessReason.EXTRA_FRAME
+    finally:
+        transport.close()
+
+
+def test_pre_ready_boundary_keeps_a_clean_eof_distinct_from_extra_bytes() -> None:
+    transport = handshake._ProtocolTransport(io.BytesIO(), io.BytesIO())
+    try:
+        transport._set_eof()
+        transport._items.put_nowait(None)
+        with pytest.raises(readiness.SidecarReadinessError) as raised:
+            transport.require_clean_pre_ready_boundary(time.monotonic() + 1)
+        assert raised.value.reason is readiness.SidecarReadinessReason.EOF
+    finally:
+        transport.close()
+
+
+def test_main_handshake_failure_retains_a_transport_that_cannot_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Process:
+        def __init__(self) -> None:
+            self.errors: list[readiness.SidecarReadinessError] = []
+
+        def _cleanup_after_handshake_failure(
+            self,
+            error: readiness.SidecarReadinessError,
+        ) -> None:
+            self.errors.append(error)
+
+    class _Transport:
+        def close(self) -> bool:
+            return False
+
+    process = _Process()
+    transport = _Transport()
+    retained: list[object] = []
+    monkeypatch.setattr(readiness, "_retain_unclosed_transport", retained.append)
+    error = readiness.SidecarReadinessError(readiness.SidecarReadinessReason.BAD_PROOF)
+
+    readiness._cleanup_failed_readiness(
+        cast(OwnedSidecarProcess, process),
+        cast(handshake._ProtocolTransport, transport),
+        error,
+    )
+
+    assert process.errors == [error]
+    assert retained == [transport]
+
+
+def test_child_handshake_failure_retains_a_transport_that_cannot_close(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Transport:
+        def read_handshake(self, *_: object) -> bytes:
+            raise readiness.SidecarReadinessError(readiness.SidecarReadinessReason.BAD_PROOF)
+
+        def close(self) -> bool:
+            return False
+
+    transport = _Transport()
+    retained: list[object] = []
+    monkeypatch.setattr(child_session_module, "_ProtocolTransport", lambda *_: transport)
+    monkeypatch.setattr(child_session_module, "_retain_unclosed_transport", retained.append)
+    lease = lease_factory()
+
+    with pytest.raises(readiness.SidecarReadinessError) as raised:
+        readiness.serve_sidecar_handshake(io.BytesIO(), io.BytesIO(), _identity(lease.admission), timeout=1)
+
+    assert raised.value.reason is readiness.SidecarReadinessReason.BAD_PROOF
+    assert retained == [transport]
+    lease.close()
+
+
 @pytest.mark.parametrize(
     ("mutation", "reason"),
     [
@@ -1180,6 +1264,40 @@ def test_collecting_child_result_cancels_its_reader_while_the_peer_stays_open(
     session.close(1)
 
 
+def test_collecting_child_result_retains_an_unclosed_transport_for_maintenance(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, _, thread, errors, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    thread.join(timeout=1)
+    assert errors == []
+    child_result = results.pop()
+    transport = child_session_module._result_state(child_result).transport
+    original_close = transport.close
+    attempts = 0
+
+    def fail_once() -> bool:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return False
+        return original_close()
+
+    monkeypatch.setattr(transport, "close", fail_once)
+    reference = weakref.ref(child_result)
+    del child_result
+    gc.collect()
+
+    assert reference() is None
+    assert transport in handshake._RETAINED_UNCLOSED_TRANSPORTS
+    handshake._maintain_retained_unclosed_transports()
+    assert transport not in handshake._RETAINED_UNCLOSED_TRANSPORTS
+    session.close(1)
+
+
 def test_child_result_close_unblocks_a_concurrent_parent_eof_wait(
     lease_factory: Callable[[], InstalledSidecarLaunchLease],
     monkeypatch: pytest.MonkeyPatch,
@@ -1303,6 +1421,277 @@ def test_protocol_transport_wakeup_setup_failure_restores_reader_mode_and_fds(
     finally:
         reader.close()
         os.close(peer_descriptor)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX wakeup descriptor rollback")
+def test_protocol_transport_rollback_retries_a_failed_wakeup_descriptor_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader_descriptor, peer_descriptor = os.pipe()
+    reader = os.fdopen(reader_descriptor, "rb", buffering=0)
+    baseline = len(os.listdir("/dev/fd"))
+    original_close = os.close
+    failed = False
+
+    class _FailingThread:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("injected reader start failure")
+
+    def fail_one_wakeup_close(descriptor: int) -> None:
+        nonlocal failed
+        if descriptor != reader_descriptor and not failed:
+            failed = True
+            raise OSError("injected wake descriptor close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(handshake.threading, "Thread", _FailingThread)
+    monkeypatch.setattr(handshake.os, "close", fail_one_wakeup_close)
+    try:
+        with pytest.raises(RuntimeError, match="reader start failure"):
+            handshake._ProtocolTransport(reader, io.BytesIO())
+        assert failed is True
+        assert handshake._RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS == set()
+        assert len(os.listdir("/dev/fd")) == baseline
+    finally:
+        reader.close()
+        original_close(peer_descriptor)
+
+
+def test_protocol_transport_close_keeps_authority_until_a_writer_close_retries() -> None:
+    class _Writer(io.BytesIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_attempts = 0
+
+        def close(self) -> None:
+            self.close_attempts += 1
+            if self.close_attempts == 1:
+                raise OSError("injected writer close failure")
+            super().close()
+
+    writer = _Writer()
+    transport = handshake._ProtocolTransport(io.BytesIO(), writer)
+
+    assert transport.close() is False
+    assert transport.reader_stopped is True
+    assert writer.closed is False
+    assert transport.close() is True
+    assert writer.closed is True
+
+
+def test_protocol_transport_close_attempts_writer_when_reader_close_fails() -> None:
+    class _Reader(io.BytesIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_attempts = 0
+
+        def close(self) -> None:
+            self.close_attempts += 1
+            if self.close_attempts <= 2:
+                raise OSError("injected reader close failure")
+            super().close()
+
+    reader = _Reader()
+    writer = io.BytesIO()
+    transport = handshake._ProtocolTransport(reader, writer)
+
+    assert transport.close() is False
+    assert reader.closed is False
+    assert writer.closed is True
+    assert transport.close() is True
+    assert reader.closed is True
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX wakeup descriptor disposition")
+def test_protocol_transport_close_retains_a_failed_wakeup_descriptor_for_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader_descriptor, peer_descriptor = os.pipe()
+    reader = os.fdopen(reader_descriptor, "rb", buffering=0)
+    transport = handshake._ProtocolTransport(reader, io.BytesIO())
+    wake_reader = transport._wake_reader_descriptor
+    assert wake_reader is not None
+    original_close = os.close
+    failed = False
+
+    def fail_once(value: int) -> None:
+        nonlocal failed
+        if value == wake_reader and not failed:
+            failed = True
+            raise OSError("injected wake descriptor close failure")
+        original_close(value)
+
+    monkeypatch.setattr(handshake.os, "close", fail_once)
+    try:
+        assert transport.close() is False
+        assert transport.reader_stopped is True
+        assert transport._wake_reader_descriptor == wake_reader
+        assert transport.close() is True
+        assert transport._wake_reader_descriptor is None
+    finally:
+        original_close(peer_descriptor)
+
+
+def test_windows_pre_ready_boundary_cancels_an_idle_blocking_read_without_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _CancellableReader:
+        def __init__(self) -> None:
+            self.cancelled = threading.Event()
+            self.entered_read = threading.Event()
+            self.closed = False
+
+        def read(self, _: int) -> bytes:
+            self.entered_read.set()
+            self.cancelled.wait(timeout=1)
+            if self.closed:
+                return b""
+            self.cancelled.clear()
+            raise OSError(995, "operation aborted")
+
+        def close(self) -> None:
+            self.closed = True
+            self.cancelled.set()
+
+    reader = _CancellableReader()
+    with monkeypatch.context() as context:
+        context.setattr(handshake.os, "name", "nt")
+        transport = handshake._ProtocolTransport(reader, io.BytesIO())
+        context.setattr(
+            handshake,
+            "_cancel_windows_synchronous_read",
+            lambda _: reader.cancelled.set() or True,
+        )
+        assert reader.entered_read.wait(timeout=1)
+        transport.require_clean_pre_ready_boundary(time.monotonic() + 1)
+        assert transport.close() is True
+
+
+def test_windows_boundary_abort_after_ack_does_not_poison_the_next_blocking_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _RepeatedCancellableReader:
+        def __init__(self) -> None:
+            self.cancelled = threading.Event()
+            self.second_read = threading.Event()
+            self.third_read = threading.Event()
+            self.closed = False
+            self.read_count = 0
+
+        def read(self, _: int) -> bytes:
+            self.read_count += 1
+            if self.read_count == 2:
+                self.second_read.set()
+            if self.read_count == 3:
+                self.third_read.set()
+            self.cancelled.wait(timeout=1)
+            self.cancelled.clear()
+            if self.closed:
+                return b""
+            raise OSError(995, "operation aborted")
+
+        def close(self) -> None:
+            self.closed = True
+            self.cancelled.set()
+
+    reader = _RepeatedCancellableReader()
+    with monkeypatch.context() as context:
+        context.setattr(handshake.os, "name", "nt")
+        transport = handshake._ProtocolTransport(reader, io.BytesIO())
+        context.setattr(
+            handshake,
+            "_cancel_windows_synchronous_read",
+            lambda _: reader.cancelled.set() or True,
+        )
+        response: queue.Queue[tuple[bool, BaseException | None]] = queue.Queue(maxsize=1)
+        transport._windows_boundary_cancel_active.set()
+        transport._boundary_requests.put(response)
+        reader.cancelled.set()
+        assert response.get(timeout=1) == (False, None)
+        assert reader.second_read.wait(timeout=1)
+
+        # The request has already been acknowledged, but the observer still
+        # owns the cancellation window while it consumes that response.
+        reader.cancelled.set()
+        assert reader.third_read.wait(timeout=1)
+        assert transport.reader_stopped is False
+
+        transport._windows_boundary_cancel_active.clear()
+        assert transport.close() is True
+
+
+def test_windows_pre_ready_boundary_waits_for_a_paused_blocking_reader_enqueue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BlockingReader:
+        def __init__(self) -> None:
+            self.allow_read = threading.Event()
+            self.closed = False
+            self._delivered = False
+
+        def read(self, _: int) -> bytes:
+            self.allow_read.wait(timeout=1)
+            if not self._delivered:
+                self._delivered = True
+                return b"early-history"
+            return b""
+
+        def close(self) -> None:
+            self.closed = True
+            self.allow_read.set()
+
+    reader = _BlockingReader()
+    with monkeypatch.context() as context:
+        context.setattr(handshake.os, "name", "nt")
+        transport = handshake._ProtocolTransport(reader, io.BytesIO())
+        paused_before_enqueue = threading.Event()
+        release_enqueue = threading.Event()
+        original_enqueue = transport._enqueue
+
+        def pause_before_enqueue(item: bytes | BaseException | None) -> None:
+            if item == b"early-history":
+                paused_before_enqueue.set()
+                release_enqueue.wait(timeout=1)
+            original_enqueue(item)
+
+        transport._enqueue = pause_before_enqueue  # type: ignore[method-assign]
+        boundary_requested = threading.Event()
+        original_put = transport._boundary_requests.put
+
+        def record_request(
+            item: queue.Queue[tuple[bool, BaseException | None]],
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            boundary_requested.set()
+            original_put(item, *args, **kwargs)
+
+        transport._boundary_requests.put = record_request  # type: ignore[method-assign]
+        reader.allow_read.set()
+        assert paused_before_enqueue.wait(timeout=1)
+        observed: list[BaseException] = []
+
+        def observe() -> None:
+            try:
+                transport.require_clean_pre_ready_boundary(time.monotonic() + 1)
+            except readiness.SidecarReadinessError as error:
+                observed.append(error)
+
+        boundary = threading.Thread(target=observe)
+        boundary.start()
+        assert boundary_requested.wait(timeout=1)
+        assert boundary.is_alive()
+        release_enqueue.set()
+        boundary.join(timeout=1)
+
+        assert not boundary.is_alive()
+        assert len(observed) == 1
+        assert isinstance(observed[0], readiness.SidecarReadinessError)
+        assert observed[0].reason is readiness.SidecarReadinessReason.EXTRA_FRAME
+        assert transport.close() is True
 
 
 def test_ready_close_retains_reaped_child_cleanup_when_real_slot_unlock_fails(

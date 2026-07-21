@@ -15,6 +15,7 @@ from seektalent.sidecar_handshake_protocol import (
     SidecarReadinessReason,
     _HandshakeMaterial,
     _ProtocolTransport,
+    _retain_unclosed_transport,
     _validated_timeout,
     perform_sidecar_handshake,
 )
@@ -113,7 +114,8 @@ def serve_sidecar_handshake(
         )
         return _new_result(transport, material)
     except (OSError, RuntimeError, ValueError):
-        transport.close()
+        if not transport.close():
+            _retain_unclosed_transport(transport)
         raise
 
 
@@ -136,7 +138,8 @@ def _new_result(transport: _ProtocolTransport, material: _HandshakeMaterial) -> 
         with _RESULTS_LOCK:
             entry = _RESULTS.pop(result_id, None)
         if entry is not None:
-            entry[1].transport.close()
+            if not entry[1].transport.close():
+                _retain_unclosed_transport(entry[1].transport)
 
     with _RESULTS_LOCK:
         _RESULTS[result_id] = (weakref.ref(result, finalize), state)

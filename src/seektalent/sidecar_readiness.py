@@ -19,6 +19,7 @@ from seektalent.sidecar_handshake_protocol import (
     SidecarReadinessError,
     SidecarReadinessReason,
     _ProtocolTransport,
+    _retain_unclosed_transport,
     _new_main_hello as _new_protocol_main_hello,
     _validated_timeout,
     perform_main_handshake,
@@ -224,7 +225,8 @@ def _cleanup_failed_readiness(
     error: SidecarReadinessError,
 ) -> None:
     if transport is not None:
-        transport.close()
+        if not transport.close():
+            _retain_unclosed_transport(transport)
     cleanup_error = process._cleanup_after_handshake_failure(error)
     if cleanup_error is not None:
         error.cleanup_error = cleanup_error
@@ -278,7 +280,8 @@ def _finalize_ready_state(state: _ReadySidecarState) -> None:
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
         return
     finally:
-        state.transport.close()
+        if not state.transport.close():
+            _retain_unclosed_transport(state.transport)
 
 
 def _ready_state(session: ReadySidecarSession) -> _ReadySidecarState:
