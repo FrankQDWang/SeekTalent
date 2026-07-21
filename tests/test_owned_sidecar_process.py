@@ -5,6 +5,7 @@ import copy
 import io
 import json
 import os
+import pickle
 import signal
 import subprocess
 import sys
@@ -224,6 +225,17 @@ def test_invalid_lifecycle_timeout_has_no_fake_process_or_group_signal_side_effe
     assert fake.terminate_calls == 0
     assert fake.kill_calls == 0
     assert group_signals == []
+
+
+def test_owned_sidecar_process_cannot_be_copied_or_serialized() -> None:
+    process, _ = _fake_owned_process()
+
+    with pytest.raises(TypeError):
+        copy.copy(process)
+    with pytest.raises(TypeError):
+        copy.deepcopy(process)
+    with pytest.raises(TypeError):
+        pickle.dumps(process)
 
 
 def test_windows_spawn_fails_closed_until_suspended_binding_exists(
@@ -708,6 +720,7 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
             "owned_sidecar_process.py",
             "windows_installed_binding.py",
             "windows_native_files.py",
+            "windows_sidecar_process.py",
         }
     ]
     references = [
@@ -719,6 +732,7 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
         or "owned_sidecar_process" in path.read_text(encoding="utf-8")
         or "windows_installed_binding" in path.read_text(encoding="utf-8")
         or "windows_native_files" in path.read_text(encoding="utf-8")
+        or "windows_sidecar_process" in path.read_text(encoding="utf-8")
     ]
     pyproject = (project_root / "pyproject.toml").read_text(encoding="utf-8")
 
@@ -729,6 +743,7 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
     assert "owned_sidecar_process" not in pyproject
     assert "windows_installed_binding" not in pyproject
     assert "windows_native_files" not in pyproject
+    assert "windows_sidecar_process" not in pyproject
 
 
 def test_resolver_failure_occurs_before_any_popen(

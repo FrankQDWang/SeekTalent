@@ -6,9 +6,12 @@ import signal
 import stat
 import subprocess
 import threading
+import weakref
 from dataclasses import dataclass, field
+from enum import Enum
+from itertools import count
 from pathlib import Path
-from typing import IO
+from typing import IO, Never, Protocol, SupportsIndex
 
 from seektalent.installed_release import INSTALLED_MANIFEST_RELATIVE_PATH, InstalledSidecarExecutableResolution
 from seektalent.installed_slot import (
@@ -19,20 +22,84 @@ from seektalent.installed_slot import (
 from seektalent.windows_installed_binding import (
     WindowsLaunchBindingError,
     WindowsLaunchBindingReason,
+    WindowsOpenedInstalledRelease,
+    _verify_suspended_child_image,
+)
+from seektalent.windows_sidecar_process import (
+    FAILED_SPAWN_REAP_TIMEOUT_SECONDS,
+    _WindowsPendingCreationError,
+    _WindowsPendingSidecar,
+    _create_windows_suspended_sidecar,
 )
 
 
-@dataclass(slots=True)
+FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS = 4
+
+__all__ = [
+    "OwnedSidecarProcess",
+    "SidecarCleanupMaintenanceResult",
+    "SidecarSpawnCleanupError",
+    "maintain_abandoned_sidecar_spawns",
+    "spawn_owned_sidecar",
+]
+
+
+class _OwnedChildProcess(Protocol):
+    pid: int
+    returncode: int | None
+
+    def poll(self) -> int | None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
+
+    def terminate(self) -> None: ...
+
+    def kill(self) -> None: ...
+
+
+@dataclass(slots=True, eq=False)
+class _WindowsPendingOwner:
+    """Private authority over the suspended child, held release, and lifecycle lease."""
+
+    pending: _WindowsPendingSidecar
+    lease_state: _InstalledSidecarLeaseState | None
+    opened_release: WindowsOpenedInstalledRelease | None
+
+    def __copy__(self) -> Never:
+        raise TypeError("private Windows pending owner cannot be copied")
+
+    def __deepcopy__(self, _: dict[int, object]) -> Never:
+        raise TypeError("private Windows pending owner cannot be copied")
+
+    def __reduce_ex__(self, _: SupportsIndex) -> Never:
+        raise TypeError("private Windows pending owner cannot be serialized")
+
+    def verify_child_image(self, executable: Path) -> None:
+        if self.opened_release is None or self.pending.child is None or self.pending.child._process_handle is None:
+            raise WindowsLaunchBindingError(WindowsLaunchBindingReason.CHILD_IMAGE_UNAVAILABLE, executable)
+        _verify_suspended_child_image(self.opened_release, self.pending.child._process_handle, executable)
+
+    def transfer_lease_after_promotion(self) -> _InstalledSidecarLeaseState:
+        state = self.lease_state
+        if state is None:
+            raise TypeError("private Windows pending owner has already transferred its lease")
+        self.pending.mark_promoted()
+        self.lease_state = None
+        self.opened_release = None
+        return state
+
+
+@dataclass(slots=True, eq=False)
 class OwnedSidecarProcess:
     """Main-owned direct child and its three anonymous one-way stdio pipes.
 
-    The exact Popen handle is private: callers must use this wrapper for every
+    The exact child handle is private: callers must use this wrapper for every
     lifecycle operation so observation, reaping, and retained process-group
     signaling remain serialized. On POSIX, a numeric process-group ID is not a
     durable ownership handle after the direct child is reaped.
     """
 
-    _process: subprocess.Popen[bytes]
+    _process: _OwnedChildProcess
     protocol_writer: IO[bytes]
     protocol_reader: IO[bytes]
     stderr_reader: IO[bytes]
@@ -117,19 +184,25 @@ class OwnedSidecarProcess:
         self.close_protocol_reader()
         self.close_stderr_reader()
 
+    def __copy__(self) -> Never:
+        raise TypeError("OwnedSidecarProcess cannot be copied")
+
+    def __deepcopy__(self, _: dict[int, object]) -> Never:
+        raise TypeError("OwnedSidecarProcess cannot be copied")
+
+    def __reduce_ex__(self, _: SupportsIndex) -> Never:
+        raise TypeError("OwnedSidecarProcess cannot be serialized")
+
 
 def spawn_owned_sidecar(lease: InstalledSidecarLaunchLease) -> OwnedSidecarProcess:
-    """Spawn one authenticated sidecar while transferring its live slot lease to the child."""
+    """Spawn one admitted direct child while transferring its live slot lease."""
     if not isinstance(lease, InstalledSidecarLaunchLease):
         raise TypeError("lease must be InstalledSidecarLaunchLease")
     lease_state = lease._take_for_spawn()
+    if os.name == "nt":
+        return _spawn_windows_owned_sidecar(lease_state)
     process: subprocess.Popen[bytes] | None = None
     try:
-        if os.name == "nt":
-            raise WindowsLaunchBindingError(
-                WindowsLaunchBindingReason.LAUNCH_BINDING_UNSUPPORTED,
-                lease_state.admission.executable_path,
-            )
         resolution = lease_state.admission.resolution
         executable = resolution.executable_path
         if not executable.is_absolute():
@@ -180,12 +253,81 @@ def spawn_owned_sidecar(lease: InstalledSidecarLaunchLease) -> OwnedSidecarProce
             if process is None:
                 raise AssertionError("unreaped failed spawn requires a direct child")
             owner = _UnreapedFailedSpawn(process, process.pid if os.name == "posix" else None, lease_state)
-            raise SidecarSpawnCleanupError(primary_error, owner, cleanup_failures) from primary_error
+            raise _new_sidecar_spawn_cleanup_error(primary_error, owner, cleanup_failures) from primary_error
         for cleanup_error in cleanup_failures:
             primary_error.add_note(
                 f"failed spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
             )
         raise
+
+
+def _spawn_windows_owned_sidecar(
+    lease_state: _InstalledSidecarLeaseState,
+) -> OwnedSidecarProcess:
+    resolution = lease_state.admission.resolution
+    executable = resolution.executable_path
+    owner: _WindowsPendingOwner | None = None
+    cleanup_failures: tuple[BaseException, ...] = ()
+    try:
+        if not executable.is_absolute():
+            raise ValueError("resolved executable path must be absolute")
+        opened_release = lease_state.windows_opened_release
+        if opened_release is None:
+            raise WindowsLaunchBindingError(
+                WindowsLaunchBindingReason.LAUNCH_BINDING_UNSUPPORTED,
+                executable,
+            )
+        pending = _create_windows_suspended_sidecar(
+            executable,
+            _installed_release_working_directory(resolution),
+        )
+        owner = _WindowsPendingOwner(pending, lease_state, opened_release)
+        owner.verify_child_image(executable)
+        owner.pending.resume(executable)
+        child, protocol_writer, protocol_reader, stderr_reader = owner.pending.resources()
+        process = OwnedSidecarProcess(
+            _process=child,
+            protocol_writer=protocol_writer,
+            protocol_reader=protocol_reader,
+            stderr_reader=stderr_reader,
+            _process_group_id=None,
+            _lease_state=lease_state,
+        )
+        owner.transfer_lease_after_promotion()
+        return process
+    except _WindowsPendingCreationError as creation_error:
+        primary_error = creation_error.primary_error
+        owner = _WindowsPendingOwner(creation_error.pending, lease_state, opened_release)
+        cleanup_failures = creation_error.failures
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        primary_error = error
+
+    if owner is None:
+        try:
+            lease_state.close()
+        except (InstalledSlotError, WindowsLaunchBindingError) as cleanup_error:
+            cleanup_failures += (cleanup_error,)
+        for cleanup_error in cleanup_failures:
+            primary_error.add_note(
+                f"failed Windows spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        raise primary_error
+
+    cleanup = owner.pending.cleanup()
+    cleanup_failures += cleanup.failures
+    if cleanup.child_reaped and cleanup.handles_closed:
+        try:
+            lease_state.close()
+        except (InstalledSlotError, WindowsLaunchBindingError) as cleanup_error:
+            cleanup_failures += (cleanup_error,)
+        for cleanup_error in cleanup_failures:
+            primary_error.add_note(
+                f"failed Windows spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        raise primary_error
+
+    cleanup_owner = _UnreapedWindowsFailedSpawn(owner, cleanup.child_reaped)
+    raise _new_sidecar_spawn_cleanup_error(primary_error, cleanup_owner, cleanup_failures) from primary_error
 
 
 def _installed_release_working_directory(
@@ -226,7 +368,7 @@ def _bounded_timeout(timeout: float) -> float:
     return value
 
 
-def _terminate_owned_process(process: subprocess.Popen[bytes], process_group_id: int | None) -> None:
+def _terminate_owned_process(process: _OwnedChildProcess, process_group_id: int | None) -> None:
     if process.returncode is not None:
         return
     if process_group_id is not None:
@@ -235,7 +377,7 @@ def _terminate_owned_process(process: subprocess.Popen[bytes], process_group_id:
     process.terminate()
 
 
-def _kill_owned_process(process: subprocess.Popen[bytes], process_group_id: int | None) -> None:
+def _kill_owned_process(process: _OwnedChildProcess, process_group_id: int | None) -> None:
     if process.returncode is not None:
         return
     if process_group_id is not None:
@@ -277,40 +419,209 @@ class _UnreapedFailedSpawn:
         return cleanup
 
 
-class SidecarSpawnCleanupError(RuntimeError):
-    """A failed spawn whose direct child needs explicit reaping before slot release."""
+@dataclass(slots=True)
+class _UnreapedWindowsFailedSpawn:
+    owner: _WindowsPendingOwner
+    child_reaped: bool = False
+    lease_released: bool = False
 
-    def __init__(
-        self,
-        primary_error: BaseException,
-        owner: _UnreapedFailedSpawn,
-        cleanup_failures: tuple[BaseException, ...],
-    ) -> None:
-        self.primary_error = primary_error
-        self._owner = owner
-        super().__init__("failed sidecar spawn cleanup could not confirm direct-child reap")
-        self.add_note(f"primary failed spawn error: {type(primary_error).__name__}: {primary_error}")
-        for cleanup_error in cleanup_failures:
-            self.add_note(
-                f"failed spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
-            )
+    def reap(self) -> _FailedSpawnCleanup:
+        cleanup = self.owner.pending.cleanup()
+        self.child_reaped = cleanup.child_reaped
+        if cleanup.child_reaped and cleanup.handles_closed and not self.lease_released:
+            lease_state = self.owner.lease_state
+            if lease_state is None:
+                raise AssertionError("private Windows pending owner lost its lifecycle lease")
+            try:
+                lease_state.close()
+            finally:
+                self.lease_released = lease_state.released
+        return _FailedSpawnCleanup(cleanup.failures, cleanup.child_reaped)
+
+
+class _CleanupRetryState(Enum):
+    ACTIVE = "active"
+    SUCCEEDED = "succeeded"
+    TERMINAL_FAILURE = "terminal_failure"
+
+
+@dataclass(slots=True)
+class _FailedSpawnCleanupCapability:
+    owner: _UnreapedFailedSpawn | _UnreapedWindowsFailedSpawn
+    native_attempts: int = 1
+    state: _CleanupRetryState = _CleanupRetryState.ACTIVE
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def reap(self) -> tuple[bool, tuple[BaseException, ...]]:
+        with self.lock:
+            if self.state is _CleanupRetryState.SUCCEEDED:
+                return True, ()
+            if self.state is _CleanupRetryState.TERMINAL_FAILURE:
+                return False, ()
+            if self.native_attempts >= FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS:
+                self.state = _CleanupRetryState.TERMINAL_FAILURE
+                return False, ()
+            self.native_attempts += 1
+            try:
+                cleanup = self.owner.reap()
+            except (InstalledSlotError, WindowsLaunchBindingError):
+                if self.native_attempts >= FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS:
+                    self.state = _CleanupRetryState.TERMINAL_FAILURE
+                raise
+            if cleanup.reaped and self.owner.lease_released:
+                self.state = _CleanupRetryState.SUCCEEDED
+                return True, cleanup.failures
+            if self.native_attempts >= FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS:
+                self.state = _CleanupRetryState.TERMINAL_FAILURE
+            return False, cleanup.failures
+
+
+@dataclass(slots=True)
+class _SpawnCleanupOwner:
+    error_reference: weakref.ReferenceType["SidecarSpawnCleanupError"]
+    capability: _FailedSpawnCleanupCapability
+    abandoned: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SidecarCleanupMaintenanceResult:
+    """The bounded disposition of abandoned failed-spawn cleanup owners."""
+
+    abandoned: int
+    reaped: int
+    terminal: int
+
+
+_SPAWN_CLEANUP_OWNERS: dict[int, _SpawnCleanupOwner] = {}
+_SPAWN_CLEANUP_OWNERS_LOCK = threading.Lock()
+_SPAWN_CLEANUP_OWNER_IDS = count(1)
+
+
+def _mark_spawn_cleanup_abandoned(owner_id: int) -> None:
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        owner = _SPAWN_CLEANUP_OWNERS.get(owner_id)
+        if owner is not None and owner.error_reference() is None:
+            owner.abandoned = True
+
+
+def maintain_abandoned_sidecar_spawns() -> SidecarCleanupMaintenanceResult:
+    """Run one bounded cleanup attempt for every unreachable failed-spawn owner."""
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        abandoned = tuple(
+            (owner_id, owner)
+            for owner_id, owner in _SPAWN_CLEANUP_OWNERS.items()
+            if owner.abandoned
+        )
+
+    reaped = 0
+    terminal = 0
+    for owner_id, owner in abandoned:
+        confirmed, _ = owner.capability.reap()
+        if confirmed:
+            with _SPAWN_CLEANUP_OWNERS_LOCK:
+                if _SPAWN_CLEANUP_OWNERS.get(owner_id) is owner:
+                    _SPAWN_CLEANUP_OWNERS.pop(owner_id)
+                    reaped += 1
+        elif owner.capability.state is _CleanupRetryState.TERMINAL_FAILURE:
+            terminal += 1
+    return SidecarCleanupMaintenanceResult(len(abandoned), reaped, terminal)
+
+
+class SidecarSpawnCleanupError(RuntimeError):
+    """A factory-issued failed spawn cleanup capability with bounded retries."""
+
+    def __init__(self, *_: object, **__: object) -> None:
+        raise TypeError("SidecarSpawnCleanupError is factory-only")
 
     @property
     def direct_child_reaped(self) -> bool:
-        return self._owner.child_reaped
+        completed = getattr(self, "_completed_cleanup_result", None)
+        if completed is not None:
+            return completed[0]
+        return _spawn_cleanup_capability(self).owner.child_reaped
 
     @property
     def lease_released(self) -> bool:
-        return self._owner.lease_released
+        completed = getattr(self, "_completed_cleanup_result", None)
+        if completed is not None:
+            return completed[1]
+        return _spawn_cleanup_capability(self).owner.lease_released
+
+    @property
+    def cleanup_terminally_failed(self) -> bool:
+        if getattr(self, "_completed_cleanup_result", None) is not None:
+            return False
+        return _spawn_cleanup_capability(self).state is _CleanupRetryState.TERMINAL_FAILURE
 
     def reap(self) -> bool:
-        """Retry the explicit cleanup owner once; release the lease only after reap."""
-        cleanup = self._owner.reap()
-        for cleanup_error in cleanup.failures:
+        """Run one bounded cleanup retry, then cache a confirmed successful result."""
+        if getattr(self, "_completed_cleanup_result", None) is not None:
+            return True
+        capability = _spawn_cleanup_capability(self)
+        reaped, failures = capability.reap()
+        for cleanup_error in failures:
             self.add_note(
                 f"failed spawn cleanup retry: {type(cleanup_error).__name__}: {cleanup_error}"
             )
-        return cleanup.reaped
+        if reaped:
+            self._completed_cleanup_result = (
+                capability.owner.child_reaped,
+                capability.owner.lease_released,
+            )
+            with _SPAWN_CLEANUP_OWNERS_LOCK:
+                _SPAWN_CLEANUP_OWNERS.pop(_spawn_cleanup_owner_id(self), None)
+        return reaped
+
+    def __copy__(self) -> Never:
+        raise TypeError("SidecarSpawnCleanupError cannot be copied")
+
+    def __deepcopy__(self, _: dict[int, object]) -> Never:
+        raise TypeError("SidecarSpawnCleanupError cannot be copied")
+
+    def __reduce_ex__(self, _: SupportsIndex) -> Never:
+        raise TypeError("SidecarSpawnCleanupError cannot be serialized")
+
+
+def _new_sidecar_spawn_cleanup_error(
+    primary_error: BaseException,
+    owner: _UnreapedFailedSpawn | _UnreapedWindowsFailedSpawn,
+    cleanup_failures: tuple[BaseException, ...],
+) -> SidecarSpawnCleanupError:
+    error = RuntimeError.__new__(SidecarSpawnCleanupError)
+    RuntimeError.__init__(error, "failed sidecar spawn cleanup could not confirm direct-child reap")
+    owner_id = next(_SPAWN_CLEANUP_OWNER_IDS)
+    error._spawn_cleanup_owner_id = owner_id
+    error._completed_cleanup_result: tuple[bool, bool] | None = None
+    error.primary_error = primary_error
+    error.add_note(f"primary failed spawn error: {type(primary_error).__name__}: {primary_error}")
+    for cleanup_error in cleanup_failures:
+        error.add_note(
+            f"failed spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
+        )
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        _SPAWN_CLEANUP_OWNERS[owner_id] = _SpawnCleanupOwner(
+            weakref.ref(error),
+            _FailedSpawnCleanupCapability(owner),
+        )
+    weakref.finalize(error, _mark_spawn_cleanup_abandoned, owner_id)
+    return error
+
+
+def _spawn_cleanup_capability(error: SidecarSpawnCleanupError) -> _FailedSpawnCleanupCapability:
+    owner_id = _spawn_cleanup_owner_id(error)
+
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        owner = _SPAWN_CLEANUP_OWNERS.get(owner_id)
+        if owner is None or owner.error_reference() is not error:
+            raise TypeError("SidecarSpawnCleanupError must be a live factory cleanup error")
+        return owner.capability
+
+
+def _spawn_cleanup_owner_id(error: SidecarSpawnCleanupError) -> int:
+    owner_id = getattr(error, "_spawn_cleanup_owner_id", None)
+    if not isinstance(owner_id, int):
+        raise TypeError("SidecarSpawnCleanupError must be a live factory cleanup error")
+    return owner_id
 
 
 def _reap_failed_spawn(
@@ -330,7 +641,7 @@ def _reap_failed_spawn(
     except OSError as exc:
         failures.append(exc)
     try:
-        process.wait()
+        process.wait(timeout=FAILED_SPAWN_REAP_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError) as exc:
         failures.append(exc)
         try:

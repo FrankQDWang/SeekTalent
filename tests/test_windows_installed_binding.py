@@ -82,7 +82,7 @@ def _create_directory_symlink(link: Path, target: Path) -> None:
 
 
 @requires_windows
-def test_windows_admission_uses_live_opened_objects_and_spawn_is_blocked(
+def test_windows_admission_uses_live_opened_objects_and_spawn_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -145,7 +145,7 @@ def test_windows_admission_uses_live_opened_objects_and_spawn_is_blocked(
 
     with pytest.raises(WindowsLaunchBindingError) as raised:
         spawn_owned_sidecar(lease)
-    assert raised.value.reason == WindowsLaunchBindingReason.LAUNCH_BINDING_UNSUPPORTED
+    assert raised.value.reason == WindowsLaunchBindingReason.CREATE_PROCESS_FAILED
     assert popen_calls == []
 
     slot_root.rename(moved_slot)
@@ -314,3 +314,11 @@ def test_windows_final_path_normalization_is_case_and_prefix_stable() -> None:
     assert windows_native.normalize_windows_path(r"\\?\UNC\server\share\slot") == (
         windows_native.normalize_windows_path(r"\\server\share\slot")
     )
+
+
+def test_child_image_failures_have_distinct_causal_reasons() -> None:
+    assert WindowsLaunchBindingReason.CHILD_IMAGE_UNAVAILABLE.value == "child_image_unavailable"
+    assert WindowsLaunchBindingReason.CHILD_IMAGE_MISMATCH.value == "child_image_mismatch"
+    assert WindowsLaunchBindingReason.PIPE_SETUP_FAILED.value == "pipe_setup_failed"
+    assert WindowsLaunchBindingReason.CREATE_PROCESS_FAILED.value == "create_process_failed"
+    assert WindowsLaunchBindingReason.RESUME_THREAD_FAILED.value == "resume_thread_failed"

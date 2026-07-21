@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ctypes
 import os
 import weakref
 from contextlib import suppress
@@ -21,6 +22,7 @@ from seektalent.windows_native_files import (
     query_windows_file_identity,
     read_windows_file,
     require_supported_local_ntfs,
+    windows_api,
     windows_error_code,
 )
 
@@ -36,6 +38,11 @@ class WindowsLaunchBindingReason(StrEnum):
     SLOT_REPARSE_POINT_REJECTED = "slot_reparse_point_rejected"
     EXECUTABLE_IDENTITY_CHANGED = "executable_identity_changed"
     EXECUTABLE_SHARE_MODE_CONFLICT = "executable_share_mode_conflict"
+    PIPE_SETUP_FAILED = "pipe_setup_failed"
+    CREATE_PROCESS_FAILED = "create_process_failed"
+    CHILD_IMAGE_UNAVAILABLE = "child_image_unavailable"
+    CHILD_IMAGE_MISMATCH = "child_image_mismatch"
+    RESUME_THREAD_FAILED = "resume_thread_failed"
     LAUNCH_BINDING_UNSUPPORTED = "launch_binding_unsupported"
     NATIVE_HANDLE_RELEASE_FAILED = "native_handle_release_failed"
 
@@ -51,7 +58,8 @@ class WindowsLaunchBindingError(ValueError):
         self.reason = reason
         self.path = path
         self.winerror = winerror
-        super().__init__(reason.value)
+        message = reason.value if winerror is None else f"{reason.value}: winerror={winerror}"
+        super().__init__(message)
 
 
 @dataclass(slots=True)
@@ -316,6 +324,86 @@ def _binding_state(binding: WindowsOpenedInstalledRelease) -> _WindowsOpenedRele
     if entry is None or entry[0]() is not binding:
         raise TypeError("Windows opened installed release must be a live factory authority")
     return entry[1]
+
+
+def _verify_suspended_child_image(
+    binding: WindowsOpenedInstalledRelease,
+    process_handle: int,
+    executable_path: Path,
+) -> None:
+    """Compare a suspended child's actual image with the held executable object."""
+    state = _binding_state(binding)
+    expected = state.opened.get(normalize_windows_path(str(executable_path)))
+    if expected is None or expected.identity.directory:
+        raise TypeError("Windows opened release has no held sidecar executable")
+
+    try:
+        image_path = _query_full_process_image_name(process_handle)
+    except OSError as exc:
+        raise WindowsLaunchBindingError(
+            WindowsLaunchBindingReason.CHILD_IMAGE_UNAVAILABLE,
+            executable_path,
+            winerror=windows_error_code(exc),
+        ) from exc
+    if normalize_windows_path(image_path) != expected.identity.final_path:
+        raise WindowsLaunchBindingError(
+            WindowsLaunchBindingReason.CHILD_IMAGE_MISMATCH,
+            executable_path,
+        )
+
+    child_image = Path(image_path)
+    child_handle: int | None = None
+    primary: WindowsLaunchBindingError | None = None
+    try:
+        child_handle = open_windows_object(child_image, directory=False)
+        actual = query_windows_file_identity(child_handle, child_image)
+        if (
+            actual.volume_serial_number != expected.identity.volume_serial_number
+            or actual.file_id != expected.identity.file_id
+            or actual.final_path != expected.identity.final_path
+        ):
+            primary = WindowsLaunchBindingError(
+                WindowsLaunchBindingReason.CHILD_IMAGE_MISMATCH,
+                executable_path,
+            )
+    except OSError as exc:
+        primary = WindowsLaunchBindingError(
+            WindowsLaunchBindingReason.CHILD_IMAGE_UNAVAILABLE,
+            executable_path,
+            winerror=windows_error_code(exc),
+        )
+    finally:
+        if child_handle is not None:
+            try:
+                close_windows_handle(child_handle)
+            except OSError as exc:
+                close_error = WindowsLaunchBindingError(
+                    WindowsLaunchBindingReason.NATIVE_HANDLE_RELEASE_FAILED,
+                    executable_path,
+                    winerror=windows_error_code(exc),
+                )
+                if primary is None:
+                    primary = close_error
+                else:
+                    primary.add_note(f"child image handle close failed: {close_error.winerror}")
+    if primary is not None:
+        raise primary
+
+
+def _query_full_process_image_name(process_handle: int) -> str:
+    from ctypes import wintypes
+
+    api = windows_api()
+    size = 32_768
+    for _ in range(4):
+        buffer = ctypes.create_unicode_buffer(size)
+        length = wintypes.DWORD(size)
+        if api.QueryFullProcessImageNameW(process_handle, 0, buffer, ctypes.byref(length)):
+            return buffer.value
+        if int(getattr(ctypes, "get_last_error")()) != 122:
+            break
+        size *= 2
+    raise OSError(int(getattr(ctypes, "get_last_error")()), "QueryFullProcessImageNameW failed")
 
 
 def _require_absolute_root(path: Path) -> Path:
