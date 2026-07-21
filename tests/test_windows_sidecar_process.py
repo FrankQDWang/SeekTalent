@@ -110,6 +110,7 @@ class _FakeCreationApi(_FakeProcessApi):
         self.set_handle_handles: list[int] = []
         self.file_calls = 0
         self.file_handles: list[int] = []
+        self.file_failure_error: OSError | None = None
         self.attribute_delete_calls = 0
         self.updated_handle_lists: list[tuple[int, ...]] = []
         self.create_arguments: tuple[object, ...] | None = None
@@ -187,7 +188,8 @@ def _fake_file_from_handle(api: _FakeCreationApi, handle: int, _mode: str) -> io
     api.file_calls += 1
     api.file_handles.append(handle)
     if api.file_failure_at == api.file_calls:
-        raise OSError("parent pipe wrapping failed")
+        api.file_failure_error = OSError("parent pipe wrapping failed")
+        raise api.file_failure_error
     return _FakeParentPipeStream(api, handle)
 
 
@@ -299,6 +301,8 @@ def test_windows_partial_pipe_setup_failures_close_each_created_handle_once(
         assert api.pipe_calls == 3
         assert api.set_handle_handles == [12, 13, 15]
         assert api.file_handles == [12, 13, 15][:failure_at]
+        assert api.file_failure_error is not None
+        assert raised.value.__cause__ is api.file_failure_error
 
 
 def test_private_windows_child_owner_cannot_be_copied_or_serialized() -> None:
@@ -322,6 +326,8 @@ def test_windows_public_surface_has_no_child_evidence_promotion_or_authenticated
     assert "ChildImageEvidence" not in public_names
     assert "PendingOwnedSidecarProcess" not in public_names
     assert tuple(inspect.signature(spawn_owned_sidecar).parameters) == ("lease",)
+    assert tuple(inspect.signature(owned_process.maintain_abandoned_sidecar_spawns).parameters) == ()
+    assert all("pending" not in name.lower() for name in owned_process.__all__)
     assert not hasattr(owned_process.OwnedSidecarProcess, "promote")
     assert "authenticated" not in (owned_process.OwnedSidecarProcess.__doc__ or "").lower()
 
@@ -640,52 +646,41 @@ def test_cleanup_error_serializes_concurrent_retry_and_caches_success(
     next_lease.close()
 
 
-def test_cleanup_error_stops_after_its_bounded_retry_budget_without_releasing_slot(
+def test_custodian_uses_remaining_budget_to_reap_an_abandoned_cleanup_owner(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    api = _FakeProcessApi([windows_sidecar.WAIT_FAILED])
-    root, cleanup_error, _ = _spawn_unreaped_windows_cleanup_error(tmp_path, monkeypatch, api)
-    assert owned_process.FAILED_SPAWN_CLEANUP_RETRY_BUDGET == 3
-    api.wait_results.extend([windows_sidecar.WAIT_FAILED] * owned_process.FAILED_SPAWN_CLEANUP_RETRY_BUDGET)
-
-    for _ in range(owned_process.FAILED_SPAWN_CLEANUP_RETRY_BUDGET):
-        assert cleanup_error.reap() is False
-
-    assert cleanup_error.cleanup_terminally_failed is True
-    assert cleanup_error.direct_child_reaped is False
-    assert cleanup_error.lease_released is False
-    assert api.wait_timeouts == [5_000] * (1 + owned_process.FAILED_SPAWN_CLEANUP_RETRY_BUDGET)
-    native_calls = (list(api.terminate_calls), api.wait_calls, list(api.closed_handles))
-    assert cleanup_error.reap() is False
-    assert (api.terminate_calls, api.wait_calls, api.closed_handles) == native_calls
-    with pytest.raises(InstalledSlotError) as conflict:
-        acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
-    assert conflict.value.reason == InstalledSlotReason.SLOT_LEASE_CONFLICT
-
-
-def test_discarded_cleanup_error_collects_while_its_orphan_owner_can_reap_and_release_slot(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    gc.collect()
-    existing_orphan_ids = set(owned_process._abandoned_spawn_cleanup_ids())
-    api = _FakeProcessApi([windows_sidecar.WAIT_FAILED, windows_sidecar.WAIT_OBJECT_0])
+    api = _FakeProcessApi(
+        [
+            windows_sidecar.WAIT_FAILED,
+            windows_sidecar.WAIT_FAILED,
+            windows_sidecar.WAIT_OBJECT_0,
+        ]
+    )
     root, cleanup_error, pending = _spawn_unreaped_windows_cleanup_error(tmp_path, monkeypatch, api)
     error_reference = weakref.ref(cleanup_error)
+
+    assert cleanup_error.reap() is False
+    assert api.wait_calls == 2
 
     del cleanup_error
     gc.collect()
 
     assert error_reference() is None
-    orphan_ids = set(owned_process._abandoned_spawn_cleanup_ids()) - existing_orphan_ids
-    assert len(orphan_ids) == 1
     with pytest.raises(InstalledSlotError) as conflict:
         acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
     assert conflict.value.reason == InstalledSlotReason.SLOT_LEASE_CONFLICT
 
-    assert owned_process._retry_abandoned_spawn_cleanup(orphan_ids.pop()) is True
-    assert set(owned_process._abandoned_spawn_cleanup_ids()) == existing_orphan_ids
+    result = owned_process.maintain_abandoned_sidecar_spawns()
+
+    assert result.abandoned >= 1
+    assert result.reaped >= 1
+    assert result.terminal == 0
+    assert owned_process.maintain_abandoned_sidecar_spawns() == owned_process.SidecarCleanupMaintenanceResult(
+        abandoned=0,
+        reaped=0,
+        terminal=0,
+    )
     assert pending.child is not None
     assert pending.child.child_reaped is True
     assert pending.child.handles_closed is True
@@ -693,34 +688,52 @@ def test_discarded_cleanup_error_collects_while_its_orphan_owner_can_reap_and_re
     next_lease.close()
 
 
-def test_terminal_cleanup_owner_survives_error_collection_until_private_retry_succeeds(
+def test_custodian_reports_terminal_orphans_without_reopening_the_native_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    gc.collect()
-    existing_orphan_ids = set(owned_process._abandoned_spawn_cleanup_ids())
     api = _FakeProcessApi([windows_sidecar.WAIT_FAILED])
     root, cleanup_error, _ = _spawn_unreaped_windows_cleanup_error(tmp_path, monkeypatch, api)
-    api.wait_results.extend([windows_sidecar.WAIT_FAILED] * owned_process.FAILED_SPAWN_CLEANUP_RETRY_BUDGET)
-    for _ in range(owned_process.FAILED_SPAWN_CLEANUP_RETRY_BUDGET):
+    api.wait_results.extend(
+        [windows_sidecar.WAIT_FAILED] * (owned_process.FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS - 1)
+    )
+    for _ in range(owned_process.FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS - 1):
         assert cleanup_error.reap() is False
     assert cleanup_error.cleanup_terminally_failed is True
+    native_calls = (list(api.terminate_calls), api.wait_calls, list(api.closed_handles))
+    assert cleanup_error.reap() is False
+    assert (api.terminate_calls, api.wait_calls, api.closed_handles) == native_calls
     error_reference = weakref.ref(cleanup_error)
 
     del cleanup_error
     gc.collect()
 
     assert error_reference() is None
-    orphan_ids = set(owned_process._abandoned_spawn_cleanup_ids()) - existing_orphan_ids
-    assert len(orphan_ids) == 1
     with pytest.raises(InstalledSlotError):
         acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
 
-    api.wait_results.append(windows_sidecar.WAIT_OBJECT_0)
-    assert owned_process._retry_abandoned_spawn_cleanup(orphan_ids.pop()) is True
-    assert set(owned_process._abandoned_spawn_cleanup_ids()) == existing_orphan_ids
-    next_lease = acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
-    next_lease.close()
+    expected = owned_process.SidecarCleanupMaintenanceResult(
+        abandoned=1,
+        reaped=0,
+        terminal=1,
+    )
+    assert owned_process.maintain_abandoned_sidecar_spawns() == expected
+    assert owned_process.maintain_abandoned_sidecar_spawns() == expected
+
+    results: list[owned_process.SidecarCleanupMaintenanceResult] = []
+    threads = [
+        threading.Thread(target=lambda: results.append(owned_process.maintain_abandoned_sidecar_spawns()))
+        for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert results == [expected] * 4
+    assert (api.terminate_calls, api.wait_calls, api.closed_handles) == native_calls
+    assert api.wait_calls == owned_process.FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS
 
 
 def test_windows_resume_thread_close_failure_kills_reaps_and_releases_slot(
