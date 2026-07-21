@@ -13,7 +13,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, cast
+from typing import IO, Callable, cast
 
 import pytest
 
@@ -82,6 +82,19 @@ class _FakePopen:
 
     def kill(self) -> None:
         self.kill_calls += 1
+
+
+class _RetryableCloseStream:
+    def __init__(self, failures: int | None) -> None:
+        self._failures = failures
+        self.close_calls = 0
+        self.closed = False
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self._failures is None or self.close_calls <= self._failures:
+            raise OSError("injected stream close failure")
+        self.closed = True
 
 
 def _fake_owned_process(*, process_group_id: int | None = None) -> tuple[owned_process.OwnedSidecarProcess, _FakePopen]:
@@ -860,3 +873,55 @@ def test_windows_lease_cleanup_failure_retains_primary_error_and_can_retry() -> 
     assert cleanup_error.lease_released is False
     assert cleanup_error.reap() is True
     assert cleanup_error.lease_released is True
+
+
+def test_reaped_handshake_cleanup_retains_only_unclosed_pipes_until_each_closes() -> None:
+    fake = _FakePopen()
+    first = _RetryableCloseStream(1)
+    second = _RetryableCloseStream(2)
+    process = owned_process.OwnedSidecarProcess(
+        _process=cast(subprocess.Popen[bytes], fake),
+        protocol_writer=cast(IO[bytes], first),
+        protocol_reader=cast(IO[bytes], second),
+        stderr_reader=fake.stderr,
+        _process_group_id=None,
+    )
+
+    cleanup_error = process._cleanup_after_handshake_failure(RuntimeError("readiness failed"))
+
+    assert isinstance(cleanup_error, owned_process.SidecarSpawnCleanupError)
+    assert cleanup_error.direct_child_reaped is True
+    assert cleanup_error.lease_released is True
+    assert first.close_calls == 1
+    assert second.close_calls == 1
+    assert cleanup_error.reap() is False
+    assert first.closed is True
+    assert second.closed is False
+    assert first.close_calls == 2
+    assert second.close_calls == 2
+    assert cleanup_error.reap() is True
+    assert second.closed is True
+    assert second.close_calls == 3
+
+
+def test_permanently_unclosed_pipe_stays_in_abandoned_cleanup_maintenance() -> None:
+    fake = _FakePopen()
+    stuck = _RetryableCloseStream(None)
+    process = owned_process.OwnedSidecarProcess(
+        _process=cast(subprocess.Popen[bytes], fake),
+        protocol_writer=cast(IO[bytes], stuck),
+        protocol_reader=fake.stdout,
+        stderr_reader=fake.stderr,
+        _process_group_id=None,
+    )
+    cleanup_error = process._cleanup_after_handshake_failure(RuntimeError("readiness failed"))
+
+    assert isinstance(cleanup_error, owned_process.SidecarSpawnCleanupError)
+    cleanup_error.abandon()
+    result = None
+    for _ in range(owned_process.FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS - 1):
+        result = owned_process.maintain_abandoned_sidecar_spawns()
+    assert result is not None
+    assert result.terminal >= 1
+    assert cleanup_error.cleanup_terminally_failed is True
+    assert stuck.closed is False

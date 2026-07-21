@@ -91,7 +91,13 @@ class ReadySidecarSession:
     def receive_history(self, *, timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS) -> tuple[ReceivedHistoryMessage, ...]:
         state = _ready_state(self)
         deadline = time.monotonic() + _validated_timeout(timeout)
-        return state.history.feed(state.transport.read_history_chunk(deadline, state.process))
+        try:
+            chunk = state.transport.read_history_chunk(deadline, state.process)
+        except SidecarReadinessError as error:
+            if error.reason is SidecarReadinessReason.EOF:
+                state.history.feed_eof()
+            raise
+        return state.history.feed(chunk)
 
     def close(self, timeout: float) -> int:
         """Kill/reap/release exactly once, retaining cleanup authority on any failure."""

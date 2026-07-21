@@ -46,6 +46,19 @@ class _CloseFailsOnce(io.BytesIO):
             raise OSError(self._message)
 
 
+class _RetryableCloseStream:
+    def __init__(self) -> None:
+        self.closed = False
+        self.close_calls = 0
+        self.fail = True
+
+    def close(self) -> None:
+        self.close_calls += 1
+        if self.fail:
+            raise OSError("injected persistent stream close failure")
+        self.closed = True
+
+
 class _FakePopen:
     def __init__(
         self,
@@ -564,6 +577,43 @@ def test_pipe_close_failure_reaps_child_before_releasing_the_consumed_lease(
     next_lease.close()
 
 
+def test_reaped_spawn_retains_retryable_lease_cleanup_after_slot_release_failure(
+    installed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A reaped failed child is not sufficient while its native slot lock remains held."""
+    fake = _FakePopen(missing_pipe=True)
+    lease = _acquire(installed_root)
+    monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(owned_process, "_signal_process_group", lambda *_: fake.kill())
+    original_unlock = installed_slot._unlock_native_slot_lock
+    attempts = 0
+
+    def fail_once_then_unlock(descriptor: int, platform: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("injected unlock failure")
+        original_unlock(descriptor, platform)
+
+    monkeypatch.setattr(installed_slot, "_unlock_native_slot_lock", fail_once_then_unlock)
+
+    with pytest.raises(owned_process.SidecarSpawnCleanupError) as raised:
+        spawn_owned_sidecar(lease)
+
+    cleanup_error = raised.value
+    assert cleanup_error.direct_child_reaped is True
+    assert cleanup_error.lease_released is False
+    with pytest.raises(InstalledSlotError) as conflict:
+        _acquire(installed_root)
+    assert conflict.value.reason is InstalledSlotReason.SLOT_LEASE_CONFLICT
+
+    assert cleanup_error.reap() is True
+    assert cleanup_error.lease_released is True
+    next_lease = _acquire(installed_root)
+    next_lease.close()
+
+
 @pytest.mark.parametrize("failure", ["kill", "wait"])
 def test_failed_spawn_cleanup_error_is_diagnostic_after_reap(
     installed_root: Path,
@@ -665,6 +715,44 @@ def test_unreaped_failed_spawn_retains_explicit_lease_owner_until_retry_succeeds
     next_lease.close()
 
 
+def test_unreaped_failed_spawn_retains_unclosed_pipe_until_a_later_retry_closes_it(
+    installed_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakePopen(
+        missing_pipe=True,
+        wait_failure=OSError("first wait failed"),
+        wait_failure_reaps=False,
+        kill_sets_returncode=False,
+    )
+    stuck = _RetryableCloseStream()
+    fake.stdout = cast(io.BytesIO, stuck)
+    monkeypatch.setattr(owned_process.subprocess, "Popen", lambda *args, **kwargs: fake)
+    monkeypatch.setattr(owned_process, "_signal_process_group", lambda *_: fake.kill())
+
+    with pytest.raises(owned_process.SidecarSpawnCleanupError) as raised:
+        spawn_owned_sidecar(_acquire(installed_root))
+
+    cleanup_error = raised.value
+    assert cleanup_error.direct_child_reaped is False
+    assert stuck.close_calls == 1
+
+    fake.wait_failure = None
+    fake.kill_sets_returncode = True
+    assert cleanup_error.reap() is False
+    assert cleanup_error.direct_child_reaped is True
+    assert cleanup_error.lease_released is True
+    assert stuck.closed is False
+    assert stuck.close_calls == 2
+
+    stuck.fail = False
+    assert cleanup_error.reap() is True
+    assert stuck.closed is True
+    assert stuck.close_calls == 3
+    next_lease = _acquire(installed_root)
+    next_lease.close()
+
+
 def test_timeout_retains_lease_until_a_direct_child_is_reaped(
     installed_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -709,6 +797,41 @@ def test_release_failure_never_restores_lease_authority(
     lease.close()
     next_lease = _acquire(installed_root)
     next_lease.close()
+
+
+def test_native_slot_lock_retries_fd_close_without_reunlocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptor, peer = os.pipe()
+    lock = installed_slot._NativeSlotLock(tmp_path / "slot.lock", descriptor, "posix")
+    unlock_calls = 0
+    close_calls = 0
+    original_close = installed_slot.os.close
+
+    def unlock(value: int, platform: str) -> None:
+        nonlocal unlock_calls
+        assert (value, platform) == (descriptor, "posix")
+        unlock_calls += 1
+
+    def fail_first_close(value: int) -> None:
+        nonlocal close_calls
+        if value == descriptor:
+            close_calls += 1
+            if close_calls == 1:
+                raise OSError("injected fd close failure")
+        original_close(value)
+
+    monkeypatch.setattr(installed_slot, "_unlock_native_slot_lock", unlock)
+    monkeypatch.setattr(installed_slot.os, "close", fail_first_close)
+    with pytest.raises(InstalledSlotError):
+        lock.close()
+    assert lock.lock_held is False
+    assert lock.descriptor == descriptor
+    lock.close()
+    assert unlock_calls == 1
+    assert lock.descriptor is None
+    original_close(peer)
 
 
 @pytest.mark.skipif(

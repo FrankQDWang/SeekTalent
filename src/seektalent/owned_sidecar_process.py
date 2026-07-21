@@ -224,19 +224,18 @@ class OwnedSidecarProcess:
                     cleanup_failures += (cleanup_error,)
                 else:
                     self._lease_state = None
-                    return None
-            elif cleanup.reaped:
+                    lease_state = None
+            if cleanup.reaped and cleanup.pipes_closed and lease_state is None:
                 return None
-
-            if lease_state is None:
-                raise AssertionError("unreaped readiness cleanup lost its lifecycle lease")
-            self._lease_state = None
+            if lease_state is not None:
+                self._lease_state = None
             owner = _UnreapedOwnedSidecar(
                 self._process,
                 None if cleanup.reaped else process_group_id,
-                streams,
+                cleanup.unresolved_streams,
                 lease_state,
                 child_reaped=cleanup.reaped,
+                lease_released=lease_state is None,
             )
             return _new_sidecar_spawn_cleanup_error(primary_error, owner, cleanup_failures)
 
@@ -295,6 +294,7 @@ def spawn_owned_sidecar(lease: InstalledSidecarLaunchLease) -> OwnedSidecarProce
         )
     except BaseException as primary_error:
         cleanup_failures: tuple[BaseException, ...] = ()
+        cleanup: _FailedSpawnCleanup | None = None
         reaped = process is None
         if process is not None:
             cleanup = _reap_failed_spawn(process, process.pid if os.name == "posix" else None)
@@ -303,12 +303,28 @@ def spawn_owned_sidecar(lease: InstalledSidecarLaunchLease) -> OwnedSidecarProce
         if reaped:
             try:
                 lease_state.close()
-            except InstalledSlotError as cleanup_error:
+            except (InstalledSlotError, WindowsLaunchBindingError) as cleanup_error:
                 cleanup_failures += (cleanup_error,)
+                owner = _reaped_spawn_cleanup_owner(process, cleanup, lease_state)
+                raise _new_sidecar_spawn_cleanup_error(
+                    primary_error,
+                    owner,
+                    cleanup_failures,
+                ) from primary_error
+            if cleanup is not None and not cleanup.pipes_closed:
+                owner = _reaped_spawn_cleanup_owner(process, cleanup, None)
+                raise _new_sidecar_spawn_cleanup_error(primary_error, owner, cleanup_failures) from primary_error
         else:
             if process is None:
                 raise AssertionError("unreaped failed spawn requires a direct child")
-            owner = _UnreapedFailedSpawn(process, process.pid if os.name == "posix" else None, lease_state)
+            if cleanup is None:
+                raise AssertionError("unreaped failed spawn requires its cleanup disposition")
+            owner = _UnreapedFailedSpawn(
+                process,
+                process.pid if os.name == "posix" else None,
+                cleanup.unresolved_streams,
+                lease_state,
+            )
             raise _new_sidecar_spawn_cleanup_error(primary_error, owner, cleanup_failures) from primary_error
         for cleanup_error in cleanup_failures:
             primary_error.add_note(
@@ -363,6 +379,11 @@ def _spawn_windows_owned_sidecar(
             lease_state.close()
         except (InstalledSlotError, WindowsLaunchBindingError) as cleanup_error:
             cleanup_failures += (cleanup_error,)
+            raise _new_sidecar_spawn_cleanup_error(
+                primary_error,
+                _ReapedLeaseCleanup(lease_state),
+                cleanup_failures,
+            ) from primary_error
         for cleanup_error in cleanup_failures:
             primary_error.add_note(
                 f"failed Windows spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
@@ -376,6 +397,11 @@ def _spawn_windows_owned_sidecar(
             lease_state.close()
         except (InstalledSlotError, WindowsLaunchBindingError) as cleanup_error:
             cleanup_failures += (cleanup_error,)
+            raise _new_sidecar_spawn_cleanup_error(
+                primary_error,
+                _ReapedLeaseCleanup(lease_state),
+                cleanup_failures,
+            ) from primary_error
         for cleanup_error in cleanup_failures:
             primary_error.add_note(
                 f"failed Windows spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
@@ -384,6 +410,27 @@ def _spawn_windows_owned_sidecar(
 
     cleanup_owner = _UnreapedWindowsFailedSpawn(owner, cleanup.child_reaped)
     raise _new_sidecar_spawn_cleanup_error(primary_error, cleanup_owner, cleanup_failures) from primary_error
+
+
+def _reaped_spawn_cleanup_owner(
+    process: subprocess.Popen[bytes] | None,
+    cleanup: _FailedSpawnCleanup | None,
+    lease_state: _InstalledSidecarLeaseState | None,
+) -> _UnreapedOwnedSidecar | _ReapedLeaseCleanup:
+    """Retain every unresolved failed-spawn resource after the direct child exits."""
+    unresolved_streams = () if cleanup is None else cleanup.unresolved_streams
+    if process is None or not unresolved_streams:
+        if lease_state is None:
+            raise AssertionError("reaped spawn cleanup needs an unresolved resource")
+        return _ReapedLeaseCleanup(lease_state)
+    return _UnreapedOwnedSidecar(
+        process,
+        None,
+        unresolved_streams,
+        lease_state,
+        child_reaped=True,
+        lease_released=lease_state is None,
+    )
 
 
 def _installed_release_working_directory(
@@ -453,18 +500,29 @@ def _signal_process_group(process_group_id: int, sig: signal.Signals) -> None:
 class _FailedSpawnCleanup:
     failures: tuple[BaseException, ...]
     reaped: bool
+    unresolved_streams: tuple[IO[bytes], ...] = ()
+
+    @property
+    def pipes_closed(self) -> bool:
+        return not self.unresolved_streams
 
 
 @dataclass(slots=True)
 class _UnreapedFailedSpawn:
     process: subprocess.Popen[bytes]
     process_group_id: int | None
+    streams: tuple[IO[bytes], ...]
     lease_state: _InstalledSidecarLeaseState
     child_reaped: bool = False
     lease_released: bool = False
 
+    @property
+    def pipes_closed(self) -> bool:
+        return not self.streams
+
     def reap(self) -> _FailedSpawnCleanup:
-        cleanup = _reap_failed_spawn(self.process, self.process_group_id)
+        cleanup = _reap_owned_child(self.process, self.process_group_id, self.streams)
+        self.streams = cleanup.unresolved_streams
         if cleanup.reaped:
             self.child_reaped = True
         if self.child_reaped and not self.lease_released:
@@ -481,20 +539,28 @@ class _UnreapedOwnedSidecar:
 
     process: _OwnedChildProcess
     process_group_id: int | None
-    streams: tuple[IO[bytes], IO[bytes], IO[bytes]]
-    lease_state: _InstalledSidecarLeaseState
+    streams: tuple[IO[bytes], ...]
+    lease_state: _InstalledSidecarLeaseState | None
     child_reaped: bool = False
     lease_released: bool = False
 
+    @property
+    def pipes_closed(self) -> bool:
+        return not self.streams
+
     def reap(self) -> _FailedSpawnCleanup:
         cleanup = _reap_owned_child(self.process, self.process_group_id, self.streams)
+        self.streams = cleanup.unresolved_streams
         if cleanup.reaped:
             self.child_reaped = True
         if self.child_reaped and not self.lease_released:
+            lease_state = self.lease_state
+            if lease_state is None:
+                raise AssertionError("unreleased cleanup lost its lease state")
             try:
-                self.lease_state.close()
+                lease_state.close()
             finally:
-                self.lease_released = self.lease_state.released
+                self.lease_released = lease_state.released
         return cleanup
 
 
@@ -503,6 +569,10 @@ class _UnreapedWindowsFailedSpawn:
     owner: _WindowsPendingOwner
     child_reaped: bool = False
     lease_released: bool = False
+
+    @property
+    def pipes_closed(self) -> bool:
+        return True
 
     def reap(self) -> _FailedSpawnCleanup:
         cleanup = self.owner.pending.cleanup()
@@ -518,6 +588,26 @@ class _UnreapedWindowsFailedSpawn:
         return _FailedSpawnCleanup(cleanup.failures, cleanup.child_reaped)
 
 
+@dataclass(slots=True)
+class _ReapedLeaseCleanup:
+    """The only remaining authority after a child is gone but its lease is not."""
+
+    lease_state: _InstalledSidecarLeaseState
+    child_reaped: bool = True
+    lease_released: bool = False
+
+    @property
+    def pipes_closed(self) -> bool:
+        return True
+
+    def reap(self) -> _FailedSpawnCleanup:
+        try:
+            self.lease_state.close()
+        finally:
+            self.lease_released = self.lease_state.released
+        return _FailedSpawnCleanup((), True)
+
+
 class _CleanupRetryState(Enum):
     ACTIVE = "active"
     SUCCEEDED = "succeeded"
@@ -526,7 +616,7 @@ class _CleanupRetryState(Enum):
 
 @dataclass(slots=True)
 class _FailedSpawnCleanupCapability:
-    owner: _UnreapedFailedSpawn | _UnreapedOwnedSidecar | _UnreapedWindowsFailedSpawn
+    owner: _UnreapedFailedSpawn | _UnreapedOwnedSidecar | _UnreapedWindowsFailedSpawn | _ReapedLeaseCleanup
     native_attempts: int = 1
     state: _CleanupRetryState = _CleanupRetryState.ACTIVE
     lock: threading.Lock = field(default_factory=threading.Lock)
@@ -547,7 +637,7 @@ class _FailedSpawnCleanupCapability:
                 if self.native_attempts >= FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS:
                     self.state = _CleanupRetryState.TERMINAL_FAILURE
                 raise
-            if cleanup.reaped and self.owner.lease_released:
+            if cleanup.reaped and self.owner.lease_released and self.owner.pipes_closed:
                 self.state = _CleanupRetryState.SUCCEEDED
                 return True, cleanup.failures
             if self.native_attempts >= FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS:
@@ -672,7 +762,7 @@ class SidecarSpawnCleanupError(RuntimeError):
 
 def _new_sidecar_spawn_cleanup_error(
     primary_error: BaseException,
-    owner: _UnreapedFailedSpawn | _UnreapedOwnedSidecar | _UnreapedWindowsFailedSpawn,
+    owner: _UnreapedFailedSpawn | _UnreapedOwnedSidecar | _UnreapedWindowsFailedSpawn | _ReapedLeaseCleanup,
     cleanup_failures: tuple[BaseException, ...],
 ) -> SidecarSpawnCleanupError:
     error = RuntimeError.__new__(SidecarSpawnCleanupError)
@@ -731,11 +821,16 @@ def _reap_owned_child(
 ) -> _FailedSpawnCleanup:
     """Close every endpoint, then kill and reap an already-owned direct child."""
     failures: list[BaseException] = []
+    unresolved_streams: list[IO[bytes]] = []
     for stream in streams:
+        if stream.closed:
+            continue
         try:
             stream.close()
         except (OSError, ValueError) as exc:
             failures.append(exc)
+        if not stream.closed:
+            unresolved_streams.append(stream)
     try:
         _kill_owned_process(process, process_group_id)
     except OSError as exc:
@@ -751,4 +846,4 @@ def _reap_owned_child(
             reaped = False
     else:
         reaped = True
-    return _FailedSpawnCleanup(tuple(failures), reaped)
+    return _FailedSpawnCleanup(tuple(failures), reaped, tuple(unresolved_streams))

@@ -5,6 +5,7 @@ import ctypes
 import gc
 import io
 import json
+import os
 import pickle
 import socket
 import subprocess
@@ -36,7 +37,11 @@ from seektalent.owned_sidecar_process import (
     SidecarSpawnCleanupError,
     maintain_abandoned_sidecar_spawns,
 )
-from seektalent.source_port.authenticated_history_frames import HistoryFrameError, HistoryFrameReason
+from seektalent.source_port.authenticated_history_frames import (
+    HistoryFrameError,
+    HistoryFrameReason,
+    PostHandshakeHistorySession,
+)
 from seektalent.source_port.history_contract import SourceHistoryNotFound, SourceHistoryQueryV1
 from seektalent.release_manifest import parse_release_manifest
 from tests.test_installed_release import _install_slot
@@ -552,6 +557,91 @@ def test_sidecar_rejects_ambiguous_or_wrong_protocol_main_hello(
     lease.close()
 
 
+@pytest.mark.parametrize("tail_kind", ["partial_header", "partial_body", "history", "duplicate_ready"])
+def test_sidecar_rejects_every_main_ready_pipeline_tail_before_sidecar_ready(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    tail_kind: str,
+) -> None:
+    lease = lease_factory()
+    identity = _identity(lease.admission)
+    main_socket, sidecar_socket = socket.socketpair()
+    main_reader = main_socket.makefile("rb", buffering=0)
+    main_writer = main_socket.makefile("wb", buffering=0)
+    main_socket.close()
+    errors: list[BaseException] = []
+    results: list[readiness.SidecarHandshakeResult] = []
+
+    def serve() -> None:
+        reader = sidecar_socket.makefile("rb", buffering=0)
+        writer = sidecar_socket.makefile("wb", buffering=0)
+        sidecar_socket.close()
+        try:
+            results.append(readiness.serve_sidecar_handshake(reader, writer, identity, timeout=1))
+        except readiness.SidecarReadinessError as error:
+            errors.append(error)
+
+    thread = threading.Thread(target=serve)
+    thread.start()
+    main_hello, secret = handshake._new_main_hello(
+        lease.admission.product_build_id,
+        lease.admission.main_application_build_id,
+    )
+    main_hello_raw = handshake._canonical_payload(main_hello)
+    _write_frame(main_writer, main_hello_raw)
+    sidecar_hello_raw = _read_frame(main_reader)
+    main_ready = handshake._ready_payload(
+        "main_ready",
+        main_hello["session_id"],
+        secret,
+        b"main_ready",
+        (main_hello_raw, sidecar_hello_raw),
+    )
+    main_ready_raw = handshake._canonical_payload(main_ready)
+    expected_sidecar_ready_raw = handshake._canonical_payload(
+        handshake._ready_payload(
+            "sidecar_ready",
+            main_hello["session_id"],
+            secret,
+            b"sidecar_ready",
+            (main_hello_raw, sidecar_hello_raw, main_ready_raw),
+        )
+    )
+    main_to_sidecar, sidecar_to_main = handshake._derive_direction_keys(
+        secret,
+        main_hello["session_id"],
+        (main_hello_raw, sidecar_hello_raw, main_ready_raw, expected_sidecar_ready_raw),
+    )
+    history = PostHandshakeHistorySession.for_main(
+        session_id=main_hello["session_id"],
+        protocol_minor=identity.protocol_max_minor,
+        main_to_sidecar_key=main_to_sidecar,
+        sidecar_to_main_key=sidecar_to_main,
+    )
+    history_frame = history.encode_query(
+        message_id="early-query",
+        correlation_id=None,
+        payload=_history_query(),
+    )
+    tail = {
+        "partial_header": history_frame[:2],
+        "partial_body": history_frame[:7],
+        "history": history_frame,
+        "duplicate_ready": len(main_ready_raw).to_bytes(4, "big") + main_ready_raw,
+    }[tail_kind]
+    main_writer.write(len(main_ready_raw).to_bytes(4, "big") + main_ready_raw + tail)
+    main_writer.flush()
+    main_writer.close()
+    thread.join(timeout=1)
+
+    assert not thread.is_alive()
+    assert results == []
+    assert len(errors) == 1
+    assert errors[0].reason is readiness.SidecarReadinessReason.EXTRA_FRAME
+    assert main_reader.read() == b""
+    main_reader.close()
+    lease.close()
+
+
 @pytest.mark.parametrize(
     ("mutation", "reason"),
     [
@@ -873,6 +963,103 @@ def test_replayed_history_frame_is_rejected_through_every_public_transport_facto
         session.close(1)
 
 
+def test_main_history_eof_preserves_partial_frame_reason_and_clean_eof_closes_parser(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, _, thread, errors, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    thread.join(timeout=1)
+    assert errors == []
+    child_result = results.pop()
+    query = _history_query()
+    query_frame = session.new_history_session().encode_query(
+        message_id="query-eof",
+        correlation_id=None,
+        payload=query,
+    )
+    session.send_history_frame(query_frame, timeout=1)
+    assert child_result.receive_history(timeout=1)[0].payload == query
+    result_frame = child_result.new_history_session().encode_result(
+        message_id="result-eof",
+        reply_to="query-eof",
+        payload=SourceHistoryNotFound(
+            **_history_query().model_dump(exclude={"contract_version"}),
+            contract_version="seektalent.source-port.query.result/v1",
+            outcome="not_found",
+            oldest_retained_generation=1,
+            newest_known_generation=3,
+            history_complete=True,
+            history_truncated=False,
+        ),
+    )
+    child_result.send_history_frame(result_frame[:3], timeout=1)
+    assert session.receive_history(timeout=1) == ()
+    child_result.close()
+    with pytest.raises(HistoryFrameError) as partial:
+        session.receive_history(timeout=1)
+    assert partial.value.reason_code == HistoryFrameReason.TRUNCATED_FRAME.value
+    session.close(1)
+
+    lease = lease_factory()
+    process, _, thread, errors, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    clean_session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    thread.join(timeout=1)
+    assert errors == []
+    results.pop().close()
+    with pytest.raises(readiness.SidecarReadinessError) as clean:
+        clean_session.receive_history(timeout=1)
+    assert clean.value.reason is readiness.SidecarReadinessReason.EOF
+    assert clean_session.new_history_session().closed is True
+    clean_session.close(1)
+
+
+def test_child_history_eof_preserves_partial_frame_reason_and_clean_eof_closes_parser(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, _, thread, errors, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    thread.join(timeout=1)
+    assert errors == []
+    child_result = results.pop()
+    frame = session.new_history_session().encode_query(
+        message_id="child-query-eof",
+        correlation_id=None,
+        payload=_history_query(),
+    )
+    session.send_history_frame(frame[:3], timeout=1)
+    assert child_result.receive_history(timeout=1) == ()
+    process.close_stdin()
+    process.close_readers()
+    with pytest.raises(HistoryFrameError) as partial:
+        child_result.receive_history(timeout=1)
+    assert partial.value.reason_code == HistoryFrameReason.TRUNCATED_FRAME.value
+    child_result.close()
+    session.close(1)
+
+    lease = lease_factory()
+    process, _, thread, errors, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    clean_session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    thread.join(timeout=1)
+    assert errors == []
+    clean_child_result = results.pop()
+    process.close_stdin()
+    process.close_readers()
+    with pytest.raises(readiness.SidecarReadinessError) as clean:
+        clean_child_result.receive_history(timeout=1)
+    assert clean.value.reason is readiness.SidecarReadinessReason.EOF
+    assert clean_child_result.new_history_session().closed is True
+    clean_child_result.close()
+    clean_session.close(1)
+
+
 def _history_query() -> SourceHistoryQueryV1:
     return SourceHistoryQueryV1(
         contract_version="seektalent.source-port.query.request/v1",
@@ -1062,6 +1249,60 @@ def test_windows_reader_cancel_uses_thread_terminate_and_never_claims_failed_sto
     monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: failing_kernel32, raising=False)
 
     assert handshake._cancel_windows_synchronous_read(456) is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX wakeup descriptor rollback")
+def test_protocol_transport_start_failure_rolls_back_wakeup_fds_and_reader_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader_descriptor, peer_descriptor = os.pipe()
+    reader = os.fdopen(reader_descriptor, "rb", buffering=0)
+    baseline = len(os.listdir("/dev/fd"))
+
+    class _FailingThread:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def start(self) -> None:
+            raise RuntimeError("injected reader start failure")
+
+    monkeypatch.setattr(handshake.threading, "Thread", _FailingThread)
+    try:
+        with pytest.raises(RuntimeError, match="reader start failure"):
+            handshake._ProtocolTransport(reader, io.BytesIO())
+        assert os.get_blocking(reader_descriptor) is True
+        assert len(os.listdir("/dev/fd")) == baseline
+    finally:
+        reader.close()
+        os.close(peer_descriptor)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX wakeup descriptor rollback")
+def test_protocol_transport_wakeup_setup_failure_restores_reader_mode_and_fds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reader_descriptor, peer_descriptor = os.pipe()
+    reader = os.fdopen(reader_descriptor, "rb", buffering=0)
+    baseline = len(os.listdir("/dev/fd"))
+    original_set_blocking = os.set_blocking
+    calls = 0
+
+    def fail_while_configuring_wakeup(descriptor: int, blocking: bool) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected wakeup nonblocking failure")
+        original_set_blocking(descriptor, blocking)
+
+    monkeypatch.setattr(handshake.os, "set_blocking", fail_while_configuring_wakeup)
+    try:
+        with pytest.raises(OSError, match="wakeup nonblocking failure"):
+            handshake._ProtocolTransport(reader, io.BytesIO())
+        assert os.get_blocking(reader_descriptor) is True
+        assert len(os.listdir("/dev/fd")) == baseline
+    finally:
+        reader.close()
+        os.close(peer_descriptor)
 
 
 def test_ready_close_retains_reaped_child_cleanup_when_real_slot_unlock_fails(

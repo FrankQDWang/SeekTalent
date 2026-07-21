@@ -61,9 +61,13 @@ class SidecarHandshakeResult:
 
     def receive_history(self, *, timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS) -> tuple[ReceivedHistoryMessage, ...]:
         state = _result_state(self)
-        return state.history.feed(
-            state.transport.read_history_chunk(time.monotonic() + _validated_timeout(timeout), None)
-        )
+        try:
+            chunk = state.transport.read_history_chunk(time.monotonic() + _validated_timeout(timeout), None)
+        except SidecarReadinessError as error:
+            if error.reason is SidecarReadinessReason.EOF:
+                state.history.feed_eof()
+            raise
+        return state.history.feed(chunk)
 
     def wait_for_parent_eof(self) -> None:
         state = _result_state(self)

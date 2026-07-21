@@ -284,6 +284,7 @@ class _NativeSlotLock:
     path: Path
     descriptor: int | None
     platform: Literal["posix", "windows"]
+    lock_held: bool = True
 
     def __enter__(self) -> Self:
         return self
@@ -295,10 +296,12 @@ class _NativeSlotLock:
         descriptor = self.descriptor
         if descriptor is None:
             return
-        try:
-            _unlock_native_slot_lock(descriptor, self.platform)
-        except OSError as exc:
-            raise InstalledSlotError(InstalledSlotReason.SLOT_RELEASE_FAILED, self.path) from exc
+        if self.lock_held:
+            try:
+                _unlock_native_slot_lock(descriptor, self.platform)
+            except OSError as exc:
+                raise InstalledSlotError(InstalledSlotReason.SLOT_RELEASE_FAILED, self.path) from exc
+            self.lock_held = False
         try:
             os.close(descriptor)
         except OSError as exc:

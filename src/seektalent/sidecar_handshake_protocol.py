@@ -65,6 +65,7 @@ class SidecarReadinessReason(StrEnum):
     NONCE_MISMATCH = "sidecar_readiness_nonce_mismatch"
     IDENTITY_MISMATCH = "sidecar_readiness_identity_mismatch"
     BAD_PROOF = "sidecar_readiness_bad_proof"
+    EXTRA_FRAME = "sidecar_readiness_extra_frame"
     PIPE_IO_FAILURE = "sidecar_readiness_pipe_io_failure"
 
 
@@ -134,22 +135,30 @@ class _ProtocolTransport:
         self._reader_descriptor: int | None = None
         self._wake_reader_descriptor: int | None = None
         self._wake_writer_descriptor: int | None = None
+        self._reader_was_blocking: bool | None = None
 
         try:
             descriptor = reader_stream.fileno()
         except (AttributeError, OSError, ValueError):
             descriptor = None
-        if descriptor is not None and os.name == "posix":
-            wake_reader, wake_writer = os.pipe()
-            os.set_blocking(descriptor, False)
-            os.set_blocking(wake_reader, False)
-            os.set_blocking(wake_writer, False)
-            self._reader_descriptor = descriptor
-            self._wake_reader_descriptor = wake_reader
-            self._wake_writer_descriptor = wake_writer
+        try:
+            if descriptor is not None and os.name == "posix":
+                wake_reader, wake_writer = os.pipe()
+                self._wake_reader_descriptor = wake_reader
+                self._wake_writer_descriptor = wake_writer
+                self._reader_was_blocking = os.get_blocking(descriptor)
+                # Record this before changing its mode so every later wakeup
+                # setup failure can restore the caller-owned pipe exactly.
+                self._reader_descriptor = descriptor
+                os.set_blocking(descriptor, False)
+                os.set_blocking(wake_reader, False)
+                os.set_blocking(wake_writer, False)
 
-        self._reader_thread = threading.Thread(target=self._read, daemon=True)
-        self._reader_thread.start()
+            self._reader_thread = threading.Thread(target=self._read, daemon=True)
+            self._reader_thread.start()
+        except BaseException:
+            self._rollback_reader_setup()
+            raise
 
     @property
     def reader_stopped(self) -> bool:
@@ -179,6 +188,25 @@ class _ProtocolTransport:
         """Confirm the reader observed no EOF/error at the post-SidecarReady handoff."""
         if process.poll() is not None:
             _fail(SidecarReadinessReason.CHILD_EXIT)
+        eof, reader_error, _ = self._observe_phase_boundary(deadline)
+        if reader_error is not None:
+            _fail(SidecarReadinessReason.PIPE_IO_FAILURE)
+        if eof:
+            _fail(SidecarReadinessReason.EOF)
+        if process.poll() is not None:
+            _fail(SidecarReadinessReason.CHILD_EXIT)
+
+    def require_clean_pre_ready_boundary(self, deadline: float) -> None:
+        """Reject every byte delivered before the child has emitted SidecarReady."""
+        eof, reader_error, pipe_has_bytes = self._observe_phase_boundary(deadline)
+        if reader_error is not None:
+            _fail(SidecarReadinessReason.PIPE_IO_FAILURE)
+        if eof:
+            _fail(SidecarReadinessReason.EOF)
+        if pipe_has_bytes or self._has_pending_input():
+            _fail(SidecarReadinessReason.EXTRA_FRAME)
+
+    def _observe_phase_boundary(self, deadline: float) -> tuple[bool, BaseException | None, bool]:
         if self._reader_descriptor is not None:
             response: queue.Queue[tuple[bool, BaseException | None]] = queue.Queue(maxsize=1)
             self._boundary_requests.put(response)
@@ -189,7 +217,7 @@ class _ProtocolTransport:
                     break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    self._raise_timed_out_or_exited(process, handshake=True)
+                    _fail(SidecarReadinessReason.READ_TIMEOUT)
                 try:
                     eof, reader_error = response.get(timeout=min(remaining, 0.05))
                     break
@@ -200,14 +228,8 @@ class _ProtocolTransport:
                             _fail(SidecarReadinessReason.PIPE_IO_FAILURE)
         else:
             eof, reader_error = self._reader_state()
-            if os.name == "nt" and _windows_pipe_is_disconnected(self._reader_stream):
-                eof = True
-        if reader_error is not None:
-            _fail(SidecarReadinessReason.PIPE_IO_FAILURE)
-        if eof:
-            _fail(SidecarReadinessReason.EOF)
-        if process.poll() is not None:
-            _fail(SidecarReadinessReason.CHILD_EXIT)
+        windows_eof, windows_has_bytes = _windows_pipe_status(self._reader_stream)
+        return eof or windows_eof, reader_error, windows_has_bytes
 
     def _read(self) -> None:
         try:
@@ -319,6 +341,10 @@ class _ProtocolTransport:
                 return
             response.put(state)
 
+    def _has_pending_input(self) -> bool:
+        with self._items.mutex:
+            return bool(self._buffer) or bool(self._items.queue)
+
     def _close_wakeup_descriptors(self) -> None:
         for attribute in ("_wake_reader_descriptor", "_wake_writer_descriptor"):
             descriptor = getattr(self, attribute)
@@ -329,6 +355,16 @@ class _ProtocolTransport:
             except OSError:
                 self._closed.set()
             setattr(self, attribute, None)
+
+    def _rollback_reader_setup(self) -> None:
+        descriptor = self._reader_descriptor
+        if descriptor is not None and self._reader_was_blocking is not None:
+            try:
+                os.set_blocking(descriptor, self._reader_was_blocking)
+            except OSError:
+                self._closed.set()
+        self._reader_descriptor = None
+        self._close_wakeup_descriptors()
 
     def write_handshake(self, payload: dict[str, object], deadline: float) -> bytes:
         body = _canonical_payload(payload)
@@ -520,6 +556,7 @@ def perform_sidecar_handshake(
         b"sidecar_ready",
         (main_hello_raw, sidecar_hello_raw, main_ready_raw),
     )
+    transport.require_clean_pre_ready_boundary(deadline)
     sidecar_ready_raw = transport.write_handshake(sidecar_ready, deadline)
     main_to_sidecar_key, sidecar_to_main_key = _derive_direction_keys(
         session_secret,
@@ -828,9 +865,9 @@ def _cancel_windows_synchronous_read(thread_id: int | None) -> bool:
         return False
 
 
-def _windows_pipe_is_disconnected(stream: IO[bytes]) -> bool:
+def _windows_pipe_status(stream: IO[bytes]) -> tuple[bool, bool]:
     if os.name != "nt":
-        return False
+        return False, False
     try:
         import ctypes
         import msvcrt
@@ -846,10 +883,10 @@ def _windows_pipe_is_disconnected(stream: IO[bytes]) -> bool:
             ctypes.byref(available),
             None,
         ):
-            return False
-        return ctypes.get_last_error() in {109, 233}
+            return False, bool(available.value)
+        return ctypes.get_last_error() in {109, 233}, False
     except (AttributeError, OSError, ValueError):
-        return False
+        return False, False
 
 
 def _fail(reason: SidecarReadinessReason) -> Never:

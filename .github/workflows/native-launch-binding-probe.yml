@@ -119,6 +119,16 @@ jobs:
           tests/test_installed_slot_lease.py::test_native_cross_process_slot_lock_conflicts
           -q
 
+      - name: Assert Windows sidecar reader cancellation lifecycle
+        if: runner.os == 'Windows'
+        run: >-
+          uv run --group dev python -m pytest
+          tests/test_sidecar_readiness.py::test_windows_reader_cancel_uses_thread_terminate_and_never_claims_failed_stop
+          tests/test_sidecar_readiness.py::test_child_result_close_cancels_its_reader_while_the_peer_stays_open
+          tests/test_sidecar_readiness.py::test_collecting_child_result_cancels_its_reader_while_the_peer_stays_open
+          tests/test_sidecar_readiness.py::test_child_result_close_unblocks_a_concurrent_parent_eof_wait
+          -q
+
       - name: Upload native evidence
         uses: actions/upload-artifact@v4
         with:
