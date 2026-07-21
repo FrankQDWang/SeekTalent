@@ -15,10 +15,16 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 
-import rfc8785
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from seektalent.release_manifest import canonical_release_manifest_bytes, parse_release_manifest, release_manifest_digest
+from seektalent.release_manifest import (
+    canonical_release_manifest_bytes,
+    declared_component_tree_digest_from_files,
+    declared_payload_tree_digest_from_files,
+    expected_product_build_id_from_parts,
+    parse_release_manifest,
+    release_manifest_digest,
+)
 from seektalent.release_signing import ReleaseManifestTrustKeyV1, ReleaseManifestTrustPolicyV1
 
 
@@ -193,7 +199,7 @@ def _manifest_payload(
     components.sort(key=lambda component: str(component["component_id"]))
     payload: dict[str, object] = {
         "schema_version": "seektalent.release-manifest/v1",
-        "manifest_id": f"test-only-packaged-sidecar-{target['os']}-{target['arch']}",
+        "manifest_id": "test-only-packaged-sidecar-st1-00000000000000000000000000000000",
         "release_series_id": "test-only-packaged-sidecar-series-v1",
         "product_name": "SeekTalent",
         "product_version": "0.7.49",
@@ -208,7 +214,11 @@ def _manifest_payload(
             "toolchain_refs": ["pyinstaller-6.21.0", "python-3.12"],
         },
         "dependency_inputs": [
-            {"name": "pyinstaller", "sha256": _digest_file(Path(__file__).resolve()), "platform_scope": target},
+            {
+                "name": "uv.lock",
+                "sha256": _digest_file(Path(__file__).resolve().parents[1] / "uv.lock"),
+                "platform_scope": "platform_independent",
+            },
         ],
         "target": target,
         "channel": "internal",
@@ -235,9 +245,27 @@ def _manifest_payload(
         "sbom_ref": _file_payload(slot_root / "release" / "licenses" / "sbom.json", "licenses/sbom.json", executable=False),
         "license_inventory_ref": _file_payload(slot_root / "release" / "licenses" / "licenses.json", "licenses/licenses.json", executable=False),
     }
-    payload["payload_tree_sha256"] = _payload_tree_digest(components)
-    product_build_id = _expected_product_build_id(payload)
+    payload["payload_tree_sha256"] = declared_payload_tree_digest_from_files(
+        (f"{component['root_path']}/{item['path']}", str(item["sha256"]))
+        for component in components
+        for item in _mappings(component["files"])
+    )
+    recipe = _mapping(payload["build_recipe"])
+    dependencies = _mappings(payload["dependency_inputs"])
+    product_build_id = expected_product_build_id_from_parts(
+        build_recipe_digest=str(recipe["digest"]),
+        component_build_identities=(
+            (str(component["component_id"]), str(component["build_id"]))
+            for component in components
+        ),
+        dependency_input_digests=(str(item["sha256"]) for item in dependencies),
+        product_version=str(payload["product_version"]),
+        source_revision=str(payload["source_revision"]),
+        target_os=str(target["os"]),
+        target_arch=str(target["arch"]),
+    )
     payload["product_build_id"] = product_build_id
+    payload["manifest_id"] = build_test_only_manifest_id(product_build_id)
     compatibility = _mapping(payload["compatibility"])
     main_sidecar = _mapping(compatibility["main_sidecar"])
     main_sidecar["product_build_id"] = product_build_id
@@ -264,7 +292,10 @@ def _component_payload(
     else:
         files = [_file_payload(root / name, name, executable=name.endswith((".bin", "-placeholder"))) for name in names]
     files.sort(key=lambda item: str(item["path"]))
-    build_id = f"test-only-{component_id}-{_tree_digest(files)[:16]}"
+    tree_sha256 = declared_component_tree_digest_from_files(
+        (str(item["path"]), str(item["sha256"])) for item in files
+    )
+    build_id = f"test-only-{component_id}-{tree_sha256[:16]}"
     entrypoints = [executable_name] if component_id == "liepin_execution_sidecar" else [str(item["path"]) for item in files if item["executable"]]
     return {
         "component_id": component_id,
@@ -275,7 +306,7 @@ def _component_payload(
         "root_path": root_path,
         "entrypoints": entrypoints,
         "files": files,
-        "tree_sha256": _tree_digest(files),
+        "tree_sha256": tree_sha256,
         "size_bytes": sum(_integer(item["size_bytes"]) for item in files),
         "platform": "platform_independent" if platform_independent else target,
         "dependencies": list(dependencies),
@@ -363,37 +394,13 @@ def _write_test_only_signature(slot_root: Path, manifest: object, seed: bytes) -
     path.write_bytes(_json_bytes(payload))
 
 
-def _tree_digest(files: list[dict[str, object]]) -> str:
-    return sha256("".join(f"{item['sha256']}  {item['path']}\n" for item in files).encode()).hexdigest()
-
-
-def _payload_tree_digest(components: list[dict[str, object]]) -> str:
-    entries = sorted(
-        (f"{component['root_path']}/{item['path']}", str(item["sha256"]))
-        for component in components
-        for item in _mappings(component["files"])
-    )
-    return sha256("".join(f"{digest}  {path}\n" for path, digest in entries).encode()).hexdigest()
-
-
-def _expected_product_build_id(payload: dict[str, object]) -> str:
-    components = _mappings(payload["components"])
-    recipe = _mapping(payload["build_recipe"])
-    dependencies = _mappings(payload["dependency_inputs"])
-    target = _mapping(payload["target"])
-    identity = {
-        "build_recipe_digest": recipe["digest"],
-        "component_build_identities": [{"build_id": item["build_id"], "component_id": item["component_id"]} for item in components],
-        "dependency_input_digests": [item["sha256"] for item in dependencies],
-        "product_version": payload["product_version"],
-        "source_revision": payload["source_revision"],
-        "target": {"arch": target["arch"], "os": target["os"]},
-    }
-    return f"st1-{sha256(rfc8785.dumps(identity)).hexdigest()[:32]}"
-
-
 def _digest_file(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
+
+
+def build_test_only_manifest_id(product_build_id: str) -> str:
+    """Return the bounded test-only manifest ID for one immutable product build."""
+    return f"test-only-packaged-sidecar-{product_build_id}"
 
 
 def _mapping(value: object) -> dict[str, object]:

@@ -4,6 +4,7 @@ import json
 import os
 import platform
 import subprocess
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ import pytest
 import seektalent.installed_release as installed_release
 import seektalent.installed_slot as installed_slot
 import seektalent.owned_sidecar_process as owned_process
+from seektalent.installed_filesystem import InstalledReleaseError, InstalledReleaseReason
 from seektalent.installed_slot import ActiveSlotPointerV1, acquire_installed_sidecar_launch_lease
 from seektalent.owned_sidecar_process import spawn_owned_sidecar
 from seektalent.release_manifest import parse_release_manifest, release_manifest_digest
@@ -18,6 +20,7 @@ from tools.build_packaged_sidecar import (
     TEST_ONLY_SIGNING_SEED,
     TEST_ONLY_VERIFICATION_TIME,
     build_packaged_sidecar,
+    build_test_only_manifest_id,
     test_only_trust_policy as _test_only_trust_policy,
 )
 
@@ -96,7 +99,7 @@ def test_packaged_artifact_launches_from_verified_active_slot_and_exits_on_paren
 
     lease = _acquire(root)
     admission = lease.admission
-    assert admission.manifest_id.startswith("test-only-packaged-sidecar-")
+    assert admission.manifest_id.startswith("test-only-packaged-sidecar-st1-")
     assert admission.trust_policy_id == "test-only-packaged-sidecar-policy-v1"
     assert admission.source_port_protocol.protocol_id == "seektalent-source-port"
     manifest = parse_release_manifest(
@@ -111,6 +114,13 @@ def test_packaged_artifact_launches_from_verified_active_slot_and_exits_on_paren
     )
     assert admission.source_port_protocol == manifest.compatibility.main_sidecar.source_port_protocol
     assert admission.executable_path.is_relative_to(root / "slots" / "A")
+    assert admission.manifest_id == build_test_only_manifest_id(manifest.product_build_id)
+    assert [(item.name, item.sha256, item.platform_scope) for item in manifest.dependency_inputs] == [
+        ("uv.lock", _digest_file(Path(__file__).resolve().parents[1] / "uv.lock"), "platform_independent"),
+    ]
+    assert manifest.build_recipe.digest == _digest_file(
+        Path(__file__).resolve().parents[1] / "tools" / "build_packaged_sidecar.py"
+    )
 
     process = spawn_owned_sidecar(lease)
     process.protocol_writer.write(b"bootstrap pipe ownership only\n")
@@ -150,6 +160,35 @@ def test_packaged_artifact_lifecycle_terminate_and_kill_release_the_active_slot(
     killed.close_readers()
     retry_after_kill = _acquire(root)
     retry_after_kill.close()
+
+
+def test_missing_declared_sidecar_support_file_fails_before_child_creation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = _install_active_artifact(tmp_path)
+    slot_root = root / "slots" / "A"
+    payload_files, executable = _sidecar_files(slot_root)
+    missing = next(path for path in payload_files if path != executable)
+    missing.unlink()
+    child_creation: list[object] = []
+
+    def should_not_start_child(*args: object, **kwargs: object) -> object:
+        child_creation.append((args, kwargs))
+        raise AssertionError("missing support file reached child creation")
+
+    monkeypatch.setattr(owned_process, "spawn_owned_sidecar", should_not_start_child)
+
+    with pytest.raises(InstalledReleaseError) as raised:
+        lease = _acquire(root)
+        try:
+            owned_process.spawn_owned_sidecar(lease)
+        finally:
+            lease.close()
+
+    assert raised.value.reason == InstalledReleaseReason.NOT_REGULAR_FILE
+    assert raised.value.path == missing
+    assert child_creation == []
 
 
 @pytest.mark.parametrize(
@@ -214,7 +253,11 @@ def test_packaged_artifact_is_not_a_python_source_or_network_launcher(tmp_path: 
     assert not any(path.suffix == ".py" for path in files)
     assert not os.environ.get("SEEKTALENT_PACKAGED_SIDECAR_NETWORK")
 
-    environment = {"PATH": os.environ.get("PATH", "")}
+    environment = {
+        "PATH": os.environ.get("SYSTEMROOT", "") if os.name == "nt" else "/usr/bin:/bin",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": str(tmp_path / "ambient-source-must-not-be-used"),
+    }
     if os.name == "nt":
         environment["SYSTEMROOT"] = os.environ["SYSTEMROOT"]
     direct = subprocess.run(
@@ -228,3 +271,7 @@ def test_packaged_artifact_is_not_a_python_source_or_network_launcher(tmp_path: 
         check=False,
     )
     assert direct.returncode == 0, direct.stderr.decode("utf-8", errors="replace")
+
+
+def _digest_file(path: Path) -> str:
+    return sha256(path.read_bytes()).hexdigest()

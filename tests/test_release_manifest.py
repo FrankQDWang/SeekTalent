@@ -15,12 +15,14 @@ from seektalent.release_manifest import (
     declared_component_tree_digest,
     declared_payload_tree_digest,
     expected_product_build_id,
+    expected_product_build_id_from_parts,
     parse_release_manifest,
     product_build_identity_bytes,
     release_manifest_digest,
     same_manifest_identity_conflict,
 )
 from seektalent.storage.json import canonical_json
+from tools.build_packaged_sidecar import build_test_only_manifest_id
 
 
 SOURCE_SHA = "1" * 40
@@ -427,6 +429,50 @@ def test_valid_targets_have_deterministic_identity_and_canonical_golden(target: 
     assert canonical_release_manifest_bytes(manifest) == rfc8785.dumps(manifest.model_dump(mode="json"))
     assert declared_payload_tree_digest(manifest) == manifest.payload_tree_sha256
     assert all(declared_component_tree_digest(component) == component.tree_sha256 for component in manifest.components)
+
+
+def test_test_only_builder_manifest_id_is_stable_and_changes_with_immutable_build_identity() -> None:
+    manifest = _parse()
+    component_identities = tuple(
+        (component.component_id, component.build_id) for component in manifest.components
+    )
+
+    def product_build_id(
+        *,
+        source_revision: str = manifest.source_revision,
+        recipe_digest: str = manifest.build_recipe.digest,
+        component_build_identities: tuple[tuple[str, str], ...] = component_identities,
+    ) -> str:
+        return expected_product_build_id_from_parts(
+            build_recipe_digest=recipe_digest,
+            component_build_identities=component_build_identities,
+            dependency_input_digests=tuple(item.sha256 for item in manifest.dependency_inputs),
+            product_version=manifest.product_version,
+            source_revision=source_revision,
+            target_os=manifest.target.os,
+            target_arch=manifest.target.arch,
+        )
+
+    baseline = product_build_id()
+    changed_source = product_build_id(source_revision="a" * 40)
+    changed_component = product_build_id(
+        component_build_identities=(
+            (component_identities[0][0], "changed-component-build"),
+            *component_identities[1:],
+        )
+    )
+    changed_recipe = product_build_id(recipe_digest="b" * 64)
+
+    assert baseline == manifest.product_build_id
+    assert len({baseline, changed_source, changed_component, changed_recipe}) == 4
+    assert build_test_only_manifest_id(baseline) == build_test_only_manifest_id(baseline)
+    assert len(build_test_only_manifest_id(baseline)) <= 96
+    assert len(
+        {
+            build_test_only_manifest_id(product_build)
+            for product_build in (baseline, changed_source, changed_component, changed_recipe)
+        }
+    ) == 4
 
 
 def test_canonical_digest_is_independent_of_raw_key_order_and_unicode_escape() -> None:
