@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import sqlite3
 import subprocess
 from hashlib import sha256
 from pathlib import Path
@@ -12,10 +13,16 @@ import pytest
 import seektalent.installed_release as installed_release
 import seektalent.installed_slot as installed_slot
 import seektalent.owned_sidecar_process as owned_process
+import seektalent.sidecar_readiness as readiness
 from seektalent.installed_filesystem import InstalledReleaseError, InstalledReleaseReason
-from seektalent.installed_slot import ActiveSlotPointerV1, acquire_installed_sidecar_launch_lease
-from seektalent.owned_sidecar_process import spawn_owned_sidecar
-from seektalent.sidecar_readiness import spawn_ready_sidecar
+from seektalent.installed_slot import (
+    ActiveSlotPointerV1,
+    InstalledSidecarLaunchLease,
+    acquire_installed_sidecar_launch_lease,
+)
+from seektalent.owned_sidecar_process import OwnedSidecarProcess, spawn_owned_sidecar
+from seektalent.sidecar_readiness import exchange_source_history, spawn_ready_sidecar
+from seektalent.source_port.history_contract import SourceHistoryMatched
 from seektalent.release_manifest import parse_release_manifest, release_manifest_digest
 from tools.build_packaged_sidecar import (
     TEST_ONLY_SIGNING_SEED,
@@ -24,6 +31,8 @@ from tools.build_packaged_sidecar import (
     build_test_only_manifest_id,
     test_only_trust_policy as _test_only_trust_policy,
 )
+from tests.support.source_history_sqlite_harness import SourceHistorySQLiteHarness
+from tests.test_source_history_sqlite_harness import _accepted, _query
 
 
 pytestmark = pytest.mark.skipif(
@@ -74,6 +83,39 @@ def _sidecar_files(slot_root: Path) -> tuple[tuple[Path, ...], Path]:
     return (
         tuple(root / item.path for item in sidecar.files),
         root / sidecar.entrypoints[0],
+    )
+
+
+def _spawn_test_history_sidecar(
+    lease: InstalledSidecarLaunchLease,
+    database: Path,
+) -> OwnedSidecarProcess:
+    lease_state = lease._take_for_spawn()
+    resolution = lease_state.admission.resolution
+    executable = resolution.executable_path
+    process = subprocess.Popen(
+        [str(executable), "--test-only-source-history-database", str(database)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        shell=False,
+        text=False,
+        bufsize=0,
+        close_fds=True,
+        cwd=str(owned_process._installed_release_working_directory(resolution)),
+        env=owned_process._bounded_environment(),
+        start_new_session=os.name == "posix",
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    assert process.stderr is not None
+    return OwnedSidecarProcess(
+        _process=process,
+        protocol_writer=process.stdin,
+        protocol_reader=process.stdout,
+        stderr_reader=process.stderr,
+        _process_group_id=process.pid if os.name == "posix" else None,
+        _lease_state=lease_state,
     )
 
 
@@ -129,6 +171,41 @@ def test_packaged_artifact_completes_readiness_from_verified_active_slot(
     assert session.new_history_session().closed is False
     assert session.close(5) != 0
 
+    retry = _acquire(root)
+    retry.close()
+
+
+def test_packaged_artifact_returns_authenticated_read_only_sqlite_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = SourceHistorySQLiteHarness.create(tmp_path / "history.sqlite3")
+    harness.register_generation(1)
+    harness.record_accepted(_accepted(), generation=1)
+    before_bytes = harness.path.read_bytes()
+    before_mtime = harness.path.stat().st_mtime_ns
+    observer = sqlite3.connect(f"{harness.path.as_uri()}?mode=ro", uri=True)
+    before_data_version = observer.execute("PRAGMA data_version").fetchone()
+    root = _install_active_artifact(tmp_path)
+    monkeypatch.setattr(
+        readiness,
+        "spawn_owned_sidecar",
+        lambda lease: _spawn_test_history_sidecar(lease, harness.path),
+    )
+
+    session = spawn_ready_sidecar(_acquire(root), timeout=30)
+    try:
+        admitted = exchange_source_history(session, _query(), timeout=30)
+        assert isinstance(admitted.payload, SourceHistoryMatched)
+        assert admitted.payload.facts[0].conclusion == "accepted_no_dispatch"
+        assert admitted.session_id == session.session_id
+    finally:
+        session.close(30)
+
+    assert harness.path.read_bytes() == before_bytes
+    assert harness.path.stat().st_mtime_ns == before_mtime
+    assert observer.execute("PRAGMA data_version").fetchone() == before_data_version
+    observer.close()
     retry = _acquire(root)
     retry.close()
 

@@ -6,6 +6,8 @@ import threading
 import time
 import weakref
 from dataclasses import dataclass
+from pathlib import Path
+import secrets
 from typing import IO, Never, SupportsIndex
 
 from seektalent.sidecar_handshake_protocol import (
@@ -22,7 +24,19 @@ from seektalent.sidecar_handshake_protocol import (
 from seektalent.source_port.authenticated_history_frames import (
     PostHandshakeHistorySession,
     ReceivedHistoryMessage,
+    ReceivedHistoryQuery,
+    SourceHistoryAdmissionError,
+    SourceHistoryAdmissionReason,
 )
+from seektalent.source_port.history_contract import (
+    SourceHistoryIdentityConflict,
+    SourceHistoryMatched,
+    SourceHistoryNotFound,
+    SourceHistoryQueryResultV1,
+    SourceHistoryUnavailable,
+)
+
+_QUERY_RESULT_CONTRACT_VERSION = "seektalent.source-port.query.result/v1"
 
 
 @dataclass(slots=True)
@@ -31,6 +45,9 @@ class _SidecarResultState:
     session_id: str
     protocol_minor: int
     history: PostHandshakeHistorySession
+    history_exchange_lock: threading.Lock
+    history_query_in_flight: bool = False
+    history_exchange_usable: bool = True
 
 
 _RESULTS: dict[int, tuple[weakref.ReferenceType["SidecarHandshakeResult"], _SidecarResultState]] = {}
@@ -97,6 +114,101 @@ class SidecarHandshakeResult:
         raise TypeError("SidecarHandshakeResult cannot be serialized")
 
 
+def serve_source_history_query(
+    session: SidecarHandshakeResult,
+    reader: object,
+    *,
+    timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
+) -> SourceHistoryQueryResultV1:
+    """Serve one authenticated query with an injected read-only reader."""
+    normalized_timeout = _validated_timeout(timeout)
+    state = _result_state(session)
+    _begin_history_exchange(state)
+    succeeded = False
+    try:
+        deadline = time.monotonic() + normalized_timeout
+        received = _receive_one_query(session, deadline)
+        try:
+            query_result = getattr(reader, "query")(received.payload)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            query_result = SourceHistoryUnavailable.model_validate(
+                {
+                    **received.payload.model_dump(exclude={"contract_version"}),
+                    "contract_version": _QUERY_RESULT_CONTRACT_VERSION,
+                    "outcome": "history_unavailable",
+                    "reason": "unreadable",
+                },
+                strict=True,
+            )
+        if not isinstance(
+            query_result,
+            (SourceHistoryMatched, SourceHistoryNotFound, SourceHistoryIdentityConflict, SourceHistoryUnavailable),
+        ):
+            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.READER_RESULT_INVALID)
+        frame = state.history.encode_result(
+            message_id=secrets.token_hex(16),
+            reply_to=received.message_id,
+            payload=query_result,
+        )
+        session.send_history_frame(frame, timeout=_remaining(deadline))
+        succeeded = True
+        return query_result
+    finally:
+        _finish_history_exchange(state, succeeded=succeeded)
+
+
+def serve_test_source_history_database(
+    session: SidecarHandshakeResult,
+    path: Path,
+    *,
+    timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
+) -> SourceHistoryQueryResultV1:
+    """Serve the explicit database embedded in the native test-entry launch."""
+    from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
+
+    return serve_source_history_query(
+        session,
+        SourceHistorySQLiteReader(path),
+        timeout=timeout,
+    )
+
+
+def _receive_one_query(session: SidecarHandshakeResult, deadline: float) -> ReceivedHistoryQuery:
+    while True:
+        messages = session.receive_history(timeout=_remaining(deadline))
+        if not messages:
+            continue
+        if len(messages) != 1:
+            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.MULTIPLE_MESSAGES)
+        message = messages[0]
+        if not isinstance(message, ReceivedHistoryQuery):
+            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE)
+        return message
+
+
+def _begin_history_exchange(state: _SidecarResultState) -> None:
+    with state.history_exchange_lock:
+        if state.history_query_in_flight:
+            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.QUERY_IN_FLIGHT)
+        if not state.history_exchange_usable:
+            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.SESSION_UNUSABLE)
+        state.history_query_in_flight = True
+
+
+def _finish_history_exchange(state: _SidecarResultState, *, succeeded: bool) -> None:
+    with state.history_exchange_lock:
+        state.history_query_in_flight = False
+        if not succeeded:
+            state.history_exchange_usable = False
+
+
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SidecarReadinessError(SidecarReadinessReason.READ_TIMEOUT)
+    return remaining
+
+
 def serve_sidecar_handshake(
     reader_stream: IO[bytes],
     writer_stream: IO[bytes],
@@ -132,6 +244,7 @@ def _new_result(transport: _ProtocolTransport, material: _HandshakeMaterial) -> 
             main_to_sidecar_key=material.main_to_sidecar_key,
             sidecar_to_main_key=material.sidecar_to_main_key,
         ),
+        history_exchange_lock=threading.Lock(),
     )
 
     def finalize(_: weakref.ReferenceType[SidecarHandshakeResult]) -> None:

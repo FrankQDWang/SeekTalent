@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -19,6 +20,7 @@ from seektalent.source_port.history_contract import (
     SourceHistoryQueryV1,
     SourceHistoryUnavailable,
 )
+from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
 from tests.support.source_history_sqlite_harness import (
     AcceptedHistoryInput,
     CommitAcknowledgementLost,
@@ -105,6 +107,125 @@ def _harness(tmp_path: Path, *generations: int) -> SourceHistorySQLiteHarness:
     for generation in generations:
         harness.register_generation(generation)
     return harness
+
+
+def test_production_reader_requires_an_explicit_absolute_path(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="Path"):
+        SourceHistorySQLiteReader(str(tmp_path / "history.sqlite3"))  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="absolute"):
+        SourceHistorySQLiteReader(Path("history.sqlite3"))
+
+
+def test_production_reader_returns_all_four_closed_history_results(tmp_path: Path) -> None:
+    harness = _harness(tmp_path, 1)
+    harness.record_accepted(_accepted(), generation=1)
+    reader = SourceHistorySQLiteReader(harness.path)
+
+    matched = reader.query(_query())
+    not_found = reader.query(_query(operation_id="absent", idempotency_key="key-absent"))
+    conflict = reader.query(_query(request_hash=HASH_D))
+    unavailable = reader.query(_query(first_generation=1, last_generation=2))
+
+    assert isinstance(matched, SourceHistoryMatched)
+    assert matched.facts[0].conclusion == "accepted_no_dispatch"
+    assert isinstance(not_found, SourceHistoryNotFound)
+    assert isinstance(conflict, SourceHistoryIdentityConflict)
+    assert conflict.conflict_reasons == ("request_hash_mismatch",)
+    assert isinstance(unavailable, SourceHistoryUnavailable)
+    assert unavailable.reason == "unknown_generation"
+    assert all(
+        result.run_id == "run-1" and result.operation_id in {"operation-1", "absent"}
+        for result in (matched, not_found, conflict, unavailable)
+    )
+
+
+def test_production_reader_closes_unknown_retention_gap_and_truncated_ranges(tmp_path: Path) -> None:
+    harness = _harness(tmp_path, 1, 2, 3)
+    reader = SourceHistorySQLiteReader(harness.path)
+
+    unknown = reader.query(_query(first_generation=1, last_generation=4))
+    assert isinstance(unknown, SourceHistoryUnavailable)
+    assert unknown.reason == "unknown_generation"
+
+    harness.set_generation_fixture(2, retained=False, complete=True)
+    gap = reader.query(_query(first_generation=1, last_generation=3))
+    assert isinstance(gap, SourceHistoryUnavailable)
+    assert gap.reason == "retention_gap"
+
+    harness.set_generation_fixture(2, retained=True, complete=False)
+    truncated = reader.query(_query(first_generation=1, last_generation=3))
+    assert isinstance(truncated, SourceHistoryUnavailable)
+    assert truncated.reason == "truncated"
+
+
+def test_production_reader_file_failures_are_closed_and_do_not_create_missing_database(tmp_path: Path) -> None:
+    missing_path = tmp_path / "missing.sqlite3"
+    missing = SourceHistorySQLiteReader(missing_path).query(_query())
+    assert isinstance(missing, SourceHistoryUnavailable)
+    assert missing.reason == "unreadable"
+    assert not missing_path.exists()
+
+    corrupt_path = tmp_path / "corrupt.sqlite3"
+    corrupt_path.write_bytes(b"not sqlite")
+    corrupt = SourceHistorySQLiteReader(corrupt_path).query(_query())
+    assert isinstance(corrupt, SourceHistoryUnavailable)
+    assert corrupt.reason == "corrupt"
+
+    schema = _harness(tmp_path / "schema", 1)
+    connection = sqlite3.connect(schema.path)
+    try:
+        connection.execute("PRAGMA user_version=2")
+    finally:
+        connection.close()
+    mismatch = SourceHistorySQLiteReader(schema.path).query(_query())
+    assert isinstance(mismatch, SourceHistoryUnavailable)
+    assert mismatch.reason == "schema_mismatch"
+
+    wal_path = tmp_path / "wal.sqlite3"
+    connection = sqlite3.connect(wal_path)
+    try:
+        assert connection.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        connection.execute("CREATE TABLE marker(value TEXT NOT NULL)")
+        connection.commit()
+    finally:
+        connection.close()
+    pragma = SourceHistorySQLiteReader(wal_path).query(_query())
+    assert isinstance(pragma, SourceHistoryUnavailable)
+    assert pragma.reason == "pragma_mismatch"
+
+
+def test_production_reader_does_not_change_database_bytes_mtime_or_data_version(tmp_path: Path) -> None:
+    harness = _harness(tmp_path, 1)
+    harness.record_accepted(_accepted(), generation=1)
+    path = harness.path
+    observer = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+    try:
+        before_bytes = path.read_bytes()
+        before_mtime = path.stat().st_mtime_ns
+        before_data_version = observer.execute("PRAGMA data_version").fetchone()
+
+        result = SourceHistorySQLiteReader(path).query(_query())
+
+        assert isinstance(result, SourceHistoryMatched)
+        assert path.read_bytes() == before_bytes
+        assert path.stat().st_mtime_ns == before_mtime
+        assert observer.execute("PRAGMA data_version").fetchone() == before_data_version
+        assert not Path(f"{path}-journal").exists()
+        assert not Path(f"{path}-wal").exists()
+        assert not Path(f"{path}-shm").exists()
+    finally:
+        observer.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file mode proof")
+def test_production_reader_queries_a_filesystem_read_only_database(tmp_path: Path) -> None:
+    harness = _harness(tmp_path, 1)
+    harness.record_accepted(_accepted(), generation=1)
+    harness.path.chmod(0o444)
+
+    result = SourceHistorySQLiteReader(harness.path).query(_query())
+
+    assert isinstance(result, SourceHistoryMatched)
 
 
 def test_real_file_pragmas_and_complete_empty_range(tmp_path: Path) -> None:
