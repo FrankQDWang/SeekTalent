@@ -1623,6 +1623,64 @@ def test_windows_boundary_abort_after_ack_does_not_poison_the_next_blocking_read
         assert transport.close() is True
 
 
+def test_windows_pre_ready_boundary_observes_a_real_reader_error_before_its_ack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FailingReader:
+        def __init__(self) -> None:
+            self.release_error = threading.Event()
+            self.entered_read = threading.Event()
+            self.closed = False
+
+        def read(self, _: int) -> bytes:
+            self.entered_read.set()
+            self.release_error.wait(timeout=1)
+            if self.closed:
+                return b""
+            raise OSError("injected reader failure")
+
+        def close(self) -> None:
+            self.closed = True
+            self.release_error.set()
+
+    reader = _FailingReader()
+    with monkeypatch.context() as context:
+        context.setattr(handshake.os, "name", "nt")
+        transport = handshake._ProtocolTransport(reader, io.BytesIO())
+        context.setattr(handshake, "_cancel_windows_synchronous_read", lambda _: False)
+        request_posted = threading.Event()
+        original_put = transport._boundary_requests.put
+
+        def record_request(
+            item: queue.Queue[tuple[bool, BaseException | None]],
+            *args: object,
+            **kwargs: object,
+        ) -> None:
+            request_posted.set()
+            original_put(item, *args, **kwargs)
+
+        transport._boundary_requests.put = record_request  # type: ignore[method-assign]
+        assert reader.entered_read.wait(timeout=1)
+        observed: list[readiness.SidecarReadinessError] = []
+
+        def observe() -> None:
+            try:
+                transport.require_clean_pre_ready_boundary(time.monotonic() + 1)
+            except readiness.SidecarReadinessError as error:
+                observed.append(error)
+
+        boundary = threading.Thread(target=observe)
+        boundary.start()
+        assert request_posted.wait(timeout=1)
+        reader.release_error.set()
+        boundary.join(timeout=1)
+
+        assert not boundary.is_alive()
+        assert len(observed) == 1
+        assert observed[0].reason is readiness.SidecarReadinessReason.PIPE_IO_FAILURE
+        assert transport.close() is True
+
+
 def test_windows_pre_ready_boundary_waits_for_a_paused_blocking_reader_enqueue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

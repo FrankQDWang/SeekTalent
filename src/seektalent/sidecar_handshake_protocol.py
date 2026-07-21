@@ -305,10 +305,6 @@ class _ProtocolTransport:
                     if self._windows_boundary_cancel_active.is_set():
                         self._answer_boundary_requests()
                         continue
-                self._answer_boundary_requests()
-                raise
-            except BaseException:
-                self._answer_boundary_requests()
                 raise
             if not chunk:
                 self._set_eof()
