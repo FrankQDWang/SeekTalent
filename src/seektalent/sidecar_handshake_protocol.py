@@ -26,6 +26,7 @@ MAX_HANDSHAKE_FRAME_BYTES = 64 * 1024
 DEFAULT_HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _READ_QUEUE_CHUNKS = 16
 _READER_CLOSE_SECONDS = 1.0
+_THREAD_TERMINATE = 0x0001
 _HANDSHAKE_PROOF_DOMAIN = b"seektalent-sidecar-readiness-proof/v1"
 _HANDSHAKE_KEY_DOMAIN = b"seektalent-sidecar-readiness-hkdf/v1"
 _MAIN_TO_SIDECAR = b"main-to-sidecar"
@@ -800,24 +801,31 @@ def _length_prefixed(value: bytes) -> bytes:
     return len(value).to_bytes(4, "big") + value
 
 
-def _cancel_windows_synchronous_read(thread_id: int | None) -> None:
+def _cancel_windows_synchronous_read(thread_id: int | None) -> bool:
     """Cancel the reader's blocking ReadFile without closing its pipe from another thread."""
     if os.name != "nt" or thread_id is None:
-        return
+        return False
     try:
         import ctypes
         from ctypes import wintypes
 
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        thread = kernel32.OpenThread(0x0010, False, thread_id)
+        kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenThread.restype = wintypes.HANDLE
+        kernel32.CancelSynchronousIo.argtypes = [wintypes.HANDLE]
+        kernel32.CancelSynchronousIo.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        thread = kernel32.OpenThread(_THREAD_TERMINATE, False, thread_id)
         if not thread:
-            return
+            return False
         try:
-            kernel32.CancelSynchronousIo(wintypes.HANDLE(thread))
+            cancelled = bool(kernel32.CancelSynchronousIo(wintypes.HANDLE(thread)))
         finally:
-            kernel32.CloseHandle(wintypes.HANDLE(thread))
+            closed = bool(kernel32.CloseHandle(wintypes.HANDLE(thread)))
+        return cancelled and closed
     except (AttributeError, OSError):
-        return
+        return False
 
 
 def _windows_pipe_is_disconnected(stream: IO[bytes]) -> bool:

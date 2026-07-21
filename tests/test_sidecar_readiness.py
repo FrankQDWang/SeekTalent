@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import ctypes
 import gc
 import io
 import json
@@ -1027,6 +1028,40 @@ def test_child_result_close_unblocks_a_concurrent_parent_eof_wait(
     assert wait_finished.is_set()
     assert not waiter.is_alive()
     session.close(1)
+
+
+def test_windows_reader_cancel_uses_thread_terminate_and_never_claims_failed_stop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Function:
+        def __init__(self, result: int) -> None:
+            self.result = result
+            self.calls: list[tuple[object, ...]] = []
+
+        def __call__(self, *args: object) -> int:
+            self.calls.append(args)
+            return self.result
+
+    class _Kernel32:
+        def __init__(self, cancel_result: int) -> None:
+            self.OpenThread = _Function(123)
+            self.CancelSynchronousIo = _Function(cancel_result)
+            self.CloseHandle = _Function(1)
+
+    kernel32 = _Kernel32(cancel_result=1)
+    monkeypatch.setattr(handshake.os, "name", "nt")
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: kernel32, raising=False)
+
+    assert handshake._cancel_windows_synchronous_read(456) is True
+    assert kernel32.OpenThread.calls == [(handshake._THREAD_TERMINATE, False, 456)]
+    assert handshake._THREAD_TERMINATE == 0x0001
+    assert kernel32.CancelSynchronousIo.calls
+    assert kernel32.CloseHandle.calls
+
+    failing_kernel32 = _Kernel32(cancel_result=0)
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *_args, **_kwargs: failing_kernel32, raising=False)
+
+    assert handshake._cancel_windows_synchronous_read(456) is False
 
 
 def test_ready_close_retains_reaped_child_cleanup_when_real_slot_unlock_fails(
