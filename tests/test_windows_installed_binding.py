@@ -14,6 +14,7 @@ import seektalent.installed_slot as installed_slot
 import seektalent.owned_sidecar_process as owned_process
 import seektalent.windows_installed_binding as windows_binding
 import seektalent.windows_native_files as windows_native
+from seektalent.installed_filesystem import InstalledReleaseError, InstalledReleaseReason
 from seektalent.installed_slot import acquire_installed_sidecar_launch_lease
 from seektalent.owned_sidecar_process import spawn_owned_sidecar
 from seektalent.release_manifest import parse_release_manifest
@@ -195,6 +196,49 @@ def test_reparse_release_component_is_rejected_by_product_binding(
 
     lease = _acquire(root)
     lease.close()
+
+
+@requires_windows
+def test_hardlinked_executable_is_rejected_and_releases_lifecycle_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, slot_root = _install_active_slot(tmp_path, monkeypatch)
+    executable = _executable_path(slot_root)
+    hardlink = executable.with_name("sidecar-hardlink.bin")
+    os.link(executable, hardlink)
+    try:
+        with pytest.raises(InstalledReleaseError) as raised:
+            _acquire(root)
+        assert raised.value.reason == InstalledReleaseReason.HARDLINK
+        assert raised.value.path == executable
+    finally:
+        hardlink.unlink()
+
+    lease = _acquire(root)
+    lease.close()
+
+
+@requires_windows
+def test_native_handle_identity_matches_ntfs_file_and_final_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, slot_root = _install_active_slot(tmp_path, monkeypatch)
+    executable = _executable_path(slot_root)
+    handle = windows_native.open_windows_object(executable, directory=False)
+    try:
+        identity = windows_native.query_windows_file_identity(handle, executable)
+    finally:
+        windows_native.close_windows_handle(handle)
+
+    assert identity.final_path == windows_native.normalize_windows_path(str(executable))
+    assert identity.volume_serial_number > 0
+    assert len(identity.file_id) == 16
+    assert any(identity.file_id)
+    assert identity.size == executable.stat().st_size
+    assert identity.link_count == 1
+    assert identity.directory is False
 
 
 @requires_windows
