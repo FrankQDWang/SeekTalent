@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import copy
 import ctypes
+import gc
 import inspect
 import io
 import os
 import pickle
 import threading
+import weakref
 from pathlib import Path
 
 import pytest
@@ -90,10 +92,24 @@ def _pending(api: _FakeProcessApi) -> windows_sidecar._WindowsPendingSidecar:
 
 
 class _FakeCreationApi(_FakeProcessApi):
-    def __init__(self, *, failure: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        failure: str | None = None,
+        pipe_failure_at: int | None = None,
+        set_handle_failure_at: int | None = None,
+        file_failure_at: int | None = None,
+    ) -> None:
         super().__init__([windows_sidecar.WAIT_OBJECT_0])
         self.failure = failure
+        self.pipe_failure_at = pipe_failure_at
+        self.set_handle_failure_at = set_handle_failure_at
+        self.file_failure_at = file_failure_at
         self.pipe_calls = 0
+        self.set_handle_calls = 0
+        self.set_handle_handles: list[int] = []
+        self.file_calls = 0
+        self.file_handles: list[int] = []
         self.attribute_delete_calls = 0
         self.updated_handle_lists: list[tuple[int, ...]] = []
         self.create_arguments: tuple[object, ...] | None = None
@@ -103,7 +119,7 @@ class _FakeCreationApi(_FakeProcessApi):
         from ctypes import wintypes
 
         self.pipe_calls += 1
-        if self.failure == "pipe":
+        if self.failure == "pipe" or self.pipe_failure_at == self.pipe_calls:
             return 0
         read_handle = 10 + self.pipe_calls * 2 - 1
         write_handle = read_handle + 1
@@ -111,8 +127,10 @@ class _FakeCreationApi(_FakeProcessApi):
         ctypes.cast(write_pointer, ctypes.POINTER(wintypes.HANDLE)).contents.value = write_handle
         return 1
 
-    def SetHandleInformation(self, *_: object) -> int:
-        return 1
+    def SetHandleInformation(self, handle: int, *_: object) -> int:
+        self.set_handle_calls += 1
+        self.set_handle_handles.append(handle)
+        return 0 if self.set_handle_failure_at == self.set_handle_calls else 1
 
     def InitializeProcThreadAttributeList(self, attribute_list: object, *_args: object) -> int:
         size_pointer = _args[-1]
@@ -151,6 +169,28 @@ class _FakeCreationApi(_FakeProcessApi):
         return 1
 
 
+class _FakeParentPipeStream(io.BytesIO):
+    def __init__(self, api: _FakeProcessApi, handle: int) -> None:
+        super().__init__()
+        self._api = api
+        self._handle = handle
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        if not self._api.CloseHandle(self._handle):
+            raise OSError("CloseHandle(parent pipe) failed")
+        super().close()
+
+
+def _fake_file_from_handle(api: _FakeCreationApi, handle: int, _mode: str) -> io.BytesIO:
+    api.file_calls += 1
+    api.file_handles.append(handle)
+    if api.file_failure_at == api.file_calls:
+        raise OSError("parent pipe wrapping failed")
+    return _FakeParentPipeStream(api, handle)
+
+
 def _create_fake_windows_pending(
     monkeypatch: pytest.MonkeyPatch,
     api: _FakeCreationApi,
@@ -159,7 +199,7 @@ def _create_fake_windows_pending(
         context.setattr(windows_sidecar.os, "name", "nt")
         context.setattr(windows_sidecar.sys, "platform", "win32")
         context.setattr(windows_sidecar, "_windows_api", lambda: api)
-        context.setattr(windows_sidecar, "_file_from_handle", lambda _handle, _mode: io.BytesIO())
+        context.setattr(windows_sidecar, "_file_from_handle", lambda handle, mode: _fake_file_from_handle(api, handle, mode))
         context.setenv("SystemRoot", "C:\\Windows")
         return windows_sidecar._create_windows_suspended_sidecar(Path("C:/sidecar.exe"), Path("C:/working"))
 
@@ -185,7 +225,8 @@ def test_windows_create_process_setup_faults_are_causal_and_close_raw_child_endp
 
     assert raised.value.reason == reason
     if failure != "pipe":
-        assert api.closed_handles == [11, 14, 16]
+        assert api.closed_handles == [12, 13, 15, 11, 14, 16]
+    assert api.attribute_delete_calls == (1 if failure in {"update", "create"} else 0)
 
 
 def test_windows_create_process_uses_exact_three_child_handles_and_explicit_native_contract(
@@ -196,6 +237,7 @@ def test_windows_create_process_uses_exact_three_child_handles_and_explicit_nati
     pending = _create_fake_windows_pending(monkeypatch, api)
 
     assert api.updated_handle_lists == [(11, 14, 16)]
+    assert api.attribute_delete_calls == 1
     assert api.closed_handles == [11, 14, 16]
     assert api.create_arguments is not None
     application, command_line, _process_attributes, _thread_attributes, inherit_handles, flags, _environment, cwd, _startup_pointer, _information = api.create_arguments
@@ -211,6 +253,52 @@ def test_windows_create_process_uses_exact_three_child_handles_and_explicit_nati
     assert cwd == "C:\\working"
     assert api.startup_handles == (11, 14, 16)
     assert pending.cleanup().child_reaped is True
+
+
+@pytest.mark.parametrize(
+    ("kind", "failure_at", "expected_closed"),
+    [
+        ("pipe", 2, [11, 12]),
+        ("pipe", 3, [11, 12, 13, 14]),
+        ("set", 1, [11, 12, 13, 14, 15, 16]),
+        ("set", 2, [11, 12, 13, 14, 15, 16]),
+        ("set", 3, [11, 12, 13, 14, 15, 16]),
+        ("file", 1, [11, 12, 13, 14, 15, 16]),
+        ("file", 2, [12, 11, 13, 14, 15, 16]),
+        ("file", 3, [12, 13, 11, 14, 15, 16]),
+    ],
+)
+def test_windows_partial_pipe_setup_failures_close_each_created_handle_once(
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    failure_at: int,
+    expected_closed: list[int],
+) -> None:
+    api = _FakeCreationApi(
+        pipe_failure_at=failure_at if kind == "pipe" else None,
+        set_handle_failure_at=failure_at if kind == "set" else None,
+        file_failure_at=failure_at if kind == "file" else None,
+    )
+
+    with pytest.raises(WindowsLaunchBindingError) as raised:
+        _create_fake_windows_pending(monkeypatch, api)
+
+    assert raised.value.reason == WindowsLaunchBindingReason.PIPE_SETUP_FAILED
+    assert api.closed_handles == expected_closed
+    assert api.create_arguments is None
+    assert api.attribute_delete_calls == 0
+    if kind == "pipe":
+        assert api.pipe_calls == failure_at
+        assert api.set_handle_handles == []
+        assert api.file_handles == []
+    elif kind == "set":
+        assert api.pipe_calls == 3
+        assert api.set_handle_handles == [12, 13, 15][:failure_at]
+        assert api.file_handles == []
+    else:
+        assert api.pipe_calls == 3
+        assert api.set_handle_handles == [12, 13, 15]
+        assert api.file_handles == [12, 13, 15][:failure_at]
 
 
 def test_private_windows_child_owner_cannot_be_copied_or_serialized() -> None:
@@ -358,6 +446,61 @@ def _spawn_unreaped_windows_cleanup_error(
             spawn_owned_sidecar(lease)
 
     return root, raised.value, pending
+
+
+def _spawn_windows_creation_fault(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    api: _FakeCreationApi,
+) -> WindowsLaunchBindingError:
+    lease = acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
+    state = installed_slot._find_live_lease_state(lease)
+    assert state is not None
+    state.windows_opened_release = _FakeOpenedAuthority()  # type: ignore[assignment]
+    with monkeypatch.context() as context:
+        context.setattr(owned_process.os, "name", "nt")
+        context.setattr(windows_sidecar.os, "name", "nt")
+        context.setattr(windows_sidecar.sys, "platform", "win32")
+        context.setattr(windows_sidecar, "_windows_api", lambda: api)
+        context.setattr(windows_sidecar, "_file_from_handle", lambda handle, mode: _fake_file_from_handle(api, handle, mode))
+        context.setenv("SystemRoot", "C:\\Windows")
+        with pytest.raises(WindowsLaunchBindingError) as raised:
+            spawn_owned_sidecar(lease)
+    return raised.value
+
+
+@pytest.mark.parametrize(
+    ("kind", "failure_at"),
+    [
+        ("pipe", 2),
+        ("pipe", 3),
+        ("set", 1),
+        ("set", 2),
+        ("set", 3),
+        ("file", 1),
+        ("file", 2),
+        ("file", 3),
+    ],
+)
+def test_windows_partial_creation_failure_releases_slot_without_returning_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    failure_at: int,
+) -> None:
+    root, _ = _install_active_slot(tmp_path, monkeypatch)
+    api = _FakeCreationApi(
+        pipe_failure_at=failure_at if kind == "pipe" else None,
+        set_handle_failure_at=failure_at if kind == "set" else None,
+        file_failure_at=failure_at if kind == "file" else None,
+    )
+
+    error = _spawn_windows_creation_fault(root, monkeypatch, api)
+
+    assert error.reason == WindowsLaunchBindingReason.PIPE_SETUP_FAILED
+    assert api.create_arguments is None
+    next_lease = acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
+    next_lease.close()
 
 
 def test_cleanup_error_is_factory_only_and_forged_instances_have_no_cleanup_authority() -> None:
@@ -519,6 +662,99 @@ def test_cleanup_error_stops_after_its_bounded_retry_budget_without_releasing_sl
     with pytest.raises(InstalledSlotError) as conflict:
         acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
     assert conflict.value.reason == InstalledSlotReason.SLOT_LEASE_CONFLICT
+
+
+def test_discarded_cleanup_error_collects_while_its_orphan_owner_can_reap_and_release_slot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gc.collect()
+    existing_orphan_ids = set(owned_process._abandoned_spawn_cleanup_ids())
+    api = _FakeProcessApi([windows_sidecar.WAIT_FAILED, windows_sidecar.WAIT_OBJECT_0])
+    root, cleanup_error, pending = _spawn_unreaped_windows_cleanup_error(tmp_path, monkeypatch, api)
+    error_reference = weakref.ref(cleanup_error)
+
+    del cleanup_error
+    gc.collect()
+
+    assert error_reference() is None
+    orphan_ids = set(owned_process._abandoned_spawn_cleanup_ids()) - existing_orphan_ids
+    assert len(orphan_ids) == 1
+    with pytest.raises(InstalledSlotError) as conflict:
+        acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
+    assert conflict.value.reason == InstalledSlotReason.SLOT_LEASE_CONFLICT
+
+    assert owned_process._retry_abandoned_spawn_cleanup(orphan_ids.pop()) is True
+    assert set(owned_process._abandoned_spawn_cleanup_ids()) == existing_orphan_ids
+    assert pending.child is not None
+    assert pending.child.child_reaped is True
+    assert pending.child.handles_closed is True
+    next_lease = acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
+    next_lease.close()
+
+
+def test_terminal_cleanup_owner_survives_error_collection_until_private_retry_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gc.collect()
+    existing_orphan_ids = set(owned_process._abandoned_spawn_cleanup_ids())
+    api = _FakeProcessApi([windows_sidecar.WAIT_FAILED])
+    root, cleanup_error, _ = _spawn_unreaped_windows_cleanup_error(tmp_path, monkeypatch, api)
+    api.wait_results.extend([windows_sidecar.WAIT_FAILED] * owned_process.FAILED_SPAWN_CLEANUP_RETRY_BUDGET)
+    for _ in range(owned_process.FAILED_SPAWN_CLEANUP_RETRY_BUDGET):
+        assert cleanup_error.reap() is False
+    assert cleanup_error.cleanup_terminally_failed is True
+    error_reference = weakref.ref(cleanup_error)
+
+    del cleanup_error
+    gc.collect()
+
+    assert error_reference() is None
+    orphan_ids = set(owned_process._abandoned_spawn_cleanup_ids()) - existing_orphan_ids
+    assert len(orphan_ids) == 1
+    with pytest.raises(InstalledSlotError):
+        acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
+
+    api.wait_results.append(windows_sidecar.WAIT_OBJECT_0)
+    assert owned_process._retry_abandoned_spawn_cleanup(orphan_ids.pop()) is True
+    assert set(owned_process._abandoned_spawn_cleanup_ids()) == existing_orphan_ids
+    next_lease = acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
+    next_lease.close()
+
+
+def test_windows_resume_thread_close_failure_kills_reaps_and_releases_slot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _ = _install_active_slot(tmp_path, monkeypatch)
+    lease = acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
+    state = installed_slot._find_live_lease_state(lease)
+    assert state is not None
+    state.windows_opened_release = _FakeOpenedAuthority()  # type: ignore[assignment]
+    api = _FakeProcessApi(
+        [windows_sidecar.WAIT_OBJECT_0],
+        close_results=[0, 1, 1],
+    )
+    pending = _pending(api)
+
+    with monkeypatch.context() as context:
+        context.setattr(owned_process.os, "name", "nt")
+        context.setattr(owned_process, "_create_windows_suspended_sidecar", lambda *_: pending)
+        context.setattr(owned_process, "_verify_suspended_child_image", lambda *_: None)
+        with pytest.raises(WindowsLaunchBindingError) as raised:
+            spawn_owned_sidecar(lease)
+
+    assert raised.value.reason == WindowsLaunchBindingReason.RESUME_THREAD_FAILED
+    assert pending.resumed is False
+    assert api.resume_calls == [42]
+    assert api.terminate_calls == [41]
+    assert api.closed_handles == [42, 42, 41]
+    assert pending.child is not None
+    assert pending.child.child_reaped is True
+    assert pending.child.handles_closed is True
+    next_lease = acquire_installed_sidecar_launch_lease(root, _policy(), VERIFICATION_TIME)
+    next_lease.close()
 
 
 def test_windows_post_resume_wrapper_failure_kills_reaps_and_returns_no_authority(

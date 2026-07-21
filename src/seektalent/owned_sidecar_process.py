@@ -9,6 +9,7 @@ import threading
 import weakref
 from dataclasses import dataclass, field
 from enum import Enum
+from itertools import count
 from pathlib import Path
 from typing import IO, Never, Protocol, SupportsIndex
 
@@ -26,7 +27,6 @@ from seektalent.windows_installed_binding import (
 )
 from seektalent.windows_sidecar_process import (
     FAILED_SPAWN_REAP_TIMEOUT_SECONDS,
-    _WindowsCleanup,
     _WindowsPendingCreationError,
     _WindowsPendingSidecar,
     _create_windows_suspended_sidecar,
@@ -318,7 +318,7 @@ def _spawn_windows_owned_sidecar(
             )
         raise primary_error
 
-    cleanup_owner = _UnreapedWindowsFailedSpawn(owner, cleanup)
+    cleanup_owner = _UnreapedWindowsFailedSpawn(owner, cleanup.child_reaped)
     raise _new_sidecar_spawn_cleanup_error(primary_error, cleanup_owner, cleanup_failures) from primary_error
 
 
@@ -414,12 +414,8 @@ class _UnreapedFailedSpawn:
 @dataclass(slots=True)
 class _UnreapedWindowsFailedSpawn:
     owner: _WindowsPendingOwner
-    initial_cleanup: _WindowsCleanup
     child_reaped: bool = False
     lease_released: bool = False
-
-    def __post_init__(self) -> None:
-        self.child_reaped = self.initial_cleanup.child_reaped
 
     def reap(self) -> _FailedSpawnCleanup:
         cleanup = self.owner.pending.cleanup()
@@ -448,12 +444,15 @@ class _FailedSpawnCleanupCapability:
     state: _CleanupRetryState = _CleanupRetryState.ACTIVE
     lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def reap(self) -> tuple[bool, tuple[BaseException, ...]]:
+    def reap(self, *, retry_terminal: bool = False) -> tuple[bool, tuple[BaseException, ...]]:
         with self.lock:
             if self.state is _CleanupRetryState.SUCCEEDED:
                 return True, ()
             if self.state is _CleanupRetryState.TERMINAL_FAILURE:
-                return False, ()
+                if not retry_terminal:
+                    return False, ()
+                self.attempts = 0
+                self.state = _CleanupRetryState.ACTIVE
             self.attempts += 1
             try:
                 cleanup = self.owner.reap()
@@ -469,14 +468,44 @@ class _FailedSpawnCleanupCapability:
             return False, cleanup.failures
 
 
-_LIVE_SPAWN_CLEANUP_CAPABILITIES: dict[
-    int,
-    tuple["SidecarSpawnCleanupError", _FailedSpawnCleanupCapability],
-] = {}
-_COMPLETED_SPAWN_CLEANUP_RESULTS: weakref.WeakKeyDictionary[
-    "SidecarSpawnCleanupError",
-    tuple[bool, bool],
-] = weakref.WeakKeyDictionary()
+@dataclass(slots=True)
+class _SpawnCleanupOwner:
+    error_reference: weakref.ReferenceType["SidecarSpawnCleanupError"]
+    capability: _FailedSpawnCleanupCapability
+    abandoned: bool = False
+
+
+_SPAWN_CLEANUP_OWNERS: dict[int, _SpawnCleanupOwner] = {}
+_SPAWN_CLEANUP_OWNERS_LOCK = threading.Lock()
+_SPAWN_CLEANUP_OWNER_IDS = count(1)
+
+
+def _mark_spawn_cleanup_abandoned(owner_id: int) -> None:
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        owner = _SPAWN_CLEANUP_OWNERS.get(owner_id)
+        if owner is not None and owner.error_reference() is None:
+            owner.abandoned = True
+
+
+def _abandoned_spawn_cleanup_ids() -> tuple[int, ...]:
+    """Return private abandoned cleanup owners that retain unreaped child authority."""
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        return tuple(owner_id for owner_id, owner in _SPAWN_CLEANUP_OWNERS.items() if owner.abandoned)
+
+
+def _retry_abandoned_spawn_cleanup(owner_id: int) -> bool:
+    """Run one new bounded retry window for an unreachable private cleanup owner."""
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        owner = _SPAWN_CLEANUP_OWNERS.get(owner_id)
+        if owner is None or not owner.abandoned:
+            raise TypeError("spawn cleanup owner must be an abandoned live owner")
+        capability = owner.capability
+    reaped, _ = capability.reap(retry_terminal=True)
+    if not reaped:
+        return False
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        _SPAWN_CLEANUP_OWNERS.pop(owner_id, None)
+    return True
 
 
 class SidecarSpawnCleanupError(RuntimeError):
@@ -487,27 +516,27 @@ class SidecarSpawnCleanupError(RuntimeError):
 
     @property
     def direct_child_reaped(self) -> bool:
-        completed = _COMPLETED_SPAWN_CLEANUP_RESULTS.get(self)
+        completed = getattr(self, "_completed_cleanup_result", None)
         if completed is not None:
             return completed[0]
         return _spawn_cleanup_capability(self).owner.child_reaped
 
     @property
     def lease_released(self) -> bool:
-        completed = _COMPLETED_SPAWN_CLEANUP_RESULTS.get(self)
+        completed = getattr(self, "_completed_cleanup_result", None)
         if completed is not None:
             return completed[1]
         return _spawn_cleanup_capability(self).owner.lease_released
 
     @property
     def cleanup_terminally_failed(self) -> bool:
-        if _COMPLETED_SPAWN_CLEANUP_RESULTS.get(self) is not None:
+        if getattr(self, "_completed_cleanup_result", None) is not None:
             return False
         return _spawn_cleanup_capability(self).state is _CleanupRetryState.TERMINAL_FAILURE
 
     def reap(self) -> bool:
         """Run one bounded cleanup retry, then cache a confirmed successful result."""
-        if _COMPLETED_SPAWN_CLEANUP_RESULTS.get(self) is not None:
+        if getattr(self, "_completed_cleanup_result", None) is not None:
             return True
         capability = _spawn_cleanup_capability(self)
         reaped, failures = capability.reap()
@@ -516,11 +545,12 @@ class SidecarSpawnCleanupError(RuntimeError):
                 f"failed spawn cleanup retry: {type(cleanup_error).__name__}: {cleanup_error}"
             )
         if reaped:
-            _COMPLETED_SPAWN_CLEANUP_RESULTS[self] = (
+            self._completed_cleanup_result = (
                 capability.owner.child_reaped,
                 capability.owner.lease_released,
             )
-            _LIVE_SPAWN_CLEANUP_CAPABILITIES.pop(id(self), None)
+            with _SPAWN_CLEANUP_OWNERS_LOCK:
+                _SPAWN_CLEANUP_OWNERS.pop(_spawn_cleanup_owner_id(self), None)
         return reaped
 
     def __copy__(self) -> Never:
@@ -540,21 +570,39 @@ def _new_sidecar_spawn_cleanup_error(
 ) -> SidecarSpawnCleanupError:
     error = RuntimeError.__new__(SidecarSpawnCleanupError)
     RuntimeError.__init__(error, "failed sidecar spawn cleanup could not confirm direct-child reap")
+    owner_id = next(_SPAWN_CLEANUP_OWNER_IDS)
+    error._spawn_cleanup_owner_id = owner_id
+    error._completed_cleanup_result: tuple[bool, bool] | None = None
     error.primary_error = primary_error
     error.add_note(f"primary failed spawn error: {type(primary_error).__name__}: {primary_error}")
     for cleanup_error in cleanup_failures:
         error.add_note(
             f"failed spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
         )
-    _LIVE_SPAWN_CLEANUP_CAPABILITIES[id(error)] = (error, _FailedSpawnCleanupCapability(owner))
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        _SPAWN_CLEANUP_OWNERS[owner_id] = _SpawnCleanupOwner(
+            weakref.ref(error),
+            _FailedSpawnCleanupCapability(owner),
+        )
+    weakref.finalize(error, _mark_spawn_cleanup_abandoned, owner_id)
     return error
 
 
 def _spawn_cleanup_capability(error: SidecarSpawnCleanupError) -> _FailedSpawnCleanupCapability:
-    entry = _LIVE_SPAWN_CLEANUP_CAPABILITIES.get(id(error))
-    if entry is None or entry[0] is not error:
+    owner_id = _spawn_cleanup_owner_id(error)
+
+    with _SPAWN_CLEANUP_OWNERS_LOCK:
+        owner = _SPAWN_CLEANUP_OWNERS.get(owner_id)
+        if owner is None or owner.error_reference() is not error:
+            raise TypeError("SidecarSpawnCleanupError must be a live factory cleanup error")
+        return owner.capability
+
+
+def _spawn_cleanup_owner_id(error: SidecarSpawnCleanupError) -> int:
+    owner_id = getattr(error, "_spawn_cleanup_owner_id", None)
+    if not isinstance(owner_id, int):
         raise TypeError("SidecarSpawnCleanupError must be a live factory cleanup error")
-    return entry[1]
+    return owner_id
 
 
 def _reap_failed_spawn(

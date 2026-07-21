@@ -393,11 +393,11 @@ def _create_windows_suspended_sidecar(
     process: _WindowsChildProcess | None = None
     try:
         stdin_child, stdin_parent = _new_pipe(api)
+        raw_handles.extend([stdin_child, stdin_parent])
         stdout_parent, stdout_child = _new_pipe(api)
+        raw_handles.extend([stdout_parent, stdout_child])
         stderr_parent, stderr_child = _new_pipe(api)
-        raw_handles.extend(
-            [stdin_child, stdin_parent, stdout_parent, stdout_child, stderr_parent, stderr_child]
-        )
+        raw_handles.extend([stderr_parent, stderr_child])
         for parent_handle in (stdin_parent, stdout_parent, stderr_parent):
             _set_non_inheritable(api, parent_handle)
 
@@ -462,7 +462,14 @@ def _create_windows_suspended_sidecar(
                 winerror=_error_code(close_failures[0]),
             )
         return _WindowsPendingSidecar(process, streams[0], streams[1], streams[2])
-    except (OSError, RuntimeError, TypeError, ValueError) as primary:
+    except (OSError, RuntimeError, TypeError, ValueError) as error:
+        primary = error
+        if not isinstance(error, WindowsLaunchBindingError):
+            primary = WindowsLaunchBindingError(
+                WindowsLaunchBindingReason.PIPE_SETUP_FAILED,
+                executable_path,
+                winerror=_error_code(error) if isinstance(error, OSError) else None,
+            )
         if process is not None:
             pending = _WindowsPendingSidecar(
                 process,
@@ -479,7 +486,9 @@ def _create_windows_suspended_sidecar(
             api.DeleteProcThreadAttributeList(ctypes.addressof(attribute_list))
         for cleanup_error in cleanup_failures:
             primary.add_note(f"Windows pipe setup cleanup failed: {cleanup_error}")
-        raise
+        if primary is error:
+            raise
+        raise primary from error
 
 
 def _new_pipe(api: _WindowsProcessApi) -> tuple[int, int]:
