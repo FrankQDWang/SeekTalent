@@ -927,11 +927,19 @@ def test_permanently_unclosed_pipe_stays_in_abandoned_cleanup_maintenance() -> N
     cleanup_error = process._cleanup_after_handshake_failure(RuntimeError("readiness failed"))
 
     assert isinstance(cleanup_error, owned_process.SidecarSpawnCleanupError)
-    cleanup_error.abandon()
-    result = None
-    for _ in range(owned_process.FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS - 1):
-        result = owned_process.maintain_abandoned_sidecar_spawns()
-    assert result is not None
-    assert result.terminal >= 1
-    assert cleanup_error.cleanup_terminally_failed is True
-    assert stuck.closed is False
+    owner_id = owned_process._spawn_cleanup_owner_id(cleanup_error)
+    try:
+        cleanup_error.abandon()
+        result = None
+        for _ in range(owned_process.FAILED_SPAWN_CLEANUP_MAX_NATIVE_ATTEMPTS - 1):
+            result = owned_process.maintain_abandoned_sidecar_spawns()
+        assert result is not None
+        assert result.terminal >= 1
+        assert cleanup_error.cleanup_terminally_failed is True
+        assert stuck.closed is False
+    finally:
+        # This test intentionally reaches an unrecoverable synthetic state;
+        # remove its test-only owner so later custodian tests see only owners
+        # that they created.
+        with owned_process._SPAWN_CLEANUP_OWNERS_LOCK:
+            owned_process._SPAWN_CLEANUP_OWNERS.pop(owner_id, None)
