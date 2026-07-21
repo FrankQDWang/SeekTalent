@@ -23,6 +23,8 @@ on:
       - "src/seektalent/release_manifest.py"
       - "src/seektalent/release_signing.py"
       - "src/seektalent/sidecar_bootstrap.py"
+      - "src/seektalent/sidecar_child_session.py"
+      - "src/seektalent/sidecar_handshake_protocol.py"
       - "src/seektalent/sidecar_readiness.py"
       - "pyproject.toml"
       - "uv.lock"

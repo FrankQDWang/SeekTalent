@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import copy
+import gc
 import io
+import json
 import pickle
 import socket
 import subprocess
 import threading
 import time
+import weakref
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
@@ -17,6 +20,7 @@ from cryptography.hazmat.primitives.hashes import SHA256
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 import seektalent.installed_release as installed_release
+import seektalent.sidecar_handshake_protocol as handshake
 import seektalent.sidecar_readiness as readiness
 from seektalent.installed_slot import (
     ActiveSlotPointerV1,
@@ -24,9 +28,13 @@ from seektalent.installed_slot import (
     acquire_installed_sidecar_launch_lease,
     canonical_active_slot_pointer_bytes,
 )
-from seektalent.owned_sidecar_process import OwnedSidecarProcess, SidecarSpawnCleanupError
+from seektalent.owned_sidecar_process import (
+    OwnedSidecarProcess,
+    SidecarSpawnCleanupError,
+    maintain_abandoned_sidecar_spawns,
+)
 from seektalent.source_port.authenticated_history_frames import HistoryFrameError, HistoryFrameReason
-from seektalent.source_port.history_contract import SourceHistoryQueryV1
+from seektalent.source_port.history_contract import SourceHistoryNotFound, SourceHistoryQueryV1
 from seektalent.release_manifest import parse_release_manifest
 from tests.test_installed_release import _install_slot
 from tests.test_release_signing import VERIFICATION_TIME, _policy, _signed
@@ -109,6 +117,8 @@ def _identity(admission: installed_release.AuthenticatedInstalledSidecarLaunch) 
 def _connected_process(
     lease: InstalledSidecarLaunchLease,
     identity: readiness.SidecarHandshakeIdentity,
+    *,
+    after_sidecar_ready: Callable[[_FakeChild], None] | None = None,
 ) -> tuple[
     OwnedSidecarProcess,
     _FakeChild,
@@ -137,12 +147,16 @@ def _connected_process(
         writer = sidecar_socket.makefile("wb", buffering=0)
         sidecar_socket.close()
         try:
-            results.append(readiness.serve_sidecar_handshake(reader, writer, identity, timeout=1))
+            result = readiness.serve_sidecar_handshake(reader, writer, identity, timeout=1)
+            if after_sidecar_ready is not None:
+                after_sidecar_ready(child)
+            results.append(result)
         except (OSError, ValueError, readiness.SidecarReadinessError) as exc:
             errors.append(exc)
         finally:
-            reader.close()
-            writer.close()
+            if not results:
+                reader.close()
+                writer.close()
             sidecar_socket.close()
 
     thread = threading.Thread(target=serve)
@@ -174,6 +188,8 @@ def _connected_scripted_process(
         sidecar_socket.close()
         try:
             script(reader, writer)
+        except EOFError:
+            return
         finally:
             reader.close()
             writer.close()
@@ -218,7 +234,7 @@ def test_ready_session_requires_the_complete_four_step_transcript(
 
     session = readiness.spawn_ready_sidecar(lease, timeout=1)
 
-    assert session.process is process
+    assert session.pid == process.pid
     assert session.session_id
     assert child.kill_calls == 0
     assert errors == []
@@ -270,7 +286,7 @@ def test_ready_session_cannot_be_fabricated_copied_or_serialized(
         pickle.dumps(session)
     fake = object.__new__(readiness.ReadySidecarSession)
     with pytest.raises(TypeError):
-        _ = fake.process
+        _ = fake.pid
 
     session.close(1)
     thread.join(timeout=1)
@@ -311,6 +327,16 @@ def test_ready_session_cannot_be_fabricated_copied_or_serialized(
             id="partial-frame-eof",
         ),
         pytest.param(
+            lambda reader, writer: (
+                _read_frame(reader),
+                getattr(writer, "write")((8).to_bytes(4, "big") + b"{"),
+                getattr(writer, "flush")(),
+                time.sleep(0.2),
+            ),
+            readiness.SidecarReadinessReason.TRUNCATED_FRAME,
+            id="slow-partial-frame-timeout",
+        ),
+        pytest.param(
             lambda reader, writer: (_read_frame(reader), time.sleep(0.2)),
             readiness.SidecarReadinessReason.READ_TIMEOUT,
             id="silent-child-timeout",
@@ -349,6 +375,52 @@ def test_child_exit_before_sidecar_hello_is_typed_and_releases_its_lease(
 
     lease = lease_factory()
     process, child, thread = _connected_scripted_process(lease, exit_after_main_hello)
+    child_holder["child"] = child
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+
+    with pytest.raises(readiness.SidecarReadinessError) as raised:
+        readiness.spawn_ready_sidecar(lease, timeout=1)
+
+    assert raised.value.reason is readiness.SidecarReadinessReason.CHILD_EXIT
+    assert child.kill_calls == 0
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    lease_factory().close()
+
+
+def test_child_exit_immediately_after_sidecar_ready_never_mints_ready_authority(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    identity = _identity(lease.admission)
+    child_holder: dict[str, _FakeChild] = {}
+
+    def sidecar_ready_then_exit(reader: object, writer: object) -> None:
+        main_hello_raw = _read_frame(reader)
+        main_hello = json.loads(main_hello_raw)
+        secret = handshake._decode_secret(main_hello["session_secret"])
+        sidecar_hello = handshake._sidecar_hello_payload(
+            identity,
+            main_hello["session_id"],
+            main_hello["nonce"],
+            secret,
+            (main_hello_raw,),
+        )
+        sidecar_hello_raw = handshake._canonical_payload(sidecar_hello)
+        _write_frame(writer, sidecar_hello_raw)
+        main_ready_raw = _read_frame(reader)
+        sidecar_ready = handshake._ready_payload(
+            "sidecar_ready",
+            main_hello["session_id"],
+            secret,
+            b"sidecar_ready",
+            (main_hello_raw, sidecar_hello_raw, main_ready_raw),
+        )
+        child_holder["child"].returncode = 70
+        _write_frame(writer, handshake._canonical_payload(sidecar_ready))
+
+    process, child, thread = _connected_scripted_process(lease, sidecar_ready_then_exit)
     child_holder["child"] = child
     monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
 
@@ -409,6 +481,7 @@ def test_unreaped_handshake_failure_retains_the_existing_cleanup_capability(
     [
         (b'{"message_type":"main_hello","message_type":"main_hello"}', readiness.SidecarReadinessReason.DUPLICATE_KEY),
         (b"\xff", readiness.SidecarReadinessReason.INVALID_UTF8),
+        (b'{"message_type":1.5}', readiness.SidecarReadinessReason.ILLEGAL_NUMBER),
         (b"[]", readiness.SidecarReadinessReason.ROOT_NOT_OBJECT),
         (b'{"message_type":"main_hello","handshake_version":2}', readiness.SidecarReadinessReason.PROTOCOL_MISMATCH),
     ],
@@ -428,6 +501,134 @@ def test_sidecar_rejects_ambiguous_or_wrong_protocol_main_hello(
     lease.close()
 
 
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        pytest.param(
+            lambda payload: payload.__setitem__("nonce", "wrong-nonce"),
+            readiness.SidecarReadinessReason.NONCE_MISMATCH,
+            id="nonce-mismatch",
+        ),
+        pytest.param(
+            lambda payload: payload.__setitem__("session_id", "wrong-session"),
+            readiness.SidecarReadinessReason.SESSION_MISMATCH,
+            id="session-mismatch",
+        ),
+        pytest.param(
+            lambda payload: payload.__setitem__("proof", "0" * 64),
+            readiness.SidecarReadinessReason.BAD_PROOF,
+            id="bad-proof",
+        ),
+        pytest.param(
+            lambda payload: payload.__setitem__("unexpected", "field"),
+            readiness.SidecarReadinessReason.UNKNOWN_FIELD,
+            id="unknown-field",
+        ),
+    ],
+)
+def test_identity_proof_and_nonce_failures_reap_without_secret_disclosure(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+    mutation: Callable[[dict[str, object]], None],
+    reason: readiness.SidecarReadinessReason,
+) -> None:
+    lease = lease_factory()
+    identity = _identity(lease.admission)
+
+    def send_mutated_sidecar_hello(reader: object, writer: object) -> None:
+        main_hello_raw = _read_frame(reader)
+        main_hello = json.loads(main_hello_raw)
+        secret = handshake._decode_secret(main_hello["session_secret"])
+        payload = handshake._sidecar_hello_payload(
+            identity,
+            main_hello["session_id"],
+            main_hello["nonce"],
+            secret,
+            (main_hello_raw,),
+        )
+        mutation(payload)
+        _write_frame(writer, handshake._canonical_payload(payload))
+
+    process, child, thread = _connected_scripted_process(lease, send_mutated_sidecar_hello)
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+
+    with pytest.raises(readiness.SidecarReadinessError) as raised:
+        readiness.spawn_ready_sidecar(lease, timeout=1)
+
+    assert raised.value.reason is reason
+    assert "session_secret" not in str(raised.value)
+    assert child.kill_calls == 1
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    lease_factory().close()
+
+
+@pytest.mark.parametrize(
+    ("writer_factory", "reason"),
+    [
+        pytest.param(
+            lambda: _BlockingWriter(),
+            readiness.SidecarReadinessReason.WRITE_TIMEOUT,
+            id="write-timeout",
+        ),
+        pytest.param(
+            lambda: _BrokenWriter(),
+            readiness.SidecarReadinessReason.PIPE_IO_FAILURE,
+            id="pipe-io-failure",
+        ),
+    ],
+)
+def test_write_failures_are_bounded_and_reap_the_child(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+    writer_factory: Callable[[], object],
+    reason: readiness.SidecarReadinessReason,
+) -> None:
+    lease = lease_factory()
+    process, child, thread = _connected_scripted_process(lease, lambda reader, _: _read_frame(reader))
+    process.protocol_writer = writer_factory()  # type: ignore[assignment]
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+
+    with pytest.raises(readiness.SidecarReadinessError) as raised:
+        readiness.spawn_ready_sidecar(lease, timeout=0.05)
+
+    assert raised.value.reason is reason
+    assert child.kill_calls == 1
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    lease_factory().close()
+
+
+class _BlockingWriter:
+    def __init__(self) -> None:
+        self.closed = False
+        self._released = threading.Event()
+
+    def write(self, _: bytes) -> int:
+        self._released.wait(timeout=1)
+        return 0
+
+    def flush(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+        self._released.set()
+
+
+class _BrokenWriter:
+    closed = False
+
+    def write(self, _: bytes) -> int:
+        raise OSError("injected pipe failure")
+
+    def flush(self) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
 @pytest.mark.parametrize("field", ["product_build_id", "main_application_build_id"])
 def test_sidecar_requires_the_exact_admitted_main_identity(
     lease_factory: Callable[[], InstalledSidecarLaunchLease],
@@ -436,7 +637,7 @@ def test_sidecar_requires_the_exact_admitted_main_identity(
     lease = lease_factory()
     payload, _ = readiness._new_main_hello(lease.admission)
     payload[field] = "forged-main-build"
-    body = readiness._canonical_payload(payload)
+    body = handshake._canonical_payload(payload)
 
     with pytest.raises(readiness.SidecarReadinessError) as raised:
         readiness.serve_sidecar_handshake(
@@ -495,19 +696,285 @@ def test_directional_keys_use_hkdf_sha256() -> None:
     secret = b"s" * 32
     session_id = "a" * 32
     transcript = (b"main-hello", b"sidecar-hello", b"main-ready", b"sidecar-ready")
-    main_to_sidecar, sidecar_to_main = readiness._derive_direction_keys(secret, session_id, transcript)
-    transcript_digest = sha256(b"".join(readiness._length_prefixed(frame) for frame in transcript)).digest()
+    main_to_sidecar, sidecar_to_main = handshake._derive_direction_keys(secret, session_id, transcript)
+    transcript_digest = sha256(b"".join(handshake._length_prefixed(frame) for frame in transcript)).digest()
 
     def expected(direction: bytes) -> bytes:
         info = (
-            readiness._HANDSHAKE_KEY_DOMAIN
-            + readiness._length_prefixed(session_id.encode("ascii"))
-            + readiness._length_prefixed(direction)
+            handshake._HANDSHAKE_KEY_DOMAIN
+            + handshake._length_prefixed(session_id.encode("ascii"))
+            + handshake._length_prefixed(direction)
         )
         return HKDF(algorithm=SHA256(), length=32, salt=transcript_digest, info=info).derive(secret)
 
-    assert main_to_sidecar == expected(readiness._MAIN_TO_SIDECAR)
-    assert sidecar_to_main == expected(readiness._SIDECAR_TO_MAIN)
+    assert main_to_sidecar == expected(handshake._MAIN_TO_SIDECAR)
+    assert sidecar_to_main == expected(handshake._SIDECAR_TO_MAIN)
+
+
+def test_handshake_returns_the_child_transport_without_waiting_for_parent_eof(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, _, thread, errors, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    try:
+        thread.join(timeout=0.1)
+        assert not thread.is_alive()
+        assert errors == []
+        assert results
+    finally:
+        session.close(1)
+        thread.join(timeout=1)
+
+
+def test_ready_session_cannot_reset_its_history_replay_state(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, _, thread, _, _ = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    try:
+        assert session.new_history_session() is session.new_history_session()
+    finally:
+        session.close(1)
+        thread.join(timeout=1)
+
+
+def test_ready_transport_keeps_one_real_pipe_for_bidirectional_authenticated_history_frames(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, _, thread, errors, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    assert errors == []
+    child_session = results[0]
+    query = _history_query()
+    try:
+        main_history = session.new_history_session()
+        query_frame = main_history.encode_query(
+            message_id="query-message-1",
+            correlation_id="correlation-1",
+            payload=query,
+        )
+        session.send_history_frame(query_frame, timeout=1)
+        assert child_session.receive_history(timeout=1)[0].payload == query
+
+        result = SourceHistoryNotFound(
+            **query.model_dump(exclude={"contract_version"}),
+            contract_version="seektalent.source-port.query.result/v1",
+            outcome="not_found",
+            oldest_retained_generation=1,
+            newest_known_generation=3,
+            history_complete=True,
+            history_truncated=False,
+        )
+        result_frame = child_session.new_history_session().encode_result(
+            message_id="result-message-1",
+            reply_to="query-message-1",
+            payload=result,
+        )
+        child_session.send_history_frame(result_frame[:3], timeout=1)
+        assert session.receive_history(timeout=1) == ()
+        child_session.send_history_frame(result_frame[3:], timeout=1)
+        assert session.receive_history(timeout=1)[0].payload == result
+    finally:
+        child_session.close()
+        session.close(1)
+
+
+def test_replayed_history_frame_is_rejected_through_every_public_transport_factory(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, _, thread, errors, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    assert errors == []
+    child_session = results[0]
+    try:
+        query = _history_query()
+        frame = session.new_history_session().encode_query(
+            message_id="query-message-1",
+            correlation_id=None,
+            payload=query,
+        )
+        session.send_history_frame(frame, timeout=1)
+        assert child_session.receive_history(timeout=1)[0].payload == query
+        assert child_session.new_history_session() is child_session.new_history_session()
+        session.send_history_frame(frame, timeout=1)
+        with pytest.raises(HistoryFrameError) as raised:
+            child_session.receive_history(timeout=1)
+        assert raised.value.reason_code == HistoryFrameReason.SEQUENCE_MISMATCH.value
+    finally:
+        child_session.close()
+        session.close(1)
+
+
+def _history_query() -> SourceHistoryQueryV1:
+    return SourceHistoryQueryV1(
+        contract_version="seektalent.source-port.query.request/v1",
+        run_id="run-1",
+        operation_id="operation-1",
+        source="liepin",
+        operation_kind="search",
+        idempotency_key="key-1",
+        request_hash="a" * 64,
+        attempt_no=1,
+        authorization_selector={"kind": "exact", "ordinal": 1},
+        accepted_generation_hint=2,
+        searched_first_generation=1,
+        searched_last_generation=3,
+        expected_source_operation_ledger_revision=4,
+        expected_reconciliation_revision=0,
+    )
+
+
+def test_collecting_a_ready_session_reaps_its_exact_child_and_releases_the_lease(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, child, thread, _, _ = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    reference = weakref.ref(session)
+
+    del session
+    gc.collect()
+
+    assert reference() is None
+    assert child.kill_calls == 1
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    lease_factory().close()
+
+
+def test_collecting_a_ready_session_transfers_unreaped_cleanup_to_maintenance(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, child, thread, _, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    attempts = 0
+
+    def kill_without_exit() -> None:
+        child.kill_calls += 1
+
+    def wait_for_maintenance(timeout: float | None = None) -> int:
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        if attempts == 1:
+            raise subprocess.TimeoutExpired("sidecar", 1)
+        child.returncode = 0
+        return 0
+
+    monkeypatch.setattr(child, "kill", kill_without_exit)
+    monkeypatch.setattr(child, "wait", wait_for_maintenance)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    reference = weakref.ref(session)
+
+    del session
+    gc.collect()
+
+    assert reference() is None
+    maintenance = maintain_abandoned_sidecar_spawns()
+    assert maintenance.reaped >= 1
+    assert child.kill_calls >= 2
+    results[0].close()
+    thread.join(timeout=1)
+    lease_factory().close()
+
+
+def test_ready_session_close_retains_authority_after_wait_timeout_and_retries(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, child, thread, _, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    attempts = 0
+
+    def kill_without_exit() -> None:
+        child.kill_calls += 1
+
+    def wait_then_reap(timeout: float | None = None) -> int:
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        if attempts <= 2:
+            raise subprocess.TimeoutExpired("sidecar", 1)
+        child.returncode = 0
+        return 0
+
+    monkeypatch.setattr(child, "kill", kill_without_exit)
+    monkeypatch.setattr(child, "wait", wait_then_reap)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+
+    with pytest.raises(readiness.SidecarReadinessError) as raised:
+        session.close(1)
+
+    assert raised.value.reason is readiness.SidecarReadinessReason.CHILD_FAILURE
+    assert isinstance(raised.value.cleanup_error, SidecarSpawnCleanupError)
+    assert session.pid == process.pid
+    assert session.close(1) == 0
+    with pytest.raises(TypeError):
+        _ = session.pid
+    results[0].close()
+    thread.join(timeout=1)
+    lease_factory().close()
+
+
+def test_stderr_drain_start_failure_reaps_the_child_and_releases_the_lease(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, child, thread, _, results = _connected_process(lease, _identity(lease.admission))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    monkeypatch.setattr(readiness._BoundedStderrDrain, "start", lambda _: (_ for _ in ()).throw(RuntimeError()))
+
+    with pytest.raises(readiness.SidecarReadinessError) as raised:
+        readiness.spawn_ready_sidecar(lease, timeout=1)
+
+    assert raised.value.reason is readiness.SidecarReadinessReason.PIPE_IO_FAILURE
+    assert child.kill_calls == 1
+    results.clear()
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    lease_factory().close()
+
+
+def test_stderr_flood_does_not_block_the_protocol_handshake(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, _, thread, errors, results = _connected_process(lease, _identity(lease.admission))
+    process.stderr_reader = io.BytesIO(b"e" * (2 * 64 * 1024))
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+
+    thread.join(timeout=1)
+    assert not thread.is_alive()
+    assert errors == []
+    results[0].close()
+    session.close(1)
+    lease_factory().close()
 
 
 def test_main_ready_session_factory_has_no_production_caller() -> None:

@@ -191,14 +191,16 @@ class OwnedSidecarProcess:
         """Retain exact child cleanup authority when readiness cannot confirm a reap."""
         with self._lifecycle_lock:
             streams = (self.protocol_writer, self.protocol_reader, self.stderr_reader)
-            cleanup = _reap_owned_child(self._process, self._process_group_id, streams)
+            process_group_id = self._process_group_id
+            cleanup = _reap_owned_child(self._process, process_group_id, streams)
             cleanup_failures = cleanup.failures
-            self._process_group_id = None
             lease_state = self._lease_state
+            if cleanup.reaped:
+                self._process_group_id = None
             if cleanup.reaped and lease_state is not None:
                 try:
                     lease_state.close()
-                except InstalledSlotError as cleanup_error:
+                except (InstalledSlotError, WindowsLaunchBindingError) as cleanup_error:
                     cleanup_failures += (cleanup_error,)
                 else:
                     self._lease_state = None
@@ -211,7 +213,7 @@ class OwnedSidecarProcess:
             self._lease_state = None
             owner = _UnreapedOwnedSidecar(
                 self._process,
-                None,
+                None if cleanup.reaped else process_group_id,
                 streams,
                 lease_state,
                 child_reaped=cleanup.reaped,
@@ -628,6 +630,15 @@ class SidecarSpawnCleanupError(RuntimeError):
             with _SPAWN_CLEANUP_OWNERS_LOCK:
                 _SPAWN_CLEANUP_OWNERS.pop(_spawn_cleanup_owner_id(self), None)
         return reaped
+
+    def abandon(self) -> None:
+        """Transfer an unreachable cleanup capability to bounded maintenance."""
+        owner_id = _spawn_cleanup_owner_id(self)
+        with _SPAWN_CLEANUP_OWNERS_LOCK:
+            owner = _SPAWN_CLEANUP_OWNERS.get(owner_id)
+            if owner is None or owner.error_reference() is not self:
+                raise TypeError("SidecarSpawnCleanupError must be a live factory cleanup error")
+            owner.abandoned = True
 
     def __copy__(self) -> Never:
         raise TypeError("SidecarSpawnCleanupError cannot be copied")

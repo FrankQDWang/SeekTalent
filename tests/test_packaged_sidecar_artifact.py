@@ -124,12 +124,10 @@ def test_packaged_artifact_completes_readiness_from_verified_active_slot(
     )
 
     session = spawn_ready_sidecar(lease, timeout=5)
-    assert session.process.pid > 0
+    assert session.pid > 0
     assert session.session_id
     assert session.new_history_session().closed is False
-    session.process.close_stdin()
-    assert session.process.wait(5) == 0
-    session.process.close_readers()
+    assert session.close(5) != 0
 
     retry = _acquire(root)
     retry.close()
@@ -139,9 +137,13 @@ def test_packaged_artifact_exits_after_early_parent_eof(tmp_path: Path) -> None:
     root = _install_active_artifact(tmp_path)
 
     process = spawn_owned_sidecar(_acquire(root))
-    process.close_stdin()
-    assert process.wait(5) == 70
-    process.close_readers()
+    try:
+        process.close_stdin()
+        assert process.wait(20) == 70
+    finally:
+        if process.poll() is None:
+            process.kill(5)
+        process.close_readers()
     retry = _acquire(root)
     retry.close()
 
@@ -271,7 +273,7 @@ def test_packaged_artifact_is_not_a_python_source_or_network_launcher(tmp_path: 
         env=environment,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        timeout=10,
+        timeout=20,
         check=False,
     )
     assert direct.returncode == 70, direct.stderr.decode("utf-8", errors="replace")

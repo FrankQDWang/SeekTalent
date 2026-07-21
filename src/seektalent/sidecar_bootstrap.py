@@ -5,11 +5,8 @@ from __future__ import annotations
 import sys
 from importlib import import_module
 
-from seektalent.sidecar_readiness import (
-    SidecarHandshakeIdentity,
-    SidecarReadinessError,
-    serve_sidecar_handshake,
-)
+from seektalent.sidecar_child_session import serve_sidecar_handshake
+from seektalent.sidecar_handshake_protocol import SidecarHandshakeIdentity
 
 
 def main() -> int:
@@ -19,8 +16,9 @@ def main() -> int:
         if not isinstance(identity_payload, dict):
             return 70
         identity = SidecarHandshakeIdentity(**identity_payload)
-        serve_sidecar_handshake(sys.stdin.buffer, sys.stdout.buffer, identity)
-    except (SidecarReadinessError, TypeError, ValueError):
+        session = serve_sidecar_handshake(sys.stdin.buffer, sys.stdout.buffer, identity)
+        session.wait_for_parent_eof()
+    except (RuntimeError, TypeError, ValueError):
         return 70
     return 0
 

@@ -410,7 +410,11 @@ def _sidecar_source_digest() -> str:
     return sha256(
         b"".join(
             path.name.encode("ascii") + b"\x00" + path.read_bytes()
-            for path in (root / "sidecar_bootstrap.py", root / "sidecar_readiness.py")
+            for path in (
+                root / "sidecar_bootstrap.py",
+                root / "sidecar_child_session.py",
+                root / "sidecar_handshake_protocol.py",
+            )
         )
     ).hexdigest()
 

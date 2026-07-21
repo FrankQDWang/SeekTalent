@@ -698,8 +698,11 @@ def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_busin
         source = path.read_text(encoding="utf-8")
         if "authenticated_history_frames" in source:
             production_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    # Readiness is an uncalled transport primitive; #375 deliberately reuses this kernel.
-    assert production_callers == ["src/seektalent/sidecar_readiness.py"]
+    # The production-unreachable #375 transport owns the single post-readiness history state.
+    assert production_callers == [
+        "src/seektalent/sidecar_readiness.py",
+        "src/seektalent/sidecar_child_session.py",
+    ]
 
     runner = (PROJECT_ROOT / "src" / "seektalent_workbench_v2" / "runtime_runner.py").read_text(encoding="utf-8")
     pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")

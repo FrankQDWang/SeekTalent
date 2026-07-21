@@ -780,3 +780,83 @@ def test_non_effective_executable_fails_in_resolver_before_popen(
 
     assert raised.value.reason == installed_release.InstalledReleaseReason.FILE_MODE_MISMATCH
     assert calls == []
+
+
+def test_unreaped_readiness_cleanup_keeps_the_original_posix_group_for_its_retry(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    fake = _FakePopen()
+    process = owned_process.OwnedSidecarProcess(
+        _process=cast(subprocess.Popen[bytes], fake),
+        protocol_writer=fake.stdin,
+        protocol_reader=fake.stdout,
+        stderr_reader=fake.stderr,
+        _process_group_id=43210,
+        _lease_state=lease._take_for_spawn(),
+    )
+    signals: list[tuple[int, signal.Signals]] = []
+    attempts = 0
+
+    def wait(*, timeout: float | None = None) -> int:
+        nonlocal attempts
+        del timeout
+        attempts += 1
+        if attempts == 1:
+            raise subprocess.TimeoutExpired("sidecar", 1)
+        fake.returncode = 0
+        return 0
+
+    monkeypatch.setattr(fake, "wait", wait)
+    monkeypatch.setattr(
+        owned_process,
+        "_signal_process_group",
+        lambda process_group_id, sig: signals.append((process_group_id, sig)),
+    )
+
+    cleanup_error = process._cleanup_after_handshake_failure(RuntimeError("readiness failed"))
+
+    assert isinstance(cleanup_error, owned_process.SidecarSpawnCleanupError)
+    assert cleanup_error.direct_child_reaped is False
+    assert signals == [(43210, signal.SIGKILL)]
+    assert cleanup_error.reap() is True
+    assert cleanup_error.direct_child_reaped is True
+    assert cleanup_error.lease_released is True
+    assert signals == [(43210, signal.SIGKILL), (43210, signal.SIGKILL)]
+    lease_factory().close()
+
+
+def test_windows_lease_cleanup_failure_retains_primary_error_and_can_retry() -> None:
+    class _LeaseState:
+        released = False
+
+        def __init__(self) -> None:
+            self.close_attempts = 0
+
+        def close(self) -> None:
+            self.close_attempts += 1
+            if self.close_attempts == 1:
+                raise WindowsLaunchBindingError(WindowsLaunchBindingReason.NATIVE_HANDLE_RELEASE_FAILED)
+            self.released = True
+
+    fake = _FakePopen()
+    lease_state = _LeaseState()
+    process = owned_process.OwnedSidecarProcess(
+        _process=cast(subprocess.Popen[bytes], fake),
+        protocol_writer=fake.stdin,
+        protocol_reader=fake.stdout,
+        stderr_reader=fake.stderr,
+        _process_group_id=None,
+        _lease_state=cast(owned_process._InstalledSidecarLeaseState, lease_state),
+    )
+    primary = RuntimeError("typed-readiness-primary")
+
+    cleanup_error = process._cleanup_after_handshake_failure(primary)
+
+    assert isinstance(cleanup_error, owned_process.SidecarSpawnCleanupError)
+    assert cleanup_error.primary_error is primary
+    assert cleanup_error.direct_child_reaped is True
+    assert cleanup_error.lease_released is False
+    assert cleanup_error.reap() is True
+    assert cleanup_error.lease_released is True

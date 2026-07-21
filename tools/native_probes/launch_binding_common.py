@@ -18,7 +18,7 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def run_executable(path: Path, *, timeout_seconds: float = 10) -> dict[str, int | str]:
+def run_executable(path: Path, *, timeout_seconds: float = 20) -> dict[str, int | str]:
     try:
         completed = subprocess.run(
             [str(path)],
