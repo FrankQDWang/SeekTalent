@@ -6,7 +6,9 @@ import signal
 import stat
 import subprocess
 import threading
+import weakref
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import IO, Never, Protocol, SupportsIndex
 
@@ -23,11 +25,15 @@ from seektalent.windows_installed_binding import (
     _verify_suspended_child_image,
 )
 from seektalent.windows_sidecar_process import (
+    FAILED_SPAWN_REAP_TIMEOUT_SECONDS,
     _WindowsCleanup,
     _WindowsPendingCreationError,
     _WindowsPendingSidecar,
     _create_windows_suspended_sidecar,
 )
+
+
+FAILED_SPAWN_CLEANUP_RETRY_BUDGET = 3
 
 
 class _OwnedChildProcess(Protocol):
@@ -239,7 +245,7 @@ def spawn_owned_sidecar(lease: InstalledSidecarLaunchLease) -> OwnedSidecarProce
             if process is None:
                 raise AssertionError("unreaped failed spawn requires a direct child")
             owner = _UnreapedFailedSpawn(process, process.pid if os.name == "posix" else None, lease_state)
-            raise SidecarSpawnCleanupError(primary_error, owner, cleanup_failures) from primary_error
+            raise _new_sidecar_spawn_cleanup_error(primary_error, owner, cleanup_failures) from primary_error
         for cleanup_error in cleanup_failures:
             primary_error.add_note(
                 f"failed spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
@@ -313,7 +319,7 @@ def _spawn_windows_owned_sidecar(
         raise primary_error
 
     cleanup_owner = _UnreapedWindowsFailedSpawn(owner, cleanup)
-    raise SidecarSpawnCleanupError(primary_error, cleanup_owner, cleanup_failures) from primary_error
+    raise _new_sidecar_spawn_cleanup_error(primary_error, cleanup_owner, cleanup_failures) from primary_error
 
 
 def _installed_release_working_directory(
@@ -429,47 +435,93 @@ class _UnreapedWindowsFailedSpawn:
         return _FailedSpawnCleanup(cleanup.failures, cleanup.child_reaped)
 
 
-class _FailedSpawnOwner(Protocol):
-    child_reaped: bool
-    lease_released: bool
+class _CleanupRetryState(Enum):
+    ACTIVE = "active"
+    SUCCEEDED = "succeeded"
+    TERMINAL_FAILURE = "terminal_failure"
 
-    def reap(self) -> _FailedSpawnCleanup: ...
+
+@dataclass(slots=True)
+class _FailedSpawnCleanupCapability:
+    owner: _UnreapedFailedSpawn | _UnreapedWindowsFailedSpawn
+    attempts: int = 0
+    state: _CleanupRetryState = _CleanupRetryState.ACTIVE
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def reap(self) -> tuple[bool, tuple[BaseException, ...]]:
+        with self.lock:
+            if self.state is _CleanupRetryState.SUCCEEDED:
+                return True, ()
+            if self.state is _CleanupRetryState.TERMINAL_FAILURE:
+                return False, ()
+            self.attempts += 1
+            try:
+                cleanup = self.owner.reap()
+            except (InstalledSlotError, WindowsLaunchBindingError):
+                if self.attempts >= FAILED_SPAWN_CLEANUP_RETRY_BUDGET:
+                    self.state = _CleanupRetryState.TERMINAL_FAILURE
+                raise
+            if cleanup.reaped and self.owner.lease_released:
+                self.state = _CleanupRetryState.SUCCEEDED
+                return True, cleanup.failures
+            if self.attempts >= FAILED_SPAWN_CLEANUP_RETRY_BUDGET:
+                self.state = _CleanupRetryState.TERMINAL_FAILURE
+            return False, cleanup.failures
+
+
+_LIVE_SPAWN_CLEANUP_CAPABILITIES: dict[
+    int,
+    tuple["SidecarSpawnCleanupError", _FailedSpawnCleanupCapability],
+] = {}
+_COMPLETED_SPAWN_CLEANUP_RESULTS: weakref.WeakKeyDictionary[
+    "SidecarSpawnCleanupError",
+    tuple[bool, bool],
+] = weakref.WeakKeyDictionary()
 
 
 class SidecarSpawnCleanupError(RuntimeError):
-    """A failed spawn whose direct child needs explicit reaping before slot release."""
+    """A factory-issued failed spawn cleanup capability with bounded retries."""
 
-    def __init__(
-        self,
-        primary_error: BaseException,
-        owner: _FailedSpawnOwner,
-        cleanup_failures: tuple[BaseException, ...],
-    ) -> None:
-        self.primary_error = primary_error
-        self._owner = owner
-        super().__init__("failed sidecar spawn cleanup could not confirm direct-child reap")
-        self.add_note(f"primary failed spawn error: {type(primary_error).__name__}: {primary_error}")
-        for cleanup_error in cleanup_failures:
-            self.add_note(
-                f"failed spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
-            )
+    def __init__(self, *_: object, **__: object) -> None:
+        raise TypeError("SidecarSpawnCleanupError is factory-only")
 
     @property
     def direct_child_reaped(self) -> bool:
-        return self._owner.child_reaped
+        completed = _COMPLETED_SPAWN_CLEANUP_RESULTS.get(self)
+        if completed is not None:
+            return completed[0]
+        return _spawn_cleanup_capability(self).owner.child_reaped
 
     @property
     def lease_released(self) -> bool:
-        return self._owner.lease_released
+        completed = _COMPLETED_SPAWN_CLEANUP_RESULTS.get(self)
+        if completed is not None:
+            return completed[1]
+        return _spawn_cleanup_capability(self).owner.lease_released
+
+    @property
+    def cleanup_terminally_failed(self) -> bool:
+        if _COMPLETED_SPAWN_CLEANUP_RESULTS.get(self) is not None:
+            return False
+        return _spawn_cleanup_capability(self).state is _CleanupRetryState.TERMINAL_FAILURE
 
     def reap(self) -> bool:
-        """Retry the explicit cleanup owner once; release the lease only after reap."""
-        cleanup = self._owner.reap()
-        for cleanup_error in cleanup.failures:
+        """Run one bounded cleanup retry, then cache a confirmed successful result."""
+        if _COMPLETED_SPAWN_CLEANUP_RESULTS.get(self) is not None:
+            return True
+        capability = _spawn_cleanup_capability(self)
+        reaped, failures = capability.reap()
+        for cleanup_error in failures:
             self.add_note(
                 f"failed spawn cleanup retry: {type(cleanup_error).__name__}: {cleanup_error}"
             )
-        return cleanup.reaped
+        if reaped:
+            _COMPLETED_SPAWN_CLEANUP_RESULTS[self] = (
+                capability.owner.child_reaped,
+                capability.owner.lease_released,
+            )
+            _LIVE_SPAWN_CLEANUP_CAPABILITIES.pop(id(self), None)
+        return reaped
 
     def __copy__(self) -> Never:
         raise TypeError("SidecarSpawnCleanupError cannot be copied")
@@ -479,6 +531,30 @@ class SidecarSpawnCleanupError(RuntimeError):
 
     def __reduce_ex__(self, _: SupportsIndex) -> Never:
         raise TypeError("SidecarSpawnCleanupError cannot be serialized")
+
+
+def _new_sidecar_spawn_cleanup_error(
+    primary_error: BaseException,
+    owner: _UnreapedFailedSpawn | _UnreapedWindowsFailedSpawn,
+    cleanup_failures: tuple[BaseException, ...],
+) -> SidecarSpawnCleanupError:
+    error = RuntimeError.__new__(SidecarSpawnCleanupError)
+    RuntimeError.__init__(error, "failed sidecar spawn cleanup could not confirm direct-child reap")
+    error.primary_error = primary_error
+    error.add_note(f"primary failed spawn error: {type(primary_error).__name__}: {primary_error}")
+    for cleanup_error in cleanup_failures:
+        error.add_note(
+            f"failed spawn cleanup: {type(cleanup_error).__name__}: {cleanup_error}"
+        )
+    _LIVE_SPAWN_CLEANUP_CAPABILITIES[id(error)] = (error, _FailedSpawnCleanupCapability(owner))
+    return error
+
+
+def _spawn_cleanup_capability(error: SidecarSpawnCleanupError) -> _FailedSpawnCleanupCapability:
+    entry = _LIVE_SPAWN_CLEANUP_CAPABILITIES.get(id(error))
+    if entry is None or entry[0] is not error:
+        raise TypeError("SidecarSpawnCleanupError must be a live factory cleanup error")
+    return entry[1]
 
 
 def _reap_failed_spawn(
@@ -498,7 +574,7 @@ def _reap_failed_spawn(
     except OSError as exc:
         failures.append(exc)
     try:
-        process.wait()
+        process.wait(timeout=FAILED_SPAWN_REAP_TIMEOUT_SECONDS)
     except (OSError, subprocess.SubprocessError) as exc:
         failures.append(exc)
         try:

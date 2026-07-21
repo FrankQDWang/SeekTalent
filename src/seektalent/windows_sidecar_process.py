@@ -165,6 +165,7 @@ class _WindowsChildProcess:
     pid: int
     args: list[str]
     returncode: int | None = None
+    _pending_exit_code: int | None = None
     _reaped: bool = False
     _resumed: bool = False
 
@@ -242,14 +243,16 @@ class _WindowsChildProcess:
 
     def _record_reap(self) -> int:
         handle = self._require_process_handle()
-        from ctypes import wintypes
+        if self._pending_exit_code is None:
+            from ctypes import wintypes
 
-        exit_code = wintypes.DWORD()
-        if not self._api.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
-            raise _last_error("GetExitCodeProcess failed")
-        self.returncode = int(exit_code.value)
-        self._reaped = True
+            exit_code = wintypes.DWORD()
+            if not self._api.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                raise _last_error("GetExitCodeProcess failed")
+            self._pending_exit_code = int(exit_code.value)
         self.close_process_handle()
+        self.returncode = self._pending_exit_code
+        self._reaped = True
         return self.returncode
 
     def _close_thread_handle(self) -> None:
