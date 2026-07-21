@@ -1,0 +1,43 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "offline-distribution-2026-07",
+  "change_type": "major_refactor",
+  "summary": "Bind the Windows opened executable object to a suspended direct child before resuming it, while keeping the result production-unreachable.",
+  "rationale": "Issue #369 consumes #368's live local-NTFS opened-object admission. A private owner creates exactly one suspended CreateProcessW child with only three anonymous stdio handles inheritable, derives child-image evidence from the real process handle, compares it to the held executable identity, and resumes only after that comparison. Any failed pre-resume or post-resume promotion path retains kill/reap/handle/lease cleanup privately until it is complete. The public wrapper remains direct-child lifecycle and transport ownership only; no session authority, production caller, browser/provider/CLI path, or handshake is introduced.",
+  "touched_layers": [
+    "governance",
+    "docs",
+    "tests",
+    "other"
+  ],
+  "red_files": [
+    ".github/workflows/native-launch-binding-probe.yml"
+  ],
+  "deletion_targets": [
+    "Windows subprocess.Popen fallback or ambient-handle inheritance for the owned sidecar",
+    "public pending-process, caller-supplied child-image evidence, or promotion authority",
+    "lease release before a failed Windows direct child is proven reaped and native handles are closed"
+  ],
+  "verification": [
+    "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
+    "uv run ruff check scripts/build_offline_macos_intel.py tests/test_build_offline_macos_intel.py tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py tests/test_build_offline_macos_intel.py tests/test_pr_governance.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "uv run --group dev python -m pytest -p no:tach tests/test_owned_sidecar_process.py tests/test_windows_installed_binding.py tests/test_windows_sidecar_process.py -q",
+    "uv run --group dev ruff check src/seektalent/owned_sidecar_process.py src/seektalent/windows_sidecar_process.py src/seektalent/windows_installed_binding.py src/seektalent/windows_native_files.py tests/test_owned_sidecar_process.py tests/test_windows_installed_binding.py tests/test_windows_sidecar_process.py",
+    "uv run --group dev ty check src/seektalent/owned_sidecar_process.py src/seektalent/windows_sidecar_process.py src/seektalent/windows_installed_binding.py src/seektalent/windows_native_files.py",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_source_boundaries.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_tach_baseline.py",
+    "scripts/verify-red-zone.sh",
+    "uv run --group dev python -m pytest -q"
+  ],
+  "risks": [
+    "Windows Server 2025 CI proves the supported local-NTFS native boundary, not every endpoint filter driver or enterprise policy.",
+    "A successful process owner has no authenticated session or workflow authority; the later four-step handshake remains a separate hard cut.",
+    "Authenticode, macOS running-image authenticity, complete packaged-sidecar dependency closure, and production composition remain outside this issue."
+  ]
+}

@@ -45,6 +45,8 @@ class WindowsApi(Protocol):
 
     def GetDriveTypeW(self, *args: object) -> int: ...
 
+    def QueryFullProcessImageNameW(self, *args: object) -> int: ...
+
 
 class _FileIdInfo(ctypes.Structure):
     _fields_ = [
@@ -148,6 +150,13 @@ def windows_api() -> WindowsApi:
     kernel32.GetVolumeInformationW.restype = wintypes.BOOL
     kernel32.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
     kernel32.GetDriveTypeW.restype = wintypes.UINT
+    kernel32.QueryFullProcessImageNameW.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.LPWSTR,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
     return kernel32
 
 

@@ -9,8 +9,10 @@ on:
       - "tests/test_native_launch_binding_probe.py"
       - "tests/test_installed_slot_lease.py"
       - "tests/test_windows_installed_binding.py"
+      - "tests/test_windows_sidecar_process.py"
       - "src/seektalent/windows_installed_binding.py"
       - "src/seektalent/windows_native_files.py"
+      - "src/seektalent/windows_sidecar_process.py"
       - "src/seektalent/installed_release.py"
       - "src/seektalent/installed_slot.py"
       - "src/seektalent/owned_sidecar_process.py"
@@ -96,6 +98,7 @@ jobs:
         run: >-
           uv run --group dev python -m pytest
           tests/test_windows_installed_binding.py
+          tests/test_windows_sidecar_process.py
           tests/test_installed_slot_lease.py::test_native_cross_process_slot_lock_conflicts
           -q
 
