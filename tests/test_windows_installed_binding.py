@@ -204,7 +204,7 @@ def test_hardlinked_executable_is_rejected_and_releases_lifecycle_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root, slot_root = _install_active_slot(tmp_path, monkeypatch)
-    executable = _executable_path(slot_root)
+    executable = _make_executable_writable(slot_root)
     hardlink = executable.with_name("sidecar-hardlink.bin")
     os.link(executable, hardlink)
     try:
