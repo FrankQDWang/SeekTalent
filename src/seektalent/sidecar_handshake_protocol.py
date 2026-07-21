@@ -27,7 +27,11 @@ DEFAULT_HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _READ_QUEUE_CHUNKS = 16
 _READER_CLOSE_SECONDS = 1.0
 _CONSTRUCTOR_WAKE_CLOSE_ATTEMPTS = 3
+_WINDOWS_POLL_SECONDS = 0.01
 _THREAD_TERMINATE = 0x0001
+_ERROR_BROKEN_PIPE = 109
+_ERROR_NO_DATA = 232
+_ERROR_PIPE_NOT_CONNECTED = 233
 _HANDSHAKE_PROOF_DOMAIN = b"seektalent-sidecar-readiness-proof/v1"
 _HANDSHAKE_KEY_DOMAIN = b"seektalent-sidecar-readiness-hkdf/v1"
 _MAIN_TO_SIDECAR = b"main-to-sidecar"
@@ -135,10 +139,10 @@ class _ProtocolTransport:
         self._eof = False
         self._closed = threading.Event()
         self._reader_stopped = threading.Event()
-        self._windows_boundary_cancel_active = threading.Event()
         self._state_lock = threading.Lock()
         self._write_lock = threading.Lock()
-        self._boundary_requests: queue.Queue[queue.Queue[tuple[bool, BaseException | None]]] = queue.Queue()
+        self._close_lock = threading.Lock()
+        self._boundary_requests: queue.Queue[queue.Queue[tuple[bool, BaseException | None, bool]]] = queue.Queue()
         self._reader_error: BaseException | None = None
         self._reader_descriptor: int | None = None
         self._wake_reader_descriptor: int | None = None
@@ -173,6 +177,10 @@ class _ProtocolTransport:
         return self._reader_stopped.is_set() and not self._reader_thread.is_alive()
 
     def close(self) -> bool:
+        with self._close_lock:
+            return self._close_locked()
+
+    def _close_locked(self) -> bool:
         self._closed.set()
         self._wake_reader()
         if os.name == "nt":
@@ -211,54 +219,44 @@ class _ProtocolTransport:
 
     def _observe_phase_boundary(self, deadline: float) -> tuple[bool, BaseException | None, bool]:
         if self._reader_descriptor is not None:
-            eof, reader_error = self._await_boundary_observation(deadline, wake_reader=True)
+            return self._await_boundary_observation(deadline, wake_reader=True)
         elif os.name == "nt":
-            eof, reader_error = self._await_boundary_observation(deadline, wake_reader=False)
-        else:
-            eof, reader_error = self._reader_state()
-        windows_eof, windows_has_bytes = _windows_pipe_status(self._reader_stream)
-        return eof or windows_eof, reader_error, windows_has_bytes
+            return self._await_boundary_observation(deadline, wake_reader=False)
+        eof, reader_error = self._reader_state()
+        return eof, reader_error, False
 
     def _await_boundary_observation(
         self,
         deadline: float,
         *,
         wake_reader: bool,
-    ) -> tuple[bool, BaseException | None]:
-        response: queue.Queue[tuple[bool, BaseException | None]] = queue.Queue(maxsize=1)
-        if not wake_reader:
-            self._windows_boundary_cancel_active.set()
+    ) -> tuple[bool, BaseException | None, bool]:
+        response: queue.Queue[tuple[bool, BaseException | None, bool]] = queue.Queue(maxsize=1)
         self._boundary_requests.put(response)
         if wake_reader:
             self._wake_reader()
-        try:
-            while True:
-                if not wake_reader:
-                    # A Windows synchronous read can have already consumed a
-                    # byte before PeekNamedPipe observes the kernel pipe.
-                    _cancel_windows_synchronous_read(self._reader_thread.native_id)
-                eof, reader_error = self._reader_state()
-                if eof or reader_error is not None:
-                    return eof, reader_error
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    _fail(SidecarReadinessReason.READ_TIMEOUT)
-                try:
-                    return response.get(timeout=min(remaining, 0.05))
-                except queue.Empty:
-                    if self._reader_stopped.is_set():
-                        eof, reader_error = self._reader_state()
-                        if not eof and reader_error is None:
-                            _fail(SidecarReadinessReason.PIPE_IO_FAILURE)
-                        return eof, reader_error
-        finally:
-            if not wake_reader:
-                self._windows_boundary_cancel_active.clear()
+        while True:
+            eof, reader_error = self._reader_state()
+            if eof or reader_error is not None:
+                return eof, reader_error, False
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _fail(SidecarReadinessReason.READ_TIMEOUT)
+            try:
+                return response.get(timeout=min(remaining, _WINDOWS_POLL_SECONDS))
+            except queue.Empty:
+                if self._reader_stopped.is_set():
+                    eof, reader_error = self._reader_state()
+                    if not eof and reader_error is None:
+                        _fail(SidecarReadinessReason.PIPE_IO_FAILURE)
+                    return eof, reader_error, False
 
     def _read(self) -> None:
         try:
             if self._reader_descriptor is not None:
                 self._read_posix()
+            elif os.name == "nt":
+                self._read_windows_polling()
             else:
                 self._read_blocking()
         except (OSError, ValueError) as exc:
@@ -296,16 +294,7 @@ class _ProtocolTransport:
         read_chunk = getattr(self._reader_stream, "read1", self._reader_stream.read)
         while not self._closed.is_set():
             self._answer_boundary_requests()
-            try:
-                chunk = read_chunk(4096)
-            except OSError as error:
-                if _is_windows_boundary_abort(error):
-                    if self._closed.is_set():
-                        return
-                    if self._windows_boundary_cancel_active.is_set():
-                        self._answer_boundary_requests()
-                        continue
-                raise
+            chunk = read_chunk(4096)
             if not chunk:
                 self._set_eof()
                 self._enqueue(None)
@@ -313,6 +302,25 @@ class _ProtocolTransport:
                 return
             self._enqueue(chunk)
             self._answer_boundary_requests()
+
+    def _read_windows_polling(self) -> None:
+        read_chunk = getattr(self._reader_stream, "read1", self._reader_stream.read)
+        while not self._closed.is_set():
+            eof, has_bytes = _windows_pipe_status(self._reader_stream)
+            if eof:
+                self._set_eof()
+                self._enqueue(None)
+                return
+            if has_bytes:
+                chunk = read_chunk(4096)
+                if not chunk:
+                    self._set_eof()
+                    self._enqueue(None)
+                    return
+                self._enqueue(chunk)
+                continue
+            self._answer_boundary_requests()
+            self._closed.wait(_WINDOWS_POLL_SECONDS)
 
     def _drain_posix_pipe(self, descriptor: int) -> bool:
         while not self._closed.is_set():
@@ -369,8 +377,9 @@ class _ProtocolTransport:
             except BlockingIOError:
                 return
 
-    def _answer_boundary_requests(self) -> None:
-        state = self._reader_state()
+    def _answer_boundary_requests(self, *, pipe_has_bytes: bool = False) -> None:
+        eof, reader_error = self._reader_state()
+        state = eof, reader_error, pipe_has_bytes
         while True:
             try:
                 response = self._boundary_requests.get_nowait()
@@ -516,10 +525,11 @@ class _ProtocolTransport:
 def _maintain_retained_constructor_wake_descriptors() -> None:
     with _RETAINED_CONSTRUCTOR_WAKE_LOCK:
         descriptors = tuple(_RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS)
+        _RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS.clear()
     for descriptor in descriptors:
-        if _close_retained_constructor_wake_descriptor(descriptor):
+        if not _close_retained_constructor_wake_descriptor(descriptor):
             with _RETAINED_CONSTRUCTOR_WAKE_LOCK:
-                _RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS.discard(descriptor)
+                _RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS.add(descriptor)
 
 
 def _close_retained_constructor_wake_descriptor(descriptor: int) -> bool:
@@ -553,10 +563,11 @@ def _retain_unclosed_transport(transport: _ProtocolTransport) -> None:
 def _maintain_retained_unclosed_transports() -> None:
     with _RETAINED_UNCLOSED_TRANSPORTS_LOCK:
         transports = tuple(_RETAINED_UNCLOSED_TRANSPORTS)
+        _RETAINED_UNCLOSED_TRANSPORTS.clear()
     for transport in transports:
-        if transport.close():
+        if not transport.close():
             with _RETAINED_UNCLOSED_TRANSPORTS_LOCK:
-                _RETAINED_UNCLOSED_TRANSPORTS.discard(transport)
+                _RETAINED_UNCLOSED_TRANSPORTS.add(transport)
 
 
 @dataclass(frozen=True, slots=True)
@@ -937,7 +948,7 @@ def _length_prefixed(value: bytes) -> bytes:
 
 
 def _cancel_windows_synchronous_read(thread_id: int | None) -> bool:
-    """Cancel the reader's blocking ReadFile without closing its pipe from another thread."""
+    """Best-effort close fallback for a Windows reader that is still blocked in ReadFile."""
     if os.name != "nt" or thread_id is None:
         return False
     try:
@@ -963,10 +974,6 @@ def _cancel_windows_synchronous_read(thread_id: int | None) -> bool:
         return False
 
 
-def _is_windows_boundary_abort(error: OSError) -> bool:
-    return os.name == "nt" and (getattr(error, "winerror", None) or error.errno) == 995
-
-
 def _windows_pipe_status(stream: IO[bytes]) -> tuple[bool, bool]:
     if os.name != "nt":
         return False, False
@@ -975,20 +982,40 @@ def _windows_pipe_status(stream: IO[bytes]) -> tuple[bool, bool]:
         import msvcrt
         from ctypes import wintypes
 
-        available = wintypes.DWORD()
-        handle = wintypes.HANDLE(msvcrt.get_osfhandle(stream.fileno()))
-        if ctypes.WinDLL("kernel32", use_last_error=True).PeekNamedPipe(
-            handle,
-            None,
-            0,
-            None,
-            ctypes.byref(available),
-            None,
-        ):
-            return False, bool(available.value)
-        return ctypes.get_last_error() in {109, 233}, False
-    except (AttributeError, ImportError, OSError, ValueError):
+    except (AttributeError, ImportError):
         return False, False
+    try:
+        descriptor = stream.fileno()
+    except AttributeError:
+        return False, False
+    except (OSError, ValueError) as error:
+        raise OSError(error.errno, "could not inspect sidecar pipe") from error
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.PeekNamedPipe.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    kernel32.PeekNamedPipe.restype = wintypes.BOOL
+    available = wintypes.DWORD()
+    handle = wintypes.HANDLE(msvcrt.get_osfhandle(descriptor))
+    if kernel32.PeekNamedPipe(
+        handle,
+        None,
+        0,
+        None,
+        ctypes.byref(available),
+        None,
+    ):
+        return False, bool(available.value)
+    error_code = ctypes.get_last_error()
+    if error_code in {_ERROR_BROKEN_PIPE, _ERROR_NO_DATA, _ERROR_PIPE_NOT_CONNECTED}:
+        return True, False
+    raise OSError(error_code, "PeekNamedPipe failed for sidecar protocol pipe")
 
 
 def _fail(reason: SidecarReadinessReason) -> Never:

@@ -1460,6 +1460,145 @@ def test_protocol_transport_rollback_retries_a_failed_wakeup_descriptor_close(
         original_close(peer_descriptor)
 
 
+@pytest.mark.skipif(os.name != "posix", reason="raw descriptor reuse requires POSIX file descriptors")
+def test_constructor_wakeup_maintenance_claims_a_descriptor_before_any_second_closer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    descriptor, peer_descriptor = os.pipe()
+    original_close = os.close
+    close_entered = threading.Event()
+    allow_first_close_to_return = threading.Event()
+    replacement_descriptors: list[int] = []
+    close_calls = 0
+
+    with handshake._RETAINED_CONSTRUCTOR_WAKE_LOCK:
+        saved_descriptors = set(handshake._RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS)
+        handshake._RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS.clear()
+        handshake._RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS.add(descriptor)
+
+    def close_once_then_hold(value: int) -> None:
+        nonlocal close_calls
+        if value != descriptor:
+            original_close(value)
+            return
+        close_calls += 1
+        original_close(value)
+        replacement_descriptors.append(os.open("/dev/null", os.O_RDONLY))
+        close_entered.set()
+        assert allow_first_close_to_return.wait(timeout=1)
+
+    monkeypatch.setattr(handshake.os, "close", close_once_then_hold)
+    first = threading.Thread(target=handshake._maintain_retained_constructor_wake_descriptors)
+    second = threading.Thread(target=handshake._maintain_retained_constructor_wake_descriptors)
+    try:
+        first.start()
+        assert close_entered.wait(timeout=1)
+        assert replacement_descriptors == [descriptor]
+
+        second.start()
+        second.join(timeout=1)
+        assert not second.is_alive()
+        assert close_calls == 1
+        assert os.fstat(replacement_descriptors[0])
+
+        allow_first_close_to_return.set()
+        first.join(timeout=1)
+        assert not first.is_alive()
+        assert close_calls == 1
+        assert os.fstat(replacement_descriptors[0])
+        with handshake._RETAINED_CONSTRUCTOR_WAKE_LOCK:
+            assert handshake._RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS == set()
+    finally:
+        allow_first_close_to_return.set()
+        first.join(timeout=1)
+        second.join(timeout=1)
+        for replacement in replacement_descriptors:
+            original_close(replacement)
+        original_close(peer_descriptor)
+        with handshake._RETAINED_CONSTRUCTOR_WAKE_LOCK:
+            handshake._RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS.clear()
+            handshake._RETAINED_CONSTRUCTOR_WAKE_DESCRIPTORS.update(saved_descriptors)
+
+
+def test_retained_transport_maintenance_claims_one_transport_for_one_closer() -> None:
+    class _Transport:
+        def __init__(self) -> None:
+            self.close_calls = 0
+            self.close_entered = threading.Event()
+            self.allow_close = threading.Event()
+
+        def close(self) -> bool:
+            self.close_calls += 1
+            self.close_entered.set()
+            assert self.allow_close.wait(timeout=1)
+            return True
+
+    transport = _Transport()
+    with handshake._RETAINED_UNCLOSED_TRANSPORTS_LOCK:
+        saved_transports = set(handshake._RETAINED_UNCLOSED_TRANSPORTS)
+        handshake._RETAINED_UNCLOSED_TRANSPORTS.clear()
+        handshake._RETAINED_UNCLOSED_TRANSPORTS.add(cast(handshake._ProtocolTransport, transport))
+
+    first = threading.Thread(target=handshake._maintain_retained_unclosed_transports)
+    second = threading.Thread(target=handshake._maintain_retained_unclosed_transports)
+    try:
+        first.start()
+        assert transport.close_entered.wait(timeout=1)
+        second.start()
+        second.join(timeout=1)
+        assert not second.is_alive()
+        assert transport.close_calls == 1
+
+        transport.allow_close.set()
+        first.join(timeout=1)
+        assert not first.is_alive()
+        assert transport.close_calls == 1
+        with handshake._RETAINED_UNCLOSED_TRANSPORTS_LOCK:
+            assert handshake._RETAINED_UNCLOSED_TRANSPORTS == set()
+    finally:
+        transport.allow_close.set()
+        first.join(timeout=1)
+        second.join(timeout=1)
+        with handshake._RETAINED_UNCLOSED_TRANSPORTS_LOCK:
+            handshake._RETAINED_UNCLOSED_TRANSPORTS.clear()
+            handshake._RETAINED_UNCLOSED_TRANSPORTS.update(saved_transports)
+
+
+def test_protocol_transport_close_serializes_concurrent_stream_disposition() -> None:
+    class _Writer(io.BytesIO):
+        def __init__(self) -> None:
+            super().__init__()
+            self.close_calls = 0
+            self.close_entered = threading.Event()
+            self.allow_close = threading.Event()
+
+        def close(self) -> None:
+            self.close_calls += 1
+            self.close_entered.set()
+            assert self.allow_close.wait(timeout=1)
+            super().close()
+
+    writer = _Writer()
+    transport = handshake._ProtocolTransport(io.BytesIO(), writer)
+    first = threading.Thread(target=transport.close)
+    second = threading.Thread(target=transport.close)
+    try:
+        first.start()
+        assert writer.close_entered.wait(timeout=1)
+        second.start()
+        assert writer.close_calls == 1
+
+        writer.allow_close.set()
+        first.join(timeout=1)
+        second.join(timeout=1)
+        assert not first.is_alive()
+        assert not second.is_alive()
+        assert writer.close_calls == 1
+    finally:
+        writer.allow_close.set()
+        transport.close()
+
+
 def test_protocol_transport_close_keeps_authority_until_a_writer_close_retries() -> None:
     class _Writer(io.BytesIO):
         def __init__(self) -> None:
@@ -1535,132 +1674,76 @@ def test_protocol_transport_close_retains_a_failed_wakeup_descriptor_for_retry(
         original_close(peer_descriptor)
 
 
-def test_windows_pre_ready_boundary_cancels_an_idle_blocking_read_without_timeout(
+def test_windows_polling_boundary_acks_a_legal_idle_pipe_without_cancellation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _CancellableReader:
+    class _IdleReader:
         def __init__(self) -> None:
-            self.cancelled = threading.Event()
-            self.entered_read = threading.Event()
             self.closed = False
 
         def read(self, _: int) -> bytes:
-            self.entered_read.set()
-            self.cancelled.wait(timeout=1)
-            if self.closed:
-                return b""
-            self.cancelled.clear()
-            raise OSError(995, "operation aborted")
+            raise AssertionError("the polling reader must not issue a blocking read without bytes")
 
         def close(self) -> None:
             self.closed = True
-            self.cancelled.set()
 
-    reader = _CancellableReader()
+    reader = _IdleReader()
+    cancellations: list[int | None] = []
     with monkeypatch.context() as context:
         context.setattr(handshake.os, "name", "nt")
         transport = handshake._ProtocolTransport(reader, io.BytesIO())
+        context.setattr(handshake, "_windows_pipe_status", lambda _: (False, False))
         context.setattr(
             handshake,
             "_cancel_windows_synchronous_read",
-            lambda _: reader.cancelled.set() or True,
+            lambda thread_id: cancellations.append(thread_id) or False,
         )
-        assert reader.entered_read.wait(timeout=1)
         transport.require_clean_pre_ready_boundary(time.monotonic() + 1)
+        assert cancellations == []
         assert transport.close() is True
 
 
-def test_windows_boundary_abort_after_ack_does_not_poison_the_next_blocking_read(
+def test_windows_polling_boundary_maps_peek_failure_to_typed_pipe_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _RepeatedCancellableReader:
+    class _Reader:
         def __init__(self) -> None:
-            self.cancelled = threading.Event()
-            self.second_read = threading.Event()
-            self.third_read = threading.Event()
-            self.closed = False
-            self.read_count = 0
-
-        def read(self, _: int) -> bytes:
-            self.read_count += 1
-            if self.read_count == 2:
-                self.second_read.set()
-            if self.read_count == 3:
-                self.third_read.set()
-            self.cancelled.wait(timeout=1)
-            self.cancelled.clear()
-            if self.closed:
-                return b""
-            raise OSError(995, "operation aborted")
-
-        def close(self) -> None:
-            self.closed = True
-            self.cancelled.set()
-
-    reader = _RepeatedCancellableReader()
-    with monkeypatch.context() as context:
-        context.setattr(handshake.os, "name", "nt")
-        transport = handshake._ProtocolTransport(reader, io.BytesIO())
-        context.setattr(
-            handshake,
-            "_cancel_windows_synchronous_read",
-            lambda _: reader.cancelled.set() or True,
-        )
-        response: queue.Queue[tuple[bool, BaseException | None]] = queue.Queue(maxsize=1)
-        transport._windows_boundary_cancel_active.set()
-        transport._boundary_requests.put(response)
-        reader.cancelled.set()
-        assert response.get(timeout=1) == (False, None)
-        assert reader.second_read.wait(timeout=1)
-
-        # The request has already been acknowledged, but the observer still
-        # owns the cancellation window while it consumes that response.
-        reader.cancelled.set()
-        assert reader.third_read.wait(timeout=1)
-        assert transport.reader_stopped is False
-
-        transport._windows_boundary_cancel_active.clear()
-        assert transport.close() is True
-
-
-def test_windows_pre_ready_boundary_observes_a_real_reader_error_before_its_ack(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _FailingReader:
-        def __init__(self) -> None:
-            self.release_error = threading.Event()
-            self.entered_read = threading.Event()
             self.closed = False
 
         def read(self, _: int) -> bytes:
-            self.entered_read.set()
-            self.release_error.wait(timeout=1)
-            if self.closed:
-                return b""
-            raise OSError("injected reader failure")
+            raise AssertionError("a failed PeekNamedPipe must not fall through to read")
 
         def close(self) -> None:
             self.closed = True
-            self.release_error.set()
 
-    reader = _FailingReader()
+    reader = _Reader()
     with monkeypatch.context() as context:
         context.setattr(handshake.os, "name", "nt")
+        boundary_requested = threading.Event()
+        status_entered = threading.Event()
+        allow_status = threading.Event()
+
+        def fail_after_boundary_request(_: object) -> tuple[bool, bool]:
+            status_entered.set()
+            assert allow_status.wait(timeout=1)
+            if boundary_requested.is_set():
+                raise OSError(6, "invalid handle")
+            return False, False
+
+        context.setattr(handshake, "_windows_pipe_status", fail_after_boundary_request)
         transport = handshake._ProtocolTransport(reader, io.BytesIO())
-        context.setattr(handshake, "_cancel_windows_synchronous_read", lambda _: False)
-        request_posted = threading.Event()
+        assert status_entered.wait(timeout=1)
         original_put = transport._boundary_requests.put
 
         def record_request(
-            item: queue.Queue[tuple[bool, BaseException | None]],
+            item: queue.Queue[tuple[bool, BaseException | None, bool]],
             *args: object,
             **kwargs: object,
         ) -> None:
-            request_posted.set()
+            boundary_requested.set()
             original_put(item, *args, **kwargs)
 
         transport._boundary_requests.put = record_request  # type: ignore[method-assign]
-        assert reader.entered_read.wait(timeout=1)
         observed: list[readiness.SidecarReadinessError] = []
 
         def observe() -> None:
@@ -1670,38 +1753,41 @@ def test_windows_pre_ready_boundary_observes_a_real_reader_error_before_its_ack(
                 observed.append(error)
 
         boundary = threading.Thread(target=observe)
-        boundary.start()
-        assert request_posted.wait(timeout=1)
-        reader.release_error.set()
-        boundary.join(timeout=1)
+        try:
+            boundary.start()
+            assert boundary_requested.wait(timeout=1)
+            allow_status.set()
+            boundary.join(timeout=1)
 
-        assert not boundary.is_alive()
-        assert len(observed) == 1
-        assert observed[0].reason is readiness.SidecarReadinessReason.PIPE_IO_FAILURE
-        assert transport.close() is True
+            assert not boundary.is_alive()
+            assert len(observed) == 1
+            assert observed[0].reason is readiness.SidecarReadinessReason.PIPE_IO_FAILURE
+            assert transport.reader_stopped is True
+        finally:
+            allow_status.set()
+            boundary.join(timeout=1)
+            assert transport.close() is True
 
 
-def test_windows_pre_ready_boundary_waits_for_a_paused_blocking_reader_enqueue(
+def test_windows_polling_boundary_waits_for_bytes_consumed_before_enqueue(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _BlockingReader:
+    class _Reader:
         def __init__(self) -> None:
-            self.allow_read = threading.Event()
+            self.allow_bytes = threading.Event()
             self.closed = False
             self._delivered = False
 
         def read(self, _: int) -> bytes:
-            self.allow_read.wait(timeout=1)
-            if not self._delivered:
+            if self.allow_bytes.is_set() and not self._delivered:
                 self._delivered = True
                 return b"early-history"
-            return b""
+            raise AssertionError("the reader must only read after PeekNamedPipe reports bytes")
 
         def close(self) -> None:
             self.closed = True
-            self.allow_read.set()
 
-    reader = _BlockingReader()
+    reader = _Reader()
     with monkeypatch.context() as context:
         context.setattr(handshake.os, "name", "nt")
         transport = handshake._ProtocolTransport(reader, io.BytesIO())
@@ -1720,7 +1806,7 @@ def test_windows_pre_ready_boundary_waits_for_a_paused_blocking_reader_enqueue(
         original_put = transport._boundary_requests.put
 
         def record_request(
-            item: queue.Queue[tuple[bool, BaseException | None]],
+            item: queue.Queue[tuple[bool, BaseException | None, bool]],
             *args: object,
             **kwargs: object,
         ) -> None:
@@ -1728,7 +1814,12 @@ def test_windows_pre_ready_boundary_waits_for_a_paused_blocking_reader_enqueue(
             original_put(item, *args, **kwargs)
 
         transport._boundary_requests.put = record_request  # type: ignore[method-assign]
-        reader.allow_read.set()
+        context.setattr(
+            handshake,
+            "_windows_pipe_status",
+            lambda _: (False, reader.allow_bytes.is_set() and not reader._delivered),
+        )
+        reader.allow_bytes.set()
         assert paused_before_enqueue.wait(timeout=1)
         observed: list[BaseException] = []
 
