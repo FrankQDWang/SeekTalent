@@ -12,6 +12,7 @@ from seektalent_runtime_control.source_operations import (
     SOURCE_OPERATION_DISPOSITIONS,
     SOURCE_OPERATION_KINDS,
     RetryPosture,
+    SourceDispatchMetadata,
     SourceOperationDisposition,
     SourceOperationKind,
 )
@@ -207,6 +208,7 @@ def source_reconciliation_matches_decision(
     record: SourceOperationReconciliationRecord,
     decision: SourceOperationReconciliationDecision,
 ) -> bool:
+    """Match semantic reconciliation identity; committed_at is first-write audit metadata."""
     return (
         record.reconciliation_id == decision.reconciliation_id
         and record.runtime_run_id == decision.runtime_run_id
@@ -229,7 +231,31 @@ def source_reconciliation_matches_decision(
         and record.retry_posture == decision.retry_posture
         and record.expected_ledger_revision == decision.expected_ledger_revision
         and record.expected_reconciliation_revision == decision.expected_reconciliation_revision
-        and record.committed_at == decision.committed_at
+    )
+
+
+def reconciliation_dispatch_precondition_matches(
+    dispatch: SourceDispatchMetadata,
+    decision: SourceOperationReconciliationDecision,
+    dispatch_precondition: SourceDispatchMetadata | None,
+) -> bool:
+    if dispatch_precondition is not None:
+        return type(dispatch_precondition) is SourceDispatchMetadata and dispatch == dispatch_precondition
+    if decision.decision_kind != "no_dispatch_proved":
+        return True
+    return (
+        dispatch.status == "pending"
+        and dispatch.outbox_revision == 1
+        and all(
+            value is None
+            for value in (
+                dispatch.accepted_sidecar_generation,
+                dispatch.accepted_sidecar_journal_revision,
+                dispatch.ack_ref,
+                dispatch.ack_kind,
+                dispatch.acknowledged_at,
+            )
+        )
     )
 
 

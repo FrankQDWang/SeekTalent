@@ -320,8 +320,11 @@ def test_commit_ack_loss_exact_replay_precedes_owner_gate(tmp_path: Path) -> Non
         acquired_at="2026-07-19T00:00:03Z",
         lease_expires_at="2026-07-19T00:01:03Z",
     )
-    replayed = store.commit_no_owner_source_reconciliation(decision)
+    replayed = store.commit_no_owner_source_reconciliation(
+        replace(decision, committed_at="2026-07-19T00:00:05Z")
+    )
     assert replayed.committed_ledger_revision == 2
+    assert replayed.committed_at == decision.committed_at
     with pytest.raises(RuntimeControlError) as conflict:
         store.commit_no_owner_source_reconciliation(
             replace(decision, history_result_ref="history_result_ref_other")

@@ -132,7 +132,11 @@ def commit_admitted_source_history_reconciliation(
         source_operation_disposition=interpretation.source_operation_disposition,
         retry_posture=interpretation.retry_posture,
     )
-    return store.commit_no_owner_source_reconciliation(decision, fault_injector)
+    return store.commit_no_owner_source_reconciliation(
+        decision,
+        fault_injector,
+        dispatch_precondition=context.dispatch,
+    )
 
 
 def _context_is_valid(context: AcceptedSourceOperation) -> bool:
@@ -220,13 +224,27 @@ def _query_and_result_match_context(
         and query.attempt_no == operation.runtime_attempt_no
         and query.expected_source_operation_ledger_revision == dispatch.expected_ledger_revision
         and query.expected_reconciliation_revision == dispatch.expected_reconciliation_revision
-        and query.accepted_generation_hint == dispatch.accepted_sidecar_generation
+        and _accepted_generation_hint_matches_context(query, result, dispatch)
         and dispatch.runtime_run_id == operation.runtime_run_id
         and dispatch.operation_id == operation.operation_id
         and dispatch.canonical_request_hash == operation.canonical_request_hash
         and dispatch.dispatch_authorization_ordinal == 1
         and _dispatch_state_is_complete(dispatch)
     )
+
+
+def _accepted_generation_hint_matches_context(
+    query: SourceHistoryQueryV1,
+    result: SourceHistoryQueryResultV1,
+    dispatch: SourceDispatchMetadata,
+) -> bool:
+    if dispatch.status == "acknowledged":
+        return query.accepted_generation_hint == dispatch.accepted_sidecar_generation
+    if dispatch.status == "pending":
+        if not isinstance(result, SourceHistoryMatched):
+            return query.accepted_generation_hint is None
+        return any(query.accepted_generation_hint == fact.accepted_generation for fact in result.facts)
+    return False
 
 
 def _dispatch_state_is_complete(dispatch: SourceDispatchMetadata) -> bool:
@@ -239,7 +257,9 @@ def _dispatch_state_is_complete(dispatch: SourceDispatchMetadata) -> bool:
     )
     if dispatch.status == "pending":
         return dispatch.outbox_revision == 1 and all(value is None for value in acceptance_values)
-    return dispatch.outbox_revision == 2 and all(value is not None for value in acceptance_values)
+    if dispatch.status == "acknowledged":
+        return dispatch.outbox_revision == 2 and all(value is not None for value in acceptance_values)
+    return False
 
 
 def _single_fact(result: SourceHistoryQueryResultV1) -> MatchedHistoryFact | None:
@@ -254,9 +274,8 @@ def _fact_matches_context(fact: MatchedHistoryFact, context: AcceptedSourceOpera
     operation = context.operation
     expectation = context.expectation
     dispatch = context.dispatch
-    return (
-        dispatch.status == "acknowledged"
-        and fact.run_id == operation.runtime_run_id
+    identities_match = (
+        fact.run_id == operation.runtime_run_id
         and fact.operation_id == operation.operation_id
         and fact.source == operation.source_id
         and fact.operation_kind == operation.operation_kind
@@ -272,9 +291,17 @@ def _fact_matches_context(fact: MatchedHistoryFact, context: AcceptedSourceOpera
         and fact.authorized_dispatch_intent_id == dispatch.dispatch_intent_id
         and fact.authorized_dispatch_intent_revision == dispatch.dispatch_intent_revision
         and fact.authorized_dispatch_intent_digest == dispatch.dispatch_intent_digest
-        and fact.accepted_generation == dispatch.accepted_sidecar_generation
-        and fact.accepted_journal_revision == dispatch.accepted_sidecar_journal_revision
     )
+    if not identities_match or not _dispatch_state_is_complete(dispatch):
+        return False
+    if dispatch.status == "pending":
+        return True
+    if dispatch.status == "acknowledged":
+        return (
+            fact.accepted_generation == dispatch.accepted_sidecar_generation
+            and fact.accepted_journal_revision == dispatch.accepted_sidecar_journal_revision
+        )
+    return False
 
 
 def _closed_interpretation(

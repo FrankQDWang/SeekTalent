@@ -40,6 +40,7 @@ RUNTIME_FENCE = "b" * 64
 DISPATCH_DIGEST = "c" * 64
 CONTROLLER_FENCE = "d" * 64
 COMMITTED_AT = "2026-07-22T03:00:00.000000Z"
+RETRY_COMMITTED_AT = "2026-07-22T03:00:01.000000Z"
 
 
 @pytest.fixture
@@ -126,6 +127,76 @@ def test_four_closed_mappings_commit_from_real_ready_session_exchange(
         assert record.dispatch_intent_ref == "current-durable-dispatch-ref"
     else:
         assert record.dispatch_intent_ref is None
+    _close_exchange(session, child_thread, errors, ready_lease_factory)
+
+
+@pytest.mark.parametrize(
+    ("history_kind", "expected_kind", "expected_conclusion", "expected_retry"),
+    [
+        ("accepted_no_dispatch", "no_dispatch_proved", "accepted_no_dispatch", "safe_retry"),
+        ("dispatch_not_observed", "unresolved", "dispatch_not_observed", "reconcile_first"),
+    ],
+)
+def test_pending_outbox_matched_history_recovers_durable_sidecar_ack_loss(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ready_lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    history_kind: str,
+    expected_kind: str,
+    expected_conclusion: str,
+    expected_retry: str,
+) -> None:
+    harness, query, _, accepted_revision = _history_case(tmp_path, history_kind)
+    store = _store_with_operation(
+        tmp_path,
+        query,
+        acknowledge=False,
+        accepted_journal_revision=accepted_revision,
+    )
+    admitted, session, child_thread, errors = _exchange(
+        SourceHistorySQLiteReader(harness.path),
+        query,
+        ready_lease_factory,
+        monkeypatch,
+    )
+
+    record = commit_admitted_source_history_reconciliation(
+        admitted,
+        store,
+        committed_at=COMMITTED_AT,
+    )
+
+    assert record.decision_kind == expected_kind
+    assert record.history_conclusion == expected_conclusion
+    assert record.retry_posture == expected_retry
+    _close_exchange(session, child_thread, errors, ready_lease_factory)
+
+
+def test_pending_outbox_ack_loss_rejects_wrong_authenticated_fact_without_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ready_lease_factory: Callable[[], InstalledSidecarLaunchLease],
+) -> None:
+    harness, query, _, accepted_revision = _history_case(tmp_path, "accepted_no_dispatch")
+    store = _store_with_operation(
+        tmp_path,
+        query,
+        acknowledge=False,
+        accepted_journal_revision=accepted_revision,
+        acceptance_changes={"runtime_attempt_fence_ref": "e" * 64},
+    )
+    admitted, session, child_thread, errors = _exchange(
+        SourceHistorySQLiteReader(harness.path),
+        query,
+        ready_lease_factory,
+        monkeypatch,
+    )
+
+    with pytest.raises(SourceHistoryReconciliationError) as exc_info:
+        commit_admitted_source_history_reconciliation(admitted, store, committed_at=COMMITTED_AT)
+
+    assert exc_info.value.reason is SourceHistoryReconciliationReason.CONTEXT_MISMATCH
+    _assert_no_reconciliation_write(store)
     _close_exchange(session, child_thread, errors, ready_lease_factory)
 
 
@@ -300,7 +371,6 @@ def test_all_authorizations_selector_is_closed_reject(
         ({"dispatch_intent_id": "other-dispatch-intent"}, True, {}),
         ({"dispatch_intent_revision": 2}, True, {}),
         ({"dispatch_intent_digest": "e" * 64}, True, {}),
-        ({}, False, {}),
         ({}, True, {"accepted_sidecar_generation": 2}),
         ({}, True, {"accepted_sidecar_journal_revision": 2}),
     ],
@@ -449,6 +519,32 @@ def test_history_unavailable_preserves_acknowledged_current_dispatch_truth(
     _close_exchange(session, child_thread, errors, ready_lease_factory)
 
 
+def test_unknown_dispatch_status_is_closed_reject_for_history_unavailable_without_writes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ready_lease_factory: Callable[[], InstalledSidecarLaunchLease],
+) -> None:
+    harness = _history_harness(tmp_path, 1)
+    query = _query(first_generation=1, last_generation=2, accepted_generation_hint=1)
+    store = _store_with_operation(tmp_path, query, acknowledge=True)
+    with sqlite3.connect(store.path) as conn:
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute("UPDATE runtime_control_source_dispatch_outbox SET status = 'unknown'")
+    admitted, session, child_thread, errors = _exchange(
+        SourceHistorySQLiteReader(harness.path),
+        query,
+        ready_lease_factory,
+        monkeypatch,
+    )
+
+    with pytest.raises(SourceHistoryReconciliationError) as exc_info:
+        commit_admitted_source_history_reconciliation(admitted, store, committed_at=COMMITTED_AT)
+
+    assert exc_info.value.reason is SourceHistoryReconciliationReason.CONTEXT_MISMATCH
+    _assert_no_reconciliation_write(store)
+    _close_exchange(session, child_thread, errors, ready_lease_factory)
+
+
 @pytest.mark.parametrize(
     ("setup", "reason_code"),
     [
@@ -582,9 +678,62 @@ def test_composition_after_commit_ack_loss_replays_same_record(
             fault_injector=lose_ack,
         )
 
-    replayed = commit_admitted_source_history_reconciliation(admitted, store, committed_at=COMMITTED_AT)
+    _close_exchange(session, child_thread, errors, ready_lease_factory)
+    replay_admitted, replay_session, replay_thread, replay_errors = _exchange(
+        SourceHistorySQLiteReader(harness.path),
+        query,
+        ready_lease_factory,
+        monkeypatch,
+    )
+    replayed = commit_admitted_source_history_reconciliation(
+        replay_admitted,
+        store,
+        committed_at=RETRY_COMMITTED_AT,
+    )
     assert replayed.committed_ledger_revision == 2
     assert replayed.committed_reconciliation_revision == 1
+    assert replayed.committed_at == COMMITTED_AT
+    _close_exchange(replay_session, replay_thread, replay_errors, ready_lease_factory)
+
+
+def test_late_outbox_ack_cannot_commit_safe_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ready_lease_factory: Callable[[], InstalledSidecarLaunchLease],
+) -> None:
+    harness, query, _, accepted_revision = _history_case(tmp_path, "not_found")
+    store = _store_with_operation(tmp_path, query, acknowledge=False)
+    admitted, session, child_thread, errors = _exchange(
+        SourceHistorySQLiteReader(harness.path),
+        query,
+        ready_lease_factory,
+        monkeypatch,
+    )
+    original_commit = RuntimeControlStore.commit_no_owner_source_reconciliation
+
+    def commit_after_late_ack(self, decision, fault_injector=None, *, dispatch_precondition=None):
+        _acknowledge_pending_dispatch(
+            self,
+            query,
+            accepted_journal_revision=accepted_revision,
+            ack_ref="late-ack-ref",
+        )
+        return original_commit(
+            self,
+            decision,
+            fault_injector,
+            dispatch_precondition=dispatch_precondition,
+        )
+
+    monkeypatch.setattr(RuntimeControlStore, "commit_no_owner_source_reconciliation", commit_after_late_ack)
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        commit_admitted_source_history_reconciliation(admitted, store, committed_at=COMMITTED_AT)
+
+    assert exc_info.value.reason_code == "source_reconciliation_dispatch_conflict"
+    dispatch = store.get_accepted_source_operation_context(query.run_id, query.operation_id).dispatch
+    assert (dispatch.status, dispatch.outbox_revision, dispatch.ack_ref) == ("acknowledged", 2, "late-ack-ref")
+    _assert_no_reconciliation_write(store)
     _close_exchange(session, child_thread, errors, ready_lease_factory)
 
 
@@ -766,6 +915,32 @@ def _store_with_operation(
         updated_at="2026-07-22T02:02:00.000000Z",
     )
     return store
+
+
+def _acknowledge_pending_dispatch(
+    store: RuntimeControlStore,
+    query: SourceHistoryQueryV1,
+    *,
+    accepted_journal_revision: int,
+    ack_ref: str = "source-ack-ref-1",
+) -> None:
+    dispatch = store.get_accepted_source_operation_context(query.run_id, query.operation_id).dispatch
+    store.record_source_dispatch_ack(
+        runtime_run_id=query.run_id,
+        operation_id=query.operation_id,
+        outbox_id=dispatch.outbox_id,
+        canonical_request_hash=dispatch.canonical_request_hash,
+        dispatch_intent_id=dispatch.dispatch_intent_id,
+        dispatch_intent_revision=dispatch.dispatch_intent_revision,
+        dispatch_intent_digest=dispatch.dispatch_intent_digest,
+        dispatch_authorization_ordinal=dispatch.dispatch_authorization_ordinal,
+        expected_outbox_revision=dispatch.outbox_revision,
+        accepted_sidecar_generation=1,
+        accepted_sidecar_journal_revision=accepted_journal_revision,
+        ack_ref=ack_ref,
+        ack_kind="new_logical_operation",
+        acknowledged_at="2026-07-22T02:01:00.000000Z",
+    )
 
 
 def _exchange(

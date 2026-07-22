@@ -89,6 +89,7 @@ from seektalent_runtime_control.source_operations import (
 from seektalent_runtime_control.source_reconciliation import (
     SourceOperationReconciliationDecision,
     SourceOperationReconciliationRecord,
+    reconciliation_dispatch_precondition_matches,
     source_reconciliation_from_row,
     source_reconciliation_matches_decision,
     validate_source_operation_reconciliation_decision,
@@ -507,12 +508,9 @@ class RuntimeControlStore:
             raise RuntimeControlLookupError("source_operation_not_found")
         return source_operation_from_row(row)
 
-    def get_source_operation_admission_expectation(
-        self, runtime_run_id: str, operation_id: str
-    ) -> SourceOperationAdmissionExpectation:
+    def get_source_operation_admission_expectation(self, runtime_run_id: str, operation_id: str) -> SourceOperationAdmissionExpectation:
         with self._connect() as conn:
-            operation_row = _source_operation_row(conn, runtime_run_id, operation_id)
-            if operation_row is None:
+            if (operation_row := _source_operation_row(conn, runtime_run_id, operation_id)) is None:
                 raise RuntimeControlLookupError("source_operation_not_found")
             expectation_row = _source_operation_admission_expectation_row(conn, runtime_run_id, operation_id)
             if expectation_row is None:
@@ -525,6 +523,7 @@ class RuntimeControlStore:
 
     def get_accepted_source_operation_context(self, runtime_run_id: str, operation_id: str) -> AcceptedSourceOperation:
         with self._connect() as conn:
+            conn.execute("BEGIN")
             operation_row = _source_operation_row(conn, runtime_run_id, operation_id)
             if operation_row is None:
                 raise RuntimeControlLookupError("source_operation_not_found")
@@ -534,6 +533,8 @@ class RuntimeControlStore:
         self,
         decision: SourceOperationReconciliationDecision,
         fault_injector: Callable[[str], None] | None = None,
+        *,
+        dispatch_precondition: SourceDispatchMetadata | None = None,
     ) -> SourceOperationReconciliationRecord:
         """Commit a closed main-authored reconciliation when no executor owns the run."""
         validate_source_operation_reconciliation_decision(decision)
@@ -560,9 +561,11 @@ class RuntimeControlStore:
                 operation_row = _source_operation_row(conn, decision.runtime_run_id, decision.operation_id)
                 if operation_row is None:
                     raise RuntimeControlLookupError("source_operation_not_found")
-                operation, _dispatch = _source_operation_pair(conn, operation_row)
+                operation, dispatch = _source_operation_pair(conn, operation_row)
                 if not _source_operation_matches_reconciliation(operation, decision):
                     raise RuntimeControlError("source_reconciliation_identity_conflict")
+                if not reconciliation_dispatch_precondition_matches(dispatch, decision, dispatch_precondition):
+                    raise RuntimeControlError("source_reconciliation_dispatch_conflict")
                 if operation.operation_phase == "main_committed" or operation.main_commit_ref is not None:
                     raise RuntimeControlError("source_reconciliation_main_commit_conflict")
                 if (
@@ -4428,8 +4431,7 @@ def _require_source_reconciliation_transition(
 
 
 def _source_operation_pair(
-    conn: sqlite3.Connection,
-    operation_row: sqlite3.Row,
+    conn: sqlite3.Connection, operation_row: sqlite3.Row
 ) -> tuple[SourceOperationRecord, SourceDispatchMetadata]:
     operation = source_operation_from_row(operation_row)
     dispatch_row = _source_dispatch_row_for_operation(conn, operation.runtime_run_id, operation.operation_id)
