@@ -55,6 +55,7 @@ __all__ = [
     "SourceHistoryAdmissionError",
     "SourceHistoryAdmissionReason",
     "exchange_source_history",
+    "require_live_admitted_source_history_result",
     "serve_sidecar_handshake",
     "spawn_ready_sidecar",
 ]
@@ -260,6 +261,25 @@ def exchange_source_history(
         return admitted
     finally:
         _finish_history_exchange(state, succeeded=succeeded)
+
+
+def require_live_admitted_source_history_result(
+    result: object,
+) -> AdmittedSourceHistoryResult:
+    """Require exact factory provenance while the admitting ready session is live."""
+    if type(result) is not AdmittedSourceHistoryResult:
+        raise TypeError("AdmittedSourceHistoryResult must be a live factory result")
+    state = _admitted_state(result)
+    session = state.ready_session()
+    if session is None:
+        raise TypeError("AdmittedSourceHistoryResult must be a live factory result")
+    try:
+        ready_state = _ready_state(session)
+    except TypeError:
+        raise TypeError("AdmittedSourceHistoryResult must be a live factory result") from None
+    if ready_state.session_id != state.session_id:
+        raise TypeError("AdmittedSourceHistoryResult must be a live factory result")
+    return result
 
 
 def _receive_one_history_result(session: ReadySidecarSession, deadline: float) -> ReceivedHistoryResult:

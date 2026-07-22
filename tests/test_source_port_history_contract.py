@@ -485,9 +485,10 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
         source = path.read_text(encoding="utf-8")
         if "seektalent.source_port" in source:
             production_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    # The production-unreachable #375 transport owns the single post-readiness history state.
+    # The production-unreachable #379 composition is the only main-side semantic consumer.
     assert production_callers == [
         "src/seektalent/sidecar_readiness.py",
+        "src/seektalent/source_history_reconciliation.py",
         "src/seektalent/sidecar_child_session.py",
     ]
 
