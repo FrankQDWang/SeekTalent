@@ -475,7 +475,12 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
         if isinstance(node, (ast.Import, ast.ImportFrom))
         for alias in node.names
     }
-    assert imported_modules <= {"__future__", "re", "unicodedata", "typing", "pydantic"}
+    assert imported_modules <= {
+        "__future__",
+        "typing",
+        "pydantic",
+        "seektalent.source_port.wire_primitives",
+    }
     assert not any(isinstance(node, ast.Name) and node.id == "Any" for node in ast.walk(tree))
 
     production_callers = []
@@ -511,6 +516,7 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
     assert loaded <= {
         "seektalent.source_port",
         "seektalent.source_port.history_contract",
+        "seektalent.source_port.wire_primitives",
         "seektalent.version",
     }
 

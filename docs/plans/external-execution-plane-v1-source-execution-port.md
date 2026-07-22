@@ -190,19 +190,20 @@ V1 唯一合法形状：
 - Deadline 在 durable `dispatch_intent` 前耗尽：journal 保留 accepted/no-dispatch fact；不得产生 side effect。
 - Deadline 在 `dispatch_intent` 后耗尽：transport 可返回 timeout observation，但 main posture 保持 `reconcile_first`，直到 journal/extension facts得出结论。
 
-### 5.5 Closed dispatch intent
+### 5.5 Closed dispatch authorization and delivery
 
-Submit 必须携带 `DispatchIntentV1`，且 `kind` 只允许：
+Submit 必须携带 durable `DispatchAuthorizationV1`，以及独立的 transport `delivery_mode`。Durable authorization epoch 只允许：
 
-| `kind` | 必填 main-owned durable facts | Sidecar 行为 |
+| authorization epoch | 必填 main-owned durable facts | Sidecar 行为 |
 |---|---|---|
 | `initial` | 新 `dispatch_intent_id/revision/digest`、`source_operation_acceptance_ref`、accepted ledger revision；`safe_retry_commit_ref=null`、reconciliation revision `0` | 可在 accepted durable 后创建首个 dispatch intent |
-| `outbox_redelivery` | 与已提交 `initial` 或 `safe_retry` 的 `dispatch_intent_id/revision/digest`、authorization refs/revisions **exact 相同** | 若无 record 可完成首次交付；若已有 accepted/dispatch/observed/reconciled record，只 replay ack/status/result，绝不新增 side effect |
 | `safe_retry` | 新 `dispatch_intent_id/revision/digest`、main-authored `safe_retry_commit_ref`、且 `expected_reconciliation_revision` 精确等于 #324 已 commit `safe_retry` 的 revision；同时携带该 commit 后 exact ledger revision | 只验证/承载 ref 与 revision，不解释 `RetryPosture`；通过后才可为同 logical operation 建立新 dispatch attempt |
 
-每个 intent 还含 positive `dispatch_authorization_ordinal`：`initial=1`；`outbox_redelivery` 必须复用原 ordinal；每个 `safe_retry` 必须是 sidecar retained history 中前一 authorization ordinal + 1，缺失、不连续或 history incomplete 均拒绝。Ordinal 只是 main durable dispatch authorization 的序号，不是 RetryPosture、browser retry count 或新的 authority。
+Transport `delivery_mode` 只允许首次交付或 `outbox_redelivery`。`outbox_redelivery` 必须复用已提交 authorization 的 `dispatch_intent_id/revision`、authorization refs/revisions、`dispatch_authorization_ordinal` 与 digest **exact 相同**；它不是新的 durable authorization，不续 deadline，也不允许第二次 side effect。若无 record 可完成首次交付；若已有 accepted/dispatch/observed/reconciled record，只 replay ack/status/result。
 
-`dispatch_intent_digest = SHA-256(JCS({kind, dispatch_intent_id, dispatch_intent_revision, dispatch_authorization_ordinal, run_id, operation_id, attempt_no, request_hash, expected_source_operation_ledger_revision, expected_reconciliation_revision, source_operation_acceptance_ref, safe_retry_commit_ref}))`。它是 main outbox/CAS 事实的稳定 digest，不是 #324 `RetryPosture` schema。`safe_retry_commit_ref` 只能引用 main 已持久化的 posture decision；sidecar 不解析 ref 得出 enum。New token、higher attempt、new deadline、new profile/browser authority 中的任何一项或组合，在没有该 exact `safe_retry` durable authorization 时都永远不得 redispatch。
+每个 durable authorization 还含 positive `dispatch_authorization_ordinal`：`initial=1`；`outbox_redelivery` 只是复用原 ordinal；每个 `safe_retry` 必须是 sidecar retained history 中前一 authorization ordinal + 1，缺失、不连续或 history incomplete 均拒绝。Ordinal 只是 main durable dispatch authorization 的序号，不是 RetryPosture、browser retry count 或新的 authority。
+
+`dispatch_intent_digest = SHA-256(JCS({dispatch_intent_id, dispatch_intent_revision, dispatch_authorization_ordinal, run_id, operation_id, attempt_no, request_hash, expected_source_operation_ledger_revision, expected_reconciliation_revision, source_operation_acceptance_ref, safe_retry_commit_ref}))`。它是 durable main outbox/CAS authorization facts 的稳定 digest，不含 transport `delivery_mode`（或 delivery kind），不是 #324 `RetryPosture` schema。`safe_retry_commit_ref` 只能引用 main 已持久化的 posture decision；sidecar 不解析 ref 得出 enum。New token、higher attempt、new deadline、new profile/browser authority 中的任何一项或组合，在没有该 exact `safe_retry` durable authorization 时都永远不得 redispatch。
 
 ### 5.6 Shared bounds
 
