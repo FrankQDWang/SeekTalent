@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import secrets
 import threading
 import time
 import weakref
@@ -27,6 +28,16 @@ from seektalent.sidecar_handshake_protocol import (
 from seektalent.source_port.authenticated_history_frames import (
     PostHandshakeHistorySession,
     ReceivedHistoryMessage,
+    ReceivedHistoryResult,
+    SourceHistoryAdmissionError,
+    SourceHistoryAdmissionReason,
+)
+from seektalent.source_port.history_contract import (
+    SourceHistoryIdentityConflict,
+    SourceHistoryMatched,
+    SourceHistoryNotFound,
+    SourceHistoryQueryV1,
+    SourceHistoryUnavailable,
 )
 
 
@@ -34,12 +45,16 @@ _STDERR_CAPTURE_BYTES = 64 * 1024
 
 __all__ = [
     "DEFAULT_HANDSHAKE_TIMEOUT_SECONDS",
+    "AdmittedSourceHistoryResult",
     "MAX_HANDSHAKE_FRAME_BYTES",
     "ReadySidecarSession",
     "SidecarHandshakeIdentity",
     "SidecarHandshakeResult",
     "SidecarReadinessError",
     "SidecarReadinessReason",
+    "SourceHistoryAdmissionError",
+    "SourceHistoryAdmissionReason",
+    "exchange_source_history",
     "serve_sidecar_handshake",
     "spawn_ready_sidecar",
 ]
@@ -53,11 +68,81 @@ class _ReadySidecarState:
     protocol_minor: int
     history: PostHandshakeHistorySession
     stderr_drain: "_BoundedStderrDrain"
+    history_exchange_lock: threading.Lock
+    history_query_in_flight: bool = False
+    history_exchange_usable: bool = True
     cleanup_error: SidecarSpawnCleanupError | None = None
 
 
 _READY_SESSIONS: dict[int, tuple[weakref.ReferenceType["ReadySidecarSession"], _ReadySidecarState]] = {}
 _READY_SESSIONS_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmittedSourceHistoryState:
+    ready_session: weakref.ReferenceType["ReadySidecarSession"]
+    session_id: str
+    query_message_id: str
+    result_message_id: str
+    reply_to: str
+    correlation_id: str | None
+    query: SourceHistoryQueryV1
+    payload: SourceHistoryMatched | SourceHistoryNotFound | SourceHistoryIdentityConflict | SourceHistoryUnavailable
+
+
+_ADMITTED_RESULTS: dict[
+    int,
+    tuple[weakref.ReferenceType["AdmittedSourceHistoryResult"], _AdmittedSourceHistoryState],
+] = {}
+_ADMITTED_RESULTS_LOCK = threading.Lock()
+
+
+class AdmittedSourceHistoryResult:
+    """Factory-only result authenticated by one exact ready sidecar session."""
+
+    __slots__ = ("__weakref__",)
+
+    def __init__(self, *_: object, **__: object) -> None:
+        raise TypeError("AdmittedSourceHistoryResult is factory-only")
+
+    @property
+    def session_id(self) -> str:
+        return _admitted_state(self).session_id
+
+    @property
+    def query_message_id(self) -> str:
+        return _admitted_state(self).query_message_id
+
+    @property
+    def result_message_id(self) -> str:
+        return _admitted_state(self).result_message_id
+
+    @property
+    def reply_to(self) -> str:
+        return _admitted_state(self).reply_to
+
+    @property
+    def correlation_id(self) -> str | None:
+        return _admitted_state(self).correlation_id
+
+    @property
+    def query(self) -> SourceHistoryQueryV1:
+        return _admitted_state(self).query
+
+    @property
+    def payload(
+        self,
+    ) -> SourceHistoryMatched | SourceHistoryNotFound | SourceHistoryIdentityConflict | SourceHistoryUnavailable:
+        return _admitted_state(self).payload
+
+    def __copy__(self) -> Never:
+        raise TypeError("AdmittedSourceHistoryResult cannot be copied")
+
+    def __deepcopy__(self, _: dict[int, object]) -> Never:
+        raise TypeError("AdmittedSourceHistoryResult cannot be copied")
+
+    def __reduce_ex__(self, _: SupportsIndex) -> Never:
+        raise TypeError("AdmittedSourceHistoryResult cannot be serialized")
 
 
 class ReadySidecarSession:
@@ -141,6 +226,79 @@ class ReadySidecarSession:
         raise TypeError("ReadySidecarSession cannot be serialized")
 
 
+def exchange_source_history(
+    session: ReadySidecarSession,
+    query: SourceHistoryQueryV1,
+    *,
+    timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
+) -> AdmittedSourceHistoryResult:
+    """Run one authenticated query/reply exchange on an exact live ready session."""
+    normalized_timeout = _validated_timeout(timeout)
+    state = _ready_state(session)
+    if not isinstance(query, SourceHistoryQueryV1):
+        raise TypeError("query must be a SourceHistoryQueryV1")
+    _begin_history_exchange(state)
+    succeeded = False
+    try:
+        deadline = time.monotonic() + normalized_timeout
+        query_message_id = secrets.token_hex(16)
+        correlation_id = secrets.token_hex(16)
+        frame = state.history.encode_query(
+            message_id=query_message_id,
+            correlation_id=correlation_id,
+            payload=query,
+        )
+        session.send_history_frame(frame, timeout=_remaining(deadline))
+        received = _receive_one_history_result(session, deadline)
+        admitted = _new_admitted_result(
+            session,
+            query=query,
+            query_message_id=query_message_id,
+            received=received,
+        )
+        succeeded = True
+        return admitted
+    finally:
+        _finish_history_exchange(state, succeeded=succeeded)
+
+
+def _receive_one_history_result(session: ReadySidecarSession, deadline: float) -> ReceivedHistoryResult:
+    while True:
+        messages = session.receive_history(timeout=_remaining(deadline))
+        if not messages:
+            continue
+        if len(messages) != 1:
+            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.MULTIPLE_MESSAGES)
+        session.new_history_session().require_frame_boundary()
+        message = messages[0]
+        if not isinstance(message, ReceivedHistoryResult):
+            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE)
+        return message
+
+
+def _begin_history_exchange(state: _ReadySidecarState) -> None:
+    with state.history_exchange_lock:
+        if state.history_query_in_flight:
+            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.QUERY_IN_FLIGHT)
+        if not state.history_exchange_usable:
+            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.SESSION_UNUSABLE)
+        state.history_query_in_flight = True
+
+
+def _finish_history_exchange(state: _ReadySidecarState, *, succeeded: bool) -> None:
+    with state.history_exchange_lock:
+        state.history_query_in_flight = False
+        if not succeeded:
+            state.history_exchange_usable = False
+
+
+def _remaining(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SidecarReadinessError(SidecarReadinessReason.READ_TIMEOUT)
+    return remaining
+
+
 def spawn_ready_sidecar(
     lease: InstalledSidecarLaunchLease,
     *,
@@ -186,6 +344,7 @@ def spawn_ready_sidecar(
                 protocol_minor=material.protocol_minor,
                 history=history,
                 stderr_drain=stderr_drain,
+                history_exchange_lock=threading.Lock(),
             )
         )
     except SidecarReadinessError as error:
@@ -264,6 +423,46 @@ def _new_ready_session(state: _ReadySidecarState) -> ReadySidecarSession:
     with _READY_SESSIONS_LOCK:
         _READY_SESSIONS[session_id] = (weakref.ref(session, finalize), state)
     return session
+
+
+def _new_admitted_result(
+    session: ReadySidecarSession,
+    *,
+    query: SourceHistoryQueryV1,
+    query_message_id: str,
+    received: ReceivedHistoryResult,
+) -> AdmittedSourceHistoryResult:
+    ready_state = _ready_state(session)
+    if received.reply_to != query_message_id:
+        raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE)
+    admitted = object.__new__(AdmittedSourceHistoryResult)
+    admitted_id = id(admitted)
+    state = _AdmittedSourceHistoryState(
+        ready_session=weakref.ref(session),
+        session_id=ready_state.session_id,
+        query_message_id=query_message_id,
+        result_message_id=received.message_id,
+        reply_to=received.reply_to,
+        correlation_id=received.correlation_id,
+        query=query,
+        payload=received.payload,
+    )
+
+    def finalize(_: weakref.ReferenceType[AdmittedSourceHistoryResult]) -> None:
+        with _ADMITTED_RESULTS_LOCK:
+            _ADMITTED_RESULTS.pop(admitted_id, None)
+
+    with _ADMITTED_RESULTS_LOCK:
+        _ADMITTED_RESULTS[admitted_id] = (weakref.ref(admitted, finalize), state)
+    return admitted
+
+
+def _admitted_state(result: AdmittedSourceHistoryResult) -> _AdmittedSourceHistoryState:
+    with _ADMITTED_RESULTS_LOCK:
+        entry = _ADMITTED_RESULTS.get(id(result))
+    if entry is None or entry[0]() is not result:
+        raise TypeError("AdmittedSourceHistoryResult must be a live factory result")
+    return entry[1]
 
 
 def _finalize_ready_state(state: _ReadySidecarState) -> None:

@@ -8,19 +8,16 @@ from typing import Literal
 from seektalent.source_port.history_contract import (
     AcceptedNoDispatchFact,
     DispatchNotObservedFact,
-    HistoryUnavailableReason,
-    IdentityConflictReason,
-    MatchedHistoryFact,
     ObservedFailureFact,
     ObservedResultFact,
     OperationKind,
     SQLITE_MAX_INTEGER,
-    SourceHistoryIdentityConflict,
-    SourceHistoryMatched,
-    SourceHistoryNotFound,
     SourceHistoryQueryResultV1,
     SourceHistoryQueryV1,
-    SourceHistoryUnavailable,
+)
+from seektalent.source_port.history_sqlite_reader import (
+    SourceHistorySQLiteReader,
+    load_validated_history_facts,
 )
 from tests.support.source_history_sqlite_storage import (
     JournalUnavailable as _JournalUnavailable,
@@ -29,14 +26,11 @@ from tests.support.source_history_sqlite_storage import (
     allocate_revision as _allocate_revision,
     connect_existing as _connect_existing,
     create_database as _create_database,
-    generation_bounds as _generation_bounds,
-    read_error as _read_error,
     scalar_integer as _scalar_integer,
     write_error as _write_error,
 )
 
 
-QUERY_RESULT_CONTRACT_VERSION = "seektalent.source-port.query.result/v1"
 FaultPoint = Literal["after_event_insert", "after_head_cas", "after_commit"]
 
 
@@ -303,92 +297,7 @@ class SourceHistorySQLiteHarness:
         )
 
     def query(self, request: SourceHistoryQueryV1) -> SourceHistoryQueryResultV1:
-        try:
-            connection = self._connect_existing(begin_read=True)
-        except _JournalUnavailable as exc:
-            return SourceHistoryUnavailable(
-                **_query_echo(request),
-                contract_version=QUERY_RESULT_CONTRACT_VERSION,
-                outcome="history_unavailable",
-                reason=exc.reason,
-            )
-
-        try:
-            oldest_retained, newest_known = _generation_bounds(connection)
-            all_rows = connection.execute(
-                """
-                SELECT * FROM source_history_heads
-                ORDER BY run_id, operation_id, dispatch_authorization_ordinal
-                """,
-            ).fetchall()
-            try:
-                facts_by_key = {_head_key(row): _fact_from_row(row) for row in all_rows}
-            except (IndexError, TypeError, ValueError, OverflowError):
-                return SourceHistoryUnavailable(
-                    **_query_echo(request),
-                    contract_version=QUERY_RESULT_CONTRACT_VERSION,
-                    outcome="history_unavailable",
-                    reason="corrupt",
-                )
-            rows = [
-                row
-                for row in all_rows
-                if request.searched_first_generation
-                <= int(row["accepted_generation"])
-                <= request.searched_last_generation
-            ]
-            exact_rows, collision_rows = _partition_rows(request, rows)
-            conflict_reasons = _conflict_reasons(request, exact_rows, collision_rows)
-            if conflict_reasons:
-                return SourceHistoryIdentityConflict(
-                    **_query_echo(request),
-                    contract_version=QUERY_RESULT_CONTRACT_VERSION,
-                    outcome="identity_conflict",
-                    conflict_reasons=conflict_reasons,
-                    oldest_retained_generation=oldest_retained,
-                    newest_known_generation=newest_known,
-                )
-
-            unavailable_reason = _coverage_failure(
-                connection,
-                request=request,
-                oldest_retained=oldest_retained,
-                newest_known=newest_known,
-            )
-            if unavailable_reason is not None:
-                return SourceHistoryUnavailable(
-                    **_query_echo(request),
-                    contract_version=QUERY_RESULT_CONTRACT_VERSION,
-                    outcome="history_unavailable",
-                    reason=unavailable_reason,
-                    oldest_retained_generation=oldest_retained,
-                    newest_known_generation=newest_known,
-                )
-            if oldest_retained is None or newest_known is None:
-                raise AssertionError("source_history_complete_range_without_bounds")
-
-            complete = {
-                **_query_echo(request),
-                "contract_version": QUERY_RESULT_CONTRACT_VERSION,
-                "oldest_retained_generation": oldest_retained,
-                "newest_known_generation": newest_known,
-                "history_complete": True,
-                "history_truncated": False,
-            }
-            if not exact_rows:
-                return SourceHistoryNotFound(**complete, outcome="not_found")
-            facts = tuple(facts_by_key[_head_key(row)] for row in exact_rows)
-            return SourceHistoryMatched(**complete, outcome="matched", facts=facts)
-        except sqlite3.DatabaseError as exc:
-            unavailable = _read_error(exc)
-            return SourceHistoryUnavailable(
-                **_query_echo(request),
-                contract_version=QUERY_RESULT_CONTRACT_VERSION,
-                outcome="history_unavailable",
-                reason=unavailable.reason,
-            )
-        finally:
-            connection.close()
+        return SourceHistorySQLiteReader(self.path).query(request)
 
     def read_event_count(self) -> int:
         connection = self._connect_existing()
@@ -511,7 +420,7 @@ class SourceHistorySQLiteHarness:
     def _connect_existing(self, *, begin_read: bool = False) -> sqlite3.Connection:
         connection = _connect_existing(self.path, begin_read=True)
         try:
-            _validated_facts(connection)
+            load_validated_history_facts(connection)
         except _JournalUnavailable:
             connection.close()
             raise
@@ -610,167 +519,6 @@ class SourceHistorySQLiteHarness:
     def _inject(actual: FaultPoint | None, expected: FaultPoint) -> None:
         if actual == expected:
             raise InjectedJournalFault(f"source_history_fault_{expected}")
-
-
-def _coverage_failure(
-    connection: sqlite3.Connection,
-    *,
-    request: SourceHistoryQueryV1,
-    oldest_retained: int | None,
-    newest_known: int | None,
-) -> HistoryUnavailableReason | None:
-    if newest_known is None or request.searched_last_generation > newest_known:
-        return "unknown_generation"
-    if oldest_retained is None or request.searched_first_generation < oldest_retained:
-        return "retention_gap"
-    rows = connection.execute(
-        """
-        SELECT generation, retained, complete
-        FROM source_history_generations
-        WHERE generation BETWEEN ? AND ?
-        ORDER BY generation
-        """,
-        (request.searched_first_generation, request.searched_last_generation),
-    ).fetchall()
-    expected_count = request.searched_last_generation - request.searched_first_generation + 1
-    if len(rows) != expected_count:
-        return "retention_gap"
-    previous = request.searched_first_generation - 1
-    for row in rows:
-        generation = int(row["generation"])
-        if generation != previous + 1 or int(row["retained"]) != 1:
-            return "retention_gap"
-        previous = generation
-    if any(int(row["complete"]) != 1 for row in rows):
-        return "truncated"
-    return None
-
-
-def _partition_rows(
-    request: SourceHistoryQueryV1,
-    rows: list[sqlite3.Row],
-) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
-    exact: list[sqlite3.Row] = []
-    collisions: list[sqlite3.Row] = []
-    for row in rows:
-        ordinal_matches = (
-            request.authorization_selector.kind == "all"
-            or int(row["dispatch_authorization_ordinal"]) == request.authorization_selector.ordinal
-        )
-        identity_matches = (
-            row["run_id"] == request.run_id
-            and row["operation_id"] == request.operation_id
-            and row["source"] == request.source
-            and row["operation_kind"] == request.operation_kind
-            and row["idempotency_key"] == request.idempotency_key
-            and row["request_hash"] == request.request_hash
-            and int(row["attempt_no"]) == request.attempt_no
-        )
-        if ordinal_matches and identity_matches:
-            exact.append(row)
-            continue
-        collision = (
-            row["run_id"] == request.run_id
-            and (row["operation_id"] == request.operation_id or row["idempotency_key"] == request.idempotency_key)
-        ) or (row["operation_id"] == request.operation_id and row["idempotency_key"] == request.idempotency_key)
-        if collision:
-            collisions.append(row)
-    return exact, collisions
-
-
-def _head_key(row: sqlite3.Row) -> tuple[str, str, int]:
-    return (
-        str(row["run_id"]),
-        str(row["operation_id"]),
-        int(row["dispatch_authorization_ordinal"]),
-    )
-
-
-def _conflict_reasons(
-    request: SourceHistoryQueryV1,
-    exact_rows: list[sqlite3.Row],
-    collision_rows: list[sqlite3.Row],
-) -> tuple[IdentityConflictReason, ...]:
-    reasons: list[IdentityConflictReason] = []
-    for row in collision_rows:
-        comparisons: tuple[tuple[str, object, IdentityConflictReason], ...] = (
-            ("run_id", request.run_id, "run_id_mismatch"),
-            ("operation_id", request.operation_id, "operation_id_mismatch"),
-            ("source", request.source, "source_mismatch"),
-            ("operation_kind", request.operation_kind, "operation_kind_mismatch"),
-            ("idempotency_key", request.idempotency_key, "idempotency_key_mismatch"),
-            ("request_hash", request.request_hash, "request_hash_mismatch"),
-            ("attempt_no", request.attempt_no, "attempt_no_mismatch"),
-        )
-        for column, expected, reason in comparisons:
-            if row[column] != expected and reason not in reasons:
-                reasons.append(reason)
-    if len(exact_rows) > 1:
-        accepted_facts = {
-            (
-                row["accepted_requirement_revision_id"],
-                row["runtime_attempt_fence_ref"],
-                row["authorized_dispatch_intent_digest"],
-                row["profile_binding_generation"],
-            )
-            for row in exact_rows
-        }
-        if len(accepted_facts) > 1:
-            reasons.append("accepted_fact_mismatch")
-    return tuple(reasons)
-
-
-def _fact_from_row(row: sqlite3.Row) -> MatchedHistoryFact:
-    accepted = _accepted_values_from_row(row)
-    common = {
-        **accepted,
-        "head_generation": int(row["head_generation"]),
-        "head_journal_revision": int(row["head_journal_revision"]),
-    }
-    phase = str(row["phase"])
-    if phase == "accepted":
-        return AcceptedNoDispatchFact(**common, conclusion="accepted_no_dispatch")
-    dispatched = {
-        **common,
-        "durable_dispatch_intent_ref": row["durable_dispatch_intent_ref"],
-        "dispatch_intent_generation": int(row["dispatch_intent_generation"]),
-        "dispatch_intent_journal_revision": int(row["dispatch_intent_journal_revision"]),
-    }
-    if phase == "dispatch_intent":
-        return DispatchNotObservedFact(**dispatched, conclusion="dispatch_not_observed")
-    observed = {
-        **dispatched,
-        "observation_generation": int(row["observation_generation"]),
-        "observation_journal_revision": int(row["observation_journal_revision"]),
-    }
-    if phase == "observed_result":
-        return ObservedResultFact(
-            **observed,
-            conclusion="observed_result",
-            result_ref=row["observation_ref"],
-            result_hash=row["observation_hash"],
-        )
-    if phase == "observed_failure":
-        return ObservedFailureFact(
-            **observed,
-            conclusion="observed_failure",
-            failure_ref=row["observation_ref"],
-            failure_hash=row["observation_hash"],
-        )
-    raise AssertionError("source_history_unknown_phase")
-
-
-def _validated_facts(connection: sqlite3.Connection) -> dict[tuple[str, str, int], MatchedHistoryFact]:
-    rows = connection.execute(
-        """
-        SELECT * FROM source_history_heads
-        ORDER BY run_id, operation_id, dispatch_authorization_ordinal
-        """
-    ).fetchall()
-    try:
-        return {_head_key(row): _fact_from_row(row) for row in rows}
-    except (IndexError, TypeError, ValueError, OverflowError) as exc:
-        raise _JournalUnavailable("corrupt") from exc
 
 
 def _validate_accepted_input(accepted: AcceptedHistoryInput, *, generation: int) -> None:
@@ -927,10 +675,6 @@ def _identity_database_values(values: dict[str, object]) -> tuple[object, ...]:
         values["attempt_no"],
         values["dispatch_authorization_ordinal"],
     )
-
-
-def _query_echo(query: SourceHistoryQueryV1) -> dict[str, object]:
-    return query.model_dump(exclude={"contract_version"})
 
 
 def _require_positive_integer(value: int, name: str) -> None:

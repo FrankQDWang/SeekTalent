@@ -95,6 +95,25 @@ class HistoryFrameError(ValueError):
         return f"HistoryFrameError(reason_code={self.reason_code!r})"
 
 
+class SourceHistoryAdmissionReason(StrEnum):
+    QUERY_IN_FLIGHT = "source_history_admission_query_in_flight"
+    SESSION_UNUSABLE = "source_history_admission_session_unusable"
+    UNEXPECTED_MESSAGE = "source_history_admission_unexpected_message"
+    MULTIPLE_MESSAGES = "source_history_admission_multiple_messages"
+    READER_RESULT_INVALID = "source_history_admission_reader_result_invalid"
+
+
+class SourceHistoryAdmissionError(ValueError):
+    """A sanitized authenticated history exchange failure."""
+
+    def __init__(self, reason: SourceHistoryAdmissionReason) -> None:
+        self.reason = reason
+        super().__init__(reason.value)
+
+    def __repr__(self) -> str:
+        return f"SourceHistoryAdmissionError(reason={self.reason.value!r})"
+
+
 AuthTag = Annotated[Sha256, Field(repr=False)]
 
 
@@ -380,6 +399,12 @@ class PostHandshakeHistorySession:
         if self._header or self._body or self._expected_body_length is not None:
             self._fail(HistoryFrameReason.TRUNCATED_FRAME)
         self._close(None)
+
+    def require_frame_boundary(self) -> None:
+        """Fail closed when a completed message was followed by a partial frame."""
+        self._require_open()
+        if self._header or self._body or self._expected_body_length is not None:
+            self._fail(HistoryFrameReason.TRUNCATED_FRAME)
 
     def _build_query_envelope(
         self,
