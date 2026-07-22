@@ -508,9 +508,7 @@ class RuntimeControlStore:
         return source_operation_from_row(row)
 
     def get_source_operation_admission_expectation(
-        self,
-        runtime_run_id: str,
-        operation_id: str,
+        self, runtime_run_id: str, operation_id: str
     ) -> SourceOperationAdmissionExpectation:
         with self._connect() as conn:
             operation_row = _source_operation_row(conn, runtime_run_id, operation_id)
@@ -524,6 +522,13 @@ class RuntimeControlStore:
             if not expectation_matches_operation(expectation, operation):
                 raise RuntimeControlError("source_operation_acceptance_incomplete")
         return expectation
+
+    def get_accepted_source_operation_context(self, runtime_run_id: str, operation_id: str) -> AcceptedSourceOperation:
+        with self._connect() as conn:
+            operation_row = _source_operation_row(conn, runtime_run_id, operation_id)
+            if operation_row is None:
+                raise RuntimeControlLookupError("source_operation_not_found")
+            return _source_operation_acceptance(conn, operation_row)
 
     def commit_no_owner_source_reconciliation(
         self,
@@ -4436,10 +4441,7 @@ def _source_operation_pair(
     return operation, dispatch
 
 
-def _source_operation_acceptance(
-    conn: sqlite3.Connection,
-    operation_row: sqlite3.Row,
-) -> AcceptedSourceOperation:
+def _source_operation_acceptance(conn: sqlite3.Connection, operation_row: sqlite3.Row) -> AcceptedSourceOperation:
     operation = source_operation_from_row(operation_row)
     expectation_row = _source_operation_admission_expectation_row(
         conn,
@@ -4483,9 +4485,7 @@ def _require_source_dispatch_operation(
     return operation
 
 
-def _source_operation_admission_expectation_from_row(
-    row: sqlite3.Row,
-) -> SourceOperationAdmissionExpectation:
+def _source_operation_admission_expectation_from_row(row: sqlite3.Row) -> SourceOperationAdmissionExpectation:
     try:
         expectation = source_operation_admission_expectation_from_row(row)
         validate_source_operation_admission_expectation(
@@ -4502,9 +4502,7 @@ def _source_operation_admission_expectation_from_row(
 
 
 def _source_dispatch_row_for_operation(
-    conn: sqlite3.Connection,
-    runtime_run_id: str,
-    operation_id: str,
+    conn: sqlite3.Connection, runtime_run_id: str, operation_id: str
 ) -> sqlite3.Row | None:
     return conn.execute(
         """

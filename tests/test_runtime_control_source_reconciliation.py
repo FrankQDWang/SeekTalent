@@ -451,7 +451,9 @@ def test_claim_winner_makes_new_cas_fail_closed(tmp_path: Path) -> None:
     assert exc_info.value.reason_code == "source_reconciliation_run_not_resumable"
 
 
-def test_raw_history_result_is_not_mutation_authority_and_production_has_no_caller(tmp_path: Path) -> None:
+def test_raw_history_result_is_not_mutation_authority_and_cas_has_only_the_closed_composition(
+    tmp_path: Path,
+) -> None:
     from seektalent.source_port.history_contract import SourceHistoryUnavailable
     from seektalent_runtime_control.errors import RuntimeControlError
 
@@ -482,12 +484,11 @@ def test_raw_history_result_is_not_mutation_authority_and_production_has_no_call
         store.commit_no_owner_source_reconciliation(raw_history)  # type: ignore[arg-type]
     assert exc_info.value.reason_code == "source_reconciliation_decision_invalid"
 
-    production_calls = 0
+    production_callers = []
     for path in Path("src").rglob("*.py"):
-        production_calls += path.read_text(encoding="utf-8").count(
-            ".commit_no_owner_source_reconciliation("
-        )
-    assert production_calls == 0
+        if ".commit_no_owner_source_reconciliation(" in path.read_text(encoding="utf-8"):
+            production_callers.append(path.as_posix())
+    assert production_callers == ["src/seektalent/source_history_reconciliation.py"]
     runner = Path("src/seektalent_workbench_v2/runtime_runner.py").read_text(encoding="utf-8")
     assert "recover_start_timeouts(resume_recoverable=False)" in runner
 

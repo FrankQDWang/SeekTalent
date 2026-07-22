@@ -583,14 +583,8 @@ def _encode_envelope(
     direction_key: bytes,
 ) -> bytes:
     unsigned = envelope.model_dump(mode="json", exclude={"auth_tag"})
-    canonical_failed = False
-    try:
-        unsigned_body = rfc8785.dumps(unsigned)
-        zero_tag_body = rfc8785.dumps({**unsigned, "auth_tag": _ZERO_AUTH_TAG})
-    except (rfc8785.CanonicalizationError, RecursionError):
-        canonical_failed = True
-    if canonical_failed:
-        raise HistoryFrameError(HistoryFrameReason.SCHEMA_VALIDATION)
+    unsigned_body = _canonical_history_json_bytes(unsigned)
+    zero_tag_body = _canonical_history_json_bytes({**unsigned, "auth_tag": _ZERO_AUTH_TAG})
     frame_length = len(zero_tag_body)
     if frame_length > MAX_FRAME_BYTES:
         raise HistoryFrameError(HistoryFrameReason.FRAME_TOO_LARGE)
@@ -605,7 +599,7 @@ def _encode_envelope(
         ),
         sha256,
     ).hexdigest()
-    body = rfc8785.dumps({**unsigned, "auth_tag": auth_tag})
+    body = _canonical_history_json_bytes({**unsigned, "auth_tag": auth_tag})
     if len(body) != frame_length:
         raise HistoryFrameError(HistoryFrameReason.FRAME_LENGTH_MISMATCH)
     return frame_length.to_bytes(4, "big") + body
@@ -636,14 +630,8 @@ def _decode_envelope(
         raise HistoryFrameError(HistoryFrameReason.SESSION_MISMATCH)
     unsigned = dict(parsed)
     auth_tag = unsigned.pop("auth_tag")
-    canonical_failed = False
-    try:
-        unsigned_body = rfc8785.dumps(unsigned)
-        expected_length = len(rfc8785.dumps({**unsigned, "auth_tag": _ZERO_AUTH_TAG}))
-    except (rfc8785.CanonicalizationError, RecursionError):
-        canonical_failed = True
-    if canonical_failed:
-        raise HistoryFrameError(HistoryFrameReason.SCHEMA_VALIDATION)
+    unsigned_body = _canonical_history_json_bytes(unsigned)
+    expected_length = len(_canonical_history_json_bytes({**unsigned, "auth_tag": _ZERO_AUTH_TAG}))
     if expected_length != frame_length:
         raise HistoryFrameError(HistoryFrameReason.FRAME_LENGTH_MISMATCH)
     expected_tag = hmac.new(
@@ -660,6 +648,28 @@ def _decode_envelope(
     if not isinstance(auth_tag, str) or not hmac.compare_digest(auth_tag, expected_tag):
         raise HistoryFrameError(HistoryFrameReason.BAD_AUTH_TAG)
     return envelope
+
+
+def canonical_source_history_semantics_bytes(
+    query: SourceHistoryQueryV1,
+    result: SourceHistoryQueryResultV1,
+) -> bytes:
+    """Return session-independent RFC 8785 bytes for one query and semantic result."""
+    if type(query) is not SourceHistoryQueryV1 or type(result) not in _HISTORY_RESULT_TYPES:
+        raise TypeError("strict source history query and result required")
+    return _canonical_history_json_bytes(
+        {
+            "query": query.model_dump(mode="json"),
+            "result": result.model_dump(mode="json"),
+        }
+    )
+
+
+def _canonical_history_json_bytes(payload: dict[str, object]) -> bytes:
+    try:
+        return rfc8785.dumps(payload)
+    except (rfc8785.CanonicalizationError, RecursionError):
+        raise HistoryFrameError(HistoryFrameReason.SCHEMA_VALIDATION) from None
 
 
 def _strict_canonical_json_object(body: bytes) -> dict[str, object]:
