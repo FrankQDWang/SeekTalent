@@ -108,6 +108,17 @@ class _VerifySessionBodyV1(_VerifySessionModel):
     verify_search_surface: ExactTrue
     component_receipt_refs: tuple[Opaque96, ...] = ()
 
+    @field_validator("required_capabilities", "component_receipt_refs", mode="before")
+    @classmethod
+    def decode_json_arrays_as_wire_tuples(
+        cls,
+        value: object,
+        info: ValidationInfo,
+    ) -> object:
+        if info.mode == "json" and type(value) is list:
+            return tuple(value)
+        return value
+
     @field_validator("required_capabilities")
     @classmethod
     def validate_registered_capabilities(
@@ -299,6 +310,32 @@ class VerifySessionRequestV1(_VerifySessionBodyV1):
         )
 
 
+class VerifySessionRequestEchoV1(_VerifySessionModel):
+    """Non-bearer request facts retained after an authenticated submit is received."""
+
+    identity: OperationIdentityV1
+    delivery_mode: Literal["initial", "outbox_redelivery"]
+    dispatch_authorization: DispatchAuthorizationV1
+    profile_binding_ref: Opaque96
+    provider_account_ref: Opaque96 | None
+    component_receipt_refs: tuple[Opaque96, ...]
+
+    @field_validator("identity")
+    @classmethod
+    def validate_identity(cls, identity: OperationIdentityV1) -> OperationIdentityV1:
+        if identity.operation_kind != "verify_session":
+            raise ValueError("verify_session_operation_kind_invalid")
+        return identity
+
+    @model_validator(mode="after")
+    def validate_authorization(self) -> VerifySessionRequestEchoV1:
+        try:
+            validate_dispatch_authorization(self.identity, self.dispatch_authorization)
+        except ValueError:
+            raise ValueError("verify_session_dispatch_authorization_invalid") from None
+        return self
+
+
 ComponentReadiness: TypeAlias = Literal["ready", "not_ready", "not_observed"]
 AccountReadiness: TypeAlias = Literal[
     "ready",
@@ -358,6 +395,17 @@ class VerifySessionResultV1(_VerifySessionModel):
     safe_reason_code: VerifySessionSafeReasonCode | None
     user_action: VerifySessionUserActionV1 | None
     component_receipt_refs: tuple[Opaque96, ...] = ()
+
+    @field_validator("component_receipt_refs", mode="before")
+    @classmethod
+    def decode_json_receipt_refs_as_wire_tuple(
+        cls,
+        value: object,
+        info: ValidationInfo,
+    ) -> object:
+        if info.mode == "json" and type(value) is list:
+            return tuple(value)
+        return value
 
     @field_validator("identity")
     @classmethod
@@ -449,9 +497,33 @@ def validate_verify_session_result_echo(
     result: VerifySessionResultV1,
 ) -> None:
     """Require an exact initial echo or a stable-fact redelivery echo."""
+    validate_verify_session_result_echo_facts(verify_session_request_echo(request), result)
+
+
+def verify_session_request_echo(request: VerifySessionRequestV1) -> VerifySessionRequestEchoV1:
+    """Strip the submit-only runtime fence bearer before retaining reply-match facts."""
     validated_request = _validated_request(request)
+    return VerifySessionRequestEchoV1.model_validate(
+        {
+            "identity": validated_request.identity,
+            "delivery_mode": validated_request.delivery.delivery_mode,
+            "dispatch_authorization": validated_request.delivery.authorization,
+            "profile_binding_ref": validated_request.profile_binding_ref,
+            "provider_account_ref": validated_request.provider_account_ref,
+            "component_receipt_refs": validated_request.component_receipt_refs,
+        },
+        strict=True,
+    )
+
+
+def validate_verify_session_result_echo_facts(
+    request: VerifySessionRequestEchoV1,
+    result: VerifySessionResultV1,
+) -> None:
+    """Validate terminal result facts against a retained non-bearer submit echo."""
+    validated_request = _validated_request_echo(request)
     validated_result = _validated_result(result)
-    if validated_request.delivery.delivery_mode == "initial":
+    if validated_request.delivery_mode == "initial":
         identity_matches = validated_result.identity == validated_request.identity
     else:
         identity_matches = _redelivery_result_identity_matches_request(
@@ -576,6 +648,15 @@ def _validated_result(value: VerifySessionResultV1) -> VerifySessionResultV1:
         raise ValueError("verify_session_contract_invalid") from None
 
 
+def _validated_request_echo(value: VerifySessionRequestEchoV1) -> VerifySessionRequestEchoV1:
+    if type(value) is not VerifySessionRequestEchoV1:
+        raise TypeError("strict VerifySessionRequestEchoV1 required")
+    try:
+        return VerifySessionRequestEchoV1.model_validate(value.model_dump(mode="python", warnings="error"), strict=True)
+    except (TypeError, ValueError, ValidationError):
+        raise ValueError("verify_session_contract_invalid") from None
+
+
 __all__ = [
     "DispatchAuthorizationV1",
     "DispatchDeliveryV1",
@@ -584,6 +665,7 @@ __all__ = [
     "OutboxRedeliveryV1",
     "RelativeMonotonicDeadlineV1",
     "VerifySessionRequestV1",
+    "VerifySessionRequestEchoV1",
     "VerifySessionResultV1",
     "VerifySessionUserActionV1",
     "canonical_dispatch_authorization_bytes",
@@ -593,6 +675,8 @@ __all__ = [
     "dispatch_authorization_digest",
     "runtime_attempt_fence_ref",
     "validate_outbox_redelivery",
+    "validate_verify_session_result_echo_facts",
     "validate_verify_session_result_echo",
+    "verify_session_request_echo",
     "verify_session_result_hash",
 ]

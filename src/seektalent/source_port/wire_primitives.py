@@ -21,6 +21,14 @@ CanonicalJsonValue: TypeAlias = (
     | dict[str, "CanonicalJsonValue"]
 )
 
+
+class CanonicalJsonError(ValueError):
+    """A boundary-neutral RFC 8785 failure kind for callers that need a taxonomy."""
+
+    def __init__(self, kind: Literal["invalid", "recursion"]) -> None:
+        self.kind = kind
+        super().__init__("source_port_canonical_json_invalid")
+
 OperationKind: TypeAlias = Literal[
     "verify_session",
     "search",
@@ -115,5 +123,7 @@ def canonical_json_bytes(payload: object) -> bytes:
     """Return RFC 8785 bytes or a safe, boundary-neutral validation error."""
     try:
         return rfc8785.dumps(_canonical_json_value(payload))
-    except (rfc8785.CanonicalizationError, RecursionError, ValueError):
-        raise ValueError("source_port_canonical_json_invalid") from None
+    except RecursionError:
+        raise CanonicalJsonError("recursion") from None
+    except (rfc8785.CanonicalizationError, ValueError):
+        raise CanonicalJsonError("invalid") from None
