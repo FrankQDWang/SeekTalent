@@ -28,7 +28,7 @@ from seektalent.source_port.history_contract import (
 
 
 QUERY_RESULT_CONTRACT_VERSION = "seektalent.source-port.query.result/v1"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 
 
 class HistorySQLiteUnavailable(RuntimeError):
@@ -279,8 +279,8 @@ def verify_schema(
     }:
         raise HistorySQLiteUnavailable("schema_mismatch")
     expected_columns = {
-        "source_history_state": ("singleton", "last_journal_revision"),
-        "source_history_generations": ("generation", "retained", "complete"),
+        "source_history_state": ("singleton", "last_journal_revision", "last_sidecar_generation"),
+        "source_history_generations": ("generation", "sidecar_instance_id", "retained", "complete"),
         "source_history_events": _EVENT_COLUMN_NAMES,
         "source_history_heads": _HEAD_COLUMN_NAMES,
     }
@@ -313,6 +313,8 @@ def _verify_schema_sql(connection: sqlite3.Connection) -> None:
         ("table", "source_history_generations"): _GENERATION_TABLE_DDL,
         ("table", "source_history_events"): _EVENT_TABLE_DDL,
         ("table", "source_history_heads"): _HEAD_TABLE_DDL,
+        ("index", "source_history_heads_run_id_idempotency_key"): _HEAD_RUN_IDEMPOTENCY_INDEX_DDL,
+        ("index", "source_history_heads_operation_id_idempotency_key"): _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL,
         ("trigger", "source_history_events_no_duplicate_revision"): _TRIGGER_DDLS[0],
         ("trigger", "source_history_events_no_update"): _TRIGGER_DDLS[1],
         ("trigger", "source_history_events_no_delete"): _TRIGGER_DDLS[2],
@@ -320,7 +322,12 @@ def _verify_schema_sql(connection: sqlite3.Connection) -> None:
     actual = {
         (str(row[0]), str(row[1])): row[2]
         for row in connection.execute(
-            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'trigger')"
+            """
+            SELECT type, name, sql
+            FROM sqlite_master
+            WHERE type IN ('table', 'trigger', 'index')
+              AND name NOT LIKE 'sqlite_autoindex%'
+            """
         ).fetchall()
     }
     for key, statement in expected.items():
@@ -376,6 +383,35 @@ def _verify_journal_consistency(
         connection,
         "SELECT last_journal_revision FROM source_history_state WHERE singleton = 1",
     )
+    last_sidecar_generation = scalar_integer(
+        connection,
+        "SELECT last_sidecar_generation FROM source_history_state WHERE singleton = 1",
+    )
+    generations = connection.execute(
+        """
+        SELECT generation, sidecar_instance_id, retained, complete
+        FROM source_history_generations
+        ORDER BY generation
+        """
+    ).fetchall()
+    newest_generation = int(generations[-1]["generation"]) if generations else 0
+    if last_sidecar_generation != newest_generation:
+        raise HistorySQLiteUnavailable("corrupt")
+    for generation in generations:
+        generation_number = generation["generation"]
+        instance_id = generation["sidecar_instance_id"]
+        if (
+            type(generation_number) is not int
+            or not 1 <= generation_number <= SQLITE_MAX_INTEGER
+            or not isinstance(instance_id, str)
+            or len(instance_id) != 64
+            or any(character not in "0123456789abcdef" for character in instance_id)
+            or type(generation["retained"]) is not int
+            or generation["retained"] not in (0, 1)
+            or type(generation["complete"]) is not int
+            or generation["complete"] not in (0, 1)
+        ):
+            raise HistorySQLiteUnavailable("corrupt")
     newest_event_revision = int(events[-1]["journal_revision"]) if events else 0
     if last_revision != newest_event_revision:
         raise HistorySQLiteUnavailable("corrupt")
@@ -785,15 +821,28 @@ CREATE TABLE source_history_state (
     singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
     last_journal_revision INTEGER NOT NULL
         CHECK(typeof(last_journal_revision) = 'integer')
-        CHECK(last_journal_revision BETWEEN 0 AND {SQLITE_MAX_INTEGER})
+        CHECK(last_journal_revision BETWEEN 0 AND {SQLITE_MAX_INTEGER}),
+    last_sidecar_generation INTEGER NOT NULL
+        CHECK(typeof(last_sidecar_generation) = 'integer')
+        CHECK(last_sidecar_generation BETWEEN 0 AND {SQLITE_MAX_INTEGER})
 )
 """
 
-_GENERATION_TABLE_DDL = """
+_GENERATION_TABLE_DDL = f"""
 CREATE TABLE source_history_generations (
-    generation INTEGER PRIMARY KEY CHECK(generation >= 1),
-    retained INTEGER NOT NULL CHECK(retained IN (0, 1)),
-    complete INTEGER NOT NULL CHECK(complete IN (0, 1))
+    generation INTEGER PRIMARY KEY
+        CHECK(typeof(generation) = 'integer')
+        CHECK(generation BETWEEN 1 AND {SQLITE_MAX_INTEGER}),
+    sidecar_instance_id TEXT NOT NULL UNIQUE
+        CHECK(typeof(sidecar_instance_id) = 'text')
+        CHECK(length(sidecar_instance_id) = 64)
+        CHECK(sidecar_instance_id NOT GLOB '*[^0-9a-f]*'),
+    retained INTEGER NOT NULL
+        CHECK(typeof(retained) = 'integer')
+        CHECK(retained IN (0, 1)),
+    complete INTEGER NOT NULL
+        CHECK(typeof(complete) = 'integer')
+        CHECK(complete IN (0, 1))
 )
 """
 
@@ -841,6 +890,16 @@ CREATE TABLE source_history_heads (
 )
 """
 
+_HEAD_RUN_IDEMPOTENCY_INDEX_DDL = """
+CREATE INDEX source_history_heads_run_id_idempotency_key
+ON source_history_heads(run_id, idempotency_key)
+"""
+
+_HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL = """
+CREATE INDEX source_history_heads_operation_id_idempotency_key
+ON source_history_heads(operation_id, idempotency_key)
+"""
+
 _TRIGGER_DDLS = (
     """
     CREATE TRIGGER source_history_events_no_duplicate_revision
@@ -865,9 +924,11 @@ _TRIGGER_DDLS = (
 
 SCHEMA_STATEMENTS = (
     _STATE_TABLE_DDL,
-    "INSERT INTO source_history_state(singleton, last_journal_revision) VALUES (1, 0)",
+    "INSERT INTO source_history_state(singleton, last_journal_revision, last_sidecar_generation) VALUES (1, 0, 0)",
     _GENERATION_TABLE_DDL,
     _EVENT_TABLE_DDL,
     _HEAD_TABLE_DDL,
+    _HEAD_RUN_IDEMPOTENCY_INDEX_DDL,
+    _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL,
     *_TRIGGER_DDLS,
 )

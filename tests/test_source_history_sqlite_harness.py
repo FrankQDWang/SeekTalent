@@ -12,8 +12,9 @@ import time
 
 import pytest
 
+import seektalent.source_port._command_journal_engine as journal_engine
+import seektalent.source_port.command_journal as command_journal
 import seektalent.source_port.history_sqlite_reader as history_sqlite_reader
-import tests.support.source_history_sqlite_storage as sqlite_storage
 from seektalent.source_port.history_contract import (
     ExactAuthorizationSelector,
     JSON_SAFE_INTEGER,
@@ -32,14 +33,9 @@ from tests.support.source_history_sqlite_harness import (
     AcceptedHistoryInput,
     CommitAcknowledgementLost,
     InjectedJournalFault,
+    JournalUnavailable,
     JournalWriteConflict,
     SourceHistorySQLiteHarness,
-)
-from tests.support.source_history_sqlite_storage import (
-    JournalUnavailable,
-    Transaction,
-    allocate_revision,
-    connect_existing,
 )
 
 
@@ -159,18 +155,17 @@ def test_tests_only_harness_delegates_query_to_the_production_reader(
     assert calls == [(harness.path, request)]
 
 
-def test_tests_only_storage_does_not_redeclare_the_production_schema_contract() -> None:
-    source = inspect.getsource(sqlite_storage)
+def test_tests_only_harness_delegates_all_production_write_truth() -> None:
+    source = inspect.getsource(SourceHistorySQLiteHarness)
 
-    assert sqlite_storage.SCHEMA_STATEMENTS is history_sqlite_reader.SCHEMA_STATEMENTS
-    assert sqlite_storage.SCHEMA_VERSION == history_sqlite_reader.SCHEMA_VERSION
-    assert "_STATE_TABLE_DDL =" not in source
-    assert "_GENERATION_TABLE_DDL =" not in source
-    assert "_EVENT_TABLE_DDL =" not in source
-    assert "_HEAD_TABLE_DDL =" not in source
-    assert "_TRIGGER_DDLS =" not in source
-    assert "def _verify_schema(" not in source
-    assert "def _verify_journal_consistency(" not in source
+    assert history_sqlite_reader.SCHEMA_VERSION == 3
+    assert "create_command_journal" in source
+    assert "record_accepted(accepted)" in source
+    assert "source_history_sqlite_storage" not in source
+    assert "INSERT INTO source_history_events" not in source
+    assert "INSERT INTO source_history_heads" not in source
+    assert "UPDATE source_history_heads" not in source
+    assert "last_journal_revision" not in source
 
 
 def test_production_reader_returns_all_four_closed_history_results(tmp_path: Path) -> None:
@@ -231,7 +226,7 @@ def test_production_reader_file_failures_are_closed_and_do_not_create_missing_da
     schema = _harness(tmp_path / "schema", 1)
     connection = sqlite3.connect(schema.path)
     try:
-        connection.execute("PRAGMA user_version=2")
+        connection.execute(f"PRAGMA user_version={history_sqlite_reader.SCHEMA_VERSION + 1}")
     finally:
         connection.close()
     mismatch = SourceHistorySQLiteReader(schema.path).query(_query())
@@ -290,8 +285,14 @@ def test_production_reader_interrupts_a_slow_scan_and_releases_its_snapshot(tmp_
     connection = sqlite3.connect(harness.path)
     try:
         connection.executemany(
-            "INSERT INTO source_history_generations(generation, retained, complete) VALUES (?, 1, 1)",
-            ((generation,) for generation in range(1, 20_001)),
+            """
+            INSERT INTO source_history_generations(generation, sidecar_instance_id, retained, complete)
+            VALUES (?, ?, 1, 1)
+            """,
+            ((generation, f"{generation:064x}") for generation in range(1, 20_001)),
+        )
+        connection.execute(
+            "UPDATE source_history_state SET last_sidecar_generation = 20000 WHERE singleton = 1"
         )
         connection.commit()
     finally:
@@ -348,11 +349,9 @@ def test_real_file_pragmas_and_complete_empty_range(tmp_path: Path) -> None:
     assert result.oldest_retained_generation == 1
     assert result.newest_known_generation == 3
 
-    snapshot = connect_existing(harness.path, begin_read=True)
-    try:
-        assert snapshot.in_transaction is True
-    finally:
-        snapshot.close()
+    reopened = command_journal.open_command_journal(harness.path)
+    assert reopened.path == harness.path
+    reopened.close()
 
 
 def test_all_four_query_conclusions_are_deterministic_after_restart(tmp_path: Path) -> None:
@@ -495,7 +494,7 @@ def test_acceptance_rejects_cross_run_operation_and_key_collision(tmp_path: Path
     harness = _harness(tmp_path, 1)
     harness.record_accepted(_accepted(run_id="run-1"), generation=1)
 
-    with pytest.raises(JournalWriteConflict, match="acceptance_identity_conflict"):
+    with pytest.raises(JournalWriteConflict, match="identity_conflict"):
         harness.record_accepted(_accepted(run_id="run-2"), generation=1)
 
     result = harness.query(_query(run_id="run-1"))
@@ -537,7 +536,7 @@ def test_corrupt_unreadable_and_schema_mismatch_use_real_file_path(tmp_path: Pat
     schema_harness = SourceHistorySQLiteHarness.create(tmp_path / "schema.sqlite3")
     connection = sqlite3.connect(schema_harness.path)
     try:
-        connection.execute("PRAGMA user_version=2")
+        connection.execute(f"PRAGMA user_version={history_sqlite_reader.SCHEMA_VERSION + 1}")
     finally:
         connection.close()
     schema = schema_harness.query(request)
@@ -600,7 +599,7 @@ def test_hot_delete_journal_is_recovered_after_hard_process_exit(tmp_path: Path)
     assert unavailable.reason == "unreadable"
     assert hot_journal.is_file()
 
-    recovered_snapshot = connect_existing(harness.path, begin_read=True)
+    recovered_snapshot = command_journal.open_command_journal(harness.path)
     recovered_snapshot.close()
     recovered = harness.query(_query())
     assert isinstance(recovered, SourceHistoryMatched)
@@ -634,6 +633,66 @@ def test_precommit_dispatch_fault_keeps_previous_complete_head(
     assert restarted.read_event_count() == 1
 
 
+@pytest.mark.parametrize("fault_point", ["after_event_insert", "after_head_cas"])
+@pytest.mark.parametrize("phase", ["accepted", "dispatch_intent", "observed_result"])
+def test_every_production_transition_rolls_back_to_the_prior_complete_head(
+    tmp_path: Path,
+    phase: str,
+    fault_point: str,
+) -> None:
+    harness = _harness(tmp_path, 1)
+    accepted_revision: int | None = None
+    dispatch_revision: int | None = None
+    expected_conclusion = "accepted_no_dispatch"
+    expected_event_count = 0
+
+    if phase == "accepted":
+        with pytest.raises(InjectedJournalFault):
+            harness.record_accepted(_accepted(), generation=1, fault_point=fault_point)  # type: ignore[arg-type]
+        result = harness.query(_query())
+        assert isinstance(result, SourceHistoryNotFound)
+    else:
+        accepted_revision = harness.record_accepted(_accepted(), generation=1)
+        expected_event_count = 1
+        if phase == "dispatch_intent":
+            with pytest.raises(InjectedJournalFault):
+                harness.record_dispatch_intent(
+                    run_id="run-1",
+                    operation_id="operation-1",
+                    expected_head_journal_revision=accepted_revision,
+                    generation=1,
+                    durable_dispatch_intent_ref="dispatch-ref",
+                    fault_point=fault_point,  # type: ignore[arg-type]
+                )
+        else:
+            dispatch_revision = harness.record_dispatch_intent(
+                run_id="run-1",
+                operation_id="operation-1",
+                expected_head_journal_revision=accepted_revision,
+                generation=1,
+                durable_dispatch_intent_ref="dispatch-ref",
+            )
+            expected_conclusion = "dispatch_not_observed"
+            expected_event_count = 2
+            with pytest.raises(InjectedJournalFault):
+                harness.record_observed_result(
+                    run_id="run-1",
+                    operation_id="operation-1",
+                    expected_head_journal_revision=dispatch_revision,
+                    generation=1,
+                    result_ref="result-ref",
+                    result_hash=HASH_D,
+                    fault_point=fault_point,  # type: ignore[arg-type]
+                )
+        result = SourceHistorySQLiteHarness(harness.path).query(_query())
+        assert isinstance(result, SourceHistoryMatched)
+        assert result.facts[0].conclusion == expected_conclusion
+
+    assert accepted_revision is None or accepted_revision > 0
+    assert dispatch_revision is None or dispatch_revision > 0
+    assert harness.read_event_count() == expected_event_count
+
+
 def test_commit_ack_loss_exposes_new_complete_head_and_exact_replay(tmp_path: Path) -> None:
     harness = _harness(tmp_path, 1)
     accepted_revision = harness.record_accepted(_accepted(), generation=1)
@@ -655,7 +714,7 @@ def test_commit_ack_loss_exposes_new_complete_head_and_exact_replay(tmp_path: Pa
     committed_revision = result.facts[0].head_journal_revision
     assert restarted.read_event_count() == 2
     assert (
-        restarted.record_dispatch_intent(
+        harness.record_dispatch_intent(
             run_id="run-1",
             operation_id="operation-1",
             expected_head_journal_revision=accepted_revision,
@@ -770,7 +829,7 @@ def test_malformed_typed_head_state_fails_closed_as_corrupt(tmp_path: Path) -> N
     assert isinstance(result, SourceHistoryUnavailable)
     assert result.reason == "corrupt"
     with pytest.raises(JournalUnavailable, match="corrupt"):
-        harness.record_accepted(_accepted("operation-new"), generation=1)
+        command_journal.open_command_journal(harness.path)
     connection = sqlite3.connect(harness.path)
     try:
         assert connection.execute("SELECT COUNT(*) FROM source_history_events").fetchone() == (1,)
@@ -801,7 +860,7 @@ def test_dangling_generation_foreign_keys_fail_closed_as_corrupt(tmp_path: Path)
     assert isinstance(result, SourceHistoryUnavailable)
     assert result.reason == "corrupt"
     with pytest.raises(JournalUnavailable, match="corrupt"):
-        harness.record_accepted(_accepted("operation-new"), generation=1)
+        command_journal.open_command_journal(harness.path)
     connection = sqlite3.connect(harness.path)
     try:
         assert connection.execute("SELECT COUNT(*) FROM source_history_events").fetchone() == (2,)
@@ -952,7 +1011,7 @@ def test_invalid_persisted_fact_fails_closed_before_identity_result(
     assert isinstance(result, SourceHistoryUnavailable)
     assert result.reason == "corrupt"
     with pytest.raises(JournalUnavailable, match="corrupt"):
-        harness.record_accepted(_accepted("operation-new"), generation=1)
+        command_journal.open_command_journal(harness.path)
     connection = sqlite3.connect(harness.path)
     try:
         assert connection.execute("SELECT COUNT(*) FROM source_history_events").fetchone() == (2,)
@@ -960,7 +1019,7 @@ def test_invalid_persisted_fact_fails_closed_before_identity_result(
         connection.close()
 
 
-def test_phase_replays_require_original_predecessor_and_return_phase_revision(tmp_path: Path) -> None:
+def test_phase_replays_require_the_current_phase_and_reject_rollbacks(tmp_path: Path) -> None:
     harness = _harness(tmp_path, 1, 2)
     accepted = _accepted()
     accepted_revision = harness.record_accepted(accepted, generation=1)
@@ -980,10 +1039,11 @@ def test_phase_replays_require_original_predecessor_and_return_phase_revision(tm
         result_hash=HASH_D,
     )
 
-    assert harness.record_accepted(accepted, generation=1) == accepted_revision
-    with pytest.raises(JournalWriteConflict, match="acceptance_replay_conflict"):
+    with pytest.raises(JournalWriteConflict, match="phase_rollback"):
+        harness.record_accepted(accepted, generation=1)
+    with pytest.raises(JournalWriteConflict, match="phase_rollback"):
         harness.record_accepted(accepted, generation=2)
-    assert (
+    with pytest.raises(JournalWriteConflict, match="phase_rollback"):
         harness.record_dispatch_intent(
             run_id="run-1",
             operation_id="operation-1",
@@ -991,22 +1051,12 @@ def test_phase_replays_require_original_predecessor_and_return_phase_revision(tm
             generation=1,
             durable_dispatch_intent_ref="dispatch-ref",
         )
-        == dispatch_revision
-    )
-    with pytest.raises(JournalWriteConflict, match="dispatch_replay_conflict"):
+    with pytest.raises(JournalWriteConflict, match="phase_rollback"):
         harness.record_dispatch_intent(
             run_id="run-1",
             operation_id="operation-1",
             expected_head_journal_revision=999,
             generation=1,
-            durable_dispatch_intent_ref="dispatch-ref",
-        )
-    with pytest.raises(JournalWriteConflict, match="dispatch_replay_conflict"):
-        harness.record_dispatch_intent(
-            run_id="run-1",
-            operation_id="operation-1",
-            expected_head_journal_revision=accepted_revision,
-            generation=2,
             durable_dispatch_intent_ref="dispatch-ref",
         )
     assert (
@@ -1038,10 +1088,35 @@ def test_phase_replays_require_original_predecessor_and_return_phase_revision(tm
             result_ref="result-ref",
             result_hash=HASH_D,
         )
+    with pytest.raises(JournalWriteConflict, match="phase_rollback"):
+        harness.record_observed_failure(
+            run_id="run-1",
+            operation_id="operation-1",
+            expected_head_journal_revision=dispatch_revision,
+            generation=1,
+            failure_ref="failure-ref",
+            failure_hash=HASH_D,
+        )
 
 
 def test_sparse_maximum_generation_range_fails_without_materializing_the_span(tmp_path: Path) -> None:
-    harness = _harness(tmp_path, 1, JSON_SAFE_INTEGER)
+    harness = _harness(tmp_path, 1)
+    connection = sqlite3.connect(harness.path)
+    try:
+        connection.execute(
+            """
+            INSERT INTO source_history_generations(generation, sidecar_instance_id, retained, complete)
+            VALUES (?, ?, 1, 1)
+            """,
+            (JSON_SAFE_INTEGER, f"{JSON_SAFE_INTEGER:064x}"),
+        )
+        connection.execute(
+            "UPDATE source_history_state SET last_sidecar_generation = ? WHERE singleton = 1",
+            (JSON_SAFE_INTEGER,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
     result = harness.query(_query(first_generation=1, last_generation=JSON_SAFE_INTEGER))
 
@@ -1055,42 +1130,26 @@ def test_revision_allocator_rejects_exhaustion_without_mutating_integer_state() 
         """
         CREATE TABLE source_history_state (
             singleton INTEGER PRIMARY KEY,
-            last_journal_revision INTEGER NOT NULL
+            last_journal_revision INTEGER NOT NULL,
+            last_sidecar_generation INTEGER NOT NULL
         )
         """
     )
     connection.execute(
-        "INSERT INTO source_history_state(singleton, last_journal_revision) VALUES (1, ?)",
+        """
+        INSERT INTO source_history_state(singleton, last_journal_revision, last_sidecar_generation)
+        VALUES (1, ?, 0)
+        """,
         (SQLITE_MAX_INTEGER,),
     )
 
-    with pytest.raises(JournalWriteConflict, match="source_history_revision_exhausted"):
-        allocate_revision(connection)
+    with pytest.raises(JournalWriteConflict, match="revision_exhausted"):
+        journal_engine._allocate_revision(connection)
 
     stored = connection.execute("SELECT last_journal_revision FROM source_history_state WHERE singleton = 1").fetchone()
     connection.close()
     assert stored == (SQLITE_MAX_INTEGER,)
     assert isinstance(stored[0], int)
-
-
-def test_transaction_closes_connection_when_begin_immediate_fails() -> None:
-    class FailingConnection:
-        def __init__(self) -> None:
-            self.closed = False
-
-        def execute(self, statement: str) -> None:
-            assert statement == "BEGIN IMMEDIATE"
-            raise sqlite3.OperationalError("database is locked")
-
-        def close(self) -> None:
-            self.closed = True
-
-    connection = FailingConnection()
-
-    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
-        Transaction(connection).__enter__()  # type: ignore[arg-type]
-
-    assert connection.closed is True
 
 
 def test_concurrent_writers_never_misclassify_a_healthy_journal_as_corrupt(tmp_path: Path) -> None:
@@ -1125,13 +1184,15 @@ def test_concurrent_writers_never_misclassify_a_healthy_journal_as_corrupt(tmp_p
     assert harness.read_event_count() == 40
 
 
-def test_storage_split_is_one_way_and_tests_only() -> None:
+def test_harness_has_no_second_storage_writer() -> None:
     support = Path(__file__).parent / "support"
-    storage = (support / "source_history_sqlite_storage.py").read_text(encoding="utf-8")
     harness = (support / "source_history_sqlite_harness.py").read_text(encoding="utf-8")
 
-    assert "source_history_sqlite_harness" not in storage
-    assert "from tests.support.source_history_sqlite_storage import" in harness
+    assert not (support / "source_history_sqlite_storage.py").exists()
+    assert "seektalent.source_port.command_journal" in harness
+    assert "INSERT INTO source_history_events" not in harness
+    assert "INSERT INTO source_history_heads" not in harness
+    assert "UPDATE source_history_heads" not in harness
 
 
 def test_schema_contains_no_authority_retry_or_business_payload_columns(tmp_path: Path) -> None:
