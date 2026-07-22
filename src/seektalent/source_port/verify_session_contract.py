@@ -142,8 +142,10 @@ class VerifySessionRequestV1(_VerifySessionBodyV1):
     @model_validator(mode="before")
     @classmethod
     def redact_invalid_fence_token_input(cls, value: object) -> object:
+        if type(value) is cls:
+            value = value.model_dump(mode="python")
         if not isinstance(value, Mapping):
-            return value
+            return {"invalid_submit_input": "[redacted]"}
         wire_value: dict[object, object] = {}
         for key, item in value.items():
             wire_value[key] = item
@@ -446,10 +448,17 @@ def validate_verify_session_result_echo(
     request: VerifySessionRequestV1,
     result: VerifySessionResultV1,
 ) -> None:
-    """Ensure a result only echoes main-owned identity and receipt references."""
+    """Require an exact initial echo or a stable-fact redelivery echo."""
     validated_request = _validated_request(request)
     validated_result = _validated_result(result)
-    if not _result_identity_matches_request(validated_request.identity, validated_result.identity):
+    if validated_request.delivery.delivery_mode == "initial":
+        identity_matches = validated_result.identity == validated_request.identity
+    else:
+        identity_matches = _redelivery_result_identity_matches_request(
+            validated_request.identity,
+            validated_result.identity,
+        )
+    if not identity_matches:
         raise ValueError("verify_session_result_identity_mismatch")
     if validated_result.component_receipt_refs != validated_request.component_receipt_refs:
         raise ValueError("verify_session_result_receipt_mismatch")
@@ -483,7 +492,7 @@ _BODY_FIELDS = (
 )
 
 
-def _result_identity_matches_request(
+def _redelivery_result_identity_matches_request(
     request_identity: OperationIdentityV1,
     result_identity: OperationIdentityV1,
 ) -> bool:

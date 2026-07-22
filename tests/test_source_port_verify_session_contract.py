@@ -108,6 +108,11 @@ class _CustomMapping(Mapping[str, object]):
         return repr(self.values)
 
 
+class _CanaryObject:
+    def __repr__(self) -> str:
+        return f"<canary {RAW_FENCE_TOKEN}>"
+
+
 def test_request_is_strict_closed_frozen_and_only_serializes_the_raw_token_in_the_full_submit() -> None:
     request = _request()
 
@@ -331,6 +336,7 @@ def test_raw_fence_token_never_leaks_from_repr_errors_or_canonical_projections_a
     request = _request()
     result = _result(request)
 
+    assert VerifySessionRequestV1.model_validate(request) == request
     assert RAW_FENCE_TOKEN not in canonical_request_intent_bytes(request).decode()
     assert RAW_FENCE_TOKEN not in canonical_dispatch_authorization_bytes(request.delivery.authorization).decode()
     assert RAW_FENCE_TOKEN not in canonical_verify_session_result_bytes(result).decode()
@@ -358,6 +364,10 @@ def test_raw_fence_token_never_leaks_from_repr_errors_or_canonical_projections_a
             "runtime_attempt_fence_token": LEAK_CANARY,
         }
     )
+    with pytest.raises(ValidationError) as invalid_submit_bypass:
+        VerifySessionRequestV1.model_validate(bypassed)
+    assert LEAK_CANARY not in str(invalid_submit_bypass.value)
+    assert LEAK_CANARY not in repr(invalid_submit_bypass.value.errors())
     with pytest.raises(ValueError) as invalid_bypass:
         canonical_request_intent_bytes(bypassed)
     assert LEAK_CANARY not in str(invalid_bypass.value)
@@ -384,6 +394,19 @@ def test_mapping_submit_input_hides_a_valid_raw_fence_token_on_semantic_error(
 
     with pytest.raises(ValidationError) as invalid:
         VerifySessionRequestV1.model_validate(mapping_type(payload))
+
+    assert RAW_FENCE_TOKEN not in str(invalid.value)
+    assert RAW_FENCE_TOKEN not in repr(invalid.value.errors())
+
+
+@pytest.mark.parametrize(
+    "input_value",
+    ([RAW_FENCE_TOKEN], (RAW_FENCE_TOKEN,), _CanaryObject()),
+    ids=("list", "tuple", "repr_object"),
+)
+def test_non_mapping_submit_input_never_exposes_a_raw_fence_token(input_value: object) -> None:
+    with pytest.raises(ValidationError) as invalid:
+        VerifySessionRequestV1.model_validate(input_value)
 
     assert RAW_FENCE_TOKEN not in str(invalid.value)
     assert RAW_FENCE_TOKEN not in repr(invalid.value.errors())
@@ -466,6 +489,21 @@ def test_initial_result_replays_to_legal_redelivery_but_rejects_stable_identity_
         tampered = result.model_copy(update={"identity": result.identity.model_copy(update={field: value})})
         with pytest.raises(ValueError, match="identity"):
             validate_verify_session_result_echo(redelivery, tampered)
+
+
+def test_initial_result_requires_an_exact_identity_echo() -> None:
+    request = _request()
+    result = _result(request)
+
+    for field, value in (
+        ("runtime_attempt_fence_ref", "a" * 64),
+        ("deadline", request.identity.deadline.model_copy(update={"value": 59_999})),
+        ("correlation_id", "correlation-2"),
+        ("browser_control_scope_id", "browser-scope-2"),
+    ):
+        tampered = result.model_copy(update={"identity": result.identity.model_copy(update={field: value})})
+        with pytest.raises(ValueError, match="identity"):
+            validate_verify_session_result_echo(request, tampered)
 
 
 def test_verify_session_result_rejects_another_operation_kind() -> None:
