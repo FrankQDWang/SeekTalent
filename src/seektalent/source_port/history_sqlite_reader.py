@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 import sqlite3
 import stat
+import time
+from collections.abc import Callable
 
 from seektalent.source_port.history_contract import (
     AcceptedNoDispatchFact,
@@ -26,13 +28,17 @@ from seektalent.source_port.history_contract import (
 
 
 QUERY_RESULT_CONTRACT_VERSION = "seektalent.source-port.query.result/v1"
-_SCHEMA_VERSION = 1
+SCHEMA_VERSION = 1
 
 
-class _JournalUnavailable(RuntimeError):
+class HistorySQLiteUnavailable(RuntimeError):
     def __init__(self, reason: HistoryUnavailableReason) -> None:
         self.reason = reason
         super().__init__(reason)
+
+
+class SourceHistoryReadDeadlineExceeded(TimeoutError):
+    """The synchronous SQLite read exhausted its caller-owned deadline."""
 
 
 class SourceHistorySQLiteReader:
@@ -47,33 +53,42 @@ class SourceHistorySQLiteReader:
             raise ValueError("history database path must be absolute")
         self.path = path
 
-    def query(self, request: SourceHistoryQueryV1) -> SourceHistoryQueryResultV1:
+    def query(
+        self,
+        request: SourceHistoryQueryV1,
+        *,
+        deadline: float | None = None,
+    ) -> SourceHistoryQueryResultV1:
         if not isinstance(request, SourceHistoryQueryV1):
             raise TypeError("history query must be a SourceHistoryQueryV1")
+        normalized_deadline = _validated_deadline(deadline)
+        _require_deadline(normalized_deadline)
         try:
-            connection = _connect_read_only(self.path)
-        except _JournalUnavailable as exc:
+            connection = _connect_read_only(self.path, deadline=normalized_deadline)
+        except HistorySQLiteUnavailable as exc:
             return _unavailable(request, exc.reason)
 
         try:
-            oldest_retained, newest_known = _generation_bounds(connection)
-            all_rows = connection.execute(
-                """
-                SELECT * FROM source_history_heads
-                ORDER BY run_id, operation_id, dispatch_authorization_ordinal
-                """
-            ).fetchall()
+            oldest_retained, newest_known = generation_bounds(connection)
             try:
-                facts_by_key = {_head_key(row): _fact_from_row(row) for row in all_rows}
+                all_rows, facts_by_key = load_validated_history_facts(
+                    connection,
+                    check_deadline=lambda: _require_deadline(normalized_deadline),
+                )
+            except HistorySQLiteUnavailable as exc:
+                return _unavailable(request, exc.reason)
             except (IndexError, TypeError, ValueError, OverflowError):
                 return _unavailable(request, "corrupt")
-            rows = [
-                row
-                for row in all_rows
-                if request.searched_first_generation
-                <= int(row["accepted_generation"])
-                <= request.searched_last_generation
-            ]
+            rows: list[sqlite3.Row] = []
+            for index, row in enumerate(all_rows):
+                if index % 64 == 0:
+                    _require_deadline(normalized_deadline)
+                if (
+                    request.searched_first_generation
+                    <= int(row["accepted_generation"])
+                    <= request.searched_last_generation
+                ):
+                    rows.append(row)
             exact_rows, collision_rows = _partition_rows(request, rows)
             conflict_reasons = _conflict_reasons(request, exact_rows, collision_rows)
             if conflict_reasons:
@@ -121,9 +136,12 @@ class SourceHistorySQLiteReader:
                 strict=True,
             )
         except sqlite3.DatabaseError as exc:
-            return _unavailable(request, _read_error(exc).reason)
+            _require_deadline(normalized_deadline)
+            return _unavailable(request, read_error(exc).reason)
         finally:
+            connection.set_progress_handler(None, 0)
             connection.close()
+            _require_deadline(normalized_deadline)
 
 
 def _unavailable(
@@ -146,79 +164,110 @@ def _unavailable(
     )
 
 
-def _connect_read_only(path: Path) -> sqlite3.Connection:
-    _probe_existing_database(path)
+def _validated_deadline(deadline: float | None) -> float:
+    if deadline is None:
+        return float("inf")
+    if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
+        raise TypeError("history query deadline must be monotonic seconds")
+    return float(deadline)
+
+
+def _require_deadline(deadline: float) -> None:
+    if time.monotonic() >= deadline:
+        raise SourceHistoryReadDeadlineExceeded("source_history_read_deadline_exceeded")
+
+
+def _remaining_timeout(deadline: float, maximum: float) -> float:
+    if deadline == float("inf"):
+        return maximum
+    return max(0.0, min(maximum, deadline - time.monotonic()))
+
+
+def _connect_read_only(path: Path, *, deadline: float) -> sqlite3.Connection:
+    probe_existing_database(path)
+    _require_deadline(deadline)
     connection: sqlite3.Connection | None = None
     try:
         connection = sqlite3.connect(
             f"{path.as_uri()}?mode=ro",
             uri=True,
             isolation_level=None,
-            timeout=0.1,
+            timeout=_remaining_timeout(deadline, 0.1),
         )
+        _require_deadline(deadline)
         connection.row_factory = sqlite3.Row
+        connection.set_progress_handler(lambda: int(time.monotonic() >= deadline), 100)
         connection.execute("PRAGMA query_only=ON")
-        connection.execute("PRAGMA busy_timeout=100")
+        busy_timeout_ms = int(_remaining_timeout(deadline, 0.1) * 1000)
+        connection.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
         connection.execute("PRAGMA foreign_keys=ON")
-        _verify_connection_pragmas(connection)
+        verify_connection_pragmas(connection, read_only=True)
         connection.execute("BEGIN")
-        _verify_schema(connection)
+        verify_schema(connection, check_deadline=lambda: _require_deadline(deadline))
         return connection
-    except _JournalUnavailable:
+    except HistorySQLiteUnavailable:
         if connection is not None:
+            connection.set_progress_handler(None, 0)
             connection.close()
         raise
     except sqlite3.DatabaseError as exc:
         if connection is not None:
+            connection.set_progress_handler(None, 0)
             connection.close()
-        raise _read_error(exc) from exc
+        _require_deadline(deadline)
+        raise read_error(exc) from exc
 
 
-def _probe_existing_database(path: Path) -> None:
+def probe_existing_database(path: Path) -> None:
     try:
         metadata = path.lstat()
         if not stat.S_ISREG(metadata.st_mode):
-            raise _JournalUnavailable("unreadable")
+            raise HistorySQLiteUnavailable("unreadable")
         with path.open("rb") as database:
             header = database.read(100)
-    except _JournalUnavailable:
+    except HistorySQLiteUnavailable:
         raise
     except OSError as exc:
-        raise _JournalUnavailable("unreadable") from exc
+        raise HistorySQLiteUnavailable("unreadable") from exc
     if len(header) < 100 or header[:16] != b"SQLite format 3\x00":
-        raise _JournalUnavailable("corrupt")
+        raise HistorySQLiteUnavailable("corrupt")
     write_version, read_version = header[18], header[19]
     if (write_version, read_version) == (2, 2):
-        raise _JournalUnavailable("pragma_mismatch")
+        raise HistorySQLiteUnavailable("pragma_mismatch")
     if (write_version, read_version) != (1, 1):
-        raise _JournalUnavailable("corrupt")
+        raise HistorySQLiteUnavailable("corrupt")
 
 
-def _read_error(error: sqlite3.DatabaseError) -> _JournalUnavailable:
+def read_error(error: sqlite3.DatabaseError) -> HistorySQLiteUnavailable:
     message = str(error).lower()
     if "locked" in message or "busy" in message:
-        return _JournalUnavailable("busy")
+        return HistorySQLiteUnavailable("busy")
     if "unable to open" in message or "readonly" in message:
-        return _JournalUnavailable("unreadable")
-    return _JournalUnavailable("corrupt")
+        return HistorySQLiteUnavailable("unreadable")
+    return HistorySQLiteUnavailable("corrupt")
 
 
-def _verify_connection_pragmas(connection: sqlite3.Connection) -> None:
-    if _scalar_text(connection, "PRAGMA journal_mode").lower() != "delete":
-        raise _JournalUnavailable("pragma_mismatch")
-    if _scalar_integer(connection, "PRAGMA synchronous") != 2:
-        raise _JournalUnavailable("pragma_mismatch")
-    if _scalar_integer(connection, "PRAGMA foreign_keys") != 1:
-        raise _JournalUnavailable("pragma_mismatch")
-    if _scalar_integer(connection, "PRAGMA query_only") != 1:
-        raise _JournalUnavailable("pragma_mismatch")
+def verify_connection_pragmas(connection: sqlite3.Connection, *, read_only: bool = False) -> None:
+    if scalar_text(connection, "PRAGMA journal_mode").lower() != "delete":
+        raise HistorySQLiteUnavailable("pragma_mismatch")
+    if scalar_integer(connection, "PRAGMA synchronous") != 2:
+        raise HistorySQLiteUnavailable("pragma_mismatch")
+    if scalar_integer(connection, "PRAGMA foreign_keys") != 1:
+        raise HistorySQLiteUnavailable("pragma_mismatch")
+    if read_only and scalar_integer(connection, "PRAGMA query_only") != 1:
+        raise HistorySQLiteUnavailable("pragma_mismatch")
 
 
-def _verify_schema(connection: sqlite3.Connection) -> None:
-    if _scalar_integer(connection, "PRAGMA user_version") != _SCHEMA_VERSION:
-        raise _JournalUnavailable("schema_mismatch")
-    if _scalar_text(connection, "PRAGMA quick_check") != "ok":
-        raise _JournalUnavailable("corrupt")
+def verify_schema(
+    connection: sqlite3.Connection,
+    *,
+    check_deadline: Callable[[], None] = lambda: None,
+) -> None:
+    check_deadline()
+    if scalar_integer(connection, "PRAGMA user_version") != SCHEMA_VERSION:
+        raise HistorySQLiteUnavailable("schema_mismatch")
+    if scalar_text(connection, "PRAGMA quick_check") != "ok":
+        raise HistorySQLiteUnavailable("corrupt")
     tables = {
         str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
     }
@@ -228,7 +277,7 @@ def _verify_schema(connection: sqlite3.Connection) -> None:
         "source_history_events",
         "source_history_heads",
     }:
-        raise _JournalUnavailable("schema_mismatch")
+        raise HistorySQLiteUnavailable("schema_mismatch")
     expected_columns = {
         "source_history_state": ("singleton", "last_journal_revision"),
         "source_history_generations": ("generation", "retained", "complete"),
@@ -238,7 +287,7 @@ def _verify_schema(connection: sqlite3.Connection) -> None:
     for table, expected in expected_columns.items():
         actual = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall())
         if actual != expected:
-            raise _JournalUnavailable("schema_mismatch")
+            raise HistorySQLiteUnavailable("schema_mismatch")
     triggers = {
         str(row[0]) for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'trigger'").fetchall()
     }
@@ -247,15 +296,15 @@ def _verify_schema(connection: sqlite3.Connection) -> None:
         "source_history_events_no_update",
         "source_history_events_no_delete",
     }:
-        raise _JournalUnavailable("schema_mismatch")
+        raise HistorySQLiteUnavailable("schema_mismatch")
     _verify_schema_sql(connection)
     _verify_foreign_keys(connection)
     try:
-        _verify_journal_consistency(connection)
-    except _JournalUnavailable:
+        _verify_journal_consistency(connection, check_deadline=check_deadline)
+    except HistorySQLiteUnavailable:
         raise
     except (IndexError, TypeError, ValueError, OverflowError) as exc:
-        raise _JournalUnavailable("corrupt") from exc
+        raise HistorySQLiteUnavailable("corrupt") from exc
 
 
 def _verify_schema_sql(connection: sqlite3.Connection) -> None:
@@ -277,7 +326,7 @@ def _verify_schema_sql(connection: sqlite3.Connection) -> None:
     for key, statement in expected.items():
         stored = actual.get(key)
         if not isinstance(stored, str) or _normalize_schema_sql(stored) != _normalize_schema_sql(statement):
-            raise _JournalUnavailable("schema_mismatch")
+            raise HistorySQLiteUnavailable("schema_mismatch")
 
 
 def _normalize_schema_sql(statement: str) -> str:
@@ -305,12 +354,17 @@ def _verify_foreign_keys(connection: sqlite3.Connection) -> None:
             for row in connection.execute(f"PRAGMA foreign_key_list({table})").fetchall()
         }
         if actual != expected_keys:
-            raise _JournalUnavailable("schema_mismatch")
+            raise HistorySQLiteUnavailable("schema_mismatch")
     if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
-        raise _JournalUnavailable("corrupt")
+        raise HistorySQLiteUnavailable("corrupt")
 
 
-def _verify_journal_consistency(connection: sqlite3.Connection) -> None:
+def _verify_journal_consistency(
+    connection: sqlite3.Connection,
+    *,
+    check_deadline: Callable[[], None],
+) -> None:
+    check_deadline()
     events = connection.execute("SELECT * FROM source_history_events ORDER BY journal_revision").fetchall()
     heads = connection.execute(
         """
@@ -318,20 +372,22 @@ def _verify_journal_consistency(connection: sqlite3.Connection) -> None:
         ORDER BY run_id, operation_id, dispatch_authorization_ordinal
         """
     ).fetchall()
-    last_revision = _scalar_integer(
+    last_revision = scalar_integer(
         connection,
         "SELECT last_journal_revision FROM source_history_state WHERE singleton = 1",
     )
     newest_event_revision = int(events[-1]["journal_revision"]) if events else 0
     if last_revision != newest_event_revision:
-        raise _JournalUnavailable("corrupt")
+        raise HistorySQLiteUnavailable("corrupt")
     if any(
         int(event["journal_revision"]) != expected_revision for expected_revision, event in enumerate(events, start=1)
     ):
-        raise _JournalUnavailable("corrupt")
+        raise HistorySQLiteUnavailable("corrupt")
 
     event_groups: dict[tuple[str, str, int], list[sqlite3.Row]] = {}
-    for event in events:
+    for index, event in enumerate(events):
+        if index % 64 == 0:
+            check_deadline()
         key = (
             str(event["run_id"]),
             str(event["operation_id"]),
@@ -340,7 +396,7 @@ def _verify_journal_consistency(connection: sqlite3.Connection) -> None:
         event_groups.setdefault(key, []).append(event)
     head_by_key = {_head_key(head): head for head in heads}
     if set(event_groups) != set(head_by_key):
-        raise _JournalUnavailable("corrupt")
+        raise HistorySQLiteUnavailable("corrupt")
 
     expected_phases = {
         "accepted": ("accepted",),
@@ -349,13 +405,14 @@ def _verify_journal_consistency(connection: sqlite3.Connection) -> None:
         "observed_failure": ("accepted", "dispatch_intent", "observed_failure"),
     }
     for key, head in head_by_key.items():
+        check_deadline()
         grouped = event_groups[key]
         phases = tuple(str(event["phase"]) for event in grouped)
         generations = tuple(int(event["event_generation"]) for event in grouped)
         if phases != expected_phases.get(str(head["phase"])) or generations != tuple(sorted(generations)):
-            raise _JournalUnavailable("corrupt")
+            raise HistorySQLiteUnavailable("corrupt")
         if any(event[column] != head[column] for event in grouped for column in _IMMUTABLE_EVENT_HEAD_COLUMNS):
-            raise _JournalUnavailable("corrupt")
+            raise HistorySQLiteUnavailable("corrupt")
 
         accepted_event = grouped[0]
         if (
@@ -363,9 +420,9 @@ def _verify_journal_consistency(connection: sqlite3.Connection) -> None:
             or int(accepted_event["event_generation"]) != int(head["accepted_generation"])
             or any(accepted_event[column] is not None for column in _DISPATCH_AND_OBSERVATION_COLUMNS)
         ):
-            raise _JournalUnavailable("corrupt")
+            raise HistorySQLiteUnavailable("corrupt")
         if len(grouped) == 1 and any(head[column] is not None for column in _DISPATCH_AND_OBSERVATION_COLUMNS):
-            raise _JournalUnavailable("corrupt")
+            raise HistorySQLiteUnavailable("corrupt")
 
         if len(grouped) >= 2:
             dispatch_event = grouped[1]
@@ -378,11 +435,11 @@ def _verify_journal_consistency(connection: sqlite3.Connection) -> None:
                 or dispatch_event["durable_dispatch_intent_ref"] != head["durable_dispatch_intent_ref"]
                 or any(dispatch_event[column] is not None for column in _OBSERVATION_COLUMNS)
             ):
-                raise _JournalUnavailable("corrupt")
+                raise HistorySQLiteUnavailable("corrupt")
             if any(event[column] != head[column] for event in grouped[1:] for column in _DISPATCH_COLUMNS):
-                raise _JournalUnavailable("corrupt")
+                raise HistorySQLiteUnavailable("corrupt")
         if len(grouped) == 2 and any(head[column] is not None for column in _OBSERVATION_COLUMNS):
-            raise _JournalUnavailable("corrupt")
+            raise HistorySQLiteUnavailable("corrupt")
 
         if len(grouped) == 3:
             observation_event = grouped[2]
@@ -397,16 +454,16 @@ def _verify_journal_consistency(connection: sqlite3.Connection) -> None:
                 or observation_event["observation_ref"] != head["observation_ref"]
                 or observation_event["observation_hash"] != head["observation_hash"]
             ):
-                raise _JournalUnavailable("corrupt")
+                raise HistorySQLiteUnavailable("corrupt")
 
         latest = grouped[-1]
         if int(latest["journal_revision"]) != int(head["head_journal_revision"]) or int(
             latest["event_generation"]
         ) != int(head["head_generation"]):
-            raise _JournalUnavailable("corrupt")
+            raise HistorySQLiteUnavailable("corrupt")
 
 
-def _generation_bounds(connection: sqlite3.Connection) -> tuple[int | None, int | None]:
+def generation_bounds(connection: sqlite3.Connection) -> tuple[int | None, int | None]:
     row = connection.execute(
         """
         SELECT MIN(CASE WHEN retained = 1 THEN generation END), MAX(generation)
@@ -494,6 +551,29 @@ def _head_key(row: sqlite3.Row) -> tuple[str, str, int]:
         str(row["operation_id"]),
         int(row["dispatch_authorization_ordinal"]),
     )
+
+
+def load_validated_history_facts(
+    connection: sqlite3.Connection,
+    *,
+    check_deadline: Callable[[], None] = lambda: None,
+) -> tuple[list[sqlite3.Row], dict[tuple[str, str, int], MatchedHistoryFact]]:
+    rows = connection.execute(
+        """
+        SELECT * FROM source_history_heads
+        ORDER BY run_id, operation_id, dispatch_authorization_ordinal
+        """
+    ).fetchall()
+    facts: dict[tuple[str, str, int], MatchedHistoryFact] = {}
+    try:
+        for index, row in enumerate(rows):
+            if index % 64 == 0:
+                check_deadline()
+            facts[_head_key(row)] = _fact_from_row(row)
+    except (IndexError, TypeError, ValueError, OverflowError) as exc:
+        raise HistorySQLiteUnavailable("corrupt") from exc
+    check_deadline()
+    return rows, facts
 
 
 def _conflict_reasons(
@@ -610,17 +690,17 @@ def _query_echo(query: SourceHistoryQueryV1) -> dict[str, object]:
     return query.model_dump(exclude={"contract_version"})
 
 
-def _scalar_integer(connection: sqlite3.Connection, statement: str) -> int:
+def scalar_integer(connection: sqlite3.Connection, statement: str) -> int:
     row = connection.execute(statement).fetchone()
     if row is None or len(row) != 1 or not isinstance(row[0], int) or isinstance(row[0], bool):
-        raise _JournalUnavailable("schema_mismatch")
+        raise HistorySQLiteUnavailable("schema_mismatch")
     return int(row[0])
 
 
-def _scalar_text(connection: sqlite3.Connection, statement: str) -> str:
+def scalar_text(connection: sqlite3.Connection, statement: str) -> str:
     row = connection.execute(statement).fetchone()
     if row is None or len(row) != 1 or not isinstance(row[0], str):
-        raise _JournalUnavailable("schema_mismatch")
+        raise HistorySQLiteUnavailable("schema_mismatch")
     return row[0]
 
 
@@ -781,4 +861,13 @@ _TRIGGER_DDLS = (
     BEFORE DELETE ON source_history_events
     BEGIN SELECT RAISE(ABORT, 'source_history_events_immutable'); END
     """,
+)
+
+SCHEMA_STATEMENTS = (
+    _STATE_TABLE_DDL,
+    "INSERT INTO source_history_state(singleton, last_journal_revision) VALUES (1, 0)",
+    _GENERATION_TABLE_DDL,
+    _EVENT_TABLE_DDL,
+    _HEAD_TABLE_DDL,
+    *_TRIGGER_DDLS,
 )

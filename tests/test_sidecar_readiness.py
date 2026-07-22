@@ -1391,7 +1391,8 @@ def test_child_reader_exception_returns_sanitized_authenticated_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class BrokenReader:
-        def query(self, _: SourceHistoryQueryV1) -> object:
+        def query(self, _: SourceHistoryQueryV1, *, deadline: float) -> object:
+            del deadline
             raise RuntimeError("private reader detail")
 
     lease = lease_factory()
@@ -1413,6 +1414,91 @@ def test_child_reader_exception_returns_sanitized_authenticated_unavailable(
     thread.join(timeout=1)
     assert not thread.is_alive()
     assert errors == []
+    lease_factory().close()
+
+
+@pytest.mark.parametrize("reader", [object(), type("NonCallableReader", (), {"query": None})()])
+def test_child_adapter_rejects_missing_or_non_callable_reader_query(
+    reader: object,
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lease = lease_factory()
+    process, _, child_thread, errors, _ = _connected_process(
+        lease,
+        _identity(lease.admission),
+        after_sidecar_result=lambda result: child_session_module.serve_source_history_query(
+            result,
+            reader,
+            timeout=1,
+        ),
+    )
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+    history = session.new_history_session()
+    frame = history.encode_query(message_id="invalid-reader-query", correlation_id=None, payload=_history_query())
+
+    session.send_history_frame(frame, timeout=1)
+
+    child_thread.join(timeout=1)
+    assert not child_thread.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], readiness.SourceHistoryAdmissionError)
+    assert errors[0].reason is readiness.SourceHistoryAdmissionReason.READER_RESULT_INVALID
+    session.close(1)
+    failure = errors.pop()
+    failure.__traceback__ = None
+    del failure
+    gc.collect()
+    assert not child_session_module._RESULTS
+    lease_factory().close()
+
+
+def test_child_reader_obeys_the_exchange_deadline_without_a_lingering_worker(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_deadlines: list[float] = []
+
+    class DeadlineReader:
+        def query(self, _: SourceHistoryQueryV1, *, deadline: float) -> object:
+            observed_deadlines.append(deadline)
+            while time.monotonic() < deadline:
+                time.sleep(0.001)
+            raise TimeoutError("bounded reader deadline")
+
+    lease = lease_factory()
+    process, _, child_thread, errors, _ = _connected_process(
+        lease,
+        _identity(lease.admission),
+        after_sidecar_result=lambda result: child_session_module.serve_source_history_query(
+            result,
+            DeadlineReader(),
+            timeout=0.05,
+        ),
+    )
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(readiness.SidecarReadinessError) as raised:
+        readiness.exchange_source_history(session, _history_query(), timeout=0.2)
+    elapsed = time.monotonic() - started
+
+    assert raised.value.reason is readiness.SidecarReadinessReason.EOF
+    assert observed_deadlines
+    assert elapsed < 0.15
+    child_thread.join(timeout=1)
+    assert not child_thread.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], readiness.SidecarReadinessError)
+    assert errors[0].reason is readiness.SidecarReadinessReason.READ_TIMEOUT
+    session.close(1)
+    failure = errors.pop()
+    failure.__traceback__ = None
+    del failure
+    gc.collect()
+    assert not child_session_module._RESULTS
     lease_factory().close()
 
 
@@ -1487,7 +1573,8 @@ def test_history_exchange_allows_only_one_in_flight_query_per_ready_session(
     release_reader = threading.Event()
 
     class BlockingReader:
-        def query(self, request: SourceHistoryQueryV1) -> object:
+        def query(self, request: SourceHistoryQueryV1, *, deadline: float) -> object:
+            del deadline
             reader_started.set()
             assert release_reader.wait(1)
             return reader.query(request)
@@ -1629,6 +1716,57 @@ def test_history_exchange_rejects_partial_result_frame_with_typed_reason(
     with pytest.raises(HistoryFrameError) as partial:
         readiness.exchange_source_history(session, _history_query(), timeout=1)
     assert partial.value.reason_code == HistoryFrameReason.TRUNCATED_FRAME.value
+
+    session.close(1)
+    child_thread.join(timeout=1)
+    assert not child_thread.is_alive()
+    assert errors == []
+    lease_factory().close()
+
+
+def test_history_exchange_rejects_valid_result_with_partial_trailing_frame(
+    lease_factory: Callable[[], InstalledSidecarLaunchLease],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def send_result_with_partial_tail(result: readiness.SidecarHandshakeResult) -> None:
+        messages = result.receive_history(timeout=1)
+        assert len(messages) == 1
+        query = messages[0]
+        assert isinstance(query, ReceivedHistoryQuery)
+        payload = SourceHistoryNotFound.model_validate(
+            {
+                **query.payload.model_dump(exclude={"contract_version"}),
+                "contract_version": "seektalent.source-port.query.result/v1",
+                "outcome": "not_found",
+                "oldest_retained_generation": 1,
+                "newest_known_generation": 3,
+                "history_complete": True,
+                "history_truncated": False,
+            },
+            strict=True,
+        )
+        frame = result.new_history_session().encode_result(
+            message_id="valid-result-with-tail",
+            reply_to=query.message_id,
+            payload=payload,
+        )
+        result.send_history_frame(frame + b"\x00\x00", timeout=1)
+        result.wait_for_parent_eof()
+        result.close()
+
+    lease = lease_factory()
+    process, _, child_thread, errors, _ = _connected_process(
+        lease,
+        _identity(lease.admission),
+        after_sidecar_result=send_result_with_partial_tail,
+    )
+    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
+    session = readiness.spawn_ready_sidecar(lease, timeout=1)
+
+    with pytest.raises(HistoryFrameError) as trailing:
+        readiness.exchange_source_history(session, _history_query(), timeout=1)
+    assert trailing.value.reason_code == HistoryFrameReason.TRUNCATED_FRAME.value
+    assert session.new_history_session().closed is True
 
     session.close(1)
     child_thread.join(timeout=1)

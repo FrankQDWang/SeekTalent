@@ -269,6 +269,7 @@ def _receive_one_history_result(session: ReadySidecarSession, deadline: float) -
             continue
         if len(messages) != 1:
             raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.MULTIPLE_MESSAGES)
+        session.new_history_session().require_frame_boundary()
         message = messages[0]
         if not isinstance(message, ReceivedHistoryResult):
             raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE)

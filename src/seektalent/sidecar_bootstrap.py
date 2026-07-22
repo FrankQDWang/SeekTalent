@@ -21,7 +21,8 @@ def main() -> int:
         session = serve_sidecar_handshake(sys.stdin.buffer, sys.stdout.buffer, identity)
         if history_database is not None:
             serve_test_source_history_database(session, history_database)
-        session.wait_for_parent_eof()
+        else:
+            session.wait_for_parent_eof()
     except (RuntimeError, TypeError, ValueError):
         return 70
     return 0

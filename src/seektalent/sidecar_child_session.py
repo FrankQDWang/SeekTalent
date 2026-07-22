@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 import threading
 import time
 import weakref
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 import secrets
@@ -32,6 +34,7 @@ from seektalent.source_port.history_contract import (
     SourceHistoryIdentityConflict,
     SourceHistoryMatched,
     SourceHistoryNotFound,
+    SourceHistoryQueryV1,
     SourceHistoryQueryResultV1,
     SourceHistoryUnavailable,
 )
@@ -128,8 +131,11 @@ def serve_source_history_query(
     try:
         deadline = time.monotonic() + normalized_timeout
         received = _receive_one_query(session, deadline)
+        query = _reader_query(reader, received.payload, deadline)
         try:
-            query_result = getattr(reader, "query")(received.payload)
+            query_result = query(received.payload, deadline=deadline)
+        except TimeoutError:
+            raise SidecarReadinessError(SidecarReadinessReason.READ_TIMEOUT) from None
         except (OSError, RuntimeError, TypeError, ValueError):
             query_result = SourceHistoryUnavailable.model_validate(
                 {
@@ -162,15 +168,18 @@ def serve_test_source_history_database(
     path: Path,
     *,
     timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
-) -> SourceHistoryQueryResultV1:
-    """Serve the explicit database embedded in the native test-entry launch."""
+) -> None:
+    """Serve sequential queries for the explicit native test database until EOF."""
     from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
 
-    return serve_source_history_query(
-        session,
-        SourceHistorySQLiteReader(path),
-        timeout=timeout,
-    )
+    reader = SourceHistorySQLiteReader(path)
+    while True:
+        try:
+            serve_source_history_query(session, reader, timeout=timeout)
+        except SidecarReadinessError as error:
+            if error.reason is SidecarReadinessReason.EOF:
+                return
+            raise
 
 
 def _receive_one_query(session: SidecarHandshakeResult, deadline: float) -> ReceivedHistoryQuery:
@@ -180,10 +189,25 @@ def _receive_one_query(session: SidecarHandshakeResult, deadline: float) -> Rece
             continue
         if len(messages) != 1:
             raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.MULTIPLE_MESSAGES)
+        session.new_history_session().require_frame_boundary()
         message = messages[0]
         if not isinstance(message, ReceivedHistoryQuery):
             raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE)
         return message
+
+
+def _reader_query(reader: object, request: SourceHistoryQueryV1, deadline: float) -> Callable[..., object]:
+    try:
+        query = getattr(reader, "query")
+    except AttributeError:
+        raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.READER_RESULT_INVALID) from None
+    if not callable(query):
+        raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.READER_RESULT_INVALID)
+    try:
+        inspect.signature(query).bind(request, deadline=deadline)
+    except (TypeError, ValueError):
+        raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.READER_RESULT_INVALID) from None
+    return query
 
 
 def _begin_history_exchange(state: _SidecarResultState) -> None:

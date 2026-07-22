@@ -22,7 +22,7 @@ from seektalent.installed_slot import (
 )
 from seektalent.owned_sidecar_process import OwnedSidecarProcess, spawn_owned_sidecar
 from seektalent.sidecar_readiness import exchange_source_history, spawn_ready_sidecar
-from seektalent.source_port.history_contract import SourceHistoryMatched
+from seektalent.source_port.history_contract import SourceHistoryMatched, SourceHistoryNotFound
 from seektalent.release_manifest import parse_release_manifest, release_manifest_digest
 from tools.build_packaged_sidecar import (
     TEST_ONLY_SIGNING_SEED,
@@ -196,9 +196,16 @@ def test_packaged_artifact_returns_authenticated_read_only_sqlite_history(
     session = spawn_ready_sidecar(_acquire(root), timeout=30)
     try:
         admitted = exchange_source_history(session, _query(), timeout=30)
+        second = exchange_source_history(
+            session,
+            _query(operation_id="operation-2", idempotency_key="key-operation-2"),
+            timeout=30,
+        )
         assert isinstance(admitted.payload, SourceHistoryMatched)
         assert admitted.payload.facts[0].conclusion == "accepted_no_dispatch"
         assert admitted.session_id == session.session_id
+        assert isinstance(second.payload, SourceHistoryNotFound)
+        assert second.session_id == session.session_id
     finally:
         session.close(30)
 

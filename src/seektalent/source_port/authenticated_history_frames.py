@@ -400,6 +400,12 @@ class PostHandshakeHistorySession:
             self._fail(HistoryFrameReason.TRUNCATED_FRAME)
         self._close(None)
 
+    def require_frame_boundary(self) -> None:
+        """Fail closed when a completed message was followed by a partial frame."""
+        self._require_open()
+        if self._header or self._body or self._expected_body_length is not None:
+            self._fail(HistoryFrameReason.TRUNCATED_FRAME)
+
     def _build_query_envelope(
         self,
         *,

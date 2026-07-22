@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import inspect
 import os
 from pathlib import Path
 import sqlite3
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 
+import seektalent.source_port.history_sqlite_reader as history_sqlite_reader
+import tests.support.source_history_sqlite_storage as sqlite_storage
 from seektalent.source_port.history_contract import (
     ExactAuthorizationSelector,
     JSON_SAFE_INTEGER,
@@ -20,7 +24,10 @@ from seektalent.source_port.history_contract import (
     SourceHistoryQueryV1,
     SourceHistoryUnavailable,
 )
-from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
+from seektalent.source_port.history_sqlite_reader import (
+    SourceHistoryReadDeadlineExceeded,
+    SourceHistorySQLiteReader,
+)
 from tests.support.source_history_sqlite_harness import (
     AcceptedHistoryInput,
     CommitAcknowledgementLost,
@@ -114,6 +121,56 @@ def test_production_reader_requires_an_explicit_absolute_path(tmp_path: Path) ->
         SourceHistorySQLiteReader(str(tmp_path / "history.sqlite3"))  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="absolute"):
         SourceHistorySQLiteReader(Path("history.sqlite3"))
+
+
+def test_tests_only_harness_delegates_query_to_the_production_reader(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = _harness(tmp_path, 1)
+    request = _query()
+    sentinel = SourceHistoryNotFound.model_validate(
+        {
+            **request.model_dump(exclude={"contract_version"}),
+            "contract_version": "seektalent.source-port.query.result/v1",
+            "outcome": "not_found",
+            "oldest_retained_generation": 1,
+            "newest_known_generation": 1,
+            "history_complete": True,
+            "history_truncated": False,
+        },
+        strict=True,
+    )
+    calls: list[tuple[Path, SourceHistoryQueryV1]] = []
+
+    def query(
+        reader: SourceHistorySQLiteReader,
+        value: SourceHistoryQueryV1,
+        *,
+        deadline: float | None = None,
+    ) -> SourceHistoryNotFound:
+        assert deadline is None
+        calls.append((reader.path, value))
+        return sentinel
+
+    monkeypatch.setattr(SourceHistorySQLiteReader, "query", query)
+
+    assert harness.query(request) is sentinel
+    assert calls == [(harness.path, request)]
+
+
+def test_tests_only_storage_does_not_redeclare_the_production_schema_contract() -> None:
+    source = inspect.getsource(sqlite_storage)
+
+    assert sqlite_storage.SCHEMA_STATEMENTS is history_sqlite_reader.SCHEMA_STATEMENTS
+    assert sqlite_storage.SCHEMA_VERSION == history_sqlite_reader.SCHEMA_VERSION
+    assert "_STATE_TABLE_DDL =" not in source
+    assert "_GENERATION_TABLE_DDL =" not in source
+    assert "_EVENT_TABLE_DDL =" not in source
+    assert "_HEAD_TABLE_DDL =" not in source
+    assert "_TRIGGER_DDLS =" not in source
+    assert "def _verify_schema(" not in source
+    assert "def _verify_journal_consistency(" not in source
 
 
 def test_production_reader_returns_all_four_closed_history_results(tmp_path: Path) -> None:
@@ -226,6 +283,51 @@ def test_production_reader_queries_a_filesystem_read_only_database(tmp_path: Pat
     result = SourceHistorySQLiteReader(harness.path).query(_query())
 
     assert isinstance(result, SourceHistoryMatched)
+
+
+def test_production_reader_interrupts_a_slow_scan_and_releases_its_snapshot(tmp_path: Path) -> None:
+    harness = SourceHistorySQLiteHarness.create(tmp_path / "deadline.sqlite3")
+    connection = sqlite3.connect(harness.path)
+    try:
+        connection.executemany(
+            "INSERT INTO source_history_generations(generation, retained, complete) VALUES (?, 1, 1)",
+            ((generation,) for generation in range(1, 20_001)),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    reader = SourceHistorySQLiteReader(harness.path)
+
+    started = time.monotonic()
+    with pytest.raises(SourceHistoryReadDeadlineExceeded):
+        reader.query(
+            _query(first_generation=1, last_generation=20_000),
+            deadline=time.monotonic() + 0.001,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.2
+    harness.register_generation(20_001)
+    recovered = reader.query(_query(first_generation=20_001, last_generation=20_001))
+    assert isinstance(recovered, SourceHistoryNotFound)
+
+
+def test_production_reader_busy_wait_obeys_the_caller_deadline(tmp_path: Path) -> None:
+    harness = _harness(tmp_path, 1)
+    blocker = sqlite3.connect(harness.path, isolation_level=None)
+    blocker.execute("BEGIN EXCLUSIVE")
+    started = time.monotonic()
+    try:
+        with pytest.raises(SourceHistoryReadDeadlineExceeded):
+            SourceHistorySQLiteReader(harness.path).query(
+                _query(),
+                deadline=time.monotonic() + 0.02,
+            )
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+    assert time.monotonic() - started < 0.08
 
 
 def test_real_file_pragmas_and_complete_empty_range(tmp_path: Path) -> None:
@@ -492,8 +594,15 @@ def test_hot_delete_journal_is_recovered_after_hard_process_exit(tmp_path: Path)
     assert hot_journal.is_file()
     assert hot_journal.stat().st_size > 0
 
-    recovered = harness.query(_query())
+    unavailable = harness.query(_query())
 
+    assert isinstance(unavailable, SourceHistoryUnavailable)
+    assert unavailable.reason == "unreadable"
+    assert hot_journal.is_file()
+
+    recovered_snapshot = connect_existing(harness.path, begin_read=True)
+    recovered_snapshot.close()
+    recovered = harness.query(_query())
     assert isinstance(recovered, SourceHistoryMatched)
     assert recovered.facts[0].accepted_requirement_revision_id == "requirement-1"
     assert not hot_journal.exists()
