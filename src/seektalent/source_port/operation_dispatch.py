@@ -140,13 +140,13 @@ _SHA256_ADAPTER = TypeAdapter(Sha256)
 
 
 def validate_runtime_attempt_fence_token(value: object) -> str:
-    """Validate a bearer only while deriving its non-bearer fence reference."""
+    """Validate a 32-code-point bearer while deriving its non-bearer fence reference."""
     try:
         token = _OPAQUE256_ADAPTER.validate_python(value, strict=True)
         byte_length = len(token.encode("utf-8"))
     except (UnicodeEncodeError, ValidationError):
         raise ValueError("source_port_runtime_fence_token_invalid") from None
-    if byte_length < 32:
+    if len(token) < 32 or byte_length < 32:
         raise ValueError("source_port_runtime_fence_token_invalid")
     return token
 

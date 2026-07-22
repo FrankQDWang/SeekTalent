@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from hashlib import sha256
 from typing import Annotated, Literal, TypeAlias
 
@@ -141,16 +142,16 @@ class VerifySessionRequestV1(_VerifySessionBodyV1):
     @model_validator(mode="before")
     @classmethod
     def redact_invalid_fence_token_input(cls, value: object) -> object:
-        if not isinstance(value, dict):
+        if not isinstance(value, Mapping):
             return value
         wire_value: dict[object, object] = {}
         for key, item in value.items():
             wire_value[key] = item
         if "runtime_attempt_fence_token" not in wire_value:
-            return value
+            return wire_value
         token = wire_value["runtime_attempt_fence_token"]
         if _raw_fence_token_is_valid(token):
-            return value
+            return wire_value
         redacted = dict(wire_value)
         redacted["runtime_attempt_fence_token"] = "[redacted]"
         return redacted
@@ -356,6 +357,16 @@ class VerifySessionResultV1(_VerifySessionModel):
     user_action: VerifySessionUserActionV1 | None
     component_receipt_refs: tuple[Opaque96, ...] = ()
 
+    @field_validator("identity")
+    @classmethod
+    def validate_verify_session_identity(
+        cls,
+        identity: OperationIdentityV1,
+    ) -> OperationIdentityV1:
+        if identity.operation_kind != "verify_session":
+            raise ValueError("verify_session_operation_kind_invalid")
+        return identity
+
     @model_validator(mode="after")
     def validate_closed_readiness(self) -> VerifySessionResultV1:
         if len(self.component_receipt_refs) > 16:
@@ -438,7 +449,7 @@ def validate_verify_session_result_echo(
     """Ensure a result only echoes main-owned identity and receipt references."""
     validated_request = _validated_request(request)
     validated_result = _validated_result(result)
-    if validated_result.identity != validated_request.identity:
+    if not _result_identity_matches_request(validated_request.identity, validated_result.identity):
         raise ValueError("verify_session_result_identity_mismatch")
     if validated_result.component_receipt_refs != validated_request.component_receipt_refs:
         raise ValueError("verify_session_result_receipt_mismatch")
@@ -470,6 +481,26 @@ _BODY_FIELDS = (
     "verify_search_surface",
     "component_receipt_refs",
 )
+
+
+def _result_identity_matches_request(
+    request_identity: OperationIdentityV1,
+    result_identity: OperationIdentityV1,
+) -> bool:
+    return (
+        result_identity.run_id == request_identity.run_id
+        and result_identity.operation_id == request_identity.operation_id
+        and result_identity.attempt_no == request_identity.attempt_no
+        and result_identity.source == request_identity.source
+        and result_identity.operation_kind == request_identity.operation_kind
+        and result_identity.request_hash == request_identity.request_hash
+        and result_identity.idempotency_key == request_identity.idempotency_key
+        and result_identity.accepted_requirement_revision_id == request_identity.accepted_requirement_revision_id
+        and result_identity.profile_binding_generation == request_identity.profile_binding_generation
+        and result_identity.expected_source_operation_ledger_revision
+        == request_identity.expected_source_operation_ledger_revision
+        and result_identity.expected_reconciliation_revision == request_identity.expected_reconciliation_revision
+    )
 
 
 def _body_from_validated_data(data: dict[str, object]) -> _VerifySessionBodyV1 | None:

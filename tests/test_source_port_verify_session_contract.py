@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+from collections import UserDict
+from collections.abc import Mapping
 from hashlib import sha256
 from pathlib import Path
 
@@ -30,6 +32,7 @@ WIRE_PRIMITIVES_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "wi
 PLAN_PATH = PROJECT_ROOT / "docs" / "plans" / "external-execution-plane-v1-source-execution-port.md"
 RAW_FENCE_TOKEN = "raw-fence-token-canary-" + "x" * 64
 LEAK_CANARY = "RAW-FENCE-TOKEN-MUST-NOT-LEAK-" + "z" * 64
+SHORT_LEAK_CANARY = "short-raw-fence-canary"
 REQUEST_HASH_VECTOR = "cd00fccc50c288cc1d0045096d431bd52a81f94cc16c68379eda6ca691457969"
 FENCE_REF_VECTOR = "7147dbb8da083fe36c037acd98b6c82fe6db2b29a9c7b257ed8654def360f7d3"
 DISPATCH_DIGEST_VECTOR = "9869ab63f2bf1d74f4476c89a80e25bdb9d257acf6cbe1e870b21acf7b42d2e8"
@@ -88,6 +91,23 @@ def _result(request: VerifySessionRequestV1, **updates: object) -> VerifySession
     return VerifySessionResultV1.model_validate(values)
 
 
+class _CustomMapping(Mapping[str, object]):
+    def __init__(self, values: dict[str, object]) -> None:
+        self.values = values
+
+    def __getitem__(self, key: str) -> object:
+        return self.values[key]
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __repr__(self) -> str:
+        return repr(self.values)
+
+
 def test_request_is_strict_closed_frozen_and_only_serializes_the_raw_token_in_the_full_submit() -> None:
     request = _request()
 
@@ -132,6 +152,12 @@ def test_request_rejects_wire_coercion_invalid_unicode_and_out_of_bounds_values(
 
     with pytest.raises(ValidationError):
         VerifySessionRequestV1.model_validate(payload)
+
+
+@pytest.mark.parametrize("token", ("😀" * 8, "é" * 16))
+def test_runtime_fence_token_requires_at_least_32_unicode_code_points(token: str) -> None:
+    with pytest.raises(ValueError, match="source_port_runtime_fence_token_invalid"):
+        _request(runtime_attempt_fence_token=token)
 
 
 def test_canonical_request_hash_and_fence_ref_match_manual_rfc8785_and_length_prefix_vectors() -> None:
@@ -337,6 +363,32 @@ def test_raw_fence_token_never_leaks_from_repr_errors_or_canonical_projections_a
     assert LEAK_CANARY not in str(invalid_bypass.value)
 
 
+@pytest.mark.parametrize("mapping_type", (UserDict, _CustomMapping))
+def test_mapping_submit_input_redacts_an_invalid_raw_fence_token(mapping_type: type[Mapping[str, object]]) -> None:
+    payload = _request().model_dump()
+    payload["runtime_attempt_fence_token"] = SHORT_LEAK_CANARY
+
+    with pytest.raises(ValidationError) as invalid:
+        VerifySessionRequestV1.model_validate(mapping_type(payload))
+
+    assert SHORT_LEAK_CANARY not in str(invalid.value)
+    assert SHORT_LEAK_CANARY not in repr(invalid.value.errors())
+
+
+@pytest.mark.parametrize("mapping_type", (UserDict, _CustomMapping))
+def test_mapping_submit_input_hides_a_valid_raw_fence_token_on_semantic_error(
+    mapping_type: type[Mapping[str, object]],
+) -> None:
+    payload = _request().model_dump()
+    payload["identity"]["request_hash"] = "a" * 64
+
+    with pytest.raises(ValidationError) as invalid:
+        VerifySessionRequestV1.model_validate(mapping_type(payload))
+
+    assert RAW_FENCE_TOKEN not in str(invalid.value)
+    assert RAW_FENCE_TOKEN not in repr(invalid.value.errors())
+
+
 def test_operation_and_idempotency_identity_facts_stay_unambiguous_without_a_runtime_kernel() -> None:
     baseline = _request()
     same = _request()
@@ -383,6 +435,57 @@ def test_verify_session_result_has_only_closed_safe_facts_and_echoes_main_receip
         validate_verify_session_result_echo(request, mismatched)
 
 
+def test_initial_result_replays_to_legal_redelivery_but_rejects_stable_identity_tampering() -> None:
+    initial = _request()
+    result = _result(initial)
+    redelivery = _request(
+        delivery_mode="outbox_redelivery",
+        runtime_attempt_fence_token="current-fence-token-" + "y" * 64,
+        deadline_value=59_999,
+        correlation_id="correlation-2",
+        browser_control_scope_id="browser-scope-2",
+    )
+
+    validate_outbox_redelivery(initial, redelivery)
+    assert redelivery.identity.runtime_attempt_fence_ref != initial.identity.runtime_attempt_fence_ref
+    assert redelivery.delivery.authorization == initial.delivery.authorization
+    validate_verify_session_result_echo(redelivery, result)
+    assert verify_session_result_hash(result) == RESULT_HASH_VECTOR
+
+    for field, value in (
+        ("run_id", "run-2"),
+        ("operation_id", "verify-session-2"),
+        ("idempotency_key", "verify-session-key-2"),
+        ("request_hash", "a" * 64),
+        ("attempt_no", 2),
+        ("accepted_requirement_revision_id", "requirement-revision-2"),
+        ("profile_binding_generation", 2),
+        ("expected_source_operation_ledger_revision", 2),
+        ("expected_reconciliation_revision", 1),
+    ):
+        tampered = result.model_copy(update={"identity": result.identity.model_copy(update={field: value})})
+        with pytest.raises(ValueError, match="identity"):
+            validate_verify_session_result_echo(redelivery, tampered)
+
+
+def test_verify_session_result_rejects_another_operation_kind() -> None:
+    result = _result(_request())
+    payload = result.model_dump()
+    payload["identity"]["operation_kind"] = "search"
+
+    with pytest.raises(ValidationError, match="operation_kind"):
+        VerifySessionResultV1.model_validate(payload)
+
+    bypassed = VerifySessionResultV1.model_construct(
+        **{
+            **result.model_dump(),
+            "identity": result.identity.model_copy(update={"operation_kind": "search"}),
+        }
+    )
+    with pytest.raises(ValueError, match="verify_session_contract_invalid"):
+        canonical_verify_session_result_bytes(bypassed)
+
+
 def test_contract_stays_source_port_only_with_no_production_caller_or_json_parser() -> None:
     source = CONTRACT_PATH.read_text(encoding="utf-8")
     operation_dispatch = OPERATION_DISPATCH_PATH.read_text(encoding="utf-8")
@@ -399,6 +502,7 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
     }
     assert imported_modules <= {
         "__future__",
+        "collections.abc",
         "hashlib",
         "pydantic",
         "typing",
