@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
+import seektalent.source_port._command_journal_engine as journal_engine
 import seektalent.source_port.command_journal as command_journal
 from seektalent.source_port.command_journal import (
     AcceptedCommand,
@@ -30,13 +31,31 @@ from seektalent.source_port.history_contract import (
     SourceHistoryMatched,
     SourceHistoryQueryV1,
 )
-from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
+from seektalent.source_port.history_sqlite_reader import (
+    SCHEMA_VERSION,
+    HistorySQLiteUnavailable,
+    SourceHistorySQLiteReader,
+)
 
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
 HASH_C = "c" * 64
 HASH_D = "d" * 64
+
+
+class _CommitFailingConnection:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        object.__setattr__(self, "_connection", connection)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._connection, name)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        setattr(self._connection, name, value)
+
+    def commit(self) -> None:
+        raise sqlite3.OperationalError("simulated I/O error before publish")
 
 
 def _accepted(
@@ -125,6 +144,289 @@ def test_create_open_and_start_use_explicit_paths_and_persist_fresh_generation_i
         connection.close()
 
 
+@pytest.mark.parametrize(
+    ("stage", "expected_reason"),
+    (
+        ("before_ddl", CommandJournalErrorReason.IO_ERROR),
+        ("ddl_midway", CommandJournalErrorReason.CORRUPT),
+        ("before_publish_commit", CommandJournalErrorReason.IO_ERROR),
+        ("verification", CommandJournalErrorReason.SCHEMA_MISMATCH),
+    ),
+)
+def test_failed_create_never_publishes_or_leaks_an_owned_database_and_is_retryable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+    expected_reason: CommandJournalErrorReason,
+) -> None:
+    path = tmp_path / "journal.sqlite3"
+
+    with monkeypatch.context() as patched:
+        if stage == "before_ddl":
+            patched.setattr(
+                journal_engine,
+                "_configure_connection",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                    CommandJournalError(CommandJournalErrorReason.IO_ERROR)
+                ),
+            )
+        elif stage == "ddl_midway":
+            patched.setattr(journal_engine, "SCHEMA_STATEMENTS", (*journal_engine.SCHEMA_STATEMENTS[:2], "not sql"))
+        elif stage == "before_publish_commit":
+            real_connect = sqlite3.connect
+            patched.setattr(
+                journal_engine.sqlite3,
+                "connect",
+                lambda *args, **kwargs: _CommitFailingConnection(real_connect(*args, **kwargs)),
+            )
+        else:
+            patched.setattr(
+                journal_engine,
+                "verify_schema",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(HistorySQLiteUnavailable("schema_mismatch")),
+            )
+
+        with pytest.raises(CommandJournalError) as failure:
+            create_command_journal(path)
+
+    assert failure.value.reason is expected_reason
+    assert not path.exists()
+    assert tuple(tmp_path.iterdir()) == ()
+
+    create_command_journal(path).close()
+
+
+def test_create_never_clobbers_a_preexisting_target_when_publication_conflicts(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    original = b"rival-owned-bytes"
+    path.write_bytes(original)
+
+    with pytest.raises(CommandJournalConflict) as conflict:
+        create_command_journal(path)
+
+    assert conflict.value.reason is CommandJournalConflictReason.CREATE_PATH_EXISTS
+    assert path.read_bytes() == original
+
+
+def test_create_publish_race_preserves_the_other_creator_bytes_and_cleans_its_temporary_file(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "journal.sqlite3"
+    winner_bytes = b"other-creator-won-the-race"
+
+    def lose_publish_race(_source: object, _target: object) -> None:
+        path.write_bytes(winner_bytes)
+        raise FileExistsError
+
+    with patch.object(journal_engine.os, "link", side_effect=lose_publish_race):
+        with pytest.raises(CommandJournalConflict) as conflict:
+            create_command_journal(path)
+
+    assert conflict.value.reason is CommandJournalConflictReason.CREATE_PATH_EXISTS
+    assert path.read_bytes() == winner_bytes
+    assert tuple(tmp_path.iterdir()) == (path,)
+
+
+def test_create_returns_a_live_journal_when_post_publish_temporary_cleanup_ack_is_lost(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "journal.sqlite3"
+    original_unlink = Path.unlink
+    temporary_unlink_calls = 0
+
+    def lose_temporary_cleanup(candidate: Path, missing_ok: bool = False) -> None:
+        nonlocal temporary_unlink_calls
+        if candidate.name.endswith(".creating"):
+            temporary_unlink_calls += 1
+            raise OSError("simulated temporary cleanup acknowledgement loss")
+        original_unlink(candidate, missing_ok=missing_ok)
+
+    with patch.object(Path, "unlink", new=lose_temporary_cleanup):
+        journal = create_command_journal(path)
+
+    session = journal.start()
+    assert session.record_accepted(_accepted()) == 1
+    assert temporary_unlink_calls == 1
+    assert path.exists()
+
+    reopened = open_command_journal(path)
+    assert reopened.start().generation == 2
+
+    for temporary_path in tmp_path.glob(".journal.sqlite3.*.creating"):
+        temporary_path.unlink()
+
+
+def test_create_rolls_back_the_uncommitted_target_when_directory_persistence_fails(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+
+    with patch.object(
+        journal_engine,
+        "_sync_published_directory",
+        side_effect=CommandJournalError(CommandJournalErrorReason.IO_ERROR),
+    ):
+        with pytest.raises(CommandJournalError) as failure:
+            create_command_journal(path)
+
+    assert failure.value.reason is CommandJournalErrorReason.IO_ERROR
+    assert not path.exists()
+    assert tuple(tmp_path.iterdir()) == ()
+
+    create_command_journal(path).close()
+
+
+def test_create_directory_persistence_rollback_never_deletes_a_racing_replacement(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    replacement = b"other-creator-replaced-the-uncommitted-link"
+
+    def replace_target_then_fail(_parent: Path) -> None:
+        path.unlink()
+        path.write_bytes(replacement)
+        raise CommandJournalError(CommandJournalErrorReason.IO_ERROR)
+
+    with patch.object(journal_engine, "_sync_published_directory", side_effect=replace_target_then_fail):
+        with pytest.raises(CommandJournalError) as failure:
+            create_command_journal(path)
+
+    assert failure.value.reason is CommandJournalErrorReason.IO_ERROR
+    assert path.read_bytes() == replacement
+    assert tuple(tmp_path.iterdir()) == (path,)
+
+
+def test_create_calls_parent_directory_persistence_after_no_clobber_publication(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    calls: list[str] = []
+    real_link = os.link
+
+    def record_link(*args: object, **kwargs: object) -> None:
+        real_link(*args, **kwargs)  # type: ignore[arg-type]
+        calls.append("link")
+
+    def record_directory_persistence(_parent: Path) -> None:
+        calls.append("directory-sync")
+
+    with (
+        patch.object(journal_engine.os, "link", new=record_link),
+        patch.object(journal_engine, "_sync_published_directory", side_effect=record_directory_persistence),
+    ):
+        create_command_journal(path)
+
+    assert calls == ["link", "directory-sync"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory fsync proof")
+def test_posix_directory_persistence_opens_and_fsyncs_the_parent_directory(tmp_path: Path) -> None:
+    directory = tmp_path / "journal-parent"
+    directory.mkdir()
+    opened: list[tuple[object, int]] = []
+    synced: list[int] = []
+    real_open = os.open
+    real_fsync = os.fsync
+
+    def record_open(candidate: object, flags: int, *args: object, **kwargs: object) -> int:
+        descriptor = real_open(candidate, flags, *args, **kwargs)  # type: ignore[arg-type]
+        opened.append((candidate, flags))
+        return descriptor
+
+    def record_fsync(descriptor: int) -> None:
+        synced.append(descriptor)
+        real_fsync(descriptor)
+
+    with (
+        patch.object(journal_engine.os, "open", new=record_open),
+        patch.object(journal_engine.os, "fsync", new=record_fsync),
+    ):
+        journal_engine._sync_published_directory(directory)
+
+    assert opened == [(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))]
+    assert len(synced) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows native directory flush proof")
+def test_windows_directory_persistence_executes_the_native_flush_path(tmp_path: Path) -> None:
+    directory = tmp_path / "journal-parent"
+    directory.mkdir()
+
+    journal_engine._sync_published_directory(directory)
+
+
+def test_transition_hot_path_has_a_fixed_reader_audit_budget_after_history_grows(tmp_path: Path) -> None:
+    session = create_command_journal(tmp_path / "journal.sqlite3").start()
+
+    with (
+        patch.object(journal_engine, "verify_schema", wraps=journal_engine.verify_schema) as verify_schema,
+        patch.object(
+            journal_engine,
+            "load_validated_history_facts",
+            wraps=journal_engine.load_validated_history_facts,
+        ) as load_facts,
+    ):
+        for index in range(400):
+            session.record_accepted(_accepted(f"operation-{index}"))
+
+    assert verify_schema.call_count == 0
+    assert load_facts.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("sqlite_errorcode", "expected_reason"),
+    (
+        (sqlite3.SQLITE_FULL, CommandJournalErrorReason.FULL),
+        (sqlite3.SQLITE_IOERR, CommandJournalErrorReason.IO_ERROR),
+    ),
+)
+def test_sqlite_error_mapping_keeps_full_and_io_reasons_stable(
+    sqlite_errorcode: int,
+    expected_reason: CommandJournalErrorReason,
+) -> None:
+    error = sqlite3.OperationalError("injected sqlite failure")
+    error.sqlite_errorcode = sqlite_errorcode
+
+    assert journal_engine._sqlite_error(error).reason is expected_reason
+
+
+@pytest.mark.parametrize(
+    ("sqlite_errorcode", "expected_reason"),
+    (
+        (sqlite3.SQLITE_FULL, CommandJournalErrorReason.FULL),
+        (sqlite3.SQLITE_IOERR, CommandJournalErrorReason.IO_ERROR),
+    ),
+)
+def test_public_transition_never_leaks_raw_sqlite_errors(
+    tmp_path: Path,
+    sqlite_errorcode: int,
+    expected_reason: CommandJournalErrorReason,
+) -> None:
+    session = create_command_journal(tmp_path / "journal.sqlite3").start()
+    error = sqlite3.OperationalError("injected sqlite failure")
+    error.sqlite_errorcode = sqlite_errorcode
+
+    with patch.object(journal_engine, "_open_write_connection", side_effect=error):
+        with pytest.raises(CommandJournalError) as observed:
+            session.record_accepted(_accepted())
+
+    assert observed.value.reason is expected_reason
+
+
+def test_open_missing_path_and_busy_transition_use_stable_public_reasons(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.sqlite3"
+    with pytest.raises(CommandJournalError) as missing_error:
+        open_command_journal(missing)
+    assert missing_error.value.reason is CommandJournalErrorReason.CANNOT_OPEN
+
+    path = tmp_path / "journal.sqlite3"
+    session = create_command_journal(path).start()
+    lock = sqlite3.connect(path, isolation_level=None)
+    try:
+        lock.execute("BEGIN EXCLUSIVE")
+        with pytest.raises(CommandJournalError) as busy_error:
+            session.record_accepted(_accepted())
+        assert busy_error.value.reason is CommandJournalErrorReason.BUSY
+    finally:
+        if lock.in_transaction:
+            lock.rollback()
+        lock.close()
+
+
 def test_concurrent_startup_allocates_one_contiguous_generation_per_live_session(tmp_path: Path) -> None:
     journal = create_command_journal(tmp_path / "journal.sqlite3")
     workers = 12
@@ -146,7 +448,7 @@ def test_committed_startup_ack_loss_does_not_reallocate_the_generation_after_reo
     journal = create_command_journal(path)
 
     with patch.object(
-        command_journal,
+        journal_engine,
         "_startup_commit_acknowledged",
         side_effect=RuntimeError("startup acknowledgement lost"),
     ):
@@ -462,7 +764,7 @@ def test_open_failures_are_closed_and_do_not_repair_existing_files(tmp_path: Pat
     create_command_journal(schema)
     connection = sqlite3.connect(schema)
     try:
-        connection.execute("PRAGMA user_version=3")
+        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
         connection.commit()
     finally:
         connection.close()
@@ -488,35 +790,81 @@ def test_open_rejects_an_existing_readonly_journal_without_repairing_it(tmp_path
         path.chmod(0o644)
 
 
+def test_command_journal_internal_modules_form_a_one_way_dag() -> None:
+    project_root = Path(__file__).parents[1]
+    source_port = project_root / "src" / "seektalent" / "source_port"
+    facade_path = source_port / "command_journal.py"
+    engine_path = source_port / "_command_journal_engine.py"
+    types_path = source_port / "_command_journal_types.py"
+    obsolete_capability_path = source_port / "command_journal_capability.py"
+
+    def imported_modules(path: Path) -> set[str]:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        modules: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules.update(alias.name for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module is not None:
+                modules.add(node.module)
+                modules.update(f"{node.module}.{alias.name}" for alias in node.names)
+        return modules
+
+    private_modules = {
+        "seektalent.source_port._command_journal_engine",
+        "seektalent.source_port._command_journal_types",
+    }
+    module_imports = {
+        facade_path: imported_modules(facade_path),
+        engine_path: imported_modules(engine_path),
+        types_path: imported_modules(types_path),
+    }
+    engine_tree = ast.parse(engine_path.read_text(encoding="utf-8"))
+    engine_functions = {
+        node.name for node in engine_tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    assert not obsolete_capability_path.exists()
+    assert all(name.startswith("_") for name in engine_functions)
+    assert module_imports[facade_path] & private_modules == private_modules
+    assert module_imports[engine_path] & private_modules == {"seektalent.source_port._command_journal_types"}
+    assert not module_imports[types_path] & private_modules
+    assert "seektalent.source_port.command_journal" not in module_imports[engine_path]
+    assert "seektalent.source_port.command_journal" not in module_imports[types_path]
+
+    allowed_private_imports = {
+        facade_path: private_modules,
+        engine_path: {"seektalent.source_port._command_journal_types"},
+        types_path: set(),
+    }
+    for path in (project_root / "src").rglob("*.py"):
+        private_imports = imported_modules(path) & private_modules
+        assert private_imports <= allowed_private_imports.get(path, set())
+
+    assert set(command_journal.__all__) == {
+        "AcceptedCommand",
+        "CommandJournal",
+        "CommandJournalConflict",
+        "CommandJournalConflictReason",
+        "CommandJournalError",
+        "CommandJournalErrorReason",
+        "CommandJournalSession",
+        "create_command_journal",
+        "open_command_journal",
+    }
+
+
 def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_columns(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[1]
-    module_path = project_root / "src" / "seektalent" / "source_port" / "command_journal.py"
-    tree = ast.parse(module_path.read_text(encoding="utf-8"))
-    imported_modules = {
-        node.module if isinstance(node, ast.ImportFrom) else alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.Import, ast.ImportFrom))
-        for alias in node.names
-    }
-    assert imported_modules <= {
-        "__future__",
-        "contextlib",
-        "dataclasses",
-        "enum",
-        "pathlib",
-        "secrets",
-        "sqlite3",
-        "stat",
-        "threading",
-        "typing",
-        "weakref",
-        "seektalent.source_port.history_contract",
-        "seektalent.source_port.history_sqlite_reader",
+    source_port = project_root / "src" / "seektalent" / "source_port"
+    journal_modules = {
+        source_port / "command_journal.py",
+        source_port / "_command_journal_engine.py",
+        source_port / "_command_journal_types.py",
     }
 
     production_callers = []
     for path in (project_root / "src").rglob("*.py"):
-        if path == module_path:
+        if path in journal_modules:
             continue
         if "command_journal" in path.read_text(encoding="utf-8"):
             production_callers.append(path.relative_to(project_root).as_posix())

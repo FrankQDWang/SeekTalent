@@ -6,7 +6,7 @@ import sqlite3
 from typing import Iterator, Literal
 from unittest.mock import patch
 
-import seektalent.source_port.command_journal as command_journal
+import seektalent.source_port._command_journal_engine as journal_engine
 from seektalent.source_port.command_journal import (
     AcceptedCommand,
     CommandJournal,
@@ -192,7 +192,7 @@ class SourceHistorySQLiteHarness:
             return
         if fault_point == "after_commit":
             with patch.object(
-                command_journal,
+                journal_engine,
                 "_transition_commit_acknowledged",
                 side_effect=CommitAcknowledgementLost("source_history_commit_acknowledgement_lost"),
             ):
@@ -203,5 +203,5 @@ class SourceHistorySQLiteHarness:
             if actual == fault_point:
                 raise InjectedJournalFault(f"source_history_fault_{actual}")
 
-        with patch.object(command_journal, "_transition_checkpoint", side_effect=checkpoint):
+        with patch.object(journal_engine, "_transition_checkpoint", side_effect=checkpoint):
             yield

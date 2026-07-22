@@ -28,7 +28,7 @@ from seektalent.source_port.history_contract import (
 
 
 QUERY_RESULT_CONTRACT_VERSION = "seektalent.source-port.query.result/v1"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class HistorySQLiteUnavailable(RuntimeError):
@@ -313,6 +313,8 @@ def _verify_schema_sql(connection: sqlite3.Connection) -> None:
         ("table", "source_history_generations"): _GENERATION_TABLE_DDL,
         ("table", "source_history_events"): _EVENT_TABLE_DDL,
         ("table", "source_history_heads"): _HEAD_TABLE_DDL,
+        ("index", "source_history_heads_run_id_idempotency_key"): _HEAD_RUN_IDEMPOTENCY_INDEX_DDL,
+        ("index", "source_history_heads_operation_id_idempotency_key"): _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL,
         ("trigger", "source_history_events_no_duplicate_revision"): _TRIGGER_DDLS[0],
         ("trigger", "source_history_events_no_update"): _TRIGGER_DDLS[1],
         ("trigger", "source_history_events_no_delete"): _TRIGGER_DDLS[2],
@@ -320,7 +322,12 @@ def _verify_schema_sql(connection: sqlite3.Connection) -> None:
     actual = {
         (str(row[0]), str(row[1])): row[2]
         for row in connection.execute(
-            "SELECT type, name, sql FROM sqlite_master WHERE type IN ('table', 'trigger')"
+            """
+            SELECT type, name, sql
+            FROM sqlite_master
+            WHERE type IN ('table', 'trigger', 'index')
+              AND name NOT LIKE 'sqlite_autoindex%'
+            """
         ).fetchall()
     }
     for key, statement in expected.items():
@@ -883,6 +890,16 @@ CREATE TABLE source_history_heads (
 )
 """
 
+_HEAD_RUN_IDEMPOTENCY_INDEX_DDL = """
+CREATE INDEX source_history_heads_run_id_idempotency_key
+ON source_history_heads(run_id, idempotency_key)
+"""
+
+_HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL = """
+CREATE INDEX source_history_heads_operation_id_idempotency_key
+ON source_history_heads(operation_id, idempotency_key)
+"""
+
 _TRIGGER_DDLS = (
     """
     CREATE TRIGGER source_history_events_no_duplicate_revision
@@ -911,5 +928,7 @@ SCHEMA_STATEMENTS = (
     _GENERATION_TABLE_DDL,
     _EVENT_TABLE_DDL,
     _HEAD_TABLE_DDL,
+    _HEAD_RUN_IDEMPOTENCY_INDEX_DDL,
+    _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL,
     *_TRIGGER_DDLS,
 )

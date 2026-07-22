@@ -12,6 +12,7 @@ import time
 
 import pytest
 
+import seektalent.source_port._command_journal_engine as journal_engine
 import seektalent.source_port.command_journal as command_journal
 import seektalent.source_port.history_sqlite_reader as history_sqlite_reader
 from seektalent.source_port.history_contract import (
@@ -157,7 +158,7 @@ def test_tests_only_harness_delegates_query_to_the_production_reader(
 def test_tests_only_harness_delegates_all_production_write_truth() -> None:
     source = inspect.getsource(SourceHistorySQLiteHarness)
 
-    assert history_sqlite_reader.SCHEMA_VERSION == 2
+    assert history_sqlite_reader.SCHEMA_VERSION == 3
     assert "create_command_journal" in source
     assert "record_accepted(accepted)" in source
     assert "source_history_sqlite_storage" not in source
@@ -225,7 +226,7 @@ def test_production_reader_file_failures_are_closed_and_do_not_create_missing_da
     schema = _harness(tmp_path / "schema", 1)
     connection = sqlite3.connect(schema.path)
     try:
-        connection.execute("PRAGMA user_version=3")
+        connection.execute(f"PRAGMA user_version={history_sqlite_reader.SCHEMA_VERSION + 1}")
     finally:
         connection.close()
     mismatch = SourceHistorySQLiteReader(schema.path).query(_query())
@@ -535,7 +536,7 @@ def test_corrupt_unreadable_and_schema_mismatch_use_real_file_path(tmp_path: Pat
     schema_harness = SourceHistorySQLiteHarness.create(tmp_path / "schema.sqlite3")
     connection = sqlite3.connect(schema_harness.path)
     try:
-        connection.execute("PRAGMA user_version=3")
+        connection.execute(f"PRAGMA user_version={history_sqlite_reader.SCHEMA_VERSION + 1}")
     finally:
         connection.close()
     schema = schema_harness.query(request)
@@ -828,7 +829,7 @@ def test_malformed_typed_head_state_fails_closed_as_corrupt(tmp_path: Path) -> N
     assert isinstance(result, SourceHistoryUnavailable)
     assert result.reason == "corrupt"
     with pytest.raises(JournalUnavailable, match="corrupt"):
-        harness.record_accepted(_accepted("operation-new"), generation=1)
+        command_journal.open_command_journal(harness.path)
     connection = sqlite3.connect(harness.path)
     try:
         assert connection.execute("SELECT COUNT(*) FROM source_history_events").fetchone() == (1,)
@@ -859,7 +860,7 @@ def test_dangling_generation_foreign_keys_fail_closed_as_corrupt(tmp_path: Path)
     assert isinstance(result, SourceHistoryUnavailable)
     assert result.reason == "corrupt"
     with pytest.raises(JournalUnavailable, match="corrupt"):
-        harness.record_accepted(_accepted("operation-new"), generation=1)
+        command_journal.open_command_journal(harness.path)
     connection = sqlite3.connect(harness.path)
     try:
         assert connection.execute("SELECT COUNT(*) FROM source_history_events").fetchone() == (2,)
@@ -1010,7 +1011,7 @@ def test_invalid_persisted_fact_fails_closed_before_identity_result(
     assert isinstance(result, SourceHistoryUnavailable)
     assert result.reason == "corrupt"
     with pytest.raises(JournalUnavailable, match="corrupt"):
-        harness.record_accepted(_accepted("operation-new"), generation=1)
+        command_journal.open_command_journal(harness.path)
     connection = sqlite3.connect(harness.path)
     try:
         assert connection.execute("SELECT COUNT(*) FROM source_history_events").fetchone() == (2,)
@@ -1143,7 +1144,7 @@ def test_revision_allocator_rejects_exhaustion_without_mutating_integer_state() 
     )
 
     with pytest.raises(JournalWriteConflict, match="revision_exhausted"):
-        command_journal._allocate_revision(connection)
+        journal_engine._allocate_revision(connection)
 
     stored = connection.execute("SELECT last_journal_revision FROM source_history_state WHERE singleton = 1").fetchone()
     connection.close()
