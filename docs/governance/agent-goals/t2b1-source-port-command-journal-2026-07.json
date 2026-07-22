@@ -3,7 +3,7 @@
   "goal_id": "source-decoupling-2026-06",
   "change_type": "major_refactor",
   "summary": "Keep the T2b1 source-port command journal production-unreachable while proving its Windows directory-publication durability path on a native runner.",
-  "rationale": "Issue #394 adds only the sidecar SQLite source-port journal kernel and its tests. The sole workflow change is a Windows-only focused test that calls the real CreateFileW and FlushFileBuffers directory path; it is necessary to prove the no-clobber publication contract rather than to wire the journal into runtime, providers, browsers, Workbench, or CLI.",
+  "rationale": "Issue #394 adds only the sidecar SQLite source-port journal kernel and its tests. The sole workflow change is a Windows-only focused test that calls the real writable-file fsync plus CreateFileW and FlushFileBuffers directory path; it is necessary to prove the no-clobber publication contract rather than to wire the journal into runtime, providers, browsers, Workbench, or CLI.",
   "touched_layers": [
     "docs",
     "governance",

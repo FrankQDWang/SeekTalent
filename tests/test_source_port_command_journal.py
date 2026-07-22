@@ -313,6 +313,37 @@ def test_create_calls_parent_directory_persistence_after_no_clobber_publication(
     assert calls == ["link", "directory-sync"]
 
 
+def test_initialized_database_persistence_opens_with_write_access(tmp_path: Path) -> None:
+    path = tmp_path / "initialized.sqlite3"
+    path.write_bytes(b"journal")
+    opened: list[int] = []
+    real_open = os.open
+
+    def record_open(candidate: object, flags: int, *args: object, **kwargs: object) -> int:
+        opened.append(flags)
+        return real_open(candidate, flags, *args, **kwargs)  # type: ignore[arg-type]
+
+    with patch.object(journal_engine.os, "open", new=record_open):
+        journal_engine._sync_initialized_database(path)
+
+    assert opened == [os.O_RDWR]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows native initialized-file flush proof")
+def test_windows_initialized_database_persistence_executes_the_native_flush_path(tmp_path: Path) -> None:
+    path = tmp_path / "initialized.sqlite3"
+    path.write_bytes(b"journal")
+
+    journal_engine._sync_initialized_database(path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows native create durability proof")
+def test_windows_create_command_journal_persists_initialized_database(tmp_path: Path) -> None:
+    journal = create_command_journal(tmp_path / "journal.sqlite3")
+
+    assert journal.start().generation == 1
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX directory fsync proof")
 def test_posix_directory_persistence_opens_and_fsyncs_the_parent_directory(tmp_path: Path) -> None:
     directory = tmp_path / "journal-parent"

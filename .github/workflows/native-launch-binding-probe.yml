@@ -110,6 +110,8 @@ jobs:
         if: runner.os == 'Windows'
         run: >-
           uv run --group dev python -m pytest
+          tests/test_source_port_command_journal.py::test_windows_initialized_database_persistence_executes_the_native_flush_path
+          tests/test_source_port_command_journal.py::test_windows_create_command_journal_persists_initialized_database
           tests/test_source_port_command_journal.py::test_windows_directory_persistence_executes_the_native_flush_path
           -q
 

@@ -95,7 +95,7 @@ def _create_temporary_database_path(path: Path) -> Path:
 def _sync_initialized_database(path: Path) -> None:
     descriptor: int | None = None
     try:
-        descriptor = os.open(path, os.O_RDONLY)
+        descriptor = os.open(path, os.O_RDWR)
         os.fsync(descriptor)
     except OSError as exc:
         raise _path_error(exc) from None
