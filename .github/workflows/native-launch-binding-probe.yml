@@ -26,7 +26,12 @@ on:
       - "src/seektalent/sidecar_child_session.py"
       - "src/seektalent/sidecar_handshake_protocol.py"
       - "src/seektalent/sidecar_readiness.py"
+      - "src/seektalent/source_port/_command_journal_engine.py"
+      - "src/seektalent/source_port/_command_journal_types.py"
+      - "src/seektalent/source_port/command_journal.py"
+      - "src/seektalent/source_port/history_sqlite_reader.py"
       - "pyproject.toml"
+      - "tests/test_source_port_command_journal.py"
       - "uv.lock"
       - "docs/plans/external-execution-plane-v1-release-artifact-evidence.md"
       - "docs/decisions/**"
@@ -100,6 +105,13 @@ jobs:
         env:
           SEEKTALENT_NATIVE_LAUNCH_BINDING_EVIDENCE: native-launch-binding-evidence.json
         run: uv run --group dev python -m pytest tests/test_native_launch_binding_probe.py -q
+
+      - name: Assert Windows command-journal directory publication durability
+        if: runner.os == 'Windows'
+        run: >-
+          uv run --group dev python -m pytest
+          tests/test_source_port_command_journal.py::test_windows_directory_persistence_executes_the_native_flush_path
+          -q
 
       - name: Build and verify test-only packaged sidecar four-step handshake artifact
         env:

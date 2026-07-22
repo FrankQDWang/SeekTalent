@@ -1,0 +1,44 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "source-decoupling-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Keep the T2b1 source-port command journal production-unreachable while proving its Windows directory-publication durability path on a native runner.",
+  "rationale": "Issue #394 adds only the sidecar SQLite source-port journal kernel and its tests. The sole workflow change is a Windows-only focused test that calls the real CreateFileW and FlushFileBuffers directory path; it is necessary to prove the no-clobber publication contract rather than to wire the journal into runtime, providers, browsers, Workbench, or CLI.",
+  "touched_layers": [
+    "docs",
+    "governance",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    ".github/workflows/native-launch-binding-probe.yml"
+  ],
+  "verification": [
+    "uv run python tools/check_source_boundaries.py",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest",
+    "uv run --group dev python -m pytest tests/test_source_port_command_journal.py -q",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_workbench_schema_modes.py",
+    "uv run --group dev tach check",
+    "uv run --group dev python tools/check_tach_baseline.py",
+    "python3 tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main"
+  ],
+  "deletion_targets": [
+    "Failed-create target-file leaks that make a safe retry report CREATE_PATH_EXISTS",
+    "Full-history validation in ordinary command-journal writer transactions",
+    "Public or reverse-imported journal engine authority outside the facade"
+  ],
+  "risks": [
+    "GitHub Windows Server 2025 proves the native directory flush route, not every enterprise filesystem or installer policy.",
+    "The journal remains production-unreachable: no runtime, provider, browser, Workbench, or CLI caller is introduced.",
+    "The workflow remains Windows-only for this focused assertion; macOS matrix jobs retain their existing native evidence coverage."
+  ]
+}
