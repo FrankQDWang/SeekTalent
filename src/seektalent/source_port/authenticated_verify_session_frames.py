@@ -158,6 +158,19 @@ class VerifySessionFailureV1(_VerifySessionFrameModel):
         return _verify_session_identity(identity)
 
 
+class VerifySessionReconcileRequiredV1(_VerifySessionFrameModel):
+    """A closed reply that transfers an accepted request to durable reconciliation."""
+
+    contract_version: Literal["seektalent.source.verify-session.reconcile-required/v1"]
+    identity: OperationIdentityV1
+    reconciliation_fact: Literal["accepted_no_dispatch", "dispatch_not_observed"]
+
+    @field_validator("identity")
+    @classmethod
+    def validate_identity(cls, identity: OperationIdentityV1) -> OperationIdentityV1:
+        return _verify_session_identity(identity)
+
+
 class _EnvelopeBase(AuthenticatedFrameEnvelopeBase):
     pass
 
@@ -192,23 +205,35 @@ class _VerifySessionFailureEnvelope(_EnvelopeBase):
     payload: VerifySessionFailureV1
 
 
+class _VerifySessionReconcileRequiredEnvelope(_EnvelopeBase):
+    reply_to: Opaque96
+    message_type: Literal["verify_session.reconcile_required"]
+    payload: VerifySessionReconcileRequiredV1
+
+
 _AuthenticatedEnvelope: TypeAlias = Annotated[
     _VerifySessionSubmitEnvelope
     | _VerifySessionAcceptedAckEnvelope
     | _VerifySessionRejectedEnvelope
     | _VerifySessionResultEnvelope
-    | _VerifySessionFailureEnvelope,
+    | _VerifySessionFailureEnvelope
+    | _VerifySessionReconcileRequiredEnvelope,
     Field(discriminator="message_type"),
 ]
 _ENVELOPE_ADAPTER = TypeAdapter(_AuthenticatedEnvelope)
 _VerifySessionReplyPayload: TypeAlias = (
-    VerifySessionAcceptedAckV1 | VerifySessionRejectedV1 | VerifySessionResultV1 | VerifySessionFailureV1
+    VerifySessionAcceptedAckV1
+    | VerifySessionRejectedV1
+    | VerifySessionResultV1
+    | VerifySessionFailureV1
+    | VerifySessionReconcileRequiredV1
 )
 _VerifySessionReplyMessageType: TypeAlias = Literal[
     "verify_session.accepted_ack",
     "verify_session.rejected",
     "verify_session.result",
     "verify_session.failure",
+    "verify_session.reconcile_required",
 ]
 
 
@@ -251,12 +276,21 @@ class ReceivedVerifySessionFailure:
     payload: VerifySessionFailureV1
 
 
+@dataclass(frozen=True, slots=True)
+class ReceivedVerifySessionReconcileRequired:
+    message_id: str
+    reply_to: str
+    correlation_id: str | None
+    payload: VerifySessionReconcileRequiredV1
+
+
 ReceivedVerifySessionMessage: TypeAlias = (
     ReceivedVerifySessionSubmit
     | ReceivedVerifySessionAcceptedAck
     | ReceivedVerifySessionRejected
     | ReceivedVerifySessionResult
     | ReceivedVerifySessionFailure
+    | ReceivedVerifySessionReconcileRequired
 )
 
 
@@ -297,6 +331,7 @@ class PostHandshakeVerifySessionSession(
                     "verify_session.rejected",
                     "verify_session.result",
                     "verify_session.failure",
+                    "verify_session.reconcile_required",
                 }
             ),
             request_message_types=frozenset({"verify_session.submit"}),
@@ -306,6 +341,7 @@ class PostHandshakeVerifySessionSession(
                     "verify_session.rejected",
                     "verify_session.result",
                     "verify_session.failure",
+                    "verify_session.reconcile_required",
                 }
             ),
             reply_validator=_validate_verify_session_reply,
@@ -457,6 +493,27 @@ class PostHandshakeVerifySessionSession(
             )
         )
 
+    def encode_reconcile_required(
+        self,
+        *,
+        message_id: str,
+        reply_to: str,
+        payload: VerifySessionReconcileRequiredV1,
+    ) -> bytes:
+        if not isinstance(payload, VerifySessionReconcileRequiredV1):
+            self._fail(VerifySessionFrameReason.SCHEMA_VALIDATION.value)
+        sequence, pending = self._reply_context(reply_to=reply_to)
+        return self.encode(
+            self._build_reply_envelope(
+                sequence=sequence,
+                message_id=message_id,
+                reply_to=reply_to,
+                correlation_id=pending.correlation_id,
+                payload=payload,
+                message_type="verify_session.reconcile_required",
+            )
+        )
+
     def _reply_context(
         self,
         *,
@@ -583,6 +640,14 @@ def _validate_verify_session_reply(
         except (TypeError, ValueError):
             raise ReplyValidationError(VerifySessionFrameReason.REPLY_MISMATCH.value)
         return PendingReply.terminal()
+    if isinstance(response, _VerifySessionReconcileRequiredEnvelope):
+        if state != "accepted":
+            raise ReplyValidationError(VerifySessionFrameReason.RESPONSE_STATE_MISMATCH.value)
+        try:
+            validate_verify_session_durable_reply_identity(submit, response.payload.identity)
+        except (TypeError, ValueError):
+            raise ReplyValidationError(VerifySessionFrameReason.REPLY_MISMATCH.value) from None
+        return PendingReply.terminal()
     raise ReplyValidationError(VerifySessionFrameReason.REPLY_MISMATCH.value)
 
 
@@ -614,7 +679,14 @@ def _received_verify_session_message(envelope: _AuthenticatedEnvelope) -> Receiv
             correlation_id=envelope.correlation_id,
             payload=envelope.payload,
         )
-    return ReceivedVerifySessionFailure(
+    if isinstance(envelope, _VerifySessionFailureEnvelope):
+        return ReceivedVerifySessionFailure(
+            message_id=envelope.message_id,
+            reply_to=envelope.reply_to,
+            correlation_id=envelope.correlation_id,
+            payload=envelope.payload,
+        )
+    return ReceivedVerifySessionReconcileRequired(
         message_id=envelope.message_id,
         reply_to=envelope.reply_to,
         correlation_id=envelope.correlation_id,
@@ -636,6 +708,7 @@ __all__ = [
     "ReceivedVerifySessionAcceptedAck",
     "ReceivedVerifySessionFailure",
     "ReceivedVerifySessionMessage",
+    "ReceivedVerifySessionReconcileRequired",
     "ReceivedVerifySessionRejected",
     "ReceivedVerifySessionResult",
     "ReceivedVerifySessionSubmit",
@@ -643,5 +716,6 @@ __all__ = [
     "VerifySessionFailureV1",
     "VerifySessionFrameError",
     "VerifySessionFrameReason",
+    "VerifySessionReconcileRequiredV1",
     "VerifySessionRejectedV1",
 ]

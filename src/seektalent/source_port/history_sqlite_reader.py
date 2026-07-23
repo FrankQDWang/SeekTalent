@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 import sqlite3
 import stat
@@ -28,7 +29,8 @@ from seektalent.source_port.history_contract import (
 
 
 QUERY_RESULT_CONTRACT_VERSION = "seektalent.source-port.query.result/v1"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+MAX_DURABLE_REPLY_BYTES = 65_536
 
 
 class HistorySQLiteUnavailable(RuntimeError):
@@ -449,6 +451,12 @@ def _verify_journal_consistency(
             raise HistorySQLiteUnavailable("corrupt")
         if any(event[column] != head[column] for event in grouped for column in _IMMUTABLE_EVENT_HEAD_COLUMNS):
             raise HistorySQLiteUnavailable("corrupt")
+        if any(
+            not _is_valid_durable_reply_bytes(row[column])
+            for row in (*grouped, head)
+            for column in ("accepted_ack_bytes", "terminal_reply_bytes")
+        ):
+            raise HistorySQLiteUnavailable("corrupt")
 
         accepted_event = grouped[0]
         if (
@@ -482,13 +490,15 @@ def _verify_journal_consistency(
             if (
                 int(observation_event["journal_revision"]) != int(head["observation_journal_revision"])
                 or int(observation_event["event_generation"]) != int(head["observation_generation"])
-                or int(observation_event["observation_journal_revision"])
-                != int(observation_event["journal_revision"])
+                or int(observation_event["observation_journal_revision"]) != int(observation_event["journal_revision"])
                 or int(observation_event["observation_generation"]) != int(observation_event["event_generation"])
                 or observation_event["observation_ref"] is None
                 or observation_event["observation_hash"] is None
                 or observation_event["observation_ref"] != head["observation_ref"]
                 or observation_event["observation_hash"] != head["observation_hash"]
+                or observation_event["terminal_reply_bytes"] != head["terminal_reply_bytes"]
+                or not _terminal_reply_bytes_match_observation(observation_event)
+                or not _terminal_reply_bytes_match_observation(head)
             ):
                 raise HistorySQLiteUnavailable("corrupt")
 
@@ -587,6 +597,22 @@ def _head_key(row: sqlite3.Row) -> tuple[str, str, int]:
         str(row["operation_id"]),
         int(row["dispatch_authorization_ordinal"]),
     )
+
+
+def _is_valid_durable_reply_bytes(value: object) -> bool:
+    return value is None or (type(value) is bytes and 1 <= len(value) <= MAX_DURABLE_REPLY_BYTES)
+
+
+def _terminal_reply_bytes_match_observation(row: sqlite3.Row) -> bool:
+    terminal_reply_bytes = row["terminal_reply_bytes"]
+    if terminal_reply_bytes is None:
+        return True
+    observation_ref = row["observation_ref"]
+    observation_hash = row["observation_hash"]
+    if type(terminal_reply_bytes) is not bytes or type(observation_ref) is not str or type(observation_hash) is not str:
+        return False
+    digest = sha256(terminal_reply_bytes).hexdigest()
+    return observation_ref == observation_hash == digest
 
 
 def load_validated_history_facts(
@@ -762,6 +788,7 @@ _EVENT_COLUMN_NAMES = (
     "profile_binding_generation",
     "browser_control_scope_id",
     "controller_fence_ref",
+    "accepted_ack_bytes",
     "durable_dispatch_intent_ref",
     "dispatch_intent_generation",
     "dispatch_intent_journal_revision",
@@ -769,6 +796,7 @@ _EVENT_COLUMN_NAMES = (
     "observation_journal_revision",
     "observation_ref",
     "observation_hash",
+    "terminal_reply_bytes",
 )
 
 _HEAD_COLUMN_NAMES = (
@@ -790,6 +818,7 @@ _HEAD_COLUMN_NAMES = (
     "profile_binding_generation",
     "browser_control_scope_id",
     "controller_fence_ref",
+    "accepted_ack_bytes",
     "phase",
     "head_generation",
     "head_journal_revision",
@@ -800,14 +829,16 @@ _HEAD_COLUMN_NAMES = (
     "observation_journal_revision",
     "observation_ref",
     "observation_hash",
+    "terminal_reply_bytes",
 )
 
-_IMMUTABLE_EVENT_HEAD_COLUMNS = _HEAD_COLUMN_NAMES[:18]
+_IMMUTABLE_EVENT_HEAD_COLUMNS = _HEAD_COLUMN_NAMES[:19]
 _OBSERVATION_COLUMNS = (
     "observation_generation",
     "observation_journal_revision",
     "observation_ref",
     "observation_hash",
+    "terminal_reply_bytes",
 )
 _DISPATCH_COLUMNS = (
     "durable_dispatch_intent_ref",
@@ -846,7 +877,7 @@ CREATE TABLE source_history_generations (
 )
 """
 
-_EVENT_TABLE_DDL = """
+_EVENT_TABLE_DDL = f"""
 CREATE TABLE source_history_events (
     journal_revision INTEGER PRIMARY KEY CHECK(journal_revision >= 1),
     event_generation INTEGER NOT NULL REFERENCES source_history_generations(generation),
@@ -860,15 +891,25 @@ CREATE TABLE source_history_events (
     accepted_journal_revision INTEGER NOT NULL, authorized_dispatch_intent_id TEXT NOT NULL,
     authorized_dispatch_intent_revision INTEGER NOT NULL, authorized_dispatch_intent_digest TEXT NOT NULL,
     profile_binding_generation INTEGER NOT NULL, browser_control_scope_id TEXT, controller_fence_ref TEXT,
+    accepted_ack_bytes BLOB CHECK(
+        accepted_ack_bytes IS NULL OR (
+            typeof(accepted_ack_bytes) = 'blob' AND length(accepted_ack_bytes) BETWEEN 1 AND {MAX_DURABLE_REPLY_BYTES}
+        )
+    ),
     durable_dispatch_intent_ref TEXT,
     dispatch_intent_generation INTEGER REFERENCES source_history_generations(generation),
     dispatch_intent_journal_revision INTEGER,
     observation_generation INTEGER REFERENCES source_history_generations(generation),
-    observation_journal_revision INTEGER, observation_ref TEXT, observation_hash TEXT
+    observation_journal_revision INTEGER, observation_ref TEXT, observation_hash TEXT,
+    terminal_reply_bytes BLOB CHECK(
+        terminal_reply_bytes IS NULL OR (
+            typeof(terminal_reply_bytes) = 'blob' AND length(terminal_reply_bytes) BETWEEN 1 AND {MAX_DURABLE_REPLY_BYTES}
+        )
+    )
 )
 """
 
-_HEAD_TABLE_DDL = """
+_HEAD_TABLE_DDL = f"""
 CREATE TABLE source_history_heads (
     run_id TEXT NOT NULL, operation_id TEXT NOT NULL, source TEXT NOT NULL,
     operation_kind TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL,
@@ -879,6 +920,11 @@ CREATE TABLE source_history_heads (
     accepted_journal_revision INTEGER NOT NULL, authorized_dispatch_intent_id TEXT NOT NULL,
     authorized_dispatch_intent_revision INTEGER NOT NULL, authorized_dispatch_intent_digest TEXT NOT NULL,
     profile_binding_generation INTEGER NOT NULL, browser_control_scope_id TEXT, controller_fence_ref TEXT,
+    accepted_ack_bytes BLOB CHECK(
+        accepted_ack_bytes IS NULL OR (
+            typeof(accepted_ack_bytes) = 'blob' AND length(accepted_ack_bytes) BETWEEN 1 AND {MAX_DURABLE_REPLY_BYTES}
+        )
+    ),
     phase TEXT NOT NULL CHECK(phase IN ('accepted', 'dispatch_intent', 'observed_result', 'observed_failure')),
     head_generation INTEGER NOT NULL REFERENCES source_history_generations(generation),
     head_journal_revision INTEGER NOT NULL, durable_dispatch_intent_ref TEXT,
@@ -886,6 +932,11 @@ CREATE TABLE source_history_heads (
     dispatch_intent_journal_revision INTEGER,
     observation_generation INTEGER REFERENCES source_history_generations(generation),
     observation_journal_revision INTEGER, observation_ref TEXT, observation_hash TEXT,
+    terminal_reply_bytes BLOB CHECK(
+        terminal_reply_bytes IS NULL OR (
+            typeof(terminal_reply_bytes) = 'blob' AND length(terminal_reply_bytes) BETWEEN 1 AND {MAX_DURABLE_REPLY_BYTES}
+        )
+    ),
     PRIMARY KEY(run_id, operation_id, dispatch_authorization_ordinal)
 )
 """
