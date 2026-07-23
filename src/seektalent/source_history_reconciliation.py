@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 
-from seektalent.sidecar_readiness import (
+from seektalent.source_port.sidecar_transport import (
     AdmittedSourceHistoryResult,
     require_live_admitted_source_history_result,
 )

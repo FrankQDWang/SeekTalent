@@ -483,19 +483,22 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
     }
     assert not any(isinstance(node, ast.Name) and node.id == "Any" for node in ast.walk(tree))
 
-    production_callers = []
+    source_port_callers = []
     for path in (PROJECT_ROOT / "src").rglob("*.py"):
         if path.is_relative_to(CONTRACT_PATH.parent):
             continue
         source = path.read_text(encoding="utf-8")
         if "seektalent.source_port" in source:
-            production_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    # The production-unreachable #379 composition is the only main-side semantic consumer.
-    assert production_callers == [
+            source_port_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
+    # The bootstrap path is explicitly test-only; the remaining entries are the #379 main-side composition.
+    assert source_port_callers == [
         "src/seektalent/sidecar_readiness.py",
         "src/seektalent/source_history_reconciliation.py",
         "src/seektalent/sidecar_child_session.py",
+        "src/seektalent/sidecar_bootstrap.py",
     ]
+    bootstrap = PROJECT_ROOT / "src" / "seektalent" / "sidecar_bootstrap.py"
+    assert "--test-only-verify-session-journal" in bootstrap.read_text(encoding="utf-8")
 
     completed = subprocess.run(
         [

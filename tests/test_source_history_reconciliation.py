@@ -20,6 +20,7 @@ from seektalent.source_port.history_contract import (
     SourceHistoryQueryV1,
 )
 from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
+from seektalent.source_port import sidecar_transport
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.models import RuntimeRunRecord
 from seektalent_runtime_control.store import RuntimeControlStore
@@ -299,7 +300,7 @@ def test_raw_mapping_fake_closed_session_and_caller_decision_cannot_write_main_t
         admitted.payload,
         admitted.payload.model_dump(mode="json"),
         forged_multiple,
-        object.__new__(readiness.AdmittedSourceHistoryResult),
+        object.__new__(sidecar_transport.AdmittedSourceHistoryResult),
     )
     for value in rejected:
         with pytest.raises(TypeError, match="live factory"):
@@ -949,7 +950,7 @@ def _exchange(
     ready_lease_factory: Callable[[], InstalledSidecarLaunchLease],
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[
-    readiness.AdmittedSourceHistoryResult,
+    sidecar_transport.AdmittedSourceHistoryResult,
     readiness.ReadySidecarSession,
     object,
     list[BaseException],
@@ -962,7 +963,7 @@ def _exchange(
     )
     monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
     session = readiness.spawn_ready_sidecar(lease, timeout=1)
-    admitted = readiness.exchange_source_history(session, query, timeout=1)
+    admitted = sidecar_transport.exchange_source_history(session, query, timeout=1)
     return admitted, session, child_thread, errors
 
 

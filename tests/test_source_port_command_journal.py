@@ -1031,6 +1031,7 @@ def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_col
         if "command_journal" in path.read_text(encoding="utf-8"):
             production_callers.append(path.relative_to(project_root).as_posix())
     assert set(production_callers) == {
+        "src/seektalent/sidecar_bootstrap.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
     }

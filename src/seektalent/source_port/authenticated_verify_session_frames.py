@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Annotated, Literal, TypeAlias
+import threading
+from typing import Annotated, Literal, Never, SupportsIndex, TypeAlias
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
@@ -244,6 +246,24 @@ class ReceivedVerifySessionSubmit:
     payload: VerifySessionRequestV1
 
 
+class _AuthenticatedVerifySessionArrival(ReceivedVerifySessionSubmit):
+    """A non-constructible submit that came from one exact authenticated session feed."""
+
+    __slots__ = ()
+
+    def __init__(self, *_: object, **__: object) -> None:
+        raise TypeError("Authenticated verify-session arrival is factory-only")
+
+    def __copy__(self) -> Never:
+        raise TypeError("Authenticated verify-session arrival cannot be copied")
+
+    def __deepcopy__(self, _: dict[int, object]) -> Never:
+        raise TypeError("Authenticated verify-session arrival cannot be copied")
+
+    def __reduce_ex__(self, _: SupportsIndex) -> Never:
+        raise TypeError("Authenticated verify-session arrival cannot be serialized")
+
+
 @dataclass(frozen=True, slots=True)
 class ReceivedVerifySessionAcceptedAck:
     message_id: str
@@ -294,10 +314,19 @@ ReceivedVerifySessionMessage: TypeAlias = (
 )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
+class _AuthenticatedVerifySessionArrivalBinding:
+    owner: object
+    request: VerifySessionRequestEchoV1
+    arrival: _AuthenticatedVerifySessionArrival
+    arrival_monotonic: float | None
+
+
+@dataclass(slots=True)
 class _VerifySessionPending:
     correlation_id: str | None
     request: VerifySessionRequestEchoV1
+    authenticated_arrival: _AuthenticatedVerifySessionArrivalBinding | None = None
 
 
 class PostHandshakeVerifySessionSession(
@@ -305,7 +334,7 @@ class PostHandshakeVerifySessionSession(
 ):
     """One endpoint's strict verify-session submit and reply framing state."""
 
-    __slots__ = ()
+    __slots__ = ("_verify_arrival_clock", "_verify_arrival_lock", "_verify_arrival_owner")
 
     def __init__(
         self,
@@ -353,6 +382,12 @@ class PostHandshakeVerifySessionSession(
             max_session_messages=lambda: MAX_SESSION_MESSAGES,
             max_pending_requests=lambda: MAX_PENDING_SUBMITS,
         )
+        self._initialize_verify_arrival_state()
+
+    def _initialize_verify_arrival_state(self) -> None:
+        self._verify_arrival_clock: Callable[[], float] | None = None
+        self._verify_arrival_lock = threading.Lock()
+        self._verify_arrival_owner: object | None = None
 
     @classmethod
     def for_main(
@@ -387,6 +422,18 @@ class PostHandshakeVerifySessionSession(
             main_to_sidecar_key=main_to_sidecar_key,
             sidecar_to_main_key=sidecar_to_main_key,
         )
+
+    def feed(self, data: bytes) -> tuple[ReceivedVerifySessionMessage, ...]:
+        received = super().feed(data)
+        if self._role != "sidecar" or self._verify_arrival_clock is None or self._verify_arrival_owner is None:
+            return received
+        arrivals: list[ReceivedVerifySessionMessage] = []
+        for message in received:
+            if type(message) is ReceivedVerifySessionSubmit:
+                arrivals.append(_new_authenticated_verify_session_arrival(self, message))
+            else:
+                arrivals.append(message)
+        return tuple(arrivals)
 
     def encode_submit(
         self,
@@ -701,6 +748,113 @@ def _verify_session_pending(envelope: _AuthenticatedEnvelope) -> _VerifySessionP
         correlation_id=envelope.correlation_id,
         request=verify_session_request_echo(envelope.payload),
     )
+
+
+def _bind_authenticated_verify_session_arrivals(
+    session: PostHandshakeVerifySessionSession,
+    *,
+    owner: object,
+    monotonic_clock: Callable[[], float],
+) -> None:
+    if not isinstance(session, PostHandshakeVerifySessionSession):
+        raise TypeError("frame_session must be a verify-session frame session")
+    if session.closed or session._role != "sidecar" or session._pending_requests:
+        raise TypeError("frame_session cannot bind authenticated arrivals")
+    if not callable(monotonic_clock) or session._verify_arrival_owner is not None:
+        raise TypeError("frame_session cannot bind authenticated arrivals")
+    session._verify_arrival_owner = owner
+    session._verify_arrival_clock = monotonic_clock
+
+
+def _release_authenticated_verify_session_arrivals(
+    session: PostHandshakeVerifySessionSession,
+    *,
+    owner: object,
+) -> None:
+    if not isinstance(session, PostHandshakeVerifySessionSession):
+        return
+    with session._verify_arrival_lock:
+        if session._verify_arrival_owner is owner:
+            session._verify_arrival_owner = None
+            session._verify_arrival_clock = None
+        for pending_request in session._pending_requests.values():
+            pending = pending_request.request
+            if type(pending) is not _VerifySessionPending:
+                continue
+            binding = pending.authenticated_arrival
+            if binding is not None and binding.owner is owner:
+                pending.authenticated_arrival = None
+
+
+def _new_authenticated_verify_session_arrival(
+    session: PostHandshakeVerifySessionSession,
+    received: ReceivedVerifySessionSubmit,
+) -> _AuthenticatedVerifySessionArrival:
+    owner = session._verify_arrival_owner
+    clock = session._verify_arrival_clock
+    with session._verify_arrival_lock:
+        pending_request = session._pending_requests.get(received.message_id)
+        pending = None if pending_request is None else pending_request.request
+        if (
+            owner is None
+            or clock is None
+            or type(pending) is not _VerifySessionPending
+            or pending.authenticated_arrival is not None
+        ):
+            session._fail(VerifySessionFrameReason.WRONG_REPLY.value)
+        arrival = object.__new__(_AuthenticatedVerifySessionArrival)
+        object.__setattr__(arrival, "message_id", received.message_id)
+        object.__setattr__(arrival, "correlation_id", received.correlation_id)
+        object.__setattr__(arrival, "payload", received.payload)
+        pending.authenticated_arrival = _AuthenticatedVerifySessionArrivalBinding(
+            owner=owner,
+            request=pending.request,
+            arrival=arrival,
+            arrival_monotonic=(
+                None if received.payload.delivery.delivery_mode == "outbox_redelivery" else clock()
+            ),
+        )
+        return arrival
+
+
+def _consume_authenticated_verify_session_arrival(
+    session: PostHandshakeVerifySessionSession,
+    *,
+    owner: object,
+    arrival: object,
+) -> tuple[ReceivedVerifySessionSubmit, float | None]:
+    if type(arrival) is not _AuthenticatedVerifySessionArrival:
+        raise TypeError("authenticated verify-session arrival is required")
+    try:
+        message_id = arrival.message_id
+        correlation_id = arrival.correlation_id
+        payload = arrival.payload
+    except AttributeError:
+        raise TypeError("authenticated verify-session arrival is required") from None
+    with session._verify_arrival_lock:
+        pending_request = session._pending_requests.get(message_id)
+        if pending_request is None or type(pending_request.request) is not _VerifySessionPending:
+            raise TypeError("authenticated verify-session arrival is required")
+        pending = pending_request.request
+        binding = pending.authenticated_arrival
+        if (
+            binding is None
+            or binding.owner is not owner
+            or binding.arrival is not arrival
+            or binding.request is not pending.request
+            or session._verify_arrival_owner is not owner
+            or session.closed
+            or pending.correlation_id != correlation_id
+        ):
+            raise TypeError("authenticated verify-session arrival is required")
+        if verify_session_request_echo(payload) != binding.request:
+            raise TypeError("authenticated verify-session arrival is required")
+        pending.authenticated_arrival = None
+    return ReceivedVerifySessionSubmit(
+        message_id=message_id,
+        correlation_id=correlation_id,
+        payload=payload,
+    ), binding.arrival_monotonic
 
 
 __all__ = [

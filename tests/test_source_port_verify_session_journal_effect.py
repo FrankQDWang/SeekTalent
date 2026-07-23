@@ -9,6 +9,7 @@ from pathlib import Path
 import pickle
 import sqlite3
 import threading
+import time
 from unittest.mock import patch
 
 import pytest
@@ -17,6 +18,7 @@ import seektalent.source_port._command_journal_engine as journal_engine
 import seektalent.source_port.verify_session_journal_effect as journal_effect
 from seektalent.source_port.authenticated_verify_session_frames import (
     PostHandshakeVerifySessionSession,
+    ReceivedVerifySessionSubmit,
     VerifySessionFailureV1,
     VerifySessionFrameError,
     VerifySessionFrameReason,
@@ -231,6 +233,156 @@ def _consume_pending_effect(
     return exchange.pending_effect.consume()
 
 
+def _journal_phases(path: Path) -> list[tuple[str]]:
+    with sqlite3.connect(path) as connection:
+        return connection.execute("SELECT phase FROM source_history_heads").fetchall()
+
+
+def _journal_snapshot(path: Path) -> tuple[tuple[str, bytes], ...]:
+    return tuple(
+        (candidate.name, candidate.read_bytes())
+        for candidate in sorted(path.parent.glob(f"{path.name}*"))
+        if candidate.is_file()
+    )
+
+
+def test_handle_submit_rejects_a_constructed_dto_before_any_journal_or_frame_mutation(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    _, composition = _composition(path, effect, session_id="session-1")
+    state = journal_effect._composition_state(composition)
+    forged = ReceivedVerifySessionSubmit(
+        message_id="unauthenticated",
+        correlation_id="correlation-1",
+        payload=_request(),
+    )
+    before_send_sequence = state.frame_session._next_send_sequence  # type: ignore[attr-defined]
+    before_pending = dict(state.frame_session._pending_requests)  # type: ignore[attr-defined]
+    before_journal = _journal_snapshot(path)
+
+    with pytest.raises(journal_effect.VerifySessionJournalEffectError, match="unauthenticated_arrival") as rejection:
+        composition.handle_submit(forged)
+
+    assert _journal_phases(path) == []
+    assert _journal_snapshot(path) == before_journal
+    assert effect.calls == 0
+    assert state.frame_session._next_send_sequence == before_send_sequence  # type: ignore[attr-defined]
+    assert state.frame_session._pending_requests == before_pending  # type: ignore[attr-defined]
+    assert RAW_FENCE_TOKEN not in "\n".join((str(rejection.value), repr(rejection.value), repr(rejection.value.args)))
+
+
+def test_handle_submit_rejects_an_authenticated_arrival_from_another_live_session_without_writes(
+    tmp_path: Path,
+) -> None:
+    first_path = tmp_path / "first.sqlite3"
+    second_path = tmp_path / "second.sqlite3"
+    first_main, first = _composition(first_path, _Effect(), session_id="session-1")
+    _, second = _composition(second_path, _Effect(), session_id="session-2")
+    first_state = journal_effect._composition_state(first)
+    second_state = journal_effect._composition_state(second)
+    arrival = first_state.frame_session.feed(
+        first_main.encode_submit(
+            message_id="submit-1",
+            correlation_id="correlation-1",
+            payload=_request(),
+        )
+    )[0]
+    before_send_sequence = second_state.frame_session._next_send_sequence  # type: ignore[attr-defined]
+    before_pending = dict(second_state.frame_session._pending_requests)  # type: ignore[attr-defined]
+    first_before_journal = _journal_snapshot(first_path)
+    second_before_journal = _journal_snapshot(second_path)
+
+    with pytest.raises(journal_effect.VerifySessionJournalEffectError, match="unauthenticated_arrival"):
+        second.handle_submit(arrival)
+
+    assert _journal_phases(first_path) == []
+    assert _journal_phases(second_path) == []
+    assert _journal_snapshot(first_path) == first_before_journal
+    assert _journal_snapshot(second_path) == second_before_journal
+    assert second_state.frame_session._next_send_sequence == before_send_sequence  # type: ignore[attr-defined]
+    assert second_state.frame_session._pending_requests == before_pending  # type: ignore[attr-defined]
+
+
+def test_handle_submit_consumes_one_authenticated_arrival_only_once_without_a_second_write(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    main, composition = _composition(path, _Effect(), session_id="session-1")
+    state = journal_effect._composition_state(composition)
+    arrival = state.frame_session.feed(
+        main.encode_submit(
+            message_id="submit-1",
+            correlation_id="correlation-1",
+            payload=_request(),
+        )
+    )[0]
+
+    accepted = composition.handle_submit(arrival)
+    before_phases = _journal_phases(path)
+    before_send_sequence = state.frame_session._next_send_sequence  # type: ignore[attr-defined]
+    before_journal = _journal_snapshot(path)
+
+    with pytest.raises(journal_effect.VerifySessionJournalEffectError, match="unauthenticated_arrival"):
+        composition.handle_submit(arrival)
+
+    assert accepted.pending_effect is not None
+    assert _journal_phases(path) == before_phases
+    assert _journal_snapshot(path) == before_journal
+    assert state.frame_session._next_send_sequence == before_send_sequence  # type: ignore[attr-defined]
+
+
+def test_handle_submit_rejects_a_caller_supplied_future_arrival_without_writes(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    main, composition = _composition(path, _Effect(), session_id="session-1")
+    state = journal_effect._composition_state(composition)
+    arrival = state.frame_session.feed(
+        main.encode_submit(
+            message_id="submit-1",
+            correlation_id="correlation-1",
+            payload=_request(),
+        )
+    )[0]
+    before_send_sequence = state.frame_session._next_send_sequence  # type: ignore[attr-defined]
+    before_journal = _journal_snapshot(path)
+
+    with pytest.raises(journal_effect.VerifySessionJournalEffectError, match="unauthenticated_arrival"):
+        composition.handle_submit(arrival, arrival_monotonic=time.monotonic() + 60)
+
+    assert _journal_phases(path) == []
+    assert _journal_snapshot(path) == before_journal
+    assert state.frame_session._next_send_sequence == before_send_sequence  # type: ignore[attr-defined]
+
+
+def test_authenticated_arrival_is_factory_only_noncopyable_and_released_on_composition_close(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    main, composition = _composition(path, _Effect(), session_id="session-1")
+    state = journal_effect._composition_state(composition)
+    arrival = state.frame_session.feed(
+        main.encode_submit(
+            message_id="submit-1",
+            correlation_id="correlation-1",
+            payload=_request(),
+        )
+    )[0]
+    before_journal = _journal_snapshot(path)
+    forged = object.__new__(type(arrival))
+    object.__setattr__(forged, "message_id", arrival.message_id)
+    object.__setattr__(forged, "correlation_id", arrival.correlation_id)
+    object.__setattr__(forged, "payload", arrival.payload)
+
+    with pytest.raises(TypeError, match="copied"):
+        copy.copy(arrival)
+    with pytest.raises(TypeError, match="serialized"):
+        pickle.dumps(arrival)
+    with pytest.raises(journal_effect.VerifySessionJournalEffectError, match="unauthenticated_arrival"):
+        composition.handle_submit(forged)
+
+    composition.close()
+
+    pending = state.frame_session._pending_request(arrival.message_id)  # type: ignore[attr-defined]
+    assert pending is not None
+    assert pending.authenticated_arrival is None
+    assert _journal_snapshot(path) == before_journal
+
+
 def test_durable_ack_is_deliverable_before_a_factory_only_pending_effect_is_consumed(tmp_path: Path) -> None:
     effect = _Effect()
     main, composition = _composition(tmp_path / "journal.sqlite3", effect, session_id="session-1")
@@ -294,6 +446,7 @@ def test_expired_local_monotonic_deadline_never_starts_a_pending_effect(tmp_path
 
     assert accepted.disposition == "pending_effect"
     assert accepted.pending_effect is not None
+    assert accepted.arrival_deadline_at == pytest.approx(0.001)
     assert effect.calls == 0
     assert main.feed(accepted.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
 
@@ -302,6 +455,7 @@ def test_expired_local_monotonic_deadline_never_starts_a_pending_effect(tmp_path
 
     assert effect.calls == 0
     assert expired.disposition == "reconcile_first"
+    assert expired.arrival_deadline_at == accepted.arrival_deadline_at
     assert len(expired.outbound_frames) == 1
     assert main.feed(expired.outbound_frames[0])[0].payload.reconciliation_fact == "dispatch_not_observed"
     facts = SourceHistorySQLiteReader(path).query(_history(_request(deadline_value=1), searched_last_generation=1))
@@ -822,7 +976,7 @@ def test_journal_effect_composition_is_factory_only_and_cannot_accept_a_forged_e
     assert pending.pending_effect is not None
 
 
-def test_production_unreachable_composition_has_no_wtscli_browser_or_runtime_caller() -> None:
+def test_only_bootstrap_and_transport_are_the_only_composition_callers_without_wtscli_or_browser() -> None:
     project_root = Path(__file__).parents[1]
     composition_modules = {
         project_root / "src" / "seektalent" / "source_port" / "verify_session_journal_effect.py",
@@ -838,5 +992,15 @@ def test_production_unreachable_composition_has_no_wtscli_browser_or_runtime_cal
         for path in (project_root / "src").rglob("*.py")
         if path not in composition_modules and "verify_session_journal_effect" in path.read_text(encoding="utf-8")
     ]
-    assert callers == []
+    assert callers == [
+        "src/seektalent/sidecar_bootstrap.py",
+        "src/seektalent/source_port/sidecar_transport.py",
+    ]
+    bootstrap = (project_root / "src" / "seektalent" / "sidecar_bootstrap.py").read_text(encoding="utf-8")
+    transport = (project_root / "src" / "seektalent" / "source_port" / "sidecar_transport.py").read_text(
+        encoding="utf-8"
+    )
+    assert "--test-only-verify-session-journal" in bootstrap
+    assert "test-only-liepin_execution_sidecar-source-" in bootstrap
+    assert "serve_test_source_port" in transport
     assert "verify_session_journal_effect" in all_source

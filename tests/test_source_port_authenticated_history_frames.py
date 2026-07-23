@@ -712,11 +712,11 @@ def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_busin
         source = path.read_text(encoding="utf-8")
         if "authenticated_history_frames" in source:
             production_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    # The #379 composition imports only the promoted semantic canonical-bytes boundary.
+    # Reconciliation imports only canonical semantics; the mixed session owns framing.
     assert production_callers == [
-        "src/seektalent/sidecar_readiness.py",
         "src/seektalent/source_history_reconciliation.py",
-        "src/seektalent/sidecar_child_session.py",
+        "src/seektalent/source_port/authenticated_source_port_session.py",
+        "src/seektalent/source_port/sidecar_transport.py",
     ]
 
     runner = (PROJECT_ROOT / "src" / "seektalent_workbench_v2" / "runtime_runner.py").read_text(encoding="utf-8")

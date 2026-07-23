@@ -44,6 +44,7 @@ class VerifySessionJournalEffectReason(StrEnum):
     JOURNAL_CONFLICT = "journal_conflict"
     JOURNAL_ERROR = "journal_error"
     PENDING_EFFECT_UNAVAILABLE = "pending_effect_unavailable"
+    UNAUTHENTICATED_ARRIVAL = "unauthenticated_arrival"
     UNEXPECTED_MESSAGE = "unexpected_message"
 
 
