@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
@@ -11,6 +11,7 @@ import pytest
 import seektalent.installed_release as installed_release
 import seektalent.sidecar_child_session as child_session_module
 import seektalent.sidecar_readiness as readiness
+from seektalent.browser_bridge_manifest import BrowserBridgeRequirement
 from seektalent.installed_slot import (
     ActiveSlotPointerV1,
     InstalledSidecarLaunchLease,
@@ -37,6 +38,11 @@ from seektalent.source_port.verify_session_contract import VerifySessionRequestV
 from seektalent.source_port.verify_session_journal_effect import create_verify_session_journal_effect_composition
 import seektalent.source_port.verify_session_journal_effect as journal_effect
 from seektalent.release_manifest import parse_release_manifest
+from seektalent.opencli_browser.daemon_transport import OpenCliDaemonAction, OpenCliDaemonResult
+from seektalent.wtscli_verify_session_adapter import (
+    WtsCliCurrentProfileSnapshot,
+    create_wtscli_verify_session_effect,
+)
 from tests.test_sidecar_readiness import (
     _connected_process,
     _history_query,
@@ -123,30 +129,6 @@ def _redelivery() -> VerifySessionRequestV1:
     )
 
 
-def _verify_result(request: VerifySessionRequestV1) -> VerifySessionResultV1:
-    return VerifySessionResultV1.model_validate(
-        {
-            "contract_version": "seektalent.source.verify-session.result/v1",
-            "identity": request.identity,
-            "process_readiness": "ready",
-            "bridge_readiness": "ready",
-            "extension_readiness": "ready",
-            "profile_lock_readiness": "ready",
-            "account_readiness": "ready",
-            "search_surface_readiness": "ready",
-            "risk_state": "clear",
-            "session_readiness": "ready",
-            "actual_profile_binding_ref": request.profile_binding_ref,
-            "actual_provider_account_ref": request.provider_account_ref,
-            "actual_profile_binding_generation": request.identity.profile_binding_generation,
-            "safe_reason_code": None,
-            "user_action": None,
-            "component_receipt_refs": request.component_receipt_refs,
-        },
-        strict=True,
-    )
-
-
 def _shared_source_port_pair() -> tuple[PostHandshakeSourcePortSession, PostHandshakeSourcePortSession]:
     values = {
         "session_id": "a" * 32,
@@ -160,10 +142,145 @@ def _shared_source_port_pair() -> tuple[PostHandshakeSourcePortSession, PostHand
 class _RecordingEffect:
     def __init__(self) -> None:
         self.calls = 0
+        self.deadlines: list[float] = []
+        self.daemon = _DeterministicWtsCliDaemon()
+        self._effect = create_wtscli_verify_session_effect(
+            daemon=self.daemon,
+            bridge_requirement=_TRANSPORT_BRIDGE_REQUIREMENT,
+            current_profile_snapshot=_transport_profile_snapshot,
+            control_key="transport-controller-only-key",
+        )
 
-    def __call__(self, request: VerifySessionRequestV1) -> VerifySessionResultV1:
+    def __call__(self, request: VerifySessionRequestV1, deadline_at: float) -> VerifySessionResultV1:
         self.calls += 1
-        return _verify_result(request)
+        self.deadlines.append(deadline_at)
+        outcome = self._effect(request, deadline_at)
+        assert type(outcome) is VerifySessionResultV1
+        return outcome
+
+
+_TRANSPORT_BRIDGE_REQUIREMENT = BrowserBridgeRequirement(
+    implementation="seektalent-opencli",
+    bridge_build_id="seektalent-opencli-0.1.0+wtscli.1",
+    protocol_major=1,
+    protocol_minor=0,
+    capabilities=frozenset(
+        {
+            "browser.operation-deadline.v1",
+            "browser.operations.v1",
+            "control-fence.v1",
+            "tab.close-verified.v1",
+            "tab.create-in-existing-window.v1",
+            "tab.find.v1",
+            "tab.idle-deadline.v1",
+        }
+    ),
+)
+
+
+def _transport_profile_snapshot() -> WtsCliCurrentProfileSnapshot:
+    return WtsCliCurrentProfileSnapshot(
+        runtime_attempt_fence_ref="bc755a043d939b683f58b27e72d7c9916ec21977f350959fd97e0b3623b7fd37",
+        profile_binding_ref="profile-binding-shared-1",
+        profile_binding_generation=1,
+        provider_account_ref="provider-account-shared-1",
+        provider_account_subject="transport-profile-subject",
+        browser_control_scope_id="browser-scope-shared-1",
+    )
+
+
+class _DeterministicWtsCliDaemon:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def verify_bridge(
+        self,
+        *,
+        timeout_seconds: float,
+        validate: bool = True,
+    ) -> Mapping[str, object]:
+        assert timeout_seconds > 0
+        self.calls.append("status.validate" if validate else "status")
+        return {
+            "ok": True,
+            "pid": 41001,
+            "daemonVersion": "0.1.0",
+            "implementation": _TRANSPORT_BRIDGE_REQUIREMENT.implementation,
+            "bridgeBuildId": _TRANSPORT_BRIDGE_REQUIREMENT.bridge_build_id,
+            "protocolVersion": {"major": 1, "minor": 0},
+            "capabilities": sorted(_TRANSPORT_BRIDGE_REQUIREMENT.capabilities),
+            "extensionConnected": True,
+            "extensionImplementation": _TRANSPORT_BRIDGE_REQUIREMENT.implementation,
+            "extensionBridgeBuildId": _TRANSPORT_BRIDGE_REQUIREMENT.bridge_build_id,
+            "extensionProtocolVersion": {"major": 1, "minor": 0},
+            "extensionCapabilities": sorted(_TRANSPORT_BRIDGE_REQUIREMENT.capabilities),
+        }
+
+    def command(
+        self,
+        action: OpenCliDaemonAction,
+        params: Mapping[str, object],
+        *,
+        timeout_seconds: float,
+    ) -> OpenCliDaemonResult:
+        assert timeout_seconds > 0
+        if action == "control":
+            self.calls.append("control.activate")
+            return OpenCliDaemonResult(
+                "control-transport",
+                data={"controlKey": params["controlKey"], "fenceToken": 17},
+            )
+        if action == "tabs" and params.get("op") == "find":
+            self.calls.append("tabs.find")
+            return OpenCliDaemonResult(
+                "tabs-find-transport",
+                data=[
+                    {
+                        "page": "transport-user-tab",
+                        "url": "https://h.liepin.com/",
+                        "windowId": 7,
+                        "active": True,
+                        "windowFocused": True,
+                    }
+                ],
+            )
+        if action == "tabs" and params.get("op") == "new":
+            self.calls.append("tabs.new")
+            return OpenCliDaemonResult(
+                "tabs-new-transport",
+                data={"active": False, "placement": "borrowed-host-window"},
+                page="transport-owned-tab",
+                idle_deadline_at=1,
+            )
+        if action == "browser-operation" and params.get("operation") == "get-url":
+            self.calls.append("browser.get-url")
+            return OpenCliDaemonResult(
+                "browser-url-transport",
+                data="https://h.liepin.com/search/getConditionItem",
+                page="transport-owned-tab",
+            )
+        if action == "browser-operation" and params.get("operation") == "state":
+            self.calls.append("browser.state")
+            return OpenCliDaemonResult(
+                "browser-state-transport",
+                data=(
+                    "找简历\n安全退出\n<span>包含全部关键词</span>\n"
+                    "[27]<input type=search role=combobox id=rc_select_1 />"
+                ),
+                page="transport-owned-tab",
+            )
+        if action == "tabs" and params.get("op") == "close":
+            self.calls.append("tabs.close")
+            return OpenCliDaemonResult(
+                "tabs-close-transport",
+                data={
+                    "requested": "transport-owned-tab",
+                    "outcome": "closed",
+                    "verified": True,
+                    "errorCode": None,
+                },
+            )
+        raise AssertionError(f"unexpected WTSCLI command: {action}")
 
 
 class _InterruptAfterIntent(RuntimeError):
@@ -267,7 +384,7 @@ def test_shared_post_handshake_session_accepts_verify_then_history_and_closes_on
     assert sidecar.closed is True
 
 
-def test_real_ready_pipe_writes_the_accepted_ack_before_consuming_the_fake_effect(
+def test_real_ready_pipe_writes_the_accepted_ack_before_the_deterministic_wtscli_probe(
     tmp_path: Path,
     lease_factory: Callable[[], InstalledSidecarLaunchLease],
     monkeypatch: pytest.MonkeyPatch,
@@ -278,7 +395,13 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_consuming_the_fake_effec
     release_effect = threading.Event()
     effect_started = threading.Event()
     verify_writes_recorded = threading.Event()
-    effect_calls: list[VerifySessionRequestV1] = []
+    daemon = _DeterministicWtsCliDaemon()
+    effect = create_wtscli_verify_session_effect(
+        daemon=daemon,
+        bridge_requirement=_TRANSPORT_BRIDGE_REQUIREMENT,
+        current_profile_snapshot=_transport_profile_snapshot,
+        control_key="transport-controller-only-key",
+    )
     verify_write_deadlines: list[float] = []
     original_send = child_session_module.SidecarHandshakeResult._send_source_port_frame
 
@@ -295,19 +418,17 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_consuming_the_fake_effec
             if len(verify_write_deadlines) == 2:
                 verify_writes_recorded.set()
 
-    def fake_effect(request: VerifySessionRequestV1) -> VerifySessionResultV1:
+    def hold_before_direct_effect() -> None:
         assert ack_written.wait(1)
-        effect_calls.append(request)
         effect_started.set()
         assert release_effect.wait(1)
-        return _verify_result(request)
 
     def serve_shared_transport(result: readiness.SidecarHandshakeResult) -> None:
         journal = create_command_journal(tmp_path / "verify-session-journal.sqlite3")
         composition = create_verify_session_journal_effect_composition(
             command_journal_session=journal.start(),
             frame_session=result.source_port_session(),
-            effect=fake_effect,
+            effect=effect,
         )
         try:
             sidecar_transport.serve_test_source_port(result, reader, composition, timeout=1)
@@ -324,6 +445,7 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_consuming_the_fake_effec
     )
     monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
     monkeypatch.setattr(child_session_module.SidecarHandshakeResult, "_send_source_port_frame", record_verify_write)
+    monkeypatch.setattr(journal_effect, "_before_effect_invocation", hold_before_direct_effect)
     session = readiness.spawn_ready_sidecar(lease, timeout=1)
 
     try:
@@ -344,7 +466,7 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_consuming_the_fake_effec
         assert ack_messages[0].payload.accepted_fact == "dispatch_authorized"
         assert ack_written.wait(1)
         assert effect_started.wait(1)
-        assert effect_calls == [request]
+        assert daemon.calls == []
 
         release_effect.set()
         terminal_messages = session.receive_history(timeout=1)
@@ -354,6 +476,16 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_consuming_the_fake_effec
         assert verify_writes_recorded.wait(1)
         assert len(verify_write_deadlines) == 2
         assert verify_write_deadlines[0] == verify_write_deadlines[1]
+        assert daemon.calls == [
+            "status",
+            "status.validate",
+            "control.activate",
+            "tabs.find",
+            "tabs.new",
+            "browser.get-url",
+            "browser.state",
+            "tabs.close",
+        ]
 
         after = sidecar_transport.exchange_source_history(
             session,
@@ -438,7 +570,7 @@ def test_real_shared_pipe_allows_a_rejection_without_ack_then_serves_history(
     ("request_factory", "label"),
     ((_verify_request, "exact_replay"), (_redelivery, "outbox_redelivery")),
 )
-def test_real_pipe_reconnect_replays_terminal_without_a_second_fake_effect(
+def test_real_pipe_reconnect_replays_terminal_without_a_second_wtscli_probe(
     tmp_path: Path,
     lease_factory: Callable[[], InstalledSidecarLaunchLease],
     monkeypatch: pytest.MonkeyPatch,

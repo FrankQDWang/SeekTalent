@@ -32,6 +32,9 @@ WIRE_PRIMITIVES_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "wi
 VERIFY_SESSION_FRAMES_PATH = (
     PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_verify_session_frames.py"
 )
+PRODUCTION_UNREACHABLE_WTSCLI_COMPOSITION_PATH = (
+    PROJECT_ROOT / "src" / "seektalent" / "wtscli_verify_session_classification.py"
+)
 PLAN_PATH = PROJECT_ROOT / "docs" / "plans" / "external-execution-plane-v1-source-execution-port.md"
 RAW_FENCE_TOKEN = "raw-fence-token-canary-" + "x" * 64
 LEAK_CANARY = "RAW-FENCE-TOKEN-MUST-NOT-LEAK-" + "z" * 64
@@ -461,6 +464,38 @@ def test_verify_session_result_has_only_closed_safe_facts_and_echoes_main_receip
         validate_verify_session_result_echo(request, mismatched)
 
 
+@pytest.mark.parametrize(
+    "safe_reason_code",
+    (
+        "liepin_opencli_bridge_integrity_failed",
+        "liepin_opencli_bridge_wrong_implementation",
+        "liepin_opencli_bridge_build_mismatch",
+        "liepin_opencli_bridge_protocol_mismatch",
+        "liepin_opencli_bridge_capability_missing",
+    ),
+)
+def test_verify_session_result_accepts_only_the_named_bridge_identity_failure_taxonomy(
+    safe_reason_code: str,
+) -> None:
+    request = _request()
+
+    result = _result(
+        request,
+        bridge_readiness="not_ready",
+        session_readiness="not_ready",
+        safe_reason_code=safe_reason_code,
+    )
+
+    assert result.safe_reason_code == safe_reason_code
+    with pytest.raises(ValidationError):
+        _result(
+            request,
+            bridge_readiness="not_ready",
+            session_readiness="not_ready",
+            safe_reason_code=f"{safe_reason_code}_unknown",
+        )
+
+
 def test_initial_result_replays_to_legal_redelivery_but_rejects_stable_identity_tampering() -> None:
     initial = _request()
     result = _result(initial)
@@ -567,7 +602,13 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
 
     callers = []
     for path in (PROJECT_ROOT / "src").rglob("*.py"):
-        if path in {CONTRACT_PATH, OPERATION_DISPATCH_PATH, WIRE_PRIMITIVES_PATH, VERIFY_SESSION_FRAMES_PATH}:
+        if path in {
+            CONTRACT_PATH,
+            OPERATION_DISPATCH_PATH,
+            WIRE_PRIMITIVES_PATH,
+            VERIFY_SESSION_FRAMES_PATH,
+            PRODUCTION_UNREACHABLE_WTSCLI_COMPOSITION_PATH,
+        }:
             continue
         content = path.read_text(encoding="utf-8")
         if "verify_session_contract" in content or "operation_dispatch" in content:

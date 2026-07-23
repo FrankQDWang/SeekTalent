@@ -162,9 +162,15 @@ class _Effect:
     def __init__(self, *, failure: bool = False) -> None:
         self.calls = 0
         self.failure = failure
+        self.deadlines: list[float] = []
 
-    def __call__(self, request: VerifySessionRequestV1) -> VerifySessionResultV1 | VerifySessionFailureV1:
+    def __call__(
+        self,
+        request: VerifySessionRequestV1,
+        deadline_at: float,
+    ) -> VerifySessionResultV1 | VerifySessionFailureV1:
         self.calls += 1
+        self.deadlines.append(deadline_at)
         return _failure(request) if self.failure else _result(request)
 
 
@@ -408,6 +414,26 @@ def test_durable_ack_is_deliverable_before_a_factory_only_pending_effect_is_cons
     assert main.feed(terminal.outbound_frames[0])[0].payload.session_readiness == "ready"
     with pytest.raises(TypeError, match="consumed"):
         accepted.pending_effect.consume()
+
+
+def test_pending_effect_receives_the_original_arrival_anchored_absolute_deadline(tmp_path: Path) -> None:
+    clock = _MonotonicClock(123.0)
+    effect = _Effect()
+    main, composition = _composition(
+        tmp_path / "journal.sqlite3",
+        effect,
+        session_id="session-1",
+        monotonic_clock=clock,
+    )
+
+    accepted = _submit(main, composition, _request(deadline_value=1_000))
+    assert accepted.arrival_deadline_at == pytest.approx(124.0)
+    clock.advance(0.250)
+    terminal = _consume_pending_effect(accepted)
+
+    assert terminal.disposition == "observed_result"
+    assert effect.deadlines == [accepted.arrival_deadline_at]
+    assert effect.deadlines[0] != clock() + 1
 
 
 def test_pending_effect_authority_cannot_expose_or_reuse_its_effect_consumer(tmp_path: Path) -> None:
@@ -796,8 +822,9 @@ def test_concurrent_same_submit_invokes_the_effect_at_most_once(tmp_path: Path) 
     release = threading.Event()
 
     class BlockingEffect(_Effect):
-        def __call__(self, request: VerifySessionRequestV1) -> VerifySessionResultV1:
+        def __call__(self, request: VerifySessionRequestV1, deadline_at: float) -> VerifySessionResultV1:
             self.calls += 1
+            self.deadlines.append(deadline_at)
             entered.set()
             assert release.wait(timeout=5)
             return _result(request)
@@ -934,7 +961,8 @@ def test_effect_errors_and_composition_surfaces_never_leak_the_raw_fence_bearer(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     class LeakingEffect:
-        def __call__(self, request: VerifySessionRequestV1) -> VerifySessionResultV1:
+        def __call__(self, request: VerifySessionRequestV1, deadline_at: float) -> VerifySessionResultV1:
+            del deadline_at
             raise RuntimeError(request.runtime_attempt_fence_token)
 
     main, composition = _composition(tmp_path / "journal.sqlite3", LeakingEffect(), session_id="session-1")

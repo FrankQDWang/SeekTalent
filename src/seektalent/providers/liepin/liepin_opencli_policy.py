@@ -8,6 +8,11 @@ from seektalent.opencli_browser.contracts import (
 )
 from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BOOTSTRAP_FAILED,
+    OPENCLI_BRIDGE_BUILD_MISMATCH,
+    OPENCLI_BRIDGE_CAPABILITY_MISSING,
+    OPENCLI_BRIDGE_INTEGRITY_FAILED,
+    OPENCLI_BRIDGE_PROTOCOL_MISMATCH,
+    OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
     OPENCLI_COMMAND_MISSING,
     OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_DAEMON_STALE,
@@ -38,6 +43,11 @@ LIEPIN_RECRUITER_SEARCH_URL = LIEPIN_RECRUITER_SEARCH_URLS[0]
 
 OPENCLI_TO_LIEPIN_REASON = {
     OPENCLI_COMMAND_MISSING: "liepin_opencli_command_missing",
+    OPENCLI_BRIDGE_INTEGRITY_FAILED: "liepin_opencli_bridge_integrity_failed",
+    OPENCLI_BRIDGE_WRONG_IMPLEMENTATION: "liepin_opencli_bridge_wrong_implementation",
+    OPENCLI_BRIDGE_BUILD_MISMATCH: "liepin_opencli_bridge_build_mismatch",
+    OPENCLI_BRIDGE_PROTOCOL_MISMATCH: "liepin_opencli_bridge_protocol_mismatch",
+    OPENCLI_BRIDGE_CAPABILITY_MISSING: "liepin_opencli_bridge_capability_missing",
     OPENCLI_TIMEOUT: "liepin_opencli_timeout",
     OPENCLI_EXTENSION_DISCONNECTED: "liepin_opencli_extension_disconnected",
     OPENCLI_STATUS_UNAVAILABLE: "liepin_opencli_status_unavailable",

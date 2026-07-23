@@ -78,8 +78,12 @@ def _test_source_port_paths(
     return history_path, journal_path
 
 
-def _deterministic_fake_verify_effect(request: VerifySessionRequestV1) -> VerifySessionResultV1:
+def _deterministic_fake_verify_effect(
+    request: VerifySessionRequestV1,
+    deadline_at: float,
+) -> VerifySessionResultV1:
     """Return deterministic test facts without WTSCLI, Node, browser, or network access."""
+    del deadline_at
     return VerifySessionResultV1.model_validate(
         {
             "contract_version": "seektalent.source.verify-session.result/v1",
