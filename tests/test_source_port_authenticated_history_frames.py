@@ -17,6 +17,7 @@ from seektalent.source_port.authenticated_history_frames import (
     PostHandshakeHistorySession,
     ReceivedHistoryQuery,
     ReceivedHistoryResult,
+    canonical_source_history_semantics_bytes,
 )
 from seektalent.source_port.history_contract import (
     AcceptedNoDispatchFact,
@@ -29,6 +30,7 @@ from seektalent.source_port.history_contract import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_history_frames.py"
+CORE_MODULE_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_frame_core.py"
 MAIN_TO_SIDECAR_KEY = bytes(range(32))
 SIDECAR_TO_MAIN_KEY = bytes(range(32, 64))
 HASH_A = "a" * 64
@@ -333,6 +335,18 @@ def test_result_sender_strictly_revalidates_copied_model_instances() -> None:
     assert caught.value.__context__ is None
     assert recorded == []
     assert sidecar.closed is True
+
+
+def test_history_semantic_canonical_bytes_revalidate_bypassed_models() -> None:
+    query = _query()
+    result = _not_found(query)
+    bypassed_query = query.model_copy(update={"attempt_no": True})
+    bypassed_result = result.model_copy(update={"attempt_no": True})
+
+    for invalid_query, invalid_result in ((bypassed_query, result), (query, bypassed_result)):
+        with pytest.raises(HistoryFrameError) as caught:
+            canonical_source_history_semantics_bytes(invalid_query, invalid_result)
+        assert caught.value.reason_code == HistoryFrameReason.SCHEMA_VALIDATION.value
 
 
 def test_frame_authentication_known_answer_is_byte_stable() -> None:
@@ -671,6 +685,7 @@ def test_errors_and_repr_do_not_leak_key_tag_body_or_internal_exception(caplog: 
 
 def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_business_caller() -> None:
     tree = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+    core_tree = ast.parse(CORE_MODULE_PATH.read_text(encoding="utf-8"))
     imported_modules = {
         node.module if isinstance(node, ast.ImportFrom) else alias.name
         for node in ast.walk(tree)
@@ -681,15 +696,14 @@ def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_busin
         "__future__",
         "dataclasses",
         "enum",
-        "hashlib",
-        "hmac",
-        "json",
         "pydantic",
-        "rfc8785",
+        "seektalent.source_port.authenticated_frame_core",
         "seektalent.source_port.history_contract",
+        "seektalent.source_port.wire_primitives",
         "typing",
     }
     assert not any(isinstance(node, ast.Name) and node.id == "Any" for node in ast.walk(tree))
+    assert not any(isinstance(node, ast.Name) and node.id == "Any" for node in ast.walk(core_tree))
 
     production_callers = []
     for path in (PROJECT_ROOT / "src").rglob("*.py"):

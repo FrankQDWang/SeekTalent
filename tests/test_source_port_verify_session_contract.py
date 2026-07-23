@@ -29,6 +29,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "verify_session_contract.py"
 OPERATION_DISPATCH_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "operation_dispatch.py"
 WIRE_PRIMITIVES_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "wire_primitives.py"
+VERIFY_SESSION_FRAMES_PATH = (
+    PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_verify_session_frames.py"
+)
 PLAN_PATH = PROJECT_ROOT / "docs" / "plans" / "external-execution-plane-v1-source-execution-port.md"
 RAW_FENCE_TOKEN = "raw-fence-token-canary-" + "x" * 64
 LEAK_CANARY = "RAW-FENCE-TOKEN-MUST-NOT-LEAK-" + "z" * 64
@@ -564,7 +567,7 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
 
     callers = []
     for path in (PROJECT_ROOT / "src").rglob("*.py"):
-        if path in {CONTRACT_PATH, OPERATION_DISPATCH_PATH, WIRE_PRIMITIVES_PATH}:
+        if path in {CONTRACT_PATH, OPERATION_DISPATCH_PATH, WIRE_PRIMITIVES_PATH, VERIFY_SESSION_FRAMES_PATH}:
             continue
         content = path.read_text(encoding="utf-8")
         if "verify_session_contract" in content or "operation_dispatch" in content:
