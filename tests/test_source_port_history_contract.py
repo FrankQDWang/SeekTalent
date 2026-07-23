@@ -490,10 +490,12 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
         source = path.read_text(encoding="utf-8")
         if "seektalent.source_port" in source:
             source_port_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    # The bootstrap path is explicitly test-only; the remaining entries are the #379 main-side composition.
+    # The WTSCLI entry is the explicit production-unreachable typed composition leaf.
+    # The bootstrap path is test-only; the remaining entries are the #379 main-side composition.
     assert source_port_callers == [
         "src/seektalent/sidecar_readiness.py",
         "src/seektalent/source_history_reconciliation.py",
+        "src/seektalent/wtscli_verify_session_classification.py",
         "src/seektalent/sidecar_child_session.py",
         "src/seektalent/sidecar_bootstrap.py",
     ]

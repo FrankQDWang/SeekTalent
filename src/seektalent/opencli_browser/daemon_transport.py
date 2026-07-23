@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import math
 import socket
 import threading
 import time
@@ -271,33 +272,44 @@ def _validate_requirement(requirement: OpenCliBridgeRequirement) -> None:
         raise OpenCliBrowserError(OPENCLI_BRIDGE_CAPABILITY_MISSING)
 
 
-def validate_bridge_status(status: Mapping[str, object], requirement: OpenCliBridgeRequirement) -> None:
+def bridge_status_failure(
+    status: Mapping[str, object],
+    requirement: OpenCliBridgeRequirement,
+) -> tuple[Literal["bridge", "extension", "process"], str] | None:
+    """Return the first causal status failure using the same order as strict validation."""
     if status.get("ok") is not True:
-        raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        return "process", OPENCLI_STATUS_UNAVAILABLE
     if status.get("implementation") != requirement.implementation:
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_WRONG_IMPLEMENTATION)
+        return "bridge", OPENCLI_BRIDGE_WRONG_IMPLEMENTATION
     if status.get("bridgeBuildId") != requirement.bridge_build_id:
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_BUILD_MISMATCH)
+        return "bridge", OPENCLI_BRIDGE_BUILD_MISMATCH
     if not _compatible_protocol(status.get("protocolVersion"), requirement):
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_PROTOCOL_MISMATCH)
+        return "bridge", OPENCLI_BRIDGE_PROTOCOL_MISMATCH
     daemon_capabilities = _string_set(status.get("capabilities"))
     if daemon_capabilities is None:
-        raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        return "bridge", OPENCLI_STATUS_UNAVAILABLE
     if not requirement.capabilities.issubset(daemon_capabilities):
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_CAPABILITY_MISSING)
+        return "bridge", OPENCLI_BRIDGE_CAPABILITY_MISSING
     if status.get("extensionConnected") is not True:
-        raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED)
+        return "extension", OPENCLI_EXTENSION_DISCONNECTED
     if status.get("extensionImplementation") != requirement.implementation:
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_WRONG_IMPLEMENTATION)
+        return "extension", OPENCLI_BRIDGE_WRONG_IMPLEMENTATION
     if status.get("extensionBridgeBuildId") != requirement.bridge_build_id:
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_BUILD_MISMATCH)
+        return "extension", OPENCLI_BRIDGE_BUILD_MISMATCH
     if not _compatible_protocol(status.get("extensionProtocolVersion"), requirement):
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_PROTOCOL_MISMATCH)
+        return "extension", OPENCLI_BRIDGE_PROTOCOL_MISMATCH
     extension_capabilities = _string_set(status.get("extensionCapabilities"))
     if extension_capabilities is None:
-        raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        return "extension", OPENCLI_STATUS_UNAVAILABLE
     if not requirement.capabilities.issubset(extension_capabilities):
-        raise OpenCliBrowserError(OPENCLI_BRIDGE_CAPABILITY_MISSING)
+        return "extension", OPENCLI_BRIDGE_CAPABILITY_MISSING
+    return None
+
+
+def validate_bridge_status(status: Mapping[str, object], requirement: OpenCliBridgeRequirement) -> None:
+    failure = bridge_status_failure(status, requirement)
+    if failure is not None:
+        raise OpenCliBrowserError(failure[1])
 
 
 def _compatible_protocol(value: object, requirement: OpenCliBridgeRequirement) -> bool:
@@ -325,7 +337,11 @@ def _optional_string(value: object) -> str | None:
 
 
 def _optional_int(value: object) -> int | None:
-    return value if type(value) is int else None
+    if type(value) is int:
+        return value
+    if type(value) is float and math.isfinite(value):
+        return math.floor(value)
+    return None
 
 
 def _http_connection(host: str, port: int, timeout: float) -> http.client.HTTPConnection:

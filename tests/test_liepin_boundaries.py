@@ -174,6 +174,7 @@ OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/providers/liepin/opencli_browser_cli.py",
     "src/seektalent/providers/liepin/liepin_opencli_policy.py",
     "src/seektalent/wtscli_verify_session_adapter.py",
+    "src/seektalent/wtscli_verify_session_classification.py",
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
     "src/seektalent/providers/liepin/liepin_site_parsing.py",
     "src/seektalent/providers/liepin/liepin_site_payloads.py",

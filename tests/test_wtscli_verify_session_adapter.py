@@ -31,6 +31,15 @@ RAW_RUNTIME_FENCE = "wtscli-adapter-runtime-fence-" + "r" * 64
 CONTROL_KEY = "wtscli-adapter-control-key-" + "c" * 64
 CONTROL_FENCE = 918273645
 SEARCH_URL = "https://h.liepin.com/search/getConditionItem#session"
+READY_STATE = "\n".join(
+    (
+        f"URL: {SEARCH_URL}",
+        "找简历",
+        "安全退出",
+        "<span>包含全部关键词</span>",
+        "[27]<input type=search autocomplete=off role=combobox id=rc_select_1 />",
+    )
+)
 RAW_DOM = "DOM-CANARY confidential visible account content"
 RAW_STDERR = "STDERR-CANARY extension diagnostic"
 
@@ -168,7 +177,9 @@ class _FakeDaemon:
             }
         ]
         self.page_url = SEARCH_URL
-        self.state_text = "URL: https://h.liepin.com/search/getConditionItem#session\n找简历"
+        self.page_urls: list[str] = []
+        self.state_text = READY_STATE
+        self.state_texts: list[str] = []
         self.calls: list[tuple[str, dict[str, object], float, float]] = []
         self.fail_at: dict[str, BaseException] = {}
         self.fail_after: dict[str, BaseException] = {}
@@ -225,9 +236,11 @@ class _FakeDaemon:
                 idle_deadline_at=round(self._idle_deadlines[page] * 1000),
             )
         elif label == "browser.get-url":
-            result = OpenCliDaemonResult("get-url-1", data=self.page_url, page="owned-search-page")
+            page_url = self.page_urls.pop(0) if self.page_urls else self.page_url
+            result = OpenCliDaemonResult("get-url-1", data=page_url, page="owned-search-page")
         elif label == "browser.state":
-            result = OpenCliDaemonResult("state-1", data=self.state_text, page="owned-search-page")
+            state_text = self.state_texts.pop(0) if self.state_texts else self.state_text
+            result = OpenCliDaemonResult("state-1", data=state_text, page="owned-search-page")
         elif label == "tabs.close":
             result = OpenCliDaemonResult("tabs-close-1", data=dict(self.close_payload))
             if self.close_payload.get("outcome") in {"closed", "already_missing"}:
@@ -277,47 +290,13 @@ def _effect(
     snapshots: _SnapshotSource,
     clock: _Clock,
 ):
-    raw_effect = create_wtscli_verify_session_effect(
+    return create_wtscli_verify_session_effect(
         daemon=daemon,
         bridge_requirement=BRIDGE_REQUIREMENT,
         current_profile_snapshot=snapshots,
         control_key=CONTROL_KEY,
         monotonic_clock=clock,
-    )
-
-    def effect(
-        request: VerifySessionRequestV1,
-        deadline_at: float,
-    ) -> VerifySessionResultV1 | VerifySessionFailureV1:
-        return _closed_reply(request, raw_effect(request, deadline_at))
-
-    return effect
-
-
-def _closed_reply(
-    request: VerifySessionRequestV1,
-    outcome: dict[str, object],
-) -> VerifySessionResultV1 | VerifySessionFailureV1:
-    payload = dict(outcome)
-    kind = payload.pop("kind", None)
-    if kind == "failure":
-        return VerifySessionFailureV1.model_validate(
-            {
-                "contract_version": "seektalent.source.verify-session.failure/v1",
-                "identity": request.identity,
-                **payload,
-            },
-            strict=True,
-        )
-    assert kind == "result"
-    return VerifySessionResultV1.model_validate(
-        {
-            "contract_version": "seektalent.source.verify-session.result/v1",
-            "identity": request.identity,
-            **payload,
-            "component_receipt_refs": request.component_receipt_refs,
-        },
-        strict=True,
+        poll_wait=clock.advance,
     )
 
 
@@ -351,6 +330,25 @@ def test_effect_consumes_the_supplied_absolute_deadline_without_reanchoring_from
         assert timeout_seconds <= deadline_at - started_at
     assert max(call[2] for call in daemon.calls) < 1
     assert request.identity.deadline.value == 60_000
+
+
+def test_factory_returns_the_exact_typed_reply_required_by_the_journal_effect_seam() -> None:
+    request = _request()
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    snapshots = _SnapshotSource(_snapshot(request), clock=clock)
+    effect = create_wtscli_verify_session_effect(
+        daemon=daemon,
+        bridge_requirement=BRIDGE_REQUIREMENT,
+        current_profile_snapshot=snapshots,
+        control_key=CONTROL_KEY,
+        monotonic_clock=clock,
+    )
+
+    reply = effect(request, clock() + 10)
+
+    assert type(reply) is VerifySessionResultV1
+    assert reply.session_readiness == "ready"
 
 
 def test_daemon_client_can_return_unvalidated_status_for_component_level_closed_mapping(
@@ -437,6 +435,84 @@ def test_expiry_before_return_stops_close_and_uses_the_owned_tab_idle_deadline()
     daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
     assert daemon.user_tabs == before_user_tabs
+
+
+def test_navigation_readiness_polls_about_blank_until_positive_search_state() -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    daemon.page_urls = ["about:blank", SEARCH_URL]
+    daemon.advance_after["browser.get-url"] = 0.100
+    snapshots = _SnapshotSource(_snapshot(), clock=clock)
+
+    result = _effect(daemon, snapshots, clock)(_request(), clock() + 10)
+
+    assert isinstance(result, VerifySessionResultV1)
+    assert result.session_readiness == "ready"
+    labels = [call[0] for call in daemon.calls]
+    assert labels.count("browser.get-url") == 2
+    assert labels.count("browser.state") == 1
+
+
+def test_navigation_that_never_reports_http_url_consumes_deadline_without_later_commands() -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    daemon.page_url = "about:blank"
+    daemon.advance_after["browser.get-url"] = 0.100
+    snapshots = _SnapshotSource(_snapshot(), clock=clock)
+
+    result = _effect(daemon, snapshots, clock)(_request(), clock() + 0.250)
+
+    assert isinstance(result, VerifySessionResultV1)
+    assert result.session_readiness == "not_ready"
+    assert result.safe_reason_code == "liepin_opencli_timeout"
+    labels = [call[0] for call in daemon.calls]
+    assert labels.count("browser.get-url") >= 2
+    assert "browser.state" not in labels
+    assert "tabs.close" not in labels
+
+
+def test_deadline_after_navigation_url_stops_state_and_cleanup_commands() -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    daemon.advance_after["browser.get-url"] = 0.600
+    snapshots = _SnapshotSource(_snapshot(), clock=clock)
+
+    result = _effect(daemon, snapshots, clock)(_request(), clock() + 0.500)
+
+    assert isinstance(result, VerifySessionResultV1)
+    assert result.safe_reason_code == "liepin_opencli_timeout"
+    labels = [call[0] for call in daemon.calls]
+    assert labels[-1] == "browser.get-url"
+    assert "browser.state" not in labels
+    assert "tabs.close" not in labels
+
+
+@pytest.mark.parametrize(
+    "state_text",
+    (
+        "",
+        "页面加载中",
+        "<div class=ant-skeleton><span>找简历</span></div>",
+        "猎聘招聘首页 普通导航内容",
+    ),
+    ids=("empty", "loading", "skeleton", "non_search_content"),
+)
+def test_search_url_without_positive_account_and_search_surface_evidence_never_becomes_ready(
+    state_text: str,
+) -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    daemon.state_text = state_text
+    daemon.advance_after["browser.state"] = 0.100
+    snapshots = _SnapshotSource(_snapshot(), clock=clock)
+
+    result = _effect(daemon, snapshots, clock)(_request(), clock() + 0.250)
+
+    assert isinstance(result, VerifySessionResultV1)
+    assert result.session_readiness == "not_ready"
+    assert result.account_readiness == "not_ready"
+    assert result.search_surface_readiness == "not_ready"
+    assert result.safe_reason_code == "liepin_opencli_timeout"
 
 
 @pytest.mark.parametrize(
@@ -536,7 +612,7 @@ def test_provider_account_subject_is_revalidated_before_every_subsequent_command
         ),
         (
             "bridge_build",
-            "liepin_opencli_status_unavailable",
+            "liepin_opencli_bridge_build_mismatch",
             "ready",
             "not_ready",
             "not_observed",
@@ -548,7 +624,7 @@ def test_provider_account_subject_is_revalidated_before_every_subsequent_command
         ),
         (
             "bridge_protocol",
-            "liepin_opencli_status_unavailable",
+            "liepin_opencli_bridge_protocol_mismatch",
             "ready",
             "not_ready",
             "not_observed",
@@ -560,7 +636,7 @@ def test_provider_account_subject_is_revalidated_before_every_subsequent_command
         ),
         (
             "bridge_capability",
-            "liepin_opencli_status_unavailable",
+            "liepin_opencli_bridge_capability_missing",
             "ready",
             "not_ready",
             "not_observed",
@@ -584,7 +660,31 @@ def test_provider_account_subject_is_revalidated_before_every_subsequent_command
         ),
         (
             "extension_build",
-            "liepin_opencli_status_unavailable",
+            "liepin_opencli_bridge_build_mismatch",
+            "ready",
+            "ready",
+            "not_ready",
+            "not_observed",
+            "not_observed",
+            "not_observed",
+            "not_observed",
+            "not_ready",
+        ),
+        (
+            "extension_protocol",
+            "liepin_opencli_bridge_protocol_mismatch",
+            "ready",
+            "ready",
+            "not_ready",
+            "not_observed",
+            "not_observed",
+            "not_observed",
+            "not_observed",
+            "not_ready",
+        ),
+        (
+            "extension_capability",
+            "liepin_opencli_bridge_capability_missing",
             "ready",
             "ready",
             "not_ready",
@@ -673,9 +773,9 @@ def test_provider_account_subject_is_revalidated_before_every_subsequent_command
             "ready",
             "ready",
             "ready",
-            "ready",
             "not_ready",
-            "clear",
+            "not_ready",
+            "not_observed",
             "not_ready",
         ),
         ("ready", None, "ready", "ready", "ready", "ready", "ready", "ready", "clear", "ready"),
@@ -709,6 +809,10 @@ def test_closed_component_mapping(
         daemon.status_payload["extensionConnected"] = False
     elif case == "extension_build":
         daemon.status_payload["extensionBridgeBuildId"] = "wrong-extension-build"
+    elif case == "extension_protocol":
+        daemon.status_payload["extensionProtocolVersion"] = {"major": 2, "minor": 0}
+    elif case == "extension_capability":
+        daemon.status_payload["extensionCapabilities"] = ["browser.operations.v1"]
     elif case == "host_missing":
         daemon.host_tabs = []
     elif case == "host_ambiguous":
@@ -785,6 +889,58 @@ def test_a_host_tab_without_account_search_and_risk_proof_is_never_ready() -> No
     assert result.search_surface_readiness == "not_observed"
     assert result.risk_state == "not_observed"
     assert result.safe_reason_code == "liepin_opencli_target_not_found"
+
+
+def test_foreign_legacy_daemon_identity_fails_closed_before_any_browser_command() -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    daemon.status_payload.update(
+        {
+            "implementation": "upstream-opencli",
+            "bridgeBuildId": "legacy-opencli-build",
+            "extensionImplementation": "upstream-opencli",
+            "extensionBridgeBuildId": "legacy-opencli-extension",
+        }
+    )
+    snapshots = _SnapshotSource(_snapshot(), clock=clock)
+
+    result = _effect(daemon, snapshots, clock)(_request(), clock() + 10)
+
+    assert isinstance(result, VerifySessionResultV1)
+    assert result.session_readiness == "not_ready"
+    assert result.safe_reason_code == "liepin_opencli_bridge_wrong_implementation"
+    assert [call[0] for call in daemon.calls] == ["status"]
+
+
+def test_binding_change_after_state_prevents_cleanup_command_and_leaves_idle_reclaim() -> None:
+    request = _request()
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    snapshots = _SnapshotSource(_snapshot(request), clock=clock)
+    original_command = daemon.command
+
+    def change_binding_after_state(
+        action: str,
+        params: dict[str, object],
+        *,
+        timeout_seconds: float,
+    ) -> OpenCliDaemonResult:
+        result = original_command(action, params, timeout_seconds=timeout_seconds)
+        if action == "browser-operation" and params.get("operation") == "state":
+            snapshots.value = replace(snapshots.value, profile_binding_generation=8)
+        return result
+
+    daemon.command = change_binding_after_state  # type: ignore[method-assign]
+
+    result = _effect(daemon, snapshots, clock)(request, clock() + 10)
+
+    assert isinstance(result, VerifySessionFailureV1)
+    assert result.failure_reason == "sidecar_not_ready"
+    assert "tabs.close" not in [call[0] for call in daemon.calls]
+    assert daemon.owned_tabs == {"owned-search-page"}
+    clock.advance(10)
+    daemon.expire_owned_tabs()
+    assert daemon.owned_tabs == set()
 
 
 @pytest.mark.parametrize(
@@ -896,14 +1052,23 @@ def test_adapter_module_has_zero_production_callers_and_does_not_import_worker_o
         for path in (project_root / "src").rglob("*.py")
         if path != adapter_path and "wtscli_verify_session_adapter" in path.read_text(encoding="utf-8")
     ]
+    factory_callers = [
+        path.relative_to(project_root).as_posix()
+        for path in (project_root / "src").rglob("*.py")
+        if path != adapter_path
+        and "create_wtscli_verify_session_effect(" in path.read_text(encoding="utf-8")
+    ]
     packaged_builder = (project_root / "tools" / "build_packaged_sidecar.py").read_text(encoding="utf-8")
     packaged_bootstrap = (project_root / "src" / "seektalent" / "sidecar_bootstrap.py").read_text(encoding="utf-8")
 
     assert callers == []
+    assert factory_callers == []
     assert "LiepinOpenCliWorkerClient" not in source
     assert "OpenCliRetriever" not in source
     assert "LiepinSiteAdapter" not in source
     assert "seektalent.source_port" not in source
+    assert "restart" not in source
+    assert ".kill" not in source
     assert "wtscli-placeholder" in packaged_builder
     assert "wtscli_verify_session_adapter" not in packaged_builder
     assert "wtscli_verify_session_adapter" not in packaged_bootstrap

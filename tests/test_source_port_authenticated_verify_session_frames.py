@@ -37,6 +37,9 @@ from seektalent.source_port.verify_session_contract import (
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FRAME_MODULE_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_verify_session_frames.py"
 CORE_MODULE_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_frame_core.py"
+PRODUCTION_UNREACHABLE_WTSCLI_COMPOSITION_PATH = (
+    PROJECT_ROOT / "src" / "seektalent" / "wtscli_verify_session_classification.py"
+)
 RAW_FENCE_TOKEN = "verify-session-frame-fence-canary-" + "x" * 64
 MAIN_TO_SIDECAR_KEY = bytes(range(32))
 SIDECAR_TO_MAIN_KEY = bytes(range(32, 64))
@@ -645,7 +648,7 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
 
     callers = []
     for path in (PROJECT_ROOT / "src").rglob("*.py"):
-        if path in {FRAME_MODULE_PATH, CORE_MODULE_PATH}:
+        if path in {FRAME_MODULE_PATH, CORE_MODULE_PATH, PRODUCTION_UNREACHABLE_WTSCLI_COMPOSITION_PATH}:
             continue
         if "authenticated_verify_session_frames" in path.read_text(encoding="utf-8"):
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())

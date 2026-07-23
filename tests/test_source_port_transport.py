@@ -155,17 +155,8 @@ class _RecordingEffect:
         self.calls += 1
         self.deadlines.append(deadline_at)
         outcome = self._effect(request, deadline_at)
-        payload = dict(outcome)
-        assert payload.pop("kind", None) == "result"
-        return VerifySessionResultV1.model_validate(
-            {
-                "contract_version": "seektalent.source.verify-session.result/v1",
-                "identity": request.identity,
-                **payload,
-                "component_receipt_refs": request.component_receipt_refs,
-            },
-            strict=True,
-        )
+        assert type(outcome) is VerifySessionResultV1
+        return outcome
 
 
 _TRANSPORT_BRIDGE_REQUIREMENT = BrowserBridgeRequirement(
@@ -272,7 +263,10 @@ class _DeterministicWtsCliDaemon:
             self.calls.append("browser.state")
             return OpenCliDaemonResult(
                 "browser-state-transport",
-                data="找简历",
+                data=(
+                    "找简历\n安全退出\n<span>包含全部关键词</span>\n"
+                    "[27]<input type=search role=combobox id=rc_select_1 />"
+                ),
                 page="transport-owned-tab",
             )
         if action == "tabs" and params.get("op") == "close":
@@ -401,7 +395,13 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_the_deterministic_wtscli
     release_effect = threading.Event()
     effect_started = threading.Event()
     verify_writes_recorded = threading.Event()
-    effect = _RecordingEffect()
+    daemon = _DeterministicWtsCliDaemon()
+    effect = create_wtscli_verify_session_effect(
+        daemon=daemon,
+        bridge_requirement=_TRANSPORT_BRIDGE_REQUIREMENT,
+        current_profile_snapshot=_transport_profile_snapshot,
+        control_key="transport-controller-only-key",
+    )
     verify_write_deadlines: list[float] = []
     original_send = child_session_module.SidecarHandshakeResult._send_source_port_frame
 
@@ -418,19 +418,17 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_the_deterministic_wtscli
             if len(verify_write_deadlines) == 2:
                 verify_writes_recorded.set()
 
-    def fake_effect(request: VerifySessionRequestV1, deadline_at: float) -> VerifySessionResultV1:
+    def hold_before_direct_effect() -> None:
         assert ack_written.wait(1)
-        assert deadline_at > 0
         effect_started.set()
         assert release_effect.wait(1)
-        return effect(request, deadline_at)
 
     def serve_shared_transport(result: readiness.SidecarHandshakeResult) -> None:
         journal = create_command_journal(tmp_path / "verify-session-journal.sqlite3")
         composition = create_verify_session_journal_effect_composition(
             command_journal_session=journal.start(),
             frame_session=result.source_port_session(),
-            effect=fake_effect,
+            effect=effect,
         )
         try:
             sidecar_transport.serve_test_source_port(result, reader, composition, timeout=1)
@@ -447,6 +445,7 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_the_deterministic_wtscli
     )
     monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
     monkeypatch.setattr(child_session_module.SidecarHandshakeResult, "_send_source_port_frame", record_verify_write)
+    monkeypatch.setattr(journal_effect, "_before_effect_invocation", hold_before_direct_effect)
     session = readiness.spawn_ready_sidecar(lease, timeout=1)
 
     try:
@@ -467,7 +466,7 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_the_deterministic_wtscli
         assert ack_messages[0].payload.accepted_fact == "dispatch_authorized"
         assert ack_written.wait(1)
         assert effect_started.wait(1)
-        assert effect.calls == 0
+        assert daemon.calls == []
 
         release_effect.set()
         terminal_messages = session.receive_history(timeout=1)
@@ -477,8 +476,7 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_the_deterministic_wtscli
         assert verify_writes_recorded.wait(1)
         assert len(verify_write_deadlines) == 2
         assert verify_write_deadlines[0] == verify_write_deadlines[1]
-        assert effect.calls == 1
-        assert effect.daemon.calls == [
+        assert daemon.calls == [
             "status",
             "status.validate",
             "control.activate",

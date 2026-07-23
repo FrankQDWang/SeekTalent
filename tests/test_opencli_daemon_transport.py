@@ -13,6 +13,7 @@ from seektalent.opencli_browser.daemon_transport import (
     REQUIRED_OPENCLI_BRIDGE_CAPABILITIES,
     OpenCliBridgeRequirement,
     OpenCliDaemonClient,
+    bridge_status_failure,
     load_bridge_requirement,
     validate_bridge_status,
 )
@@ -74,13 +75,20 @@ class _Response:
 
 
 class _Connection:
-    def __init__(self, *, status_payload: Mapping[str, object], command_error: tuple[int, str] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        status_payload: Mapping[str, object],
+        command_error: tuple[int, str] | None = None,
+        idle_deadline_at: object = 123456,
+    ) -> None:
         self.timeout = 0.0
         self.sock = None
         self.closed = False
         self.requests: list[tuple[str, str, bytes | None, Mapping[str, str]]] = []
         self.status_payload = status_payload
         self.command_error = command_error
+        self.idle_deadline_at = idle_deadline_at
 
     def request(
         self,
@@ -107,7 +115,7 @@ class _Connection:
                 "ok": True,
                 "data": {"echo": command["action"]},
                 "page": "page_1",
-                "idleDeadlineAt": 123456,
+                "idleDeadlineAt": self.idle_deadline_at,
             },
         )
 
@@ -212,6 +220,29 @@ def test_validate_bridge_status_reports_stale_daemon_before_disconnected_extensi
     assert captured.value.safe_reason_code == OPENCLI_BRIDGE_BUILD_MISMATCH
 
 
+@pytest.mark.parametrize(
+    ("updates", "expected"),
+    [
+        ({"bridgeBuildId": "stale-build"}, ("bridge", OPENCLI_BRIDGE_BUILD_MISMATCH)),
+        (
+            {"extensionProtocolVersion": {"major": 2, "minor": 0}},
+            ("extension", OPENCLI_BRIDGE_PROTOCOL_MISMATCH),
+        ),
+        ({"extensionCapabilities": []}, ("extension", OPENCLI_BRIDGE_CAPABILITY_MISSING)),
+    ],
+)
+def test_bridge_status_mapping_and_strict_validator_share_one_causal_taxonomy(
+    updates: Mapping[str, object],
+    expected: tuple[str, str],
+) -> None:
+    status = _status(**updates)
+
+    assert bridge_status_failure(status, _requirement()) == expected
+    with pytest.raises(OpenCliBrowserError) as captured:
+        validate_bridge_status(status, _requirement())
+    assert captured.value.safe_reason_code == expected[1]
+
+
 def test_daemon_client_reuses_connection_and_sends_unique_deadlined_commands() -> None:
     connection = _Connection(status_payload=_status())
     factory_calls: list[tuple[str, int, float]] = []
@@ -238,6 +269,18 @@ def test_daemon_client_reuses_connection_and_sends_unique_deadlined_commands() -
     assert first.page == "page_1"
     assert first.idle_deadline_at == 123456
     assert second.command_id != first.command_id
+
+
+def test_daemon_client_conservatively_normalizes_fractional_idle_deadline_milliseconds() -> None:
+    connection = _Connection(status_payload=_status(), idle_deadline_at=123456.75)
+    client = OpenCliDaemonClient(
+        requirement=_requirement(),
+        connection_factory=lambda *_args: connection,
+    )
+
+    result = client.command("tabs", {"op": "list", "session": "scope_a"}, timeout_seconds=3)
+
+    assert result.idle_deadline_at == 123456
 
 
 def test_daemon_client_can_create_an_independent_connection_for_background_cleanup() -> None:
