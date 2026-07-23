@@ -186,6 +186,7 @@ class PostHandshakeHistorySession(
             received_message=_received_history_message,
             pending_from_request=_history_pending,
             reply_mismatch_reason=HistoryFrameReason.RESULT_ECHO_MISMATCH.value,
+            pending_request_limit_reason=HistoryFrameReason.PENDING_QUERY_LIMIT.value,
             max_frame_bytes=lambda: MAX_FRAME_BYTES,
             max_session_messages=lambda: MAX_SESSION_MESSAGES,
             max_pending_requests=lambda: MAX_PENDING_QUERIES,

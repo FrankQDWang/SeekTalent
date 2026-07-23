@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated, Literal, TypeAlias
@@ -31,6 +30,8 @@ from seektalent.source_port.verify_session_contract import (
     VerifySessionRequestEchoV1,
     VerifySessionRequestV1,
     VerifySessionResultV1,
+    redact_runtime_attempt_fence_token_input,
+    validate_verify_session_durable_reply_identity,
     validate_verify_session_result_echo_facts,
     verify_session_request_echo,
 )
@@ -68,7 +69,7 @@ class VerifySessionFrameReason(StrEnum):
     UNEXPECTED_DIRECTION = "source_port_unexpected_direction"
     DUPLICATE_MESSAGE_ID = "source_port_duplicate_message_id"
     MESSAGE_LIMIT = "source_port_message_limit"
-    PENDING_SUBMIT_LIMIT = "source_port_pending_query_limit"
+    PENDING_SUBMIT_LIMIT = "source_port_pending_submit_limit"
     WRONG_REPLY = "source_port_wrong_reply"
     REPLY_MISMATCH = "source_port_verify_session_reply_mismatch"
     RESPONSE_STATE_MISMATCH = "source_port_verify_session_response_state_mismatch"
@@ -95,13 +96,8 @@ class _VerifySessionFrameModel(StrictWireModel):
     @classmethod
     def redact_raw_fence_token_input(cls, value: object) -> object:
         if type(value) is cls:
-            return value.model_dump(mode="python")
-        if not isinstance(value, Mapping):
-            return {"invalid_frame_input": "[redacted]"}
-        redacted = dict(value)
-        if "runtime_attempt_fence_token" in redacted:
-            redacted["runtime_attempt_fence_token"] = "[redacted]"
-        return redacted
+            value = value.model_dump(mode="python")
+        return redact_runtime_attempt_fence_token_input(value, invalid_input_field="invalid_frame_input")
 
 
 def _verify_session_identity(identity: OperationIdentityV1) -> OperationIdentityV1:
@@ -316,6 +312,7 @@ class PostHandshakeVerifySessionSession(
             received_message=_received_verify_session_message,
             pending_from_request=_verify_session_pending,
             reply_mismatch_reason=VerifySessionFrameReason.REPLY_MISMATCH.value,
+            pending_request_limit_reason=VerifySessionFrameReason.PENDING_SUBMIT_LIMIT.value,
             max_frame_bytes=lambda: MAX_FRAME_BYTES,
             max_session_messages=lambda: MAX_SESSION_MESSAGES,
             max_pending_requests=lambda: MAX_PENDING_SUBMITS,
@@ -556,15 +553,17 @@ def _validate_verify_session_reply(
     if isinstance(response, _VerifySessionAcceptedAckEnvelope):
         if state is not None:
             raise ReplyValidationError(VerifySessionFrameReason.RESPONSE_STATE_MISMATCH.value)
-        if (
-            response.payload.identity != submit.identity
-            or response.payload.dispatch_authorization != submit.dispatch_authorization
-        ):
+        try:
+            validate_verify_session_durable_reply_identity(submit, response.payload.identity)
+        except (TypeError, ValueError):
+            raise ReplyValidationError(VerifySessionFrameReason.REPLY_MISMATCH.value) from None
+        if response.payload.dispatch_authorization != submit.dispatch_authorization:
             raise ReplyValidationError(VerifySessionFrameReason.REPLY_MISMATCH.value)
         return PendingReply.pending("accepted")
     if isinstance(response, _VerifySessionRejectedEnvelope):
         if state is not None:
             raise ReplyValidationError(VerifySessionFrameReason.RESPONSE_STATE_MISMATCH.value)
+        # Rejection is a fresh admission decision for this transport submit, not a durable replay.
         if response.payload.identity != submit.identity:
             raise ReplyValidationError(VerifySessionFrameReason.REPLY_MISMATCH.value)
         return PendingReply.terminal()
@@ -579,7 +578,9 @@ def _validate_verify_session_reply(
     if isinstance(response, _VerifySessionFailureEnvelope):
         if state != "accepted":
             raise ReplyValidationError(VerifySessionFrameReason.RESPONSE_STATE_MISMATCH.value)
-        if response.payload.identity != submit.identity:
+        try:
+            validate_verify_session_durable_reply_identity(submit, response.payload.identity)
+        except (TypeError, ValueError):
             raise ReplyValidationError(VerifySessionFrameReason.REPLY_MISMATCH.value)
         return PendingReply.terminal()
     raise ReplyValidationError(VerifySessionFrameReason.REPLY_MISMATCH.value)

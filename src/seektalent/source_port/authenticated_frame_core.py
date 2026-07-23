@@ -123,6 +123,7 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
         "_next_send_sequence",
         "_pending_requests",
         "_pending_from_request",
+        "_pending_request_limit_reason",
         "_protocol_minor",
         "_receive_direction",
         "_receive_key",
@@ -156,6 +157,7 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
         received_message: ReceivedMessageFactory[EnvelopeT, ReceivedT],
         pending_from_request: PendingRequestFactory[EnvelopeT, PendingT],
         reply_mismatch_reason: str,
+        pending_request_limit_reason: str,
         max_frame_bytes: LimitSupplier,
         max_session_messages: LimitSupplier,
         max_pending_requests: LimitSupplier,
@@ -187,6 +189,9 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
         self._received_message = received_message
         self._pending_from_request = pending_from_request
         self._reply_mismatch_reason = reply_mismatch_reason
+        if type(pending_request_limit_reason) is not str or not pending_request_limit_reason:
+            raise self._new_error("source_port_invalid_session_config")
+        self._pending_request_limit_reason = pending_request_limit_reason
         self._max_frame_bytes = max_frame_bytes
         self._max_session_messages = max_session_messages
         self._max_pending_requests = max_pending_requests
@@ -495,7 +500,7 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
 
     def _require_pending_capacity(self) -> None:
         if len(self._pending_requests) >= self._max_pending_requests():
-            self._fail("source_port_pending_query_limit")
+            self._fail(self._pending_request_limit_reason)
 
     def _require_send_sequence(self) -> int:
         if self._next_send_sequence >= JSON_SAFE_INTEGER:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from hashlib import sha256
-from typing import Annotated, Literal, TypeAlias
+from typing import Annotated, ClassVar, Literal, TypeAlias
 
 from pydantic import (
     AfterValidator,
@@ -42,6 +42,81 @@ from seektalent.source_port.wire_primitives import (
 
 VERIFY_SESSION_REQUEST_CONTRACT = "seektalent.source.verify-session.request/v1"
 VERIFY_SESSION_RESULT_CONTRACT = "seektalent.source.verify-session.result/v1"
+_RUNTIME_ATTEMPT_FENCE_TOKEN_FIELD = "runtime_attempt_fence_token"
+_REDACTED_SENSITIVE_INPUT = "[redacted]"
+_MAX_SENSITIVE_INPUT_DEPTH = 64
+
+
+def redact_runtime_attempt_fence_token_input(
+    value: object,
+    *,
+    allow_valid_top_level_fence_token: bool = False,
+    invalid_input_field: str,
+) -> object:
+    """Return a non-mutating validation input with nested fence bearers redacted."""
+    if not isinstance(value, Mapping):
+        return {invalid_input_field: _REDACTED_SENSITIVE_INPUT}
+    return _redact_runtime_attempt_fence_tokens(
+        value,
+        allow_valid_top_level_fence_token=allow_valid_top_level_fence_token,
+        depth=0,
+        ancestors=set(),
+    )
+
+
+def _redact_runtime_attempt_fence_tokens(
+    value: object,
+    *,
+    allow_valid_top_level_fence_token: bool,
+    depth: int,
+    ancestors: set[int],
+) -> object:
+    if depth >= _MAX_SENSITIVE_INPUT_DEPTH:
+        return _REDACTED_SENSITIVE_INPUT
+    if isinstance(value, Mapping):
+        identity = id(value)
+        if identity in ancestors:
+            return _REDACTED_SENSITIVE_INPUT
+        ancestors.add(identity)
+        try:
+            redacted: dict[object, object] = {}
+            for key, item in value.items():
+                is_fence_token = type(key) is str and key == _RUNTIME_ATTEMPT_FENCE_TOKEN_FIELD
+                if is_fence_token and depth == 0 and allow_valid_top_level_fence_token and _raw_fence_token_is_valid(item):
+                    redacted[key] = item
+                elif is_fence_token:
+                    redacted[key] = _REDACTED_SENSITIVE_INPUT
+                else:
+                    redacted[key] = _redact_runtime_attempt_fence_tokens(
+                        item,
+                        allow_valid_top_level_fence_token=False,
+                        depth=depth + 1,
+                        ancestors=ancestors,
+                    )
+            return redacted
+        finally:
+            ancestors.remove(identity)
+    if type(value) is list:
+        return [
+            _redact_runtime_attempt_fence_tokens(
+                item,
+                allow_valid_top_level_fence_token=False,
+                depth=depth + 1,
+                ancestors=ancestors,
+            )
+            for item in value
+        ]
+    if type(value) is tuple:
+        return tuple(
+            _redact_runtime_attempt_fence_tokens(
+                item,
+                allow_valid_top_level_fence_token=False,
+                depth=depth + 1,
+                ancestors=ancestors,
+            )
+            for item in value
+        )
+    return value
 
 
 class _VerifySessionModel(StrictWireModel):
@@ -52,6 +127,19 @@ class _VerifySessionModel(StrictWireModel):
         revalidate_instances="always",
         strict=True,
     )
+    _allow_valid_top_level_fence_token: ClassVar[bool] = False
+    _invalid_input_field: ClassVar[str] = "invalid_verify_session_input"
+
+    @model_validator(mode="before")
+    @classmethod
+    def redact_raw_fence_token_input(cls, value: object) -> object:
+        if type(value) is cls:
+            value = value.model_dump(mode="python")
+        return redact_runtime_attempt_fence_token_input(
+            value,
+            allow_valid_top_level_fence_token=cls._allow_valid_top_level_fence_token,
+            invalid_input_field=cls._invalid_input_field,
+        )
 
 
 RuntimeAttemptFenceToken = Annotated[
@@ -149,25 +237,8 @@ class VerifySessionRequestV1(_VerifySessionBodyV1):
     runtime_attempt_fence_token: RuntimeAttemptFenceToken = Field(repr=False)
     identity: OperationIdentityV1
     delivery: DispatchDeliveryV1
-
-    @model_validator(mode="before")
-    @classmethod
-    def redact_invalid_fence_token_input(cls, value: object) -> object:
-        if type(value) is cls:
-            value = value.model_dump(mode="python")
-        if not isinstance(value, Mapping):
-            return {"invalid_submit_input": "[redacted]"}
-        wire_value: dict[object, object] = {}
-        for key, item in value.items():
-            wire_value[key] = item
-        if "runtime_attempt_fence_token" not in wire_value:
-            return wire_value
-        token = wire_value["runtime_attempt_fence_token"]
-        if _raw_fence_token_is_valid(token):
-            return wire_value
-        redacted = dict(wire_value)
-        redacted["runtime_attempt_fence_token"] = "[redacted]"
-        return redacted
+    _allow_valid_top_level_fence_token: ClassVar[bool] = True
+    _invalid_input_field: ClassVar[str] = "invalid_submit_input"
 
     @field_validator("identity")
     @classmethod
@@ -516,6 +587,17 @@ def verify_session_request_echo(request: VerifySessionRequestV1) -> VerifySessio
     )
 
 
+def validate_verify_session_durable_reply_identity(
+    request: VerifySessionRequestEchoV1,
+    reply_identity: OperationIdentityV1,
+) -> None:
+    """Accept an initial exact echo or the durable facts of an outbox redelivery."""
+    validated_request = _validated_request_echo(request)
+    validated_reply_identity = _validated_identity(reply_identity)
+    if not _durable_reply_identity_matches_request(validated_request, validated_reply_identity):
+        raise ValueError("verify_session_durable_reply_identity_mismatch")
+
+
 def validate_verify_session_result_echo_facts(
     request: VerifySessionRequestEchoV1,
     result: VerifySessionResultV1,
@@ -523,14 +605,7 @@ def validate_verify_session_result_echo_facts(
     """Validate terminal result facts against a retained non-bearer submit echo."""
     validated_request = _validated_request_echo(request)
     validated_result = _validated_result(result)
-    if validated_request.delivery_mode == "initial":
-        identity_matches = validated_result.identity == validated_request.identity
-    else:
-        identity_matches = _redelivery_result_identity_matches_request(
-            validated_request.identity,
-            validated_result.identity,
-        )
-    if not identity_matches:
+    if not _durable_reply_identity_matches_request(validated_request, validated_result.identity):
         raise ValueError("verify_session_result_identity_mismatch")
     if validated_result.component_receipt_refs != validated_request.component_receipt_refs:
         raise ValueError("verify_session_result_receipt_mismatch")
@@ -564,23 +639,32 @@ _BODY_FIELDS = (
 )
 
 
-def _redelivery_result_identity_matches_request(
+def _durable_reply_identity_matches_request(
+    request: VerifySessionRequestEchoV1,
+    reply_identity: OperationIdentityV1,
+) -> bool:
+    if request.delivery_mode == "initial":
+        return reply_identity == request.identity
+    return _redelivery_durable_reply_identity_matches_request(request.identity, reply_identity)
+
+
+def _redelivery_durable_reply_identity_matches_request(
     request_identity: OperationIdentityV1,
-    result_identity: OperationIdentityV1,
+    reply_identity: OperationIdentityV1,
 ) -> bool:
     return (
-        result_identity.run_id == request_identity.run_id
-        and result_identity.operation_id == request_identity.operation_id
-        and result_identity.attempt_no == request_identity.attempt_no
-        and result_identity.source == request_identity.source
-        and result_identity.operation_kind == request_identity.operation_kind
-        and result_identity.request_hash == request_identity.request_hash
-        and result_identity.idempotency_key == request_identity.idempotency_key
-        and result_identity.accepted_requirement_revision_id == request_identity.accepted_requirement_revision_id
-        and result_identity.profile_binding_generation == request_identity.profile_binding_generation
-        and result_identity.expected_source_operation_ledger_revision
+        reply_identity.run_id == request_identity.run_id
+        and reply_identity.operation_id == request_identity.operation_id
+        and reply_identity.attempt_no == request_identity.attempt_no
+        and reply_identity.source == request_identity.source
+        and reply_identity.operation_kind == request_identity.operation_kind
+        and reply_identity.request_hash == request_identity.request_hash
+        and reply_identity.idempotency_key == request_identity.idempotency_key
+        and reply_identity.accepted_requirement_revision_id == request_identity.accepted_requirement_revision_id
+        and reply_identity.profile_binding_generation == request_identity.profile_binding_generation
+        and reply_identity.expected_source_operation_ledger_revision
         == request_identity.expected_source_operation_ledger_revision
-        and result_identity.expected_reconciliation_revision == request_identity.expected_reconciliation_revision
+        and reply_identity.expected_reconciliation_revision == request_identity.expected_reconciliation_revision
     )
 
 
@@ -648,6 +732,15 @@ def _validated_result(value: VerifySessionResultV1) -> VerifySessionResultV1:
         raise ValueError("verify_session_contract_invalid") from None
 
 
+def _validated_identity(value: OperationIdentityV1) -> OperationIdentityV1:
+    if type(value) is not OperationIdentityV1:
+        raise TypeError("strict OperationIdentityV1 required")
+    try:
+        return OperationIdentityV1.model_validate(value.model_dump(mode="python", warnings="error"), strict=True)
+    except (TypeError, ValueError, ValidationError):
+        raise ValueError("verify_session_contract_invalid") from None
+
+
 def _validated_request_echo(value: VerifySessionRequestEchoV1) -> VerifySessionRequestEchoV1:
     if type(value) is not VerifySessionRequestEchoV1:
         raise TypeError("strict VerifySessionRequestEchoV1 required")
@@ -673,8 +766,10 @@ __all__ = [
     "canonical_request_intent_hash",
     "canonical_verify_session_result_bytes",
     "dispatch_authorization_digest",
+    "redact_runtime_attempt_fence_token_input",
     "runtime_attempt_fence_ref",
     "validate_outbox_redelivery",
+    "validate_verify_session_durable_reply_identity",
     "validate_verify_session_result_echo_facts",
     "validate_verify_session_result_echo",
     "verify_session_request_echo",
