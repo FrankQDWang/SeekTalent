@@ -42,6 +42,7 @@ from seektalent.source_port.verify_session_pending_effect import (
     VerifySessionPendingEffectAuthority,
     _create_pending_effect_authority,
 )
+from seektalent.source_port.sidecar_transport import PostHandshakeSourcePortSession
 
 
 MonotonicClock: TypeAlias = Callable[[], float]
@@ -61,12 +62,13 @@ class VerifySessionJournalEffectExchange:
     outbound_frames: tuple[bytes, ...]
     receipts: tuple[CommandJournalTransitionReceipt, ...]
     pending_effect: VerifySessionPendingEffectAuthority | None = None
+    arrival_deadline_at: float | None = None
 
 
 @dataclass(slots=True)
 class _CompositionState:
     command_journal_session: CommandJournalSession
-    frame_session: PostHandshakeVerifySessionSession
+    frame_session: PostHandshakeVerifySessionSession | PostHandshakeSourcePortSession
     effect: VerifySessionEffect
     monotonic_clock: MonotonicClock
     lifecycle_lock: threading.Lock = field(default_factory=threading.Lock)
@@ -97,7 +99,20 @@ class VerifySessionJournalEffectComposition:
         received = state.frame_session.feed(frame)
         if len(received) != 1 or type(received[0]) is not ReceivedVerifySessionSubmit:
             raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.UNEXPECTED_MESSAGE)
-        return _handle_submit(state, received[0])
+        return self.handle_submit(received[0])
+
+    def handle_submit(
+        self,
+        received: ReceivedVerifySessionSubmit,
+        *,
+        arrival_monotonic: float | None = None,
+    ) -> VerifySessionJournalEffectExchange:
+        """Compose one already-authenticated transport submit without reparsing its frame."""
+        state = _composition_state(self)
+        _require_open_state(state)
+        if type(received) is not ReceivedVerifySessionSubmit:
+            raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.UNEXPECTED_MESSAGE)
+        return _handle_submit(state, received, arrival_monotonic=arrival_monotonic)
 
     def close(self) -> None:
         with _COMPOSITION_LOCK:
@@ -121,15 +136,15 @@ class VerifySessionJournalEffectComposition:
 def create_verify_session_journal_effect_composition(
     *,
     command_journal_session: CommandJournalSession,
-    frame_session: PostHandshakeVerifySessionSession,
+    frame_session: PostHandshakeVerifySessionSession | PostHandshakeSourcePortSession,
     effect: VerifySessionEffect,
     monotonic_clock: MonotonicClock = time.monotonic,
 ) -> VerifySessionJournalEffectComposition:
     """Bind one real journal session to one authenticated sidecar frame session."""
     if type(command_journal_session) is not CommandJournalSession:
         raise TypeError("command_journal_session must be a factory CommandJournalSession")
-    if type(frame_session) is not PostHandshakeVerifySessionSession:
-        raise TypeError("frame_session must be a PostHandshakeVerifySessionSession")
+    if type(frame_session) not in (PostHandshakeVerifySessionSession, PostHandshakeSourcePortSession):
+        raise TypeError("frame_session must be a factory Source Port verify session")
     if not callable(effect):
         raise TypeError("effect must be callable")
     if not callable(monotonic_clock):
@@ -158,12 +173,16 @@ def create_verify_session_journal_effect_composition(
 def _handle_submit(
     state: _CompositionState,
     received: ReceivedVerifySessionSubmit,
+    *,
+    arrival_monotonic: float | None,
 ) -> VerifySessionJournalEffectExchange:
     request = received.payload
     # This candidate starts at authenticated arrival, so journal lock/queue time consumes
     # the same local deadline as the eventual effect. Replays discard it without applying it.
     deadline_at = (
-        None if request.delivery.delivery_mode == "outbox_redelivery" else _anchor_local_deadline(state, request)
+        None
+        if request.delivery.delivery_mode == "outbox_redelivery"
+        else _anchor_local_deadline(state, request, arrival_monotonic=arrival_monotonic)
     )
     accepted_ack = _accepted_ack_for_request(request)
     accepted_receipt = _record_accepted(state, request, accepted_ack)
@@ -215,6 +234,7 @@ def _handle_submit(
             receipts=(accepted_receipt,),
             reconciliation_fact="accepted_no_dispatch",
             ack_frame=ack_frame,
+            arrival_deadline_at=deadline_at,
         )
 
     dispatch_receipt = _record_dispatch_intent(state, request, accepted_receipt)
@@ -226,6 +246,7 @@ def _handle_submit(
             receipts=(accepted_receipt, dispatch_receipt),
             reconciliation_fact="dispatch_not_observed",
             ack_frame=ack_frame,
+            arrival_deadline_at=deadline_at,
         )
     if _deadline_expired(state, deadline_at):
         return _reconcile_after_ack(
@@ -235,6 +256,7 @@ def _handle_submit(
             receipts=(accepted_receipt, dispatch_receipt),
             reconciliation_fact="dispatch_not_observed",
             ack_frame=ack_frame,
+            arrival_deadline_at=deadline_at,
         )
 
     pending_effect = _create_pending_effect_authority(
@@ -252,6 +274,7 @@ def _handle_submit(
         outbound_frames=(ack_frame,),
         receipts=(accepted_receipt, dispatch_receipt),
         pending_effect=pending_effect,
+        arrival_deadline_at=deadline_at,
     )
 
 
@@ -272,6 +295,7 @@ def _consume_pending_effect(
             reply_to=reply_to,
             receipts=(accepted_receipt, dispatch_receipt),
             reconciliation_fact="dispatch_not_observed",
+            arrival_deadline_at=deadline_at,
         )
 
     _before_effect_invocation()
@@ -282,6 +306,7 @@ def _consume_pending_effect(
             reply_to=reply_to,
             receipts=(accepted_receipt, dispatch_receipt),
             reconciliation_fact="dispatch_not_observed",
+            arrival_deadline_at=deadline_at,
         )
     effect_reply = _invoke_effect(state.effect, request)
     observed_receipt = _record_observation(state, request, dispatch_receipt, effect_reply)
@@ -293,6 +318,7 @@ def _consume_pending_effect(
         disposition=disposition,
         outbound_frames=(_encode_terminal(state, reply_to, durable_terminal),),
         receipts=(accepted_receipt, dispatch_receipt, observed_receipt),
+        arrival_deadline_at=deadline_at,
     )
 
 
@@ -304,6 +330,7 @@ def _reconcile_after_ack(
     receipts: tuple[CommandJournalTransitionReceipt, ...],
     reconciliation_fact: Literal["accepted_no_dispatch", "dispatch_not_observed"],
     ack_frame: bytes | None = None,
+    arrival_deadline_at: float | None = None,
 ) -> VerifySessionJournalEffectExchange:
     reconciliation = _reconciliation_required_for_request(request, reconciliation_fact)
     status_frame = state.frame_session.encode_reconcile_required(
@@ -316,11 +343,17 @@ def _reconcile_after_ack(
         disposition="reconcile_first",
         outbound_frames=outbound_frames,
         receipts=receipts,
+        arrival_deadline_at=arrival_deadline_at,
     )
 
 
-def _anchor_local_deadline(state: _CompositionState, request: VerifySessionRequestV1) -> float:
-    now = _monotonic_now(state)
+def _anchor_local_deadline(
+    state: _CompositionState,
+    request: VerifySessionRequestV1,
+    *,
+    arrival_monotonic: float | None,
+) -> float:
+    now = _monotonic_now(state) if arrival_monotonic is None else _validated_monotonic_value(arrival_monotonic)
     deadline_at = now + request.identity.deadline.value / 1_000
     if not math.isfinite(deadline_at):
         raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR)
@@ -336,6 +369,10 @@ def _monotonic_now(state: _CompositionState) -> float:
         value = state.monotonic_clock()
     except (ArithmeticError, RuntimeError, TypeError, ValueError):
         raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR) from None
+    return _validated_monotonic_value(value)
+
+
+def _validated_monotonic_value(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR)
     return float(value)

@@ -218,6 +218,10 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
 
     def encode(self, envelope: EnvelopeT) -> bytes:
         """Authenticate one strict outbound envelope and update bounded state."""
+        return self._encode_authenticated_envelope(envelope)
+
+    def _encode_authenticated_envelope(self, envelope: AuthenticatedFrameEnvelopeBase) -> bytes:
+        """Authenticate one envelope after a specialized session has built it."""
         self._require_open()
         validated = self._validated_envelope(envelope)
         self._require_outbound_context(validated)
@@ -458,7 +462,7 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
             self._fail("source_port_frame_length_mismatch")
         return frame_length.to_bytes(4, "big") + body
 
-    def _validated_envelope(self, value: EnvelopeT) -> EnvelopeT:
+    def _validated_envelope(self, value: AuthenticatedFrameEnvelopeBase) -> EnvelopeT:
         validation_failed = False
         envelope: EnvelopeT | None = None
         if not isinstance(value, AuthenticatedFrameEnvelopeBase):

@@ -21,8 +21,10 @@ from seektalent.installed_slot import (
     acquire_installed_sidecar_launch_lease,
 )
 from seektalent.owned_sidecar_process import OwnedSidecarProcess, spawn_owned_sidecar
-from seektalent.sidecar_readiness import exchange_source_history, spawn_ready_sidecar
+from seektalent.sidecar_readiness import spawn_ready_sidecar
 from seektalent.source_port.history_contract import SourceHistoryMatched, SourceHistoryNotFound
+from seektalent.source_port.sidecar_transport import exchange_source_history, exchange_verify_session
+from seektalent.source_port.verify_session_contract import VerifySessionRequestV1
 from seektalent.release_manifest import parse_release_manifest, release_manifest_digest
 from tools.build_packaged_sidecar import (
     TEST_ONLY_SIGNING_SEED,
@@ -90,11 +92,22 @@ def _spawn_test_history_sidecar(
     lease: InstalledSidecarLaunchLease,
     database: Path,
 ) -> OwnedSidecarProcess:
+    return _spawn_test_source_port_sidecar(
+        lease,
+        "--test-only-source-history-database",
+        str(database),
+    )
+
+
+def _spawn_test_source_port_sidecar(
+    lease: InstalledSidecarLaunchLease,
+    *arguments: str,
+) -> OwnedSidecarProcess:
     lease_state = lease._take_for_spawn()
     resolution = lease_state.admission.resolution
     executable = resolution.executable_path
     process = subprocess.Popen(
-        [str(executable), "--test-only-source-history-database", str(database)],
+        [str(executable), *arguments],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -116,6 +129,33 @@ def _spawn_test_history_sidecar(
         stderr_reader=process.stderr,
         _process_group_id=process.pid if os.name == "posix" else None,
         _lease_state=lease_state,
+    )
+
+
+def _verify_request() -> VerifySessionRequestV1:
+    return VerifySessionRequestV1.create(
+        run_id="packaged-verify-run-1",
+        operation_id="packaged-verify-operation-1",
+        attempt_no=1,
+        idempotency_key="packaged-verify-key-1",
+        correlation_id="packaged-verify-correlation-1",
+        accepted_requirement_revision_id="packaged-requirement-1",
+        runtime_attempt_fence_token="packaged-verify-fence-" + "x" * 64,
+        profile_binding_generation=1,
+        browser_control_scope_id="packaged-browser-scope-1",
+        deadline_value=60_000,
+        expected_source_operation_ledger_revision=1,
+        expected_reconciliation_revision=0,
+        delivery_mode="initial",
+        dispatch_intent_id="packaged-dispatch-intent-1",
+        dispatch_intent_revision=1,
+        source_operation_acceptance_ref="packaged-source-acceptance-1",
+        profile_binding_ref="packaged-profile-binding-1",
+        provider_account_ref="packaged-provider-account-1",
+        required_capabilities=("bridge", "extension"),
+        user_interaction_policy="observe_only",
+        verify_search_surface=True,
+        component_receipt_refs=("packaged-main-receipt-1",),
     )
 
 
@@ -213,6 +253,50 @@ def test_packaged_artifact_returns_authenticated_read_only_sqlite_history(
     assert harness.path.stat().st_mtime_ns == before_mtime
     assert observer.execute("PRAGMA data_version").fetchone() == before_data_version
     observer.close()
+    retry = _acquire(root)
+    retry.close()
+
+
+def test_packaged_artifact_runs_history_verify_history_over_one_authenticated_pipe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    harness = SourceHistorySQLiteHarness.create(tmp_path / "history.sqlite3")
+    harness.register_generation(1)
+    harness.record_accepted(_accepted(), generation=1)
+    journal_path = tmp_path / "verify-session-journal.sqlite3"
+    root = _install_active_artifact(tmp_path)
+    monkeypatch.setattr(
+        readiness,
+        "spawn_owned_sidecar",
+        lambda lease: _spawn_test_source_port_sidecar(
+            lease,
+            "--test-only-source-history-database",
+            str(harness.path),
+            "--test-only-verify-session-journal",
+            str(journal_path),
+        ),
+    )
+
+    session = spawn_ready_sidecar(_acquire(root), timeout=30)
+    try:
+        before = exchange_source_history(session, _query(), timeout=30)
+        ack, terminal = exchange_verify_session(session, _verify_request(), timeout=30)
+        after = exchange_source_history(
+            session,
+            _query(operation_id="packaged-history-after-verify", idempotency_key="packaged-history-after-verify-key"),
+            timeout=30,
+        )
+        assert isinstance(before.payload, SourceHistoryMatched)
+        assert ack.payload.accepted_fact == "dispatch_authorized"
+        assert terminal.payload.session_readiness == "ready"
+        assert isinstance(after.payload, SourceHistoryNotFound)
+    finally:
+        session.close(30)
+
+    with sqlite3.connect(journal_path) as connection:
+        phases = connection.execute("SELECT phase FROM source_history_heads").fetchall()
+    assert phases == [("observed_result",)]
     retry = _acquire(root)
     retry.close()
 

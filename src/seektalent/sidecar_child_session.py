@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-import inspect
 import threading
 import time
 import weakref
-from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
-import secrets
-from typing import IO, Never, SupportsIndex
+from typing import IO, Literal, Never, SupportsIndex
 
 from seektalent.sidecar_handshake_protocol import (
     DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
@@ -23,23 +19,15 @@ from seektalent.sidecar_handshake_protocol import (
     _validated_timeout,
     perform_sidecar_handshake,
 )
-from seektalent.source_port.authenticated_history_frames import (
-    PostHandshakeHistorySession,
-    ReceivedHistoryMessage,
-    ReceivedHistoryQuery,
-    SourceHistoryAdmissionError,
-    SourceHistoryAdmissionReason,
+from seektalent.source_port.sidecar_transport import (
+    PostHandshakeSourcePortSession,
+    ReceivedSourcePortMessage,
+    SourcePortEndpoint,
+    _register_source_port_endpoint,
+    receive_source_port_messages,
+    send_source_port_frame,
+    wait_for_parent_eof as _wait_for_parent_eof,
 )
-from seektalent.source_port.history_contract import (
-    SourceHistoryIdentityConflict,
-    SourceHistoryMatched,
-    SourceHistoryNotFound,
-    SourceHistoryQueryV1,
-    SourceHistoryQueryResultV1,
-    SourceHistoryUnavailable,
-)
-
-_QUERY_RESULT_CONTRACT_VERSION = "seektalent.source-port.query.result/v1"
 
 
 @dataclass(slots=True)
@@ -47,18 +35,18 @@ class _SidecarResultState:
     transport: _ProtocolTransport
     session_id: str
     protocol_minor: int
-    history: PostHandshakeHistorySession
-    history_exchange_lock: threading.Lock
-    history_query_in_flight: bool = False
-    history_exchange_usable: bool = True
+    source_port: PostHandshakeSourcePortSession
+    source_port_exchange_lock: threading.Lock
+    source_port_exchange_in_flight: bool = False
+    source_port_exchange_usable: bool = True
 
 
 _RESULTS: dict[int, tuple[weakref.ReferenceType["SidecarHandshakeResult"], _SidecarResultState]] = {}
 _RESULTS_LOCK = threading.Lock()
 
 
-class SidecarHandshakeResult:
-    """Factory-only child transport authority with one persistent history state."""
+class SidecarHandshakeResult(SourcePortEndpoint):
+    """Factory-only child transport authority with one shared Source Port state."""
 
     __slots__ = ("__weakref__",)
 
@@ -73,34 +61,51 @@ class SidecarHandshakeResult:
     def protocol_minor(self) -> int:
         return _result_state(self).protocol_minor
 
-    def new_history_session(self) -> PostHandshakeHistorySession:
-        return _result_state(self).history
+    def source_port_session(self) -> PostHandshakeSourcePortSession:
+        return _result_state(self).source_port
 
-    def send_history_frame(self, frame: bytes, *, timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS) -> None:
-        state = _result_state(self)
-        state.transport.write_raw(frame, time.monotonic() + _validated_timeout(timeout))
+    def _send_source_port_frame(self, frame: bytes, deadline: float) -> None:
+        _result_state(self).transport.write_raw(frame, deadline)
 
-    def receive_history(self, *, timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS) -> tuple[ReceivedHistoryMessage, ...]:
+    def _receive_source_port_messages(self, deadline: float) -> tuple[ReceivedSourcePortMessage, ...]:
         state = _result_state(self)
         try:
-            chunk = state.transport.read_history_chunk(time.monotonic() + _validated_timeout(timeout), None)
+            chunk = state.transport.read_history_chunk(deadline, None)
         except SidecarReadinessError as error:
             if error.reason is SidecarReadinessReason.EOF:
-                state.history.feed_eof()
+                state.source_port.feed_eof()
             raise
-        return state.history.feed(chunk)
+        return state.source_port.feed(chunk)
+
+    def _begin_source_port_exchange(self) -> Literal["acquired", "in_flight", "unusable"]:
+        state = _result_state(self)
+        with state.source_port_exchange_lock:
+            if state.source_port_exchange_in_flight:
+                return "in_flight"
+            if not state.source_port_exchange_usable:
+                return "unusable"
+            state.source_port_exchange_in_flight = True
+            return "acquired"
+
+    def _finish_source_port_exchange(self, *, succeeded: bool) -> None:
+        state = _result_state(self)
+        with state.source_port_exchange_lock:
+            state.source_port_exchange_in_flight = False
+            if not succeeded:
+                state.source_port_exchange_usable = False
+
+    def new_history_session(self) -> PostHandshakeSourcePortSession:
+        """Compatibility view over the one shared post-handshake session."""
+        return self.source_port_session()
+
+    def send_history_frame(self, frame: bytes, *, timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS) -> None:
+        send_source_port_frame(self, frame, timeout=timeout)
+
+    def receive_history(self, *, timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS) -> tuple[ReceivedSourcePortMessage, ...]:
+        return receive_source_port_messages(self, timeout=timeout)
 
     def wait_for_parent_eof(self) -> None:
-        state = _result_state(self)
-        while True:
-            try:
-                chunk = state.transport.read_history_chunk(float("inf"), None)
-            except SidecarReadinessError as error:
-                if error.reason is not SidecarReadinessReason.EOF:
-                    raise
-                state.history.feed_eof()
-                return
-            state.history.feed(chunk)
+        _wait_for_parent_eof(self)
 
     def close(self) -> None:
         if not _result_state(self).transport.close():
@@ -115,122 +120,6 @@ class SidecarHandshakeResult:
 
     def __reduce_ex__(self, _: SupportsIndex) -> Never:
         raise TypeError("SidecarHandshakeResult cannot be serialized")
-
-
-def serve_source_history_query(
-    session: SidecarHandshakeResult,
-    reader: object,
-    *,
-    timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
-) -> SourceHistoryQueryResultV1:
-    """Serve one authenticated query with an injected read-only reader."""
-    normalized_timeout = _validated_timeout(timeout)
-    state = _result_state(session)
-    _begin_history_exchange(state)
-    succeeded = False
-    try:
-        deadline = time.monotonic() + normalized_timeout
-        received = _receive_one_query(session, deadline)
-        query = _reader_query(reader, received.payload, deadline)
-        try:
-            query_result = query(received.payload, deadline=deadline)
-        except TimeoutError:
-            raise SidecarReadinessError(SidecarReadinessReason.READ_TIMEOUT) from None
-        except (OSError, RuntimeError, TypeError, ValueError):
-            query_result = SourceHistoryUnavailable.model_validate(
-                {
-                    **received.payload.model_dump(exclude={"contract_version"}),
-                    "contract_version": _QUERY_RESULT_CONTRACT_VERSION,
-                    "outcome": "history_unavailable",
-                    "reason": "unreadable",
-                },
-                strict=True,
-            )
-        if not isinstance(
-            query_result,
-            (SourceHistoryMatched, SourceHistoryNotFound, SourceHistoryIdentityConflict, SourceHistoryUnavailable),
-        ):
-            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.READER_RESULT_INVALID)
-        frame = state.history.encode_result(
-            message_id=secrets.token_hex(16),
-            reply_to=received.message_id,
-            payload=query_result,
-        )
-        session.send_history_frame(frame, timeout=_remaining(deadline))
-        succeeded = True
-        return query_result
-    finally:
-        _finish_history_exchange(state, succeeded=succeeded)
-
-
-def serve_test_source_history_database(
-    session: SidecarHandshakeResult,
-    path: Path,
-    *,
-    timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
-) -> None:
-    """Serve sequential queries for the explicit native test database until EOF."""
-    from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
-
-    reader = SourceHistorySQLiteReader(path)
-    while True:
-        try:
-            serve_source_history_query(session, reader, timeout=timeout)
-        except SidecarReadinessError as error:
-            if error.reason is SidecarReadinessReason.EOF:
-                return
-            raise
-
-
-def _receive_one_query(session: SidecarHandshakeResult, deadline: float) -> ReceivedHistoryQuery:
-    while True:
-        messages = session.receive_history(timeout=_remaining(deadline))
-        if not messages:
-            continue
-        if len(messages) != 1:
-            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.MULTIPLE_MESSAGES)
-        session.new_history_session().require_frame_boundary()
-        message = messages[0]
-        if not isinstance(message, ReceivedHistoryQuery):
-            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE)
-        return message
-
-
-def _reader_query(reader: object, request: SourceHistoryQueryV1, deadline: float) -> Callable[..., object]:
-    try:
-        query = getattr(reader, "query")
-    except AttributeError:
-        raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.READER_RESULT_INVALID) from None
-    if not callable(query):
-        raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.READER_RESULT_INVALID)
-    try:
-        inspect.signature(query).bind(request, deadline=deadline)
-    except (TypeError, ValueError):
-        raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.READER_RESULT_INVALID) from None
-    return query
-
-
-def _begin_history_exchange(state: _SidecarResultState) -> None:
-    with state.history_exchange_lock:
-        if state.history_query_in_flight:
-            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.QUERY_IN_FLIGHT)
-        if not state.history_exchange_usable:
-            raise SourceHistoryAdmissionError(SourceHistoryAdmissionReason.SESSION_UNUSABLE)
-        state.history_query_in_flight = True
-
-
-def _finish_history_exchange(state: _SidecarResultState, *, succeeded: bool) -> None:
-    with state.history_exchange_lock:
-        state.history_query_in_flight = False
-        if not succeeded:
-            state.history_exchange_usable = False
-
-
-def _remaining(deadline: float) -> float:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise SidecarReadinessError(SidecarReadinessReason.READ_TIMEOUT)
-    return remaining
 
 
 def serve_sidecar_handshake(
@@ -262,13 +151,13 @@ def _new_result(transport: _ProtocolTransport, material: _HandshakeMaterial) -> 
         transport=transport,
         session_id=material.session_id,
         protocol_minor=material.protocol_minor,
-        history=PostHandshakeHistorySession.for_sidecar(
+        source_port=PostHandshakeSourcePortSession.for_sidecar(
             session_id=material.session_id,
             protocol_minor=material.protocol_minor,
             main_to_sidecar_key=material.main_to_sidecar_key,
             sidecar_to_main_key=material.sidecar_to_main_key,
         ),
-        history_exchange_lock=threading.Lock(),
+        source_port_exchange_lock=threading.Lock(),
     )
 
     def finalize(_: weakref.ReferenceType[SidecarHandshakeResult]) -> None:
@@ -280,6 +169,7 @@ def _new_result(transport: _ProtocolTransport, material: _HandshakeMaterial) -> 
 
     with _RESULTS_LOCK:
         _RESULTS[result_id] = (weakref.ref(result, finalize), state)
+    _register_source_port_endpoint(result)
     return result
 
 

@@ -407,14 +407,17 @@ def _product_build_id(
 
 def _sidecar_source_digest() -> str:
     root = Path(__file__).resolve().parents[1] / "src" / "seektalent"
+    source_port = root / "source_port"
+    paths = (
+        root / "sidecar_bootstrap.py",
+        root / "sidecar_child_session.py",
+        root / "sidecar_handshake_protocol.py",
+        *sorted(source_port.glob("*.py")),
+    )
     return sha256(
         b"".join(
             path.name.encode("ascii") + b"\x00" + path.read_bytes()
-            for path in (
-                root / "sidecar_bootstrap.py",
-                root / "sidecar_child_session.py",
-                root / "sidecar_handshake_protocol.py",
-            )
+            for path in paths
         )
     ).hexdigest()
 

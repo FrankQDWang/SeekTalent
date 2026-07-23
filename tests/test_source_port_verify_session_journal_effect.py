@@ -294,6 +294,7 @@ def test_expired_local_monotonic_deadline_never_starts_a_pending_effect(tmp_path
 
     assert accepted.disposition == "pending_effect"
     assert accepted.pending_effect is not None
+    assert accepted.arrival_deadline_at == pytest.approx(0.001)
     assert effect.calls == 0
     assert main.feed(accepted.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
 
@@ -302,6 +303,7 @@ def test_expired_local_monotonic_deadline_never_starts_a_pending_effect(tmp_path
 
     assert effect.calls == 0
     assert expired.disposition == "reconcile_first"
+    assert expired.arrival_deadline_at == accepted.arrival_deadline_at
     assert len(expired.outbound_frames) == 1
     assert main.feed(expired.outbound_frames[0])[0].payload.reconciliation_fact == "dispatch_not_observed"
     facts = SourceHistorySQLiteReader(path).query(_history(_request(deadline_value=1), searched_last_generation=1))
@@ -822,7 +824,7 @@ def test_journal_effect_composition_is_factory_only_and_cannot_accept_a_forged_e
     assert pending.pending_effect is not None
 
 
-def test_production_unreachable_composition_has_no_wtscli_browser_or_runtime_caller() -> None:
+def test_only_bootstrap_and_transport_are_the_only_composition_callers_without_wtscli_or_browser() -> None:
     project_root = Path(__file__).parents[1]
     composition_modules = {
         project_root / "src" / "seektalent" / "source_port" / "verify_session_journal_effect.py",
@@ -838,5 +840,15 @@ def test_production_unreachable_composition_has_no_wtscli_browser_or_runtime_cal
         for path in (project_root / "src").rglob("*.py")
         if path not in composition_modules and "verify_session_journal_effect" in path.read_text(encoding="utf-8")
     ]
-    assert callers == []
+    assert callers == [
+        "src/seektalent/sidecar_bootstrap.py",
+        "src/seektalent/source_port/sidecar_transport.py",
+    ]
+    bootstrap = (project_root / "src" / "seektalent" / "sidecar_bootstrap.py").read_text(encoding="utf-8")
+    transport = (project_root / "src" / "seektalent" / "source_port" / "sidecar_transport.py").read_text(
+        encoding="utf-8"
+    )
+    assert "--test-only-verify-session-journal" in bootstrap
+    assert "test-only-liepin_execution_sidecar-source-" in bootstrap
+    assert "serve_test_source_port" in transport
     assert "verify_session_journal_effect" in all_source

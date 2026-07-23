@@ -1,0 +1,45 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "source-decoupling-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Move ready-sidecar post-handshake history and verify-session exchange into one shared Source Port transport, then exercise the accepted verify journal/effect composition only through the explicit native-test fake sidecar.",
+  "rationale": "Issue #402 removes the history-only mutable post-handshake state from readiness ownership and replaces it with one mixed-family authenticated session per endpoint. The only governed tool change extends the test-only packaged sidecar build identity to cover every Source Port module now bundled by the bootstrap. No runtime, provider, browser, CLI, WTSCLI, installer, or production route is introduced.",
+  "touched_layers": [
+    "docs",
+    "governance",
+    "other",
+    "tests"
+  ],
+  "red_files": [
+    "tools/build_packaged_sidecar.py"
+  ],
+  "verification": [
+    "uv run python tools/check_source_boundaries.py",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest",
+    "uv run --group dev pytest tests/test_sidecar_readiness.py tests/test_source_port_verify_session_journal_effect.py tests/test_source_port_authenticated_verify_session_frames.py tests/test_source_port_authenticated_history_frames.py tests/test_source_port_verify_session_contract.py tests/test_source_port_command_journal.py tests/test_source_history_reconciliation.py -q -p no:cacheprovider -x",
+    "uv run --group dev pytest tests/test_packaged_sidecar_artifact.py -q -p no:cacheprovider -x",
+    "uv run --group dev ruff check src tests tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_workbench_schema_modes.py",
+    "uv run --group dev python tools/check_tach_baseline.py",
+    "python3 tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main",
+    "git diff --check"
+  ],
+  "deletion_targets": [
+    "Independent history-only sequence, received-message-ID, parser-buffer, HMAC, and closed-state truth after readiness.",
+    "Readiness-owned source-history admission and child-side operation exchange logic.",
+    "A packaged fake sidecar identity that omits bundled Source Port code from its deterministic source digest."
+  ],
+  "risks": [
+    "The deterministic fake verifies journal and authenticated-pipe semantics only; it is not a WTSCLI, browser, Node, OpenCLI, or user-chain implementation.",
+    "The native package tests run on Windows x64 and both macOS architectures in CI; local evidence is limited to the current macOS host architecture.",
+    "Issue #388 remains open because this bounded extraction does not independently claim all of its broader architecture acceptance."
+  ]
+}
