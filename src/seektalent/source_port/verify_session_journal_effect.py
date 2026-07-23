@@ -60,7 +60,7 @@ class VerifySessionJournalEffectExchange:
     ]
     outbound_frames: tuple[bytes, ...]
     receipts: tuple[CommandJournalTransitionReceipt, ...]
-    pending_effect: VerifySessionPendingEffectAuthority["VerifySessionJournalEffectExchange"] | None = None
+    pending_effect: VerifySessionPendingEffectAuthority | None = None
 
 
 @dataclass(slots=True)
@@ -275,6 +275,14 @@ def _consume_pending_effect(
         )
 
     _before_effect_invocation()
+    if _deadline_expired(state, deadline_at):
+        return _reconcile_after_ack(
+            state,
+            request=request,
+            reply_to=reply_to,
+            receipts=(accepted_receipt, dispatch_receipt),
+            reconciliation_fact="dispatch_not_observed",
+        )
     effect_reply = _invoke_effect(state.effect, request)
     observed_receipt = _record_observation(state, request, dispatch_receipt, effect_reply)
     durable_terminal = _terminal_reply_from_receipt(request, observed_receipt)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
+from contextlib import suppress
 import copy
 import logging
 from pathlib import Path
@@ -257,6 +258,32 @@ def test_durable_ack_is_deliverable_before_a_factory_only_pending_effect_is_cons
         accepted.pending_effect.consume()
 
 
+def test_pending_effect_authority_cannot_expose_or_reuse_its_effect_consumer(tmp_path: Path) -> None:
+    effect = _Effect()
+    main, composition = _composition(tmp_path / "journal.sqlite3", effect, session_id="session-1")
+    accepted = _submit(main, composition, _request())
+
+    assert accepted.pending_effect is not None
+    state_accessor = getattr(accepted.pending_effect, "_state", None)
+    if state_accessor is not None:
+        escaped_state = state_accessor()
+        with suppress(Exception):
+            escaped_state.consume_effect()
+        with suppress(Exception):
+            escaped_state.consume_effect()
+
+    assert effect.calls == 0
+    assert state_accessor is None
+    assert not hasattr(accepted.pending_effect, "_install_state")
+
+    terminal = accepted.pending_effect.consume()
+
+    assert terminal.disposition == "observed_result"
+    assert effect.calls == 1
+    with pytest.raises(TypeError, match="consumed"):
+        accepted.pending_effect.consume()
+
+
 def test_expired_local_monotonic_deadline_never_starts_a_pending_effect(tmp_path: Path) -> None:
     path = tmp_path / "journal.sqlite3"
     effect = _Effect()
@@ -280,6 +307,28 @@ def test_expired_local_monotonic_deadline_never_starts_a_pending_effect(tmp_path
     facts = SourceHistorySQLiteReader(path).query(_history(_request(deadline_value=1), searched_last_generation=1))
     assert isinstance(facts, SourceHistoryMatched)
     assert facts.facts[0].conclusion == "dispatch_not_observed"
+
+
+def test_deadline_expiry_after_the_pre_effect_hook_never_starts_the_effect(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    clock = _MonotonicClock()
+    main, composition = _composition(path, effect, session_id="session-1", monotonic_clock=clock)
+    pending = _submit(main, composition, _request(deadline_value=1))
+
+    assert pending.disposition == "pending_effect"
+    assert [receipt.head_phase for receipt in pending.receipts] == ["accepted", "dispatch_intent"]
+    assert pending.pending_effect is not None
+    assert main.feed(pending.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
+
+    with patch.object(journal_effect, "_before_effect_invocation", side_effect=lambda: clock.advance(0.050)):
+        expired = pending.pending_effect.consume()
+
+    assert effect.calls == 0
+    assert expired.disposition == "reconcile_first"
+    assert len(expired.outbound_frames) == 1
+    assert main.feed(expired.outbound_frames[0])[0].payload.reconciliation_fact == "dispatch_not_observed"
+    assert len(main._pending_requests) == 0  # type: ignore[attr-defined]
 
 
 def test_deadline_anchor_includes_durable_acceptance_wait_before_effect_can_start(tmp_path: Path) -> None:
