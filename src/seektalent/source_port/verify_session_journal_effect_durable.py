@@ -33,7 +33,7 @@ from seektalent.source_port.wire_primitives import canonical_json_bytes
 
 
 VerifySessionEffectResult: TypeAlias = VerifySessionResultV1 | VerifySessionFailureV1
-VerifySessionEffect: TypeAlias = Callable[[VerifySessionRequestV1], VerifySessionEffectResult]
+VerifySessionEffect: TypeAlias = Callable[[VerifySessionRequestV1, float], VerifySessionEffectResult]
 
 
 class VerifySessionJournalEffectReason(StrEnum):
@@ -194,10 +194,11 @@ def _accepted_command(request: VerifySessionRequestV1) -> AcceptedCommand:
 def _invoke_effect(
     effect: VerifySessionEffect,
     request: VerifySessionRequestV1,
+    deadline_at: float,
 ) -> VerifySessionEffectResult:
     reply: object = _NO_EFFECT_REPLY
     with suppress(Exception):
-        reply = effect(request)
+        reply = effect(request, deadline_at)
     if reply is _NO_EFFECT_REPLY:
         raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.EFFECT_FAILED)
     try:

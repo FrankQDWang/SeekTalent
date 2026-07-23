@@ -103,9 +103,15 @@ class OpenCliDaemonClient:
             connection_factory=self._connection_factory,
         )
 
-    def verify_bridge(self, *, timeout_seconds: float = 2.0) -> Mapping[str, object]:
+    def verify_bridge(
+        self,
+        *,
+        timeout_seconds: float = 2.0,
+        validate: bool = True,
+    ) -> Mapping[str, object]:
+        """Read bridge status, validating identity by default."""
         with self._lock:
-            return self._verify_bridge(timeout_seconds=timeout_seconds)
+            return self._verify_bridge(timeout_seconds=timeout_seconds, validate=validate)
 
     def command(
         self,
@@ -150,14 +156,20 @@ class OpenCliDaemonClient:
                 idle_deadline_at=_optional_int(payload.get("idleDeadlineAt")),
             )
 
-    def _verify_bridge(self, *, timeout_seconds: float) -> Mapping[str, object]:
+    def _verify_bridge(
+        self,
+        *,
+        timeout_seconds: float,
+        validate: bool = True,
+    ) -> Mapping[str, object]:
         query = urlencode({"contextId": self.context_id}) if self.context_id else ""
         path = f"/status?{query}" if query else "/status"
         status, payload = self._request_json("GET", path, body=None, timeout_seconds=timeout_seconds)
         if status != 200:
             raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
-        validate_bridge_status(payload, self.requirement)
-        self._verified = True
+        if validate:
+            validate_bridge_status(payload, self.requirement)
+            self._verified = True
         return payload
 
     def _request_json(
