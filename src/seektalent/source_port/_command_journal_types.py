@@ -37,6 +37,11 @@ class CommandJournalConflictReason(StrEnum):
     STALE_HEAD_REVISION = "stale_head_revision"
 
 
+class CommandJournalTransitionDisposition(StrEnum):
+    CREATED = "created"
+    EXACT_REPLAY = "exact_replay"
+
+
 class CommandJournalError(RuntimeError):
     """A closed SQLite lifecycle or storage failure."""
 
@@ -51,6 +56,18 @@ class CommandJournalConflict(RuntimeError):
     def __init__(self, reason: CommandJournalConflictReason) -> None:
         self.reason = reason
         super().__init__(reason.value)
+
+
+@dataclass(frozen=True, slots=True)
+class CommandJournalTransitionResult:
+    """Private durable transition facts used to mint a public sealed receipt."""
+
+    disposition: CommandJournalTransitionDisposition
+    startup_generation: int
+    revision: int
+    head_phase: Literal["accepted", "dispatch_intent", "observed_result", "observed_failure"]
+    accepted_ack_bytes: bytes | None
+    terminal_reply_bytes: bytes | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

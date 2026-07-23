@@ -562,7 +562,21 @@ def test_current_phase_replay_is_exact_and_rollbacks_identity_conflicts_and_stal
     session = create_command_journal(path).start()
     accepted = _accepted()
     accepted_revision = session.record_accepted(accepted)
-    assert session.record_accepted(accepted) == accepted_revision
+    accepted_replay = session.record_accepted(accepted)
+    assert isinstance(accepted_revision, command_journal.CommandJournalTransitionReceipt)
+    assert (
+        accepted_revision.disposition,
+        accepted_revision.startup_generation,
+        accepted_revision.revision,
+        accepted_revision.head_phase,
+    ) == (command_journal.CommandJournalTransitionDisposition.CREATED, session.generation, 1, "accepted")
+    assert (
+        accepted_replay.disposition,
+        accepted_replay.startup_generation,
+        accepted_replay.revision,
+        accepted_replay.head_phase,
+    ) == (command_journal.CommandJournalTransitionDisposition.EXACT_REPLAY, session.generation, 1, "accepted")
+    assert accepted_replay == accepted_revision
 
     with pytest.raises(CommandJournalConflict) as stale:
         session.record_dispatch_intent(
@@ -580,12 +594,25 @@ def test_current_phase_replay_is_exact_and_rollbacks_identity_conflicts_and_stal
         expected_head_journal_revision=accepted_revision,
         durable_dispatch_intent_ref="dispatch-ref",
     )
-    assert session.record_dispatch_intent(
+    dispatch_replay = session.record_dispatch_intent(
         run_id="run-1",
         operation_id="operation-1",
         expected_head_journal_revision=accepted_revision,
         durable_dispatch_intent_ref="dispatch-ref",
-    ) == dispatch_revision
+    )
+    assert (
+        dispatch_revision.disposition,
+        dispatch_revision.startup_generation,
+        dispatch_revision.revision,
+        dispatch_revision.head_phase,
+    ) == (command_journal.CommandJournalTransitionDisposition.CREATED, session.generation, 2, "dispatch_intent")
+    assert (
+        dispatch_replay.disposition,
+        dispatch_replay.startup_generation,
+        dispatch_replay.revision,
+        dispatch_replay.head_phase,
+    ) == (command_journal.CommandJournalTransitionDisposition.EXACT_REPLAY, session.generation, 2, "dispatch_intent")
+    assert dispatch_replay == dispatch_revision
     with pytest.raises(CommandJournalConflict) as dispatch_replay:
         session.record_dispatch_intent(
             run_id="run-1",
@@ -601,13 +628,26 @@ def test_current_phase_replay_is_exact_and_rollbacks_identity_conflicts_and_stal
         result_ref="result-ref",
         result_hash=HASH_D,
     )
-    assert session.record_observed_result(
+    observed_replay = session.record_observed_result(
         run_id="run-1",
         operation_id="operation-1",
         expected_head_journal_revision=dispatch_revision,
         result_ref="result-ref",
         result_hash=HASH_D,
-    ) == observed_revision
+    )
+    assert (
+        observed_revision.disposition,
+        observed_revision.startup_generation,
+        observed_revision.revision,
+        observed_revision.head_phase,
+    ) == (command_journal.CommandJournalTransitionDisposition.CREATED, session.generation, 3, "observed_result")
+    assert (
+        observed_replay.disposition,
+        observed_replay.startup_generation,
+        observed_replay.revision,
+        observed_replay.head_phase,
+    ) == (command_journal.CommandJournalTransitionDisposition.EXACT_REPLAY, session.generation, 3, "observed_result")
+    assert observed_replay == observed_revision
 
     for result_ref, result_hash in (("different-result-ref", HASH_D), ("result-ref", HASH_C)):
         with pytest.raises(CommandJournalConflict) as replay:
@@ -879,6 +919,8 @@ def test_command_journal_internal_modules_form_a_one_way_dag() -> None:
         "CommandJournalError",
         "CommandJournalErrorReason",
         "CommandJournalSession",
+        "CommandJournalTransitionDisposition",
+        "CommandJournalTransitionReceipt",
         "create_command_journal",
         "open_command_journal",
     }
@@ -899,7 +941,7 @@ def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_col
             continue
         if "command_journal" in path.read_text(encoding="utf-8"):
             production_callers.append(path.relative_to(project_root).as_posix())
-    assert production_callers == []
+    assert production_callers == ["src/seektalent/source_port/verify_session_journal_effect.py"]
 
     connection_path = tmp_path / "journal.sqlite3"
     try:

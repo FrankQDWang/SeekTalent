@@ -158,7 +158,7 @@ def test_tests_only_harness_delegates_query_to_the_production_reader(
 def test_tests_only_harness_delegates_all_production_write_truth() -> None:
     source = inspect.getsource(SourceHistorySQLiteHarness)
 
-    assert history_sqlite_reader.SCHEMA_VERSION == 3
+    assert history_sqlite_reader.SCHEMA_VERSION == 4
     assert "create_command_journal" in source
     assert "record_accepted(accepted)" in source
     assert "source_history_sqlite_storage" not in source

@@ -568,4 +568,4 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
             continue
         if "authenticated_verify_session_frames" in path.read_text(encoding="utf-8"):
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    assert callers == []
+    assert callers == ["src/seektalent/source_port/verify_session_journal_effect.py"]

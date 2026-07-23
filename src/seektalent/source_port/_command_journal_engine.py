@@ -17,6 +17,8 @@ from seektalent.source_port._command_journal_types import (
     CommandJournalConflictReason,
     CommandJournalError,
     CommandJournalErrorReason,
+    CommandJournalTransitionDisposition,
+    CommandJournalTransitionResult,
 )
 from seektalent.source_port.history_contract import (
     AcceptedNoDispatchFact,
@@ -28,6 +30,7 @@ from seektalent.source_port.history_contract import (
 from seektalent.source_port.history_sqlite_reader import (
     SCHEMA_STATEMENTS,
     SCHEMA_VERSION,
+    MAX_DURABLE_REPLY_BYTES,
     HistorySQLiteUnavailable,
     load_validated_history_facts,
     probe_existing_database,
@@ -312,10 +315,15 @@ def _record_accepted(
     generation: int,
     instance_id: str,
     accepted: AcceptedCommand,
-) -> int:
+    accepted_ack_bytes: bytes | None,
+    allow_existing_phase_replay: bool,
+    allow_transport_replay: bool,
+    require_existing_replay: bool,
+) -> CommandJournalTransitionResult:
     if type(accepted) is not AcceptedCommand:
         raise TypeError("accepted command must be an AcceptedCommand")
     _validate_accepted_input(accepted, generation=generation)
+    _validate_durable_reply_bytes(accepted_ack_bytes, "accepted_ack_bytes")
     with _write_transaction(path) as connection:
         _require_session_generation(connection, generation=generation, instance_id=instance_id)
         existing = _find_operation_head(
@@ -325,13 +333,21 @@ def _record_accepted(
             ordinal=accepted.dispatch_authorization_ordinal,
         )
         if existing is not None:
-            if not _same_accepted_identity(existing, accepted):
+            if not _same_accepted_identity(existing, accepted, allow_transport_replay=allow_transport_replay):
                 raise CommandJournalConflict(CommandJournalConflictReason.IDENTITY_CONFLICT)
-            if str(existing["phase"]) != "accepted":
+            if str(existing["phase"]) != "accepted" and not allow_existing_phase_replay:
                 raise CommandJournalConflict(CommandJournalConflictReason.PHASE_ROLLBACK)
-            if int(existing["accepted_generation"]) != generation:
+            if int(existing["accepted_generation"]) != generation and not allow_existing_phase_replay:
                 raise CommandJournalConflict(CommandJournalConflictReason.ACCEPTANCE_REPLAY_CONFLICT)
-            return int(existing["accepted_journal_revision"])
+            return _transition_result_from_head(
+                existing,
+                disposition=CommandJournalTransitionDisposition.EXACT_REPLAY,
+                startup_generation=generation,
+                revision=int(existing["accepted_journal_revision"]),
+            )
+
+        if require_existing_replay:
+            raise CommandJournalConflict(CommandJournalConflictReason.HEAD_MISSING)
 
         _require_no_identity_collision(connection, accepted)
         revision = _allocate_revision(connection)
@@ -346,12 +362,19 @@ def _record_accepted(
             },
             strict=True,
         )
-        connection.execute(_EVENT_INSERT, _accepted_event_parameters(fact))
+        connection.execute(_EVENT_INSERT, _accepted_event_parameters(fact, accepted_ack_bytes=accepted_ack_bytes))
         _transition_checkpoint("after_event_insert")
-        connection.execute(_HEAD_INSERT, _accepted_head_parameters(fact))
+        connection.execute(_HEAD_INSERT, _accepted_head_parameters(fact, accepted_ack_bytes=accepted_ack_bytes))
         _transition_checkpoint("after_head_cas")
     _transition_commit_acknowledged()
-    return revision
+    return CommandJournalTransitionResult(
+        disposition=CommandJournalTransitionDisposition.CREATED,
+        startup_generation=generation,
+        revision=revision,
+        head_phase="accepted",
+        accepted_ack_bytes=accepted_ack_bytes,
+        terminal_reply_bytes=None,
+    )
 
 
 def _record_dispatch_intent(
@@ -363,7 +386,7 @@ def _record_dispatch_intent(
     operation_id: str,
     expected_head_journal_revision: int,
     durable_dispatch_intent_ref: str,
-) -> int:
+) -> CommandJournalTransitionResult:
     _require_positive_integer(expected_head_journal_revision, "expected_head_journal_revision")
     with _write_transaction(path) as connection:
         _require_session_generation(connection, generation=generation, instance_id=instance_id)
@@ -376,7 +399,12 @@ def _record_dispatch_intent(
                 or head["durable_dispatch_intent_ref"] != durable_dispatch_intent_ref
             ):
                 raise CommandJournalConflict(CommandJournalConflictReason.DISPATCH_REPLAY_CONFLICT)
-            return int(head["dispatch_intent_journal_revision"])
+            return _transition_result_from_head(
+                head,
+                disposition=CommandJournalTransitionDisposition.EXACT_REPLAY,
+                startup_generation=generation,
+                revision=int(head["dispatch_intent_journal_revision"]),
+            )
         if phase in {"observed_result", "observed_failure"}:
             raise CommandJournalConflict(CommandJournalConflictReason.PHASE_ROLLBACK)
         if phase != "accepted":
@@ -397,7 +425,15 @@ def _record_dispatch_intent(
             },
             strict=True,
         )
-        connection.execute(_EVENT_INSERT, _transition_event_parameters(fact, phase="dispatch_intent"))
+        connection.execute(
+            _EVENT_INSERT,
+            _transition_event_parameters(
+                fact,
+                phase="dispatch_intent",
+                accepted_ack_bytes=_reply_bytes_from_row(head, "accepted_ack_bytes"),
+                terminal_reply_bytes=None,
+            ),
+        )
         _transition_checkpoint("after_event_insert")
         cursor = connection.execute(
             """
@@ -427,7 +463,14 @@ def _record_dispatch_intent(
             raise CommandJournalConflict(CommandJournalConflictReason.HEAD_CAS_FAILED)
         _transition_checkpoint("after_head_cas")
     _transition_commit_acknowledged()
-    return revision
+    return CommandJournalTransitionResult(
+        disposition=CommandJournalTransitionDisposition.CREATED,
+        startup_generation=generation,
+        revision=revision,
+        head_phase="dispatch_intent",
+        accepted_ack_bytes=_reply_bytes_from_row(head, "accepted_ack_bytes"),
+        terminal_reply_bytes=None,
+    )
 
 
 def _record_observation(
@@ -441,8 +484,10 @@ def _record_observation(
     observation_kind: Literal["observed_result", "observed_failure"],
     observation_ref: str,
     observation_hash: str,
-) -> int:
+    terminal_reply_bytes: bytes | None,
+) -> CommandJournalTransitionResult:
     _require_positive_integer(expected_head_journal_revision, "expected_head_journal_revision")
+    _validate_durable_reply_bytes(terminal_reply_bytes, "terminal_reply_bytes")
     with _write_transaction(path) as connection:
         _require_session_generation(connection, generation=generation, instance_id=instance_id)
         head = _require_head(connection, run_id=run_id, operation_id=operation_id)
@@ -457,7 +502,12 @@ def _record_observation(
                 or head["observation_hash"] != observation_hash
             ):
                 raise CommandJournalConflict(CommandJournalConflictReason.OBSERVATION_REPLAY_CONFLICT)
-            return int(head["observation_journal_revision"])
+            return _transition_result_from_head(
+                head,
+                disposition=CommandJournalTransitionDisposition.EXACT_REPLAY,
+                startup_generation=generation,
+                revision=int(head["observation_journal_revision"]),
+            )
         if phase != "dispatch_intent":
             raise CommandJournalConflict(CommandJournalConflictReason.OBSERVATION_WITHOUT_DISPATCH)
         if int(head["head_journal_revision"]) != expected_head_journal_revision:
@@ -494,7 +544,15 @@ def _record_observation(
                 },
                 strict=True,
             )
-        connection.execute(_EVENT_INSERT, _transition_event_parameters(fact, phase=observation_kind))
+        connection.execute(
+            _EVENT_INSERT,
+            _transition_event_parameters(
+                fact,
+                phase=observation_kind,
+                accepted_ack_bytes=_reply_bytes_from_row(head, "accepted_ack_bytes"),
+                terminal_reply_bytes=terminal_reply_bytes,
+            ),
+        )
         _transition_checkpoint("after_event_insert")
         cursor = connection.execute(
             """
@@ -505,7 +563,8 @@ def _record_observation(
                 observation_generation = ?,
                 observation_journal_revision = ?,
                 observation_ref = ?,
-                observation_hash = ?
+                observation_hash = ?,
+                terminal_reply_bytes = ?
             WHERE run_id = ? AND operation_id = ?
               AND dispatch_authorization_ordinal = 1
               AND head_journal_revision = ? AND phase = 'dispatch_intent'
@@ -518,6 +577,7 @@ def _record_observation(
                 revision,
                 observation_ref,
                 observation_hash,
+                terminal_reply_bytes,
                 run_id,
                 operation_id,
                 expected_head_journal_revision,
@@ -527,7 +587,14 @@ def _record_observation(
             raise CommandJournalConflict(CommandJournalConflictReason.HEAD_CAS_FAILED)
         _transition_checkpoint("after_head_cas")
     _transition_commit_acknowledged()
-    return revision
+    return CommandJournalTransitionResult(
+        disposition=CommandJournalTransitionDisposition.CREATED,
+        startup_generation=generation,
+        revision=revision,
+        head_phase=observation_kind,
+        accepted_ack_bytes=_reply_bytes_from_row(head, "accepted_ack_bytes"),
+        terminal_reply_bytes=terminal_reply_bytes,
+    )
 
 
 @contextmanager
@@ -697,8 +764,52 @@ def _require_no_identity_collision(connection: sqlite3.Connection, accepted: Acc
             raise CommandJournalConflict(CommandJournalConflictReason.IDENTITY_CONFLICT)
 
 
-def _same_accepted_identity(row: sqlite3.Row, accepted: AcceptedCommand) -> bool:
-    return all(row[name] == value for name, value in _accepted_fact_values(accepted).items())
+def _same_accepted_identity(
+    row: sqlite3.Row,
+    accepted: AcceptedCommand,
+    *,
+    allow_transport_replay: bool,
+) -> bool:
+    values = _accepted_fact_values(accepted)
+    if allow_transport_replay:
+        for name in ("runtime_attempt_fence_ref", "browser_control_scope_id", "controller_fence_ref"):
+            values.pop(name)
+    return all(row[name] == value for name, value in values.items())
+
+
+def _transition_result_from_head(
+    head: sqlite3.Row,
+    *,
+    disposition: CommandJournalTransitionDisposition,
+    startup_generation: int,
+    revision: int,
+) -> CommandJournalTransitionResult:
+    phase = str(head["phase"])
+    if phase == "accepted":
+        head_phase: Literal["accepted", "dispatch_intent", "observed_result", "observed_failure"] = "accepted"
+    elif phase == "dispatch_intent":
+        head_phase = "dispatch_intent"
+    elif phase == "observed_result":
+        head_phase = "observed_result"
+    elif phase == "observed_failure":
+        head_phase = "observed_failure"
+    else:
+        raise CommandJournalError(CommandJournalErrorReason.CORRUPT)
+    return CommandJournalTransitionResult(
+        disposition=disposition,
+        startup_generation=startup_generation,
+        revision=revision,
+        head_phase=head_phase,
+        accepted_ack_bytes=_reply_bytes_from_row(head, "accepted_ack_bytes"),
+        terminal_reply_bytes=_reply_bytes_from_row(head, "terminal_reply_bytes"),
+    )
+
+
+def _reply_bytes_from_row(row: sqlite3.Row, name: str) -> bytes | None:
+    value = row[name]
+    if not _is_valid_durable_reply_bytes(value):
+        raise CommandJournalError(CommandJournalErrorReason.CORRUPT)
+    return value
 
 
 def _allocate_revision(connection: sqlite3.Connection) -> int:
@@ -781,7 +892,11 @@ def _accepted_values_from_row(row: sqlite3.Row) -> dict[str, object]:
     return {name: row[name] for name in names}
 
 
-def _accepted_event_parameters(fact: AcceptedNoDispatchFact) -> tuple[object, ...]:
+def _accepted_event_parameters(
+    fact: AcceptedNoDispatchFact,
+    *,
+    accepted_ack_bytes: bytes | None,
+) -> tuple[object, ...]:
     values = fact.model_dump()
     return (
         fact.accepted_journal_revision,
@@ -798,6 +913,8 @@ def _accepted_event_parameters(fact: AcceptedNoDispatchFact) -> tuple[object, ..
         fact.profile_binding_generation,
         fact.browser_control_scope_id,
         fact.controller_fence_ref,
+        accepted_ack_bytes,
+        None,
         None,
         None,
         None,
@@ -808,7 +925,11 @@ def _accepted_event_parameters(fact: AcceptedNoDispatchFact) -> tuple[object, ..
     )
 
 
-def _accepted_head_parameters(fact: AcceptedNoDispatchFact) -> tuple[object, ...]:
+def _accepted_head_parameters(
+    fact: AcceptedNoDispatchFact,
+    *,
+    accepted_ack_bytes: bytes | None,
+) -> tuple[object, ...]:
     values = fact.model_dump()
     return (
         *(_identity_database_values(values)),
@@ -822,9 +943,11 @@ def _accepted_head_parameters(fact: AcceptedNoDispatchFact) -> tuple[object, ...
         fact.profile_binding_generation,
         fact.browser_control_scope_id,
         fact.controller_fence_ref,
+        accepted_ack_bytes,
         "accepted",
         fact.head_generation,
         fact.head_journal_revision,
+        None,
         None,
         None,
         None,
@@ -839,6 +962,8 @@ def _transition_event_parameters(
     fact: DispatchNotObservedFact | ObservedResultFact | ObservedFailureFact,
     *,
     phase: Literal["dispatch_intent", "observed_result", "observed_failure"],
+    accepted_ack_bytes: bytes | None,
+    terminal_reply_bytes: bytes | None,
 ) -> tuple[object, ...]:
     values = fact.model_dump()
     observation_ref = values.get("result_ref") or values.get("failure_ref")
@@ -858,6 +983,7 @@ def _transition_event_parameters(
         fact.profile_binding_generation,
         fact.browser_control_scope_id,
         fact.controller_fence_ref,
+        accepted_ack_bytes,
         fact.durable_dispatch_intent_ref,
         fact.dispatch_intent_generation,
         fact.dispatch_intent_journal_revision,
@@ -865,6 +991,7 @@ def _transition_event_parameters(
         values.get("observation_journal_revision"),
         observation_ref,
         observation_hash,
+        terminal_reply_bytes,
     )
 
 
@@ -884,6 +1011,15 @@ def _identity_database_values(values: dict[str, object]) -> tuple[object, ...]:
 def _require_positive_integer(value: int, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= SQLITE_MAX_INTEGER:
         raise ValueError(f"command_journal_invalid_{name}")
+
+
+def _validate_durable_reply_bytes(value: bytes | None, name: str) -> None:
+    if not _is_valid_durable_reply_bytes(value):
+        raise ValueError(f"command_journal_invalid_{name}")
+
+
+def _is_valid_durable_reply_bytes(value: object) -> bool:
+    return value is None or (type(value) is bytes and 1 <= len(value) <= MAX_DURABLE_REPLY_BYTES)
 
 
 def _rollback(connection: sqlite3.Connection) -> None:
@@ -974,10 +1110,12 @@ INSERT INTO source_history_events(
     authorized_dispatch_intent_id, authorized_dispatch_intent_revision,
     authorized_dispatch_intent_digest, profile_binding_generation,
     browser_control_scope_id, controller_fence_ref,
+    accepted_ack_bytes,
     durable_dispatch_intent_ref, dispatch_intent_generation,
     dispatch_intent_journal_revision, observation_generation,
-    observation_journal_revision, observation_ref, observation_hash
-) VALUES ({", ".join("?" for _ in range(28))})
+    observation_journal_revision, observation_ref, observation_hash,
+    terminal_reply_bytes
+) VALUES ({", ".join("?" for _ in range(30))})
 """
 
 _HEAD_INSERT = f"""
@@ -988,9 +1126,11 @@ INSERT INTO source_history_heads(
     authorized_dispatch_intent_id, authorized_dispatch_intent_revision,
     authorized_dispatch_intent_digest, profile_binding_generation,
     browser_control_scope_id, controller_fence_ref,
+    accepted_ack_bytes,
     phase, head_generation, head_journal_revision,
     durable_dispatch_intent_ref, dispatch_intent_generation,
     dispatch_intent_journal_revision, observation_generation,
-    observation_journal_revision, observation_ref, observation_hash
-) VALUES ({", ".join("?" for _ in range(28))})
+    observation_journal_revision, observation_ref, observation_hash,
+    terminal_reply_bytes
+) VALUES ({", ".join("?" for _ in range(30))})
 """
