@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import ast
 import copy
 from dataclasses import replace
+from hashlib import sha256
 import os
 from pathlib import Path
 import pickle
@@ -15,6 +16,7 @@ import pytest
 
 import seektalent.source_port._command_journal_engine as journal_engine
 import seektalent.source_port.command_journal as command_journal
+import seektalent.source_port.history_sqlite_reader as history_reader
 from seektalent.source_port.command_journal import (
     AcceptedCommand,
     CommandJournalConflict,
@@ -490,7 +492,9 @@ def test_committed_startup_ack_loss_does_not_reallocate_the_generation_after_reo
     assert restarted.generation == 2
     connection = sqlite3.connect(path)
     try:
-        assert connection.execute("SELECT generation FROM source_history_generations ORDER BY generation").fetchall() == [
+        assert connection.execute(
+            "SELECT generation FROM source_history_generations ORDER BY generation"
+        ).fetchall() == [
             (1,),
             (2,),
         ]
@@ -696,6 +700,91 @@ def test_current_phase_replay_is_exact_and_rollbacks_identity_conflicts_and_stal
         )
     assert observation_before_dispatch.value.reason is CommandJournalConflictReason.OBSERVATION_WITHOUT_DISPATCH
     assert _event_count(path) == 4
+
+
+def test_terminal_reply_bytes_must_bind_to_the_observation_digest_without_a_write(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    session = create_command_journal(path).start()
+    accepted = session.record_accepted(_accepted())
+    dispatch = session.record_dispatch_intent(
+        run_id="run-1",
+        operation_id="operation-1",
+        expected_head_journal_revision=accepted,
+        durable_dispatch_intent_ref="dispatch-ref",
+    )
+    terminal_reply_bytes = b'{"reply":"canonical-terminal"}'
+
+    with pytest.raises(ValueError, match="terminal_reply_bytes"):
+        session.record_observed_result(
+            run_id="run-1",
+            operation_id="operation-1",
+            expected_head_journal_revision=dispatch,
+            result_ref=HASH_A,
+            result_hash=HASH_A,
+            terminal_reply_bytes=terminal_reply_bytes,
+        )
+
+    assert _event_count(path) == 2
+    digest = sha256(terminal_reply_bytes).hexdigest()
+    observed = session.record_observed_result(
+        run_id="run-1",
+        operation_id="operation-1",
+        expected_head_journal_revision=dispatch,
+        result_ref=digest,
+        result_hash=digest,
+        terminal_reply_bytes=terminal_reply_bytes,
+    )
+    replay = session.record_observed_result(
+        run_id="run-1",
+        operation_id="operation-1",
+        expected_head_journal_revision=dispatch,
+        result_ref=digest,
+        result_hash=digest,
+        terminal_reply_bytes=terminal_reply_bytes,
+    )
+
+    assert replay == observed
+    assert replay.terminal_reply_bytes == terminal_reply_bytes
+
+
+def test_reopen_rejects_terminal_bytes_tampered_with_a_matching_event_and_head(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    session = create_command_journal(path).start()
+    accepted = session.record_accepted(_accepted())
+    dispatch = session.record_dispatch_intent(
+        run_id="run-1",
+        operation_id="operation-1",
+        expected_head_journal_revision=accepted,
+        durable_dispatch_intent_ref="dispatch-ref",
+    )
+    original = b'{"reply":"original"}'
+    digest = sha256(original).hexdigest()
+    session.record_observed_result(
+        run_id="run-1",
+        operation_id="operation-1",
+        expected_head_journal_revision=dispatch,
+        result_ref=digest,
+        result_hash=digest,
+        terminal_reply_bytes=original,
+    )
+
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("DROP TRIGGER source_history_events_no_update")
+        replacement = b'{"reply":"tampered"}'
+        connection.execute(
+            "UPDATE source_history_events SET terminal_reply_bytes = ? WHERE phase = 'observed_result'",
+            (replacement,),
+        )
+        connection.execute("UPDATE source_history_heads SET terminal_reply_bytes = ?", (replacement,))
+        connection.execute(history_reader._TRIGGER_DDLS[1])
+        connection.commit()
+    finally:
+        connection.close()
+
+    with pytest.raises(CommandJournalError) as corrupt:
+        open_command_journal(path)
+    assert corrupt.value.reason is CommandJournalErrorReason.CORRUPT
 
 
 def test_concurrent_same_and_different_transitions_preserve_one_complete_head(tmp_path: Path) -> None:
@@ -941,7 +1030,10 @@ def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_col
             continue
         if "command_journal" in path.read_text(encoding="utf-8"):
             production_callers.append(path.relative_to(project_root).as_posix())
-    assert production_callers == ["src/seektalent/source_port/verify_session_journal_effect.py"]
+    assert set(production_callers) == {
+        "src/seektalent/source_port/verify_session_journal_effect.py",
+        "src/seektalent/source_port/verify_session_journal_effect_durable.py",
+    }
 
     connection_path = tmp_path / "journal.sqlite3"
     try:

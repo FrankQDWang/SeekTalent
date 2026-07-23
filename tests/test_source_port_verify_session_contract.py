@@ -572,7 +572,10 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
         content = path.read_text(encoding="utf-8")
         if "verify_session_contract" in content or "operation_dispatch" in content:
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    assert callers == ["src/seektalent/source_port/verify_session_journal_effect.py"]
+    assert set(callers) == {
+        "src/seektalent/source_port/verify_session_journal_effect.py",
+        "src/seektalent/source_port/verify_session_journal_effect_durable.py",
+    }
 
 
 def test_dispatch_plan_keeps_delivery_out_of_the_durable_digest_allowlist() -> None:

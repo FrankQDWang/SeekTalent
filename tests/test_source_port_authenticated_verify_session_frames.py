@@ -14,6 +14,7 @@ from seektalent.source_port.authenticated_verify_session_frames import (
     PostHandshakeVerifySessionSession,
     ReceivedVerifySessionAcceptedAck,
     ReceivedVerifySessionFailure,
+    ReceivedVerifySessionReconcileRequired,
     ReceivedVerifySessionRejected,
     ReceivedVerifySessionResult,
     ReceivedVerifySessionSubmit,
@@ -21,6 +22,7 @@ from seektalent.source_port.authenticated_verify_session_frames import (
     VerifySessionFailureV1,
     VerifySessionFrameError,
     VerifySessionFrameReason,
+    VerifySessionReconcileRequiredV1,
     VerifySessionRejectedV1,
 )
 from seektalent.source_port.verify_session_contract import (
@@ -33,9 +35,7 @@ from seektalent.source_port.verify_session_contract import (
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-FRAME_MODULE_PATH = (
-    PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_verify_session_frames.py"
-)
+FRAME_MODULE_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_verify_session_frames.py"
 CORE_MODULE_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_frame_core.py"
 RAW_FENCE_TOKEN = "verify-session-frame-fence-canary-" + "x" * 64
 MAIN_TO_SIDECAR_KEY = bytes(range(32))
@@ -141,6 +141,19 @@ def _failure(request: VerifySessionRequestV1, **updates: object) -> VerifySessio
     }
     values.update(updates)
     return VerifySessionFailureV1.model_validate(values)
+
+
+def _reconcile_required(
+    request: VerifySessionRequestV1,
+    **updates: object,
+) -> VerifySessionReconcileRequiredV1:
+    values: dict[str, object] = {
+        "contract_version": "seektalent.source.verify-session.reconcile-required/v1",
+        "identity": request.identity,
+        "reconciliation_fact": "dispatch_not_observed",
+    }
+    values.update(updates)
+    return VerifySessionReconcileRequiredV1.model_validate(values)
 
 
 def _main() -> PostHandshakeVerifySessionSession:
@@ -291,6 +304,17 @@ def test_rejected_is_terminal_while_failure_requires_the_accepted_ack() -> None:
     main = _main()
     sidecar = _sidecar()
     sidecar.feed(main.encode_submit(message_id="submit-1", correlation_id=None, payload=request))
+    with pytest.raises(VerifySessionFrameError) as reconcile_before_ack:
+        sidecar.encode_reconcile_required(
+            message_id="reconcile-1",
+            reply_to="submit-1",
+            payload=_reconcile_required(request),
+        )
+    assert reconcile_before_ack.value.reason_code == VerifySessionFrameReason.RESPONSE_STATE_MISMATCH.value
+
+    main = _main()
+    sidecar = _sidecar()
+    sidecar.feed(main.encode_submit(message_id="submit-1", correlation_id=None, payload=request))
     rejected = _rejected(request)
     assert main.feed(sidecar.encode_rejected(message_id="rejected-1", reply_to="submit-1", payload=rejected)) == (
         ReceivedVerifySessionRejected(
@@ -320,6 +344,38 @@ def test_rejected_is_terminal_while_failure_requires_the_accepted_ack() -> None:
             payload=failure,
         ),
     )
+
+
+def test_reconcile_required_is_authenticated_and_retires_an_accepted_submit() -> None:
+    request = _request()
+    main = _main()
+    sidecar = _sidecar()
+    sidecar.feed(main.encode_submit(message_id="submit-1", correlation_id="correlation-1", payload=request))
+    main.feed(
+        sidecar.encode_accepted_ack(
+            message_id="ack-1",
+            reply_to="submit-1",
+            payload=_accepted_ack(request),
+        )
+    )
+    reconciliation = _reconcile_required(request)
+
+    assert main.feed(
+        sidecar.encode_reconcile_required(
+            message_id="reconcile-1",
+            reply_to="submit-1",
+            payload=reconciliation,
+        )
+    ) == (
+        ReceivedVerifySessionReconcileRequired(
+            message_id="reconcile-1",
+            reply_to="submit-1",
+            correlation_id="correlation-1",
+            payload=reconciliation,
+        ),
+    )
+    assert len(main._pending_requests) == 0  # type: ignore[attr-defined]
+    assert len(sidecar._pending_requests) == 0  # type: ignore[attr-defined]
 
 
 def test_response_identity_authorization_and_direction_fail_closed() -> None:
@@ -370,9 +426,7 @@ def test_outbox_redelivery_accepts_durable_ack_and_failure_with_the_original_ide
     sidecar.feed(main.encode_submit(message_id="submit-1", correlation_id="correlation-2", payload=redelivery))
 
     accepted_ack = _accepted_ack(initial)
-    assert main.feed(
-        sidecar.encode_accepted_ack(message_id="ack-1", reply_to="submit-1", payload=accepted_ack)
-    ) == (
+    assert main.feed(sidecar.encode_accepted_ack(message_id="ack-1", reply_to="submit-1", payload=accepted_ack)) == (
         ReceivedVerifySessionAcceptedAck(
             message_id="ack-1",
             reply_to="submit-1",
@@ -391,6 +445,26 @@ def test_outbox_redelivery_accepts_durable_ack_and_failure_with_the_original_ide
         ),
     )
 
+    main = _main()
+    sidecar = _sidecar()
+    sidecar.feed(main.encode_submit(message_id="submit-1", correlation_id="correlation-2", payload=redelivery))
+    main.feed(sidecar.encode_accepted_ack(message_id="ack-1", reply_to="submit-1", payload=accepted_ack))
+    reconciliation = _reconcile_required(initial)
+    assert main.feed(
+        sidecar.encode_reconcile_required(
+            message_id="reconcile-1",
+            reply_to="submit-1",
+            payload=reconciliation,
+        )
+    ) == (
+        ReceivedVerifySessionReconcileRequired(
+            message_id="reconcile-1",
+            reply_to="submit-1",
+            correlation_id="correlation-2",
+            payload=reconciliation,
+        ),
+    )
+
 
 def test_raw_fence_bearer_is_submit_only_and_bypasses_revalidate_without_leaking() -> None:
     request = _request()
@@ -398,24 +472,26 @@ def test_raw_fence_bearer_is_submit_only_and_bypasses_revalidate_without_leaking
     rejected = _rejected(request)
     result = _result(request)
     failure = _failure(request)
+    reconciliation = _reconcile_required(request)
 
-    for value in (ack, rejected, result, failure):
+    for value in (ack, rejected, result, failure, reconciliation):
         surfaces = "\n".join((repr(value), repr(value.model_dump()), repr(value.model_dump(mode="json"))))
         assert RAW_FENCE_TOKEN not in surfaces
 
-    for model in (VerifySessionAcceptedAckV1, VerifySessionRejectedV1, VerifySessionFailureV1):
-        payload = ack.model_dump() if model is VerifySessionAcceptedAckV1 else (
-            rejected.model_dump() if model is VerifySessionRejectedV1 else failure.model_dump()
-        )
+    for model, value in (
+        (VerifySessionAcceptedAckV1, ack),
+        (VerifySessionRejectedV1, rejected),
+        (VerifySessionFailureV1, failure),
+        (VerifySessionReconcileRequiredV1, reconciliation),
+    ):
+        payload = value.model_dump()
         payload["runtime_attempt_fence_token"] = RAW_FENCE_TOKEN
         with pytest.raises(ValidationError) as invalid:
             model.model_validate(payload)
         assert RAW_FENCE_TOKEN not in str(invalid.value)
         assert RAW_FENCE_TOKEN not in repr(invalid.value.errors())
 
-    bypassed = request.model_copy(
-        update={"identity": request.identity.model_copy(update={"operation_kind": "search"})}
-    )
+    bypassed = request.model_copy(update={"identity": request.identity.model_copy(update={"operation_kind": "search"})})
     main = _main()
     with pytest.raises(VerifySessionFrameError) as invalid_submit:
         main.encode_submit(message_id="submit-1", correlation_id=None, payload=bypassed)
@@ -445,6 +521,7 @@ def test_all_verify_dtos_recursively_redact_fence_bearers_from_validation_surfac
         (VerifySessionRejectedV1, _rejected(request)),
         (VerifySessionResultV1, _result(request)),
         (VerifySessionFailureV1, _failure(request)),
+        (VerifySessionReconcileRequiredV1, _reconcile_required(request)),
     )
 
     for model, value in values:
@@ -464,6 +541,7 @@ def test_non_submit_verify_dtos_redact_unknown_top_level_fence_bearers(
         (VerifySessionRejectedV1, _rejected(request)),
         (VerifySessionResultV1, _result(request)),
         (VerifySessionFailureV1, _failure(request)),
+        (VerifySessionReconcileRequiredV1, _reconcile_required(request)),
     )
 
     for model, value in values:
@@ -508,10 +586,12 @@ def test_reply_contracts_are_closed_and_revalidate_constructed_bypasses() -> Non
     request = _request()
     rejected = _rejected(request)
     failure = _failure(request)
+    reconciliation = _reconcile_required(request)
 
     for model, payload, field in (
         (VerifySessionRejectedV1, rejected.model_dump(), "rejection_reason"),
         (VerifySessionFailureV1, failure.model_dump(), "failure_reason"),
+        (VerifySessionReconcileRequiredV1, reconciliation.model_dump(), "reconciliation_fact"),
     ):
         payload[field] = "https://private.example.invalid/path"
         with pytest.raises(ValidationError):
@@ -568,4 +648,7 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
             continue
         if "authenticated_verify_session_frames" in path.read_text(encoding="utf-8"):
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    assert callers == ["src/seektalent/source_port/verify_session_journal_effect.py"]
+    assert set(callers) == {
+        "src/seektalent/source_port/verify_session_journal_effect.py",
+        "src/seektalent/source_port/verify_session_journal_effect_durable.py",
+    }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 import sqlite3
 import stat
@@ -489,14 +490,15 @@ def _verify_journal_consistency(
             if (
                 int(observation_event["journal_revision"]) != int(head["observation_journal_revision"])
                 or int(observation_event["event_generation"]) != int(head["observation_generation"])
-                or int(observation_event["observation_journal_revision"])
-                != int(observation_event["journal_revision"])
+                or int(observation_event["observation_journal_revision"]) != int(observation_event["journal_revision"])
                 or int(observation_event["observation_generation"]) != int(observation_event["event_generation"])
                 or observation_event["observation_ref"] is None
                 or observation_event["observation_hash"] is None
                 or observation_event["observation_ref"] != head["observation_ref"]
                 or observation_event["observation_hash"] != head["observation_hash"]
                 or observation_event["terminal_reply_bytes"] != head["terminal_reply_bytes"]
+                or not _terminal_reply_bytes_match_observation(observation_event)
+                or not _terminal_reply_bytes_match_observation(head)
             ):
                 raise HistorySQLiteUnavailable("corrupt")
 
@@ -599,6 +601,18 @@ def _head_key(row: sqlite3.Row) -> tuple[str, str, int]:
 
 def _is_valid_durable_reply_bytes(value: object) -> bool:
     return value is None or (type(value) is bytes and 1 <= len(value) <= MAX_DURABLE_REPLY_BYTES)
+
+
+def _terminal_reply_bytes_match_observation(row: sqlite3.Row) -> bool:
+    terminal_reply_bytes = row["terminal_reply_bytes"]
+    if terminal_reply_bytes is None:
+        return True
+    observation_ref = row["observation_ref"]
+    observation_hash = row["observation_hash"]
+    if type(terminal_reply_bytes) is not bytes or type(observation_ref) is not str or type(observation_hash) is not str:
+        return False
+    digest = sha256(terminal_reply_bytes).hexdigest()
+    return observation_ref == observation_hash == digest
 
 
 def load_validated_history_facts(

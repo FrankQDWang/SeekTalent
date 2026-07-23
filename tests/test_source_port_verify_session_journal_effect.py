@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 import copy
 import logging
 from pathlib import Path
@@ -164,59 +165,272 @@ class _Effect:
         return _failure(request) if self.failure else _result(request)
 
 
+class _MonotonicClock:
+    def __init__(self, value: float = 0.0) -> None:
+        self.value = value
+
+    def __call__(self) -> float:
+        return self.value
+
+    def advance(self, seconds: float) -> None:
+        self.value += seconds
+
+
+class _SequenceClock:
+    def __init__(self, values: tuple[float, ...]) -> None:
+        self.values = iter(values)
+
+    def __call__(self) -> float:
+        return next(self.values)
+
+
 def _composition(
     path: Path,
     effect: journal_effect.VerifySessionEffect,
     *,
     session_id: str,
     reopen: bool = False,
+    monotonic_clock: Callable[[], float] | None = None,
 ) -> tuple[
     PostHandshakeVerifySessionSession,
     journal_effect.VerifySessionJournalEffectComposition,
 ]:
     journal = open_command_journal(path) if reopen else create_command_journal(path)
     main, sidecar = _sessions(session_id)
-    return main, journal_effect.create_verify_session_journal_effect_composition(
-        command_journal_session=journal.start(),
-        frame_session=sidecar,
-        effect=effect,
-    )
+    values: dict[str, object] = {
+        "command_journal_session": journal.start(),
+        "frame_session": sidecar,
+        "effect": effect,
+    }
+    if monotonic_clock is not None:
+        values["monotonic_clock"] = monotonic_clock
+    return main, journal_effect.create_verify_session_journal_effect_composition(**values)  # type: ignore[arg-type]
 
 
 def _submit(
     main: PostHandshakeVerifySessionSession,
     composition: journal_effect.VerifySessionJournalEffectComposition,
     request: VerifySessionRequestV1,
+    *,
+    message_id: str = "submit-1",
 ) -> journal_effect.VerifySessionJournalEffectExchange:
     return composition.feed(
         main.encode_submit(
-            message_id="submit-1",
+            message_id=message_id,
             correlation_id=request.identity.correlation_id,
             payload=request,
         )
     )
 
 
+def _consume_pending_effect(
+    exchange: journal_effect.VerifySessionJournalEffectExchange,
+) -> journal_effect.VerifySessionJournalEffectExchange:
+    assert exchange.pending_effect is not None
+    return exchange.pending_effect.consume()
+
+
+def test_durable_ack_is_deliverable_before_a_factory_only_pending_effect_is_consumed(tmp_path: Path) -> None:
+    effect = _Effect()
+    main, composition = _composition(tmp_path / "journal.sqlite3", effect, session_id="session-1")
+
+    accepted = _submit(main, composition, _request())
+
+    assert accepted.disposition == "pending_effect"
+    assert effect.calls == 0
+    assert len(accepted.outbound_frames) == 1
+    assert accepted.pending_effect is not None
+    assert main.feed(accepted.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
+
+    with pytest.raises(TypeError, match="copied"):
+        copy.copy(accepted.pending_effect)
+    with pytest.raises(TypeError, match="serialized"):
+        pickle.dumps(accepted.pending_effect)
+
+    terminal = accepted.pending_effect.consume()
+
+    assert effect.calls == 1
+    assert terminal.disposition == "observed_result"
+    assert len(terminal.outbound_frames) == 1
+    assert main.feed(terminal.outbound_frames[0])[0].payload.session_readiness == "ready"
+    with pytest.raises(TypeError, match="consumed"):
+        accepted.pending_effect.consume()
+
+
+def test_expired_local_monotonic_deadline_never_starts_a_pending_effect(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    clock = _MonotonicClock()
+    main, composition = _composition(path, effect, session_id="session-1", monotonic_clock=clock)
+
+    accepted = _submit(main, composition, _request(deadline_value=1))
+
+    assert accepted.disposition == "pending_effect"
+    assert accepted.pending_effect is not None
+    assert effect.calls == 0
+    assert main.feed(accepted.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
+
+    clock.advance(0.050)
+    expired = accepted.pending_effect.consume()
+
+    assert effect.calls == 0
+    assert expired.disposition == "reconcile_first"
+    assert len(expired.outbound_frames) == 1
+    assert main.feed(expired.outbound_frames[0])[0].payload.reconciliation_fact == "dispatch_not_observed"
+    facts = SourceHistorySQLiteReader(path).query(_history(_request(deadline_value=1), searched_last_generation=1))
+    assert isinstance(facts, SourceHistoryMatched)
+    assert facts.facts[0].conclusion == "dispatch_not_observed"
+
+
+def test_deadline_anchor_includes_durable_acceptance_wait_before_effect_can_start(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    clock = _MonotonicClock()
+    main, composition = _composition(path, effect, session_id="session-1", monotonic_clock=clock)
+    original_record_accepted = journal_effect._record_accepted
+
+    def delayed_record_accepted(*args: object) -> CommandJournalTransitionReceipt:
+        receipt = original_record_accepted(*args)  # type: ignore[arg-type]
+        clock.advance(0.050)
+        return receipt
+
+    with patch.object(journal_effect, "_record_accepted", side_effect=delayed_record_accepted):
+        expired = _submit(main, composition, _request(deadline_value=1))
+
+    assert expired.disposition == "reconcile_first"
+    assert expired.pending_effect is None
+    assert [receipt.head_phase for receipt in expired.receipts] == ["accepted"]
+    assert effect.calls == 0
+    main.feed(expired.outbound_frames[0])
+    assert main.feed(expired.outbound_frames[1])[0].payload.reconciliation_fact == "accepted_no_dispatch"
+
+
+def test_deadline_expiry_after_durable_acceptance_never_creates_dispatch_intent(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    clock = _SequenceClock((0.0, 0.002))
+    main, composition = _composition(path, effect, session_id="session-1", monotonic_clock=clock)
+
+    expired = _submit(main, composition, _request(deadline_value=1))
+
+    assert expired.disposition == "reconcile_first"
+    assert expired.pending_effect is None
+    assert [receipt.head_phase for receipt in expired.receipts] == ["accepted"]
+    assert effect.calls == 0
+    main.feed(expired.outbound_frames[0])
+    assert main.feed(expired.outbound_frames[1])[0].payload.reconciliation_fact == "accepted_no_dispatch"
+    facts = SourceHistorySQLiteReader(path).query(_history(_request(deadline_value=1), searched_last_generation=1))
+    assert isinstance(facts, SourceHistoryMatched)
+    assert facts.facts[0].conclusion == "accepted_no_dispatch"
+
+
+def test_deadline_expiry_after_durable_dispatch_never_mints_an_effect_authority(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    clock = _SequenceClock((0.0, 0.0, 0.002))
+    main, composition = _composition(path, effect, session_id="session-1", monotonic_clock=clock)
+
+    expired = _submit(main, composition, _request(deadline_value=1))
+
+    assert expired.disposition == "reconcile_first"
+    assert expired.pending_effect is None
+    assert [receipt.head_phase for receipt in expired.receipts] == ["accepted", "dispatch_intent"]
+    assert effect.calls == 0
+    main.feed(expired.outbound_frames[0])
+    assert main.feed(expired.outbound_frames[1])[0].payload.reconciliation_fact == "dispatch_not_observed"
+
+
+def test_terminal_replay_never_applies_or_extends_a_local_deadline(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    first_main, first = _composition(
+        path,
+        effect,
+        session_id="session-1",
+        monotonic_clock=_MonotonicClock(),
+    )
+    _consume_pending_effect(_submit(first_main, first, _request(deadline_value=1)))
+
+    exact_clock_values = iter((0.0, 0.050))
+
+    def exact_clock() -> float:
+        return next(exact_clock_values)
+
+    def forbidden_outbox_clock() -> float:
+        raise AssertionError("outbox redelivery must not anchor a local deadline")
+
+    exact_main, exact = _composition(
+        path,
+        effect,
+        session_id="session-2",
+        reopen=True,
+        monotonic_clock=exact_clock,
+    )
+    exact_replay = _submit(exact_main, exact, _request(deadline_value=1))
+
+    outbox_main, outbox = _composition(
+        path,
+        effect,
+        session_id="session-3",
+        reopen=True,
+        monotonic_clock=forbidden_outbox_clock,
+    )
+    outbox_replay = _submit(outbox_main, outbox, _redelivery(deadline_value=1))
+
+    assert exact_replay.disposition == outbox_replay.disposition == "terminal_replay"
+    assert effect.calls == 1
+
+
+def test_reconcile_first_status_retires_each_replayed_request_without_pending_growth(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    first_main, first = _composition(path, effect, session_id="session-1")
+    pending = _submit(first_main, first, _request())
+
+    assert pending.disposition == "pending_effect"
+    assert pending.pending_effect is not None
+    assert effect.calls == 0
+
+    main, retry = _composition(path, effect, session_id="session-2", reopen=True)
+    for number in range(1, 6):
+        exchange = _submit(main, retry, _redelivery(), message_id=f"submit-{number}")
+
+        assert exchange.disposition == "reconcile_first"
+        assert len(exchange.outbound_frames) == 2
+        assert main.feed(exchange.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
+        assert main.feed(exchange.outbound_frames[1])[0].payload.reconciliation_fact == "dispatch_not_observed"
+        assert len(main._pending_requests) == 0  # type: ignore[attr-defined]
+        assert len(journal_effect._composition_state(retry).frame_session._pending_requests) == 0  # type: ignore[attr-defined]
+
+    assert effect.calls == 0
+
+
 def test_first_submit_returns_sealed_created_receipts_and_durable_ack_then_terminal(tmp_path: Path) -> None:
     effect = _Effect()
     main, composition = _composition(tmp_path / "journal.sqlite3", effect, session_id="session-1")
 
-    exchange = _submit(main, composition, _request())
+    accepted = _submit(main, composition, _request())
 
-    assert effect.calls == 1
-    assert exchange.disposition == "observed_result"
-    assert len(exchange.outbound_frames) == 2
-    assert tuple(receipt.disposition for receipt in exchange.receipts) == (
-        CommandJournalTransitionDisposition.CREATED,
+    assert effect.calls == 0
+    assert accepted.disposition == "pending_effect"
+    assert len(accepted.outbound_frames) == 1
+    assert tuple(receipt.disposition for receipt in accepted.receipts) == (
         CommandJournalTransitionDisposition.CREATED,
         CommandJournalTransitionDisposition.CREATED,
     )
-    assert all(isinstance(receipt, CommandJournalTransitionReceipt) for receipt in exchange.receipts)
-    assert [receipt.revision for receipt in exchange.receipts] == [1, 2, 3]
-    assert [receipt.startup_generation for receipt in exchange.receipts] == [1, 1, 1]
-    assert RAW_FENCE_TOKEN not in repr(exchange.receipts[0])
-    assert main.feed(exchange.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
-    assert main.feed(exchange.outbound_frames[1])[0].payload.session_readiness == "ready"
+    assert all(isinstance(receipt, CommandJournalTransitionReceipt) for receipt in accepted.receipts)
+    assert [receipt.revision for receipt in accepted.receipts] == [1, 2]
+    assert [receipt.startup_generation for receipt in accepted.receipts] == [1, 1]
+    assert RAW_FENCE_TOKEN not in repr(accepted.receipts[0])
+    assert main.feed(accepted.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
+
+    terminal = _consume_pending_effect(accepted)
+
+    assert effect.calls == 1
+    assert terminal.disposition == "observed_result"
+    assert len(terminal.outbound_frames) == 1
+    assert [receipt.revision for receipt in terminal.receipts] == [1, 2, 3]
+    assert main.feed(terminal.outbound_frames[0])[0].payload.session_readiness == "ready"
 
 
 def test_transition_receipts_are_factory_only_and_cannot_be_copied_or_forged(tmp_path: Path) -> None:
@@ -239,7 +453,7 @@ def test_transition_receipts_are_factory_only_and_cannot_be_copied_or_forged(tmp
 def test_durable_reply_bytes_never_contain_the_raw_fence_bearer(tmp_path: Path) -> None:
     path = tmp_path / "journal.sqlite3"
     main, composition = _composition(path, _Effect(), session_id="session-1")
-    _submit(main, composition, _request())
+    _consume_pending_effect(_submit(main, composition, _request()))
 
     connection = sqlite3.connect(path)
     try:
@@ -255,7 +469,7 @@ def test_durable_reply_bytes_never_contain_the_raw_fence_bearer(tmp_path: Path) 
 def test_terminal_reply_bytes_are_immutable_against_the_history_head(tmp_path: Path) -> None:
     path = tmp_path / "journal.sqlite3"
     main, composition = _composition(path, _Effect(), session_id="session-1")
-    _submit(main, composition, _request())
+    _consume_pending_effect(_submit(main, composition, _request()))
 
     connection = sqlite3.connect(path)
     try:
@@ -280,14 +494,16 @@ def test_tampered_authenticated_submit_never_reaches_the_journal_or_effect(tmp_p
         composition.feed(tampered)
 
     assert effect.calls == 0
-    assert SourceHistorySQLiteReader(path).query(_history(_request(), searched_last_generation=1)).outcome == "not_found"
+    assert (
+        SourceHistorySQLiteReader(path).query(_history(_request(), searched_last_generation=1)).outcome == "not_found"
+    )
 
 
 def test_exact_replay_replays_durable_ack_and_terminal_without_effect(tmp_path: Path) -> None:
     path = tmp_path / "journal.sqlite3"
     effect = _Effect()
     first_main, first = _composition(path, effect, session_id="session-1")
-    _submit(first_main, first, _request())
+    _consume_pending_effect(_submit(first_main, first, _request()))
 
     replay_main, replay = _composition(path, effect, session_id="session-2", reopen=True)
     exchange = _submit(replay_main, replay, _request())
@@ -306,7 +522,8 @@ def test_ack_loss_outbox_redelivery_replays_original_durable_reply_without_effec
     effect = _Effect()
     first_main, first = _composition(path, effect, session_id="session-1")
     lost = _submit(first_main, first, _request())
-    assert len(lost.outbound_frames) == 2
+    assert len(lost.outbound_frames) == 1
+    _consume_pending_effect(lost)
 
     retry_main, retry = _composition(path, effect, session_id="session-2", reopen=True)
     exchange = _submit(retry_main, retry, _redelivery())
@@ -331,8 +548,10 @@ def test_outbox_redelivery_with_only_an_accepted_head_is_reconcile_first_and_nev
     exchange = _submit(retry_main, retry, _redelivery())
 
     assert exchange.disposition == "reconcile_first"
-    assert len(exchange.outbound_frames) == 1
+    assert len(exchange.outbound_frames) == 2
     assert effect.calls == 0
+    retry_main.feed(exchange.outbound_frames[0])
+    assert retry_main.feed(exchange.outbound_frames[1])[0].payload.reconciliation_fact == "accepted_no_dispatch"
 
 
 def test_exact_replay_with_only_an_accepted_head_is_reconcile_first_and_never_effects(tmp_path: Path) -> None:
@@ -348,15 +567,17 @@ def test_exact_replay_with_only_an_accepted_head_is_reconcile_first_and_never_ef
     exchange = _submit(retry_main, retry, _request())
 
     assert exchange.disposition == "reconcile_first"
-    assert len(exchange.outbound_frames) == 1
+    assert len(exchange.outbound_frames) == 2
     assert effect.calls == 0
+    retry_main.feed(exchange.outbound_frames[0])
+    assert retry_main.feed(exchange.outbound_frames[1])[0].payload.reconciliation_fact == "accepted_no_dispatch"
 
 
 def test_outbox_redelivery_cannot_extend_the_durable_deadline(tmp_path: Path) -> None:
     path = tmp_path / "journal.sqlite3"
     effect = _Effect()
     main, composition = _composition(path, effect, session_id="session-1")
-    _submit(main, composition, _request())
+    _consume_pending_effect(_submit(main, composition, _request()))
 
     retry_main, retry = _composition(path, effect, session_id="session-2", reopen=True)
     with pytest.raises(journal_effect.VerifySessionJournalEffectError) as failure:
@@ -381,19 +602,21 @@ def test_concurrent_same_submit_invokes_the_effect_at_most_once(tmp_path: Path) 
     effect = BlockingEffect()
     first_main, first = _composition(path, effect, session_id="session-1")
     second_main, second = _composition(path, effect, session_id="session-2", reopen=True)
+    accepted = _submit(first_main, first, _request())
+    assert accepted.pending_effect is not None
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        first_future = executor.submit(_submit, first_main, first, _request())
+        first_future = executor.submit(accepted.pending_effect.consume)
         assert entered.wait(timeout=5)
         second_future = executor.submit(_submit, second_main, second, _request())
         second_exchange = second_future.result(timeout=5)
         release.set()
-        first_exchange = first_future.result(timeout=5)
+        terminal = first_future.result(timeout=5)
 
     assert effect.calls == 1
-    assert first_exchange.disposition == "observed_result"
+    assert terminal.disposition == "observed_result"
     assert second_exchange.disposition == "reconcile_first"
-    assert len(second_exchange.outbound_frames) == 1
+    assert len(second_exchange.outbound_frames) == 2
     assert second_exchange.receipts[0].disposition is CommandJournalTransitionDisposition.EXACT_REPLAY
 
 
@@ -412,7 +635,7 @@ def test_conflicting_identity_or_dispatch_digest_fails_closed_without_another_ef
     path = tmp_path / "journal.sqlite3"
     effect = _Effect()
     main, composition = _composition(path, effect, session_id="session-1")
-    _submit(main, composition, _request())
+    _consume_pending_effect(_submit(main, composition, _request()))
 
     retry_main, retry = _composition(path, effect, session_id="session-2", reopen=True)
     with pytest.raises(journal_effect.VerifySessionJournalEffectError) as failure:
@@ -427,9 +650,11 @@ def test_crash_after_durable_intent_leaves_reconcile_first_and_restart_never_red
     effect = _Effect()
     main, composition = _composition(path, effect, session_id="session-1")
 
+    pending = _submit(main, composition, _request())
+    assert pending.pending_effect is not None
     with patch.object(journal_effect, "_before_effect_invocation", side_effect=SystemExit("crash")):
         with pytest.raises(SystemExit, match="crash"):
-            _submit(main, composition, _request())
+            pending.pending_effect.consume()
 
     assert effect.calls == 0
     facts = SourceHistorySQLiteReader(path).query(_history(_request(), searched_last_generation=1))
@@ -440,9 +665,10 @@ def test_crash_after_durable_intent_leaves_reconcile_first_and_restart_never_red
     exchange = _submit(replay_main, replay, _redelivery())
 
     assert exchange.disposition == "reconcile_first"
-    assert len(exchange.outbound_frames) == 1
+    assert len(exchange.outbound_frames) == 2
     assert effect.calls == 0
     assert replay_main.feed(exchange.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
+    assert replay_main.feed(exchange.outbound_frames[1])[0].payload.reconciliation_fact == "dispatch_not_observed"
 
 
 @pytest.mark.parametrize("failure", (False, True), ids=("result", "failure"))
@@ -461,7 +687,7 @@ def test_terminal_frames_are_encoded_only_after_the_matching_observation_is_dura
             side_effect=AssertionError("terminal was encoded before durable observation"),
         ):
             with pytest.raises(journal_effect.VerifySessionJournalEffectError) as write_failure:
-                _submit(main, composition, _request())
+                _consume_pending_effect(_submit(main, composition, _request()))
 
     assert write_failure.value.reason is journal_effect.VerifySessionJournalEffectReason.JOURNAL_ERROR
     assert effect.calls == 1
@@ -489,11 +715,12 @@ def test_failure_effect_is_durably_observed_before_its_terminal_frame(tmp_path: 
     effect = _Effect(failure=True)
     main, composition = _composition(path, effect, session_id="session-1")
 
-    exchange = _submit(main, composition, _request())
+    accepted = _submit(main, composition, _request())
+    main.feed(accepted.outbound_frames[0])
+    exchange = _consume_pending_effect(accepted)
 
     assert exchange.disposition == "observed_failure"
-    main.feed(exchange.outbound_frames[0])
-    assert main.feed(exchange.outbound_frames[1])[0].payload.failure_fact == "no_effect_performed"
+    assert main.feed(exchange.outbound_frames[0])[0].payload.failure_fact == "no_effect_performed"
     facts = SourceHistorySQLiteReader(path).query(_history(_request(), searched_last_generation=1))
     assert isinstance(facts, SourceHistoryMatched)
     assert facts.facts[0].conclusion == "observed_failure"
@@ -508,8 +735,9 @@ def test_effect_errors_and_composition_surfaces_never_leak_the_raw_fence_bearer(
             raise RuntimeError(request.runtime_attempt_fence_token)
 
     main, composition = _composition(tmp_path / "journal.sqlite3", LeakingEffect(), session_id="session-1")
+    pending = _submit(main, composition, _request())
     with pytest.raises(journal_effect.VerifySessionJournalEffectError) as error:
-        _submit(main, composition, _request())
+        _consume_pending_effect(pending)
 
     logger = logging.getLogger("seektalent.source_port.verify_session_journal_effect")
     caplog.clear()
@@ -528,9 +756,13 @@ def test_journal_effect_composition_is_factory_only_and_cannot_accept_a_forged_e
     effect = _Effect()
     main, composition = _composition(tmp_path / "journal.sqlite3", effect, session_id="session-1")
     forged = object.__new__(journal_effect.VerifySessionJournalEffectComposition)
+    pending = _submit(main, composition, _request())
+    forged_authority = object.__new__(journal_effect.VerifySessionPendingEffectAuthority)
 
     with pytest.raises(TypeError, match="factory"):
         forged.feed(b"not a frame")
+    with pytest.raises(TypeError, match="factory"):
+        forged_authority.consume()
     with pytest.raises(TypeError, match="factory"):
         journal_effect.VerifySessionJournalEffectComposition()  # type: ignore[call-arg]
     with pytest.raises(VerifySessionFrameError) as no_bypass:
@@ -538,21 +770,24 @@ def test_journal_effect_composition_is_factory_only_and_cannot_accept_a_forged_e
     assert no_bypass.value.reason_code == VerifySessionFrameReason.FRAME_TOO_LARGE.value
     assert effect.calls == 0
     assert main.closed is False
+    assert pending.pending_effect is not None
 
 
 def test_production_unreachable_composition_has_no_wtscli_browser_or_runtime_caller() -> None:
     project_root = Path(__file__).parents[1]
-    source = (project_root / "src" / "seektalent" / "source_port" / "verify_session_journal_effect.py").read_text(
-        encoding="utf-8"
-    )
+    composition_modules = {
+        project_root / "src" / "seektalent" / "source_port" / "verify_session_journal_effect.py",
+        project_root / "src" / "seektalent" / "source_port" / "verify_session_journal_effect_durable.py",
+        project_root / "src" / "seektalent" / "source_port" / "verify_session_pending_effect.py",
+    }
+    source = "\n".join(path.read_text(encoding="utf-8") for path in sorted(composition_modules))
     all_source = "\n".join(path.read_text(encoding="utf-8") for path in (project_root / "src").rglob("*.py"))
 
     assert all(token not in source.lower() for token in ("wtscli", "opencli", "playwright", "selenium"))
     callers = [
         path.relative_to(project_root).as_posix()
         for path in (project_root / "src").rglob("*.py")
-        if path.name != "verify_session_journal_effect.py"
-        and "verify_session_journal_effect" in path.read_text(encoding="utf-8")
+        if path not in composition_modules and "verify_session_journal_effect" in path.read_text(encoding="utf-8")
     ]
     assert callers == []
     assert "verify_session_journal_effect" in all_source

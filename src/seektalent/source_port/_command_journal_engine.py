@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, suppress
+from hashlib import sha256
 import os
 from pathlib import Path
 import secrets
@@ -490,6 +491,11 @@ def _record_observation(
     _validate_durable_reply_bytes(terminal_reply_bytes, "terminal_reply_bytes")
     with _write_transaction(path) as connection:
         _require_session_generation(connection, generation=generation, instance_id=instance_id)
+        _validate_terminal_observation_binding(
+            observation_ref=observation_ref,
+            observation_hash=observation_hash,
+            terminal_reply_bytes=terminal_reply_bytes,
+        )
         head = _require_head(connection, run_id=run_id, operation_id=operation_id)
         phase = str(head["phase"])
         if phase in {"observed_result", "observed_failure"}:
@@ -500,6 +506,10 @@ def _record_observation(
                 or int(head["observation_generation"]) != generation
                 or head["observation_ref"] != observation_ref
                 or head["observation_hash"] != observation_hash
+                or (
+                    terminal_reply_bytes is not None
+                    and terminal_reply_bytes != _reply_bytes_from_row(head, "terminal_reply_bytes")
+                )
             ):
                 raise CommandJournalConflict(CommandJournalConflictReason.OBSERVATION_REPLAY_CONFLICT)
             return _transition_result_from_head(
@@ -704,11 +714,7 @@ def _require_session_generation(
         """,
         (generation,),
     ).fetchone()
-    if (
-        row is None
-        or row["sidecar_instance_id"] != instance_id
-        or tuple(row[1:]) != (1, 1)
-    ):
+    if row is None or row["sidecar_instance_id"] != instance_id or tuple(row[1:]) != (1, 1):
         raise CommandJournalConflict(CommandJournalConflictReason.SESSION_GENERATION_INVALID)
 
 
@@ -795,13 +801,23 @@ def _transition_result_from_head(
         head_phase = "observed_failure"
     else:
         raise CommandJournalError(CommandJournalErrorReason.CORRUPT)
+    terminal_reply_bytes = _reply_bytes_from_row(head, "terminal_reply_bytes")
+    if phase in {"observed_result", "observed_failure"}:
+        try:
+            _validate_terminal_observation_binding(
+                observation_ref=head["observation_ref"],
+                observation_hash=head["observation_hash"],
+                terminal_reply_bytes=terminal_reply_bytes,
+            )
+        except ValueError:
+            raise CommandJournalError(CommandJournalErrorReason.CORRUPT) from None
     return CommandJournalTransitionResult(
         disposition=disposition,
         startup_generation=startup_generation,
         revision=revision,
         head_phase=head_phase,
         accepted_ack_bytes=_reply_bytes_from_row(head, "accepted_ack_bytes"),
-        terminal_reply_bytes=_reply_bytes_from_row(head, "terminal_reply_bytes"),
+        terminal_reply_bytes=terminal_reply_bytes,
     )
 
 
@@ -1020,6 +1036,19 @@ def _validate_durable_reply_bytes(value: bytes | None, name: str) -> None:
 
 def _is_valid_durable_reply_bytes(value: object) -> bool:
     return value is None or (type(value) is bytes and 1 <= len(value) <= MAX_DURABLE_REPLY_BYTES)
+
+
+def _validate_terminal_observation_binding(
+    *,
+    observation_ref: object,
+    observation_hash: object,
+    terminal_reply_bytes: bytes | None,
+) -> None:
+    if terminal_reply_bytes is None:
+        return
+    digest = sha256(terminal_reply_bytes).hexdigest()
+    if observation_ref != digest or observation_hash != digest:
+        raise ValueError("command_journal_terminal_reply_bytes_digest_mismatch")
 
 
 def _rollback(connection: sqlite3.Connection) -> None:

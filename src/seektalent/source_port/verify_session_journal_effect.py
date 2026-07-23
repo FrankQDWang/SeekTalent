@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass, field
-from enum import StrEnum
-from hashlib import sha256
+import math
 import threading
+import time
 from typing import Literal, Never, TypeAlias
 import weakref
-
-from pydantic import ValidationError
 
 from seektalent.source_port.authenticated_verify_session_frames import (
     PostHandshakeVerifySessionSession,
@@ -21,51 +18,49 @@ from seektalent.source_port.authenticated_verify_session_frames import (
     VerifySessionResultV1,
 )
 from seektalent.source_port.command_journal import (
-    AcceptedCommand,
-    CommandJournalConflict,
     CommandJournalSession,
     CommandJournalTransitionDisposition,
     CommandJournalTransitionReceipt,
 )
-from seektalent.source_port.verify_session_contract import (
-    VerifySessionRequestV1,
-    canonical_verify_session_result_bytes,
-    validate_verify_session_durable_reply_identity,
-    validate_verify_session_result_echo,
-    verify_session_request_echo,
+from seektalent.source_port.verify_session_contract import VerifySessionRequestV1
+from seektalent.source_port.verify_session_journal_effect_durable import (
+    VerifySessionEffect,
+    VerifySessionEffectResult,
+    VerifySessionJournalEffectError,
+    VerifySessionJournalEffectReason,
+    _accepted_ack_for_request,
+    _accepted_ack_from_receipt,
+    _invoke_effect,
+    _record_accepted as _durable_record_accepted,
+    _record_dispatch_intent as _durable_record_dispatch_intent,
+    _record_observation as _durable_record_observation,
+    _reconciliation_required_for_request,
+    _terminal_reply_from_receipt,
+    _validate_durable_accepted_ack,
 )
-from seektalent.source_port.wire_primitives import canonical_json_bytes
+from seektalent.source_port.verify_session_pending_effect import (
+    VerifySessionPendingEffectAuthority,
+    _create_pending_effect_authority,
+)
 
 
-VerifySessionEffectResult: TypeAlias = VerifySessionResultV1 | VerifySessionFailureV1
-VerifySessionEffect: TypeAlias = Callable[[VerifySessionRequestV1], VerifySessionEffectResult]
-
-
-class VerifySessionJournalEffectReason(StrEnum):
-    DURABLE_REPLY_INVALID = "durable_reply_invalid"
-    DURABLE_REPLY_MISSING = "durable_reply_missing"
-    EFFECT_FAILED = "effect_failed"
-    EFFECT_OUTCOME_INVALID = "effect_outcome_invalid"
-    JOURNAL_CONFLICT = "journal_conflict"
-    JOURNAL_ERROR = "journal_error"
-    UNEXPECTED_MESSAGE = "unexpected_message"
-
-
-class VerifySessionJournalEffectError(RuntimeError):
-    """A closed composition failure that never carries a runtime fence bearer."""
-
-    def __init__(self, reason: VerifySessionJournalEffectReason) -> None:
-        self.reason = reason
-        super().__init__(reason.value)
+MonotonicClock: TypeAlias = Callable[[], float]
 
 
 @dataclass(frozen=True, slots=True)
 class VerifySessionJournalEffectExchange:
-    """One sidecar response batch and the durable receipts that authorize it."""
+    """One authenticated response batch and the durable receipts that authorize it."""
 
-    disposition: Literal["observed_result", "observed_failure", "terminal_replay", "reconcile_first"]
+    disposition: Literal[
+        "pending_effect",
+        "observed_result",
+        "observed_failure",
+        "terminal_replay",
+        "reconcile_first",
+    ]
     outbound_frames: tuple[bytes, ...]
     receipts: tuple[CommandJournalTransitionReceipt, ...]
+    pending_effect: VerifySessionPendingEffectAuthority["VerifySessionJournalEffectExchange"] | None = None
 
 
 @dataclass(slots=True)
@@ -73,7 +68,10 @@ class _CompositionState:
     command_journal_session: CommandJournalSession
     frame_session: PostHandshakeVerifySessionSession
     effect: VerifySessionEffect
+    monotonic_clock: MonotonicClock
+    lifecycle_lock: threading.Lock = field(default_factory=threading.Lock)
     reply_lock: threading.Lock = field(default_factory=threading.Lock)
+    closed: bool = False
     next_reply_number: int = 1
 
 
@@ -82,7 +80,6 @@ _COMPOSITIONS: dict[
     tuple[weakref.ReferenceType["VerifySessionJournalEffectComposition"], _CompositionState],
 ] = {}
 _COMPOSITION_LOCK = threading.Lock()
-_NO_EFFECT_REPLY = object()
 
 
 class VerifySessionJournalEffectComposition:
@@ -94,8 +91,9 @@ class VerifySessionJournalEffectComposition:
         raise TypeError("VerifySessionJournalEffectComposition is factory-only")
 
     def feed(self, frame: bytes) -> VerifySessionJournalEffectExchange:
-        """Accept one authenticated submit and return only durable replies."""
+        """Durably accept one submit and return its ack, replay, or pending-effect authority."""
         state = _composition_state(self)
+        _require_open_state(state)
         received = state.frame_session.feed(frame)
         if len(received) != 1 or type(received[0]) is not ReceivedVerifySessionSubmit:
             raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.UNEXPECTED_MESSAGE)
@@ -106,6 +104,8 @@ class VerifySessionJournalEffectComposition:
             entry = _COMPOSITIONS.get(id(self))
             if entry is None or entry[0]() is not self:
                 raise TypeError("VerifySessionJournalEffectComposition must be a live factory composition")
+            with entry[1].lifecycle_lock:
+                entry[1].closed = True
             _COMPOSITIONS.pop(id(self), None)
 
     def __copy__(self) -> Never:
@@ -123,6 +123,7 @@ def create_verify_session_journal_effect_composition(
     command_journal_session: CommandJournalSession,
     frame_session: PostHandshakeVerifySessionSession,
     effect: VerifySessionEffect,
+    monotonic_clock: MonotonicClock = time.monotonic,
 ) -> VerifySessionJournalEffectComposition:
     """Bind one real journal session to one authenticated sidecar frame session."""
     if type(command_journal_session) is not CommandJournalSession:
@@ -131,18 +132,24 @@ def create_verify_session_journal_effect_composition(
         raise TypeError("frame_session must be a PostHandshakeVerifySessionSession")
     if not callable(effect):
         raise TypeError("effect must be callable")
-    composition = object.__new__(VerifySessionJournalEffectComposition)
-    composition_id = id(composition)
-
-    def finalize(_: weakref.ReferenceType[VerifySessionJournalEffectComposition]) -> None:
-        with _COMPOSITION_LOCK:
-            _COMPOSITIONS.pop(composition_id, None)
+    if not callable(monotonic_clock):
+        raise TypeError("monotonic_clock must be callable")
 
     state = _CompositionState(
         command_journal_session=command_journal_session,
         frame_session=frame_session,
         effect=effect,
+        monotonic_clock=monotonic_clock,
     )
+    composition = object.__new__(VerifySessionJournalEffectComposition)
+    composition_id = id(composition)
+
+    def finalize(_: weakref.ReferenceType[VerifySessionJournalEffectComposition]) -> None:
+        with state.lifecycle_lock:
+            state.closed = True
+        with _COMPOSITION_LOCK:
+            _COMPOSITIONS.pop(composition_id, None)
+
     with _COMPOSITION_LOCK:
         _COMPOSITIONS[composition_id] = (weakref.ref(composition, finalize), state)
     return composition
@@ -153,31 +160,36 @@ def _handle_submit(
     received: ReceivedVerifySessionSubmit,
 ) -> VerifySessionJournalEffectExchange:
     request = received.payload
+    # This candidate starts at authenticated arrival, so journal lock/queue time consumes
+    # the same local deadline as the eventual effect. Replays discard it without applying it.
+    deadline_at = (
+        None if request.delivery.delivery_mode == "outbox_redelivery" else _anchor_local_deadline(state, request)
+    )
     accepted_ack = _accepted_ack_for_request(request)
     accepted_receipt = _record_accepted(state, request, accepted_ack)
     durable_ack = _accepted_ack_from_receipt(accepted_receipt)
     _validate_durable_accepted_ack(request, durable_ack)
-    outbound = [
-        state.frame_session.encode_accepted_ack(
-            message_id=_next_reply_message_id(state, "ack"),
-            reply_to=received.message_id,
-            payload=durable_ack,
-        )
-    ]
+    ack_frame = state.frame_session.encode_accepted_ack(
+        message_id=_next_reply_message_id(state, "ack"),
+        reply_to=received.message_id,
+        payload=durable_ack,
+    )
 
     if accepted_receipt.head_phase in {"observed_result", "observed_failure"}:
         terminal = _terminal_reply_from_receipt(request, accepted_receipt)
-        outbound.append(_encode_terminal(state, received.message_id, terminal))
         return VerifySessionJournalEffectExchange(
             disposition="terminal_replay",
-            outbound_frames=tuple(outbound),
+            outbound_frames=(ack_frame, _encode_terminal(state, received.message_id, terminal)),
             receipts=(accepted_receipt,),
         )
     if accepted_receipt.head_phase == "dispatch_intent":
-        return VerifySessionJournalEffectExchange(
-            disposition="reconcile_first",
-            outbound_frames=tuple(outbound),
+        return _reconcile_after_ack(
+            state,
+            request=request,
+            reply_to=received.message_id,
             receipts=(accepted_receipt,),
+            reconciliation_fact="dispatch_not_observed",
+            ack_frame=ack_frame,
         )
     if accepted_receipt.head_phase != "accepted":
         raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR)
@@ -185,51 +197,140 @@ def _handle_submit(
         request.delivery.delivery_mode == "outbox_redelivery"
         or accepted_receipt.disposition is CommandJournalTransitionDisposition.EXACT_REPLAY
     ):
-        return VerifySessionJournalEffectExchange(
-            disposition="reconcile_first",
-            outbound_frames=tuple(outbound),
+        return _reconcile_after_ack(
+            state,
+            request=request,
+            reply_to=received.message_id,
             receipts=(accepted_receipt,),
+            reconciliation_fact="accepted_no_dispatch",
+            ack_frame=ack_frame,
+        )
+    if deadline_at is None:
+        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR)
+    if _deadline_expired(state, deadline_at):
+        return _reconcile_after_ack(
+            state,
+            request=request,
+            reply_to=received.message_id,
+            receipts=(accepted_receipt,),
+            reconciliation_fact="accepted_no_dispatch",
+            ack_frame=ack_frame,
         )
 
     dispatch_receipt = _record_dispatch_intent(state, request, accepted_receipt)
     if dispatch_receipt.disposition is not CommandJournalTransitionDisposition.CREATED:
-        return VerifySessionJournalEffectExchange(
-            disposition="reconcile_first",
-            outbound_frames=tuple(outbound),
+        return _reconcile_after_ack(
+            state,
+            request=request,
+            reply_to=received.message_id,
             receipts=(accepted_receipt, dispatch_receipt),
+            reconciliation_fact="dispatch_not_observed",
+            ack_frame=ack_frame,
+        )
+    if _deadline_expired(state, deadline_at):
+        return _reconcile_after_ack(
+            state,
+            request=request,
+            reply_to=received.message_id,
+            receipts=(accepted_receipt, dispatch_receipt),
+            reconciliation_fact="dispatch_not_observed",
+            ack_frame=ack_frame,
+        )
+
+    pending_effect = _create_pending_effect_authority(
+        consume_effect=lambda: _consume_pending_effect(
+            state,
+            request=request,
+            reply_to=received.message_id,
+            accepted_receipt=accepted_receipt,
+            dispatch_receipt=dispatch_receipt,
+            deadline_at=deadline_at,
+        )
+    )
+    return VerifySessionJournalEffectExchange(
+        disposition="pending_effect",
+        outbound_frames=(ack_frame,),
+        receipts=(accepted_receipt, dispatch_receipt),
+        pending_effect=pending_effect,
+    )
+
+
+def _consume_pending_effect(
+    state: _CompositionState,
+    *,
+    request: VerifySessionRequestV1,
+    reply_to: str,
+    accepted_receipt: CommandJournalTransitionReceipt,
+    dispatch_receipt: CommandJournalTransitionReceipt,
+    deadline_at: float,
+) -> VerifySessionJournalEffectExchange:
+    _require_open_state(state)
+    if _deadline_expired(state, deadline_at):
+        return _reconcile_after_ack(
+            state,
+            request=request,
+            reply_to=reply_to,
+            receipts=(accepted_receipt, dispatch_receipt),
+            reconciliation_fact="dispatch_not_observed",
         )
 
     _before_effect_invocation()
     effect_reply = _invoke_effect(state.effect, request)
     observed_receipt = _record_observation(state, request, dispatch_receipt, effect_reply)
     durable_terminal = _terminal_reply_from_receipt(request, observed_receipt)
-    outbound.append(_encode_terminal(state, received.message_id, durable_terminal))
     disposition: Literal["observed_result", "observed_failure"] = (
         "observed_result" if type(durable_terminal) is VerifySessionResultV1 else "observed_failure"
     )
     return VerifySessionJournalEffectExchange(
         disposition=disposition,
-        outbound_frames=tuple(outbound),
+        outbound_frames=(_encode_terminal(state, reply_to, durable_terminal),),
         receipts=(accepted_receipt, dispatch_receipt, observed_receipt),
     )
 
 
-def _accepted_ack_for_request(request: VerifySessionRequestV1) -> VerifySessionAcceptedAckV1:
+def _reconcile_after_ack(
+    state: _CompositionState,
+    *,
+    request: VerifySessionRequestV1,
+    reply_to: str,
+    receipts: tuple[CommandJournalTransitionReceipt, ...],
+    reconciliation_fact: Literal["accepted_no_dispatch", "dispatch_not_observed"],
+    ack_frame: bytes | None = None,
+) -> VerifySessionJournalEffectExchange:
+    reconciliation = _reconciliation_required_for_request(request, reconciliation_fact)
+    status_frame = state.frame_session.encode_reconcile_required(
+        message_id=_next_reply_message_id(state, "reconcile"),
+        reply_to=reply_to,
+        payload=reconciliation,
+    )
+    outbound_frames = (status_frame,) if ack_frame is None else (ack_frame, status_frame)
+    return VerifySessionJournalEffectExchange(
+        disposition="reconcile_first",
+        outbound_frames=outbound_frames,
+        receipts=receipts,
+    )
+
+
+def _anchor_local_deadline(state: _CompositionState, request: VerifySessionRequestV1) -> float:
+    now = _monotonic_now(state)
+    deadline_at = now + request.identity.deadline.value / 1_000
+    if not math.isfinite(deadline_at):
+        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR)
+    return deadline_at
+
+
+def _deadline_expired(state: _CompositionState, deadline_at: float) -> bool:
+    return _monotonic_now(state) >= deadline_at
+
+
+def _monotonic_now(state: _CompositionState) -> float:
     try:
-        accepted_ack = VerifySessionAcceptedAckV1.model_validate(
-            {
-                "contract_version": "seektalent.source.verify-session.accepted-ack/v1",
-                "identity": request.identity,
-                "dispatch_authorization": request.delivery.authorization,
-                "accepted_fact": "dispatch_authorized",
-            },
-            strict=True,
-        )
-    except (TypeError, ValueError, ValidationError):
-        accepted_ack = None
-    if accepted_ack is None:
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.EFFECT_OUTCOME_INVALID)
-    return accepted_ack
+        value = state.monotonic_clock()
+    except (ArithmeticError, RuntimeError, TypeError, ValueError):
+        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR) from None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR)
+    return float(value)
 
 
 def _record_accepted(
@@ -237,20 +338,7 @@ def _record_accepted(
     request: VerifySessionRequestV1,
     accepted_ack: VerifySessionAcceptedAckV1,
 ) -> CommandJournalTransitionReceipt:
-    delivery_mode = request.delivery.delivery_mode
-    try:
-        return state.command_journal_session.record_accepted(
-            _accepted_command(request),
-            accepted_ack_bytes=_canonical_reply_bytes(accepted_ack),
-            allow_existing_phase_replay=True,
-            allow_transport_replay=delivery_mode == "outbox_redelivery",
-            require_existing_replay=delivery_mode == "outbox_redelivery",
-        )
-    except CommandJournalConflict:
-        reason = VerifySessionJournalEffectReason.JOURNAL_CONFLICT
-    except (RuntimeError, TypeError, ValueError):
-        reason = VerifySessionJournalEffectReason.JOURNAL_ERROR
-    raise VerifySessionJournalEffectError(reason)
+    return _durable_record_accepted(state.command_journal_session, request, accepted_ack)
 
 
 def _record_dispatch_intent(
@@ -258,18 +346,7 @@ def _record_dispatch_intent(
     request: VerifySessionRequestV1,
     accepted_receipt: CommandJournalTransitionReceipt,
 ) -> CommandJournalTransitionReceipt:
-    try:
-        return state.command_journal_session.record_dispatch_intent(
-            run_id=request.identity.run_id,
-            operation_id=request.identity.operation_id,
-            expected_head_journal_revision=accepted_receipt.revision,
-            durable_dispatch_intent_ref=request.delivery.authorization.dispatch_intent_id,
-        )
-    except CommandJournalConflict:
-        reason = VerifySessionJournalEffectReason.JOURNAL_CONFLICT
-    except (RuntimeError, TypeError, ValueError):
-        reason = VerifySessionJournalEffectReason.JOURNAL_ERROR
-    raise VerifySessionJournalEffectError(reason)
+    return _durable_record_dispatch_intent(state.command_journal_session, request, accepted_receipt)
 
 
 def _record_observation(
@@ -278,172 +355,7 @@ def _record_observation(
     dispatch_receipt: CommandJournalTransitionReceipt,
     effect_reply: VerifySessionEffectResult,
 ) -> CommandJournalTransitionReceipt:
-    reply_bytes = _canonical_reply_bytes(effect_reply)
-    reply_hash = sha256(reply_bytes).hexdigest()
-    try:
-        if type(effect_reply) is VerifySessionResultV1:
-            return state.command_journal_session.record_observed_result(
-                run_id=request.identity.run_id,
-                operation_id=request.identity.operation_id,
-                expected_head_journal_revision=dispatch_receipt.revision,
-                result_ref=reply_hash,
-                result_hash=reply_hash,
-                terminal_reply_bytes=reply_bytes,
-            )
-        return state.command_journal_session.record_observed_failure(
-            run_id=request.identity.run_id,
-            operation_id=request.identity.operation_id,
-            expected_head_journal_revision=dispatch_receipt.revision,
-            failure_ref=reply_hash,
-            failure_hash=reply_hash,
-            terminal_reply_bytes=reply_bytes,
-        )
-    except CommandJournalConflict:
-        reason = VerifySessionJournalEffectReason.JOURNAL_CONFLICT
-    except (RuntimeError, TypeError, ValueError):
-        reason = VerifySessionJournalEffectReason.JOURNAL_ERROR
-    raise VerifySessionJournalEffectError(reason)
-
-
-def _accepted_command(request: VerifySessionRequestV1) -> AcceptedCommand:
-    identity = request.identity
-    authorization = request.delivery.authorization
-    return AcceptedCommand(
-        run_id=identity.run_id,
-        operation_id=identity.operation_id,
-        source=identity.source,
-        operation_kind=identity.operation_kind,
-        idempotency_key=identity.idempotency_key,
-        request_hash=identity.request_hash,
-        attempt_no=identity.attempt_no,
-        accepted_requirement_revision_id=identity.accepted_requirement_revision_id,
-        runtime_attempt_fence_ref=identity.runtime_attempt_fence_ref,
-        authorized_dispatch_intent_id=authorization.dispatch_intent_id,
-        authorized_dispatch_intent_revision=authorization.dispatch_intent_revision,
-        authorized_dispatch_intent_digest=authorization.dispatch_intent_digest,
-        profile_binding_generation=identity.profile_binding_generation,
-        browser_control_scope_id=identity.browser_control_scope_id,
-    )
-
-
-def _invoke_effect(
-    effect: VerifySessionEffect,
-    request: VerifySessionRequestV1,
-) -> VerifySessionEffectResult:
-    reply: object = _NO_EFFECT_REPLY
-    # The injected effect is the one boundary allowed to fail without exposing its exception payload.
-    with suppress(Exception):
-        reply = effect(request)
-    if reply is _NO_EFFECT_REPLY:
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.EFFECT_FAILED)
-    try:
-        if type(reply) is VerifySessionResultV1:
-            result = VerifySessionResultV1.model_validate(reply.model_dump(mode="python"), strict=True)
-            validate_verify_session_result_echo(request, result)
-            return result
-        if type(reply) is VerifySessionFailureV1:
-            failure = VerifySessionFailureV1.model_validate(reply.model_dump(mode="python"), strict=True)
-            validate_verify_session_durable_reply_identity(verify_session_request_echo(request), failure.identity)
-            return failure
-    except (TypeError, ValueError, ValidationError):
-        invalid_outcome = True
-    else:
-        invalid_outcome = False
-    if invalid_outcome:
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.EFFECT_OUTCOME_INVALID)
-    raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.EFFECT_OUTCOME_INVALID)
-
-
-def _accepted_ack_from_receipt(receipt: CommandJournalTransitionReceipt) -> VerifySessionAcceptedAckV1:
-    reply_bytes = receipt.accepted_ack_bytes
-    if reply_bytes is None:
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_MISSING)
-    reply = _decode_canonical_reply(reply_bytes, VerifySessionAcceptedAckV1)
-    if type(reply) is not VerifySessionAcceptedAckV1:
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)
-    return reply
-
-
-def _validate_durable_accepted_ack(
-    request: VerifySessionRequestV1,
-    accepted_ack: VerifySessionAcceptedAckV1,
-) -> None:
-    try:
-        validate_verify_session_durable_reply_identity(verify_session_request_echo(request), accepted_ack.identity)
-    except (TypeError, ValueError, ValidationError):
-        accepted_ack_matches_request = False
-    else:
-        accepted_ack_matches_request = accepted_ack.dispatch_authorization == request.delivery.authorization
-    if not accepted_ack_matches_request:
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_CONFLICT)
-    if (
-        request.delivery.delivery_mode == "outbox_redelivery"
-        and request.identity.deadline.value > accepted_ack.identity.deadline.value
-    ):
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_CONFLICT)
-
-
-def _terminal_reply_from_receipt(
-    request: VerifySessionRequestV1,
-    receipt: CommandJournalTransitionReceipt,
-) -> VerifySessionEffectResult:
-    reply_bytes = receipt.terminal_reply_bytes
-    if reply_bytes is None:
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_MISSING)
-    if receipt.head_phase == "observed_result":
-        reply = _decode_canonical_reply(reply_bytes, VerifySessionResultV1)
-        if type(reply) is VerifySessionResultV1:
-            _validate_durable_terminal_reply(request, reply)
-            return reply
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)
-    if receipt.head_phase == "observed_failure":
-        reply = _decode_canonical_reply(reply_bytes, VerifySessionFailureV1)
-        if type(reply) is VerifySessionFailureV1:
-            _validate_durable_terminal_reply(request, reply)
-            return reply
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)
-    raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)
-
-
-def _decode_canonical_reply(
-    reply_bytes: bytes,
-    model: type[VerifySessionAcceptedAckV1] | type[VerifySessionEffectResult],
-) -> VerifySessionAcceptedAckV1 | VerifySessionEffectResult:
-    reply: VerifySessionAcceptedAckV1 | VerifySessionEffectResult | None = None
-    try:
-        reply = model.model_validate_json(reply_bytes, strict=True)
-        if _canonical_reply_bytes(reply) != reply_bytes:
-            raise ValueError("durable_reply_noncanonical")
-    except (TypeError, ValueError, UnicodeDecodeError, ValidationError):
-        invalid_reply = True
-    else:
-        invalid_reply = False
-    if invalid_reply or reply is None:
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)
-    return reply
-
-
-def _validate_durable_terminal_reply(
-    request: VerifySessionRequestV1,
-    reply: VerifySessionEffectResult,
-) -> None:
-    try:
-        if type(reply) is VerifySessionResultV1:
-            validate_verify_session_result_echo(request, reply)
-        else:
-            validate_verify_session_durable_reply_identity(verify_session_request_echo(request), reply.identity)
-    except (TypeError, ValueError, ValidationError):
-        valid = False
-    else:
-        valid = True
-    if not valid:
-        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)
-
-
-def _canonical_reply_bytes(reply: VerifySessionAcceptedAckV1 | VerifySessionEffectResult) -> bytes:
-    if type(reply) is VerifySessionResultV1:
-        return canonical_verify_session_result_bytes(reply)
-    return canonical_json_bytes(reply.model_dump(mode="json"))
+    return _durable_record_observation(state.command_journal_session, request, dispatch_receipt, effect_reply)
 
 
 def _encode_terminal(
@@ -459,7 +371,7 @@ def _encode_terminal(
     raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)
 
 
-def _next_reply_message_id(state: _CompositionState, kind: Literal["ack", "terminal"]) -> str:
+def _next_reply_message_id(state: _CompositionState, kind: Literal["ack", "reconcile", "terminal"]) -> str:
     with state.reply_lock:
         number = state.next_reply_number
         state.next_reply_number += 1
@@ -476,16 +388,24 @@ def _composition_state(composition: VerifySessionJournalEffectComposition) -> _C
     return entry[1]
 
 
+def _require_open_state(state: _CompositionState) -> None:
+    with state.lifecycle_lock:
+        if state.closed or state.frame_session.closed:
+            raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.PENDING_EFFECT_UNAVAILABLE)
+
+
 def _before_effect_invocation() -> None:
     return None
 
 
 __all__ = [
+    "MonotonicClock",
     "VerifySessionEffect",
     "VerifySessionEffectResult",
     "VerifySessionJournalEffectComposition",
     "VerifySessionJournalEffectError",
     "VerifySessionJournalEffectExchange",
     "VerifySessionJournalEffectReason",
+    "VerifySessionPendingEffectAuthority",
     "create_verify_session_journal_effect_composition",
 ]
