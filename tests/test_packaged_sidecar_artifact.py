@@ -281,15 +281,16 @@ def test_packaged_artifact_runs_history_verify_history_over_one_authenticated_pi
     session = spawn_ready_sidecar(_acquire(root), timeout=30)
     try:
         before = exchange_source_history(session, _query(), timeout=30)
-        ack, terminal = exchange_verify_session(session, _verify_request(), timeout=30)
+        verify_exchange = exchange_verify_session(session, _verify_request(), timeout=30)
         after = exchange_source_history(
             session,
             _query(operation_id="packaged-history-after-verify", idempotency_key="packaged-history-after-verify-key"),
             timeout=30,
         )
         assert isinstance(before.payload, SourceHistoryMatched)
-        assert ack.payload.accepted_fact == "dispatch_authorized"
-        assert terminal.payload.session_readiness == "ready"
+        assert verify_exchange.accepted_ack is not None
+        assert verify_exchange.accepted_ack.payload.accepted_fact == "dispatch_authorized"
+        assert verify_exchange.terminal.payload.session_readiness == "ready"
         assert isinstance(after.payload, SourceHistoryNotFound)
     finally:
         session.close(30)

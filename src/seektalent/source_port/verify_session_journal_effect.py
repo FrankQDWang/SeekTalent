@@ -16,6 +16,10 @@ from seektalent.source_port.authenticated_verify_session_frames import (
     VerifySessionAcceptedAckV1,
     VerifySessionFailureV1,
     VerifySessionResultV1,
+    _AuthenticatedVerifySessionArrival,
+    _bind_authenticated_verify_session_arrivals,
+    _consume_authenticated_verify_session_arrival,
+    _release_authenticated_verify_session_arrivals,
 )
 from seektalent.source_port.command_journal import (
     CommandJournalSession,
@@ -42,7 +46,6 @@ from seektalent.source_port.verify_session_pending_effect import (
     VerifySessionPendingEffectAuthority,
     _create_pending_effect_authority,
 )
-from seektalent.source_port.sidecar_transport import PostHandshakeSourcePortSession
 
 
 MonotonicClock: TypeAlias = Callable[[], float]
@@ -68,9 +71,10 @@ class VerifySessionJournalEffectExchange:
 @dataclass(slots=True)
 class _CompositionState:
     command_journal_session: CommandJournalSession
-    frame_session: PostHandshakeVerifySessionSession | PostHandshakeSourcePortSession
+    frame_session: PostHandshakeVerifySessionSession
     effect: VerifySessionEffect
     monotonic_clock: MonotonicClock
+    arrival_owner: object
     lifecycle_lock: threading.Lock = field(default_factory=threading.Lock)
     reply_lock: threading.Lock = field(default_factory=threading.Lock)
     closed: bool = False
@@ -97,22 +101,30 @@ class VerifySessionJournalEffectComposition:
         state = _composition_state(self)
         _require_open_state(state)
         received = state.frame_session.feed(frame)
-        if len(received) != 1 or type(received[0]) is not ReceivedVerifySessionSubmit:
+        if len(received) != 1 or type(received[0]) is not _AuthenticatedVerifySessionArrival:
             raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.UNEXPECTED_MESSAGE)
         return self.handle_submit(received[0])
 
     def handle_submit(
         self,
-        received: ReceivedVerifySessionSubmit,
+        received: object,
         *,
-        arrival_monotonic: float | None = None,
+        arrival_monotonic: object | None = None,
     ) -> VerifySessionJournalEffectExchange:
         """Compose one already-authenticated transport submit without reparsing its frame."""
         state = _composition_state(self)
         _require_open_state(state)
-        if type(received) is not ReceivedVerifySessionSubmit:
-            raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.UNEXPECTED_MESSAGE)
-        return _handle_submit(state, received, arrival_monotonic=arrival_monotonic)
+        if arrival_monotonic is not None:
+            raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.UNAUTHENTICATED_ARRIVAL)
+        try:
+            submit, authenticated_arrival_at = _consume_authenticated_verify_session_arrival(
+                state.frame_session,
+                owner=state.arrival_owner,
+                arrival=received,
+            )
+        except (TypeError, ValueError):
+            raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.UNAUTHENTICATED_ARRIVAL) from None
+        return _handle_submit(state, submit, arrival_monotonic=authenticated_arrival_at)
 
     def close(self) -> None:
         with _COMPOSITION_LOCK:
@@ -121,6 +133,10 @@ class VerifySessionJournalEffectComposition:
                 raise TypeError("VerifySessionJournalEffectComposition must be a live factory composition")
             with entry[1].lifecycle_lock:
                 entry[1].closed = True
+            _release_authenticated_verify_session_arrivals(
+                entry[1].frame_session,
+                owner=entry[1].arrival_owner,
+            )
             _COMPOSITIONS.pop(id(self), None)
 
     def __copy__(self) -> Never:
@@ -136,25 +152,27 @@ class VerifySessionJournalEffectComposition:
 def create_verify_session_journal_effect_composition(
     *,
     command_journal_session: CommandJournalSession,
-    frame_session: PostHandshakeVerifySessionSession | PostHandshakeSourcePortSession,
+    frame_session: PostHandshakeVerifySessionSession,
     effect: VerifySessionEffect,
     monotonic_clock: MonotonicClock = time.monotonic,
 ) -> VerifySessionJournalEffectComposition:
     """Bind one real journal session to one authenticated sidecar frame session."""
     if type(command_journal_session) is not CommandJournalSession:
         raise TypeError("command_journal_session must be a factory CommandJournalSession")
-    if type(frame_session) not in (PostHandshakeVerifySessionSession, PostHandshakeSourcePortSession):
+    if not isinstance(frame_session, PostHandshakeVerifySessionSession):
         raise TypeError("frame_session must be a factory Source Port verify session")
     if not callable(effect):
         raise TypeError("effect must be callable")
     if not callable(monotonic_clock):
         raise TypeError("monotonic_clock must be callable")
 
+    arrival_owner = object()
     state = _CompositionState(
         command_journal_session=command_journal_session,
         frame_session=frame_session,
         effect=effect,
         monotonic_clock=monotonic_clock,
+        arrival_owner=arrival_owner,
     )
     composition = object.__new__(VerifySessionJournalEffectComposition)
     composition_id = id(composition)
@@ -162,9 +180,15 @@ def create_verify_session_journal_effect_composition(
     def finalize(_: weakref.ReferenceType[VerifySessionJournalEffectComposition]) -> None:
         with state.lifecycle_lock:
             state.closed = True
+        _release_authenticated_verify_session_arrivals(state.frame_session, owner=state.arrival_owner)
         with _COMPOSITION_LOCK:
             _COMPOSITIONS.pop(composition_id, None)
 
+    _bind_authenticated_verify_session_arrivals(
+        frame_session,
+        owner=arrival_owner,
+        monotonic_clock=monotonic_clock,
+    )
     with _COMPOSITION_LOCK:
         _COMPOSITIONS[composition_id] = (weakref.ref(composition, finalize), state)
     return composition

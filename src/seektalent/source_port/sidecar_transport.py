@@ -8,9 +8,7 @@ import threading
 import time
 import weakref
 from dataclasses import dataclass
-from typing import Annotated, Literal, Never, SupportsIndex, TypeAlias
-
-from pydantic import Field, TypeAdapter, ValidationError
+from typing import Literal, Never, SupportsIndex, TypeAlias
 
 from seektalent.sidecar_handshake_protocol import (
     DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
@@ -20,39 +18,10 @@ from seektalent.sidecar_handshake_protocol import (
 )
 from seektalent.source_port import authenticated_history_frames as history_frames
 from seektalent.source_port import authenticated_verify_session_frames as verify_frames
-from seektalent.source_port.authenticated_frame_core import (
-    AuthenticatedFrameError,
-    AuthenticatedFrameSession,
-    DEFAULT_MAX_FRAME_BYTES,
-    DEFAULT_MAX_PENDING_REQUESTS,
-    DEFAULT_MAX_SESSION_MESSAGES,
-    PendingReply,
-    PROTOCOL_MAJOR,
-    PROTOCOL_NAME,
-    ReplyValidationError,
-    ZERO_AUTH_TAG,
-)
-from seektalent.source_port.authenticated_history_frames import (
-    _HISTORY_RESULT_TYPES,
-    _HistoryPending,
-    _OperationQueryEnvelope,
-    _OperationQueryResultEnvelope,
-    _history_pending,
-    _received_history_message,
-    _result_echoes_query,
-    _validate_history_reply,
-)
-from seektalent.source_port.authenticated_verify_session_frames import (
-    _VerifySessionAcceptedAckEnvelope,
-    _VerifySessionFailureEnvelope,
-    _VerifySessionPending,
-    _VerifySessionReconcileRequiredEnvelope,
-    _VerifySessionRejectedEnvelope,
-    _VerifySessionResultEnvelope,
-    _VerifySessionSubmitEnvelope,
-    _received_verify_session_message,
-    _validate_verify_session_reply,
-    _verify_session_pending,
+from seektalent.source_port.authenticated_source_port_session import (
+    PostHandshakeSourcePortSession,
+    ReceivedSourcePortMessage,
+    SourcePortTransportFrameError,
 )
 from seektalent.source_port.history_contract import (
     SourceHistoryIdentityConflict,
@@ -67,26 +36,33 @@ from seektalent.source_port.verify_session_contract import VerifySessionRequestV
 _HistoryResult = (
     SourceHistoryMatched | SourceHistoryNotFound | SourceHistoryIdentityConflict | SourceHistoryUnavailable
 )
-_TransportEnvelope: TypeAlias = Annotated[
-    _OperationQueryEnvelope
-    | _OperationQueryResultEnvelope
-    | _VerifySessionSubmitEnvelope
-    | _VerifySessionAcceptedAckEnvelope
-    | _VerifySessionRejectedEnvelope
-    | _VerifySessionResultEnvelope
-    | _VerifySessionFailureEnvelope
-    | _VerifySessionReconcileRequiredEnvelope,
-    Field(discriminator="message_type"),
-]
-_TRANSPORT_ENVELOPE_ADAPTER = TypeAdapter(_TransportEnvelope)
-_TransportPending: TypeAlias = _HistoryPending | _VerifySessionPending
-ReceivedSourcePortMessage: TypeAlias = history_frames.ReceivedHistoryMessage | verify_frames.ReceivedVerifySessionMessage
 ReceivedVerifySessionTerminal: TypeAlias = (
     verify_frames.ReceivedVerifySessionRejected
     | verify_frames.ReceivedVerifySessionResult
     | verify_frames.ReceivedVerifySessionFailure
     | verify_frames.ReceivedVerifySessionReconcileRequired
 )
+ReceivedVerifySessionAcceptedTerminal: TypeAlias = (
+    verify_frames.ReceivedVerifySessionResult
+    | verify_frames.ReceivedVerifySessionFailure
+    | verify_frames.ReceivedVerifySessionReconcileRequired
+)
+
+
+@dataclass(frozen=True, slots=True)
+class VerifySessionExchangeResult:
+    """One complete verify reply: rejection needs no ack; all other terminals do."""
+
+    accepted_ack: verify_frames.ReceivedVerifySessionAcceptedAck | None
+    terminal: ReceivedVerifySessionTerminal
+
+    def __post_init__(self) -> None:
+        if isinstance(self.terminal, verify_frames.ReceivedVerifySessionRejected):
+            if self.accepted_ack is not None:
+                raise ValueError("verify rejection cannot carry an accepted ack")
+            return
+        if self.accepted_ack is None:
+            raise ValueError("verify terminal requires an accepted ack")
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,13 +132,6 @@ class AdmittedSourceHistoryResult:
         raise TypeError("AdmittedSourceHistoryResult cannot be serialized")
 
 
-class SourcePortTransportFrameError(history_frames.HistoryFrameError, verify_frames.VerifySessionFrameError):
-    """A sanitized failure for the one mixed-family post-handshake transport."""
-
-    def __init__(self, reason_code: str) -> None:
-        AuthenticatedFrameError.__init__(self, reason_code)
-
-
 class SourcePortEndpoint:
     """Private nominal boundary implemented only by factory-created ready endpoints."""
 
@@ -196,205 +165,6 @@ def _register_source_port_endpoint(endpoint: SourcePortEndpoint) -> None:
 
     with _ENDPOINTS_LOCK:
         _ENDPOINTS[endpoint_id] = weakref.ref(endpoint, finalize)
-
-
-class PostHandshakeSourcePortSession(verify_frames.PostHandshakeVerifySessionSession):
-    """One endpoint's single mutable framing state for both Source Port families."""
-
-    __slots__ = ()
-
-    def __init__(
-        self,
-        *,
-        role: Literal["main", "sidecar"],
-        session_id: str,
-        protocol_minor: int,
-        main_to_sidecar_key: bytes,
-        sidecar_to_main_key: bytes,
-    ) -> None:
-        AuthenticatedFrameSession.__init__(
-            self,
-            role=role,
-            session_id=session_id,
-            protocol_minor=protocol_minor,
-            main_to_sidecar_key=main_to_sidecar_key,
-            sidecar_to_main_key=sidecar_to_main_key,
-            envelope_adapter=_TRANSPORT_ENVELOPE_ADAPTER,
-            error_factory=SourcePortTransportFrameError,
-            main_send_types=frozenset({"operation.query", "verify_session.submit"}),
-            sidecar_send_types=frozenset(
-                {
-                    "operation.query.result",
-                    "verify_session.accepted_ack",
-                    "verify_session.rejected",
-                    "verify_session.result",
-                    "verify_session.failure",
-                    "verify_session.reconcile_required",
-                }
-            ),
-            request_message_types=frozenset({"operation.query", "verify_session.submit"}),
-            response_message_types=frozenset(
-                {
-                    "operation.query.result",
-                    "verify_session.accepted_ack",
-                    "verify_session.rejected",
-                    "verify_session.result",
-                    "verify_session.failure",
-                    "verify_session.reconcile_required",
-                }
-            ),
-            reply_validator=_validate_transport_reply,
-            received_message=_received_transport_message,
-            pending_from_request=_transport_pending,
-            reply_mismatch_reason="source_port_wrong_reply",
-            pending_request_limit_reason="source_port_pending_request_limit",
-            max_frame_bytes=lambda: DEFAULT_MAX_FRAME_BYTES,
-            max_session_messages=lambda: DEFAULT_MAX_SESSION_MESSAGES,
-            max_pending_requests=lambda: DEFAULT_MAX_PENDING_REQUESTS,
-        )
-
-    @classmethod
-    def for_main(
-        cls,
-        *,
-        session_id: str,
-        protocol_minor: int,
-        main_to_sidecar_key: bytes,
-        sidecar_to_main_key: bytes,
-    ) -> PostHandshakeSourcePortSession:
-        return cls(
-            role="main",
-            session_id=session_id,
-            protocol_minor=protocol_minor,
-            main_to_sidecar_key=main_to_sidecar_key,
-            sidecar_to_main_key=sidecar_to_main_key,
-        )
-
-    @classmethod
-    def for_sidecar(
-        cls,
-        *,
-        session_id: str,
-        protocol_minor: int,
-        main_to_sidecar_key: bytes,
-        sidecar_to_main_key: bytes,
-    ) -> PostHandshakeSourcePortSession:
-        return cls(
-            role="sidecar",
-            session_id=session_id,
-            protocol_minor=protocol_minor,
-            main_to_sidecar_key=main_to_sidecar_key,
-            sidecar_to_main_key=sidecar_to_main_key,
-        )
-
-    def encode_query(
-        self,
-        *,
-        message_id: str,
-        correlation_id: str | None,
-        payload: SourceHistoryQueryV1,
-    ) -> bytes:
-        self._require_open()
-        if self._role != "main":
-            self._fail(history_frames.HistoryFrameReason.UNEXPECTED_DIRECTION.value)
-        if not isinstance(payload, SourceHistoryQueryV1):
-            self._fail(history_frames.HistoryFrameReason.SCHEMA_VALIDATION.value)
-        return self._encode_authenticated_envelope(
-            self._build_query_envelope(
-                sequence=self._require_send_sequence(),
-                message_id=message_id,
-                correlation_id=correlation_id,
-                payload=payload,
-            )
-        )
-
-    def encode_history_result(
-        self,
-        *,
-        message_id: str,
-        reply_to: str,
-        payload: _HistoryResult,
-    ) -> bytes:
-        self._require_open()
-        if self._role != "sidecar":
-            self._fail(history_frames.HistoryFrameReason.UNEXPECTED_DIRECTION.value)
-        if not isinstance(payload, _HISTORY_RESULT_TYPES) or type(reply_to) is not str:
-            self._fail(history_frames.HistoryFrameReason.SCHEMA_VALIDATION.value)
-        pending = self._pending_request(reply_to)
-        if not isinstance(pending, _HistoryPending):
-            self._fail(history_frames.HistoryFrameReason.WRONG_REPLY.value)
-        if not _result_echoes_query(payload, pending.payload):
-            self._fail(history_frames.HistoryFrameReason.RESULT_ECHO_MISMATCH.value)
-        return self._encode_authenticated_envelope(
-            self._build_result_envelope(
-                sequence=self._require_send_sequence(),
-                message_id=message_id,
-                reply_to=reply_to,
-                correlation_id=pending.correlation_id,
-                payload=payload,
-            )
-        )
-
-    def _build_query_envelope(
-        self,
-        *,
-        sequence: int,
-        message_id: str,
-        correlation_id: str | None,
-        payload: SourceHistoryQueryV1,
-    ) -> _OperationQueryEnvelope:
-        validation_failed = False
-        envelope: _OperationQueryEnvelope | None = None
-        try:
-            envelope = _OperationQueryEnvelope(
-                protocol_name=PROTOCOL_NAME,
-                protocol_major=PROTOCOL_MAJOR,
-                protocol_minor=self._protocol_minor,
-                session_id=self._session_id,
-                direction_seq=sequence,
-                message_id=message_id,
-                reply_to=None,
-                message_type="operation.query",
-                correlation_id=correlation_id,
-                payload=payload,
-                auth_tag=ZERO_AUTH_TAG,
-            )
-        except ValidationError:
-            validation_failed = True
-        if validation_failed or envelope is None:
-            self._fail(history_frames.HistoryFrameReason.SCHEMA_VALIDATION.value)
-        return envelope
-
-    def _build_result_envelope(
-        self,
-        *,
-        sequence: int,
-        message_id: str,
-        reply_to: str,
-        correlation_id: str | None,
-        payload: _HistoryResult,
-    ) -> _OperationQueryResultEnvelope:
-        validation_failed = False
-        envelope: _OperationQueryResultEnvelope | None = None
-        try:
-            envelope = _OperationQueryResultEnvelope(
-                protocol_name=PROTOCOL_NAME,
-                protocol_major=PROTOCOL_MAJOR,
-                protocol_minor=self._protocol_minor,
-                session_id=self._session_id,
-                direction_seq=sequence,
-                message_id=message_id,
-                reply_to=reply_to,
-                message_type="operation.query.result",
-                correlation_id=correlation_id,
-                payload=payload,
-                auth_tag=ZERO_AUTH_TAG,
-            )
-        except ValidationError:
-            validation_failed = True
-        if validation_failed or envelope is None:
-            self._fail(history_frames.HistoryFrameReason.SCHEMA_VALIDATION.value)
-        return envelope
 
 
 def exchange_source_history(
@@ -433,8 +203,8 @@ def exchange_verify_session(
     request: VerifySessionRequestV1,
     *,
     timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
-) -> tuple[verify_frames.ReceivedVerifySessionAcceptedAck, ReceivedVerifySessionTerminal]:
-    """Submit a verify-session request and require accepted ack before its terminal reply."""
+) -> VerifySessionExchangeResult:
+    """Submit verify-session: a fresh rejection is terminal; durable terminals require ack."""
     normalized_timeout = _validated_timeout(timeout)
     source_port = _require_endpoint(endpoint)
     if type(request) is not VerifySessionRequestV1:
@@ -472,11 +242,17 @@ def exchange_verify_session(
                         verify_frames.ReceivedVerifySessionReconcileRequired,
                     ),
                 ):
+                    if isinstance(message, verify_frames.ReceivedVerifySessionRejected):
+                        if ack is not None:
+                            raise SourcePortTransportFrameError("source_port_verify_session_response_state_mismatch")
+                        source_port.require_frame_boundary()
+                        succeeded = True
+                        return VerifySessionExchangeResult(accepted_ack=None, terminal=message)
                     if ack is None:
                         raise SourcePortTransportFrameError("source_port_verify_session_response_state_mismatch")
                     source_port.require_frame_boundary()
                     succeeded = True
-                    return ack, message
+                    return VerifySessionExchangeResult(accepted_ack=ack, terminal=message)
                 raise SourcePortTransportFrameError("source_port_unexpected_direction")
     finally:
         endpoint._finish_source_port_exchange(succeeded=succeeded)
@@ -597,7 +373,6 @@ def serve_test_source_port(
             if error.reason is SidecarReadinessReason.EOF:
                 return
             raise
-        arrival_at = time.monotonic()
         for message in messages:
             if isinstance(message, history_frames.ReceivedHistoryQuery):
                 _begin_history_exchange(endpoint)
@@ -613,7 +388,7 @@ def serve_test_source_port(
             _begin_verify_exchange(endpoint)
             succeeded = False
             try:
-                exchange = verify_composition.handle_submit(message, arrival_monotonic=arrival_at)
+                exchange = verify_composition.handle_submit(message)
                 _send_verify_exchange(endpoint, exchange, deadline=deadline)
                 succeeded = True
             finally:
@@ -797,52 +572,13 @@ def _reader_query(reader: object, request: SourceHistoryQueryV1, deadline: float
     return query
 
 
-def _validate_transport_reply(
-    request: _TransportPending,
-    response: _TransportEnvelope,
-    state: object | None,
-) -> PendingReply:
-    if isinstance(request, _HistoryPending):
-        if not isinstance(response, (_OperationQueryEnvelope, _OperationQueryResultEnvelope)):
-            raise ReplyValidationError("source_port_wrong_reply")
-        return _validate_history_reply(request, response, state)
-    if isinstance(request, _VerifySessionPending):
-        if not isinstance(
-            response,
-            (
-                _VerifySessionSubmitEnvelope,
-                _VerifySessionAcceptedAckEnvelope,
-                _VerifySessionRejectedEnvelope,
-                _VerifySessionResultEnvelope,
-                _VerifySessionFailureEnvelope,
-                _VerifySessionReconcileRequiredEnvelope,
-            ),
-        ):
-            raise ReplyValidationError("source_port_wrong_reply")
-        return _validate_verify_session_reply(request, response, state)
-    raise ReplyValidationError("source_port_wrong_reply")
-
-
-def _received_transport_message(envelope: _TransportEnvelope) -> ReceivedSourcePortMessage:
-    if isinstance(envelope, (_OperationQueryEnvelope, _OperationQueryResultEnvelope)):
-        return _received_history_message(envelope)
-    return _received_verify_session_message(envelope)
-
-
-def _transport_pending(envelope: _TransportEnvelope) -> _TransportPending:
-    if isinstance(envelope, _OperationQueryEnvelope):
-        return _history_pending(envelope)
-    if isinstance(envelope, _VerifySessionSubmitEnvelope):
-        return _verify_session_pending(envelope)
-    raise ValueError("source_port_transport_pending_message_invalid")
-
-
 __all__ = [
     "AdmittedSourceHistoryResult",
     "PostHandshakeSourcePortSession",
     "ReceivedSourcePortMessage",
     "SourcePortEndpoint",
     "SourcePortTransportFrameError",
+    "VerifySessionExchangeResult",
     "exchange_source_history",
     "exchange_verify_session",
     "receive_source_port_messages",

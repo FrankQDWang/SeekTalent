@@ -24,9 +24,11 @@ from seektalent.sidecar_handshake_protocol import (
     _validated_timeout,
     perform_main_handshake,
 )
-from seektalent.source_port.sidecar_transport import (
+from seektalent.source_port.authenticated_source_port_session import (
     PostHandshakeSourcePortSession,
     ReceivedSourcePortMessage,
+)
+from seektalent.source_port.sidecar_transport import (
     SourcePortEndpoint,
     _register_source_port_endpoint,
     receive_source_port_messages,

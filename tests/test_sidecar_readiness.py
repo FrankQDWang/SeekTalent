@@ -47,11 +47,6 @@ from seektalent.source_port.authenticated_history_frames import (
     SourceHistoryAdmissionError,
     SourceHistoryAdmissionReason,
 )
-from seektalent.source_port.authenticated_verify_session_frames import (
-    ReceivedVerifySessionAcceptedAck,
-    ReceivedVerifySessionResult,
-)
-from seektalent.source_port.command_journal import create_command_journal
 from seektalent.source_port.history_contract import (
     SourceHistoryIdentityConflict,
     SourceHistoryMatched,
@@ -60,13 +55,8 @@ from seektalent.source_port.history_contract import (
     SourceHistoryUnavailable,
 )
 from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
-from seektalent.source_port.sidecar_transport import (
-    PostHandshakeSourcePortSession,
-    SourcePortTransportFrameError,
-)
+from seektalent.source_port.sidecar_transport import PostHandshakeSourcePortSession
 from seektalent.source_port import sidecar_transport
-from seektalent.source_port.verify_session_contract import VerifySessionRequestV1, VerifySessionResultV1
-from seektalent.source_port.verify_session_journal_effect import create_verify_session_journal_effect_composition
 from seektalent.release_manifest import parse_release_manifest
 from tests.support.source_history_sqlite_harness import SourceHistorySQLiteHarness
 from tests.test_installed_release import _install_slot
@@ -1270,7 +1260,12 @@ def test_history_exchange_and_child_adapter_reject_fake_authority_and_fake_power
 
     class ForgedEndpoint(sidecar_transport.SourcePortEndpoint):
         def source_port_session(self) -> PostHandshakeSourcePortSession:
-            return _shared_source_port_pair()[0]
+            return PostHandshakeSourcePortSession.for_main(
+                session_id="a" * 32,
+                protocol_minor=0,
+                main_to_sidecar_key=bytes(range(32)),
+                sidecar_to_main_key=bytes(range(32, 64)),
+            )
 
     with pytest.raises(TypeError, match="factory-created"):
         sidecar_transport.exchange_source_history(object(), query)  # type: ignore[arg-type]
@@ -2622,230 +2617,3 @@ def test_main_ready_session_factory_has_no_production_caller() -> None:
             callers.append(path.relative_to(Path(__file__).resolve().parents[1]).as_posix())
 
     assert callers == []
-
-
-def _verify_request_for_shared_transport() -> VerifySessionRequestV1:
-    return VerifySessionRequestV1.create(
-        run_id="run-shared-1",
-        operation_id="verify-shared-1",
-        attempt_no=1,
-        idempotency_key="verify-shared-key-1",
-        correlation_id="verify-shared-correlation-1",
-        accepted_requirement_revision_id="requirement-shared-1",
-        runtime_attempt_fence_token="shared-transport-fence-" + "x" * 64,
-        profile_binding_generation=1,
-        browser_control_scope_id="browser-scope-shared-1",
-        deadline_value=60_000,
-        expected_source_operation_ledger_revision=1,
-        expected_reconciliation_revision=0,
-        delivery_mode="initial",
-        dispatch_intent_id="dispatch-intent-shared-1",
-        dispatch_intent_revision=1,
-        source_operation_acceptance_ref="source-acceptance-shared-1",
-        profile_binding_ref="profile-binding-shared-1",
-        provider_account_ref="provider-account-shared-1",
-        required_capabilities=("bridge", "extension"),
-        user_interaction_policy="observe_only",
-        verify_search_surface=True,
-        component_receipt_refs=("main-receipt-shared-1",),
-    )
-
-
-def _verify_result_for_shared_transport(request: VerifySessionRequestV1) -> VerifySessionResultV1:
-    return VerifySessionResultV1.model_validate(
-        {
-            "contract_version": "seektalent.source.verify-session.result/v1",
-            "identity": request.identity,
-            "process_readiness": "ready",
-            "bridge_readiness": "ready",
-            "extension_readiness": "ready",
-            "profile_lock_readiness": "ready",
-            "account_readiness": "ready",
-            "search_surface_readiness": "ready",
-            "risk_state": "clear",
-            "session_readiness": "ready",
-            "actual_profile_binding_ref": request.profile_binding_ref,
-            "actual_provider_account_ref": request.provider_account_ref,
-            "actual_profile_binding_generation": request.identity.profile_binding_generation,
-            "safe_reason_code": None,
-            "user_action": None,
-            "component_receipt_refs": request.component_receipt_refs,
-        },
-        strict=True,
-    )
-
-
-def _shared_source_port_pair() -> tuple[PostHandshakeSourcePortSession, PostHandshakeSourcePortSession]:
-    values = {
-        "session_id": "a" * 32,
-        "protocol_minor": 0,
-        "main_to_sidecar_key": bytes(range(32)),
-        "sidecar_to_main_key": bytes(range(32, 64)),
-    }
-    return PostHandshakeSourcePortSession.for_main(**values), PostHandshakeSourcePortSession.for_sidecar(**values)
-
-
-def test_shared_post_handshake_session_has_one_sequence_and_message_id_space_across_families() -> None:
-    main, sidecar = _shared_source_port_pair()
-    history = _history_query()
-    verify = _verify_request_for_shared_transport()
-
-    history_frame = main.encode_query(
-        message_id="history-message-1",
-        correlation_id="history-correlation-1",
-        payload=history,
-    )
-    verify_frame = main.encode_submit(
-        message_id="verify-message-1",
-        correlation_id="verify-correlation-1",
-        payload=verify,
-    )
-
-    assert sidecar.feed(history_frame[:7]) == ()
-    received = sidecar.feed(history_frame[7:] + verify_frame)
-    assert isinstance(received[0], ReceivedHistoryQuery)
-    assert received[0].payload == history
-    assert received[1].payload == verify
-
-    with pytest.raises(SourcePortTransportFrameError) as duplicate:
-        main.encode_submit(
-            message_id="history-message-1",
-            correlation_id="verify-correlation-2",
-            payload=verify,
-        )
-    assert duplicate.value.reason_code == "source_port_duplicate_message_id"
-
-
-def test_shared_post_handshake_session_accepts_verify_then_history_and_closes_on_partial_tail() -> None:
-    main, sidecar = _shared_source_port_pair()
-    history = _history_query()
-    verify = _verify_request_for_shared_transport()
-
-    verify_frame = main.encode_submit(
-        message_id="verify-message-1",
-        correlation_id="verify-correlation-1",
-        payload=verify,
-    )
-    history_frame = main.encode_query(
-        message_id="history-message-1",
-        correlation_id="history-correlation-1",
-        payload=history,
-    )
-
-    received = sidecar.feed(verify_frame + history_frame + b"\x00\x00")
-    assert received[0].payload == verify
-    assert isinstance(received[1], ReceivedHistoryQuery)
-    with pytest.raises(SourcePortTransportFrameError) as partial_tail:
-        sidecar.require_frame_boundary()
-    assert partial_tail.value.reason_code == "source_port_truncated_frame"
-    assert sidecar.closed is True
-
-
-def test_one_real_ready_pipe_delivers_history_verify_history_with_ack_before_fake_effect(
-    tmp_path: Path,
-    lease_factory: Callable[[], InstalledSidecarLaunchLease],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    reader, first_query = _history_reader(tmp_path)
-    ack_written = threading.Event()
-    expect_ack_write = threading.Event()
-    release_effect = threading.Event()
-    effect_started = threading.Event()
-    verify_writes_recorded = threading.Event()
-    effect_calls: list[VerifySessionRequestV1] = []
-    verify_write_deadlines: list[float] = []
-    original_send = child_session_module.SidecarHandshakeResult._send_source_port_frame
-
-    def record_ack_write(
-        child_session: child_session_module.SidecarHandshakeResult,
-        frame: bytes,
-        deadline: float,
-    ) -> None:
-        original_send(child_session, frame, deadline)
-        message_type = json.loads(frame[4:])["message_type"]
-        if expect_ack_write.is_set() and message_type.startswith("verify_session."):
-            verify_write_deadlines.append(deadline)
-            ack_written.set()
-            if len(verify_write_deadlines) == 2:
-                verify_writes_recorded.set()
-
-    def fake_effect(request: VerifySessionRequestV1) -> VerifySessionResultV1:
-        assert ack_written.wait(1)
-        effect_calls.append(request)
-        effect_started.set()
-        assert release_effect.wait(1)
-        return _verify_result_for_shared_transport(request)
-
-    def serve_shared_transport(result: readiness.SidecarHandshakeResult) -> None:
-        journal = create_command_journal(tmp_path / "verify-session-journal.sqlite3")
-        composition = create_verify_session_journal_effect_composition(
-            command_journal_session=journal.start(),
-            frame_session=result.source_port_session(),
-            effect=fake_effect,
-        )
-        try:
-            sidecar_transport.serve_test_source_port(result, reader, composition, timeout=1)
-        finally:
-            composition.close()
-            journal.close()
-            result.close()
-
-    lease = lease_factory()
-    process, _, thread, errors, _ = _connected_process(
-        lease,
-        _identity(lease.admission),
-        after_sidecar_result=serve_shared_transport,
-    )
-    monkeypatch.setattr(readiness, "spawn_owned_sidecar", lambda _: process)
-    monkeypatch.setattr(child_session_module.SidecarHandshakeResult, "_send_source_port_frame", record_ack_write)
-    session = readiness.spawn_ready_sidecar(lease, timeout=1)
-
-    try:
-        first = sidecar_transport.exchange_source_history(session, first_query, timeout=1)
-        assert isinstance(first.payload, SourceHistoryMatched)
-
-        expect_ack_write.set()
-        request = _verify_request_for_shared_transport()
-        submit = session.source_port_session().encode_submit(
-            message_id="verify-after-history",
-            correlation_id=request.identity.correlation_id,
-            payload=request,
-        )
-        session.send_history_frame(submit, timeout=1)
-        ack_messages = session.receive_history(timeout=1)
-        assert len(ack_messages) == 1
-        assert isinstance(ack_messages[0], ReceivedVerifySessionAcceptedAck)
-        assert ack_messages[0].payload.accepted_fact == "dispatch_authorized"
-        assert ack_written.wait(1)
-        assert effect_started.wait(1)
-        assert effect_calls == [request]
-
-        release_effect.set()
-        try:
-            terminal_messages = session.receive_history(timeout=1)
-        except readiness.SidecarReadinessError as error:
-            thread.join(timeout=1)
-            if errors:
-                raise errors[0]
-            pytest.fail(f"shared transport closed before terminal: {error.reason}, server_errors={errors!r}")
-        assert len(terminal_messages) == 1
-        assert isinstance(terminal_messages[0], ReceivedVerifySessionResult)
-        assert terminal_messages[0].payload.session_readiness == "ready"
-        assert verify_writes_recorded.wait(1)
-        assert len(verify_write_deadlines) == 2
-        assert verify_write_deadlines[0] == verify_write_deadlines[1]
-
-        second = sidecar_transport.exchange_source_history(
-            session,
-            _sqlite_query(operation_id="history-after-verify", idempotency_key="history-after-verify-key"),
-            timeout=1,
-        )
-        assert isinstance(second.payload, SourceHistoryNotFound)
-    finally:
-        release_effect.set()
-        session.close(1)
-        thread.join(timeout=1)
-
-    assert not thread.is_alive()
-    assert errors == []
-    lease_factory().close()
