@@ -223,6 +223,7 @@ def test_candidate_npm_and_probes_drop_global_node_injection_environment(
 
     requirement = exact_browser_bridge_requirement()
     captured_envs: list[dict[str, str]] = []
+    captured_timeouts: list[float] = []
 
     class Completed:
         returncode = 0
@@ -234,6 +235,9 @@ def test_candidate_npm_and_probes_drop_global_node_injection_environment(
         env = kwargs["env"]
         assert isinstance(env, dict)
         captured_envs.append(dict(env))
+        timeout = kwargs["timeout"]
+        assert isinstance(timeout, int | float)
+        captured_timeouts.append(timeout)
         return Completed("0.1.0\n" if argv[-1] == "--version" else "")
 
     monkeypatch.setenv("NODE_PATH", "/ambient/global-node-modules")
@@ -263,6 +267,7 @@ def test_candidate_npm_and_probes_drop_global_node_injection_environment(
     )
 
     assert len(captured_envs) == 3
+    assert captured_timeouts == [300, 20, 20]
     for env in captured_envs:
         assert not any(
             key.upper() in {"NODE_PATH", "NODE_OPTIONS"}

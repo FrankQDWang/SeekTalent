@@ -26,6 +26,7 @@ from seektalent.strict_json import StrictJsonError, strict_json_object_loads
 
 _MAX_RUNTIME_FILES = 20_000
 _MAX_RUNTIME_UNPACKED_BYTES = 512 * 1024 * 1024
+_NPM_INSTALL_TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,7 +531,7 @@ def _install_runtime_with_npm(
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=120,
+            timeout=_NPM_INSTALL_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise BrowserBridgeManifestError("integrity_failed") from exc

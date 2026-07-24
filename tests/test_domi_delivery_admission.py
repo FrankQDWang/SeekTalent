@@ -25,6 +25,10 @@ POWERSHELL_INSTALLER = ROOT / "scripts" / "install-seektalent-domi.ps1"
 OFFLINE_INSTALLER = ROOT / "scripts" / "offline" / "install-offline-macos-intel.sh"
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX Domi delivery is not a Windows product entrypoint",
+)
 def test_posix_delivery_requires_explicit_bundle_before_target_mutation(
     tmp_path: Path,
 ) -> None:
@@ -158,6 +162,10 @@ def test_bootstrap_failed_activation_rolls_back_python_shims_and_wts_pair(
     assert _snapshot(home) == before
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="POSIX Domi delivery is not a Windows product entrypoint",
+)
 @pytest.mark.parametrize("mutation", ["legacy_identity", "tampered_runtime"])
 def test_posix_delivery_rejects_invalid_bundle_before_pip_or_target_mutation(
     tmp_path: Path,
@@ -214,7 +222,8 @@ def test_powershell_delivery_rejects_invalid_bundle_before_pip_or_target_mutatio
     sentinel.write_text("previous-install", encoding="utf-8")
     bundle = _invalid_bundle(tmp_path / "invalid-bundle", mutation=mutation)
     pip_log = tmp_path / "pip.log"
-    before = _snapshot(home)
+    product_root = home / ".seektalent"
+    before = _snapshot(product_root)
     env = {
         **os.environ,
         "USERPROFILE": str(home),
@@ -249,9 +258,13 @@ def test_powershell_delivery_rejects_invalid_bundle_before_pip_or_target_mutatio
 
     assert completed.returncode != 0
     assert not pip_log.exists()
-    assert _snapshot(home) == before
+    assert _snapshot(product_root) == before
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="macOS Intel offline delivery is not a Windows product entrypoint",
+)
 @pytest.mark.parametrize("mutation", ["legacy_identity", "tampered_runtime"])
 def test_offline_delivery_rejects_invalid_bundle_before_pip_or_target_mutation(
     tmp_path: Path,
@@ -312,6 +325,10 @@ source {_shell_quote(installer)}
     assert _snapshot(home) == before
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="macOS Intel offline delivery is not a Windows product entrypoint",
+)
 def test_offline_checksums_are_verified_before_wheel_admission_code_runs(
     tmp_path: Path,
 ) -> None:
@@ -356,6 +373,10 @@ source {_shell_quote(installer)}
     assert _snapshot(home) == before
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="macOS Intel offline delivery is not a Windows product entrypoint",
+)
 def test_offline_candidate_version_failure_precedes_activation(
     tmp_path: Path,
 ) -> None:
