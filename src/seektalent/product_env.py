@@ -27,9 +27,9 @@ DOMI_LLM_ENV_VARS = frozenset(
     }
 )
 
-DOMI_OPENCLI_NODE_ENV_VARS = frozenset(
+DOMI_WTSCLI_NODE_ENV_VARS = frozenset(
     {
-        "SEEKTALENT_OPENCLI_NODE",
+        "SEEKTALENT_WTSCLI_NODE",
         "SEEKTALENT_DOMI_NODE",
         "DOMI_NODE",
     }
@@ -47,8 +47,6 @@ _PASSTHROUGH_ENV_VARS = frozenset(
         "LANG",
         "LC_ALL",
         "LOCALAPPDATA",
-        "OPENCLI_PROFILE",
-        "OPENCLI_VERBOSE",
         "PATH",
         "PATHEXT",
         "ProgramData",
@@ -123,7 +121,7 @@ def _force_domi_provider_for_prod_workbench(env: MutableMapping[str, str]) -> No
 
 
 def _preserve_domi_opencli_node_env(env: MutableMapping[str, str], source_env: Mapping[str, str]) -> None:
-    for key in DOMI_OPENCLI_NODE_ENV_VARS:
+    for key in DOMI_WTSCLI_NODE_ENV_VARS:
         value = source_env.get(key)
         if value and value.strip():
             env[key] = value

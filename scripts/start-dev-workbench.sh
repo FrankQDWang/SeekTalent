@@ -11,10 +11,10 @@ FRONTEND_PORT="${SEEKTALENT_DEV_FRONTEND_PORT:-5178}"
 OPENCLI_CMD=(uv run python -m seektalent.opencli_launcher)
 OPENCLI_COMMAND_TEXT="uv run python -m seektalent.opencli_launcher"
 
-if [[ -z "${SEEKTALENT_OPENCLI_NODE:-}" && -z "${SEEKTALENT_DOMI_NODE:-}" && -z "${DOMI_NODE:-}" ]]; then
-  SEEKTALENT_OPENCLI_NODE="$(command -v node || true)"
-  if [[ -n "$SEEKTALENT_OPENCLI_NODE" ]]; then
-    export SEEKTALENT_OPENCLI_NODE
+if [[ -z "${SEEKTALENT_WTSCLI_NODE:-}" && -z "${SEEKTALENT_DOMI_NODE:-}" && -z "${DOMI_NODE:-}" ]]; then
+  SEEKTALENT_WTSCLI_NODE="$(command -v node || true)"
+  if [[ -n "$SEEKTALENT_WTSCLI_NODE" ]]; then
+    export SEEKTALENT_WTSCLI_NODE
   fi
 fi
 

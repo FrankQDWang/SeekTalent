@@ -14,7 +14,7 @@ DOMI_LAUNCHER_ENV_KEYS = {
     "SEEKTALENT_DOMI_NODE",
     "DOMI_NODE",
     "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL",
-    "SEEKTALENT_OPENCLI_NODE",
+    "SEEKTALENT_WTSCLI_NODE",
     "SEEKTALENT_DOMI_LLM_CHANNEL",
 }
 
@@ -39,8 +39,8 @@ def test_prepare_domi_env_normalizes_domi_env_from_domi_node() -> None:
     assert domi_workbench.prepare_domi_env(env) is None
 
     assert env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
-    assert "SEEKTALENT_OPENCLI_NODE_POLICY" not in env
-    assert env["SEEKTALENT_OPENCLI_NODE"] == "/opt/domi/bin/node"
+    assert "SEEKTALENT_WTSCLI_NODE_POLICY" not in env
+    assert env["SEEKTALENT_WTSCLI_NODE"] == "/opt/domi/bin/node"
     assert env["SEEKTALENT_DOMI_LLM_CHANNEL"] == "seek_talent"
 
 

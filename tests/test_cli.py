@@ -575,7 +575,7 @@ def test_workbench_command_builds_windows_safe_domi_node_opencli_command(
             self.opencli_main = opencli_main
 
     def ensure_runtime(**kwargs):
-        assert kwargs["env"]["SEEKTALENT_OPENCLI_NODE"] == domi_node
+        assert kwargs["env"]["SEEKTALENT_WTSCLI_NODE"] == domi_node
         return Runtime()
 
     def fake_run(argv, **kwargs):
@@ -683,8 +683,8 @@ def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
 
     def ensure_runtime(**kwargs):
         ensured.append(True)
-        assert "SEEKTALENT_OPENCLI_NODE_POLICY" not in kwargs["env"]
-        assert kwargs["env"]["SEEKTALENT_OPENCLI_NODE"] == str(tmp_path / "domi-node")
+        assert "SEEKTALENT_WTSCLI_NODE_POLICY" not in kwargs["env"]
+        assert kwargs["env"]["SEEKTALENT_WTSCLI_NODE"] == str(tmp_path / "domi-node")
         return Runtime()
 
     monkeypatch.setattr("seektalent.opencli_launcher.ensure_opencli_runtime", ensure_runtime)
@@ -696,8 +696,8 @@ def test_workbench_command_accepts_domi_jwt_without_text_llm_api_key(
     _assert_workbench_server_launch(launch_calls[0][0])
     assert launch_calls[0][1]["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
     assert launch_calls[0][1]["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"
-    assert "SEEKTALENT_OPENCLI_NODE_POLICY" not in launch_calls[0][1]
-    assert launch_calls[0][1]["SEEKTALENT_OPENCLI_NODE"] == str(tmp_path / "domi-node")
+    assert "SEEKTALENT_WTSCLI_NODE_POLICY" not in launch_calls[0][1]
+    assert launch_calls[0][1]["SEEKTALENT_WTSCLI_NODE"] == str(tmp_path / "domi-node")
 
 
 def test_workbench_command_auto_selects_domi_provider_when_domi_jwt_is_present(
@@ -713,7 +713,7 @@ def test_workbench_command_auto_selects_domi_provider_when_domi_jwt_is_present(
     monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
     monkeypatch.delenv("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL", raising=False)
     monkeypatch.delenv("SEEKTALENT_TEXT_LLM_API_KEY", raising=False)
-    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_WTSCLI_NODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
     monkeypatch.delenv("DOMI_NODE", raising=False)
     launch_calls: list[tuple[list[str], dict[str, str] | None]] = []
@@ -728,7 +728,7 @@ def test_workbench_command_auto_selects_domi_provider_when_domi_jwt_is_present(
         stderr = ""
 
     def ensure_runtime(**kwargs):
-        assert kwargs["env"]["SEEKTALENT_OPENCLI_NODE"] == str(node)
+        assert kwargs["env"]["SEEKTALENT_WTSCLI_NODE"] == str(node)
         return Runtime()
 
     def fake_run(argv, **kwargs):
@@ -742,7 +742,7 @@ def test_workbench_command_auto_selects_domi_provider_when_domi_jwt_is_present(
 
     assert launch_calls[0][1]["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "domi"
     assert launch_calls[0][1]["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"
-    assert launch_calls[0][1]["SEEKTALENT_OPENCLI_NODE"] == str(node)
+    assert launch_calls[0][1]["SEEKTALENT_WTSCLI_NODE"] == str(node)
 
 
 def test_workbench_command_requires_domi_node_for_domi_opencli(
@@ -753,7 +753,7 @@ def test_workbench_command_requires_domi_node_for_domi_opencli(
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL", "domi")
     monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
-    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_WTSCLI_NODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
     monkeypatch.delenv("DOMI_NODE", raising=False)
     monkeypatch.setattr(
@@ -776,7 +776,7 @@ def test_workbench_command_requires_domi_node_for_prod_opencli(
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
     monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
-    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_WTSCLI_NODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
     monkeypatch.delenv("DOMI_NODE", raising=False)
     monkeypatch.setattr(

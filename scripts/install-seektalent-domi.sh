@@ -15,6 +15,7 @@ _seektalent_domi_fail() {
 
 _seektalent_domi_install() {
   local version="${1:-0.7.49}"
+  local wtscli_bundle_dir="${2:-${SEEKTALENT_WTSCLI_BUNDLE_DIR:-}}"
   local domi_python="${DOMI_PYTHON:-}"
   local domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
 
@@ -58,6 +59,10 @@ _seektalent_domi_install() {
     _seektalent_domi_fail "domi_node_missing" "Domi Node was not found. Set DOMI_NODE or SEEKTALENT_DOMI_NODE to the Domi node executable path."
     return 1
   fi
+  if [[ -z "${wtscli_bundle_dir}" || ! -f "${wtscli_bundle_dir}/bridge-manifest.json" ]]; then
+    _seektalent_domi_fail "wtscli_bundle_missing" "Set SEEKTALENT_WTSCLI_BUNDLE_DIR to the exact SeekTalent WTSCLI bundle directory."
+    return 1
+  fi
 
   local prefix="${HOME}/.seektalent/python-prefix/${version}"
   local site_packages="${prefix}/site-packages"
@@ -78,6 +83,7 @@ _seektalent_domi_install() {
       --python-path "${site_packages}" \
       --domi-python "${domi_python}" \
       --domi-node "${domi_node}" \
+      --browser-bridge-bundle-dir "${wtscli_bundle_dir}" \
       --bin-dir "${bin_dir}" \
       --print-json || {
         _seektalent_domi_fail "seektalent_domi_bootstrap_failed" "Failed to prepare the seektalent command shim."

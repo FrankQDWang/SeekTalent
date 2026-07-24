@@ -101,7 +101,7 @@ def test_dev_launcher_uses_managed_opencli_launcher_instead_of_node_modules_bina
 
     assert "python -m seektalent.opencli_launcher" in script
     assert "apps/web-react/node_modules/.bin/opencli" not in script
-    assert 'SEEKTALENT_OPENCLI_NODE="$(command -v node || true)"' in script
+    assert 'SEEKTALENT_WTSCLI_NODE="$(command -v node || true)"' in script
 
 
 def test_dev_launcher_command_override_supports_macos_bash() -> None:

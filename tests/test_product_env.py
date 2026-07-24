@@ -245,15 +245,15 @@ def test_build_workbench_command_env_preserves_domi_opencli_node_env(
             "PATH": "/usr/bin",
             "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL": "domi",
             "SEEKTALENT_DOMI_JWT": "domi-test-jwt",
-            "SEEKTALENT_OPENCLI_NODE_POLICY": "legacy-domi-policy",
-            "SEEKTALENT_OPENCLI_NODE": "/opt/domi/bin/node",
+            "SEEKTALENT_WTSCLI_NODE_POLICY": "legacy-domi-policy",
+            "SEEKTALENT_WTSCLI_NODE": "/opt/domi/bin/node",
             "SEEKTALENT_DOMI_NODE": "/opt/domi/current/node",
             "DOMI_NODE": "/opt/domi/fallback/node",
         }
     )
 
-    assert "SEEKTALENT_OPENCLI_NODE_POLICY" not in env
-    assert env["SEEKTALENT_OPENCLI_NODE"] == "/opt/domi/bin/node"
+    assert "SEEKTALENT_WTSCLI_NODE_POLICY" not in env
+    assert env["SEEKTALENT_WTSCLI_NODE"] == "/opt/domi/bin/node"
     assert env["SEEKTALENT_DOMI_NODE"] == "/opt/domi/current/node"
     assert env["DOMI_NODE"] == "/opt/domi/fallback/node"
 
@@ -380,4 +380,4 @@ def test_build_workbench_command_env_preserves_platform_context_case_insensitive
     assert env["SYSTEMROOT"] == r"C:\Windows"
     assert env["COMSPEC"] == r"C:\Windows\System32\cmd.exe"
     assert env["PROGRAMFILES"] == r"C:\Program Files"
-    assert env["OPENCLI_PROFILE"] == "work-profile"
+    assert "OPENCLI_PROFILE" not in env

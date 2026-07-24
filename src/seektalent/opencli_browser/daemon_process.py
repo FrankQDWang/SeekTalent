@@ -14,7 +14,12 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_EXTENSION_DISCONNECTED,
 )
-from seektalent.opencli_launcher import OpenCliRuntime, opencli_subprocess_env
+from seektalent.opencli_launcher import (
+    BootstrapError,
+    OpenCliRuntime,
+    opencli_subprocess_env,
+    runtime_requirement,
+)
 
 
 OPENCLI_DAEMON_RESTART_TIMEOUT_SECONDS = 10
@@ -40,8 +45,9 @@ def connect_installed_opencli_daemon(
     manifest = runtime.bridge_manifest
     if manifest is None:
         raise OpenCliBrowserError(OPENCLI_BRIDGE_INTEGRITY_FAILED)
+    requirement = runtime.requirement or load_bridge_requirement(manifest)
     client = OpenCliDaemonClient(
-        requirement=load_bridge_requirement(manifest),
+        requirement=requirement,
         context_id=context_id,
     )
     try:
@@ -70,9 +76,16 @@ def connect_installed_opencli_daemon(
 
 def _restart_installed_daemon(runtime: OpenCliRuntime) -> None:
     try:
+        requirement = runtime_requirement(runtime)
+    except BootstrapError as exc:
+        raise OpenCliBrowserError(OPENCLI_BRIDGE_INTEGRITY_FAILED) from exc
+    try:
         completed = subprocess.run(
             (str(runtime.node), str(runtime.opencli_main), "daemon", "restart"),
-            env=opencli_subprocess_env(node_bin_dir=runtime.node_bin_dir),
+            env=opencli_subprocess_env(
+                node_bin_dir=runtime.node_bin_dir,
+                requirement=requirement,
+            ),
             check=False,
             capture_output=True,
             text=True,

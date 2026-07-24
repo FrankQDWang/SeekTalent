@@ -9,6 +9,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from seektalent.browser_bridge_install import install_browser_bridge_bundle
+from seektalent.browser_bridge_manifest import BrowserBridgeManifestError
 from seektalent.version import __version__
 
 
@@ -57,6 +59,8 @@ def bootstrap_domi_workbench(
     python_paths: Sequence[Path] = (),
     package_version: str = __version__,
     bin_dir: Path | None = None,
+    browser_bridge_bundle_dir: Path | None = None,
+    browser_bridge_prepared_runtime_dir: Path | None = None,
     env: Mapping[str, str] | None = None,
 ) -> DomiBootstrapResult:
     current_platform = platform or sys.platform
@@ -79,6 +83,25 @@ def bootstrap_domi_workbench(
         reason_code="domi_node_missing",
         label="Domi Node",
     )
+
+    if browser_bridge_prepared_runtime_dir is not None and browser_bridge_bundle_dir is None:
+        raise DomiBootstrapError(
+            "browser_bridge_install_failed",
+            "A prepared WTSCLI runtime requires its exact browser bridge bundle.",
+        )
+    if browser_bridge_bundle_dir is not None:
+        try:
+            install_browser_bridge_bundle(
+                bundle_dir=browser_bridge_bundle_dir.expanduser(),
+                install_root=root / ".seektalent",
+                node=resolved_node,
+                prepared_runtime_dir=browser_bridge_prepared_runtime_dir,
+            )
+        except (BrowserBridgeManifestError, OSError, RuntimeError) as exc:
+            raise DomiBootstrapError(
+                "browser_bridge_install_failed",
+                "The exact SeekTalent WTSCLI browser bridge bundle could not be installed.",
+            ) from exc
 
     resolved_python_paths = tuple(path.expanduser() for path in python_paths if str(path).strip())
     if current_platform == "win32":
@@ -131,6 +154,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--python-path", type=Path, action="append", default=[])
     parser.add_argument("--bin-dir", type=Path)
     parser.add_argument("--package-version", default=__version__)
+    parser.add_argument("--browser-bridge-bundle-dir", type=Path)
+    parser.add_argument("--browser-bridge-prepared-runtime-dir", type=Path)
     parser.add_argument("--print-json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -141,6 +166,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             python_paths=tuple(args.python_path),
             bin_dir=args.bin_dir,
             package_version=args.package_version,
+            browser_bridge_bundle_dir=args.browser_bridge_bundle_dir,
+            browser_bridge_prepared_runtime_dir=args.browser_bridge_prepared_runtime_dir,
         )
     except DomiBootstrapError as exc:
         print(f"reason_code={exc.reason_code} {exc}", file=sys.stderr)

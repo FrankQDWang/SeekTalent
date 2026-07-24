@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import tarfile
 from pathlib import Path
 
 import pytest
 
 from seektalent import opencli_launcher
-from seektalent.opencli_browser.daemon_transport import REQUIRED_OPENCLI_BRIDGE_CAPABILITIES
+from tests.browser_bridge_bundle_fixtures import (
+    exact_browser_bridge_requirement,
+    write_browser_bridge_bundle,
+)
 
 
 def test_managed_opencli_version_is_pinned_to_wtscli_0_1_0() -> None:
-    assert opencli_launcher.OPENCLI_PACKAGE == "@jackwener/opencli"
+    assert opencli_launcher.OPENCLI_PACKAGE == "wtscli"
     assert opencli_launcher.OPENCLI_VERSION == "0.1.0"
 
 
@@ -21,7 +27,7 @@ def test_ensure_opencli_runtime_rejects_without_domi_node_even_if_system_node_ex
     node = _write_fake_node(tmp_path / "bin", exit_code=0)
     _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("PATH", str(node.parent))
-    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_WTSCLI_NODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
     monkeypatch.delenv("DOMI_NODE", raising=False)
 
@@ -36,7 +42,7 @@ def test_ensure_opencli_runtime_does_not_download_replacement_node(
     _write_fake_node(tmp_path / "system-bin", exit_code=0)
     _write_managed_opencli(tmp_path / "runtime")
     monkeypatch.setenv("PATH", str(tmp_path / "system-bin"))
-    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_WTSCLI_NODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
     monkeypatch.delenv("DOMI_NODE", raising=False)
 
@@ -54,14 +60,73 @@ def test_launcher_delegates_to_managed_opencli(
     monkeypatch.setattr(
         opencli_launcher,
         "ensure_opencli_runtime",
-        lambda: opencli_launcher.OpenCliRuntime(node=node, opencli_main=opencli_main),
+        lambda: opencli_launcher.OpenCliRuntime(
+            node=node,
+            opencli_main=opencli_main,
+            requirement=exact_browser_bridge_requirement(),
+        ),
     )
 
     assert opencli_launcher.main(["browser", "seektalent-liepin", "state"]) == 7
 
     argv = log_path.read_text(encoding="utf-8").splitlines()
-    assert argv[0].endswith("/node_modules/@jackwener/opencli/dist/src/main.js")
+    assert argv[0].endswith("/node_modules/wtscli/dist/src/main.js")
     assert argv[1:] == ["browser", "seektalent-liepin", "state"]
+
+
+def test_launcher_stop_uses_exact_wts_runtime_and_preserves_legacy_authority(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    runtime_root = home / ".seektalent" / "wtscli-runtime"
+    node = _write_fake_node(tmp_path / "bin", exit_code=0)
+    wtscli_main = _write_managed_opencli(runtime_root)
+    legacy_paths = (
+        home / ".opencli" / "sentinel",
+        home / ".seektalent" / "opencli-runtime" / "sentinel",
+        home / ".seektalent" / "chrome-extension" / "opencli" / "sentinel",
+    )
+    for sentinel in legacy_paths:
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("legacy-untouched", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("OPENCLI_CONFIG_DIR", str(home / ".opencli"))
+    monkeypatch.setenv("OPENCLI_DAEMON_PORT", "19825")
+    monkeypatch.setattr(
+        opencli_launcher,
+        "ensure_opencli_runtime",
+        lambda: opencli_launcher.OpenCliRuntime(
+            node=node,
+            opencli_main=wtscli_main,
+            requirement=exact_browser_bridge_requirement(),
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    class Completed:
+        returncode = 0
+
+    def fake_run(argv: object, **kwargs: object) -> Completed:
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return Completed()
+
+    monkeypatch.setattr(opencli_launcher.subprocess, "run", fake_run)
+
+    assert opencli_launcher.main(["daemon", "stop"]) == 0
+    assert captured["argv"] == (
+        str(node),
+        str(wtscli_main),
+        "daemon",
+        "stop",
+    )
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert not any(str(name).startswith("OPENCLI_") for name in env)
+    assert env["WTSCLI_CONFIG_DIR"] == str(home / ".seektalent" / "wtscli")
+    assert all(path.read_text(encoding="utf-8") == "legacy-untouched" for path in legacy_paths)
 
 
 def test_ensure_opencli_runtime_uses_explicit_domi_node_without_downloading(
@@ -140,6 +205,7 @@ def test_verification_stamp_write_tolerates_concurrent_matching_writer(
     package_json = opencli_launcher._opencli_package_json_path(install_dir)
     bridge_identity = opencli_launcher._opencli_bridge_identity_path(install_dir)
     bridge_manifest = opencli_launcher._bridge_manifest_path(runtime_root)
+    requirement = opencli_launcher._load_bridge_requirement(bridge_manifest)
     stamp_path = opencli_launcher._verification_stamp_path(install_dir)
     opencli_launcher._write_verification_stamp(
         stamp_path,
@@ -148,7 +214,7 @@ def test_verification_stamp_write_tolerates_concurrent_matching_writer(
         package_json=package_json,
         bridge_identity=bridge_identity,
         bridge_manifest=bridge_manifest,
-        opencli_version=opencli_launcher.OPENCLI_VERSION,
+        requirement=requirement,
     )
 
     def lose_replace_race(self: Path, target: Path) -> None:
@@ -163,7 +229,7 @@ def test_verification_stamp_write_tolerates_concurrent_matching_writer(
         package_json=package_json,
         bridge_identity=bridge_identity,
         bridge_manifest=bridge_manifest,
-        opencli_version=opencli_launcher.OPENCLI_VERSION,
+        requirement=requirement,
     )
 
 
@@ -210,6 +276,38 @@ def test_missing_opencli_fails_without_running_npm_or_any_subprocess(
     assert calls == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="creating symlinks is not portable on Windows")
+def test_launcher_rejects_runtime_root_symlinked_to_legacy_before_subprocess(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    legacy_runtime = tmp_path / "home" / ".opencli"
+    _write_managed_opencli(legacy_runtime)
+    runtime_root = tmp_path / "home" / ".seektalent" / "wtscli-runtime"
+    runtime_root.parent.mkdir(parents=True)
+    runtime_root.symlink_to(legacy_runtime, target_is_directory=True)
+    source_manifest = legacy_runtime.parent / "browser-bridge" / "bridge-manifest.json"
+    target_manifest = runtime_root.parent / "browser-bridge" / "bridge-manifest.json"
+    target_manifest.parent.mkdir()
+    shutil.copy2(source_manifest, target_manifest)
+    sentinel = legacy_runtime / "sentinel"
+    sentinel.write_text("legacy-untouched", encoding="utf-8")
+    node = _write_fake_node(tmp_path / "bin", exit_code=0)
+    monkeypatch.setattr(
+        opencli_launcher.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("legacy runtime alias must not be probed"),
+    )
+
+    with pytest.raises(opencli_launcher.BootstrapError, match="opencli_bridge_integrity_failed"):
+        opencli_launcher.ensure_opencli_runtime(
+            root=runtime_root,
+            env={"SEEKTALENT_DOMI_NODE": str(node)},
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "legacy-untouched"
+
+
 def test_installed_opencli_requires_the_paired_bridge_manifest(tmp_path: Path) -> None:
     domi_node = _write_fake_node(tmp_path / "domi-bin", exit_code=0)
     _write_managed_opencli(tmp_path / "runtime")
@@ -230,10 +328,10 @@ def test_installed_opencli_rejects_runtime_from_another_bridge_build(tmp_path: P
     )
     identity_path = opencli_launcher._opencli_bridge_identity_path(install_dir)
     identity = json.loads(identity_path.read_text(encoding="utf-8"))
-    identity["bridgeBuildId"] = "seektalent-opencli-0.1.0+stale"
+    identity["bridgeBuildId"] = "seektalent-wtscli-0.1.0+stale"
     identity_path.write_text(json.dumps(identity), encoding="utf-8")
 
-    with pytest.raises(opencli_launcher.BootstrapError, match="opencli_bridge_build_mismatch"):
+    with pytest.raises(opencli_launcher.BootstrapError, match="opencli_bridge_integrity_failed"):
         opencli_launcher.ensure_opencli_runtime(
             root=tmp_path / "runtime",
             env={"SEEKTALENT_DOMI_NODE": str(domi_node)},
@@ -311,7 +409,7 @@ def test_ensure_opencli_runtime_requires_domi_node_env(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("SEEKTALENT_OPENCLI_NODE", raising=False)
+    monkeypatch.delenv("SEEKTALENT_WTSCLI_NODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_DOMI_NODE", raising=False)
     monkeypatch.delenv("DOMI_NODE", raising=False)
 
@@ -347,45 +445,41 @@ def test_opencli_subprocess_env_excludes_provider_secrets(
     monkeypatch.setenv("SEEKTALENT_DOMI_LLM_BASE_URL", "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1")
     monkeypatch.setenv("SEEKTALENT_DOMI_LLM_CHANNEL", "seek_talent")
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "text-secret-key")
-    captured_env = opencli_launcher.opencli_subprocess_env(node_bin_dir=node.parent)
+    monkeypatch.setenv("OPENCLI_DAEMON_PORT", "19825")
+    monkeypatch.setenv("WTSCLI_CONFIG_DIR", "/ambient/wtscli")
+    captured_env = opencli_launcher.opencli_subprocess_env(
+        node_bin_dir=node.parent,
+        requirement=exact_browser_bridge_requirement(),
+    )
 
     assert "SEEKTALENT_DOMI_JWT" not in captured_env
     assert "SEEKTALENT_DOMI_LLM_BASE_URL" not in captured_env
     assert "SEEKTALENT_DOMI_LLM_CHANNEL" not in captured_env
     assert "SEEKTALENT_TEXT_LLM_API_KEY" not in captured_env
+    assert "OPENCLI_DAEMON_PORT" not in captured_env
+    assert captured_env["WTSCLI_CONFIG_DIR"] == str(Path.home() / ".seektalent" / "wtscli")
     assert str(node.parent) in captured_env["PATH"]
 
 
 def _write_managed_opencli(root: Path) -> Path:
-    package_dir = root / "opencli" / opencli_launcher.OPENCLI_VERSION / "node_modules" / "@jackwener" / "opencli"
+    bundle = root.parent / "wtscli-test-bundle"
+    write_browser_bridge_bundle(bundle)
+    package_dir = (
+        root
+        / "wtscli"
+        / opencli_launcher.OPENCLI_VERSION
+        / "node_modules"
+        / "wtscli"
+    )
+    unpacked = bundle / ".unpacked"
+    with tarfile.open(bundle / "runtime" / "wtscli-0.1.0.tgz", "r:gz") as archive:
+        archive.extractall(unpacked, filter="data")
+    shutil.copytree(unpacked / "package", package_dir)
+    shutil.rmtree(unpacked)
     main = package_dir / "dist" / "src" / "main.js"
-    main.parent.mkdir(parents=True)
-    main.write_text("#!/usr/bin/env node\n", encoding="utf-8")
-    (package_dir / "package.json").write_text(
-        f'{{"version": "{opencli_launcher.OPENCLI_VERSION}"}}\n',
-        encoding="utf-8",
-    )
-    bridge_identity = {
-        "implementation": "seektalent-opencli",
-        "bridgeBuildId": "seektalent-opencli-0.1.0+test",
-        "protocolVersion": {"major": 1, "minor": 0},
-        "capabilities": sorted(REQUIRED_OPENCLI_BRIDGE_CAPABILITIES),
-    }
-    (package_dir / "bridge-identity.json").write_text(
-        json.dumps(bridge_identity),
-        encoding="utf-8",
-    )
     bridge_manifest = root.parent / "browser-bridge" / "bridge-manifest.json"
     bridge_manifest.parent.mkdir(parents=True, exist_ok=True)
-    bridge_manifest.write_text(
-        json.dumps(
-            {
-                "schemaVersion": "seektalent.browser_bridge_bundle.v1",
-                **bridge_identity,
-            }
-        ),
-        encoding="utf-8",
-    )
+    shutil.copy2(bundle / "bridge-manifest.json", bridge_manifest)
     return main
 
 

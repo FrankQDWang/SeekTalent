@@ -5,6 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from seektalent import domi_bootstrap
 
 
@@ -98,6 +100,53 @@ def test_bootstrap_writes_posix_shim_with_domi_python_node_and_pythonpath(tmp_pa
     assert "SEEKTALENT_DOMI_NODE" in text
     assert "-m seektalent.domi_workbench" in text
     assert "-m seektalent \"$@\"" in text
+
+
+def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    domi_python = _touch_executable(tmp_path / "Domi.app" / "python" / "bin" / "python")
+    domi_node = _touch_executable(tmp_path / "Domi.app" / "node" / "bin" / "node")
+    bundle = tmp_path / "bundle"
+    prepared_runtime = tmp_path / "prepared-runtime"
+    bundle.mkdir()
+    prepared_runtime.mkdir()
+    captured: dict[str, object] = {}
+
+    def fake_install(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(domi_bootstrap, "install_browser_bridge_bundle", fake_install)
+
+    domi_bootstrap.bootstrap_domi_workbench(
+        home=home,
+        platform="darwin",
+        domi_python=domi_python,
+        domi_node=domi_node,
+        browser_bridge_bundle_dir=bundle,
+        browser_bridge_prepared_runtime_dir=prepared_runtime,
+    )
+
+    assert captured == {
+        "bundle_dir": bundle,
+        "install_root": home / ".seektalent",
+        "node": domi_node,
+        "prepared_runtime_dir": prepared_runtime,
+    }
+
+    with pytest.raises(
+        domi_bootstrap.DomiBootstrapError,
+        match="prepared WTSCLI runtime requires",
+    ):
+        domi_bootstrap.bootstrap_domi_workbench(
+            home=home,
+            platform="darwin",
+            domi_python=domi_python,
+            domi_node=domi_node,
+            browser_bridge_prepared_runtime_dir=prepared_runtime,
+        )
 
 
 def test_resolve_domi_node_uses_windows_default_appdata_path(tmp_path: Path) -> None:
@@ -198,6 +247,7 @@ def test_posix_install_script_preserves_sourced_shell_state(tmp_path: Path) -> N
     domi_python.parent.mkdir(parents=True)
     domi_node.parent.mkdir(parents=True)
     home.mkdir()
+    wtscli_bundle = _write_bundle_marker(tmp_path)
     domi_python.write_text(
         """#!/usr/bin/env bash
 if [[ "${1:-} ${2:-}" == "-m pip" ]]; then
@@ -225,7 +275,7 @@ export PYTHONPATH="before-pythonpath"
 before_flags="$-"
 before_pipefail="$(set -o | awk '$1 == "pipefail" {{ print $2 }}')"
 before_pythonpath="$PYTHONPATH"
-source {_bash_quote(script)} 0.7.25 >/dev/null
+source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
 after_flags="$-"
 after_pipefail="$(set -o | awk '$1 == "pipefail" {{ print $2 }}')"
 if [[ "$after_flags" != "$before_flags" ]]; then
@@ -258,6 +308,7 @@ def test_posix_install_script_finds_user_runtime_domi_python_when_app_bundle_pat
     domi_python.parent.mkdir(parents=True)
     domi_node.parent.mkdir(parents=True)
     python_capture = tmp_path / "python-capture.txt"
+    wtscli_bundle = _write_bundle_marker(tmp_path)
     domi_python.write_text(
         f"""#!/usr/bin/env bash
 printf "%s" "$0" > {_bash_quote(python_capture)}
@@ -288,7 +339,7 @@ set +e +u +o pipefail
 export HOME={_bash_quote(home)}
 unset DOMI_PYTHON
 export DOMI_NODE={_bash_quote(domi_node)}
-source {_bash_quote(script)} 0.7.25 >/dev/null
+source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
 """
 
     result = subprocess.run(["bash", "-c", bash_code], capture_output=True, text=True, check=False)
@@ -305,6 +356,7 @@ def test_posix_install_script_accepts_seektalent_domi_node_alias(tmp_path: Path)
     domi_node.parent.mkdir(parents=True)
     home.mkdir()
     node_capture = tmp_path / "node-capture.txt"
+    wtscli_bundle = _write_bundle_marker(tmp_path)
     domi_python.write_text(
         f"""#!/usr/bin/env bash
 if [[ "${{1:-}} ${{2:-}}" == "-m pip" ]]; then
@@ -335,13 +387,20 @@ export HOME={_bash_quote(home)}
 export DOMI_PYTHON={_bash_quote(domi_python)}
 unset DOMI_NODE
 export SEEKTALENT_DOMI_NODE={_bash_quote(domi_node)}
-source {_bash_quote(script)} 0.7.25 >/dev/null
+source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
 """
 
     result = subprocess.run(["bash", "-c", bash_code], capture_output=True, text=True, check=False)
 
     assert result.returncode == 0, result.stderr
     assert node_capture.read_text(encoding="utf-8") == str(domi_node)
+
+
+def _write_bundle_marker(root: Path) -> Path:
+    bundle = root / "wtscli-bundle"
+    bundle.mkdir()
+    (bundle / "bridge-manifest.json").write_text("{}\n", encoding="utf-8")
+    return bundle
 
 
 def _bash_quote(value: Path | str) -> str:

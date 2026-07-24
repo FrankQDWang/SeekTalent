@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 30
     env:
       WTSCLI_VERSION: "0.1.0"
-      WTSCLI_FORK_COMMIT: "60ae80db9ed96a0813eea12d5e24aa8e5c6ec863"
+      WTSCLI_FORK_COMMIT: "709622fc3fb3463f15551467fdf0d28571dfd049"
 
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -31,6 +31,13 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: "22.14.0"
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          enable-cache: true
+
+      - name: Install the pinned SeekTalent build environment
+        run: uv sync --locked --group dev
 
       - name: Build the paired SeekTalent browser bridge
         working-directory: wtscli-fork
@@ -63,11 +70,11 @@ jobs:
 
       - name: Build Intel offline bundle
         run: |
-          python scripts/build_offline_macos_intel.py \
+          uv run --group dev python scripts/build_offline_macos_intel.py \
             --output-dir dist \
             --version "$VERSION" \
-            --opencli-version "$WTSCLI_VERSION" \
-            --opencli-bundle-dir "$RUNNER_TEMP/wtscli-browser-bridge"
+            --wtscli-version "$WTSCLI_VERSION" \
+            --wtscli-bundle-dir "$RUNNER_TEMP/wtscli-browser-bridge"
 
       - name: Verify archive and bundled checksums
         run: |
@@ -77,7 +84,10 @@ jobs:
           unzip -q "dist/${BUNDLE_NAME}.zip" -d "$RUNNER_TEMP/seektalent-intel-bundle"
           cd "$RUNNER_TEMP/seektalent-intel-bundle/${BUNDLE_NAME}"
           shasum -a 256 -c SHA256SUMS
-          test -f "chrome-extension/wtscli-extension-v${WTSCLI_EXTENSION_VERSION}.zip"
+          test -f "wtscli-browser-bridge/bridge-manifest.json"
+          test -f "wtscli-browser-bridge/runtime/wtscli-${WTSCLI_VERSION}.tgz"
+          test -f "wtscli-browser-bridge/extension/manifest.json"
+          test -f "wtscli-runtime/wtscli-${WTSCLI_VERSION}-runtime.zip"
 
       - name: Smoke-test offline install
         env:
@@ -97,20 +107,27 @@ jobs:
           rm -rf "$TEST_HOME"
           mkdir -p "$TEST_HOME"
           HOME="$TEST_HOME" bash -euo pipefail <<'BASH'
+          mkdir -p "$HOME/.opencli" "$HOME/.seektalent/opencli-runtime" "$HOME/.seektalent/chrome-extension/opencli"
+          printf "legacy-state\n" > "$HOME/.opencli/sentinel"
+          printf "legacy-runtime\n" > "$HOME/.seektalent/opencli-runtime/sentinel"
+          printf "legacy-extension\n" > "$HOME/.seektalent/chrome-extension/opencli/sentinel"
           source "$BUNDLE_ROOT/install-offline.sh"
           test "$(seektalent --version)" = "$VERSION"
 
-          WTSCLI_MAIN="$HOME/.seektalent/opencli-runtime/opencli/$WTSCLI_VERSION/node_modules/@jackwener/opencli/dist/src/main.js"
+          WTSCLI_MAIN="$HOME/.seektalent/wtscli-runtime/wtscli/$WTSCLI_VERSION/node_modules/wtscli/dist/src/main.js"
           test "$("$DOMI_NODE" "$WTSCLI_MAIN" --version)" = "$WTSCLI_VERSION"
 
-          EXTENSION_MANIFEST="$HOME/.seektalent/chrome-extension/opencli/manifest.json"
+          EXTENSION_MANIFEST="$HOME/.seektalent/chrome-extension/wtscli/manifest.json"
           test -f "$EXTENSION_MANIFEST"
-          test -f "$HOME/.seektalent/chrome-extension/opencli/dist/background.js"
+          test -f "$HOME/.seektalent/chrome-extension/wtscli/dist/background.js"
           test "$("$DOMI_PYTHON" -c 'import json, pathlib, sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text())["version"])' "$EXTENSION_MANIFEST")" = "$WTSCLI_EXTENSION_VERSION"
 
           BRIDGE_MANIFEST="$HOME/.seektalent/browser-bridge/bridge-manifest.json"
           test -f "$BRIDGE_MANIFEST"
           test "$("$DOMI_PYTHON" -c 'import json, pathlib, sys; print(json.loads(pathlib.Path(sys.argv[1]).read_text())["bridgeBuildId"])' "$BRIDGE_MANIFEST")" = "$WTSCLI_BRIDGE_BUILD_ID"
+          test "$(cat "$HOME/.opencli/sentinel")" = "legacy-state"
+          test "$(cat "$HOME/.seektalent/opencli-runtime/sentinel")" = "legacy-runtime"
+          test "$(cat "$HOME/.seektalent/chrome-extension/opencli/sentinel")" = "legacy-extension"
 
           SITE_PACKAGES="$HOME/.seektalent/python-prefix/$VERSION/site-packages"
           PYTHONPATH="$SITE_PACKAGES" "$DOMI_PYTHON" - <<'PY'

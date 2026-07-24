@@ -10,7 +10,7 @@ from seektalent.cli import main as seektalent_main
 DOMI_NODE_KEYS = ("SEEKTALENT_DOMI_NODE", "DOMI_NODE")
 _DOMI_ENV_KEYS = (
     "SEEKTALENT_TEXT_LLM_PROVIDER_LABEL",
-    "SEEKTALENT_OPENCLI_NODE",
+    "SEEKTALENT_WTSCLI_NODE",
     "SEEKTALENT_DOMI_LLM_CHANNEL",
 )
 _JWT_MISSING_MESSAGE = "未获取到 Domi 大模型授权。请在当前终端设置 SEEKTALENT_DOMI_JWT 后重试。"
@@ -43,7 +43,7 @@ def prepare_domi_env(env: MutableMapping[str, str]) -> tuple[str, str] | None:
         return "domi_node_missing", _NODE_MISSING_MESSAGE
 
     env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "domi"
-    env["SEEKTALENT_OPENCLI_NODE"] = node
+    env["SEEKTALENT_WTSCLI_NODE"] = node
     env.setdefault("SEEKTALENT_DOMI_LLM_CHANNEL", "seek_talent")
     return None
 

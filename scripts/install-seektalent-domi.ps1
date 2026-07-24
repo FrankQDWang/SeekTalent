@@ -1,7 +1,8 @@
 param(
   [string]$Version = "0.7.49",
   [string]$DomiPython = "",
-  [string]$DomiNode = ""
+  [string]$DomiNode = "",
+  [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR
 )
 
 function Fail($ReasonCode, $Message) {
@@ -12,7 +13,8 @@ function Install-SeekTalentDomi {
   param(
     [string]$Version = "0.7.49",
     [string]$DomiPython = "",
-    [string]$DomiNode = ""
+    [string]$DomiNode = "",
+    [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR
   )
 
   $ErrorActionPreference = "Stop"
@@ -29,6 +31,9 @@ function Install-SeekTalentDomi {
   }
   if (-not (Test-Path -Path $DomiNode -PathType Leaf)) {
     Fail "domi_node_missing" "Domi Node was not found: $DomiNode"
+  }
+  if (-not $WtscliBundleDir -or -not (Test-Path -Path (Join-Path $WtscliBundleDir "bridge-manifest.json") -PathType Leaf)) {
+    Fail "wtscli_bundle_missing" "Set SEEKTALENT_WTSCLI_BUNDLE_DIR to the exact SeekTalent WTSCLI bundle directory."
   }
 
   $Prefix = Join-Path $env:USERPROFILE ".seektalent\python-prefix\$Version"
@@ -50,6 +55,7 @@ function Install-SeekTalentDomi {
       --python-path $SitePackages `
       --domi-python $DomiPython `
       --domi-node $DomiNode `
+      --browser-bridge-bundle-dir $WtscliBundleDir `
       --bin-dir $BinDir `
       --print-json
     if ($LASTEXITCODE -ne 0) {
@@ -72,7 +78,7 @@ function Install-SeekTalentDomi {
 
 if ($MyInvocation.MyCommand.Path -and $MyInvocation.InvocationName -ne ".") {
   try {
-    Install-SeekTalentDomi -Version $Version -DomiPython $DomiPython -DomiNode $DomiNode
+    Install-SeekTalentDomi -Version $Version -DomiPython $DomiPython -DomiNode $DomiNode -WtscliBundleDir $WtscliBundleDir
   } catch {
     Write-Error $_
     exit 1

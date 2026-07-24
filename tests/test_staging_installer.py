@@ -23,8 +23,9 @@ def test_staging_installer_uses_published_package_and_isolated_runtime() -> None
     assert 'export HOME="$STAGING_ROOT/home"' in script
     assert "run_seektalent_staging.py" in script
     assert "install_staging_browser_bridge.py" in script
-    assert "60ae80db9ed96a0813eea12d5e24aa8e5c6ec863" in script
-    assert '(cd "${WTSCLI_ROOT}" && npm ci --ignore-scripts)' in script
+    assert "709622fc3fb3463f15551467fdf0d28571dfd049" in script
+    assert 'WTSCLI_NPM_VERSION="10.9.2"' in script
+    assert '(cd "${WTSCLI_ROOT}" && "${WTSCLI_NPM[@]}" ci --ignore-scripts)' in script
     assert 'npm --prefix "${WTSCLI_ROOT}" ci' not in script
     assert "Application Support/Domi" in script
     assert "staging refuses the Domi Node runtime" in script
