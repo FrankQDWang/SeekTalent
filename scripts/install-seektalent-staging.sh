@@ -10,7 +10,8 @@ VENV="${STAGING_ROOT}/venv"
 BIN_DIR="${STAGING_ROOT}/bin"
 RUNTIME_DIR="${STAGING_ROOT}/runtime"
 WTSCLI_REPOSITORY="https://github.com/FrankQDWang/wtscli.git"
-WTSCLI_COMMIT="60ae80db9ed96a0813eea12d5e24aa8e5c6ec863"
+WTSCLI_COMMIT="709622fc3fb3463f15551467fdf0d28571dfd049"
+WTSCLI_NPM_VERSION="10.9.2"
 
 fail() {
   echo "reason_code=$1 $2" >&2
@@ -19,7 +20,6 @@ fail() {
 
 command -v uv >/dev/null 2>&1 || fail "seektalent_staging_uv_missing" "uv is required."
 command -v node >/dev/null 2>&1 || fail "seektalent_staging_node_missing" "Standalone Node is required."
-command -v npm >/dev/null 2>&1 || fail "seektalent_staging_npm_missing" "npm is required."
 
 NODE="$(command -v node)"
 case "${NODE}" in
@@ -52,14 +52,16 @@ trap cleanup EXIT
 
 if [[ -z "${BUNDLE_DIR}" ]]; then
   command -v git >/dev/null 2>&1 || fail "seektalent_staging_git_missing" "git is required to build WTSCLI."
+  command -v npx >/dev/null 2>&1 || fail "seektalent_staging_npx_missing" "npx is required to build WTSCLI."
+  WTSCLI_NPM=(npx --yes "npm@${WTSCLI_NPM_VERSION}")
   TEMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/seektalent-staging.XXXXXX")"
   WTSCLI_ROOT="${TEMP_ROOT}/wtscli"
   BUNDLE_DIR="${TEMP_ROOT}/browser-bridge"
   git clone --filter=blob:none --no-checkout "${WTSCLI_REPOSITORY}" "${WTSCLI_ROOT}"
   git -C "${WTSCLI_ROOT}" checkout "${WTSCLI_COMMIT}"
-  (cd "${WTSCLI_ROOT}" && npm ci --ignore-scripts)
-  (cd "${WTSCLI_ROOT}/extension" && npm ci --ignore-scripts)
-  (cd "${WTSCLI_ROOT}" && npm run build:seektalent-bundle -- --out "${BUNDLE_DIR}")
+  (cd "${WTSCLI_ROOT}" && "${WTSCLI_NPM[@]}" ci --ignore-scripts)
+  (cd "${WTSCLI_ROOT}/extension" && "${WTSCLI_NPM[@]}" ci --ignore-scripts)
+  (cd "${WTSCLI_ROOT}" && "${WTSCLI_NPM[@]}" run build:seektalent-bundle -- --out "${BUNDLE_DIR}")
 fi
 
 "${VENV}/bin/python" "${SCRIPT_DIR}/install_staging_browser_bridge.py" \
@@ -85,7 +87,7 @@ wrapper.write_text(
 set -eu
 BIN_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 STAGING_ROOT=${SEEKTALENT_STAGING_ROOT:-$(dirname -- "$BIN_DIR")}
-NODE=${SEEKTALENT_OPENCLI_NODE:-$(command -v node || true)}
+NODE=${SEEKTALENT_WTSCLI_NODE:-$(command -v node || true)}
 if [ -z "$NODE" ]; then
   echo "reason_code=seektalent_staging_node_missing Standalone Node is required." >&2
   exit 1
@@ -97,7 +99,7 @@ case "$NODE" in
     ;;
 esac
 export SEEKTALENT_STAGING_ROOT="$STAGING_ROOT"
-export SEEKTALENT_OPENCLI_NODE="$NODE"
+export SEEKTALENT_WTSCLI_NODE="$NODE"
 export HOME="$STAGING_ROOT/home"
 export PATH="$STAGING_ROOT/venv/bin:$PATH"
 exec "$STAGING_ROOT/venv/bin/python" "$STAGING_ROOT/runtime/run_seektalent_staging.py" "$@"
@@ -111,7 +113,7 @@ echo "SeekTalent staging installed from the published prod package."
 echo "SeekTalent version: ${INSTALLED_VERSION}"
 echo "Python: ${VENV}/bin/python"
 echo "Node: ${NODE}"
-echo "Chrome extension: ${STAGING_HOME}/.seektalent/chrome-extension/opencli"
+echo "Chrome extension: ${STAGING_HOME}/.seektalent/chrome-extension/wtscli"
 echo "Load that unpacked extension in chrome://extensions before running the check."
 echo "Check: ${WRAPPER} --check"
 echo "Run: ${WRAPPER}"

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import http.client
 import json
 import os
 import shlex
@@ -143,7 +142,7 @@ def build_staging_env(base_env: Mapping[str, str]) -> tuple[dict[str, str], Path
     env["SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE"] = "prod"
     env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] = "bailian"
     env["SEEKTALENT_TEXT_LLM_API_KEY"] = key
-    env["SEEKTALENT_OPENCLI_NODE"] = str(node)
+    env["SEEKTALENT_WTSCLI_NODE"] = str(node)
     return env, staging_root
 
 
@@ -196,11 +195,11 @@ def _staging_root(env: Mapping[str, str]) -> Path:
 
 
 def _resolve_node(env: Mapping[str, str]) -> Path:
-    configured = str(env.get("SEEKTALENT_OPENCLI_NODE") or "").strip()
+    configured = str(env.get("SEEKTALENT_WTSCLI_NODE") or "").strip()
     candidate = configured or shutil.which("node", path=env.get("PATH"))
     if not candidate:
         raise StagingConfigurationError(
-            "Node was not found; set SEEKTALENT_OPENCLI_NODE to a standalone Node executable"
+            "Node was not found; set SEEKTALENT_WTSCLI_NODE to a standalone Node executable"
         )
     node = Path(candidate).expanduser().resolve()
     if not node.is_file() or (sys.platform != "win32" and not os.access(node, os.X_OK)):
@@ -213,71 +212,37 @@ def _resolve_node(env: Mapping[str, str]) -> Path:
 def _ensure_browser_runtime(env: MutableMapping[str, str], *, staging_root: Path):
     from seektalent.opencli_launcher import ensure_opencli_runtime
 
-    runtime_root = staging_root / "home" / ".seektalent" / "opencli-runtime"
+    runtime_root = staging_root / "home" / ".seektalent" / "wtscli-runtime"
     return ensure_opencli_runtime(root=runtime_root, env=env)
 
 
 def _require_staging_port_ownership(staging_root: Path) -> None:
-    status = _running_bridge_status()
-    if status is None:
-        return
     manifest_path = staging_root / "home" / ".seektalent" / "browser-bridge" / "bridge-manifest.json"
+    from seektalent.opencli_browser.contracts import OpenCliBrowserError
+    from seektalent.opencli_browser.daemon_transport import (
+        OpenCliDaemonClient,
+        load_bridge_requirement,
+    )
+    from seektalent.opencli_browser.reason_codes import (
+        OPENCLI_DAEMON_NOT_RUNNING,
+        OPENCLI_EXTENSION_DISCONNECTED,
+    )
+
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        client = OpenCliDaemonClient(requirement=load_bridge_requirement(manifest_path))
+    except OpenCliBrowserError as exc:
         raise StagingConfigurationError(f"invalid staging browser bridge manifest: {manifest_path}") from exc
-    runtime_root = (staging_root / "home" / ".seektalent" / "opencli-runtime").resolve()
-    process_command = _running_bridge_process_command(status)
-    if (
-        status.get("implementation") != manifest.get("implementation")
-        or status.get("bridgeBuildId") != manifest.get("bridgeBuildId")
-        or process_command is None
-        or str(runtime_root) not in process_command
-    ):
+    try:
+        client.verify_bridge(timeout_seconds=0.3)
+    except OpenCliBrowserError as exc:
+        reason = exc.safe_reason_code
+        if reason in {OPENCLI_DAEMON_NOT_RUNNING, OPENCLI_EXTENSION_DISCONNECTED}:
+            return
         raise StagingConfigurationError(
-            "port 19825 is owned by Domi or another OpenCLI bridge; stop that bridge before staging"
-        )
-
-
-def _running_bridge_status() -> dict[str, object] | None:
-    connection = http.client.HTTPConnection("127.0.0.1", 19825, timeout=0.3)
-    try:
-        connection.request("GET", "/status", headers={"X-OpenCLI": "1", "Accept": "application/json"})
-        response = connection.getresponse()
-        raw = response.read(1024 * 1024)
-    except (OSError, TimeoutError, http.client.HTTPException):
-        return None
+            "port 19826 did not prove ownership by this exact WTSCLI bundle"
+        ) from exc
     finally:
-        connection.close()
-    if response.status != 200:
-        raise StagingConfigurationError("port 19825 is occupied by an unknown service")
-    try:
-        payload = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise StagingConfigurationError("port 19825 returned an invalid browser bridge status") from exc
-    if not isinstance(payload, dict):
-        raise StagingConfigurationError("port 19825 returned an invalid browser bridge status")
-    return {str(key): value for key, value in payload.items()}
-
-
-def _running_bridge_process_command(status: Mapping[str, object]) -> str | None:
-    pid = status.get("pid")
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return None
-    try:
-        completed = subprocess.run(
-            ("ps", "-p", str(pid), "-o", "command="),
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=2,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    command = completed.stdout.strip()
-    return command if completed.returncode == 0 and command else None
+        client.close()
 
 
 def _verify_browser_bridge(runtime: Any) -> None:

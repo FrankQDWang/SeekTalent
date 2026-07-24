@@ -5,10 +5,16 @@ import json
 import os
 import stat
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from seektalent.browser_bridge_install import install_browser_bridge_bundle
+from seektalent.browser_bridge_manifest import (
+    BrowserBridgeManifestError,
+    load_browser_bridge_bundle,
+)
 from seektalent.version import __version__
 
 
@@ -57,12 +63,39 @@ def bootstrap_domi_workbench(
     python_paths: Sequence[Path] = (),
     package_version: str = __version__,
     bin_dir: Path | None = None,
+    browser_bridge_bundle_dir: Path | None = None,
+    browser_bridge_prepared_runtime_dir: Path | None = None,
+    python_prefix_candidate: Path | None = None,
+    python_prefix_target: Path | None = None,
     env: Mapping[str, str] | None = None,
 ) -> DomiBootstrapResult:
     current_platform = platform or sys.platform
     root = (home or Path.home()).expanduser()
     target_bin_dir = (bin_dir or root / ".seektalent" / "bin").expanduser()
-    target_bin_dir.mkdir(parents=True, exist_ok=True)
+
+    if browser_bridge_prepared_runtime_dir is not None and browser_bridge_bundle_dir is None:
+        raise DomiBootstrapError(
+            "browser_bridge_install_failed",
+            "A prepared WTSCLI runtime requires its exact browser bridge bundle.",
+        )
+    if (python_prefix_candidate is None) != (python_prefix_target is None):
+        raise DomiBootstrapError(
+            "browser_bridge_install_failed",
+            "The SeekTalent Python prefix candidate and target must be supplied together.",
+        )
+    if python_prefix_candidate is not None and browser_bridge_bundle_dir is None:
+        raise DomiBootstrapError(
+            "browser_bridge_install_failed",
+            "A SeekTalent Python prefix candidate requires its exact browser bridge bundle.",
+        )
+    if browser_bridge_bundle_dir is not None:
+        try:
+            load_browser_bridge_bundle(browser_bridge_bundle_dir.expanduser())
+        except (BrowserBridgeManifestError, OSError) as exc:
+            raise DomiBootstrapError(
+                "browser_bridge_install_failed",
+                "The exact SeekTalent WTSCLI browser bridge bundle could not be installed.",
+            ) from exc
 
     resolved_python = (domi_python or Path(sys.executable)).expanduser()
     _require_executable_runtime(
@@ -81,21 +114,84 @@ def bootstrap_domi_workbench(
     )
 
     resolved_python_paths = tuple(path.expanduser() for path in python_paths if str(path).strip())
-    if current_platform == "win32":
-        _write_windows_shims(
-            bin_dir=target_bin_dir,
-            domi_python=resolved_python,
-            domi_node=resolved_node,
-            python_paths=resolved_python_paths,
-        )
-        _write_windows_root_compat_shims(root / ".seektalent", target_bin_dir)
+    if browser_bridge_bundle_dir is None:
+        target_bin_dir.mkdir(parents=True, exist_ok=True)
+        if current_platform == "win32":
+            _write_windows_shims(
+                bin_dir=target_bin_dir,
+                domi_python=resolved_python,
+                domi_node=resolved_node,
+                python_paths=resolved_python_paths,
+            )
+            _write_windows_root_compat_shims(root / ".seektalent", target_bin_dir)
+        else:
+            _write_posix_shim(
+                bin_dir=target_bin_dir,
+                domi_python=resolved_python,
+                domi_node=resolved_node,
+                python_paths=resolved_python_paths,
+            )
     else:
-        _write_posix_shim(
-            bin_dir=target_bin_dir,
-            domi_python=resolved_python,
-            domi_node=resolved_node,
-            python_paths=resolved_python_paths,
-        )
+        with tempfile.TemporaryDirectory(
+            prefix="seektalent-domi-delivery-",
+        ) as temporary:
+            stage_root = Path(temporary)
+            staged_bin = stage_root / "bin"
+            staged_bin.mkdir()
+            additional_targets: list[tuple[Path | None, Path]] = []
+            if current_platform == "win32":
+                _write_windows_shims(
+                    bin_dir=staged_bin,
+                    domi_python=resolved_python,
+                    domi_node=resolved_node,
+                    python_paths=resolved_python_paths,
+                )
+                staged_root_shims = stage_root / "root-shims"
+                _write_windows_root_compat_shims(staged_root_shims, staged_bin)
+                additional_targets.extend(
+                    (
+                        (
+                            staged_root_shims / "seektalent-runner.ps1",
+                            root / ".seektalent" / "seektalent-runner.ps1",
+                        ),
+                        (
+                            staged_root_shims / "seektalent.cmd",
+                            root / ".seektalent" / "seektalent.cmd",
+                        ),
+                        (
+                            None,
+                            root / ".seektalent" / "seektalent.ps1",
+                        ),
+                    )
+                )
+            else:
+                _write_posix_shim(
+                    bin_dir=staged_bin,
+                    domi_python=resolved_python,
+                    domi_node=resolved_node,
+                    python_paths=resolved_python_paths,
+                )
+            if python_prefix_candidate is not None and python_prefix_target is not None:
+                additional_targets.append(
+                    (
+                        python_prefix_candidate.expanduser(),
+                        python_prefix_target.expanduser(),
+                    )
+                )
+            additional_targets.append((staged_bin, target_bin_dir))
+            try:
+                install_browser_bridge_bundle(
+                    bundle_dir=browser_bridge_bundle_dir.expanduser(),
+                    install_root=root / ".seektalent",
+                    node=resolved_node,
+                    prepared_runtime_dir=browser_bridge_prepared_runtime_dir,
+                    additional_targets=tuple(additional_targets),
+                )
+            except (BrowserBridgeManifestError, OSError, RuntimeError) as exc:
+                raise DomiBootstrapError(
+                    "browser_bridge_install_failed",
+                    "The exact SeekTalent WTSCLI browser bridge bundle could not be installed.",
+                ) from exc
 
     return DomiBootstrapResult(
         bin_dir=target_bin_dir,
@@ -131,6 +227,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--python-path", type=Path, action="append", default=[])
     parser.add_argument("--bin-dir", type=Path)
     parser.add_argument("--package-version", default=__version__)
+    parser.add_argument("--browser-bridge-bundle-dir", type=Path)
+    parser.add_argument("--browser-bridge-prepared-runtime-dir", type=Path)
+    parser.add_argument("--python-prefix-candidate", type=Path)
+    parser.add_argument("--python-prefix-target", type=Path)
     parser.add_argument("--print-json", action="store_true")
     args = parser.parse_args(argv)
 
@@ -141,6 +241,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             python_paths=tuple(args.python_path),
             bin_dir=args.bin_dir,
             package_version=args.package_version,
+            browser_bridge_bundle_dir=args.browser_bridge_bundle_dir,
+            browser_bridge_prepared_runtime_dir=args.browser_bridge_prepared_runtime_dir,
+            python_prefix_candidate=args.python_prefix_candidate,
+            python_prefix_target=args.python_prefix_target,
         )
     except DomiBootstrapError as exc:
         print(f"reason_code={exc.reason_code} {exc}", file=sys.stderr)

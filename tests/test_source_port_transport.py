@@ -11,7 +11,6 @@ import pytest
 import seektalent.installed_release as installed_release
 import seektalent.sidecar_child_session as child_session_module
 import seektalent.sidecar_readiness as readiness
-from seektalent.browser_bridge_manifest import BrowserBridgeRequirement
 from seektalent.installed_slot import (
     ActiveSlotPointerV1,
     InstalledSidecarLaunchLease,
@@ -43,6 +42,7 @@ from seektalent.wtscli_verify_session_adapter import (
     WtsCliCurrentProfileSnapshot,
     create_wtscli_verify_session_effect,
 )
+from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 from tests.test_sidecar_readiness import (
     _connected_process,
     _history_query,
@@ -159,23 +159,7 @@ class _RecordingEffect:
         return outcome
 
 
-_TRANSPORT_BRIDGE_REQUIREMENT = BrowserBridgeRequirement(
-    implementation="seektalent-opencli",
-    bridge_build_id="seektalent-opencli-0.1.0+wtscli.1",
-    protocol_major=1,
-    protocol_minor=0,
-    capabilities=frozenset(
-        {
-            "browser.operation-deadline.v1",
-            "browser.operations.v1",
-            "control-fence.v1",
-            "tab.close-verified.v1",
-            "tab.create-in-existing-window.v1",
-            "tab.find.v1",
-            "tab.idle-deadline.v1",
-        }
-    ),
-)
+_TRANSPORT_BRIDGE_REQUIREMENT = exact_browser_bridge_requirement()
 
 
 def _transport_profile_snapshot() -> WtsCliCurrentProfileSnapshot:
@@ -208,8 +192,15 @@ class _DeterministicWtsCliDaemon:
             "implementation": _TRANSPORT_BRIDGE_REQUIREMENT.implementation,
             "bridgeBuildId": _TRANSPORT_BRIDGE_REQUIREMENT.bridge_build_id,
             "protocolVersion": {"major": 1, "minor": 0},
+            "transportProtocol": {
+                "name": _TRANSPORT_BRIDGE_REQUIREMENT.runtime_identity.transport.protocol.name,
+                "version": {"major": 1, "minor": 0},
+            },
+            "ownerTokenHash": "0" * 64,
             "capabilities": sorted(_TRANSPORT_BRIDGE_REQUIREMENT.capabilities),
+            "port": _TRANSPORT_BRIDGE_REQUIREMENT.runtime_identity.endpoint.port,
             "extensionConnected": True,
+            "extensionVersion": _TRANSPORT_BRIDGE_REQUIREMENT.extension.version,
             "extensionImplementation": _TRANSPORT_BRIDGE_REQUIREMENT.implementation,
             "extensionBridgeBuildId": _TRANSPORT_BRIDGE_REQUIREMENT.bridge_build_id,
             "extensionProtocolVersion": {"major": 1, "minor": 0},

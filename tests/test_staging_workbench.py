@@ -6,6 +6,10 @@ from pathlib import Path
 import pytest
 
 from scripts import run_seektalent_staging
+from seektalent.opencli_browser import daemon_transport
+from seektalent.opencli_browser.contracts import OpenCliBrowserError
+from seektalent.opencli_browser.reason_codes import OPENCLI_STATUS_UNAVAILABLE
+from tests.browser_bridge_bundle_fixtures import write_browser_bridge_bundle
 
 
 def _staging_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, str], Path, Path]:
@@ -22,7 +26,7 @@ def _staging_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[
         "HOME": str(home),
         "PATH": str(node.parent),
         "SEEKTALENT_STAGING_ROOT": str(root),
-        "SEEKTALENT_OPENCLI_NODE": str(node),
+        "SEEKTALENT_WTSCLI_NODE": str(node),
         "SEEKTALENT_TEXT_LLM_API_KEY": "staging-key",
         "SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE": "https://llm.example/v1",
         "SEEKTALENT_CONTROLLER_MODEL_ID": "staging-controller",
@@ -50,7 +54,7 @@ def test_build_staging_env_uses_prod_policy_with_non_domi_llm(
     assert env["SEEKTALENT_TEXT_LLM_API_KEY"] == "staging-key"
     assert env["SEEKTALENT_TEXT_LLM_BASE_URL_OVERRIDE"] == "https://llm.example/v1"
     assert env["SEEKTALENT_CONTROLLER_MODEL_ID"] == "staging-controller"
-    assert env["SEEKTALENT_OPENCLI_NODE"] == str(node.resolve())
+    assert env["SEEKTALENT_WTSCLI_NODE"] == str(node.resolve())
     assert "SEEKTALENT_DOMI_JWT" not in env
     assert "SEEKTALENT_DOMI_NODE" not in env
     assert "DOMI_NODE" not in env
@@ -126,7 +130,7 @@ def test_build_staging_env_rejects_domi_node(
     domi_node.parent.mkdir(parents=True)
     domi_node.write_text("", encoding="utf-8")
     domi_node.chmod(0o755)
-    base_env["SEEKTALENT_OPENCLI_NODE"] = str(domi_node)
+    base_env["SEEKTALENT_WTSCLI_NODE"] = str(domi_node)
 
     with pytest.raises(run_seektalent_staging.StagingConfigurationError, match="refuses the Domi Node"):
         run_seektalent_staging.build_staging_env(base_env)
@@ -138,23 +142,21 @@ def test_staging_port_guard_rejects_foreign_browser_bridge(
 ) -> None:
     root = tmp_path / "staging"
     manifest = root / "home" / ".seektalent" / "browser-bridge" / "bridge-manifest.json"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(
-        json.dumps(
-            {
-                "implementation": "seektalent-opencli",
-                "bridgeBuildId": "seektalent-opencli-0.1.0+expected",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        run_seektalent_staging,
-        "_running_bridge_status",
-        lambda: {"implementation": "opencli", "bridgeBuildId": "foreign"},
-    )
+    write_browser_bridge_bundle(manifest.parent)
 
-    with pytest.raises(run_seektalent_staging.StagingConfigurationError, match="owned by Domi"):
+    class ForeignClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def verify_bridge(self, **_kwargs: object) -> None:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(daemon_transport, "OpenCliDaemonClient", ForeignClient)
+
+    with pytest.raises(run_seektalent_staging.StagingConfigurationError, match="19826"):
         run_seektalent_staging._require_staging_port_ownership(root)
 
 
@@ -164,66 +166,44 @@ def test_staging_port_guard_accepts_the_paired_staging_daemon(
 ) -> None:
     root = tmp_path / "staging"
     manifest = root / "home" / ".seektalent" / "browser-bridge" / "bridge-manifest.json"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(
-        json.dumps(
-            {
-                "implementation": "seektalent-opencli",
-                "bridgeBuildId": "seektalent-opencli-0.1.0+expected",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        run_seektalent_staging,
-        "_running_bridge_status",
-        lambda: {
-            "implementation": "seektalent-opencli",
-            "bridgeBuildId": "seektalent-opencli-0.1.0+expected",
-            "pid": 42,
-        },
-    )
-    monkeypatch.setattr(
-        run_seektalent_staging,
-        "_running_bridge_process_command",
-        lambda _status: str(root / "home" / ".seektalent" / "opencli-runtime" / "daemon.js"),
-    )
+    write_browser_bridge_bundle(manifest.parent)
+
+    class ExactClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def verify_bridge(self, **_kwargs: object) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(daemon_transport, "OpenCliDaemonClient", ExactClient)
 
     run_seektalent_staging._require_staging_port_ownership(root)
 
 
-def test_staging_port_guard_rejects_same_build_from_another_home(
+def test_staging_port_guard_rejects_same_build_without_local_ownership_proof(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     root = tmp_path / "staging"
     manifest = root / "home" / ".seektalent" / "browser-bridge" / "bridge-manifest.json"
-    manifest.parent.mkdir(parents=True)
-    manifest.write_text(
-        json.dumps(
-            {
-                "implementation": "seektalent-opencli",
-                "bridgeBuildId": "seektalent-opencli-0.1.0+expected",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(
-        run_seektalent_staging,
-        "_running_bridge_status",
-        lambda: {
-            "implementation": "seektalent-opencli",
-            "bridgeBuildId": "seektalent-opencli-0.1.0+expected",
-            "pid": 42,
-        },
-    )
-    monkeypatch.setattr(
-        run_seektalent_staging,
-        "_running_bridge_process_command",
-        lambda _status: str(tmp_path / "other-home" / ".seektalent" / "opencli-runtime" / "daemon.js"),
-    )
+    write_browser_bridge_bundle(manifest.parent)
 
-    with pytest.raises(run_seektalent_staging.StagingConfigurationError, match="owned by Domi"):
+    class UnownedClient:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def verify_bridge(self, **_kwargs: object) -> None:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(daemon_transport, "OpenCliDaemonClient", UnownedClient)
+
+    with pytest.raises(run_seektalent_staging.StagingConfigurationError, match="ownership"):
         run_seektalent_staging._require_staging_port_ownership(root)
 
 

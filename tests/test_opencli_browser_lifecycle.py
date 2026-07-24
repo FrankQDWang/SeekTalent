@@ -7,14 +7,12 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from seektalent.browser_bridge_manifest import REQUIRED_BROWSER_BRIDGE_CAPABILITIES
 from seektalent.opencli_browser.contracts import (
     BrowserControlScope,
     OpenCliOwnedTab,
     OpenCliTabCloseResult,
 )
 from seektalent.opencli_browser.daemon_transport import (
-    OpenCliBridgeRequirement,
     OpenCliDaemonClient,
     OpenCliDaemonResult,
 )
@@ -24,6 +22,7 @@ from seektalent.opencli_browser.lifecycle import (
     OpenCliDaemonOwnedTabCloser,
 )
 from seektalent.opencli_browser.lifecycle_registry import BrowserControlRegistry
+from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 
 
 def _scope(scope_id: str = "scope-1") -> BrowserControlScope:
@@ -174,13 +173,7 @@ def test_registry_work_is_also_off_the_run_path(tmp_path: Path) -> None:
 
 
 def test_shared_lifecycle_reuses_registry_and_bridge_build(tmp_path: Path) -> None:
-    requirement = OpenCliBridgeRequirement(
-        implementation="seektalent-opencli",
-        bridge_build_id="seektalent-opencli-1.8.6+test",
-        protocol_major=1,
-        protocol_minor=0,
-        capabilities=REQUIRED_BROWSER_BRIDGE_CAPABILITIES,
-    )
+    requirement = exact_browser_bridge_requirement()
     registry_path = tmp_path / "state" / ".." / "browser-control.sqlite3"
 
     first = BrowserControlLifecycle.shared_from_daemon(
@@ -194,7 +187,7 @@ def test_shared_lifecycle_reuses_registry_and_bridge_build(tmp_path: Path) -> No
     upgraded = BrowserControlLifecycle.shared_from_daemon(
         registry_path=registry_path,
         daemon=OpenCliDaemonClient(
-            requirement=replace(requirement, bridge_build_id="seektalent-opencli-1.8.6+next")
+            requirement=replace(requirement, bridge_build_id=f"{requirement.bridge_build_id}-next")
         ),
     )
 
@@ -293,7 +286,9 @@ def test_startup_recovers_owned_tab_but_not_previous_failed_close(tmp_path: Path
     assert _tab_state(path, failed.tab_token) == ("reclaim_failed", "failed", "close_failed")
 
 
-def test_daemon_closer_sends_exact_owned_page_and_requires_verified_readback() -> None:
+def test_daemon_cleanup_sends_exact_owned_page_and_preserves_legacy_sentinels(
+    tmp_path: Path,
+) -> None:
     class Daemon:
         def __init__(self) -> None:
             self.calls: list[tuple[str, dict[str, object], float]] = []
@@ -311,6 +306,15 @@ def test_daemon_closer_sends_exact_owned_page_and_requires_verified_readback() -
                 data={"requested": "page-1", "outcome": "closed", "verified": True},
             )
 
+    legacy_paths = (
+        tmp_path / "home" / ".opencli" / "sentinel",
+        tmp_path / "home" / ".seektalent" / "opencli-runtime" / "sentinel",
+        tmp_path / "home" / ".seektalent" / "chrome-extension" / "opencli" / "sentinel",
+    )
+    for sentinel in legacy_paths:
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("legacy-untouched", encoding="utf-8")
+
     daemon = Daemon()
     result = OpenCliDaemonOwnedTabCloser(daemon).close_tab(_tab())  # type: ignore[arg-type]
 
@@ -322,3 +326,4 @@ def test_daemon_closer_sends_exact_owned_page_and_requires_verified_readback() -
             OPENCLI_RECLAIM_CLOSE_TIMEOUT_SECONDS,
         )
     ]
+    assert all(path.read_text(encoding="utf-8") == "legacy-untouched" for path in legacy_paths)

@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from seektalent.browser_bridge_manifest import BrowserBridgeRequirement
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.opencli_browser.daemon_transport import OpenCliDaemonClient, OpenCliDaemonResult
 from seektalent.opencli_browser.reason_codes import (
@@ -25,6 +24,7 @@ from seektalent.wtscli_verify_session_adapter import (
     WtsCliCurrentProfileSnapshot,
     create_wtscli_verify_session_effect,
 )
+from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 
 
 RAW_RUNTIME_FENCE = "wtscli-adapter-runtime-fence-" + "r" * 64
@@ -43,23 +43,7 @@ READY_STATE = "\n".join(
 RAW_DOM = "DOM-CANARY confidential visible account content"
 RAW_STDERR = "STDERR-CANARY extension diagnostic"
 
-BRIDGE_REQUIREMENT = BrowserBridgeRequirement(
-    implementation="seektalent-opencli",
-    bridge_build_id="seektalent-opencli-0.1.0+wtscli.1",
-    protocol_major=1,
-    protocol_minor=0,
-    capabilities=frozenset(
-        {
-            "browser.operation-deadline.v1",
-            "browser.operations.v1",
-            "control-fence.v1",
-            "tab.close-verified.v1",
-            "tab.create-in-existing-window.v1",
-            "tab.find.v1",
-            "tab.idle-deadline.v1",
-        }
-    ),
-)
+BRIDGE_REQUIREMENT = exact_browser_bridge_requirement()
 
 
 def _request(**updates: object) -> VerifySessionRequestV1:
@@ -124,8 +108,18 @@ def _ready_status(**updates: object) -> dict[str, object]:
             "major": BRIDGE_REQUIREMENT.protocol_major,
             "minor": BRIDGE_REQUIREMENT.protocol_minor,
         },
+        "transportProtocol": {
+            "name": BRIDGE_REQUIREMENT.runtime_identity.transport.protocol.name,
+            "version": {
+                "major": BRIDGE_REQUIREMENT.protocol_major,
+                "minor": BRIDGE_REQUIREMENT.protocol_minor,
+            },
+        },
+        "ownerTokenHash": "0" * 64,
         "capabilities": sorted(BRIDGE_REQUIREMENT.capabilities),
+        "port": BRIDGE_REQUIREMENT.runtime_identity.endpoint.port,
         "extensionConnected": True,
+        "extensionVersion": BRIDGE_REQUIREMENT.extension.version,
         "extensionImplementation": BRIDGE_REQUIREMENT.implementation,
         "extensionBridgeBuildId": BRIDGE_REQUIREMENT.bridge_build_id,
         "extensionProtocolVersion": {
@@ -363,10 +357,10 @@ def test_daemon_client_can_return_unvalidated_status_for_component_level_closed_
         *,
         body: Mapping[str, object] | None,
         timeout_seconds: float,
-    ) -> tuple[int, dict[str, object]]:
+    ) -> tuple[int, dict[str, object], str]:
         assert (method, path, body) == ("GET", "/status", None)
         assert timeout_seconds > 0
-        return 200, status
+        return 200, status, "0" * 64
 
     monkeypatch.setattr(OpenCliDaemonClient, "_request_json", read_status)
     client = OpenCliDaemonClient(requirement=BRIDGE_REQUIREMENT)

@@ -1,0 +1,49 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "offline-distribution-2026-07",
+  "change_type": "major_refactor",
+  "summary": "Bind every SeekTalent installer and managed browser runtime path to the exact merged WTSCLI bundle contract for issue #407.",
+  "rationale": "This vertical hard cut must update the shared bundle admission and staging logic, all three existing installer surfaces, the managed launcher, daemon readiness and lifecycle checks, and native CI together. Splitting those paths would leave a supported installer or runtime consumer able to admit the retired OpenCLI identity. The change deliberately keeps internal OpenCLI module and reason-code names where they are not external authority.",
+  "touched_layers": [
+    "dependencies",
+    "governance",
+    "other"
+  ],
+  "dependency_files": [
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "dependency_rationale": "The exact current SeekTalent wheel must remain installable on the supported macOS Intel target. Cryptography 49.0.0 has no Intel-compatible wheel, so project metadata formally selects the existing accepted 48.0.0 pin only for Darwin x86_64 while preserving 49.0.0 everywhere else.",
+  "red_files": [
+    ".github/workflows/build-macos-intel-offline.yml",
+    ".github/workflows/native-launch-binding-probe.yml"
+  ],
+  "verification": [
+    "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
+    "uv run ruff check scripts/build_offline_macos_intel.py tests/test_build_offline_macos_intel.py tools/check_pr_governance.py tests/test_pr_governance.py",
+    "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py tests/test_build_offline_macos_intel.py tests/test_pr_governance.py",
+    "uv run python tools/check_pr_governance.py --base origin/main",
+    "uv run --group dev pytest -q tests/test_wtscli_bundle_binding.py tests/test_domi_delivery_admission.py tests/test_opencli_launcher.py tests/test_opencli_daemon_transport.py tests/test_opencli_daemon_process.py tests/test_opencli_browser_lifecycle.py tests/test_source_port_transport.py tests/test_wtscli_verify_session_adapter.py tests/test_domi_bootstrap.py tests/test_build_offline_macos_intel.py tests/test_staging_installer.py tests/test_staging_workbench.py",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_workbench_schema_modes.py",
+    "uv run --group dev python tools/check_source_boundaries.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "scripts/verify-red-zone.sh",
+    "uv run --group dev pytest -q"
+  ],
+  "deletion_targets": [
+    "installer and runtime authority derived from legacy OpenCLI package, port, headers, state, environment, or extension identity",
+    "PATH, global npm, or legacy package fallback in the managed browser launcher",
+    "installer-specific browser bridge extraction and admission logic outside the shared verified bundle installer"
+  ],
+  "risks": [
+    "The hard cut intentionally rejects all legacy or mixed OpenCLI and WTSCLI installations instead of migrating them.",
+    "The current SeekTalent wheel is built from the checked-out source; macOS Intel formally selects cryptography 48.0.0 because cryptography 49.0.0 does not publish an Intel-compatible wheel.",
+    "The macOS Intel offline workflow remains manually dispatched; its exact-head native run is required evidence before review.",
+    "Coexistence evidence is deterministic and sanitized unless a safely isolated real legacy runtime is available; this slice must not operate user-owned legacy state, processes, extensions, profiles, or tabs."
+  ]
+}

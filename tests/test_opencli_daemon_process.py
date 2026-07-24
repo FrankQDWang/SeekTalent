@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from seektalent.opencli_browser import daemon_process
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
-from seektalent.opencli_browser.daemon_transport import REQUIRED_OPENCLI_BRIDGE_CAPABILITIES
 from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_BUILD_MISMATCH,
     OPENCLI_DAEMON_NOT_RUNNING,
@@ -15,6 +13,10 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_STATUS_UNAVAILABLE,
 )
 from seektalent.opencli_launcher import OpenCliRuntime
+from tests.browser_bridge_bundle_fixtures import (
+    exact_browser_bridge_requirement,
+    write_browser_bridge_bundle,
+)
 
 
 class FakeDaemonClient:
@@ -31,26 +33,21 @@ class FakeDaemonClient:
 
 
 def _runtime(tmp_path: Path) -> OpenCliRuntime:
-    manifest = tmp_path / "bridge-manifest.json"
-    manifest.write_text(
-        json.dumps(
-            {
-                "schemaVersion": "seektalent.browser_bridge_bundle.v1",
-                "implementation": "seektalent-opencli",
-                "bridgeBuildId": "seektalent-opencli-1.8.6+test",
-                "protocolVersion": {"major": 1, "minor": 0},
-                "capabilities": sorted(REQUIRED_OPENCLI_BRIDGE_CAPABILITIES),
-            }
-        ),
-        encoding="utf-8",
-    )
+    bundle = tmp_path / "bundle"
+    write_browser_bridge_bundle(bundle)
+    manifest = bundle / "bridge-manifest.json"
     node = tmp_path / "bin" / "node"
     main = tmp_path / "opencli" / "main.js"
     node.parent.mkdir(parents=True)
     main.parent.mkdir(parents=True)
     node.write_text("node", encoding="utf-8")
     main.write_text("opencli", encoding="utf-8")
-    return OpenCliRuntime(node=node, opencli_main=main, bridge_manifest=manifest)
+    return OpenCliRuntime(
+        node=node,
+        opencli_main=main,
+        bridge_manifest=manifest,
+        requirement=exact_browser_bridge_requirement(),
+    )
 
 
 def _install_fake_client(
@@ -147,6 +144,15 @@ def test_restart_uses_installed_runtime_with_sanitized_bounded_subprocess(
     tmp_path: Path,
 ) -> None:
     runtime = _runtime(tmp_path)
+    home = tmp_path / "home"
+    legacy_paths = (
+        home / ".opencli" / "sentinel",
+        home / ".seektalent" / "opencli-runtime" / "sentinel",
+        home / ".seektalent" / "chrome-extension" / "opencli" / "sentinel",
+    )
+    for sentinel in legacy_paths:
+        sentinel.parent.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text("legacy-untouched", encoding="utf-8")
     captured: dict[str, object] = {}
 
     class Completed:
@@ -158,6 +164,12 @@ def test_restart_uses_installed_runtime_with_sanitized_bounded_subprocess(
         return Completed()
 
     monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "secret")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("OPENCLI_CONFIG_DIR", str(home / ".opencli"))
+    monkeypatch.setenv("OPENCLI_DAEMON_PORT", "19825")
+    monkeypatch.setenv("node_path", str(home / "global-node-modules"))
+    monkeypatch.setenv("NODE_OPTIONS", "--require=global-injection.js")
     monkeypatch.setattr(daemon_process.subprocess, "run", fake_run)
 
     daemon_process._restart_installed_daemon(runtime)
@@ -170,6 +182,12 @@ def test_restart_uses_installed_runtime_with_sanitized_bounded_subprocess(
     )
     assert captured["timeout"] == daemon_process.OPENCLI_DAEMON_RESTART_TIMEOUT_SECONDS
     assert "SEEKTALENT_DOMI_JWT" not in captured["env"]
+    assert not any(str(name).startswith("OPENCLI_") for name in captured["env"])
+    assert not any(
+        str(name).upper() in {"NODE_PATH", "NODE_OPTIONS"}
+        for name in captured["env"]
+    )
+    assert all(path.read_text(encoding="utf-8") == "legacy-untouched" for path in legacy_paths)
 
 
 def test_restart_failure_is_source_safe_daemon_error(

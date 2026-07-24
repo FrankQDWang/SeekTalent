@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import hashlib
 import importlib.util
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
+from tests.browser_bridge_bundle_fixtures import WTSCLI_BUILD_ID, write_browser_bridge_bundle
 
 
 SCRIPT_PATH = Path(__file__).parents[1] / "scripts" / "build_offline_macos_intel.py"
@@ -13,7 +14,7 @@ CONSTRAINTS_PATH = (
     Path(__file__).parents[1]
     / "scripts"
     / "offline"
-    / "constraints-0.7.47-macos-intel.txt"
+    / "constraints-0.7.49-macos-intel.txt"
 )
 SPEC = importlib.util.spec_from_file_location("build_offline_macos_intel", SCRIPT_PATH)
 assert SPEC and SPEC.loader
@@ -22,46 +23,7 @@ SPEC.loader.exec_module(MODULE)
 
 
 def _browser_bridge_bundle(directory: Path) -> Path:
-    runtime_dir = directory / "runtime"
-    extension_dir = directory / "extension"
-    runtime_dir.mkdir(parents=True)
-    (extension_dir / "dist").mkdir(parents=True)
-    runtime_package = runtime_dir / "wtscli-0.1.0.tgz"
-    runtime_package.write_bytes(b"fork runtime")
-    (extension_dir / "dist" / "background.js").write_text("bridge", encoding="utf-8")
-    (extension_dir / "manifest.json").write_text(
-        json.dumps({"version": "0.1.0"}, separators=(",", ":")),
-        encoding="utf-8",
-    )
-    tree_sha256, files = MODULE._extension_tree(extension_dir)
-    fork_commit = "a" * 40
-    manifest = {
-        "schemaVersion": MODULE.BROWSER_BRIDGE_SCHEMA_VERSION,
-        "implementation": MODULE.BROWSER_BRIDGE_IMPLEMENTATION,
-        "forkCommit": fork_commit,
-        "bridgeBuildId": f"seektalent-opencli-0.1.0+{fork_commit[:12]}",
-        "protocolVersion": {"major": 1, "minor": 0},
-        "capabilities": sorted(MODULE.REQUIRED_BROWSER_BRIDGE_CAPABILITIES),
-        "cli": {
-            "version": "0.1.0",
-            "asset": "runtime/wtscli-0.1.0.tgz",
-            "size": runtime_package.stat().st_size,
-            "sha256": hashlib.sha256(runtime_package.read_bytes()).hexdigest(),
-        },
-        "extension": {
-            "version": "0.1.0",
-            "directory": "extension",
-            "treeSha256": tree_sha256,
-            "manifestSha256": hashlib.sha256(
-                (extension_dir / "manifest.json").read_bytes()
-            ).hexdigest(),
-            "files": files,
-        },
-    }
-    (directory / "bridge-manifest.json").write_text(
-        json.dumps(manifest, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    write_browser_bridge_bundle(directory)
     return directory
 
 
@@ -72,11 +34,26 @@ def _wheel(directory: Path, name: str) -> None:
 def test_constraints_pin_the_current_release_and_accepted_native_dependencies() -> None:
     constraints = CONSTRAINTS_PATH.read_text(encoding="utf-8").splitlines()
 
-    assert "seektalent==0.7.47" in constraints
+    assert "seektalent==0.7.49" in constraints
     assert "cryptography==48.0.0" in constraints
     assert "pydantic-core==2.46.4" in constraints
+    assert "rfc8785==0.1.4" in constraints
     assert "tiktoken==0.13.0" in constraints
     assert all("==" in line for line in constraints if line and not line.startswith("#"))
+
+
+def test_project_declares_an_intel_compatible_cryptography_dependency() -> None:
+    with (SCRIPT_PATH.parents[1] / "pyproject.toml").open("rb") as handle:
+        dependencies = tomllib.load(handle)["project"]["dependencies"]
+
+    assert (
+        "cryptography==48.0.0; sys_platform == 'darwin' and platform_machine == 'x86_64'"
+        in dependencies
+    )
+    assert (
+        "cryptography==49.0.0; sys_platform != 'darwin' or platform_machine != 'x86_64'"
+        in dependencies
+    )
 
 
 def test_load_browser_bridge_bundle_accepts_verified_seek_talent_fork(tmp_path: Path) -> None:
@@ -84,7 +61,7 @@ def test_load_browser_bridge_bundle_accepts_verified_seek_talent_fork(tmp_path: 
 
     bundle = MODULE.load_browser_bridge_bundle(bundle_dir, opencli_version="0.1.0")
 
-    assert bundle.bridge_build_id == "seektalent-opencli-0.1.0+aaaaaaaaaaaa"
+    assert bundle.bridge_build_id == WTSCLI_BUILD_ID
     assert bundle.runtime_package.name == "wtscli-0.1.0.tgz"
     assert bundle.extension_version == "0.1.0"
 
@@ -93,7 +70,7 @@ def test_load_browser_bridge_bundle_rejects_tampered_runtime(tmp_path: Path) -> 
     bundle_dir = _browser_bridge_bundle(tmp_path / "bridge")
     (bundle_dir / "runtime" / "wtscli-0.1.0.tgz").write_bytes(b"tampered")
 
-    with pytest.raises(RuntimeError, match="CLI asset failed manifest verification"):
+    with pytest.raises(RuntimeError, match="admission failed: integrity_failed"):
         MODULE.load_browser_bridge_bundle(bundle_dir, opencli_version="0.1.0")
 
 
@@ -101,7 +78,7 @@ def test_load_browser_bridge_bundle_rejects_tampered_extension_tree(tmp_path: Pa
     bundle_dir = _browser_bridge_bundle(tmp_path / "bridge")
     (bundle_dir / "extension" / "unexpected.js").write_text("tampered", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="extension tree failed manifest verification"):
+    with pytest.raises(RuntimeError, match="admission failed: integrity_failed"):
         MODULE.load_browser_bridge_bundle(bundle_dir, opencli_version="0.1.0")
 
 
@@ -112,7 +89,7 @@ def test_load_browser_bridge_bundle_requires_production_capabilities(tmp_path: P
     manifest["capabilities"].remove("tab.idle-deadline.v1")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="tab.idle-deadline.v1"):
+    with pytest.raises(RuntimeError, match="admission failed: capability_missing"):
         MODULE.load_browser_bridge_bundle(bundle_dir, opencli_version="0.1.0")
 
 
@@ -122,11 +99,56 @@ def test_offline_release_uses_pinned_fork_bundle_not_upstream_assets() -> None:
         encoding="utf-8"
     )
 
-    assert "--opencli-bundle-dir" in source
+    assert "--wtscli-bundle-dir" in source
+    assert "install_browser_bridge_bundle" in source
+    assert "browser_bridge_runtime_sha256" in source
     assert "github.com/jackwener/OpenCLI/releases" not in source
     assert "@jackwener/opencli@{opencli_version}" not in source
     assert "repository: FrankQDWang/wtscli" in workflow
     assert "WTSCLI_FORK_COMMIT" in workflow
+    assert "uv sync --python 3.13 --locked --group dev" in workflow
+    assert "uv run --python 3.13 --group dev python scripts/build_offline_macos_intel.py" in workflow
+    assert "from seektalent.browser_bridge_manifest import WTSCLI_FORK_COMMIT" in workflow
+    assert "from seektalent.opencli_launcher import OPENCLI_PACKAGE" in workflow
+
+
+def test_offline_release_builds_the_seek_talent_wheel_from_the_current_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    destination = tmp_path / "wheel"
+    repo_root.mkdir()
+    commands: list[tuple[list[str], Path | None]] = []
+
+    monkeypatch.setattr(MODULE.shutil, "which", lambda name: "/opt/uv" if name == "uv" else None)
+
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
+        del env
+        commands.append((command, cwd))
+        destination.mkdir()
+        (destination / "seektalent-0.7.49-py3-none-any.whl").write_bytes(b"wheel")
+
+    monkeypatch.setattr(MODULE, "run", fake_run)
+
+    wheel = MODULE.build_project_wheel(
+        repo_root,
+        destination,
+        version="0.7.49",
+    )
+
+    assert wheel == destination / "seektalent-0.7.49-py3-none-any.whl"
+    assert commands == [
+        (
+            ["/opt/uv", "build", "--wheel", "--out-dir", str(destination)],
+            repo_root,
+        )
+    ]
 
 
 def test_validate_wheelhouse_accepts_pure_intel_and_universal2_wheels(tmp_path: Path) -> None:

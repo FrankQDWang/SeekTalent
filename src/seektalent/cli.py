@@ -1764,7 +1764,7 @@ def _doctor_command(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
-_WORKBENCH_DOMI_NODE_ENV_KEYS = ("SEEKTALENT_OPENCLI_NODE", "SEEKTALENT_DOMI_NODE", "DOMI_NODE")
+_WORKBENCH_DOMI_NODE_ENV_KEYS = ("SEEKTALENT_WTSCLI_NODE", "SEEKTALENT_DOMI_NODE", "DOMI_NODE")
 
 
 def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
@@ -1797,7 +1797,7 @@ def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
 
 
 def _workbench_managed_opencli_command(runtime: object, env: Mapping[str, str]) -> str:
-    node = getattr(runtime, "node", None) or env.get("SEEKTALENT_OPENCLI_NODE")
+    node = getattr(runtime, "node", None) or env.get("SEEKTALENT_WTSCLI_NODE")
     opencli_main = getattr(runtime, "opencli_main", None)
     if node is None or opencli_main is None:
         raise RuntimeError("WTSCLI runtime did not expose managed Node/main.js paths")
@@ -1818,7 +1818,7 @@ def _configure_workbench_domi_opencli_node(env: MutableMapping[str, str]) -> boo
             "未找到 Domi Node 运行时。请在当前终端设置 SEEKTALENT_DOMI_NODE 或 DOMI_NODE 后重试。",
         )
         return False
-    env["SEEKTALENT_OPENCLI_NODE"] = node
+    env["SEEKTALENT_WTSCLI_NODE"] = node
     return True
 
 

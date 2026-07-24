@@ -3,129 +3,66 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
-import tempfile
+import sys
 from pathlib import Path
-from typing import cast
-
-if __package__:
-    from scripts.build_offline_macos_intel import load_browser_bridge_bundle
-else:
-    from build_offline_macos_intel import load_browser_bridge_bundle
 
 
-WTSCLI_VERSION = "0.1.0"
+ROOT = Path(__file__).resolve().parents[1]
+SOURCE_ROOT = ROOT / "src"
+PACKAGE_CONTEXT_ENV = "SEEKTALENT_STAGING_HELPER_PACKAGE_ROOT"
 
 
-def install_browser_bridge(*, bundle_dir: Path, staging_home: Path, node: Path) -> dict[str, str]:
-    bundle = load_browser_bridge_bundle(bundle_dir, opencli_version=WTSCLI_VERSION)
-    install_root = staging_home / ".seektalent"
-    runtime_target = install_root / "opencli-runtime" / "opencli" / WTSCLI_VERSION
-    extension_target = install_root / "chrome-extension" / "opencli"
-    manifest_target = install_root / "browser-bridge" / "bridge-manifest.json"
-    install_root.mkdir(parents=True, exist_ok=True)
-
-    with tempfile.TemporaryDirectory(prefix="seektalent-staging-bridge-", dir=install_root) as temporary:
-        stage_root = Path(temporary)
-        runtime_stage = stage_root / "runtime"
-        extension_stage = stage_root / "extension"
-        subprocess.run(
-            (
-                "npm",
-                "install",
-                "--prefix",
-                str(runtime_stage),
-                "--omit=dev",
-                "--ignore-scripts",
-                "--no-audit",
-                "--no-fund",
-                str(bundle.runtime_package),
-            ),
-            check=True,
-        )
-        shutil.copytree(bundle.extension_dir, extension_stage)
-        _verify_staged_pair(
-            runtime_dir=runtime_stage,
-            extension_dir=extension_stage,
-            manifest=bundle.manifest,
-            node=node,
-        )
-        _replace_directory(runtime_stage, runtime_target)
-        _replace_directory(extension_stage, extension_target)
-        manifest_target.parent.mkdir(parents=True, exist_ok=True)
-        manifest_stage = stage_root / "bridge-manifest.json"
-        shutil.copy2(bundle.manifest_path, manifest_stage)
-        os.replace(manifest_stage, manifest_target)
-
-    return {
-        "runtime": str(runtime_target),
-        "extension": str(extension_target),
-        "manifest": str(manifest_target),
-        "bridgeBuildId": bundle.bridge_build_id,
-        "extensionVersion": bundle.extension_version,
-    }
-
-
-def _verify_staged_pair(
+def install_browser_bridge(
     *,
-    runtime_dir: Path,
-    extension_dir: Path,
-    manifest: dict[str, object],
+    bundle_dir: Path,
+    staging_home: Path,
     node: Path,
-) -> None:
-    package_dir = runtime_dir / "node_modules" / "@jackwener" / "opencli"
-    package_json = json.loads((package_dir / "package.json").read_text(encoding="utf-8"))
-    identity = json.loads((package_dir / "bridge-identity.json").read_text(encoding="utf-8"))
-    main = package_dir / "dist" / "src" / "main.js"
-    if package_json.get("version") != WTSCLI_VERSION or not main.is_file():
-        raise RuntimeError("staged WTSCLI runtime is incomplete")
-    for key in ("implementation", "bridgeBuildId", "protocolVersion", "capabilities"):
-        if identity.get(key) != manifest.get(key):
-            raise RuntimeError(f"staged WTSCLI identity mismatch: {key}")
-    if any(runtime_dir.rglob("*.node")):
-        raise RuntimeError("staged WTSCLI unexpectedly contains a native Node module")
-    extension_metadata = manifest["extension"]
-    if not isinstance(extension_metadata, dict):
-        raise RuntimeError("browser bridge extension metadata is invalid")
-    typed_extension_metadata = cast(dict[str, object], extension_metadata)
-    extension_manifest = json.loads((extension_dir / "manifest.json").read_text(encoding="utf-8"))
-    if extension_manifest.get("version") != typed_extension_metadata.get("version"):
-        raise RuntimeError("staged browser extension version mismatch")
-    completed = subprocess.run(
-        (str(node), str(main), "--version"),
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
+) -> dict[str, str]:
+    from seektalent.browser_bridge_install import install_browser_bridge_bundle
+
+    installed = install_browser_bridge_bundle(
+        bundle_dir=bundle_dir,
+        install_root=staging_home / ".seektalent",
+        node=node,
     )
-    if completed.returncode != 0 or completed.stdout.strip() != WTSCLI_VERSION:
-        raise RuntimeError("staged WTSCLI failed its version probe")
-
-
-def _replace_directory(source: Path, target: Path) -> None:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    backup = target.with_name(f"{target.name}.previous")
-    if backup.exists():
-        shutil.rmtree(backup)
-    if target.exists():
-        os.replace(target, backup)
-    try:
-        os.replace(source, target)
-    except BaseException:
-        if backup.exists() and not target.exists():
-            os.replace(backup, target)
-        raise
-    if backup.exists():
-        shutil.rmtree(backup)
+    return {
+        "runtime": str(installed.runtime_dir),
+        "extension": str(installed.extension_dir),
+        "manifest": str(installed.manifest_path),
+        "bridgeBuildId": installed.bridge_build_id,
+        "extensionVersion": installed.extension_version,
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle-dir", type=Path, required=True)
-    parser.add_argument("--staging-home", type=Path, required=True)
-    parser.add_argument("--node", type=Path, required=True)
+    parser.add_argument("--staging-home", type=Path)
+    parser.add_argument("--node", type=Path)
+    parser.add_argument("--verify-only", action="store_true")
     args = parser.parse_args()
+    package_context_result = _run_with_explicit_package_context()
+    if package_context_result is not None:
+        return package_context_result
+    if args.verify_only:
+        from seektalent.browser_bridge_manifest import (
+            BrowserBridgeManifestError,
+            load_browser_bridge_bundle,
+        )
+
+        try:
+            bundle = load_browser_bridge_bundle(args.bundle_dir.resolve())
+        except BrowserBridgeManifestError as exc:
+            print(
+                f"reason_code=browser_bridge_bundle_{exc.code}",
+                file=sys.stderr,
+            )
+            return 1
+        print(bundle.bridge_build_id)
+        return 0
+    if args.staging_home is None or args.node is None:
+        parser.error("--staging-home and --node are required unless --verify-only is used")
     result = install_browser_bridge(
         bundle_dir=args.bundle_dir.resolve(),
         staging_home=args.staging_home.resolve(),
@@ -133,6 +70,23 @@ def main() -> int:
     )
     print(json.dumps(result, ensure_ascii=False))
     return 0
+
+
+def _run_with_explicit_package_context() -> int | None:
+    source_root = str(SOURCE_ROOT)
+    if os.environ.get(PACKAGE_CONTEXT_ENV) == source_root:
+        return None
+    env = {
+        **os.environ,
+        "PYTHONPATH": source_root,
+        PACKAGE_CONTEXT_ENV: source_root,
+    }
+    completed = subprocess.run(
+        (sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]),
+        env=env,
+        check=False,
+    )
+    return completed.returncode
 
 
 if __name__ == "__main__":

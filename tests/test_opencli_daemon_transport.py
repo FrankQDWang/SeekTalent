@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -8,7 +10,6 @@ import pytest
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.opencli_browser.daemon_transport import (
-    OPENCLI_BRIDGE_MANIFEST_SCHEMA,
     OPENCLI_DAEMON_MAX_RESPONSE_BYTES,
     REQUIRED_OPENCLI_BRIDGE_CAPABILITIES,
     OpenCliBridgeRequirement,
@@ -20,7 +21,6 @@ from seektalent.opencli_browser.daemon_transport import (
 from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_BUILD_MISMATCH,
     OPENCLI_BRIDGE_CAPABILITY_MISSING,
-    OPENCLI_BRIDGE_INTEGRITY_FAILED,
     OPENCLI_BRIDGE_PROTOCOL_MISMATCH,
     OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
     OPENCLI_COMMAND_RESULT_UNKNOWN,
@@ -29,30 +29,39 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_STALE_CONTROL_FENCE,
     OPENCLI_STATUS_UNAVAILABLE,
 )
+from tests.browser_bridge_bundle_fixtures import (
+    WTSCLI_BUILD_ID,
+    exact_browser_bridge_requirement,
+    write_browser_bridge_bundle,
+    write_daemon_ownership,
+)
 
 
-BUILD_ID = "seektalent-opencli-1.8.6+test"
+BUILD_ID = WTSCLI_BUILD_ID
+OWNER_HASH = hashlib.sha256(("ab" * 32).encode()).hexdigest()
 
 
 def _requirement() -> OpenCliBridgeRequirement:
-    return OpenCliBridgeRequirement(
-        implementation="seektalent-opencli",
-        bridge_build_id=BUILD_ID,
-        protocol_major=1,
-        protocol_minor=0,
-        capabilities=REQUIRED_OPENCLI_BRIDGE_CAPABILITIES,
-    )
+    return exact_browser_bridge_requirement()
 
 
 def _status(**updates: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "ok": True,
-        "implementation": "seektalent-opencli",
+        "daemonVersion": "0.1.0",
+        "implementation": "seektalent-wtscli",
         "bridgeBuildId": BUILD_ID,
         "protocolVersion": {"major": 1, "minor": 0},
+        "transportProtocol": {
+            "name": "wtscli.browser-bridge",
+            "version": {"major": 1, "minor": 0},
+        },
+        "ownerTokenHash": OWNER_HASH,
         "capabilities": sorted(REQUIRED_OPENCLI_BRIDGE_CAPABILITIES),
+        "port": 19826,
         "extensionConnected": True,
-        "extensionImplementation": "seektalent-opencli",
+        "extensionVersion": "0.1.0",
+        "extensionImplementation": "seektalent-wtscli",
         "extensionBridgeBuildId": BUILD_ID,
         "extensionProtocolVersion": {"major": 1, "minor": 0},
         "extensionCapabilities": sorted(REQUIRED_OPENCLI_BRIDGE_CAPABILITIES),
@@ -72,6 +81,12 @@ class _Response:
         if isinstance(self.payload, bytes):
             return self.payload
         return json.dumps(self.payload).encode("utf-8")
+
+    def getheader(self, name: str, default: str | None = None) -> str | None:
+        return {
+            "x-wtscli-bridge": "wtscli.browser-bridge.v1",
+            "x-wtscli-owner": OWNER_HASH,
+        }.get(name.lower(), default)
 
 
 class _Connection:
@@ -123,67 +138,52 @@ class _Connection:
         self.closed = True
 
 
+@pytest.fixture(autouse=True)
+def _exact_wtscli_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    write_daemon_ownership(home)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+
 def test_load_bridge_requirement_validates_manifest_identity_and_minimum_capabilities(tmp_path: Path) -> None:
-    manifest = tmp_path / "bridge-manifest.json"
-    manifest.write_text(
-        json.dumps(
-            {
-                "schemaVersion": OPENCLI_BRIDGE_MANIFEST_SCHEMA,
-                "implementation": "seektalent-opencli",
-                "bridgeBuildId": BUILD_ID,
-                "protocolVersion": {"major": 1, "minor": 0},
-                "capabilities": sorted(REQUIRED_OPENCLI_BRIDGE_CAPABILITIES | {"future.v1"}),
-            }
-        ),
-        encoding="utf-8",
-    )
+    bundle = tmp_path / "bundle"
+    write_browser_bridge_bundle(bundle)
+    manifest = bundle / "bridge-manifest.json"
 
     requirement = load_bridge_requirement(manifest)
 
     assert requirement.bridge_build_id == BUILD_ID
-    assert requirement.capabilities == REQUIRED_OPENCLI_BRIDGE_CAPABILITIES | {"future.v1"}
+    assert requirement.capabilities == REQUIRED_OPENCLI_BRIDGE_CAPABILITIES
 
 
 @pytest.mark.parametrize(
-    ("payload", "reason"),
+    ("mutation", "reason"),
     [
-        ({}, OPENCLI_BRIDGE_INTEGRITY_FAILED),
         (
-            {
-                "schemaVersion": OPENCLI_BRIDGE_MANIFEST_SCHEMA,
-                "implementation": "upstream-opencli",
-                "bridgeBuildId": BUILD_ID,
-                "protocolVersion": {"major": 1, "minor": 0},
-                "capabilities": sorted(REQUIRED_OPENCLI_BRIDGE_CAPABILITIES),
-            },
+            lambda payload: payload.__setitem__("implementation", "upstream-opencli"),
             OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
         ),
         (
-            {
-                "schemaVersion": OPENCLI_BRIDGE_MANIFEST_SCHEMA,
-                "implementation": "seektalent-opencli",
-                "bridgeBuildId": BUILD_ID,
-                "protocolVersion": {"major": 2, "minor": 0},
-                "capabilities": sorted(REQUIRED_OPENCLI_BRIDGE_CAPABILITIES),
-            },
+            lambda payload: payload["protocolVersion"].__setitem__("major", 2),
             OPENCLI_BRIDGE_PROTOCOL_MISMATCH,
         ),
         (
-            {
-                "schemaVersion": OPENCLI_BRIDGE_MANIFEST_SCHEMA,
-                "implementation": "seektalent-opencli",
-                "bridgeBuildId": BUILD_ID,
-                "protocolVersion": {"major": 1, "minor": 0},
-                "capabilities": [],
-            },
+            lambda payload: payload.__setitem__("capabilities", []),
             OPENCLI_BRIDGE_CAPABILITY_MISSING,
         ),
     ],
 )
 def test_load_bridge_requirement_rejects_invalid_manifest(
-    tmp_path: Path, payload: Mapping[str, object], reason: str
+    tmp_path: Path, mutation, reason: str
 ) -> None:
-    manifest = tmp_path / "bridge-manifest.json"
+    bundle = tmp_path / "bundle"
+    payload = copy.deepcopy(write_browser_bridge_bundle(bundle))
+    mutation(payload)
+    manifest = bundle / "bridge-manifest.json"
     manifest.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(OpenCliBrowserError) as captured:
@@ -292,8 +292,6 @@ def test_daemon_client_can_create_an_independent_connection_for_background_clean
     client = OpenCliDaemonClient(
         requirement=_requirement(),
         context_id="profile-1",
-        host="127.0.0.1",
-        port=19826,
         connection_factory=factory,
     )
 
@@ -382,6 +380,30 @@ def test_daemon_client_rejects_oversized_response() -> None:
 
     connection.getresponse = oversized_response  # type: ignore[method-assign]
     client = OpenCliDaemonClient(requirement=_requirement(), connection_factory=lambda *_args: connection)
+
+    with pytest.raises(OpenCliBrowserError) as captured:
+        client.verify_bridge()
+
+    assert captured.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert connection.closed is True
+
+
+def test_daemon_client_rejects_duplicate_status_identity_keys() -> None:
+    connection = _Connection(status_payload=_status())
+    raw = json.dumps(_status()).replace(
+        '"implementation": "seektalent-wtscli"',
+        '"implementation": "seektalent-wtscli", "implementation": "seektalent-wtscli"',
+        1,
+    ).encode()
+
+    def duplicate_response() -> _Response:
+        return _Response(200, raw)
+
+    connection.getresponse = duplicate_response  # type: ignore[method-assign]
+    client = OpenCliDaemonClient(
+        requirement=_requirement(),
+        connection_factory=lambda *_args: connection,
+    )
 
     with pytest.raises(OpenCliBrowserError) as captured:
         client.verify_bridge()
