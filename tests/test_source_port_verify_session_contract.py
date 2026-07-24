@@ -614,6 +614,7 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
         if "verify_session_contract" in content or "operation_dispatch" in content:
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert set(callers) == {
+        "src/seektalent/source_history_reconciliation.py",
         "src/seektalent/sidecar_bootstrap.py",
         "src/seektalent/source_port/sidecar_transport.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",

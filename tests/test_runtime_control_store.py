@@ -29,9 +29,7 @@ def test_store_initializes_empty_db_and_reopens_idempotently(tmp_path: Path) -> 
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         tables = {
             row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'runtime_%'"
-            )
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'runtime_%'")
         }
 
     assert version == RUNTIME_CONTROL_SCHEMA_VERSION
@@ -54,7 +52,7 @@ def test_store_initializes_empty_db_and_reopens_idempotently(tmp_path: Path) -> 
     } <= tables
 
 
-def test_populated_v7_migrates_to_v10_with_readable_backup_and_reopens(tmp_path: Path) -> None:
+def test_populated_v7_migrates_to_v11_with_readable_backup_and_reopens(tmp_path: Path) -> None:
     from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION, RuntimeControlStore
 
     db_path = tmp_path / "runtime_control.sqlite3"
@@ -69,7 +67,7 @@ def test_populated_v7_migrates_to_v10_with_readable_backup_and_reopens(tmp_path:
     backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
     assert len(backups) == 1
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 11
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
@@ -120,7 +118,7 @@ def test_v7_to_v8_statement_failure_rolls_back_ddl_and_user_version(
     monkeypatch.setattr(store_module, "_SOURCE_OPERATION_SCHEMA_STATEMENTS", statements)
     store.initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
 
 
 @pytest.mark.parametrize("completed_statements", [1, 2, 3])
@@ -150,12 +148,12 @@ def test_real_v1_to_v8_source_schema_failure_stops_at_clean_v7(
     monkeypatch.setattr(store_module, "_SOURCE_OPERATION_SCHEMA_STATEMENTS", statements)
     RuntimeControlStore(db_path).initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
 
 
-def test_populated_v8_migrates_to_v10_with_readable_backup_and_reopens(tmp_path: Path) -> None:
+def test_populated_v8_migrates_to_v11_with_readable_backup_and_reopens(tmp_path: Path) -> None:
     from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION, RuntimeControlStore
 
     db_path = tmp_path / "runtime_control.sqlite3"
@@ -176,15 +174,13 @@ def test_populated_v8_migrates_to_v10_with_readable_backup_and_reopens(tmp_path:
     backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
     assert len(backups) == 1
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 11
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_reconciliations").fetchone()[0] == 0
         assert (
-            conn.execute(
-                "SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations"
-            ).fetchone()[0]
+            conn.execute("SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations").fetchone()[0]
             == 0
         )
 
@@ -223,11 +219,11 @@ def test_v8_to_v9_statement_failure_rolls_back_ddl_and_user_version(
     monkeypatch.setattr(store_module, "_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS", statements)
     store.initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
 
 
-def test_populated_v9_migrates_to_v10_without_inventing_expectations(tmp_path: Path) -> None:
+def test_populated_v9_migrates_to_v11_without_inventing_expectations(tmp_path: Path) -> None:
     from seektalent_runtime_control.errors import RuntimeControlError
     from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION, RuntimeControlStore
 
@@ -249,13 +245,11 @@ def test_populated_v9_migrates_to_v10_without_inventing_expectations(tmp_path: P
     backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
     assert len(backups) == 1
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 11
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 1
         assert (
-            conn.execute(
-                "SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations"
-            ).fetchone()[0]
+            conn.execute("SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations").fetchone()[0]
             == 0
         )
     with sqlite3.connect(f"file:{backups[0]}?mode=ro", uri=True) as backup:
@@ -304,7 +298,7 @@ def test_v9_to_v10_statement_failure_rolls_back_ddl_and_user_version(
     )
     store.initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
 
 
 def test_v7_to_v9_second_phase_failure_rolls_back_both_source_schemas(
@@ -339,7 +333,7 @@ def test_v7_to_v9_second_phase_failure_rolls_back_both_source_schemas(
     monkeypatch.setattr(store_module, "_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS", statements)
     store.initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 11
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {
         "runtime_control_source_operations",
@@ -946,8 +940,15 @@ def _downgrade_fixture_to_v8(db_path: Path) -> None:
 
 
 def _downgrade_fixture_to_v9(db_path: Path) -> None:
+    from seektalent_runtime_control.source_reconciliation import (
+        SOURCE_RECONCILIATION_V10_SCHEMA_STATEMENTS,
+    )
+
     with sqlite3.connect(db_path) as conn:
         conn.execute("DROP TABLE runtime_control_source_operation_admission_expectations")
+        conn.execute("DROP TABLE runtime_control_source_reconciliations")
+        for statement in SOURCE_RECONCILIATION_V10_SCHEMA_STATEMENTS:
+            conn.execute(statement)
         conn.execute("PRAGMA user_version = 9")
 
 
@@ -968,9 +969,7 @@ def _assert_v8_without_reconciliation_schema(db_path: Path) -> None:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
         objects = {
             (row[0], row[1])
-            for row in conn.execute(
-                "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'trigger')"
-            )
+            for row in conn.execute("SELECT type, name FROM sqlite_master WHERE type IN ('table', 'trigger')")
         }
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
     assert ("table", "runtime_control_source_operations") in objects
@@ -985,9 +984,7 @@ def _assert_v9_without_expectation_schema(db_path: Path) -> None:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 9
         objects = {
             (row[0], row[1])
-            for row in conn.execute(
-                "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'trigger')"
-            )
+            for row in conn.execute("SELECT type, name FROM sqlite_master WHERE type IN ('table', 'trigger')")
         }
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
     assert ("table", "runtime_control_source_operations") in objects

@@ -712,7 +712,14 @@ def test_late_outbox_ack_cannot_commit_safe_retry(
     )
     original_commit = RuntimeControlStore.commit_no_owner_source_reconciliation
 
-    def commit_after_late_ack(self, decision, fault_injector=None, *, dispatch_precondition=None):
+    def commit_after_late_ack(
+        self,
+        decision,
+        fault_injector=None,
+        *,
+        dispatch_precondition=None,
+        dispatch_ack=None,
+    ):
         _acknowledge_pending_dispatch(
             self,
             query,
@@ -724,6 +731,7 @@ def test_late_outbox_ack_cannot_commit_safe_retry(
             decision,
             fault_injector,
             dispatch_precondition=dispatch_precondition,
+            dispatch_ack=dispatch_ack,
         )
 
     monkeypatch.setattr(RuntimeControlStore, "commit_no_owner_source_reconciliation", commit_after_late_ack)
@@ -785,12 +793,12 @@ def _history_harness(root: Path, *generations: int) -> SourceHistorySQLiteHarnes
     return harness
 
 
-def _accepted() -> AcceptedHistoryInput:
+def _accepted(*, operation_kind: str = "search") -> AcceptedHistoryInput:
     return AcceptedHistoryInput(
         run_id="runtime-run-1",
         operation_id="source-operation-1",
         source="liepin",
-        operation_kind="search",
+        operation_kind=operation_kind,
         idempotency_key="source-key-1",
         request_hash=REQUEST_HASH,
         attempt_no=1,
@@ -807,6 +815,7 @@ def _accepted() -> AcceptedHistoryInput:
 
 def _query(
     *,
+    operation_kind: str = "search",
     request_hash: str = REQUEST_HASH,
     authorization_selector: ExactAuthorizationSelector | AllAuthorizationsSelector | None = None,
     first_generation: int = 1,
@@ -820,7 +829,7 @@ def _query(
         run_id="runtime-run-1",
         operation_id="source-operation-1",
         source="liepin",
-        operation_kind="search",
+        operation_kind=operation_kind,
         idempotency_key="source-key-1",
         request_hash=request_hash,
         attempt_no=1,

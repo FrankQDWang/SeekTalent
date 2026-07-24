@@ -87,9 +87,14 @@ from seektalent_runtime_control.source_operations import (
     validate_source_operation_acceptance,
 )
 from seektalent_runtime_control.source_reconciliation import (
+    SOURCE_RECONCILIATION_SCHEMA_STATEMENTS as _SOURCE_RECONCILIATION_V11_SCHEMA_STATEMENTS,
+    SOURCE_RECONCILIATION_V10_SCHEMA_STATEMENTS as _SOURCE_RECONCILIATION_SCHEMA_STATEMENTS,
     SourceOperationReconciliationDecision,
     SourceOperationReconciliationRecord,
+    migrate_source_reconciliation_v10_to_v11,
+    reconciliation_dispatch_ack_requires_update,
     reconciliation_dispatch_precondition_matches,
+    source_dispatch_is_initially_deliverable,
     source_reconciliation_from_row,
     source_reconciliation_matches_decision,
     validate_source_operation_reconciliation_decision,
@@ -97,7 +102,7 @@ from seektalent_runtime_control.source_reconciliation import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 10
+RUNTIME_CONTROL_SCHEMA_VERSION = 11
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -170,7 +175,7 @@ class RuntimeControlStore:
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                 conn.commit()
                 version = 7
-            if version in {7, 8, 9}:
+            if version in {7, 8, 9, 10}:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     if version == 7:
@@ -181,8 +186,12 @@ class RuntimeControlStore:
                         _migrate_v8_to_v9(conn)
                         conn.execute("PRAGMA user_version = 9")
                         version = 9
-                    _migrate_v9_to_v10(conn)
-                    conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
+                    if version == 9:
+                        _migrate_v9_to_v10(conn)
+                        conn.execute("PRAGMA user_version = 10")
+                        version = 10
+                    migrate_source_reconciliation_v10_to_v11(conn)
+                    conn.execute("PRAGMA user_version = 11")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
                 except (SQLiteMigrationError, sqlite3.Error):
@@ -535,6 +544,7 @@ class RuntimeControlStore:
         fault_injector: Callable[[str], None] | None = None,
         *,
         dispatch_precondition: SourceDispatchMetadata | None = None,
+        dispatch_ack: SourceDispatchMetadata | None = None,
     ) -> SourceOperationReconciliationRecord:
         """Commit a closed main-authored reconciliation when no executor owns the run."""
         validate_source_operation_reconciliation_decision(decision)
@@ -566,6 +576,11 @@ class RuntimeControlStore:
                     raise RuntimeControlError("source_reconciliation_identity_conflict")
                 if not reconciliation_dispatch_precondition_matches(dispatch, decision, dispatch_precondition):
                     raise RuntimeControlError("source_reconciliation_dispatch_conflict")
+                update_dispatch_ack = reconciliation_dispatch_ack_requires_update(
+                    dispatch,
+                    dispatch_ack,
+                    decision,
+                )
                 if operation.operation_phase == "main_committed" or operation.main_commit_ref is not None:
                     raise RuntimeControlError("source_reconciliation_main_commit_conflict")
                 if (
@@ -582,6 +597,35 @@ class RuntimeControlStore:
 
                 committed_ledger_revision = operation.ledger_revision + 1
                 committed_reconciliation_revision = operation.reconciliation_revision + 1
+                if update_dispatch_ack and dispatch_ack is not None:
+                    _inject_source_reconciliation_fault(fault_injector, "before_outbox_update")
+                    acknowledged = conn.execute(
+                        """
+                        UPDATE runtime_control_source_dispatch_outbox
+                        SET status = 'acknowledged', outbox_revision = ?,
+                            accepted_sidecar_generation = ?,
+                            accepted_sidecar_journal_revision = ?,
+                            ack_ref = ?, ack_kind = ?, acknowledged_at = ?
+                        WHERE outbox_id = ? AND status = 'pending' AND outbox_revision = ?
+                          AND accepted_sidecar_generation IS NULL
+                          AND accepted_sidecar_journal_revision IS NULL
+                          AND ack_ref IS NULL AND ack_kind IS NULL AND acknowledged_at IS NULL
+                        """,
+                        (
+                            dispatch_ack.outbox_revision,
+                            dispatch_ack.accepted_sidecar_generation,
+                            dispatch_ack.accepted_sidecar_journal_revision,
+                            dispatch_ack.ack_ref,
+                            dispatch_ack.ack_kind,
+                            dispatch_ack.acknowledged_at,
+                            dispatch.outbox_id,
+                            dispatch.outbox_revision,
+                        ),
+                    )
+                    if acknowledged.rowcount != 1:
+                        raise RuntimeControlError("source_reconciliation_dispatch_conflict")
+                    _inject_source_reconciliation_fault(fault_injector, "after_outbox_update")
+                _inject_source_reconciliation_fault(fault_injector, "before_operation_update")
                 updated = conn.execute(
                     """
                     UPDATE runtime_control_source_operations
@@ -613,6 +657,7 @@ class RuntimeControlStore:
                     raise RuntimeControlError("source_reconciliation_revision_conflict")
                 _inject_source_reconciliation_fault(fault_injector, "after_operation_update")
 
+                _inject_source_reconciliation_fault(fault_injector, "before_reconciliation_insert")
                 conn.execute(
                     """
                     INSERT INTO runtime_control_source_reconciliations (
@@ -663,6 +708,7 @@ class RuntimeControlStore:
                 if committed_row is None:
                     raise RuntimeControlError("source_reconciliation_commit_incomplete")
                 committed = source_reconciliation_from_row(committed_row)
+                _inject_source_reconciliation_fault(fault_injector, "before_commit")
                 conn.commit()
                 _inject_source_reconciliation_fault(fault_injector, "after_commit")
             except Exception:
@@ -674,21 +720,30 @@ class RuntimeControlStore:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("source_dispatch_limit_invalid")
         with self._connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM runtime_control_source_dispatch_outbox
-                WHERE status = 'pending'
-                ORDER BY outbox_id ASC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            conn.execute("BEGIN")
             dispatches = []
-            for row in rows:
-                dispatch = source_dispatch_from_row(row)
-                _require_source_dispatch_operation(conn, dispatch)
-                dispatches.append(dispatch)
+            offset = 0
+            while len(dispatches) < limit:
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_control_source_dispatch_outbox
+                    WHERE status = 'pending'
+                    ORDER BY outbox_id ASC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (limit, offset),
+                ).fetchall()
+                if not rows:
+                    break
+                offset += len(rows)
+                for row in rows:
+                    dispatch = source_dispatch_from_row(row)
+                    operation = _require_source_dispatch_operation(conn, dispatch)
+                    if source_dispatch_is_initially_deliverable(dispatch, operation):
+                        dispatches.append(dispatch)
+                        if len(dispatches) == limit:
+                            break
         return dispatches
 
     def record_source_dispatch_ack(
@@ -3367,7 +3422,8 @@ def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
-    _create_source_reconciliation_schema(conn)
+    for statement in _SOURCE_RECONCILIATION_SCHEMA_STATEMENTS:
+        conn.execute(statement)
 
 
 def _migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
@@ -3537,105 +3593,8 @@ def _create_source_operation_admission_expectation_schema(conn: sqlite3.Connecti
         conn.execute(statement)
 
 
-_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS = (
-    """
-    CREATE TABLE IF NOT EXISTS runtime_control_source_reconciliations (
-      reconciliation_id TEXT PRIMARY KEY,
-      runtime_run_id TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      source_id TEXT NOT NULL,
-      operation_kind TEXT NOT NULL,
-      canonical_request_hash TEXT NOT NULL,
-      idempotency_key TEXT NOT NULL,
-      accepted_requirement_revision_id TEXT NOT NULL,
-      runtime_attempt_no INTEGER NOT NULL,
-      runtime_attempt_authority_ref TEXT NOT NULL,
-      history_result_ref TEXT NOT NULL,
-      history_result_digest TEXT NOT NULL,
-      history_outcome TEXT NOT NULL,
-      history_conclusion TEXT,
-      decision_kind TEXT NOT NULL,
-      dispatch_intent_ref TEXT,
-      conclusive_observation_ref TEXT,
-      source_operation_disposition TEXT,
-      retry_posture TEXT NOT NULL,
-      expected_ledger_revision INTEGER NOT NULL,
-      expected_reconciliation_revision INTEGER NOT NULL,
-      committed_at TEXT NOT NULL,
-      committed_operation_phase TEXT NOT NULL,
-      committed_ledger_revision INTEGER NOT NULL,
-      committed_reconciliation_revision INTEGER NOT NULL,
-      UNIQUE(runtime_run_id, operation_id, committed_reconciliation_revision),
-      CHECK (source_id = 'liepin'),
-      CHECK (operation_kind IN ('verify_session', 'search', 'cards', 'details', 'continuation', 'cleanup')),
-      CHECK (history_outcome IN ('matched', 'not_found', 'history_unavailable')),
-      CHECK (history_conclusion IS NULL OR history_conclusion IN (
-        'accepted_no_dispatch', 'dispatch_not_observed', 'observed_result', 'observed_failure'
-      )),
-      CHECK (decision_kind IN ('no_dispatch_proved', 'unresolved', 'conclusive_observation')),
-      CHECK (source_operation_disposition IS NULL OR source_operation_disposition IN (
-        'completed', 'partial', 'user_action_required', 'incompatible', 'failed',
-        'cancelled', 'reconciliation_unknown'
-      )),
-      CHECK (retry_posture IN ('no_retry', 'safe_retry', 'reconcile_first')),
-      CHECK (runtime_attempt_no > 0),
-      CHECK (expected_ledger_revision > 0),
-      CHECK (expected_reconciliation_revision >= 0),
-      CHECK (committed_operation_phase = 'reconciled'),
-      CHECK (committed_ledger_revision = expected_ledger_revision + 1),
-      CHECK (committed_reconciliation_revision = expected_reconciliation_revision + 1),
-      CHECK (
-        (
-          decision_kind = 'no_dispatch_proved'
-          AND (
-            (history_outcome = 'not_found' AND history_conclusion IS NULL)
-            OR (history_outcome = 'matched' AND history_conclusion = 'accepted_no_dispatch')
-          )
-          AND dispatch_intent_ref IS NULL
-          AND conclusive_observation_ref IS NULL
-          AND retry_posture = 'safe_retry'
-        )
-        OR (
-          decision_kind = 'unresolved'
-          AND (
-            (history_outcome = 'history_unavailable' AND history_conclusion IS NULL)
-            OR (
-              history_outcome = 'matched'
-              AND history_conclusion = 'dispatch_not_observed'
-              AND dispatch_intent_ref IS NOT NULL
-            )
-          )
-          AND conclusive_observation_ref IS NULL
-          AND source_operation_disposition = 'reconciliation_unknown'
-          AND retry_posture = 'reconcile_first'
-        )
-        OR (
-          decision_kind = 'conclusive_observation'
-          AND history_outcome = 'matched'
-          AND history_conclusion IN ('observed_result', 'observed_failure')
-          AND dispatch_intent_ref IS NOT NULL
-          AND conclusive_observation_ref IS NOT NULL
-          AND source_operation_disposition IN ('completed', 'partial', 'incompatible', 'failed')
-          AND retry_posture = 'no_retry'
-        )
-      )
-    )
-    """,
-    """
-    CREATE TRIGGER IF NOT EXISTS runtime_control_source_reconciliations_no_update
-    BEFORE UPDATE ON runtime_control_source_reconciliations
-    BEGIN SELECT RAISE(ABORT, 'runtime_control_source_reconciliations_immutable'); END
-    """,
-    """
-    CREATE TRIGGER IF NOT EXISTS runtime_control_source_reconciliations_no_delete
-    BEFORE DELETE ON runtime_control_source_reconciliations
-    BEGIN SELECT RAISE(ABORT, 'runtime_control_source_reconciliations_immutable'); END
-    """,
-)
-
-
 def _create_source_reconciliation_schema(conn: sqlite3.Connection) -> None:
-    for statement in _SOURCE_RECONCILIATION_SCHEMA_STATEMENTS:
+    for statement in _SOURCE_RECONCILIATION_V11_SCHEMA_STATEMENTS:
         conn.execute(statement)
 
 
