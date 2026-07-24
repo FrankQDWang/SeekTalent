@@ -2,7 +2,8 @@ param(
   [string]$Version = "0.7.49",
   [string]$DomiPython = "",
   [string]$DomiNode = "",
-  [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR
+  [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR,
+  [string]$BrowserBridgeHelper = $env:SEEKTALENT_BROWSER_BRIDGE_HELPER
 )
 
 function Fail($ReasonCode, $Message) {
@@ -14,7 +15,8 @@ function Install-SeekTalentDomi {
     [string]$Version = "0.7.49",
     [string]$DomiPython = "",
     [string]$DomiNode = "",
-    [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR
+    [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR,
+    [string]$BrowserBridgeHelper = $env:SEEKTALENT_BROWSER_BRIDGE_HELPER
   )
 
   $ErrorActionPreference = "Stop"
@@ -35,24 +37,36 @@ function Install-SeekTalentDomi {
   if (-not $WtscliBundleDir -or -not (Test-Path -Path (Join-Path $WtscliBundleDir "bridge-manifest.json") -PathType Leaf)) {
     Fail "wtscli_bundle_missing" "Set SEEKTALENT_WTSCLI_BUNDLE_DIR to the exact SeekTalent WTSCLI bundle directory."
   }
+  if (-not $BrowserBridgeHelper) {
+    $BrowserBridgeHelper = Join-Path $PSScriptRoot "install_staging_browser_bridge.py"
+  }
+  if (-not (Test-Path -Path $BrowserBridgeHelper -PathType Leaf)) {
+    Fail "wtscli_bundle_admission_unavailable" "The shared SeekTalent browser bridge admission helper was not found: $BrowserBridgeHelper"
+  }
+  & $DomiPython $BrowserBridgeHelper --bundle-dir $WtscliBundleDir --verify-only | Out-Null
+  if ($LASTEXITCODE -ne 0) {
+    Fail "wtscli_bundle_invalid" "The exact SeekTalent WTSCLI bundle failed strict admission."
+  }
 
   $Prefix = Join-Path $env:USERPROFILE ".seektalent\python-prefix\$Version"
   $SitePackages = Join-Path $Prefix "Lib\site-packages"
   $BinDir = Join-Path $env:USERPROFILE ".seektalent\bin"
-  New-Item -ItemType Directory -Force -Path $SitePackages | Out-Null
-  New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
-
-  & $DomiPython -m pip install --upgrade --ignore-installed --no-cache-dir --target $SitePackages "seektalent==$Version"
-  if ($LASTEXITCODE -ne 0) {
-    Fail "seektalent_pypi_install_failed" "Failed to install seektalent==$Version with Domi Python."
-  }
-
+  $CandidateRoot = Join-Path ([IO.Path]::GetTempPath()) ("seektalent-domi-install-" + [Guid]::NewGuid().ToString("N"))
+  $CandidatePrefix = Join-Path $CandidateRoot "python-prefix"
+  $CandidateSitePackages = Join-Path $CandidatePrefix "Lib\site-packages"
   $PreviousPythonPath = $env:PYTHONPATH
   try {
-    $env:PYTHONPATH = if ($env:PYTHONPATH) { "$SitePackages;$env:PYTHONPATH" } else { $SitePackages }
+    New-Item -ItemType Directory -Force -Path $CandidateSitePackages | Out-Null
+    & $DomiPython -m pip install --upgrade --ignore-installed --no-cache-dir --target $CandidateSitePackages "seektalent==$Version"
+    if ($LASTEXITCODE -ne 0) {
+      Fail "seektalent_pypi_install_failed" "Failed to install seektalent==$Version with Domi Python."
+    }
+    $env:PYTHONPATH = if ($env:PYTHONPATH) { "$CandidateSitePackages;$env:PYTHONPATH" } else { $CandidateSitePackages }
     & $DomiPython -m seektalent.domi_bootstrap `
       --package-version $Version `
       --python-path $SitePackages `
+      --python-prefix-candidate $CandidatePrefix `
+      --python-prefix-target $Prefix `
       --domi-python $DomiPython `
       --domi-node $DomiNode `
       --browser-bridge-bundle-dir $WtscliBundleDir `
@@ -67,6 +81,7 @@ function Install-SeekTalentDomi {
     } else {
       $env:PYTHONPATH = $PreviousPythonPath
     }
+    Remove-Item -Recurse -Force -Path $CandidateRoot -ErrorAction SilentlyContinue
   }
 
   if (($env:Path -split ";") -notcontains $BinDir) {
@@ -78,7 +93,7 @@ function Install-SeekTalentDomi {
 
 if ($MyInvocation.MyCommand.Path -and $MyInvocation.InvocationName -ne ".") {
   try {
-    Install-SeekTalentDomi -Version $Version -DomiPython $DomiPython -DomiNode $DomiNode -WtscliBundleDir $WtscliBundleDir
+    Install-SeekTalentDomi -Version $Version -DomiPython $DomiPython -DomiNode $DomiNode -WtscliBundleDir $WtscliBundleDir -BrowserBridgeHelper $BrowserBridgeHelper
   } catch {
     Write-Error $_
     exit 1

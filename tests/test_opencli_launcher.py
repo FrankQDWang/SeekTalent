@@ -9,6 +9,8 @@ from pathlib import Path
 import pytest
 
 from seektalent import opencli_launcher
+from seektalent.browser_bridge_manifest import load_browser_bridge_requirement
+from seektalent.browser_bridge_runtime_receipt import bind_runtime_package_receipt
 from tests.browser_bridge_bundle_fixtures import (
     exact_browser_bridge_requirement,
     write_browser_bridge_bundle,
@@ -447,6 +449,9 @@ def test_opencli_subprocess_env_excludes_provider_secrets(
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "text-secret-key")
     monkeypatch.setenv("OPENCLI_DAEMON_PORT", "19825")
     monkeypatch.setenv("WTSCLI_CONFIG_DIR", "/ambient/wtscli")
+    monkeypatch.setenv("NODE_PATH", "/ambient/global-node-modules")
+    monkeypatch.setenv("Node_Options", "--require=/ambient/injected.js")
+    monkeypatch.setenv("SEEKTALENT_UNRELATED_SENTINEL", "preserved")
     captured_env = opencli_launcher.opencli_subprocess_env(
         node_bin_dir=node.parent,
         requirement=exact_browser_bridge_requirement(),
@@ -457,6 +462,11 @@ def test_opencli_subprocess_env_excludes_provider_secrets(
     assert "SEEKTALENT_DOMI_LLM_CHANNEL" not in captured_env
     assert "SEEKTALENT_TEXT_LLM_API_KEY" not in captured_env
     assert "OPENCLI_DAEMON_PORT" not in captured_env
+    assert not any(
+        key.upper() in {"NODE_PATH", "NODE_OPTIONS"}
+        for key in captured_env
+    )
+    assert captured_env["SEEKTALENT_UNRELATED_SENTINEL"] == "preserved"
     assert captured_env["WTSCLI_CONFIG_DIR"] == str(Path.home() / ".seektalent" / "wtscli")
     assert str(node.parent) in captured_env["PATH"]
 
@@ -464,10 +474,9 @@ def test_opencli_subprocess_env_excludes_provider_secrets(
 def _write_managed_opencli(root: Path) -> Path:
     bundle = root.parent / "wtscli-test-bundle"
     write_browser_bridge_bundle(bundle)
+    install_dir = root / "wtscli" / opencli_launcher.OPENCLI_VERSION
     package_dir = (
-        root
-        / "wtscli"
-        / opencli_launcher.OPENCLI_VERSION
+        install_dir
         / "node_modules"
         / "wtscli"
     )
@@ -480,6 +489,11 @@ def _write_managed_opencli(root: Path) -> Path:
     bridge_manifest = root.parent / "browser-bridge" / "bridge-manifest.json"
     bridge_manifest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(bundle / "bridge-manifest.json", bridge_manifest)
+    bind_runtime_package_receipt(
+        runtime_dir=install_dir,
+        runtime_package=bundle / "runtime" / "wtscli-0.1.0.tgz",
+        requirement=load_browser_bridge_requirement(bridge_manifest),
+    )
     return main
 
 

@@ -14,10 +14,12 @@ on:
       - "scripts/offline/install-offline-macos-intel.sh"
       - "src/seektalent/browser_bridge_install.py"
       - "src/seektalent/browser_bridge_manifest.py"
+      - "src/seektalent/browser_bridge_runtime_receipt.py"
       - "src/seektalent/domi_bootstrap.py"
       - "src/seektalent/opencli_browser/**"
       - "src/seektalent/opencli_launcher.py"
       - "tests/browser_bridge_bundle_fixtures.py"
+      - "tests/test_domi_delivery_admission.py"
       - "tests/test_wtscli_bundle_binding.py"
       - "tools/native_probes/**"
       - "tests/test_native_launch_binding_probe.py"
@@ -165,7 +167,11 @@ jobs:
       - name: Assert exact WTSCLI bundle admission and atomic install
         env:
           SEEKTALENT_EXACT_WTSCLI_BUNDLE: ${{ github.workspace }}/wtscli-browser-bridge
-        run: uv run --group dev python -m pytest tests/test_wtscli_bundle_binding.py -q
+        run: >-
+          uv run --group dev python -m pytest
+          tests/test_wtscli_bundle_binding.py
+          tests/test_domi_delivery_admission.py
+          -q
 
       - name: Assert Windows command-journal directory publication durability
         if: runner.os == 'Windows'

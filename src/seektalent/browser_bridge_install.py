@@ -17,6 +17,10 @@ from seektalent.browser_bridge_manifest import (
     load_browser_bridge_bundle,
     load_runtime_package_identity,
 )
+from seektalent.browser_bridge_runtime_receipt import (
+    bind_runtime_package_receipt,
+    verify_installed_runtime_package,
+)
 from seektalent.strict_json import StrictJsonError, strict_json_object_loads
 
 
@@ -40,74 +44,105 @@ def install_browser_bridge_bundle(
     install_root: Path,
     node: Path,
     prepared_runtime_dir: Path | None = None,
+    additional_targets: tuple[tuple[Path | None, Path], ...] = (),
 ) -> BrowserBridgeInstallResult:
     """Verify, stage, and atomically switch one WTSCLI runtime/extension pair."""
     bundle = load_browser_bridge_bundle(bundle_dir)
-    resolved_install_root = _prepare_install_root(install_root.expanduser())
+    resolved_install_root = _resolve_install_root(install_root.expanduser())
     resolved_node = node.expanduser().resolve(strict=False)
     _require_node(resolved_node)
     targets = _install_targets(resolved_install_root, bundle.requirement)
-    _prepare_target_parents(resolved_install_root, targets)
-
-    with tempfile.TemporaryDirectory(
-        prefix=".wtscli-install-stage-",
-        dir=resolved_install_root,
-    ) as temporary:
-        stage_root = Path(temporary)
-        runtime_stage = stage_root / ".stage-runtime"
-        extension_stage = stage_root / ".stage-extension"
-        manifest_stage = stage_root / ".stage-bridge-manifest.json"
-        runtime_package_stage = stage_root / ".stage-runtime-package.tgz"
-        exact_runtime_stage = stage_root / ".stage-exact-runtime"
-        shutil.copy2(bundle.runtime_package, runtime_package_stage)
-        if (
-            runtime_package_stage.stat().st_size != bundle.requirement.cli.size
-            or _file_sha256(runtime_package_stage) != bundle.requirement.cli.sha256
-        ):
-            raise BrowserBridgeManifestError("integrity_failed")
-        exact_package_dir = (
-            exact_runtime_stage
-            / "node_modules"
-            / bundle.requirement.runtime_identity.package.name
-        )
-        _extract_runtime_package(runtime_package_stage, exact_package_dir)
-        expected_package_files = _runtime_package_files(exact_package_dir)
-        if prepared_runtime_dir is not None:
-            _copy_prepared_runtime(
-                source=prepared_runtime_dir,
-                target=runtime_stage,
+    requested_targets = (
+        targets.runtime_dir,
+        targets.extension_dir,
+        targets.manifest_path,
+        *(target for _source, target in additional_targets),
+    )
+    _validate_target_paths(resolved_install_root, requested_targets)
+    created_staging_parents = _ensure_parent_directory(
+        resolved_install_root.parent,
+    )
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix=f".{resolved_install_root.name}.wtscli-install-stage-",
+            dir=resolved_install_root.parent,
+        ) as temporary:
+            stage_root = Path(temporary)
+            runtime_stage = stage_root / ".stage-runtime"
+            extension_stage = stage_root / ".stage-extension"
+            manifest_stage = stage_root / ".stage-bridge-manifest.json"
+            runtime_package_stage = stage_root / ".stage-runtime-package.tgz"
+            exact_runtime_stage = stage_root / ".stage-exact-runtime"
+            candidate_home = stage_root / ".candidate-home"
+            candidate_home.mkdir()
+            shutil.copy2(bundle.runtime_package, runtime_package_stage)
+            if (
+                runtime_package_stage.stat().st_size != bundle.requirement.cli.size
+                or _file_sha256(runtime_package_stage) != bundle.requirement.cli.sha256
+            ):
+                raise BrowserBridgeManifestError("integrity_failed")
+            exact_package_dir = (
+                exact_runtime_stage
+                / "node_modules"
+                / bundle.requirement.runtime_identity.package.name
             )
-        elif _runtime_dependencies(exact_package_dir):
-            _install_runtime_with_npm(
-                runtime_package=runtime_package_stage,
+            _extract_runtime_package(runtime_package_stage, exact_package_dir)
+            if prepared_runtime_dir is not None:
+                _copy_prepared_runtime(
+                    source=prepared_runtime_dir,
+                    target=runtime_stage,
+                )
+            elif _runtime_dependencies(exact_package_dir):
+                _install_runtime_with_npm(
+                    runtime_package=runtime_package_stage,
+                    runtime_dir=runtime_stage,
+                    node=resolved_node,
+                    requirement=bundle.requirement,
+                    state_home=candidate_home,
+                )
+            else:
+                os.replace(exact_runtime_stage, runtime_stage)
+            _remove_runtime_bin_links(runtime_stage)
+            bind_runtime_package_receipt(
                 runtime_dir=runtime_stage,
-                node=resolved_node,
+                runtime_package=runtime_package_stage,
                 requirement=bundle.requirement,
-                state_home=resolved_install_root.parent,
             )
-        else:
-            os.replace(exact_runtime_stage, runtime_stage)
-        _remove_runtime_bin_links(runtime_stage)
-        shutil.copytree(bundle.extension_dir, extension_stage)
-        shutil.copy2(bundle.manifest_path, manifest_stage)
-        runtime_main = _verify_staged_pair(
-            bundle=bundle,
-            runtime_dir=runtime_stage,
-            extension_dir=extension_stage,
-            manifest_path=manifest_stage,
-            node=resolved_node,
-            state_home=resolved_install_root.parent,
-            expected_package_files=expected_package_files,
-        )
-        relative_main = runtime_main.relative_to(runtime_stage)
-        _activate_pair(
-            staged=(
+            shutil.copytree(bundle.extension_dir, extension_stage)
+            shutil.copy2(bundle.manifest_path, manifest_stage)
+            runtime_main = _verify_staged_pair(
+                bundle=bundle,
+                runtime_dir=runtime_stage,
+                extension_dir=extension_stage,
+                manifest_path=manifest_stage,
+                node=resolved_node,
+                state_home=candidate_home,
+            )
+            relative_main = runtime_main.relative_to(runtime_stage)
+            staged_additional = _stage_additional_targets(
+                stage_root=stage_root,
+                additional_targets=additional_targets,
+            )
+            staged = (
                 (runtime_stage, targets.runtime_dir),
                 (extension_stage, targets.extension_dir),
                 (manifest_stage, targets.manifest_path),
-            ),
-            install_root=resolved_install_root,
-        )
+                *staged_additional,
+            )
+            created_target_parents = _prepare_target_parents(
+                resolved_install_root,
+                tuple(target for _source, target in staged),
+            )
+            try:
+                _activate_pair(
+                    staged=staged,
+                    install_root=resolved_install_root,
+                )
+            except (OSError, BrowserBridgeManifestError, RuntimeError):
+                _remove_empty_directories(created_target_parents)
+                raise
+    finally:
+        _remove_empty_directories(created_staging_parents)
 
     return BrowserBridgeInstallResult(
         runtime_dir=targets.runtime_dir,
@@ -126,16 +161,16 @@ class _InstallTargets:
     manifest_path: Path
 
 
-def _prepare_install_root(install_root: Path) -> Path:
+def _resolve_install_root(install_root: Path) -> Path:
+    resolved = install_root.absolute()
     try:
-        if os.path.lexists(install_root) and install_root.is_symlink():
+        if os.path.lexists(resolved) and (
+            resolved.is_symlink() or not resolved.is_dir()
+        ):
             raise BrowserBridgeManifestError("integrity_failed")
-        install_root.mkdir(parents=True, exist_ok=True)
-        if install_root.is_symlink() or not install_root.is_dir():
-            raise BrowserBridgeManifestError("integrity_failed")
-        return install_root.resolve(strict=True)
     except OSError as exc:
         raise BrowserBridgeManifestError("integrity_failed") from exc
+    return resolved
 
 
 def _reject_relative_symlink_components(root: Path, path: Path) -> None:
@@ -150,28 +185,121 @@ def _reject_relative_symlink_components(root: Path, path: Path) -> None:
             raise BrowserBridgeManifestError("integrity_failed")
 
 
-def _prepare_target_parents(
+def _validate_target_paths(
     install_root: Path,
-    targets: _InstallTargets,
+    targets: tuple[Path, ...],
 ) -> None:
-    for target in (targets.runtime_dir, targets.extension_dir, targets.manifest_path):
+    seen: set[Path] = set()
+    for raw_target in targets:
+        target = raw_target.expanduser().absolute()
+        if target in seen:
+            raise BrowserBridgeManifestError("integrity_failed")
+        seen.add(target)
         try:
-            relative_parent = target.parent.relative_to(install_root)
+            relative = target.relative_to(install_root)
         except ValueError as exc:
             raise BrowserBridgeManifestError("integrity_failed") from exc
-        current = install_root
-        for part in relative_parent.parts:
-            current /= part
-            try:
-                if os.path.lexists(current):
-                    if current.is_symlink() or not current.is_dir():
-                        raise BrowserBridgeManifestError("integrity_failed")
-                else:
-                    current.mkdir()
-            except OSError as exc:
-                raise BrowserBridgeManifestError("integrity_failed") from exc
-        if os.path.lexists(target) and target.is_symlink():
+        if not relative.parts:
             raise BrowserBridgeManifestError("integrity_failed")
+        current = install_root
+        for part in relative.parts:
+            current /= part
+            if os.path.lexists(current) and current.is_symlink():
+                raise BrowserBridgeManifestError("integrity_failed")
+
+
+def _prepare_target_parents(
+    install_root: Path,
+    targets: tuple[Path, ...],
+) -> tuple[Path, ...]:
+    created: list[Path] = []
+    try:
+        if not install_root.exists():
+            created.extend(_ensure_parent_directory(install_root))
+        for target in targets:
+            try:
+                relative_parent = target.parent.relative_to(install_root)
+            except ValueError as exc:
+                raise BrowserBridgeManifestError("integrity_failed") from exc
+            current = install_root
+            for part in relative_parent.parts:
+                current /= part
+                try:
+                    if os.path.lexists(current):
+                        if current.is_symlink() or not current.is_dir():
+                            raise BrowserBridgeManifestError("integrity_failed")
+                    else:
+                        current.mkdir()
+                        created.append(current)
+                except OSError as exc:
+                    raise BrowserBridgeManifestError("integrity_failed") from exc
+            if os.path.lexists(target) and target.is_symlink():
+                raise BrowserBridgeManifestError("integrity_failed")
+    except (OSError, BrowserBridgeManifestError):
+        _remove_empty_directories(tuple(created))
+        raise
+    return tuple(created)
+
+
+def _ensure_parent_directory(path: Path) -> tuple[Path, ...]:
+    missing: list[Path] = []
+    current = path
+    while not current.exists():
+        if os.path.lexists(current) and current.is_symlink():
+            raise BrowserBridgeManifestError("integrity_failed")
+        missing.append(current)
+        if current.parent == current:
+            raise BrowserBridgeManifestError("integrity_failed")
+        current = current.parent
+    if current.is_symlink() or not current.is_dir():
+        raise BrowserBridgeManifestError("integrity_failed")
+    created: list[Path] = []
+    try:
+        for directory in reversed(missing):
+            directory.mkdir()
+            created.append(directory)
+    except OSError as exc:
+        _remove_empty_directories(tuple(created))
+        raise BrowserBridgeManifestError("integrity_failed") from exc
+    return tuple(created)
+
+
+def _remove_empty_directories(paths: tuple[Path, ...]) -> None:
+    for path in reversed(paths):
+        try:
+            path.rmdir()
+        except OSError:
+            break
+
+
+def _stage_additional_targets(
+    *,
+    stage_root: Path,
+    additional_targets: tuple[tuple[Path | None, Path], ...],
+) -> tuple[tuple[Path | None, Path], ...]:
+    staged: list[tuple[Path | None, Path]] = []
+    for index, (raw_source, raw_target) in enumerate(additional_targets):
+        target = raw_target.expanduser().absolute()
+        if raw_source is None:
+            staged.append((None, target))
+            continue
+        source = raw_source.expanduser().absolute()
+        staged_source = stage_root / f".stage-additional-{index}"
+        try:
+            if source.is_symlink():
+                raise BrowserBridgeManifestError("integrity_failed")
+            if source.is_dir():
+                if any(candidate.is_symlink() for candidate in source.rglob("*")):
+                    raise BrowserBridgeManifestError("integrity_failed")
+                shutil.copytree(source, staged_source)
+            elif source.is_file():
+                shutil.copy2(source, staged_source)
+            else:
+                raise BrowserBridgeManifestError("integrity_failed")
+        except OSError as exc:
+            raise BrowserBridgeManifestError("integrity_failed") from exc
+        staged.append((staged_source, target))
+    return tuple(staged)
 
 
 def _install_targets(
@@ -244,7 +372,6 @@ def _verify_staged_pair(
     manifest_path: Path,
     node: Path,
     state_home: Path,
-    expected_package_files: tuple[BrowserBridgeExtensionFile, ...],
 ) -> Path:
     requirement = bundle.requirement
     package_dir = runtime_dir / "node_modules" / requirement.runtime_identity.package.name
@@ -268,8 +395,7 @@ def _verify_staged_pair(
     main = _package_path(package_dir, entrypoint)
     if main.is_symlink() or not main.is_file():
         raise BrowserBridgeManifestError("integrity_failed")
-    if _runtime_package_files(package_dir) != expected_package_files:
-        raise BrowserBridgeManifestError("integrity_failed")
+    verify_installed_runtime_package(runtime_dir, requirement=requirement)
     _require_runtime_dependencies(runtime_dir, package_dir)
 
     runtime_identity = load_runtime_package_identity(identity_path)
@@ -319,26 +445,6 @@ def _declared_extension_files(
             files.append(
                 BrowserBridgeExtensionFile(
                     path=candidate.relative_to(extension_dir).as_posix(),
-                    size=candidate.stat().st_size,
-                    sha256=_file_sha256(candidate),
-                )
-            )
-    return tuple(files)
-
-
-def _runtime_package_files(
-    package_dir: Path,
-) -> tuple[BrowserBridgeExtensionFile, ...]:
-    if package_dir.is_symlink() or not package_dir.is_dir():
-        raise BrowserBridgeManifestError("integrity_failed")
-    files: list[BrowserBridgeExtensionFile] = []
-    for candidate in sorted(package_dir.rglob("*")):
-        if candidate.is_symlink():
-            raise BrowserBridgeManifestError("integrity_failed")
-        if candidate.is_file():
-            files.append(
-                BrowserBridgeExtensionFile(
-                    path=candidate.relative_to(package_dir).as_posix(),
                     size=candidate.stat().st_size,
                     sha256=_file_sha256(candidate),
                 )
@@ -500,9 +606,12 @@ def _wtscli_env(
         if not name.startswith("OPENCLI_")
         and not name.startswith(requirement.runtime_identity.state.env_prefix)
         and not name.upper().startswith("NPM_CONFIG_")
+        and name.upper() not in {"NODE_PATH", "NODE_OPTIONS"}
     }
     state = requirement.runtime_identity.state
     state_root = state.resolve_root(home=state_home)
+    env["HOME"] = str(state_home)
+    env["USERPROFILE"] = str(state_home)
     env[state.config_dir_env] = str(state_root)
     env[state.cache_dir_env] = str(state_root / "cache")
     return env
@@ -510,7 +619,7 @@ def _wtscli_env(
 
 def _activate_pair(
     *,
-    staged: tuple[tuple[Path, Path], ...],
+    staged: tuple[tuple[Path | None, Path], ...],
     install_root: Path,
 ) -> None:
     token = uuid.uuid4().hex
@@ -527,8 +636,9 @@ def _activate_pair(
             if os.path.lexists(target):
                 os.replace(target, backup)
                 backups.append((backup, target))
-            os.replace(source, target)
-            activated.append((target, source))
+            if source is not None:
+                os.replace(source, target)
+                activated.append((target, source))
     except (OSError, BrowserBridgeManifestError):
         rollback_errors: list[OSError] = []
         for target, source in reversed(activated):

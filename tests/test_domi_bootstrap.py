@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 from seektalent import domi_bootstrap
+from tests.browser_bridge_bundle_fixtures import write_browser_bridge_bundle
 
 
 def _touch(path: Path) -> Path:
@@ -111,7 +113,7 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
     domi_node = _touch_executable(tmp_path / "Domi.app" / "node" / "bin" / "node")
     bundle = tmp_path / "bundle"
     prepared_runtime = tmp_path / "prepared-runtime"
-    bundle.mkdir()
+    write_browser_bridge_bundle(bundle)
     prepared_runtime.mkdir()
     captured: dict[str, object] = {}
 
@@ -129,12 +131,15 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
         browser_bridge_prepared_runtime_dir=prepared_runtime,
     )
 
-    assert captured == {
-        "bundle_dir": bundle,
-        "install_root": home / ".seektalent",
-        "node": domi_node,
-        "prepared_runtime_dir": prepared_runtime,
-    }
+    assert captured["bundle_dir"] == bundle
+    assert captured["install_root"] == home / ".seektalent"
+    assert captured["node"] == domi_node
+    assert captured["prepared_runtime_dir"] == prepared_runtime
+    additional_targets = captured["additional_targets"]
+    assert isinstance(additional_targets, tuple)
+    assert [target for _source, target in additional_targets] == [
+        home / ".seektalent" / "bin"
+    ]
 
     with pytest.raises(
         domi_bootstrap.DomiBootstrapError,
@@ -249,12 +254,15 @@ def test_posix_install_script_preserves_sourced_shell_state(tmp_path: Path) -> N
     home.mkdir()
     wtscli_bundle = _write_bundle_marker(tmp_path)
     domi_python.write_text(
-        """#!/usr/bin/env bash
-if [[ "${1:-} ${2:-}" == "-m pip" ]]; then
+        f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == *"install_staging_browser_bridge.py" ]]; then
+  exec {_bash_quote(sys.executable)} "$@"
+fi
+if [[ "${{1:-}} ${{2:-}}" == "-m pip" ]]; then
   exit 0
 fi
-if [[ "${1:-} ${2:-}" == "-m seektalent.domi_bootstrap" ]]; then
-  echo '{}'
+if [[ "${{1:-}} ${{2:-}}" == "-m seektalent.domi_bootstrap" ]]; then
+  echo '{{}}'
   exit 0
 fi
 echo "unexpected fake Domi Python invocation: $*" >&2
@@ -312,6 +320,9 @@ def test_posix_install_script_finds_user_runtime_domi_python_when_app_bundle_pat
     domi_python.write_text(
         f"""#!/usr/bin/env bash
 printf "%s" "$0" > {_bash_quote(python_capture)}
+if [[ "${{1:-}}" == *"install_staging_browser_bridge.py" ]]; then
+  exec {_bash_quote(sys.executable)} "$@"
+fi
 if [[ "${{1:-}} ${{2:-}}" == "-m pip" ]]; then
   exit 0
 fi
@@ -339,6 +350,7 @@ set +e +u +o pipefail
 export HOME={_bash_quote(home)}
 unset DOMI_PYTHON
 export DOMI_NODE={_bash_quote(domi_node)}
+export SEEKTALENT_BROWSER_BRIDGE_HELPER={_bash_quote(Path("scripts/install_staging_browser_bridge.py").resolve())}
 source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
 """
 
@@ -359,6 +371,9 @@ def test_posix_install_script_accepts_seektalent_domi_node_alias(tmp_path: Path)
     wtscli_bundle = _write_bundle_marker(tmp_path)
     domi_python.write_text(
         f"""#!/usr/bin/env bash
+if [[ "${{1:-}}" == *"install_staging_browser_bridge.py" ]]; then
+  exec {_bash_quote(sys.executable)} "$@"
+fi
 if [[ "${{1:-}} ${{2:-}}" == "-m pip" ]]; then
   exit 0
 fi
@@ -398,8 +413,7 @@ source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
 
 def _write_bundle_marker(root: Path) -> Path:
     bundle = root / "wtscli-bundle"
-    bundle.mkdir()
-    (bundle / "bridge-manifest.json").write_text("{}\n", encoding="utf-8")
+    write_browser_bridge_bundle(bundle)
     return bundle
 
 

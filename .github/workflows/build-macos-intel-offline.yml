@@ -116,6 +116,8 @@ jobs:
 
           WTSCLI_MAIN="$HOME/.seektalent/wtscli-runtime/wtscli/$WTSCLI_VERSION/node_modules/wtscli/dist/src/main.js"
           test "$("$DOMI_NODE" "$WTSCLI_MAIN" --version)" = "$WTSCLI_VERSION"
+          test -f "$HOME/.seektalent/wtscli-runtime/wtscli/$WTSCLI_VERSION/.seektalent-wtscli-package.tgz"
+          test -f "$HOME/.seektalent/wtscli-runtime/wtscli/$WTSCLI_VERSION/.seektalent-wtscli-package-receipt.json"
 
           EXTENSION_MANIFEST="$HOME/.seektalent/chrome-extension/wtscli/manifest.json"
           test -f "$EXTENSION_MANIFEST"

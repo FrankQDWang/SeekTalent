@@ -72,8 +72,33 @@ _seektalent_offline_install() {
     _seektalent_offline_fail "offline_manifest_missing" "bundle-manifest.json was not found."
     return 1
   fi
+  if [[ ! -f "${bundle_root}/SHA256SUMS" ]]; then
+    _seektalent_offline_fail "offline_manifest_missing" "SHA256SUMS was not found."
+    return 1
+  fi
   if ! command -v shasum >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
     _seektalent_offline_fail "offline_system_tool_missing" "The macOS shasum and unzip commands are required."
+    return 1
+  fi
+  if ! (cd "${bundle_root}" && shasum -a 256 -c SHA256SUMS >/dev/null); then
+    _seektalent_offline_fail "offline_bundle_checksum_mismatch" "One or more bundled resources failed SHA256 verification."
+    return 1
+  fi
+  local admission_wheels=("${bundle_root}"/python-wheelhouse/seektalent-*-py3-none-any.whl)
+  local admission_wheel="${admission_wheels[0]:-}"
+  local admission_bundle="${bundle_root}/wtscli-browser-bridge"
+  if [[ "${#admission_wheels[@]}" -ne 1 || ! -f "${admission_wheel}" ]]; then
+    _seektalent_offline_fail "offline_resource_missing" "The exact SeekTalent wheel required for browser bridge admission was not found."
+    return 1
+  fi
+  if [[ ! -f "${admission_bundle}/bridge-manifest.json" ]]; then
+    _seektalent_offline_fail "offline_resource_missing" "The exact WTSCLI browser bridge bundle was not found."
+    return 1
+  fi
+  if ! PYTHONPATH="${admission_wheel}" "${domi_python}" -c \
+    'from pathlib import Path; import sys; from seektalent.browser_bridge_manifest import load_browser_bridge_bundle; load_browser_bridge_bundle(Path(sys.argv[1]))' \
+    "${admission_bundle}"; then
+    _seektalent_offline_fail "wtscli_bundle_invalid" "The exact SeekTalent WTSCLI bundle failed strict admission."
     return 1
   fi
 
@@ -111,11 +136,6 @@ _seektalent_offline_install() {
     return 1
   fi
 
-  if ! (cd "${bundle_root}" && shasum -a 256 -c SHA256SUMS >/dev/null); then
-    _seektalent_offline_fail "offline_bundle_checksum_mismatch" "One or more bundled resources failed SHA256 verification."
-    return 1
-  fi
-
   local wheelhouse="${bundle_root}/python-wheelhouse"
   local app_wheel="${wheelhouse}/seektalent-${version}-py3-none-any.whl"
   local pip_zipapp="${bundle_root}/tools/pip.pyz"
@@ -128,6 +148,10 @@ _seektalent_offline_install() {
       return 1
     fi
   done
+  if [[ "${app_wheel}" != "${admission_wheel}" ]]; then
+    _seektalent_offline_fail "offline_resource_missing" "The admitted SeekTalent wheel did not match bundle-manifest.json."
+    return 1
+  fi
   local actual_runtime_sha256
   actual_runtime_sha256="$("${domi_python}" -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${wtscli_runtime_archive}")" || return 1
   if [[ "${actual_runtime_sha256}" != "${browser_bridge_runtime_sha256}" ]]; then
@@ -138,14 +162,17 @@ _seektalent_offline_install() {
   local prefix="${install_root}/python-prefix/${version}"
   local site_packages="${prefix}/site-packages"
   local bin_dir="${install_root}/bin"
-  local wtscli_install_dir="${install_root}/wtscli-runtime/wtscli/${wtscli_version}"
-  local wtscli_main="${wtscli_install_dir}/node_modules/wtscli/dist/src/main.js"
   local extension_install_dir="${install_root}/chrome-extension/wtscli"
-  local extension_manifest="${extension_install_dir}/manifest.json"
-  local installed_bridge_manifest="${install_root}/browser-bridge/bridge-manifest.json"
 
-  rm -rf "${prefix}"
-  mkdir -p "${site_packages}" "${bin_dir}" || return 1
+  local candidate_root
+  candidate_root="$(mktemp -d "${TMPDIR:-/tmp}/seektalent-offline-install.XXXXXX")" || return 1
+  local candidate_prefix="${candidate_root}/python-prefix"
+  local candidate_site_packages="${candidate_prefix}/site-packages"
+  local prepared_runtime_dir="${candidate_root}/prepared-runtime"
+  mkdir -p "${candidate_site_packages}" "${prepared_runtime_dir}" || {
+    rm -rf -- "${candidate_root}"
+    return 1
+  }
   "${domi_python}" "${pip_zipapp}" install \
     --disable-pip-version-check \
     --no-index \
@@ -154,56 +181,56 @@ _seektalent_offline_install() {
     --ignore-installed \
     --no-warn-conflicts \
     --no-warn-script-location \
-    --target "${site_packages}" \
+    --target "${candidate_site_packages}" \
     "${app_wheel}" || {
+      rm -rf -- "${candidate_root}"
       _seektalent_offline_fail "seektalent_offline_install_failed" "Failed to install SeekTalent from the bundled wheelhouse."
       return 1
     }
+  local candidate_version
+  candidate_version="$(PYTHONPATH="${candidate_site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
+    "${domi_python}" -m seektalent --version)" || {
+      rm -rf -- "${candidate_root}"
+      _seektalent_offline_fail "seektalent_offline_version_mismatch" "The staged SeekTalent candidate could not report its version."
+      return 1
+    }
+  if [[ "${candidate_version}" != "${version}" ]]; then
+    rm -rf -- "${candidate_root}"
+    _seektalent_offline_fail "seektalent_offline_version_mismatch" "Expected staged SeekTalent ${version} but found ${candidate_version}."
+    return 1
+  fi
 
-  local prepared_runtime_dir
-  prepared_runtime_dir="$(mktemp -d "${TMPDIR:-/tmp}/seektalent-wtscli-runtime.XXXXXX")" || return 1
   if ! unzip -q "${wtscli_runtime_archive}" -d "${prepared_runtime_dir}"; then
-    rm -rf "${prepared_runtime_dir}"
+    rm -rf -- "${candidate_root}"
     _seektalent_offline_fail "browser_bridge_runtime_extract_failed" "The prepared WTSCLI runtime could not be extracted."
     return 1
   fi
-  if ! PYTHONPATH="${site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
+  if ! PYTHONPATH="${candidate_site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
     "${domi_python}" -m seektalent.domi_bootstrap \
       --package-version "${version}" \
       --python-path "${site_packages}" \
+      --python-prefix-candidate "${candidate_prefix}" \
+      --python-prefix-target "${prefix}" \
       --domi-python "${domi_python}" \
       --domi-node "${domi_node}" \
       --browser-bridge-bundle-dir "${wtscli_bundle_dir}" \
       --browser-bridge-prepared-runtime-dir "${prepared_runtime_dir}" \
       --bin-dir "${bin_dir}" \
       --print-json; then
-    rm -rf "${prepared_runtime_dir}"
+    rm -rf -- "${candidate_root}"
     _seektalent_offline_fail "seektalent_domi_bootstrap_failed" "Failed to verify and install the exact WTSCLI bundle."
     return 1
   fi
-  rm -rf "${prepared_runtime_dir}"
+  rm -rf -- "${candidate_root}"
 
   case ":${PATH}:" in
     *":${bin_dir}:"*) ;;
     *) export PATH="${bin_dir}:${PATH}" ;;
   esac
 
-  local installed_version installed_wtscli_version installed_extension_version
-  installed_version="$("${bin_dir}/seektalent" --version)" || return 1
-  installed_wtscli_version="$("${domi_node}" "${wtscli_main}" --version)" || return 1
-  installed_extension_version="$(_seektalent_json_value "${domi_python}" "${extension_manifest}" "version")" || return 1
-  if [[ "${installed_version}" != "${version}" ]]; then
-    _seektalent_offline_fail "seektalent_offline_version_mismatch" "Expected SeekTalent ${version} but found ${installed_version}."
-    return 1
-  fi
-  if [[ "${installed_wtscli_version}" != "${wtscli_version}" ]]; then
-    _seektalent_offline_fail "wtscli_offline_probe_failed" "Expected WTSCLI ${wtscli_version} but found ${installed_wtscli_version}."
-    return 1
-  fi
-  if [[ "${installed_extension_version}" != "${extension_version}" || ! -f "${installed_bridge_manifest}" ]]; then
-    _seektalent_offline_fail "browser_bridge_pair_mismatch" "The installed WTSCLI extension and bundle manifest did not remain paired."
-    return 1
-  fi
+  local installed_version="${version}"
+  local installed_wtscli_version="${wtscli_version}"
+  local installed_extension_version="${extension_version}"
 
   echo "SeekTalent macOS Intel offline install ready."
   echo "SeekTalent version: ${installed_version}"
@@ -214,6 +241,7 @@ _seektalent_offline_install() {
   echo "Chrome extension directory: ${extension_install_dir}"
   echo "Chrome setup: open chrome://extensions, enable Developer mode, and choose Load unpacked."
   echo "Run: export SEEKTALENT_DOMI_JWT='<new Domi JWT>'; seektalent workbench"
+  return 0
 }
 
 if _seektalent_offline_install; then

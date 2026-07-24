@@ -4,6 +4,7 @@ import hashlib
 import json
 import shutil
 import tarfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +107,7 @@ def write_browser_bridge_bundle(
     *,
     runtime_main: str = 'print("0.1.0")\n',
     extension_key: str = WTSCLI_EXTENSION_KEY,
+    runtime_extra_files: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     root.mkdir(parents=True)
     runtime_dir = root / "runtime"
@@ -139,6 +141,10 @@ def write_browser_bridge_bundle(
         json.dumps(bridge_identity, separators=(",", ":")) + "\n",
         encoding="utf-8",
     )
+    for relative_path, content in (runtime_extra_files or {}).items():
+        extra_file = package_dir / relative_path
+        extra_file.parent.mkdir(parents=True, exist_ok=True)
+        extra_file.write_text(content, encoding="utf-8")
 
     runtime_package = runtime_dir / f"wtscli-{WTSCLI_VERSION}.tgz"
     with tarfile.open(runtime_package, "w:gz") as archive:

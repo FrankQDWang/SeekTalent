@@ -23,7 +23,7 @@
     "uv run ruff check scripts/build_offline_macos_intel.py tests/test_build_offline_macos_intel.py tools/check_pr_governance.py tests/test_pr_governance.py",
     "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py tests/test_build_offline_macos_intel.py tests/test_pr_governance.py",
     "uv run python tools/check_pr_governance.py --base origin/main",
-    "uv run --group dev pytest -q tests/test_wtscli_bundle_binding.py tests/test_opencli_launcher.py tests/test_opencli_daemon_transport.py tests/test_opencli_daemon_process.py tests/test_opencli_browser_lifecycle.py tests/test_source_port_transport.py tests/test_wtscli_verify_session_adapter.py tests/test_domi_bootstrap.py tests/test_build_offline_macos_intel.py tests/test_staging_workbench.py",
+    "uv run --group dev pytest -q tests/test_wtscli_bundle_binding.py tests/test_domi_delivery_admission.py tests/test_opencli_launcher.py tests/test_opencli_daemon_transport.py tests/test_opencli_daemon_process.py tests/test_opencli_browser_lifecycle.py tests/test_source_port_transport.py tests/test_wtscli_verify_session_adapter.py tests/test_domi_bootstrap.py tests/test_build_offline_macos_intel.py tests/test_staging_installer.py tests/test_staging_workbench.py",
     "uv run --group dev ruff check src tests experiments tools",
     "uv run --group dev ty check src tests tools",
     "uv run --group dev python tools/check_arch_imports.py",

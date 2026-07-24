@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import copy
 import json
 import os
@@ -21,6 +22,7 @@ from tests.browser_bridge_bundle_fixtures import (
     WTSCLI_EXTENSION_ID,
     WTSCLI_FORK_COMMIT,
     WTSCLI_RUNTIME_IDENTITY,
+    exact_browser_bridge_requirement,
     write_browser_bridge_bundle,
     write_daemon_ownership,
 )
@@ -183,8 +185,9 @@ def test_shared_install_uses_only_wts_paths_and_preserves_legacy_sentinels(tmp_p
         bundle_root,
         runtime_main=(
             "import os\n"
-            f"assert os.environ['WTSCLI_CONFIG_DIR'] == {str(expected_state_root)!r}\n"
-            f"assert os.environ['WTSCLI_CACHE_DIR'] == {str(expected_state_root / 'cache')!r}\n"
+            f"assert os.environ['WTSCLI_CONFIG_DIR'] != {str(expected_state_root)!r}\n"
+            "assert os.environ['WTSCLI_CACHE_DIR'] == "
+            "os.path.join(os.environ['WTSCLI_CONFIG_DIR'], 'cache')\n"
             "print('0.1.0')\n"
         ),
     )
@@ -210,6 +213,64 @@ def test_shared_install_uses_only_wts_paths_and_preserves_legacy_sentinels(tmp_p
         legacy_runtime,
         legacy_extension,
     ))
+
+
+def test_candidate_npm_and_probes_drop_global_node_injection_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seektalent import browser_bridge_install
+
+    requirement = exact_browser_bridge_requirement()
+    captured_envs: list[dict[str, str]] = []
+
+    class Completed:
+        returncode = 0
+
+        def __init__(self, stdout: str = "") -> None:
+            self.stdout = stdout
+
+    def fake_run(argv: tuple[str, ...], **kwargs: object) -> Completed:
+        env = kwargs["env"]
+        assert isinstance(env, dict)
+        captured_envs.append(dict(env))
+        return Completed("0.1.0\n" if argv[-1] == "--version" else "")
+
+    monkeypatch.setenv("NODE_PATH", "/ambient/global-node-modules")
+    monkeypatch.setenv("Node_Options", "--require=/ambient/injected.js")
+    monkeypatch.setenv("SEEKTALENT_UNRELATED_SENTINEL", "preserved")
+    monkeypatch.setattr(
+        browser_bridge_install,
+        "_npm_cli_for_node",
+        lambda _node: tmp_path / "npm-cli.js",
+    )
+    monkeypatch.setattr(browser_bridge_install.subprocess, "run", fake_run)
+    candidate_home = tmp_path / "candidate-home"
+    runtime_dir = tmp_path / "stage" / "runtime"
+
+    browser_bridge_install._install_runtime_with_npm(
+        runtime_package=tmp_path / "wtscli.tgz",
+        runtime_dir=runtime_dir,
+        node=tmp_path / "node",
+        requirement=requirement,
+        state_home=candidate_home,
+    )
+    browser_bridge_install._probe_wtscli(
+        node=tmp_path / "node",
+        main=tmp_path / "main.js",
+        requirement=requirement,
+        state_home=candidate_home,
+    )
+
+    assert len(captured_envs) == 3
+    for env in captured_envs:
+        assert not any(
+            key.upper() in {"NODE_PATH", "NODE_OPTIONS"}
+            for key in env
+        )
+        assert env["SEEKTALENT_UNRELATED_SENTINEL"] == "preserved"
+        assert env["HOME"] == str(candidate_home)
+        assert env["USERPROFILE"] == str(candidate_home)
 
 
 def test_failed_pair_activation_rolls_back_wts_slot_and_preserves_legacy(
@@ -258,6 +319,115 @@ def test_failed_pair_activation_rolls_back_wts_slot_and_preserves_legacy(
     assert (installed.extension_dir / "dist" / "background.js").read_bytes() == previous_extension
     assert installed.manifest_path.read_bytes() == previous_manifest
     assert legacy.read_text(encoding="utf-8") == "legacy-untouched"
+
+
+def test_staged_help_probe_and_late_failure_leave_real_wts_state_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seektalent import browser_bridge_install
+
+    first_bundle = tmp_path / "bundle-first"
+    second_bundle = tmp_path / "bundle-second"
+    write_browser_bridge_bundle(first_bundle)
+    write_browser_bridge_bundle(
+        second_bundle,
+        runtime_main=(
+            "import os\n"
+            "import pathlib\n"
+            "import sys\n"
+            "if '--help' in sys.argv:\n"
+            "    state = pathlib.Path(os.environ['WTSCLI_CONFIG_DIR'])\n"
+            "    state.mkdir(parents=True, exist_ok=True)\n"
+            "    (state / 'candidate-help-write').write_text('mutated')\n"
+            "print('0.1.0' if '--version' in sys.argv else 'help')\n"
+        ),
+    )
+    home = tmp_path / "home"
+    install_root = home / ".seektalent"
+    installed = browser_bridge_install.install_browser_bridge_bundle(
+        bundle_dir=first_bundle,
+        install_root=install_root,
+        node=Path(sys.executable),
+    )
+    state_sentinel = install_root / "wtscli" / "sentinel"
+    state_sentinel.parent.mkdir(parents=True)
+    state_sentinel.write_text("previous-state", encoding="utf-8")
+    before = _tree_snapshot(home)
+    real_replace = os.replace
+    failed = False
+
+    def fail_extension_activation(source: str | Path, target: str | Path) -> None:
+        nonlocal failed
+        if (
+            not failed
+            and Path(target) == installed.extension_dir
+            and ".stage-" in str(source)
+        ):
+            failed = True
+            raise OSError("injected late activation failure")
+        real_replace(source, target)
+
+    monkeypatch.setattr(
+        browser_bridge_install.os,
+        "replace",
+        fail_extension_activation,
+    )
+
+    with pytest.raises(OSError, match="injected late activation failure"):
+        browser_bridge_install.install_browser_bridge_bundle(
+            bundle_dir=second_bundle,
+            install_root=install_root,
+            node=Path(sys.executable),
+        )
+
+    assert failed is True
+    assert _tree_snapshot(home) == before
+
+
+def test_fresh_install_parent_preparation_failure_removes_created_directories(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seektalent.browser_bridge_install import install_browser_bridge_bundle
+
+    bundle_root = tmp_path / "bundle"
+    write_browser_bridge_bundle(bundle_root)
+    home = tmp_path / "home"
+    home.mkdir()
+    sentinel = home / "sentinel"
+    sentinel.write_text("previous-state", encoding="utf-8")
+    install_root = home / ".seektalent"
+    fail_at = install_root / "chrome-extension"
+    real_mkdir = Path.mkdir
+
+    def fail_midway(
+        path: Path,
+        mode: int = 0o777,
+        parents: bool = False,
+        exist_ok: bool = False,
+    ) -> None:
+        if path == fail_at:
+            raise OSError("injected parent preparation failure")
+        real_mkdir(
+            path,
+            mode=mode,
+            parents=parents,
+            exist_ok=exist_ok,
+        )
+
+    monkeypatch.setattr(Path, "mkdir", fail_midway)
+
+    with pytest.raises(browser_bridge_manifest.BrowserBridgeManifestError):
+        install_browser_bridge_bundle(
+            bundle_dir=bundle_root,
+            install_root=install_root,
+            node=Path(sys.executable),
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "previous-state"
+    assert not install_root.exists()
+    assert sorted(path.name for path in home.iterdir()) == ["sentinel"]
 
 
 def test_prepared_runtime_must_contain_the_exact_manifest_declared_wtscli_package(
@@ -484,6 +654,126 @@ def test_managed_launcher_derives_wts_package_entrypoint_and_state_env(
     assert env["WTSCLI_CACHE_DIR"] == str(Path.home() / ".seektalent" / "wtscli" / "cache")
 
 
+def test_install_binds_manifest_declared_wts_package_receipt_to_runtime_slot(
+    tmp_path: Path,
+) -> None:
+    from seektalent.browser_bridge_install import install_browser_bridge_bundle
+
+    bundle_root = tmp_path / "bundle"
+    write_browser_bridge_bundle(bundle_root)
+    installed = install_browser_bridge_bundle(
+        bundle_dir=bundle_root,
+        install_root=tmp_path / "home" / ".seektalent",
+        node=Path(sys.executable),
+    )
+
+    assert (installed.runtime_dir / ".seektalent-wtscli-package.tgz").is_file()
+    assert (installed.runtime_dir / ".seektalent-wtscli-package-receipt.json").is_file()
+
+
+def test_runtime_receipt_uses_host_independent_mixed_case_path_order(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seektalent.browser_bridge_install import install_browser_bridge_bundle
+    from seektalent.browser_bridge_manifest import load_browser_bridge_requirement
+    from seektalent.browser_bridge_runtime_receipt import (
+        verify_installed_runtime_package,
+    )
+
+    bundle_root = tmp_path / "bundle"
+    write_browser_bridge_bundle(
+        bundle_root,
+        runtime_extra_files={
+            "LICENSE": "license\n",
+            "README.md": "readme\n",
+        },
+    )
+    installed = install_browser_bridge_bundle(
+        bundle_dir=bundle_root,
+        install_root=tmp_path / "home" / ".seektalent",
+        node=Path(sys.executable),
+    )
+    requirement = load_browser_bridge_requirement(installed.manifest_path)
+    real_sorted = builtins.sorted
+
+    def windows_path_sorted(iterable, *, key=None, reverse=False):
+        items = list(iterable)
+        if key is None and items and all(isinstance(item, Path) for item in items):
+            return real_sorted(
+                items,
+                key=lambda item: str(item).casefold(),
+                reverse=reverse,
+            )
+        return real_sorted(items, key=key, reverse=reverse)
+
+    monkeypatch.setattr(builtins, "sorted", windows_path_sorted)
+
+    verify_installed_runtime_package(
+        installed.runtime_dir,
+        requirement=requirement,
+    )
+
+
+@pytest.mark.parametrize("mutation", ["same_size_restored_mtime", "extra_file"])
+def test_launcher_rejects_post_install_wts_package_tree_tampering_before_spawn(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    from seektalent.browser_bridge_install import install_browser_bridge_bundle
+
+    bundle_root = tmp_path / "bundle"
+    write_browser_bridge_bundle(bundle_root)
+    install_root = tmp_path / "home" / ".seektalent"
+    installed = install_browser_bridge_bundle(
+        bundle_dir=bundle_root,
+        install_root=install_root,
+        node=Path(sys.executable),
+    )
+    monkeypatch.setattr(opencli_launcher, "_verify_domi_node", lambda _node: None)
+    monkeypatch.setattr(opencli_launcher, "_probe_opencli_cli", lambda **_kwargs: None)
+    opencli_launcher.ensure_opencli_runtime(
+        root=install_root / "wtscli-runtime",
+        env={"SEEKTALENT_DOMI_NODE": sys.executable},
+    )
+
+    package_dir = installed.runtime_dir / "node_modules" / "wtscli"
+    if mutation == "same_size_restored_mtime":
+        original_stat = installed.runtime_main.stat()
+        original = installed.runtime_main.read_bytes()
+        tampered = original.replace(b"0.1.0", b"9.9.9", 1)
+        assert tampered != original
+        assert len(tampered) == len(original)
+        installed.runtime_main.write_bytes(tampered)
+        os.utime(
+            installed.runtime_main,
+            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+        )
+    else:
+        (package_dir / "unexpected-runtime-file.js").write_text(
+            "unexpected\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(
+        opencli_launcher.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail(
+            "tampered WTS package bytes must be rejected before spawn"
+        ),
+    )
+
+    with pytest.raises(
+        opencli_launcher.BootstrapError,
+        match="opencli_bridge_integrity_failed",
+    ):
+        opencli_launcher.ensure_opencli_runtime(
+            root=install_root / "wtscli-runtime",
+            env={"SEEKTALENT_DOMI_NODE": sys.executable},
+        )
+
+
 def test_all_delivery_entrypoints_bind_the_exact_merged_wtscli_bundle() -> None:
     root = Path(__file__).resolve().parents[1]
     staging = (root / "scripts" / "install-seektalent-staging.sh").read_text(encoding="utf-8")
@@ -574,3 +864,16 @@ def test_native_ci_installs_the_real_exact_wtscli_bundle_when_supplied(
         sentinel.read_text(encoding="utf-8") == "legacy-untouched"
         for sentinel in (legacy_state, legacy_runtime, legacy_extension)
     )
+
+
+def _tree_snapshot(root: Path) -> tuple[tuple[str, str, bytes], ...]:
+    entries: list[tuple[str, str, bytes]] = []
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            entries.append((relative, "symlink", os.readlink(path).encode()))
+        elif path.is_dir():
+            entries.append((relative, "dir", b""))
+        else:
+            entries.append((relative, "file", path.read_bytes()))
+    return tuple(entries)

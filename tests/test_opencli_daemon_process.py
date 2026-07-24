@@ -168,6 +168,8 @@ def test_restart_uses_installed_runtime_with_sanitized_bounded_subprocess(
     monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("OPENCLI_CONFIG_DIR", str(home / ".opencli"))
     monkeypatch.setenv("OPENCLI_DAEMON_PORT", "19825")
+    monkeypatch.setenv("node_path", str(home / "global-node-modules"))
+    monkeypatch.setenv("NODE_OPTIONS", "--require=global-injection.js")
     monkeypatch.setattr(daemon_process.subprocess, "run", fake_run)
 
     daemon_process._restart_installed_daemon(runtime)
@@ -181,6 +183,10 @@ def test_restart_uses_installed_runtime_with_sanitized_bounded_subprocess(
     assert captured["timeout"] == daemon_process.OPENCLI_DAEMON_RESTART_TIMEOUT_SECONDS
     assert "SEEKTALENT_DOMI_JWT" not in captured["env"]
     assert not any(str(name).startswith("OPENCLI_") for name in captured["env"])
+    assert not any(
+        str(name).upper() in {"NODE_PATH", "NODE_OPTIONS"}
+        for name in captured["env"]
+    )
     assert all(path.read_text(encoding="utf-8") == "legacy-untouched" for path in legacy_paths)
 
 

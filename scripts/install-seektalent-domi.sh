@@ -18,6 +18,12 @@ _seektalent_domi_install() {
   local wtscli_bundle_dir="${2:-${SEEKTALENT_WTSCLI_BUNDLE_DIR:-}}"
   local domi_python="${DOMI_PYTHON:-}"
   local domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
+  local script_path="${BASH_SOURCE[0]}"
+  local script_dir="${script_path%/*}"
+  if [[ "${script_dir}" == "${script_path}" ]]; then
+    script_dir="."
+  fi
+  local admission_helper="${SEEKTALENT_BROWSER_BRIDGE_HELPER:-${script_dir}/install_staging_browser_bridge.py}"
 
   if [[ -z "${domi_python}" ]]; then
     local python_candidate
@@ -63,32 +69,55 @@ _seektalent_domi_install() {
     _seektalent_domi_fail "wtscli_bundle_missing" "Set SEEKTALENT_WTSCLI_BUNDLE_DIR to the exact SeekTalent WTSCLI bundle directory."
     return 1
   fi
+  if [[ ! -f "${admission_helper}" ]]; then
+    _seektalent_domi_fail "wtscli_bundle_admission_unavailable" "The shared SeekTalent browser bridge admission helper was not found: ${admission_helper}"
+    return 1
+  fi
+  if ! "${domi_python}" "${admission_helper}" \
+    --bundle-dir "${wtscli_bundle_dir}" \
+    --verify-only >/dev/null; then
+    _seektalent_domi_fail "wtscli_bundle_invalid" "The exact SeekTalent WTSCLI bundle failed strict admission."
+    return 1
+  fi
 
   local prefix="${HOME}/.seektalent/python-prefix/${version}"
   local site_packages="${prefix}/site-packages"
   local bin_dir="${HOME}/.seektalent/bin"
-  mkdir -p "${site_packages}" "${bin_dir}" || {
-    _seektalent_domi_fail "seektalent_bootstrap_directory_failed" "Failed to create ${site_packages} or ${bin_dir}."
+  local candidate_root
+  candidate_root="$(mktemp -d "${TMPDIR:-/tmp}/seektalent-domi-install.XXXXXX")" || {
+    _seektalent_domi_fail "seektalent_bootstrap_directory_failed" "Failed to create the temporary SeekTalent candidate."
+    return 1
+  }
+  local candidate_prefix="${candidate_root}/python-prefix"
+  local candidate_site_packages="${candidate_prefix}/site-packages"
+  mkdir -p "${candidate_site_packages}" || {
+    rm -rf -- "${candidate_root}"
+    _seektalent_domi_fail "seektalent_bootstrap_directory_failed" "Failed to create the temporary SeekTalent candidate."
     return 1
   }
 
-  "${domi_python}" -m pip install --upgrade --ignore-installed --no-cache-dir --target "${site_packages}" "seektalent==${version}" || {
+  "${domi_python}" -m pip install --upgrade --ignore-installed --no-cache-dir --target "${candidate_site_packages}" "seektalent==${version}" || {
+    rm -rf -- "${candidate_root}"
     _seektalent_domi_fail "seektalent_pypi_install_failed" "Failed to install seektalent==${version} with Domi Python."
     return 1
   }
 
-  PYTHONPATH="${site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
+  PYTHONPATH="${candidate_site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
     "${domi_python}" -m seektalent.domi_bootstrap \
       --package-version "${version}" \
       --python-path "${site_packages}" \
+      --python-prefix-candidate "${candidate_prefix}" \
+      --python-prefix-target "${prefix}" \
       --domi-python "${domi_python}" \
       --domi-node "${domi_node}" \
       --browser-bridge-bundle-dir "${wtscli_bundle_dir}" \
       --bin-dir "${bin_dir}" \
       --print-json || {
+        rm -rf -- "${candidate_root}"
         _seektalent_domi_fail "seektalent_domi_bootstrap_failed" "Failed to prepare the seektalent command shim."
         return 1
       }
+  rm -rf -- "${candidate_root}"
 
   case ":${PATH}:" in
     *":${bin_dir}:"*) ;;
@@ -96,6 +125,7 @@ _seektalent_domi_install() {
   esac
 
   echo "SeekTalent Domi install ready. Run: seektalent workbench"
+  return 0
 }
 
 if _seektalent_domi_install "$@"; then

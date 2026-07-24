@@ -17,6 +17,9 @@ from seektalent.browser_bridge_manifest import (
     load_browser_bridge_requirement,
     load_runtime_package_identity,
 )
+from seektalent.browser_bridge_runtime_receipt import (
+    verify_installed_runtime_package,
+)
 from seektalent.strict_json import StrictJsonError, strict_json_object_loads
 
 
@@ -123,6 +126,15 @@ def ensure_opencli_runtime(
             requirement=requirement,
         )
         _verify_runtime_bridge_identity(bridge_identity, requirement)
+        try:
+            verify_installed_runtime_package(
+                install_dir,
+                requirement=requirement,
+            )
+        except BrowserBridgeManifestError as exc:
+            raise BootstrapError(
+                "opencli_bridge_integrity_failed: Installed WTSCLI package bytes do not match the admitted bundle"
+            ) from exc
         stamp_path = _verification_stamp_path(install_dir)
         if not _verification_stamp_matches(
             stamp_path,
@@ -511,6 +523,7 @@ def opencli_subprocess_env(
         if key not in PROVIDER_SECRET_ENV_VARS
         and not key.startswith("OPENCLI_")
         and not key.startswith(state.env_prefix)
+        and key.upper() not in {"NODE_PATH", "NODE_OPTIONS"}
     }
     state_root = state.resolve_root()
     env[state.config_dir_env] = str(state_root)
