@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -36,8 +37,23 @@ def test_constraints_pin_the_current_release_and_accepted_native_dependencies() 
     assert "seektalent==0.7.49" in constraints
     assert "cryptography==48.0.0" in constraints
     assert "pydantic-core==2.46.4" in constraints
+    assert "rfc8785==0.1.4" in constraints
     assert "tiktoken==0.13.0" in constraints
     assert all("==" in line for line in constraints if line and not line.startswith("#"))
+
+
+def test_project_declares_an_intel_compatible_cryptography_dependency() -> None:
+    with (SCRIPT_PATH.parents[1] / "pyproject.toml").open("rb") as handle:
+        dependencies = tomllib.load(handle)["project"]["dependencies"]
+
+    assert (
+        "cryptography==48.0.0; sys_platform == 'darwin' and platform_machine == 'x86_64'"
+        in dependencies
+    )
+    assert (
+        "cryptography==49.0.0; sys_platform != 'darwin' or platform_machine != 'x86_64'"
+        in dependencies
+    )
 
 
 def test_load_browser_bridge_bundle_accepts_verified_seek_talent_fork(tmp_path: Path) -> None:
@@ -92,28 +108,47 @@ def test_offline_release_uses_pinned_fork_bundle_not_upstream_assets() -> None:
     assert "WTSCLI_FORK_COMMIT" in workflow
     assert "uv sync --python 3.13 --locked --group dev" in workflow
     assert "uv run --python 3.13 --group dev python scripts/build_offline_macos_intel.py" in workflow
+    assert "from seektalent.browser_bridge_manifest import WTSCLI_FORK_COMMIT" in workflow
+    assert "from seektalent.opencli_launcher import OPENCLI_PACKAGE" in workflow
 
 
-def test_offline_release_copies_the_current_shared_browser_bridge_installer(
+def test_offline_release_builds_the_seek_talent_wheel_from_the_current_checkout(
+    monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    repo_root = SCRIPT_PATH.parents[1]
-    destination = tmp_path / "installer"
+    repo_root = tmp_path / "repo"
+    destination = tmp_path / "wheel"
+    repo_root.mkdir()
+    commands: list[tuple[list[str], Path | None]] = []
 
-    MODULE.copy_browser_bridge_installer(repo_root, destination)
+    monkeypatch.setattr(MODULE.shutil, "which", lambda name: "/opt/uv" if name == "uv" else None)
 
-    expected = {
-        "__init__.py",
-        "browser_bridge_install.py",
-        "browser_bridge_manifest.py",
-        "strict_json.py",
-        "version.py",
-    }
-    assert {path.name for path in (destination / "seektalent").iterdir()} == expected
-    for filename in expected:
-        assert (destination / "seektalent" / filename).read_bytes() == (
-            repo_root / "src" / "seektalent" / filename
-        ).read_bytes()
+    def fake_run(
+        command: list[str],
+        *,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
+        del env
+        commands.append((command, cwd))
+        destination.mkdir()
+        (destination / "seektalent-0.7.49-py3-none-any.whl").write_bytes(b"wheel")
+
+    monkeypatch.setattr(MODULE, "run", fake_run)
+
+    wheel = MODULE.build_project_wheel(
+        repo_root,
+        destination,
+        version="0.7.49",
+    )
+
+    assert wheel == destination / "seektalent-0.7.49-py3-none-any.whl"
+    assert commands == [
+        (
+            ["/opt/uv", "build", "--wheel", "--out-dir", str(destination)],
+            repo_root,
+        )
+    ]
 
 
 def test_validate_wheelhouse_accepts_pure_intel_and_universal2_wheels(tmp_path: Path) -> None:

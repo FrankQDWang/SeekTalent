@@ -506,8 +506,8 @@ def test_all_delivery_entrypoints_bind_the_exact_merged_wtscli_bundle() -> None:
     assert "SEEKTALENT_WTSCLI_BUNDLE_DIR" in powershell
     assert "--browser-bridge-bundle-dir" in posix
     assert "--browser-bridge-bundle-dir" in powershell
-    assert "tools/browser-bridge-installer" in offline
-    assert "from seektalent.browser_bridge_install import install_browser_bridge_bundle" in offline
+    assert "--browser-bridge-bundle-dir" in offline
+    assert "--browser-bridge-prepared-runtime-dir" in offline
     assert "browser_bridge_runtime_sha256" in offline
     assert "opencli-runtime/opencli" not in offline
     assert "@jackwener/opencli" not in offline

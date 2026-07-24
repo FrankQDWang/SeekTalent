@@ -143,9 +143,14 @@ jobs:
           import tiktoken
           import yaml
           import seektalent
+          from seektalent.browser_bridge_manifest import WTSCLI_FORK_COMMIT
+          from seektalent.opencli_launcher import OPENCLI_PACKAGE
 
+          assert cryptography.__version__ == "48.0.0", cryptography.__version__
           assert platform.machine() == "x86_64", platform.machine()
           assert sqlite3.sqlite_version
+          assert OPENCLI_PACKAGE == "wtscli", OPENCLI_PACKAGE
+          assert WTSCLI_FORK_COMMIT == "709622fc3fb3463f15551467fdf0d28571dfd049"
           PY
           BASH
 

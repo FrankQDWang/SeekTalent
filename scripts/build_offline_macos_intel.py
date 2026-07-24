@@ -24,13 +24,6 @@ from seektalent.browser_bridge_manifest import (
 
 PIP_ZIPAPP_URL = "https://bootstrap.pypa.io/pip/pip.pyz"
 VERSION_PATTERN = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")
-OFFLINE_BROWSER_BRIDGE_INSTALLER_FILES = (
-    "__init__.py",
-    "browser_bridge_install.py",
-    "browser_bridge_manifest.py",
-    "strict_json.py",
-    "version.py",
-)
 
 
 def run(
@@ -120,12 +113,25 @@ def write_bundle_checksums(bundle_root: Path) -> None:
     checksum_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def copy_browser_bridge_installer(repo_root: Path, destination: Path) -> None:
-    source_package = repo_root / "src" / "seektalent"
-    destination_package = destination / "seektalent"
-    destination_package.mkdir(parents=True)
-    for filename in OFFLINE_BROWSER_BRIDGE_INSTALLER_FILES:
-        shutil.copy2(source_package / filename, destination_package / filename)
+def build_project_wheel(
+    repo_root: Path,
+    destination: Path,
+    *,
+    version: str,
+) -> Path:
+    uv = shutil.which("uv")
+    if uv is None:
+        raise RuntimeError("uv is required to build the current SeekTalent wheel")
+    run(
+        [uv, "build", "--wheel", "--out-dir", str(destination)],
+        cwd=repo_root,
+    )
+    expected = destination / f"seektalent-{version}-py3-none-any.whl"
+    wheels = sorted(destination.glob("seektalent-*.whl"))
+    if wheels != [expected]:
+        names = ", ".join(wheel.name for wheel in wheels)
+        raise RuntimeError(f"expected only {expected.name}, found: {names}")
+    return expected
 
 
 def write_readme(bundle_root: Path, *, version: str, opencli_version: str, extension_version: str) -> None:
@@ -195,30 +201,34 @@ def build_bundle(args: argparse.Namespace) -> Path:
     checksum_file.unlink(missing_ok=True)
     (bundle_root / "python-wheelhouse").mkdir(parents=True)
     (bundle_root / "tools").mkdir()
-    copy_browser_bridge_installer(
-        repo_root,
-        bundle_root / "tools" / "browser-bridge-installer",
-    )
     browser_bridge_target = bundle_root / "wtscli-browser-bridge"
     shutil.copytree(browser_bridge.root, browser_bridge_target)
 
     pip_zipapp = bundle_root / "tools" / "pip.pyz"
     download(PIP_ZIPAPP_URL, pip_zipapp)
     shutil.copy2(constraints, bundle_root / "tools" / "python-constraints.txt")
-    run(
-        [
-            sys.executable,
-            str(pip_zipapp),
-            "download",
-            "--disable-pip-version-check",
-            "--only-binary=:all:",
-            "--constraint",
-            str(constraints),
-            "--dest",
-            str(bundle_root / "python-wheelhouse"),
-            f"seektalent=={version}",
-        ]
-    )
+    with tempfile.TemporaryDirectory(prefix="seektalent-offline-wheel-") as temporary:
+        app_wheel = build_project_wheel(
+            repo_root,
+            Path(temporary),
+            version=version,
+        )
+        run(
+            [
+                sys.executable,
+                str(pip_zipapp),
+                "download",
+                "--disable-pip-version-check",
+                "--only-binary=:all:",
+                "--constraint",
+                str(constraints),
+                "--dest",
+                str(bundle_root / "python-wheelhouse"),
+                str(app_wheel),
+            ]
+        )
+    if not (bundle_root / "python-wheelhouse" / app_wheel.name).is_file():
+        raise RuntimeError("the current SeekTalent wheel was not copied into the wheelhouse")
     validate_wheelhouse(bundle_root / "python-wheelhouse")
 
     node = shutil.which("node")

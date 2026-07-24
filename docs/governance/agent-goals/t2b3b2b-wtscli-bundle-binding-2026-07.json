@@ -5,9 +5,15 @@
   "summary": "Bind every SeekTalent installer and managed browser runtime path to the exact merged WTSCLI bundle contract for issue #407.",
   "rationale": "This vertical hard cut must update the shared bundle admission and staging logic, all three existing installer surfaces, the managed launcher, daemon readiness and lifecycle checks, and native CI together. Splitting those paths would leave a supported installer or runtime consumer able to admit the retired OpenCLI identity. The change deliberately keeps internal OpenCLI module and reason-code names where they are not external authority.",
   "touched_layers": [
+    "dependencies",
     "governance",
     "other"
   ],
+  "dependency_files": [
+    "pyproject.toml",
+    "uv.lock"
+  ],
+  "dependency_rationale": "The exact current SeekTalent wheel must remain installable on the supported macOS Intel target. Cryptography 49.0.0 has no Intel-compatible wheel, so project metadata formally selects the existing accepted 48.0.0 pin only for Darwin x86_64 while preserving 49.0.0 everywhere else.",
   "red_files": [
     ".github/workflows/build-macos-intel-offline.yml",
     ".github/workflows/native-launch-binding-probe.yml"
@@ -36,6 +42,7 @@
   ],
   "risks": [
     "The hard cut intentionally rejects all legacy or mixed OpenCLI and WTSCLI installations instead of migrating them.",
+    "The current SeekTalent wheel is built from the checked-out source; macOS Intel formally selects cryptography 48.0.0 because cryptography 49.0.0 does not publish an Intel-compatible wheel.",
     "The macOS Intel offline workflow remains manually dispatched; its exact-head native run is required evidence before review.",
     "Coexistence evidence is deterministic and sanitized unless a safely isolated real legacy runtime is available; this slice must not operate user-owned legacy state, processes, extensions, profiles, or tabs."
   ]
