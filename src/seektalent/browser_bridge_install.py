@@ -119,7 +119,7 @@ def install_browser_bridge_bundle(
                 node=resolved_node,
                 state_home=candidate_home,
             )
-            relative_main = runtime_main.relative_to(runtime_stage)
+            relative_main = runtime_main.relative_to(runtime_stage.resolve(strict=True))
             staged_additional = _stage_additional_targets(
                 stage_root=stage_root,
                 additional_targets=additional_targets,
@@ -626,10 +626,13 @@ def _activate_pair(
     token = uuid.uuid4().hex
     backups: list[tuple[Path, Path]] = []
     activated: list[tuple[Path, Path]] = []
+    canonical_install_root = install_root.resolve(strict=True)
     try:
         for source, target in staged:
             _reject_relative_symlink_components(install_root, target.parent)
-            if not target.parent.resolve(strict=True).is_relative_to(install_root):
+            if not target.parent.resolve(strict=True).is_relative_to(
+                canonical_install_root
+            ):
                 raise BrowserBridgeManifestError("integrity_failed")
             if os.path.lexists(target) and target.is_symlink():
                 raise BrowserBridgeManifestError("integrity_failed")

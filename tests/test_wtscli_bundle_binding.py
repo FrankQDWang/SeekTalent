@@ -215,6 +215,70 @@ def test_shared_install_uses_only_wts_paths_and_preserves_legacy_sentinels(tmp_p
     ))
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows symlink creation requires privileges unrelated to this path test",
+)
+def test_shared_install_maps_canonical_main_through_aliased_stage_parent(
+    tmp_path: Path,
+) -> None:
+    from seektalent.browser_bridge_install import install_browser_bridge_bundle
+
+    bundle_root = tmp_path / "bundle"
+    write_browser_bridge_bundle(bundle_root)
+    canonical_root = tmp_path / "canonical"
+    canonical_home = canonical_root / "home"
+    canonical_home.mkdir(parents=True)
+    aliased_root = tmp_path / "alias"
+    aliased_root.symlink_to(canonical_root, target_is_directory=True)
+
+    installed = install_browser_bridge_bundle(
+        bundle_dir=bundle_root,
+        install_root=aliased_root / "home" / ".seektalent",
+        node=Path(sys.executable),
+    )
+
+    assert installed.runtime_main.is_file()
+    assert installed.runtime_dir == (
+        aliased_root
+        / "home"
+        / ".seektalent"
+        / "wtscli-runtime"
+        / "wtscli"
+        / "0.1.0"
+    )
+    assert installed.runtime_main.resolve() == (
+        canonical_home.resolve()
+        / ".seektalent"
+        / "wtscli-runtime"
+        / "wtscli"
+        / "0.1.0"
+        / "node_modules"
+        / "wtscli"
+        / "dist"
+        / "src"
+        / "main.js"
+    )
+
+
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows symlink creation requires privileges unrelated to this path test",
+)
+def test_package_path_keeps_escape_and_symlink_rejection(tmp_path: Path) -> None:
+    from seektalent import browser_bridge_install
+
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    outside = tmp_path / "outside.js"
+    outside.write_text("outside", encoding="utf-8")
+    (package_dir / "linked.js").symlink_to(outside)
+
+    for entrypoint in ("../outside.js", "linked.js"):
+        with pytest.raises(browser_bridge_manifest.BrowserBridgeManifestError):
+            browser_bridge_install._package_path(package_dir, entrypoint)
+
+
 def test_candidate_npm_and_probes_drop_global_node_injection_environment(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
