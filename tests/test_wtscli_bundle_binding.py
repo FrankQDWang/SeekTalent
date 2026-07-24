@@ -565,7 +565,7 @@ def test_native_ci_installs_the_real_exact_wtscli_bundle_when_supplied(
         },
         check=False,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         timeout=20,
     )
     assert completed.returncode == 0

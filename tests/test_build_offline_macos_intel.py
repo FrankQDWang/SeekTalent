@@ -13,7 +13,7 @@ CONSTRAINTS_PATH = (
     Path(__file__).parents[1]
     / "scripts"
     / "offline"
-    / "constraints-0.7.47-macos-intel.txt"
+    / "constraints-0.7.49-macos-intel.txt"
 )
 SPEC = importlib.util.spec_from_file_location("build_offline_macos_intel", SCRIPT_PATH)
 assert SPEC and SPEC.loader
@@ -33,7 +33,7 @@ def _wheel(directory: Path, name: str) -> None:
 def test_constraints_pin_the_current_release_and_accepted_native_dependencies() -> None:
     constraints = CONSTRAINTS_PATH.read_text(encoding="utf-8").splitlines()
 
-    assert "seektalent==0.7.47" in constraints
+    assert "seektalent==0.7.49" in constraints
     assert "cryptography==48.0.0" in constraints
     assert "pydantic-core==2.46.4" in constraints
     assert "tiktoken==0.13.0" in constraints
