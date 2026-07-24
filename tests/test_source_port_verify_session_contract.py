@@ -10,6 +10,10 @@ from pydantic import ValidationError
 import pytest
 import rfc8785
 
+from seektalent.source_port.operation_dispatch import (
+    DispatchAuthorizationV1,
+    validate_dispatch_authorization,
+)
 from seektalent.source_port.verify_session_contract import (
     VerifySessionRequestV1,
     VerifySessionResultV1,
@@ -41,7 +45,8 @@ LEAK_CANARY = "RAW-FENCE-TOKEN-MUST-NOT-LEAK-" + "z" * 64
 SHORT_LEAK_CANARY = "short-raw-fence-canary"
 REQUEST_HASH_VECTOR = "cd00fccc50c288cc1d0045096d431bd52a81f94cc16c68379eda6ca691457969"
 FENCE_REF_VECTOR = "7147dbb8da083fe36c037acd98b6c82fe6db2b29a9c7b257ed8654def360f7d3"
-DISPATCH_DIGEST_VECTOR = "9869ab63f2bf1d74f4476c89a80e25bdb9d257acf6cbe1e870b21acf7b42d2e8"
+DISPATCH_DIGEST_VECTOR = "b50ef3cb4701b3f224fdf888090344bceb86466e7190ee960c9fd065a8444bd7"
+SAFE_RETRY_DISPATCH_DIGEST_VECTOR = "7d7ae2d058782cba8440a3efa264c2035efacc931f2e29a97dc81b26517f4924"
 RESULT_HASH_VECTOR = "bcc6f7c9cc5b4811e48f1bb7338897fd93a650d4c306416a163921a5214aedef"
 
 
@@ -72,6 +77,19 @@ def _request(**updates: object) -> VerifySessionRequestV1:
     }
     values.update(updates)
     return VerifySessionRequestV1.create(**values)
+
+
+def _safe_retry_request(**updates: object) -> VerifySessionRequestV1:
+    values: dict[str, object] = {
+        "attempt_no": 2,
+        "expected_source_operation_ledger_revision": 2,
+        "expected_reconciliation_revision": 1,
+        "dispatch_intent_revision": 2,
+        "dispatch_authorization_ordinal": 2,
+        "safe_retry_commit_ref": "safe-retry-commit-2",
+    }
+    values.update(updates)
+    return _request(**values)
 
 
 def _result(request: VerifySessionRequestV1, **updates: object) -> VerifySessionResultV1:
@@ -274,6 +292,7 @@ def test_dispatch_authorization_digest_is_durable_only_and_redelivery_reuses_it_
             "operation_id": "verify-session-1",
             "request_hash": initial.identity.request_hash,
             "run_id": "run-1",
+            "safe_retry_commit_ref": None,
             "source_operation_acceptance_ref": "source-acceptance-1",
         }
     )
@@ -336,6 +355,157 @@ def test_dispatch_authorization_digest_is_durable_only_and_redelivery_reuses_it_
     payload["delivery"]["delivery_mode"] = "safe_retry"
     with pytest.raises(ValidationError):
         VerifySessionRequestV1.model_validate(payload)
+
+
+def test_dispatch_authorization_exposes_only_explicit_epoch_constructors() -> None:
+    initial_request = _request()
+    initial = DispatchAuthorizationV1.create_initial(
+        identity=initial_request.identity,
+        dispatch_intent_id="dispatch-intent-1",
+        dispatch_intent_revision=1,
+        source_operation_acceptance_ref="source-acceptance-1",
+    )
+    safe_retry_request = _safe_retry_request()
+    safe_retry = DispatchAuthorizationV1.create_safe_retry(
+        identity=safe_retry_request.identity,
+        dispatch_intent_id="dispatch-intent-1",
+        dispatch_intent_revision=2,
+        dispatch_authorization_ordinal=2,
+        safe_retry_commit_ref="safe-retry-commit-2",
+        source_operation_acceptance_ref="source-acceptance-1",
+    )
+
+    assert not hasattr(DispatchAuthorizationV1, "create")
+    assert initial == initial_request.delivery.authorization
+    assert safe_retry == safe_retry_request.delivery.authorization
+
+
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {"dispatch_authorization_ordinal": 2, "safe_retry_commit_ref": None},
+        {"dispatch_authorization_ordinal": 1, "safe_retry_commit_ref": "safe-retry-commit-1"},
+        {"expected_source_operation_ledger_revision": 2},
+        {"expected_reconciliation_revision": 1},
+    ),
+)
+def test_initial_and_safe_retry_authorization_matrix_fails_closed(updates: dict[str, object]) -> None:
+    with pytest.raises((TypeError, ValueError, ValidationError)):
+        _request(**updates)
+
+
+@pytest.mark.parametrize("ordinal", (True, 2.0, 0, -1, 2**53))
+def test_safe_retry_authorization_rejects_non_json_safe_ordinals(ordinal: object) -> None:
+    with pytest.raises((TypeError, ValueError, ValidationError)):
+        _safe_retry_request(dispatch_authorization_ordinal=ordinal)
+
+
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {"safe_retry_commit_ref": ""},
+        {"safe_retry_commit_ref": "x" * 257},
+        {"safe_retry_commit_ref": "retry\ncommit"},
+        {"expected_source_operation_ledger_revision": True},
+        {"expected_source_operation_ledger_revision": 2.0},
+        {"expected_source_operation_ledger_revision": 0},
+        {"expected_source_operation_ledger_revision": 2**53},
+        {"expected_reconciliation_revision": True},
+        {"expected_reconciliation_revision": 1.0},
+        {"expected_reconciliation_revision": 0},
+        {"expected_reconciliation_revision": 2**53},
+    ),
+)
+def test_safe_retry_authorization_rejects_invalid_refs_and_revisions(updates: dict[str, object]) -> None:
+    with pytest.raises((TypeError, ValueError, ValidationError)):
+        _safe_retry_request(**updates)
+
+
+def test_safe_retry_authorization_round_trips_with_fixed_canonical_vector() -> None:
+    request = _safe_retry_request()
+    authorization = request.delivery.authorization
+    expected_payload = {
+        "attempt_no": 2,
+        "dispatch_authorization_ordinal": 2,
+        "dispatch_intent_id": "dispatch-intent-1",
+        "dispatch_intent_revision": 2,
+        "expected_reconciliation_revision": 1,
+        "expected_source_operation_ledger_revision": 2,
+        "operation_id": "verify-session-1",
+        "request_hash": request.identity.request_hash,
+        "run_id": "run-1",
+        "safe_retry_commit_ref": "safe-retry-commit-2",
+        "source_operation_acceptance_ref": "source-acceptance-1",
+    }
+
+    assert VerifySessionRequestV1.model_validate_json(request.model_dump_json()) == request
+    assert canonical_dispatch_authorization_bytes(authorization) == rfc8785.dumps(expected_payload)
+    assert dispatch_authorization_digest(authorization) == SAFE_RETRY_DISPATCH_DIGEST_VECTOR
+    assert authorization.dispatch_intent_digest == SAFE_RETRY_DISPATCH_DIGEST_VECTOR
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("safe_retry_commit_ref", "safe-retry-commit-3"),
+        ("dispatch_authorization_ordinal", 3),
+        ("expected_source_operation_ledger_revision", 3),
+        ("expected_reconciliation_revision", 2),
+    ),
+)
+def test_safe_retry_authorization_tampering_changes_digest_and_cannot_match_exact_epoch(
+    field: str,
+    value: object,
+) -> None:
+    request = _safe_retry_request()
+    payload = request.delivery.authorization.model_dump()
+    payload[field] = value
+
+    with pytest.raises(ValidationError, match="digest"):
+        DispatchAuthorizationV1.model_validate(payload)
+
+    changed = _safe_retry_request(**{field: value})
+    assert changed.delivery.authorization.dispatch_intent_digest != (
+        request.delivery.authorization.dispatch_intent_digest
+    )
+    with pytest.raises(ValueError, match="outbox_redelivery"):
+        validate_outbox_redelivery(
+            request,
+            _safe_retry_request(delivery_mode="outbox_redelivery", **{field: value}),
+        )
+
+
+def test_safe_retry_outbox_redelivery_requires_the_exact_authorization_and_cannot_extend_deadline() -> None:
+    initial = _safe_retry_request()
+    redelivery = _safe_retry_request(
+        delivery_mode="outbox_redelivery",
+        runtime_attempt_fence_token="current-safe-retry-fence-token-" + "y" * 64,
+        deadline_value=59_999,
+        correlation_id="correlation-2",
+        browser_control_scope_id="browser-scope-2",
+    )
+
+    validate_outbox_redelivery(initial, redelivery)
+    assert redelivery.delivery.authorization == initial.delivery.authorization
+    assert redelivery.identity.runtime_attempt_fence_ref != initial.identity.runtime_attempt_fence_ref
+
+    with pytest.raises(ValueError, match="outbox_redelivery"):
+        validate_outbox_redelivery(
+            initial,
+            _safe_retry_request(delivery_mode="outbox_redelivery", deadline_value=60_001),
+        )
+
+    for transport_only in (
+        _request(runtime_attempt_fence_token="new-fence-token-" + "z" * 64),
+        _request(attempt_no=2),
+        _request(deadline_value=59_999),
+    ):
+        assert transport_only.delivery.authorization.dispatch_authorization_ordinal == 1
+        with pytest.raises(ValueError, match="identity_mismatch"):
+            validate_dispatch_authorization(
+                transport_only.identity,
+                initial.delivery.authorization,
+            )
 
 
 def test_raw_fence_token_never_leaks_from_repr_errors_or_canonical_projections_and_bypasses_revalidate() -> None:
@@ -620,6 +790,45 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
     }
+
+
+def test_safe_retry_wire_contract_does_not_widen_ordinal_one_storage_history_or_production_routing() -> None:
+    ordinal_one_sources = {
+        "runtime_control": PROJECT_ROOT / "src" / "seektalent_runtime_control" / "store.py",
+        "runtime_control_validation": (
+            PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_operations.py"
+        ),
+        "journal_types": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "_command_journal_types.py",
+        "journal_engine": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "_command_journal_engine.py",
+        "history_contract": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "history_contract.py",
+        "history_reader": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "history_sqlite_reader.py",
+        "reconciliation": PROJECT_ROOT / "src" / "seektalent" / "source_history_reconciliation.py",
+    }
+    source = {name: path.read_text(encoding="utf-8") for name, path in ordinal_one_sources.items()}
+
+    assert "CHECK (dispatch_authorization_ordinal = 1)" in source["runtime_control"]
+    assert "dispatch.dispatch_authorization_ordinal == 1" in source["runtime_control_validation"]
+    assert "dispatch_authorization_ordinal: Literal[1] = 1" in source["journal_types"]
+    assert "dispatch_authorization_ordinal = 1" in source["journal_engine"]
+    assert "dispatch_authorization_ordinal: ExactIntegerOne" in source["history_contract"]
+    assert "CHECK(dispatch_authorization_ordinal = 1)" in source["history_reader"]
+    assert "query.authorization_selector.ordinal == 1" in source["reconciliation"]
+    assert "dispatch.dispatch_authorization_ordinal == 1" in source["reconciliation"]
+
+    production_callers = [
+        path.relative_to(PROJECT_ROOT).as_posix()
+        for path in (PROJECT_ROOT / "src").rglob("*.py")
+        if path != CONTRACT_PATH and "VerifySessionRequestV1.create(" in path.read_text(encoding="utf-8")
+    ]
+    assert production_callers == []
+    safe_retry_callers = []
+    for path in (PROJECT_ROOT / "src").rglob("*.py"):
+        if path in {CONTRACT_PATH, OPERATION_DISPATCH_PATH}:
+            continue
+        content = path.read_text(encoding="utf-8")
+        if "create_safe_retry(" in content or "safe_retry_commit_ref" in content:
+            safe_retry_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
+    assert safe_retry_callers == []
 
 
 def test_dispatch_plan_keeps_delivery_out_of_the_durable_digest_allowlist() -> None:
