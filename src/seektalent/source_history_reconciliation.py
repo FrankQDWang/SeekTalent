@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from hashlib import sha256
 
+from pydantic import ValidationError
+
+from seektalent.source_port.authenticated_history_frames import canonical_source_history_semantics_bytes
+from seektalent.source_port.authenticated_verify_session_frames import VerifySessionFailureV1
 from seektalent.source_port.sidecar_transport import (
     AdmittedSourceHistoryResult,
     require_live_admitted_source_history_result,
 )
-from seektalent.source_port.authenticated_history_frames import canonical_source_history_semantics_bytes
 from seektalent.source_port.history_contract import (
     AcceptedNoDispatchFact,
     DispatchNotObservedFact,
@@ -26,6 +29,12 @@ from seektalent.source_port.history_contract import (
     SourceHistoryQueryV1,
     SourceHistoryUnavailable,
 )
+from seektalent.source_port.operation_dispatch import OperationIdentityV1
+from seektalent.source_port.verify_session_contract import (
+    VerifySessionResultV1,
+    canonical_verify_session_result_bytes,
+)
+from seektalent.source_port.wire_primitives import canonical_json_bytes
 from seektalent_runtime_control.source_operations import (
     AcceptedSourceOperation,
     RetryPosture,
@@ -51,6 +60,12 @@ class SourceHistoryReconciliationReason(StrEnum):
     IDENTITY_CONFLICT = "source_history_reconciliation_identity_conflict"
     FACT_COUNT_INVALID = "source_history_reconciliation_fact_count_invalid"
     OPERATION_INTERPRETATION_REQUIRED = "source_history_reconciliation_operation_interpretation_required"
+    TERMINAL_PAYLOAD_REQUIRED = "source_history_reconciliation_terminal_payload_required"
+    TERMINAL_PAYLOAD_UNEXPECTED = "source_history_reconciliation_terminal_payload_unexpected"
+    TERMINAL_PAYLOAD_INVALID = "source_history_reconciliation_terminal_payload_invalid"
+    TERMINAL_IDENTITY_MISMATCH = "source_history_reconciliation_terminal_identity_mismatch"
+    TERMINAL_CONCLUSION_MISMATCH = "source_history_reconciliation_terminal_conclusion_mismatch"
+    TERMINAL_OBSERVATION_MISMATCH = "source_history_reconciliation_terminal_observation_mismatch"
 
 
 class SourceHistoryReconciliationError(ValueError):
@@ -80,6 +95,7 @@ def commit_admitted_source_history_reconciliation(
     admitted: AdmittedSourceHistoryResult,
     store: RuntimeControlStore,
     *,
+    terminal_payload: VerifySessionResultV1 | VerifySessionFailureV1 | None = None,
     committed_at: str,
     fault_injector: Callable[[str], None] | None = None,
 ) -> SourceOperationReconciliationRecord:
@@ -107,7 +123,13 @@ def commit_admitted_source_history_reconciliation(
 
     semantic_bytes = canonical_source_history_semantics_bytes(query, result)
     history_digest = sha256(semantic_bytes).hexdigest()
-    interpretation = _closed_interpretation(result, fact, context)
+    interpretation = _closed_interpretation(
+        result,
+        fact,
+        context,
+        terminal_payload=terminal_payload,
+    )
+    dispatch_ack = _dispatch_ack_from_fact(fact, context, committed_at=committed_at)
     decision = SourceOperationReconciliationDecision(
         reconciliation_id=f"source-history-{history_digest}",
         runtime_run_id=context.operation.runtime_run_id,
@@ -136,6 +158,7 @@ def commit_admitted_source_history_reconciliation(
         decision,
         fault_injector,
         dispatch_precondition=context.dispatch,
+        dispatch_ack=dispatch_ack,
     )
 
 
@@ -308,7 +331,11 @@ def _closed_interpretation(
     result: SourceHistoryQueryResultV1,
     fact: MatchedHistoryFact | None,
     context: AcceptedSourceOperation,
+    *,
+    terminal_payload: object | None,
 ) -> _ClosedInterpretation:
+    if not isinstance(fact, (ObservedResultFact, ObservedFailureFact)) and terminal_payload is not None:
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.TERMINAL_PAYLOAD_UNEXPECTED)
     if isinstance(result, SourceHistoryNotFound):
         if context.dispatch.status != "pending":
             raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.CONTEXT_MISMATCH)
@@ -352,7 +379,182 @@ def _closed_interpretation(
             retry_posture="reconcile_first",
         )
     if isinstance(fact, (ObservedResultFact, ObservedFailureFact)):
-        raise SourceHistoryReconciliationError(
-            SourceHistoryReconciliationReason.OPERATION_INTERPRETATION_REQUIRED
+        return _verify_session_interpretation(
+            fact,
+            context,
+            terminal_payload=terminal_payload,
         )
     raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.CONTEXT_MISMATCH)
+
+
+def _verify_session_interpretation(
+    fact: ObservedResultFact | ObservedFailureFact,
+    context: AcceptedSourceOperation,
+    *,
+    terminal_payload: object | None,
+) -> _ClosedInterpretation:
+    if context.operation.operation_kind != "verify_session":
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.OPERATION_INTERPRETATION_REQUIRED)
+    if terminal_payload is None:
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.TERMINAL_PAYLOAD_REQUIRED)
+    terminal, terminal_bytes = _validated_terminal_payload(terminal_payload)
+    if not _terminal_identity_matches_context(terminal.identity, context):
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.TERMINAL_IDENTITY_MISMATCH)
+    if (isinstance(fact, ObservedResultFact)) != (type(terminal) is VerifySessionResultV1):
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.TERMINAL_CONCLUSION_MISMATCH)
+    terminal_digest = sha256(terminal_bytes).hexdigest()
+    observation_ref, observation_hash = (
+        (fact.result_ref, fact.result_hash)
+        if isinstance(fact, ObservedResultFact)
+        else (fact.failure_ref, fact.failure_hash)
+    )
+    if observation_ref != terminal_digest or observation_hash != terminal_digest:
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.TERMINAL_OBSERVATION_MISMATCH)
+    if isinstance(terminal, VerifySessionFailureV1):
+        disposition: SourceOperationDisposition = "failed"
+    elif isinstance(terminal, VerifySessionResultV1) and terminal.session_readiness == "ready":
+        disposition = "completed"
+    elif isinstance(terminal, VerifySessionResultV1) and terminal.user_action is not None:
+        disposition = "user_action_required"
+    elif (
+        isinstance(terminal, VerifySessionResultV1)
+        and terminal.safe_reason_code in _VERIFY_SESSION_INCOMPATIBILITY_REASONS
+    ):
+        disposition = "incompatible"
+    else:
+        disposition = "failed"
+    return _ClosedInterpretation(
+        decision_kind="conclusive_observation",
+        history_outcome="matched",
+        history_conclusion=fact.conclusion,
+        dispatch_intent_ref=fact.durable_dispatch_intent_ref,
+        conclusive_observation_ref=observation_ref,
+        source_operation_disposition=disposition,
+        retry_posture="no_retry",
+    )
+
+
+_VERIFY_SESSION_INCOMPATIBILITY_REASONS = frozenset(
+    {
+        "liepin_opencli_bridge_build_mismatch",
+        "liepin_opencli_bridge_capability_missing",
+        "liepin_opencli_bridge_integrity_failed",
+        "liepin_opencli_bridge_protocol_mismatch",
+        "liepin_opencli_bridge_wrong_implementation",
+        "liepin_opencli_command_missing",
+    }
+)
+
+
+def _validated_terminal_payload(
+    terminal_payload: object,
+) -> tuple[VerifySessionResultV1 | VerifySessionFailureV1, bytes]:
+    try:
+        if type(terminal_payload) is VerifySessionResultV1:
+            terminal = VerifySessionResultV1.model_validate(
+                terminal_payload.model_dump(mode="python", warnings="error"),
+                strict=True,
+            )
+            return terminal, canonical_verify_session_result_bytes(terminal)
+        if type(terminal_payload) is VerifySessionFailureV1:
+            terminal = VerifySessionFailureV1.model_validate(
+                terminal_payload.model_dump(mode="python", warnings="error"),
+                strict=True,
+            )
+            return terminal, canonical_json_bytes(terminal.model_dump(mode="json"))
+    except (TypeError, ValueError, ValidationError):
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.TERMINAL_PAYLOAD_INVALID) from None
+    raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.TERMINAL_PAYLOAD_INVALID)
+
+
+def _terminal_identity_matches_context(
+    identity: OperationIdentityV1,
+    context: AcceptedSourceOperation,
+) -> bool:
+    operation = context.operation
+    expectation = context.expectation
+    dispatch = context.dispatch
+    return (
+        identity.run_id == operation.runtime_run_id
+        and identity.operation_id == operation.operation_id
+        and identity.source == operation.source_id
+        and identity.operation_kind == operation.operation_kind
+        and identity.request_hash == operation.canonical_request_hash
+        and identity.idempotency_key == operation.idempotency_key
+        and identity.accepted_requirement_revision_id == operation.accepted_requirement_revision_id
+        and identity.attempt_no == operation.runtime_attempt_no
+        and identity.runtime_attempt_fence_ref == expectation.runtime_attempt_fence_ref
+        and identity.profile_binding_generation == expectation.profile_binding_generation
+        and identity.browser_control_scope_id == expectation.browser_control_scope_id
+        and identity.expected_source_operation_ledger_revision == dispatch.expected_ledger_revision
+        and identity.expected_reconciliation_revision == dispatch.expected_reconciliation_revision
+    )
+
+
+def _dispatch_ack_from_fact(
+    fact: MatchedHistoryFact | None,
+    context: AcceptedSourceOperation,
+    *,
+    committed_at: str,
+) -> SourceDispatchMetadata | None:
+    if fact is None:
+        return None
+    dispatch = context.dispatch
+    if dispatch.status == "acknowledged":
+        return dispatch
+    ack_ref = _accepted_history_ack_ref(fact)
+    acknowledged = replace(
+        dispatch,
+        status="acknowledged",
+        outbox_revision=dispatch.outbox_revision + 1,
+        accepted_sidecar_generation=fact.accepted_generation,
+        accepted_sidecar_journal_revision=fact.accepted_journal_revision,
+        ack_ref=ack_ref,
+        ack_kind="new_logical_operation",
+        acknowledged_at=committed_at,
+    )
+    try:
+        validate_source_dispatch_ack(
+            runtime_run_id=acknowledged.runtime_run_id,
+            operation_id=acknowledged.operation_id,
+            outbox_id=acknowledged.outbox_id,
+            canonical_request_hash=acknowledged.canonical_request_hash,
+            dispatch_intent_id=acknowledged.dispatch_intent_id,
+            dispatch_intent_revision=acknowledged.dispatch_intent_revision,
+            dispatch_intent_digest=acknowledged.dispatch_intent_digest,
+            dispatch_authorization_ordinal=acknowledged.dispatch_authorization_ordinal,
+            expected_outbox_revision=dispatch.outbox_revision,
+            accepted_sidecar_generation=fact.accepted_generation,
+            accepted_sidecar_journal_revision=fact.accepted_journal_revision,
+            ack_ref=ack_ref,
+            ack_kind="new_logical_operation",
+            acknowledged_at=committed_at,
+        )
+    except RuntimeControlError:
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.CONTEXT_MISMATCH) from None
+    return acknowledged
+
+
+def _accepted_history_ack_ref(fact: MatchedHistoryFact) -> str:
+    acknowledgement = {
+        "contract_version": "seektalent.runtime-control.source-dispatch.history-ack/v1",
+        "run_id": fact.run_id,
+        "operation_id": fact.operation_id,
+        "source": fact.source,
+        "operation_kind": fact.operation_kind,
+        "idempotency_key": fact.idempotency_key,
+        "request_hash": fact.request_hash,
+        "attempt_no": fact.attempt_no,
+        "accepted_requirement_revision_id": fact.accepted_requirement_revision_id,
+        "runtime_attempt_fence_ref": fact.runtime_attempt_fence_ref,
+        "accepted_generation": fact.accepted_generation,
+        "accepted_journal_revision": fact.accepted_journal_revision,
+        "dispatch_authorization_ordinal": fact.dispatch_authorization_ordinal,
+        "authorized_dispatch_intent_id": fact.authorized_dispatch_intent_id,
+        "authorized_dispatch_intent_revision": fact.authorized_dispatch_intent_revision,
+        "authorized_dispatch_intent_digest": fact.authorized_dispatch_intent_digest,
+        "profile_binding_generation": fact.profile_binding_generation,
+        "browser_control_scope_id": fact.browser_control_scope_id,
+        "controller_fence_ref": fact.controller_fence_ref,
+    }
+    return f"sha256:{sha256(canonical_json_bytes(acknowledgement)).hexdigest()}"

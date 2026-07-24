@@ -100,9 +100,10 @@ def test_legacy_candidate_identity_reads_version_fields_with_safe_defaults(tmp_p
               '["resume_legacy"]', '["evidence_legacy"]', 'Legacy', '', '', '', '',
               NULL, NULL, NULL, 'legacy_hash', '2026-06-17T00:00:00Z'
             );
-            PRAGMA user_version = 5;
             """
         )
+        _drop_post_v7_source_schema(conn)
+        conn.execute("PRAGMA user_version = 5")
 
     store.initialize()
     [identity] = store.list_candidate_identities(runtime_run_id="runtime_run_candidates")
@@ -179,11 +180,19 @@ def test_candidate_evidence_source_references_round_trip_and_legacy_schema_defau
             """
         )
         conn.execute("DROP TABLE evidence_current")
+        _drop_post_v7_source_schema(conn)
         conn.execute("PRAGMA user_version = 6")
 
     store.initialize()
     [legacy, *_] = store.list_candidate_evidence(runtime_run_id="runtime_run_candidates")
     assert legacy.source_references == []
+
+
+def _drop_post_v7_source_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE runtime_control_source_operation_admission_expectations")
+    conn.execute("DROP TABLE runtime_control_source_reconciliations")
+    conn.execute("DROP TABLE runtime_control_source_dispatch_outbox")
+    conn.execute("DROP TABLE runtime_control_source_operations")
 
 
 def test_candidate_truth_projects_scorecard_match_fields() -> None:

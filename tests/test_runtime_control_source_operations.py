@@ -458,6 +458,33 @@ def test_pending_read_is_deterministic_across_restarts(tmp_path: Path) -> None:
     assert first_read == [second.dispatch, first.dispatch]
 
 
+def test_retired_pending_rows_do_not_consume_the_delivery_limit(tmp_path: Path) -> None:
+    store = _store_with_run(tmp_path)
+    store.accept_source_operation(**_acceptance())
+    _add_run(store, runtime_run_id="runtime_run_2")
+    second = store.accept_source_operation(
+        **_acceptance(
+            runtime_run_id="runtime_run_2",
+            operation_id="source_operation_2",
+            idempotency_key="source-key-2",
+            outbox_id="source_outbox_2",
+            dispatch_intent_id="dispatch_intent_2",
+            source_operation_acceptance_ref="source_acceptance_ref_2",
+        )
+    )
+    with sqlite3.connect(store.path) as conn:
+        conn.execute(
+            """
+            UPDATE runtime_control_source_operations
+            SET operation_phase = 'reconciled', retry_posture = 'safe_retry',
+                reconciliation_revision = 1, ledger_revision = 2
+            WHERE runtime_run_id = 'runtime_run_1'
+            """
+        )
+
+    assert store.list_pending_source_dispatches(limit=1) == [second.dispatch]
+
+
 def test_authenticated_ack_is_cas_idempotent_and_does_not_advance_operation(tmp_path: Path) -> None:
     store = _store_with_run(tmp_path)
     accepted = store.accept_source_operation(**_acceptance())

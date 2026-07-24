@@ -115,15 +115,14 @@ def test_three_closed_decisions_commit_immutable_head_and_record(tmp_path: Path,
 
     with sqlite3.connect(store.path) as conn:
         with pytest.raises(sqlite3.IntegrityError, match="source_reconciliations_immutable"):
-            conn.execute(
-                "UPDATE runtime_control_source_reconciliations SET committed_at = 'changed'"
-            )
+            conn.execute("UPDATE runtime_control_source_reconciliations SET committed_at = 'changed'")
         with pytest.raises(sqlite3.IntegrityError, match="source_reconciliations_immutable"):
             conn.execute("DELETE FROM runtime_control_source_reconciliations")
 
 
 def test_v9_legacy_operation_without_expectation_remains_reconcilable(tmp_path: Path) -> None:
     store = _store_with_operation(tmp_path)
+    _downgrade_reconciliation_schema_to_v10(store.path)
     with sqlite3.connect(store.path) as conn:
         conn.execute("DROP TABLE runtime_control_source_operation_admission_expectations")
         conn.execute("PRAGMA user_version = 9")
@@ -133,6 +132,77 @@ def test_v9_legacy_operation_without_expectation_remains_reconcilable(tmp_path: 
 
     assert record.committed_ledger_revision == 2
     assert store.get_source_operation("runtime_run_1", "source_operation_1").retry_posture == "safe_retry"
+
+
+def test_user_action_required_is_a_closed_conclusive_python_and_sqlite_disposition(
+    tmp_path: Path,
+) -> None:
+    store = _store_with_operation(tmp_path)
+    decision = _conclusive_decision(source_operation_disposition="user_action_required")
+
+    record = store.commit_no_owner_source_reconciliation(decision)
+
+    assert record.source_operation_disposition == "user_action_required"
+    assert (
+        store.get_source_operation(
+            "runtime_run_1",
+            "source_operation_1",
+        ).source_operation_disposition
+        == "user_action_required"
+    )
+
+
+def test_v10_reconciliation_migration_preserves_existing_rows_exactly(tmp_path: Path) -> None:
+    from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION
+
+    store = _store_with_operation(tmp_path)
+    store.commit_no_owner_source_reconciliation(_conclusive_decision())
+    before = _reconciliation_rows(store.path)
+    _downgrade_reconciliation_schema_to_v10(store.path)
+
+    store.initialize()
+
+    with sqlite3.connect(store.path) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        table_sql = conn.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table' AND name = 'runtime_control_source_reconciliations'
+            """
+        ).fetchone()[0]
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 11
+    assert _reconciliation_rows(store.path) == before
+    assert (
+        "source_operation_disposition IN ('completed', 'partial', 'user_action_required', 'incompatible', 'failed')"
+    ) in " ".join(str(table_sql).split())
+
+
+def test_v10_reconciliation_migration_rejects_malformed_legacy_state_without_rewrite(
+    tmp_path: Path,
+) -> None:
+    from seektalent.sqlite_migrations import SQLiteMigrationError
+
+    store = _store_with_operation(tmp_path)
+    store.commit_no_owner_source_reconciliation(_conclusive_decision())
+    _downgrade_reconciliation_schema_to_v10(store.path)
+    with sqlite3.connect(store.path) as conn:
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute("DROP TRIGGER runtime_control_source_reconciliations_no_update")
+        conn.execute(
+            """
+            UPDATE runtime_control_source_reconciliations
+            SET source_operation_disposition = 'cancelled'
+            """
+        )
+    before = _reconciliation_rows(store.path)
+
+    with pytest.raises(SQLiteMigrationError) as exc_info:
+        store.initialize()
+
+    assert exc_info.value.reason_code == "runtime_control_source_reconciliation_migration_invalid"
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert _reconciliation_rows(store.path) == before
 
 
 def test_unknown_head_can_be_resolved_without_replacing_dispatch_truth(tmp_path: Path) -> None:
@@ -182,9 +252,7 @@ def test_history_unavailable_cannot_invent_clear_or_replace_dispatch_truth(tmp_p
 
     store = _store_with_operation(tmp_path)
     with pytest.raises(RuntimeControlError) as invented:
-        store.commit_no_owner_source_reconciliation(
-            _unresolved_decision(dispatch_intent_ref="invented_dispatch_ref")
-        )
+        store.commit_no_owner_source_reconciliation(_unresolved_decision(dispatch_intent_ref="invented_dispatch_ref"))
     assert invented.value.reason_code == "source_reconciliation_transition_conflict"
 
     with sqlite3.connect(store.path) as conn:
@@ -198,9 +266,7 @@ def test_history_unavailable_cannot_invent_clear_or_replace_dispatch_truth(tmp_p
         store.commit_no_owner_source_reconciliation(_unresolved_decision())
     assert cleared.value.reason_code == "source_reconciliation_transition_conflict"
     with pytest.raises(RuntimeControlError) as replaced:
-        store.commit_no_owner_source_reconciliation(
-            _unresolved_decision(dispatch_intent_ref="different_dispatch_ref")
-        )
+        store.commit_no_owner_source_reconciliation(_unresolved_decision(dispatch_intent_ref="different_dispatch_ref"))
     assert replaced.value.reason_code == "source_reconciliation_transition_conflict"
 
 
@@ -287,9 +353,7 @@ def test_no_dispatch_must_preserve_current_disposition_without_writes(tmp_path: 
     store = _store_with_operation(tmp_path)
 
     with pytest.raises(RuntimeControlError) as exc_info:
-        store.commit_no_owner_source_reconciliation(
-            _decision(source_operation_disposition="completed")
-        )
+        store.commit_no_owner_source_reconciliation(_decision(source_operation_disposition="completed"))
 
     assert exc_info.value.reason_code == "source_reconciliation_transition_conflict"
     operation = store.get_source_operation("runtime_run_1", "source_operation_1")
@@ -320,15 +384,11 @@ def test_commit_ack_loss_exact_replay_precedes_owner_gate(tmp_path: Path) -> Non
         acquired_at="2026-07-19T00:00:03Z",
         lease_expires_at="2026-07-19T00:01:03Z",
     )
-    replayed = store.commit_no_owner_source_reconciliation(
-        replace(decision, committed_at="2026-07-19T00:00:05Z")
-    )
+    replayed = store.commit_no_owner_source_reconciliation(replace(decision, committed_at="2026-07-19T00:00:05Z"))
     assert replayed.committed_ledger_revision == 2
     assert replayed.committed_at == decision.committed_at
     with pytest.raises(RuntimeControlError) as conflict:
-        store.commit_no_owner_source_reconciliation(
-            replace(decision, history_result_ref="history_result_ref_other")
-        )
+        store.commit_no_owner_source_reconciliation(replace(decision, history_result_ref="history_result_ref_other"))
     assert conflict.value.reason_code == "source_reconciliation_idempotency_conflict"
 
 
@@ -693,3 +753,55 @@ def _conclusive_decision(**changes: object):
     }
     values.update(changes)
     return _decision(**values)
+
+
+def _reconciliation_rows(path: Path) -> list[tuple[object, ...]]:
+    with sqlite3.connect(path) as conn:
+        return conn.execute(
+            """
+            SELECT reconciliation_id, runtime_run_id, operation_id, source_id,
+                   operation_kind, canonical_request_hash, idempotency_key,
+                   accepted_requirement_revision_id, runtime_attempt_no,
+                   runtime_attempt_authority_ref, history_result_ref,
+                   history_result_digest, history_outcome, history_conclusion,
+                   decision_kind, dispatch_intent_ref, conclusive_observation_ref,
+                   source_operation_disposition, retry_posture,
+                   expected_ledger_revision, expected_reconciliation_revision,
+                   committed_at, committed_operation_phase,
+                   committed_ledger_revision, committed_reconciliation_revision
+            FROM runtime_control_source_reconciliations
+            ORDER BY reconciliation_id
+            """
+        ).fetchall()
+
+
+def _downgrade_reconciliation_schema_to_v10(path: Path) -> None:
+    current_clause = (
+        "source_operation_disposition IN ('completed', 'partial', 'user_action_required', 'incompatible', 'failed')"
+    )
+    legacy_clause = "source_operation_disposition IN ('completed', 'partial', 'incompatible', 'failed')"
+    with sqlite3.connect(path) as conn:
+        table_sql = str(
+            conn.execute(
+                """
+                SELECT sql FROM sqlite_master
+                WHERE type = 'table' AND name = 'runtime_control_source_reconciliations'
+                """
+            ).fetchone()[0]
+        )
+        normalized = " ".join(table_sql.split())
+        if current_clause in normalized:
+            start = normalized.index(current_clause)
+            normalized = normalized[:start] + legacy_clause + normalized[start + len(current_clause) :]
+            schema_version = int(conn.execute("PRAGMA schema_version").fetchone()[0])
+            conn.execute("PRAGMA writable_schema = ON")
+            conn.execute(
+                """
+                UPDATE sqlite_master SET sql = ?
+                WHERE type = 'table' AND name = 'runtime_control_source_reconciliations'
+                """,
+                (normalized,),
+            )
+            conn.execute(f"PRAGMA schema_version = {schema_version + 1}")
+            conn.execute("PRAGMA writable_schema = OFF")
+        conn.execute("PRAGMA user_version = 10")
