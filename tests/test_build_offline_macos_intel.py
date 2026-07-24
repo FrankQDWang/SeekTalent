@@ -94,6 +94,28 @@ def test_offline_release_uses_pinned_fork_bundle_not_upstream_assets() -> None:
     assert "uv run --python 3.13 --group dev python scripts/build_offline_macos_intel.py" in workflow
 
 
+def test_offline_release_copies_the_current_shared_browser_bridge_installer(
+    tmp_path: Path,
+) -> None:
+    repo_root = SCRIPT_PATH.parents[1]
+    destination = tmp_path / "installer"
+
+    MODULE.copy_browser_bridge_installer(repo_root, destination)
+
+    expected = {
+        "__init__.py",
+        "browser_bridge_install.py",
+        "browser_bridge_manifest.py",
+        "strict_json.py",
+        "version.py",
+    }
+    assert {path.name for path in (destination / "seektalent").iterdir()} == expected
+    for filename in expected:
+        assert (destination / "seektalent" / filename).read_bytes() == (
+            repo_root / "src" / "seektalent" / filename
+        ).read_bytes()
+
+
 def test_validate_wheelhouse_accepts_pure_intel_and_universal2_wheels(tmp_path: Path) -> None:
     _wheel(tmp_path, "seektalent-0.7.47-py3-none-any.whl")
     _wheel(tmp_path, "pydantic_core-2.46.4-cp313-cp313-macosx_10_13_x86_64.whl")

@@ -119,10 +119,16 @@ _seektalent_offline_install() {
   local wheelhouse="${bundle_root}/python-wheelhouse"
   local app_wheel="${wheelhouse}/seektalent-${version}-py3-none-any.whl"
   local pip_zipapp="${bundle_root}/tools/pip.pyz"
+  local bridge_installer_root="${bundle_root}/tools/browser-bridge-installer"
   local wtscli_bundle_dir="${bundle_root}/${browser_bridge_bundle}"
   local wtscli_runtime_archive="${bundle_root}/${browser_bridge_runtime}"
   local required_file
-  for required_file in "${app_wheel}" "${pip_zipapp}" "${wtscli_bundle_dir}/bridge-manifest.json" "${wtscli_runtime_archive}"; do
+  for required_file in \
+    "${app_wheel}" \
+    "${pip_zipapp}" \
+    "${bridge_installer_root}/seektalent/browser_bridge_install.py" \
+    "${wtscli_bundle_dir}/bridge-manifest.json" \
+    "${wtscli_runtime_archive}"; do
     if [[ ! -f "${required_file}" ]]; then
       _seektalent_offline_fail "offline_resource_missing" "Required offline resource was not found: ${required_file}"
       return 1
@@ -167,21 +173,43 @@ _seektalent_offline_install() {
     _seektalent_offline_fail "browser_bridge_runtime_extract_failed" "The prepared WTSCLI runtime could not be extracted."
     return 1
   fi
+  if ! PYTHONPATH="${bridge_installer_root}${PYTHONPATH:+:${PYTHONPATH}}" \
+    "${domi_python}" - \
+      "${wtscli_bundle_dir}" \
+      "${install_root}" \
+      "${domi_node}" \
+      "${prepared_runtime_dir}" <<'PY'
+from pathlib import Path
+import sys
+
+from seektalent.browser_bridge_install import install_browser_bridge_bundle
+
+bundle_dir, install_root, node, prepared_runtime_dir = map(Path, sys.argv[1:])
+install_browser_bridge_bundle(
+    bundle_dir=bundle_dir,
+    install_root=install_root,
+    node=node,
+    prepared_runtime_dir=prepared_runtime_dir,
+)
+PY
+  then
+    rm -rf "${prepared_runtime_dir}"
+    _seektalent_offline_fail "seektalent_browser_bridge_install_failed" "Failed to verify and install the exact WTSCLI bundle."
+    return 1
+  fi
+  rm -rf "${prepared_runtime_dir}"
+
   if ! PYTHONPATH="${site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
     "${domi_python}" -m seektalent.domi_bootstrap \
       --package-version "${version}" \
       --python-path "${site_packages}" \
       --domi-python "${domi_python}" \
       --domi-node "${domi_node}" \
-      --browser-bridge-bundle-dir "${wtscli_bundle_dir}" \
-      --browser-bridge-prepared-runtime-dir "${prepared_runtime_dir}" \
       --bin-dir "${bin_dir}" \
       --print-json; then
-    rm -rf "${prepared_runtime_dir}"
-    _seektalent_offline_fail "seektalent_domi_bootstrap_failed" "Failed to verify and install the exact WTSCLI bundle."
+    _seektalent_offline_fail "seektalent_domi_bootstrap_failed" "Failed to install the SeekTalent Domi command shim."
     return 1
   fi
-  rm -rf "${prepared_runtime_dir}"
 
   case ":${PATH}:" in
     *":${bin_dir}:"*) ;;
