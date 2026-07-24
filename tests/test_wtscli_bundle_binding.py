@@ -513,6 +513,12 @@ def test_all_delivery_entrypoints_bind_the_exact_merged_wtscli_bundle() -> None:
     assert "@jackwener/opencli" not in offline
     assert "repository: FrankQDWang/wtscli" in native_workflow
     assert f"ref: {WTSCLI_FORK_COMMIT}" in native_workflow
+    assert "build-exact-wtscli-bundle:" in native_workflow
+    assert "needs: build-exact-wtscli-bundle" in native_workflow
+    assert "actions/download-artifact@v4" in native_workflow
+    assert "name: exact-wtscli-browser-bridge" in native_workflow
+    assert native_workflow.count("repository: FrankQDWang/wtscli") == 1
+    assert native_workflow.count("npm run build:seektalent-bundle") == 1
     assert "npm run build:seektalent-bundle" in native_workflow
     assert "SEEKTALENT_EXACT_WTSCLI_BUNDLE" in native_workflow
 

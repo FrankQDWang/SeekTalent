@@ -90,6 +90,8 @@ def test_offline_release_uses_pinned_fork_bundle_not_upstream_assets() -> None:
     assert "@jackwener/opencli@{opencli_version}" not in source
     assert "repository: FrankQDWang/wtscli" in workflow
     assert "WTSCLI_FORK_COMMIT" in workflow
+    assert "uv sync --python 3.13 --locked --group dev" in workflow
+    assert "uv run --python 3.13 --group dev python scripts/build_offline_macos_intel.py" in workflow
 
 
 def test_validate_wheelhouse_accepts_pure_intel_and_universal2_wheels(tmp_path: Path) -> None:

@@ -54,8 +54,40 @@ permissions:
   contents: read
 
 jobs:
+  build-exact-wtscli-bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the exact merged SeekTalent WTSCLI bundle source
+        uses: actions/checkout@v5
+        with:
+          repository: FrankQDWang/wtscli
+          ref: 709622fc3fb3463f15551467fdf0d28571dfd049
+          path: wtscli-fork
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22.14.0"
+
+      - name: Build the exact merged WTSCLI bundle
+        working-directory: wtscli-fork
+        run: |
+          npm ci --ignore-scripts
+          npm --prefix extension ci --ignore-scripts
+          npm run build:seektalent-bundle -- --out "$GITHUB_WORKSPACE/wtscli-browser-bridge"
+
+      - name: Upload the exact merged WTSCLI bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: exact-wtscli-browser-bridge
+          path: wtscli-browser-bridge
+          if-no-files-found: error
+          retention-days: 14
+
   native-launch-binding:
     name: ${{ matrix.name }}
+    needs: build-exact-wtscli-bundle
     strategy:
       fail-fast: false
       matrix:
@@ -77,13 +109,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
-
-      - name: Check out the exact merged SeekTalent WTSCLI bundle source
-        uses: actions/checkout@v5
-        with:
-          repository: FrankQDWang/wtscli
-          ref: 709622fc3fb3463f15551467fdf0d28571dfd049
-          path: wtscli-fork
 
       - uses: actions/setup-python@v6
         with:
@@ -126,12 +151,11 @@ jobs:
 
       - run: uv sync --locked --group dev
 
-      - name: Build the exact merged WTSCLI bundle
-        working-directory: wtscli-fork
-        run: |
-          npm ci --ignore-scripts
-          npm --prefix extension ci --ignore-scripts
-          npm run build:seektalent-bundle -- --out ../wtscli-browser-bridge
+      - name: Download the exact merged WTSCLI bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: exact-wtscli-browser-bridge
+          path: wtscli-browser-bridge
 
       - name: Assert deterministic native evidence contract
         env:
