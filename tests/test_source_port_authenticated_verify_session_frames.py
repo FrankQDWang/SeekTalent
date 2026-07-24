@@ -45,14 +45,14 @@ MAIN_TO_SIDECAR_KEY = bytes(range(32))
 SIDECAR_TO_MAIN_KEY = bytes(range(32, 64))
 VERIFY_SESSION_FRAME_VECTORS = {
     "submit": {
-        "length": 2068,
-        "auth_tag": "cfd0a05e9b247838a4ebc6b78da5b1436323c11218571c62dabe25921d49c211",
-        "sha256": "dbf41b0a7f70930737479082d3cdd7518944cc5dd5016f5ef9a92dce36e13c58",
+        "length": 2097,
+        "auth_tag": "86114ea7037c7f9d6fdc673878d5027a29fa97398d5dd5ed04d37b5bcfbdab71",
+        "sha256": "2d11ddbf81590534a3911906bcc1f5d18423f90ee23749856195b077429f4a8d",
     },
     "accepted_ack": {
-        "length": 1646,
-        "auth_tag": "ccef8340eb6a8863bdb0b319fcc66e7ef45916cecd51050aca7757851d905b53",
-        "sha256": "f1074e6da77a340e76e92e8be456c59c65d41f65ccd01b227b99d6d4e56bba67",
+        "length": 1675,
+        "auth_tag": "44b59d8922f0ca68a5538cb24262668dd3b364559492db143095ef6535a8e1a9",
+        "sha256": "7cef081d1d8b3e02aab7d5431788d17dbb7ef2dc10aa8763f2831c429b7daeee",
     },
     "result": {
         "length": 1543,

@@ -8,8 +8,6 @@ from typing import Annotated, Literal, TypeAlias
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 
 from seektalent.source_port.wire_primitives import (
-    ExactIntegerOne,
-    ExactIntegerZero,
     NonNegativeJsonInteger,
     Opaque96,
     Opaque128,
@@ -63,7 +61,7 @@ class OperationIdentityV1(_OperationDispatchModel):
 
 
 class DispatchAuthorizationV1(_OperationDispatchModel):
-    """The one currently supported durable main-owned authorization epoch."""
+    """One closed durable main-owned authorization epoch."""
 
     run_id: Opaque96
     operation_id: Opaque96
@@ -71,20 +69,30 @@ class DispatchAuthorizationV1(_OperationDispatchModel):
     request_hash: Sha256
     dispatch_intent_id: Opaque96
     dispatch_intent_revision: PositiveJsonInteger
-    dispatch_authorization_ordinal: ExactIntegerOne
+    dispatch_authorization_ordinal: PositiveJsonInteger
+    safe_retry_commit_ref: Opaque256 | None
     source_operation_acceptance_ref: Opaque256
-    expected_source_operation_ledger_revision: ExactIntegerOne
-    expected_reconciliation_revision: ExactIntegerZero
+    expected_source_operation_ledger_revision: PositiveJsonInteger
+    expected_reconciliation_revision: NonNegativeJsonInteger
     dispatch_intent_digest: Sha256
 
     @model_validator(mode="after")
-    def validate_digest(self) -> DispatchAuthorizationV1:
+    def validate_epoch_and_digest(self) -> DispatchAuthorizationV1:
+        if self.dispatch_authorization_ordinal == 1:
+            if (
+                self.safe_retry_commit_ref is not None
+                or self.expected_source_operation_ledger_revision != 1
+                or self.expected_reconciliation_revision != 0
+            ):
+                raise ValueError("source_port_dispatch_authorization_initial_epoch_invalid")
+        elif self.safe_retry_commit_ref is None or self.expected_reconciliation_revision == 0:
+            raise ValueError("source_port_dispatch_authorization_safe_retry_epoch_invalid")
         if self.dispatch_intent_digest != _dispatch_authorization_digest_for_values(self):
             raise ValueError("source_port_dispatch_authorization_digest_mismatch")
         return self
 
     @classmethod
-    def create(
+    def create_initial(
         cls,
         *,
         identity: OperationIdentityV1,
@@ -92,16 +100,78 @@ class DispatchAuthorizationV1(_OperationDispatchModel):
         dispatch_intent_revision: int,
         source_operation_acceptance_ref: str,
     ) -> DispatchAuthorizationV1:
+        return cls._create_epoch(
+            identity=identity,
+            dispatch_intent_id=dispatch_intent_id,
+            dispatch_intent_revision=dispatch_intent_revision,
+            dispatch_authorization_ordinal=1,
+            safe_retry_commit_ref=None,
+            source_operation_acceptance_ref=source_operation_acceptance_ref,
+        )
+
+    @classmethod
+    def create_safe_retry(
+        cls,
+        *,
+        identity: OperationIdentityV1,
+        dispatch_intent_id: str,
+        dispatch_intent_revision: int,
+        dispatch_authorization_ordinal: int,
+        safe_retry_commit_ref: str,
+        source_operation_acceptance_ref: str,
+    ) -> DispatchAuthorizationV1:
+        return cls._create_epoch(
+            identity=identity,
+            dispatch_intent_id=dispatch_intent_id,
+            dispatch_intent_revision=dispatch_intent_revision,
+            dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+            safe_retry_commit_ref=safe_retry_commit_ref,
+            source_operation_acceptance_ref=source_operation_acceptance_ref,
+        )
+
+    @classmethod
+    def _create_epoch(
+        cls,
+        *,
+        identity: OperationIdentityV1,
+        dispatch_intent_id: str,
+        dispatch_intent_revision: int,
+        dispatch_authorization_ordinal: int,
+        safe_retry_commit_ref: str | None,
+        source_operation_acceptance_ref: str,
+    ) -> DispatchAuthorizationV1:
         validated_identity = _validated_identity(identity)
+        try:
+            validated_dispatch_intent_id = _OPAQUE96_ADAPTER.validate_python(dispatch_intent_id, strict=True)
+            validated_dispatch_intent_revision = _POSITIVE_INTEGER_ADAPTER.validate_python(
+                dispatch_intent_revision,
+                strict=True,
+            )
+            validated_ordinal = _POSITIVE_INTEGER_ADAPTER.validate_python(
+                dispatch_authorization_ordinal,
+                strict=True,
+            )
+            validated_retry_ref = (
+                None
+                if safe_retry_commit_ref is None
+                else _OPAQUE256_ADAPTER.validate_python(safe_retry_commit_ref, strict=True)
+            )
+            validated_acceptance_ref = _OPAQUE256_ADAPTER.validate_python(
+                source_operation_acceptance_ref,
+                strict=True,
+            )
+        except ValidationError:
+            raise ValueError("source_port_dispatch_authorization_input_invalid") from None
         provisional = cls.model_construct(
             run_id=validated_identity.run_id,
             operation_id=validated_identity.operation_id,
             attempt_no=validated_identity.attempt_no,
             request_hash=validated_identity.request_hash,
-            dispatch_intent_id=dispatch_intent_id,
-            dispatch_intent_revision=dispatch_intent_revision,
-            dispatch_authorization_ordinal=1,
-            source_operation_acceptance_ref=source_operation_acceptance_ref,
+            dispatch_intent_id=validated_dispatch_intent_id,
+            dispatch_intent_revision=validated_dispatch_intent_revision,
+            dispatch_authorization_ordinal=validated_ordinal,
+            safe_retry_commit_ref=validated_retry_ref,
+            source_operation_acceptance_ref=validated_acceptance_ref,
             expected_source_operation_ledger_revision=validated_identity.expected_source_operation_ledger_revision,
             expected_reconciliation_revision=validated_identity.expected_reconciliation_revision,
             dispatch_intent_digest="0" * 64,
@@ -203,7 +273,7 @@ def validate_dispatch_authorization(
     identity: OperationIdentityV1,
     authorization: DispatchAuthorizationV1,
 ) -> None:
-    """Require one durable ordinal-one authorization to match an operation identity."""
+    """Require one durable authorization epoch to match an operation identity."""
     validated_identity = _validated_identity(identity)
     validated_authorization = _validated_authorization(authorization)
     if not _authorization_matches_identity(validated_authorization, validated_identity):
@@ -260,6 +330,7 @@ def _dispatch_authorization_payload(authorization: DispatchAuthorizationV1) -> d
         "dispatch_intent_id": authorization.dispatch_intent_id,
         "dispatch_intent_revision": authorization.dispatch_intent_revision,
         "dispatch_authorization_ordinal": authorization.dispatch_authorization_ordinal,
+        "safe_retry_commit_ref": authorization.safe_retry_commit_ref,
         "source_operation_acceptance_ref": authorization.source_operation_acceptance_ref,
         "expected_source_operation_ledger_revision": authorization.expected_source_operation_ledger_revision,
         "expected_reconciliation_revision": authorization.expected_reconciliation_revision,

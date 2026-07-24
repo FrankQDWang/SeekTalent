@@ -311,6 +311,8 @@ class VerifySessionRequestV1(_VerifySessionBodyV1):
         delivery_mode: Literal["initial", "outbox_redelivery"],
         dispatch_intent_id: str,
         dispatch_intent_revision: int,
+        dispatch_authorization_ordinal: int = 1,
+        safe_retry_commit_ref: str | None = None,
         source_operation_acceptance_ref: str,
         profile_binding_ref: str,
         provider_account_ref: str | None,
@@ -366,12 +368,26 @@ class VerifySessionRequestV1(_VerifySessionBodyV1):
         identity = provisional_identity.model_copy(
             update={"request_hash": request_hash, "runtime_attempt_fence_ref": fence_ref}
         )
-        authorization = DispatchAuthorizationV1.create(
-            identity=identity,
-            dispatch_intent_id=dispatch_intent_id,
-            dispatch_intent_revision=dispatch_intent_revision,
-            source_operation_acceptance_ref=source_operation_acceptance_ref,
-        )
+        if type(dispatch_authorization_ordinal) is int and dispatch_authorization_ordinal == 1:
+            if safe_retry_commit_ref is not None:
+                raise ValueError("source_port_dispatch_authorization_initial_epoch_invalid")
+            authorization = DispatchAuthorizationV1.create_initial(
+                identity=identity,
+                dispatch_intent_id=dispatch_intent_id,
+                dispatch_intent_revision=dispatch_intent_revision,
+                source_operation_acceptance_ref=source_operation_acceptance_ref,
+            )
+        else:
+            if type(safe_retry_commit_ref) is not str:
+                raise ValueError("source_port_dispatch_authorization_safe_retry_epoch_invalid")
+            authorization = DispatchAuthorizationV1.create_safe_retry(
+                identity=identity,
+                dispatch_intent_id=dispatch_intent_id,
+                dispatch_intent_revision=dispatch_intent_revision,
+                dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+                safe_retry_commit_ref=safe_retry_commit_ref,
+                source_operation_acceptance_ref=source_operation_acceptance_ref,
+            )
         return cls.model_validate(
             {
                 "contract_version": VERIFY_SESSION_REQUEST_CONTRACT,
