@@ -367,10 +367,15 @@ def test_admission_expectation_rows_are_immutable(tmp_path: Path) -> None:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO runtime_control_source_operation_admission_expectations (
-                    runtime_run_id, operation_id, runtime_attempt_fence_ref,
-                    profile_binding_generation, browser_control_scope_id, controller_fence_ref
+                    runtime_run_id, operation_id, dispatch_authorization_ordinal,
+                    runtime_attempt_no, runtime_attempt_authority_ref,
+                    runtime_attempt_fence_ref, profile_binding_generation,
+                    browser_control_scope_id, controller_fence_ref
                 )
-                VALUES ('runtime_run_1', 'source_operation_1', ?, 2, NULL, NULL)
+                VALUES (
+                    'runtime_run_1', 'source_operation_1', 1, 1,
+                    'runtime_attempt_authority_ref_1', ?, 2, NULL, NULL
+                )
                 """,
                 ("d" * 64,),
             )

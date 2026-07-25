@@ -68,6 +68,21 @@ from seektalent_runtime_control.run_acceptance import (
     normalize_run_record,
     validate_run_acceptance,
 )
+from seektalent_runtime_control.safe_retry_turnover import (
+    _SafeRetryTurnoverAuthorityIssuer,
+    issue_safe_retry_turnover_authority,
+    latest_source_dispatch_row as _latest_source_dispatch_row,
+    mint_safe_retry_dispatch_epoch,
+    require_safe_retry_dispatch_authorization as _require_safe_retry_dispatch_authorization,
+    source_dispatch_identity_exists as _source_dispatch_identity_exists,
+)
+from seektalent_runtime_control.source_epoch_schema import (
+    SOURCE_OPERATION_ADMISSION_EXPECTATION_V10_SCHEMA_STATEMENTS as _SOURCE_OPERATION_ADMISSION_EXPECTATION_V10_SCHEMA_STATEMENTS,
+    SOURCE_OPERATION_V8_SCHEMA_STATEMENTS as _SOURCE_OPERATION_V8_SCHEMA_STATEMENTS,
+    create_source_operation_admission_expectation_schema as _create_source_operation_admission_expectation_schema,
+    create_source_operation_schema as _create_source_operation_schema,
+    migrate_source_epochs_v11_to_v12 as _migrate_v11_to_v12,
+)
 from seektalent_runtime_control.source_operations import (
     AcceptedSourceOperation,
     SourceDispatchMetadata,
@@ -94,7 +109,7 @@ from seektalent_runtime_control.source_reconciliation import (
     migrate_source_reconciliation_v10_to_v11,
     reconciliation_dispatch_ack_requires_update,
     reconciliation_dispatch_precondition_matches,
-    source_dispatch_is_initially_deliverable,
+    source_dispatch_is_currently_deliverable,
     source_reconciliation_from_row,
     source_reconciliation_matches_decision,
     validate_source_operation_reconciliation_decision,
@@ -102,7 +117,7 @@ from seektalent_runtime_control.source_reconciliation import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 11
+RUNTIME_CONTROL_SCHEMA_VERSION = 12
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -133,6 +148,7 @@ class RuntimeControlStore:
     def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
         self.path = Path(path)
         self.busy_timeout_ms = busy_timeout_ms
+        self._safe_retry_authority_issuer = _SafeRetryTurnoverAuthorityIssuer()
 
     def initialize(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -175,7 +191,7 @@ class RuntimeControlStore:
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                 conn.commit()
                 version = 7
-            if version in {7, 8, 9, 10}:
+            if version in {7, 8, 9, 10, 11}:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     if version == 7:
@@ -190,11 +206,16 @@ class RuntimeControlStore:
                         _migrate_v9_to_v10(conn)
                         conn.execute("PRAGMA user_version = 10")
                         version = 10
-                    migrate_source_reconciliation_v10_to_v11(conn)
-                    conn.execute("PRAGMA user_version = 11")
+                    if version == 10:
+                        migrate_source_reconciliation_v10_to_v11(conn)
+                        conn.execute("PRAGMA user_version = 11")
+                        version = 11
+                    if version == 11:
+                        _migrate_v11_to_v12(conn)
+                        conn.execute("PRAGMA user_version = 12")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
-                except (SQLiteMigrationError, sqlite3.Error):
+                except Exception:
                     conn.rollback()
                     raise
             else:
@@ -384,6 +405,9 @@ class RuntimeControlStore:
                         raise RuntimeControlError("identity_conflict")
                     if not expectation_matches_acceptance(
                         expectation,
+                        dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+                        runtime_attempt_no=runtime_attempt_no,
+                        runtime_attempt_authority_ref=runtime_attempt_authority_ref,
                         runtime_attempt_fence_ref=runtime_attempt_fence_ref,
                         profile_binding_generation=profile_binding_generation,
                         browser_control_scope_id=browser_control_scope_id,
@@ -398,6 +422,7 @@ class RuntimeControlStore:
                         dispatch_intent_revision=dispatch_intent_revision,
                         dispatch_intent_digest=dispatch_intent_digest,
                         dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+                        safe_retry_commit_ref=None,
                         source_operation_acceptance_ref=source_operation_acceptance_ref,
                         expected_ledger_revision=expected_ledger_revision,
                         expected_reconciliation_revision=expected_reconciliation_revision,
@@ -452,15 +477,19 @@ class RuntimeControlStore:
                 conn.execute(
                     """
                     INSERT INTO runtime_control_source_operation_admission_expectations (
-                        runtime_run_id, operation_id, runtime_attempt_fence_ref,
-                        profile_binding_generation, browser_control_scope_id,
-                        controller_fence_ref
+                        runtime_run_id, operation_id, dispatch_authorization_ordinal,
+                        runtime_attempt_no, runtime_attempt_authority_ref,
+                        runtime_attempt_fence_ref, profile_binding_generation,
+                        browser_control_scope_id, controller_fence_ref
                     )
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         runtime_run_id,
                         operation_id,
+                        dispatch_authorization_ordinal,
+                        runtime_attempt_no,
+                        runtime_attempt_authority_ref,
                         runtime_attempt_fence_ref,
                         profile_binding_generation,
                         browser_control_scope_id,
@@ -473,12 +502,14 @@ class RuntimeControlStore:
                     INSERT INTO runtime_control_source_dispatch_outbox (
                         outbox_id, runtime_run_id, operation_id, canonical_request_hash,
                         dispatch_intent_id, dispatch_intent_revision, dispatch_intent_digest,
-                        dispatch_authorization_ordinal, source_operation_acceptance_ref,
+                        dispatch_authorization_ordinal, safe_retry_commit_ref,
+                        source_operation_acceptance_ref,
                         expected_ledger_revision, expected_reconciliation_revision,
                         status, outbox_revision, accepted_sidecar_generation,
                         accepted_sidecar_journal_revision, ack_ref, ack_kind, acknowledged_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 1, NULL, NULL, NULL, NULL, NULL)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 'pending', 1,
+                            NULL, NULL, NULL, NULL, NULL)
                     """,
                     (
                         outbox_id,
@@ -517,11 +548,21 @@ class RuntimeControlStore:
             raise RuntimeControlLookupError("source_operation_not_found")
         return source_operation_from_row(row)
 
-    def get_source_operation_admission_expectation(self, runtime_run_id: str, operation_id: str) -> SourceOperationAdmissionExpectation:
+    def get_source_operation_admission_expectation(
+        self,
+        runtime_run_id: str,
+        operation_id: str,
+        dispatch_authorization_ordinal: int = 1,
+    ) -> SourceOperationAdmissionExpectation:
         with self._connect() as conn:
             if (operation_row := _source_operation_row(conn, runtime_run_id, operation_id)) is None:
                 raise RuntimeControlLookupError("source_operation_not_found")
-            expectation_row = _source_operation_admission_expectation_row(conn, runtime_run_id, operation_id)
+            expectation_row = _source_operation_admission_expectation_row(
+                conn,
+                runtime_run_id,
+                operation_id,
+                dispatch_authorization_ordinal,
+            )
             if expectation_row is None:
                 raise RuntimeControlError("source_operation_acceptance_incomplete")
             expectation = _source_operation_admission_expectation_from_row(expectation_row)
@@ -716,6 +757,64 @@ class RuntimeControlStore:
                 raise
         return committed
 
+    def _mint_safe_retry_turnover_authority_for_test(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        attempt_no: int,
+        observed_at: str,
+        runtime_attempt_authority_ref: str,
+        runtime_attempt_fence_ref: str,
+        profile_binding_generation: int,
+        browser_control_scope_id: str,
+        controller_fence_ref: str | None,
+    ) -> object:
+        """Issue a sealed test-only capability until a product authority source exists."""
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            return issue_safe_retry_turnover_authority(
+                conn,
+                self._safe_retry_authority_issuer,
+                runtime_run_id=runtime_run_id,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+                observed_at=observed_at,
+                runtime_attempt_authority_ref=runtime_attempt_authority_ref,
+                runtime_attempt_fence_ref=runtime_attempt_fence_ref,
+                profile_binding_generation=profile_binding_generation,
+                browser_control_scope_id=browser_control_scope_id,
+                controller_fence_ref=controller_fence_ref,
+            )
+
+    def mint_safe_retry_dispatch_epoch(
+        self,
+        *,
+        runtime_run_id: str,
+        operation_id: str,
+        reconciliation_id: str,
+        expected_reconciliation_ledger_revision: int,
+        expected_reconciliation_revision: int,
+        outbox_id: str,
+        dispatch_intent_id: str,
+        authority: object,
+        fault_injector: Callable[[str], None] | None = None,
+    ) -> AcceptedSourceOperation:
+        with self._connect() as conn:
+            return mint_safe_retry_dispatch_epoch(
+                conn,
+                self._safe_retry_authority_issuer,
+                runtime_run_id=runtime_run_id,
+                operation_id=operation_id,
+                reconciliation_id=reconciliation_id,
+                expected_reconciliation_ledger_revision=(expected_reconciliation_ledger_revision),
+                expected_reconciliation_revision=(expected_reconciliation_revision),
+                outbox_id=outbox_id,
+                dispatch_intent_id=dispatch_intent_id,
+                authority=authority,
+                fault_injector=fault_injector,
+            )
+
     def list_pending_source_dispatches(self, limit: int = 100) -> list[SourceDispatchMetadata]:
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
             raise ValueError("source_dispatch_limit_invalid")
@@ -740,7 +839,18 @@ class RuntimeControlStore:
                 for row in rows:
                     dispatch = source_dispatch_from_row(row)
                     operation = _require_source_dispatch_operation(conn, dispatch)
-                    if source_dispatch_is_initially_deliverable(dispatch, operation):
+                    latest_row = _latest_source_dispatch_row(
+                        conn,
+                        dispatch.runtime_run_id,
+                        dispatch.operation_id,
+                    )
+                    if latest_row is None:
+                        raise RuntimeControlError("source_operation_acceptance_incomplete")
+                    if source_dispatch_is_currently_deliverable(
+                        dispatch,
+                        operation,
+                        latest_dispatch_authorization_ordinal=int(latest_row["dispatch_authorization_ordinal"]),
+                    ):
                         dispatches.append(dispatch)
                         if len(dispatches) == limit:
                             break
@@ -3418,7 +3528,8 @@ def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
-    _create_source_operation_schema(conn)
+    for statement in _SOURCE_OPERATION_V8_SCHEMA_STATEMENTS:
+        conn.execute(statement)
 
 
 def _migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
@@ -3427,169 +3538,7 @@ def _migrate_v8_to_v9(conn: sqlite3.Connection) -> None:
 
 
 def _migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
-    _create_source_operation_admission_expectation_schema(conn)
-
-
-_SOURCE_OPERATION_SCHEMA_STATEMENTS = (
-    """
-    CREATE TABLE IF NOT EXISTS runtime_control_source_operations (
-      runtime_run_id TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      source_id TEXT NOT NULL,
-      operation_kind TEXT NOT NULL,
-      canonical_request_hash TEXT NOT NULL,
-      idempotency_key TEXT NOT NULL,
-      accepted_requirement_revision_id TEXT NOT NULL,
-      runtime_attempt_no INTEGER NOT NULL,
-      runtime_attempt_authority_ref TEXT NOT NULL,
-      operation_phase TEXT NOT NULL,
-      dispatch_intent_ref TEXT,
-      conclusive_observation_ref TEXT,
-      source_operation_disposition TEXT,
-      retry_posture TEXT NOT NULL,
-      reconciliation_revision INTEGER NOT NULL,
-      main_commit_ref TEXT,
-      ledger_revision INTEGER NOT NULL,
-      PRIMARY KEY(runtime_run_id, operation_id),
-      UNIQUE(runtime_run_id, idempotency_key),
-      CHECK (source_id = 'liepin'),
-      CHECK (operation_kind IN ('verify_session', 'search', 'cards', 'details', 'continuation', 'cleanup')),
-      CHECK (operation_phase IN ('accepted', 'dispatch_intent', 'observed', 'reconciled', 'main_committed')),
-      CHECK (source_operation_disposition IS NULL OR source_operation_disposition IN (
-        'completed', 'partial', 'user_action_required', 'incompatible', 'failed',
-        'cancelled', 'reconciliation_unknown'
-      )),
-      CHECK (retry_posture IN ('no_retry', 'safe_retry', 'reconcile_first')),
-      CHECK (runtime_attempt_no > 0),
-      CHECK (reconciliation_revision >= 0),
-      CHECK (ledger_revision > 0)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS runtime_control_source_dispatch_outbox (
-      outbox_id TEXT PRIMARY KEY,
-      runtime_run_id TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      canonical_request_hash TEXT NOT NULL,
-      dispatch_intent_id TEXT NOT NULL,
-      dispatch_intent_revision INTEGER NOT NULL,
-      dispatch_intent_digest TEXT NOT NULL,
-      dispatch_authorization_ordinal INTEGER NOT NULL,
-      source_operation_acceptance_ref TEXT NOT NULL,
-      expected_ledger_revision INTEGER NOT NULL,
-      expected_reconciliation_revision INTEGER NOT NULL,
-      status TEXT NOT NULL,
-      outbox_revision INTEGER NOT NULL,
-      accepted_sidecar_generation INTEGER,
-      accepted_sidecar_journal_revision INTEGER,
-      ack_ref TEXT,
-      ack_kind TEXT,
-      acknowledged_at TEXT,
-      UNIQUE(runtime_run_id, operation_id, dispatch_authorization_ordinal),
-      UNIQUE(runtime_run_id, dispatch_intent_id),
-      CHECK (dispatch_intent_revision > 0),
-      CHECK (dispatch_authorization_ordinal = 1),
-      CHECK (expected_ledger_revision = 1),
-      CHECK (expected_reconciliation_revision = 0),
-      CHECK (status IN ('pending', 'acknowledged')),
-      CHECK (outbox_revision > 0),
-      CHECK (accepted_sidecar_generation IS NULL OR accepted_sidecar_generation > 0),
-      CHECK (accepted_sidecar_journal_revision IS NULL OR accepted_sidecar_journal_revision > 0),
-      CHECK (ack_kind IS NULL OR ack_kind IN (
-        'new_logical_operation', 'new_dispatch_authorization', 'same_intent_replay'
-      )),
-      CHECK (
-        (status = 'pending' AND outbox_revision = 1
-          AND accepted_sidecar_generation IS NULL
-          AND accepted_sidecar_journal_revision IS NULL
-          AND ack_ref IS NULL AND ack_kind IS NULL AND acknowledged_at IS NULL)
-        OR
-        (status = 'acknowledged' AND outbox_revision = 2
-          AND accepted_sidecar_generation IS NOT NULL
-          AND accepted_sidecar_journal_revision IS NOT NULL
-          AND ack_ref IS NOT NULL AND ack_kind IS NOT NULL AND acknowledged_at IS NOT NULL)
-      )
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_runtime_source_dispatch_pending
-      ON runtime_control_source_dispatch_outbox(status, outbox_id)
-    """,
-)
-
-
-def _create_source_operation_schema(conn: sqlite3.Connection) -> None:
-    for statement in _SOURCE_OPERATION_SCHEMA_STATEMENTS:
-        conn.execute(statement)
-
-
-_SOURCE_OPERATION_ADMISSION_EXPECTATION_SCHEMA_STATEMENTS = (
-    """
-    CREATE TABLE IF NOT EXISTS runtime_control_source_operation_admission_expectations (
-      runtime_run_id TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      runtime_attempt_fence_ref TEXT NOT NULL,
-      profile_binding_generation INTEGER NOT NULL,
-      browser_control_scope_id TEXT,
-      controller_fence_ref TEXT,
-      PRIMARY KEY(runtime_run_id, operation_id),
-      FOREIGN KEY(runtime_run_id, operation_id)
-        REFERENCES runtime_control_source_operations(runtime_run_id, operation_id),
-      CHECK (
-        length(runtime_attempt_fence_ref) = 64
-        AND runtime_attempt_fence_ref NOT GLOB '*[^0-9a-f]*'
-      ),
-      CHECK (
-        typeof(profile_binding_generation) = 'integer'
-        AND profile_binding_generation BETWEEN 1 AND 9007199254740991
-      ),
-      CHECK (
-        browser_control_scope_id IS NULL
-        OR (
-          length(CAST(browser_control_scope_id AS BLOB)) BETWEEN 1 AND 96
-          AND browser_control_scope_id = trim(browser_control_scope_id)
-        )
-      ),
-      CHECK (
-        controller_fence_ref IS NULL
-        OR (
-          length(controller_fence_ref) = 64
-          AND controller_fence_ref NOT GLOB '*[^0-9a-f]*'
-        )
-      )
-    )
-    """,
-    """
-    CREATE TRIGGER IF NOT EXISTS trg_runtime_source_admission_expectation_no_update
-    BEFORE UPDATE ON runtime_control_source_operation_admission_expectations
-    BEGIN
-      SELECT RAISE(ABORT, 'source_operation_admission_expectation_immutable');
-    END
-    """,
-    """
-    CREATE TRIGGER IF NOT EXISTS trg_runtime_source_admission_expectation_no_delete
-    BEFORE DELETE ON runtime_control_source_operation_admission_expectations
-    BEGIN
-      SELECT RAISE(ABORT, 'source_operation_admission_expectation_immutable');
-    END
-    """,
-    """
-    CREATE TRIGGER IF NOT EXISTS trg_runtime_source_admission_expectation_no_replace
-    BEFORE INSERT ON runtime_control_source_operation_admission_expectations
-    WHEN EXISTS (
-      SELECT 1
-      FROM runtime_control_source_operation_admission_expectations
-      WHERE runtime_run_id = NEW.runtime_run_id AND operation_id = NEW.operation_id
-    )
-    BEGIN
-      SELECT RAISE(ABORT, 'source_operation_admission_expectation_immutable');
-    END
-    """,
-)
-
-
-def _create_source_operation_admission_expectation_schema(conn: sqlite3.Connection) -> None:
-    for statement in _SOURCE_OPERATION_ADMISSION_EXPECTATION_SCHEMA_STATEMENTS:
+    for statement in _SOURCE_OPERATION_ADMISSION_EXPECTATION_V10_SCHEMA_STATEMENTS:
         conn.execute(statement)
 
 
@@ -4282,14 +4231,20 @@ def _source_operation_admission_expectation_row(
     conn: sqlite3.Connection,
     runtime_run_id: str,
     operation_id: str,
+    dispatch_authorization_ordinal: int = 1,
 ) -> sqlite3.Row | None:
     return conn.execute(
         """
         SELECT *
         FROM runtime_control_source_operation_admission_expectations
         WHERE runtime_run_id = ? AND operation_id = ?
+          AND dispatch_authorization_ordinal = ?
         """,
-        (runtime_run_id, operation_id),
+        (
+            runtime_run_id,
+            operation_id,
+            dispatch_authorization_ordinal,
+        ),
     ).fetchone()
 
 
@@ -4414,7 +4369,12 @@ def _source_operation_acceptance(conn: sqlite3.Connection, operation_row: sqlite
         raise RuntimeControlError("source_operation_acceptance_incomplete")
     expectation = _source_operation_admission_expectation_from_row(expectation_row)
     dispatch = source_dispatch_from_row(dispatch_row)
-    if not expectation_matches_operation(expectation, operation):
+    if (
+        not expectation_matches_operation(expectation, operation)
+        or expectation.dispatch_authorization_ordinal != 1
+        or expectation.runtime_attempt_no != operation.runtime_attempt_no
+        or expectation.runtime_attempt_authority_ref != operation.runtime_attempt_authority_ref
+    ):
         raise RuntimeControlError("source_operation_acceptance_incomplete")
     if not dispatch_matches_operation(dispatch, operation):
         raise RuntimeControlError("source_operation_acceptance_incomplete")
@@ -4435,6 +4395,7 @@ def _require_source_dispatch_operation(
         conn,
         operation.runtime_run_id,
         operation.operation_id,
+        dispatch.dispatch_authorization_ordinal,
     )
     if expectation_row is None:
         raise RuntimeControlError("source_operation_acceptance_incomplete")
@@ -4443,6 +4404,18 @@ def _require_source_dispatch_operation(
         raise RuntimeControlError("source_operation_acceptance_incomplete")
     if not dispatch_matches_operation(dispatch, operation):
         raise RuntimeControlError("source_operation_acceptance_incomplete")
+    if dispatch.dispatch_authorization_ordinal == 1:
+        if (
+            expectation.runtime_attempt_no != operation.runtime_attempt_no
+            or expectation.runtime_attempt_authority_ref != operation.runtime_attempt_authority_ref
+        ):
+            raise RuntimeControlError("source_operation_acceptance_incomplete")
+    else:
+        _require_safe_retry_dispatch_authorization(
+            operation=operation,
+            expectation=expectation,
+            dispatch=dispatch,
+        )
     return operation
 
 
@@ -4452,6 +4425,9 @@ def _source_operation_admission_expectation_from_row(row: sqlite3.Row) -> Source
         validate_source_operation_admission_expectation(
             runtime_run_id=expectation.runtime_run_id,
             operation_id=expectation.operation_id,
+            dispatch_authorization_ordinal=(expectation.dispatch_authorization_ordinal),
+            runtime_attempt_no=expectation.runtime_attempt_no,
+            runtime_attempt_authority_ref=(expectation.runtime_attempt_authority_ref),
             runtime_attempt_fence_ref=expectation.runtime_attempt_fence_ref,
             profile_binding_generation=expectation.profile_binding_generation,
             browser_control_scope_id=expectation.browser_control_scope_id,
@@ -4473,25 +4449,6 @@ def _source_dispatch_row_for_operation(
         """,
         (runtime_run_id, operation_id),
     ).fetchone()
-
-
-def _source_dispatch_identity_exists(
-    conn: sqlite3.Connection,
-    outbox_id: str,
-    dispatch_intent_id: str,
-) -> bool:
-    return (
-        conn.execute(
-            """
-            SELECT 1
-            FROM runtime_control_source_dispatch_outbox
-            WHERE outbox_id = ? OR dispatch_intent_id = ?
-            LIMIT 1
-            """,
-            (outbox_id, dispatch_intent_id),
-        ).fetchone()
-        is not None
-    )
 
 
 def _run_row_by_run_intent(conn: sqlite3.Connection, run_intent_id: str | None) -> sqlite3.Row | None:

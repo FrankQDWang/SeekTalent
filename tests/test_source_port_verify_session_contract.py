@@ -789,15 +789,14 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
         "src/seektalent/source_port/sidecar_transport.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
+        "src/seektalent_runtime_control/safe_retry_turnover.py",
     }
 
 
-def test_safe_retry_wire_contract_does_not_widen_ordinal_one_storage_history_or_production_routing() -> None:
+def test_safe_retry_main_storage_widens_without_sidecar_or_production_routing() -> None:
     ordinal_one_sources = {
-        "runtime_control": PROJECT_ROOT / "src" / "seektalent_runtime_control" / "store.py",
-        "runtime_control_validation": (
-            PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_operations.py"
-        ),
+        "runtime_control": (PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_epoch_schema.py"),
+        "runtime_control_validation": (PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_operations.py"),
         "journal_types": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "_command_journal_types.py",
         "journal_engine": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "_command_journal_engine.py",
         "history_contract": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "history_contract.py",
@@ -806,8 +805,8 @@ def test_safe_retry_wire_contract_does_not_widen_ordinal_one_storage_history_or_
     }
     source = {name: path.read_text(encoding="utf-8") for name, path in ordinal_one_sources.items()}
 
-    assert "CHECK (dispatch_authorization_ordinal = 1)" in source["runtime_control"]
-    assert "dispatch.dispatch_authorization_ordinal == 1" in source["runtime_control_validation"]
+    assert "dispatch_authorization_ordinal BETWEEN 2 AND 9007199254740991" in source["runtime_control"]
+    assert "dispatch.safe_retry_commit_ref is not None" in source["runtime_control_validation"]
     assert "dispatch_authorization_ordinal: Literal[1] = 1" in source["journal_types"]
     assert "dispatch_authorization_ordinal = 1" in source["journal_engine"]
     assert "dispatch_authorization_ordinal: ExactIntegerOne" in source["history_contract"]
@@ -828,7 +827,20 @@ def test_safe_retry_wire_contract_does_not_widen_ordinal_one_storage_history_or_
         content = path.read_text(encoding="utf-8")
         if "create_safe_retry(" in content or "safe_retry_commit_ref" in content:
             safe_retry_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    assert safe_retry_callers == []
+    assert set(safe_retry_callers) == {
+        "src/seektalent_runtime_control/safe_retry_turnover.py",
+        "src/seektalent_runtime_control/source_epoch_schema.py",
+        "src/seektalent_runtime_control/source_operations.py",
+        "src/seektalent_runtime_control/source_reconciliation.py",
+        "src/seektalent_runtime_control/store.py",
+    }
+    production_turnover_callers = [
+        path.relative_to(PROJECT_ROOT).as_posix()
+        for path in (PROJECT_ROOT / "src").rglob("*.py")
+        if path != PROJECT_ROOT / "src" / "seektalent_runtime_control" / "store.py"
+        and ".mint_safe_retry_dispatch_epoch(" in path.read_text(encoding="utf-8")
+    ]
+    assert production_turnover_callers == []
 
 
 def test_dispatch_plan_keeps_delivery_out_of_the_durable_digest_allowlist() -> None:

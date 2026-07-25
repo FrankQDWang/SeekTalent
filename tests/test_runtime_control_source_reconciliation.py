@@ -170,7 +170,7 @@ def test_v10_reconciliation_migration_preserves_existing_rows_exactly(tmp_path: 
             WHERE type = 'table' AND name = 'runtime_control_source_reconciliations'
             """
         ).fetchone()[0]
-    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 11
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 12
     assert _reconciliation_rows(store.path) == before
     assert (
         "source_operation_disposition IN ('completed', 'partial', 'user_action_required', 'incompatible', 'failed')"
@@ -776,6 +776,11 @@ def _reconciliation_rows(path: Path) -> list[tuple[object, ...]]:
 
 
 def _downgrade_reconciliation_schema_to_v10(path: Path) -> None:
+    from tests.test_runtime_control_safe_retry_turnover import (
+        _downgrade_source_epochs_to_v11,
+    )
+
+    _downgrade_source_epochs_to_v11(path)
     current_clause = (
         "source_operation_disposition IN ('completed', 'partial', 'user_action_required', 'incompatible', 'failed')"
     )

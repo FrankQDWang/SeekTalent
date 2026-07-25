@@ -125,6 +125,7 @@ depends_on = [
   "seektalent.runtime",
   "seektalent.source_adapters",
   "seektalent.source_contracts",
+  "seektalent.source_port",
 ]
 
 [[modules]]
