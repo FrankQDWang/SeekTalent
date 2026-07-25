@@ -29,15 +29,23 @@ from seektalent.source_port.history_contract import (
     SQLITE_MAX_INTEGER,
 )
 from seektalent.source_port.history_sqlite_reader import (
+    LEGACY_EVENT_COLUMN_NAMES,
+    LEGACY_HEAD_COLUMN_NAMES,
+    LEGACY_SCHEMA_VERSION,
     SCHEMA_STATEMENTS,
     SCHEMA_VERSION,
+    V5_RESTORED_SCHEMA_STATEMENTS,
     MAX_DURABLE_REPLY_BYTES,
     HistorySQLiteUnavailable,
+    _EVENT_TABLE_DDL,
+    _HEAD_TABLE_DDL,
     load_validated_history_facts,
+    load_validated_legacy_history_facts,
     probe_existing_database,
     scalar_integer,
     scalar_text,
     verify_connection_pragmas,
+    verify_legacy_schema,
     verify_schema,
 )
 
@@ -256,19 +264,172 @@ def _initialize_database(path: Path) -> None:
 
 def _validate_existing_journal(path: Path) -> None:
     connection = _open_write_connection(path)
+    migrated = False
     try:
-        connection.execute("BEGIN")
-        try:
-            verify_schema(connection)
-            load_validated_history_facts(connection)
-        finally:
-            _rollback(connection)
+        version = scalar_integer(connection, "PRAGMA user_version")
+        if version == SCHEMA_VERSION:
+            _validate_v5_connection(connection)
+        elif version == LEGACY_SCHEMA_VERSION:
+            _migrate_v4_to_v5(connection)
+            migrated = True
+        else:
+            raise HistorySQLiteUnavailable("schema_mismatch")
     except HistorySQLiteUnavailable as exc:
         raise _validation_error(exc) from None
     except sqlite3.Error as exc:
         raise _sqlite_error(exc) from None
     finally:
         connection.close()
+    if migrated:
+        _validate_migrated_database(path)
+
+
+def _validate_v5_connection(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN")
+    try:
+        verify_schema(connection)
+        load_validated_history_facts(connection)
+    finally:
+        _rollback(connection)
+
+
+def _migrate_v4_to_v5(connection: sqlite3.Connection) -> None:
+    legacy_event_table = "source_history_events_v4"
+    legacy_head_table = "source_history_heads_v4"
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        verify_connection_pragmas(connection)
+        version = scalar_integer(connection, "PRAGMA user_version")
+        if version == SCHEMA_VERSION:
+            verify_schema(connection)
+            load_validated_history_facts(connection)
+            return
+        if version != LEGACY_SCHEMA_VERSION:
+            raise HistorySQLiteUnavailable("schema_mismatch")
+        verify_legacy_schema(connection)
+        load_validated_legacy_history_facts(connection)
+        _migration_checkpoint("after_validation")
+
+        for trigger in (
+            "source_history_events_no_duplicate_revision",
+            "source_history_events_no_update",
+            "source_history_events_no_delete",
+        ):
+            connection.execute(f"DROP TRIGGER {trigger}")
+        for index in (
+            "source_history_heads_run_id_idempotency_key",
+            "source_history_heads_operation_id_idempotency_key",
+        ):
+            connection.execute(f"DROP INDEX {index}")
+        connection.execute(f"ALTER TABLE source_history_events RENAME TO {legacy_event_table}")
+        connection.execute(f"ALTER TABLE source_history_heads RENAME TO {legacy_head_table}")
+        _migration_checkpoint("after_table_rename")
+
+        connection.execute(_EVENT_TABLE_DDL)
+        _migration_checkpoint("after_events_create")
+        _copy_legacy_history_table(
+            connection,
+            source_table=legacy_event_table,
+            target_table="source_history_events",
+            legacy_columns=LEGACY_EVENT_COLUMN_NAMES,
+        )
+        _migration_checkpoint("after_events_copy")
+
+        connection.execute(_HEAD_TABLE_DDL)
+        _migration_checkpoint("after_heads_create")
+        _copy_legacy_history_table(
+            connection,
+            source_table=legacy_head_table,
+            target_table="source_history_heads",
+            legacy_columns=LEGACY_HEAD_COLUMN_NAMES,
+        )
+        _migration_checkpoint("after_heads_copy")
+
+        connection.execute(f"DROP TABLE {legacy_event_table}")
+        connection.execute(f"DROP TABLE {legacy_head_table}")
+        _migration_checkpoint("after_legacy_drop")
+        for statement in V5_RESTORED_SCHEMA_STATEMENTS:
+            connection.execute(statement)
+        _migration_checkpoint("after_schema_restore")
+        connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        _migration_checkpoint("after_user_version")
+        verify_schema(connection)
+        load_validated_history_facts(connection)
+        _migration_checkpoint("after_v5_validation")
+        _commit_migration(connection)
+    finally:
+        _rollback(connection)
+
+
+def _copy_legacy_history_table(
+    connection: sqlite3.Connection,
+    *,
+    source_table: str,
+    target_table: str,
+    legacy_columns: tuple[str, ...],
+) -> None:
+    destination_columns = list(legacy_columns)
+    insertion = destination_columns.index("dispatch_authorization_ordinal") + 1
+    destination_columns[insertion:insertion] = [
+        "safe_retry_commit_ref",
+        "expected_source_operation_ledger_revision",
+        "expected_reconciliation_revision",
+    ]
+    selected_values = [
+        (
+            "NULL"
+            if column == "safe_retry_commit_ref"
+            else "1"
+            if column == "expected_source_operation_ledger_revision"
+            else "0"
+            if column == "expected_reconciliation_revision"
+            else column
+        )
+        for column in destination_columns
+    ]
+    connection.execute(
+        f"""
+        INSERT INTO {target_table}({", ".join(destination_columns)})
+        SELECT {", ".join(selected_values)} FROM {source_table}
+        """
+    )
+    source_count = scalar_integer(connection, f"SELECT COUNT(*) FROM {source_table}")
+    target_count = scalar_integer(connection, f"SELECT COUNT(*) FROM {target_table}")
+    legacy_projection = ", ".join(legacy_columns)
+    difference = connection.execute(
+        f"""
+        SELECT 1 FROM (
+            SELECT {legacy_projection} FROM {source_table}
+            EXCEPT
+            SELECT {legacy_projection} FROM {target_table}
+        )
+        UNION ALL
+        SELECT 1 FROM (
+            SELECT {legacy_projection} FROM {target_table}
+            EXCEPT
+            SELECT {legacy_projection} FROM {source_table}
+        )
+        LIMIT 1
+        """
+    ).fetchone()
+    if source_count != target_count or difference is not None:
+        raise HistorySQLiteUnavailable("corrupt")
+
+
+def _commit_migration(connection: sqlite3.Connection) -> None:
+    connection.commit()
+
+
+def _validate_migrated_database(path: Path) -> None:
+    connection = _open_write_connection(path)
+    try:
+        _validate_v5_connection(connection)
+    finally:
+        connection.close()
+
+
+def _migration_checkpoint(_: str) -> None:
+    return None
 
 
 def _start_generation(path: Path) -> tuple[int, str]:
@@ -850,6 +1011,8 @@ def _allocate_revision(connection: sqlite3.Connection) -> int:
 
 
 def _validate_accepted_input(accepted: AcceptedCommand, *, generation: int) -> None:
+    if type(accepted.dispatch_authorization_ordinal) is not int or accepted.dispatch_authorization_ordinal != 1:
+        raise ValueError("command_journal_invalid_dispatch_authorization_ordinal")
     AcceptedNoDispatchFact.model_validate(
         {
             **_accepted_fact_values(accepted),
@@ -875,6 +1038,9 @@ def _accepted_fact_values(accepted: AcceptedCommand) -> dict[str, object]:
         "accepted_requirement_revision_id": accepted.accepted_requirement_revision_id,
         "runtime_attempt_fence_ref": accepted.runtime_attempt_fence_ref,
         "dispatch_authorization_ordinal": accepted.dispatch_authorization_ordinal,
+        "safe_retry_commit_ref": None,
+        "expected_source_operation_ledger_revision": 1,
+        "expected_reconciliation_revision": 0,
         "authorized_dispatch_intent_id": accepted.authorized_dispatch_intent_id,
         "authorized_dispatch_intent_revision": accepted.authorized_dispatch_intent_revision,
         "authorized_dispatch_intent_digest": accepted.authorized_dispatch_intent_digest,
@@ -898,6 +1064,9 @@ def _accepted_values_from_row(row: sqlite3.Row) -> dict[str, object]:
         "accepted_generation",
         "accepted_journal_revision",
         "dispatch_authorization_ordinal",
+        "safe_retry_commit_ref",
+        "expected_source_operation_ledger_revision",
+        "expected_reconciliation_revision",
         "authorized_dispatch_intent_id",
         "authorized_dispatch_intent_revision",
         "authorized_dispatch_intent_digest",
@@ -1021,6 +1190,9 @@ def _identity_database_values(values: dict[str, object]) -> tuple[object, ...]:
         values["request_hash"],
         values["attempt_no"],
         values["dispatch_authorization_ordinal"],
+        values["safe_retry_commit_ref"],
+        values["expected_source_operation_ledger_revision"],
+        values["expected_reconciliation_revision"],
     )
 
 
@@ -1128,7 +1300,8 @@ def _transition_commit_acknowledged() -> None:
 
 _IDENTITY_COLUMNS = """
     run_id, operation_id, source, operation_kind, idempotency_key, request_hash,
-    attempt_no, dispatch_authorization_ordinal
+    attempt_no, dispatch_authorization_ordinal, safe_retry_commit_ref,
+    expected_source_operation_ledger_revision, expected_reconciliation_revision
 """
 
 _EVENT_INSERT = f"""
@@ -1144,7 +1317,7 @@ INSERT INTO source_history_events(
     dispatch_intent_journal_revision, observation_generation,
     observation_journal_revision, observation_ref, observation_hash,
     terminal_reply_bytes
-) VALUES ({", ".join("?" for _ in range(30))})
+) VALUES ({", ".join("?" for _ in range(33))})
 """
 
 _HEAD_INSERT = f"""
@@ -1161,5 +1334,5 @@ INSERT INTO source_history_heads(
     dispatch_intent_journal_revision, observation_generation,
     observation_journal_revision, observation_ref, observation_hash,
     terminal_reply_bytes
-) VALUES ({", ".join("?" for _ in range(30))})
+) VALUES ({", ".join("?" for _ in range(33))})
 """

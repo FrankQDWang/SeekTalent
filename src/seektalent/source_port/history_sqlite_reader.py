@@ -15,6 +15,7 @@ from seektalent.source_port.history_contract import (
     ExactAuthorizationSelector,
     HistoryUnavailableReason,
     IdentityConflictReason,
+    JSON_SAFE_INTEGER,
     MatchedHistoryFact,
     ObservedFailureFact,
     ObservedResultFact,
@@ -29,7 +30,8 @@ from seektalent.source_port.history_contract import (
 
 
 QUERY_RESULT_CONTRACT_VERSION = "seektalent.source-port.query.result/v1"
-SCHEMA_VERSION = 4
+LEGACY_SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 MAX_DURABLE_REPLY_BYTES = 65_536
 
 
@@ -133,10 +135,18 @@ class SourceHistorySQLiteReader:
             if not exact_rows:
                 return SourceHistoryNotFound.model_validate({**complete, "outcome": "not_found"}, strict=True)
             facts = tuple(facts_by_key[_head_key(row)] for row in exact_rows)
-            return SourceHistoryMatched.model_validate(
-                {**complete, "outcome": "matched", "facts": facts},
-                strict=True,
-            )
+            try:
+                return SourceHistoryMatched.model_validate(
+                    {**complete, "outcome": "matched", "facts": facts},
+                    strict=True,
+                )
+            except (TypeError, ValueError, OverflowError):
+                return _unavailable(
+                    request,
+                    "corrupt",
+                    oldest_retained=oldest_retained,
+                    newest_known=newest_known,
+                )
         except sqlite3.DatabaseError as exc:
             _require_deadline(normalized_deadline)
             return _unavailable(request, read_error(exc).reason)
@@ -265,8 +275,73 @@ def verify_schema(
     *,
     check_deadline: Callable[[], None] = lambda: None,
 ) -> None:
+    _verify_schema_version(
+        connection,
+        schema_version=SCHEMA_VERSION,
+        event_columns=_EVENT_COLUMN_NAMES,
+        head_columns=_HEAD_COLUMN_NAMES,
+        event_ddl=_EVENT_TABLE_DDL,
+        head_ddl=_HEAD_TABLE_DDL,
+        indexes=(
+            (
+                "source_history_heads_run_id_idempotency_key",
+                _HEAD_RUN_IDEMPOTENCY_INDEX_DDL,
+            ),
+            (
+                "source_history_heads_operation_id_idempotency_key",
+                _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL,
+            ),
+            (
+                "source_history_heads_operation_retry_ref",
+                _HEAD_OPERATION_RETRY_INDEX_DDL,
+            ),
+        ),
+        immutable_columns=_IMMUTABLE_EVENT_HEAD_COLUMNS,
+        check_deadline=check_deadline,
+    )
+
+
+def verify_legacy_schema(
+    connection: sqlite3.Connection,
+    *,
+    check_deadline: Callable[[], None] = lambda: None,
+) -> None:
+    _verify_schema_version(
+        connection,
+        schema_version=LEGACY_SCHEMA_VERSION,
+        event_columns=_LEGACY_EVENT_COLUMN_NAMES,
+        head_columns=_LEGACY_HEAD_COLUMN_NAMES,
+        event_ddl=_LEGACY_EVENT_TABLE_DDL,
+        head_ddl=_LEGACY_HEAD_TABLE_DDL,
+        indexes=(
+            (
+                "source_history_heads_run_id_idempotency_key",
+                _HEAD_RUN_IDEMPOTENCY_INDEX_DDL,
+            ),
+            (
+                "source_history_heads_operation_id_idempotency_key",
+                _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL,
+            ),
+        ),
+        immutable_columns=_LEGACY_IMMUTABLE_EVENT_HEAD_COLUMNS,
+        check_deadline=check_deadline,
+    )
+
+
+def _verify_schema_version(
+    connection: sqlite3.Connection,
+    *,
+    schema_version: int,
+    event_columns: tuple[str, ...],
+    head_columns: tuple[str, ...],
+    event_ddl: str,
+    head_ddl: str,
+    indexes: tuple[tuple[str, str], ...],
+    immutable_columns: tuple[str, ...],
+    check_deadline: Callable[[], None],
+) -> None:
     check_deadline()
-    if scalar_integer(connection, "PRAGMA user_version") != SCHEMA_VERSION:
+    if scalar_integer(connection, "PRAGMA user_version") != schema_version:
         raise HistorySQLiteUnavailable("schema_mismatch")
     if scalar_text(connection, "PRAGMA quick_check") != "ok":
         raise HistorySQLiteUnavailable("corrupt")
@@ -283,8 +358,8 @@ def verify_schema(
     expected_columns = {
         "source_history_state": ("singleton", "last_journal_revision", "last_sidecar_generation"),
         "source_history_generations": ("generation", "sidecar_instance_id", "retained", "complete"),
-        "source_history_events": _EVENT_COLUMN_NAMES,
-        "source_history_heads": _HEAD_COLUMN_NAMES,
+        "source_history_events": event_columns,
+        "source_history_heads": head_columns,
     }
     for table, expected in expected_columns.items():
         actual = tuple(str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall())
@@ -299,27 +374,41 @@ def verify_schema(
         "source_history_events_no_delete",
     }:
         raise HistorySQLiteUnavailable("schema_mismatch")
-    _verify_schema_sql(connection)
+    _verify_schema_sql(
+        connection,
+        event_ddl=event_ddl,
+        head_ddl=head_ddl,
+        indexes=indexes,
+    )
     _verify_foreign_keys(connection)
     try:
-        _verify_journal_consistency(connection, check_deadline=check_deadline)
+        _verify_journal_consistency(
+            connection,
+            immutable_columns=immutable_columns,
+            check_deadline=check_deadline,
+        )
     except HistorySQLiteUnavailable:
         raise
     except (IndexError, TypeError, ValueError, OverflowError) as exc:
         raise HistorySQLiteUnavailable("corrupt") from exc
 
 
-def _verify_schema_sql(connection: sqlite3.Connection) -> None:
+def _verify_schema_sql(
+    connection: sqlite3.Connection,
+    *,
+    event_ddl: str,
+    head_ddl: str,
+    indexes: tuple[tuple[str, str], ...],
+) -> None:
     expected = {
         ("table", "source_history_state"): _STATE_TABLE_DDL,
         ("table", "source_history_generations"): _GENERATION_TABLE_DDL,
-        ("table", "source_history_events"): _EVENT_TABLE_DDL,
-        ("table", "source_history_heads"): _HEAD_TABLE_DDL,
-        ("index", "source_history_heads_run_id_idempotency_key"): _HEAD_RUN_IDEMPOTENCY_INDEX_DDL,
-        ("index", "source_history_heads_operation_id_idempotency_key"): _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL,
+        ("table", "source_history_events"): event_ddl,
+        ("table", "source_history_heads"): head_ddl,
         ("trigger", "source_history_events_no_duplicate_revision"): _TRIGGER_DDLS[0],
         ("trigger", "source_history_events_no_update"): _TRIGGER_DDLS[1],
         ("trigger", "source_history_events_no_delete"): _TRIGGER_DDLS[2],
+        **{("index", name): statement for name, statement in indexes},
     }
     actual = {
         (str(row[0]), str(row[1])): row[2]
@@ -332,6 +421,8 @@ def _verify_schema_sql(connection: sqlite3.Connection) -> None:
             """
         ).fetchall()
     }
+    if set(actual) != set(expected):
+        raise HistorySQLiteUnavailable("schema_mismatch")
     for key, statement in expected.items():
         stored = actual.get(key)
         if not isinstance(stored, str) or _normalize_schema_sql(stored) != _normalize_schema_sql(statement):
@@ -371,6 +462,7 @@ def _verify_foreign_keys(connection: sqlite3.Connection) -> None:
 def _verify_journal_consistency(
     connection: sqlite3.Connection,
     *,
+    immutable_columns: tuple[str, ...],
     check_deadline: Callable[[], None],
 ) -> None:
     check_deadline()
@@ -435,6 +527,7 @@ def _verify_journal_consistency(
     head_by_key = {_head_key(head): head for head in heads}
     if set(event_groups) != set(head_by_key):
         raise HistorySQLiteUnavailable("corrupt")
+    _verify_head_aliases(heads)
 
     expected_phases = {
         "accepted": ("accepted",),
@@ -449,7 +542,7 @@ def _verify_journal_consistency(
         generations = tuple(int(event["event_generation"]) for event in grouped)
         if phases != expected_phases.get(str(head["phase"])) or generations != tuple(sorted(generations)):
             raise HistorySQLiteUnavailable("corrupt")
-        if any(event[column] != head[column] for event in grouped for column in _IMMUTABLE_EVENT_HEAD_COLUMNS):
+        if any(event[column] != head[column] for event in grouped for column in immutable_columns):
             raise HistorySQLiteUnavailable("corrupt")
         if any(
             not _is_valid_durable_reply_bytes(row[column])
@@ -506,6 +599,32 @@ def _verify_journal_consistency(
         if int(latest["journal_revision"]) != int(head["head_journal_revision"]) or int(
             latest["event_generation"]
         ) != int(head["head_generation"]):
+            raise HistorySQLiteUnavailable("corrupt")
+
+
+def _verify_head_aliases(heads: list[sqlite3.Row]) -> None:
+    logical_by_operation: dict[tuple[object, object], tuple[object, ...]] = {}
+    operation_by_run_key: dict[tuple[object, object], object] = {}
+    run_by_operation_key: dict[tuple[object, object], object] = {}
+    for head in heads:
+        run_id = head["run_id"]
+        operation_id = head["operation_id"]
+        idempotency_key = head["idempotency_key"]
+        logical_identity = (
+            head["source"],
+            head["operation_kind"],
+            idempotency_key,
+            head["request_hash"],
+            head["accepted_requirement_revision_id"],
+        )
+        operation_key = (run_id, operation_id)
+        if logical_by_operation.setdefault(operation_key, logical_identity) != logical_identity:
+            raise HistorySQLiteUnavailable("corrupt")
+        run_key = (run_id, idempotency_key)
+        if operation_by_run_key.setdefault(run_key, operation_id) != operation_id:
+            raise HistorySQLiteUnavailable("corrupt")
+        idempotency_alias = (operation_id, idempotency_key)
+        if run_by_operation_key.setdefault(idempotency_alias, run_id) != run_id:
             raise HistorySQLiteUnavailable("corrupt")
 
 
@@ -570,17 +689,21 @@ def _partition_rows(
             if isinstance(selector, ExactAuthorizationSelector)
             else True
         )
-        identity_matches = (
+        stable_identity_matches = (
             row["run_id"] == request.run_id
             and row["operation_id"] == request.operation_id
             and row["source"] == request.source
             and row["operation_kind"] == request.operation_kind
             and row["idempotency_key"] == request.idempotency_key
             and row["request_hash"] == request.request_hash
-            and int(row["attempt_no"]) == request.attempt_no
         )
-        if ordinal_matches and identity_matches:
+        attempt_matches = (
+            int(row["attempt_no"]) == request.attempt_no if isinstance(selector, ExactAuthorizationSelector) else True
+        )
+        if ordinal_matches and stable_identity_matches and attempt_matches:
             exact.append(row)
+            continue
+        if isinstance(selector, ExactAuthorizationSelector) and not ordinal_matches and stable_identity_matches:
             continue
         collision = (
             row["run_id"] == request.run_id
@@ -620,6 +743,31 @@ def load_validated_history_facts(
     *,
     check_deadline: Callable[[], None] = lambda: None,
 ) -> tuple[list[sqlite3.Row], dict[tuple[str, str, int], MatchedHistoryFact]]:
+    return _load_validated_history_facts(
+        connection,
+        legacy=False,
+        check_deadline=check_deadline,
+    )
+
+
+def load_validated_legacy_history_facts(
+    connection: sqlite3.Connection,
+    *,
+    check_deadline: Callable[[], None] = lambda: None,
+) -> tuple[list[sqlite3.Row], dict[tuple[str, str, int], MatchedHistoryFact]]:
+    return _load_validated_history_facts(
+        connection,
+        legacy=True,
+        check_deadline=check_deadline,
+    )
+
+
+def _load_validated_history_facts(
+    connection: sqlite3.Connection,
+    *,
+    legacy: bool,
+    check_deadline: Callable[[], None],
+) -> tuple[list[sqlite3.Row], dict[tuple[str, str, int], MatchedHistoryFact]]:
     rows = connection.execute(
         """
         SELECT * FROM source_history_heads
@@ -631,7 +779,8 @@ def load_validated_history_facts(
         for index, row in enumerate(rows):
             if index % 64 == 0:
                 check_deadline()
-            facts[_head_key(row)] = _fact_from_row(row)
+            facts[_head_key(row)] = _fact_from_row(row, legacy=legacy)
+        _validate_authorization_histories(facts)
     except (IndexError, TypeError, ValueError, OverflowError) as exc:
         raise HistorySQLiteUnavailable("corrupt") from exc
     check_deadline()
@@ -652,28 +801,65 @@ def _conflict_reasons(
             ("operation_kind", request.operation_kind, "operation_kind_mismatch"),
             ("idempotency_key", request.idempotency_key, "idempotency_key_mismatch"),
             ("request_hash", request.request_hash, "request_hash_mismatch"),
-            ("attempt_no", request.attempt_no, "attempt_no_mismatch"),
         )
+        if isinstance(request.authorization_selector, ExactAuthorizationSelector):
+            comparisons = (*comparisons, ("attempt_no", request.attempt_no, "attempt_no_mismatch"))
         for column, expected, reason in comparisons:
             if row[column] != expected and reason not in reasons:
                 reasons.append(reason)
     if len(exact_rows) > 1:
-        accepted_facts = {
-            (
-                row["accepted_requirement_revision_id"],
-                row["runtime_attempt_fence_ref"],
-                row["authorized_dispatch_intent_digest"],
-                row["profile_binding_generation"],
-            )
-            for row in exact_rows
-        }
-        if len(accepted_facts) > 1:
-            reasons.append("accepted_fact_mismatch")
+        accepted_requirements = {row["accepted_requirement_revision_id"] for row in exact_rows}
+        if len(accepted_requirements) > 1:
+            reasons.append("accepted_requirement_revision_mismatch")
     return tuple(reasons)
 
 
-def _fact_from_row(row: sqlite3.Row) -> MatchedHistoryFact:
-    accepted = _accepted_values_from_row(row)
+def _validate_authorization_histories(
+    facts: dict[tuple[str, str, int], MatchedHistoryFact],
+) -> None:
+    grouped: dict[tuple[str, str], list[MatchedHistoryFact]] = {}
+    for fact in facts.values():
+        grouped.setdefault((fact.run_id, fact.operation_id), []).append(fact)
+    for history in grouped.values():
+        history.sort(key=lambda fact: fact.dispatch_authorization_ordinal)
+        ordinals = tuple(fact.dispatch_authorization_ordinal for fact in history)
+        if ordinals != tuple(range(1, len(history) + 1)):
+            raise ValueError("source_history_authorization_ordinal_gap")
+        stable_identity = (
+            history[0].source,
+            history[0].operation_kind,
+            history[0].idempotency_key,
+            history[0].request_hash,
+            history[0].accepted_requirement_revision_id,
+        )
+        if any(
+            (
+                fact.source,
+                fact.operation_kind,
+                fact.idempotency_key,
+                fact.request_hash,
+                fact.accepted_requirement_revision_id,
+            )
+            != stable_identity
+            for fact in history
+        ):
+            raise ValueError("source_history_authorization_identity_mismatch")
+        retry_refs = tuple(fact.safe_retry_commit_ref for fact in history if fact.safe_retry_commit_ref is not None)
+        if len(retry_refs) != len(set(retry_refs)):
+            raise ValueError("source_history_safe_retry_commit_ref_reused")
+        for field in (
+            "attempt_no",
+            "authorized_dispatch_intent_revision",
+            "expected_source_operation_ledger_revision",
+            "expected_reconciliation_revision",
+        ):
+            values = tuple(getattr(fact, field) for fact in history)
+            if any(current <= previous for previous, current in zip(values, values[1:], strict=False)):
+                raise ValueError(f"source_history_{field}_not_increasing")
+
+
+def _fact_from_row(row: sqlite3.Row, *, legacy: bool = False) -> MatchedHistoryFact:
+    accepted = _accepted_values_from_row(row, legacy=legacy)
     common = {
         **accepted,
         "head_generation": int(row["head_generation"]),
@@ -724,7 +910,7 @@ def _fact_from_row(row: sqlite3.Row) -> MatchedHistoryFact:
     raise ValueError("source_history_unknown_phase")
 
 
-def _accepted_values_from_row(row: sqlite3.Row) -> dict[str, object]:
+def _accepted_values_from_row(row: sqlite3.Row, *, legacy: bool = False) -> dict[str, object]:
     names = (
         "run_id",
         "operation_id",
@@ -738,6 +924,9 @@ def _accepted_values_from_row(row: sqlite3.Row) -> dict[str, object]:
         "accepted_generation",
         "accepted_journal_revision",
         "dispatch_authorization_ordinal",
+        "safe_retry_commit_ref",
+        "expected_source_operation_ledger_revision",
+        "expected_reconciliation_revision",
         "authorized_dispatch_intent_id",
         "authorized_dispatch_intent_revision",
         "authorized_dispatch_intent_digest",
@@ -745,7 +934,14 @@ def _accepted_values_from_row(row: sqlite3.Row) -> dict[str, object]:
         "browser_control_scope_id",
         "controller_fence_ref",
     )
-    return {name: row[name] for name in names}
+    values = {name: row[name] for name in names if not legacy or name not in _V5_EPOCH_COLUMNS}
+    if legacy:
+        values.update(
+            safe_retry_commit_ref=None,
+            expected_source_operation_ledger_revision=1,
+            expected_reconciliation_revision=0,
+        )
+    return values
 
 
 def _query_echo(query: SourceHistoryQueryV1) -> dict[str, object]:
@@ -766,7 +962,13 @@ def scalar_text(connection: sqlite3.Connection, statement: str) -> str:
     return row[0]
 
 
-_EVENT_COLUMN_NAMES = (
+_V5_EPOCH_COLUMNS = (
+    "safe_retry_commit_ref",
+    "expected_source_operation_ledger_revision",
+    "expected_reconciliation_revision",
+)
+
+_LEGACY_EVENT_COLUMN_NAMES = (
     "journal_revision",
     "event_generation",
     "phase",
@@ -799,7 +1001,7 @@ _EVENT_COLUMN_NAMES = (
     "terminal_reply_bytes",
 )
 
-_HEAD_COLUMN_NAMES = (
+_LEGACY_HEAD_COLUMN_NAMES = (
     "run_id",
     "operation_id",
     "source",
@@ -832,7 +1034,18 @@ _HEAD_COLUMN_NAMES = (
     "terminal_reply_bytes",
 )
 
-_IMMUTABLE_EVENT_HEAD_COLUMNS = _HEAD_COLUMN_NAMES[:19]
+
+def _with_v5_epoch_columns(columns: tuple[str, ...]) -> tuple[str, ...]:
+    insertion = columns.index("dispatch_authorization_ordinal") + 1
+    return (*columns[:insertion], *_V5_EPOCH_COLUMNS, *columns[insertion:])
+
+
+_EVENT_COLUMN_NAMES = _with_v5_epoch_columns(_LEGACY_EVENT_COLUMN_NAMES)
+_HEAD_COLUMN_NAMES = _with_v5_epoch_columns(_LEGACY_HEAD_COLUMN_NAMES)
+LEGACY_EVENT_COLUMN_NAMES = _LEGACY_EVENT_COLUMN_NAMES
+LEGACY_HEAD_COLUMN_NAMES = _LEGACY_HEAD_COLUMN_NAMES
+_LEGACY_IMMUTABLE_EVENT_HEAD_COLUMNS = _LEGACY_HEAD_COLUMN_NAMES[:19]
+_IMMUTABLE_EVENT_HEAD_COLUMNS = _HEAD_COLUMN_NAMES[:22]
 _OBSERVATION_COLUMNS = (
     "observation_generation",
     "observation_journal_revision",
@@ -877,7 +1090,7 @@ CREATE TABLE source_history_generations (
 )
 """
 
-_EVENT_TABLE_DDL = f"""
+_LEGACY_EVENT_TABLE_DDL = f"""
 CREATE TABLE source_history_events (
     journal_revision INTEGER PRIMARY KEY CHECK(journal_revision >= 1),
     event_generation INTEGER NOT NULL REFERENCES source_history_generations(generation),
@@ -909,7 +1122,7 @@ CREATE TABLE source_history_events (
 )
 """
 
-_HEAD_TABLE_DDL = f"""
+_LEGACY_HEAD_TABLE_DDL = f"""
 CREATE TABLE source_history_heads (
     run_id TEXT NOT NULL, operation_id TEXT NOT NULL, source TEXT NOT NULL,
     operation_kind TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL,
@@ -941,6 +1154,124 @@ CREATE TABLE source_history_heads (
 )
 """
 
+
+_AUTHORIZATION_EPOCH_COLUMNS_DDL = f"""
+    dispatch_authorization_ordinal INTEGER NOT NULL
+        CHECK(typeof(dispatch_authorization_ordinal) = 'integer')
+        CHECK(dispatch_authorization_ordinal BETWEEN 1 AND {JSON_SAFE_INTEGER}),
+    safe_retry_commit_ref TEXT,
+    expected_source_operation_ledger_revision INTEGER NOT NULL,
+    expected_reconciliation_revision INTEGER NOT NULL
+"""
+
+_AUTHORIZATION_EPOCH_CHECK_DDL = f"""
+    CHECK(
+        (
+            dispatch_authorization_ordinal = 1
+            AND safe_retry_commit_ref IS NULL
+            AND typeof(expected_source_operation_ledger_revision) = 'integer'
+            AND expected_source_operation_ledger_revision = 1
+            AND typeof(expected_reconciliation_revision) = 'integer'
+            AND expected_reconciliation_revision = 0
+        )
+        OR (
+            dispatch_authorization_ordinal BETWEEN 2 AND {JSON_SAFE_INTEGER}
+            AND typeof(safe_retry_commit_ref) = 'text'
+            AND length(CAST(safe_retry_commit_ref AS BLOB)) BETWEEN 1 AND 256
+            AND safe_retry_commit_ref = trim(safe_retry_commit_ref)
+            AND lower(safe_retry_commit_ref) NOT LIKE 'bearer %'
+            AND lower(safe_retry_commit_ref) NOT LIKE 'basic %'
+            AND lower(safe_retry_commit_ref) NOT LIKE 'authorization:%'
+            AND lower(safe_retry_commit_ref) NOT LIKE 'authorization=%'
+            AND instr(lower(safe_retry_commit_ref), 'authorization=') = 0
+            AND typeof(expected_source_operation_ledger_revision) = 'integer'
+            AND expected_source_operation_ledger_revision BETWEEN 1 AND {JSON_SAFE_INTEGER}
+            AND typeof(expected_reconciliation_revision) = 'integer'
+            AND expected_reconciliation_revision BETWEEN 1 AND {JSON_SAFE_INTEGER}
+        )
+    )
+"""
+
+
+def _event_table_ddl(table_name: str) -> str:
+    return f"""
+CREATE TABLE {table_name} (
+    journal_revision INTEGER PRIMARY KEY
+        CHECK(typeof(journal_revision) = 'integer')
+        CHECK(journal_revision BETWEEN 1 AND {SQLITE_MAX_INTEGER}),
+    event_generation INTEGER NOT NULL REFERENCES source_history_generations(generation),
+    phase TEXT NOT NULL CHECK(phase IN ('accepted', 'dispatch_intent', 'observed_result', 'observed_failure')),
+    run_id TEXT NOT NULL, operation_id TEXT NOT NULL, source TEXT NOT NULL,
+    operation_kind TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL,
+    attempt_no INTEGER NOT NULL
+        CHECK(typeof(attempt_no) = 'integer')
+        CHECK(attempt_no BETWEEN 1 AND {JSON_SAFE_INTEGER}),
+    {_AUTHORIZATION_EPOCH_COLUMNS_DDL},
+    accepted_requirement_revision_id TEXT NOT NULL, runtime_attempt_fence_ref TEXT NOT NULL,
+    accepted_generation INTEGER NOT NULL REFERENCES source_history_generations(generation),
+    accepted_journal_revision INTEGER NOT NULL, authorized_dispatch_intent_id TEXT NOT NULL,
+    authorized_dispatch_intent_revision INTEGER NOT NULL, authorized_dispatch_intent_digest TEXT NOT NULL,
+    profile_binding_generation INTEGER NOT NULL, browser_control_scope_id TEXT, controller_fence_ref TEXT,
+    accepted_ack_bytes BLOB CHECK(
+        accepted_ack_bytes IS NULL OR (
+            typeof(accepted_ack_bytes) = 'blob' AND length(accepted_ack_bytes) BETWEEN 1 AND {MAX_DURABLE_REPLY_BYTES}
+        )
+    ),
+    durable_dispatch_intent_ref TEXT,
+    dispatch_intent_generation INTEGER REFERENCES source_history_generations(generation),
+    dispatch_intent_journal_revision INTEGER,
+    observation_generation INTEGER REFERENCES source_history_generations(generation),
+    observation_journal_revision INTEGER, observation_ref TEXT, observation_hash TEXT,
+    terminal_reply_bytes BLOB CHECK(
+        terminal_reply_bytes IS NULL OR (
+            typeof(terminal_reply_bytes) = 'blob' AND length(terminal_reply_bytes) BETWEEN 1 AND {MAX_DURABLE_REPLY_BYTES}
+        )
+    ),
+    {_AUTHORIZATION_EPOCH_CHECK_DDL}
+)
+"""
+
+
+def _head_table_ddl(table_name: str) -> str:
+    return f"""
+CREATE TABLE {table_name} (
+    run_id TEXT NOT NULL, operation_id TEXT NOT NULL, source TEXT NOT NULL,
+    operation_kind TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL,
+    attempt_no INTEGER NOT NULL
+        CHECK(typeof(attempt_no) = 'integer')
+        CHECK(attempt_no BETWEEN 1 AND {JSON_SAFE_INTEGER}),
+    {_AUTHORIZATION_EPOCH_COLUMNS_DDL},
+    accepted_requirement_revision_id TEXT NOT NULL, runtime_attempt_fence_ref TEXT NOT NULL,
+    accepted_generation INTEGER NOT NULL REFERENCES source_history_generations(generation),
+    accepted_journal_revision INTEGER NOT NULL, authorized_dispatch_intent_id TEXT NOT NULL,
+    authorized_dispatch_intent_revision INTEGER NOT NULL, authorized_dispatch_intent_digest TEXT NOT NULL,
+    profile_binding_generation INTEGER NOT NULL, browser_control_scope_id TEXT, controller_fence_ref TEXT,
+    accepted_ack_bytes BLOB CHECK(
+        accepted_ack_bytes IS NULL OR (
+            typeof(accepted_ack_bytes) = 'blob' AND length(accepted_ack_bytes) BETWEEN 1 AND {MAX_DURABLE_REPLY_BYTES}
+        )
+    ),
+    phase TEXT NOT NULL CHECK(phase IN ('accepted', 'dispatch_intent', 'observed_result', 'observed_failure')),
+    head_generation INTEGER NOT NULL REFERENCES source_history_generations(generation),
+    head_journal_revision INTEGER NOT NULL, durable_dispatch_intent_ref TEXT,
+    dispatch_intent_generation INTEGER REFERENCES source_history_generations(generation),
+    dispatch_intent_journal_revision INTEGER,
+    observation_generation INTEGER REFERENCES source_history_generations(generation),
+    observation_journal_revision INTEGER, observation_ref TEXT, observation_hash TEXT,
+    terminal_reply_bytes BLOB CHECK(
+        terminal_reply_bytes IS NULL OR (
+            typeof(terminal_reply_bytes) = 'blob' AND length(terminal_reply_bytes) BETWEEN 1 AND {MAX_DURABLE_REPLY_BYTES}
+        )
+    ),
+    {_AUTHORIZATION_EPOCH_CHECK_DDL},
+    PRIMARY KEY(run_id, operation_id, dispatch_authorization_ordinal)
+)
+"""
+
+
+_EVENT_TABLE_DDL = _event_table_ddl("source_history_events")
+_HEAD_TABLE_DDL = _head_table_ddl("source_history_heads")
+
 _HEAD_RUN_IDEMPOTENCY_INDEX_DDL = """
 CREATE INDEX source_history_heads_run_id_idempotency_key
 ON source_history_heads(run_id, idempotency_key)
@@ -949,6 +1280,12 @@ ON source_history_heads(run_id, idempotency_key)
 _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL = """
 CREATE INDEX source_history_heads_operation_id_idempotency_key
 ON source_history_heads(operation_id, idempotency_key)
+"""
+
+_HEAD_OPERATION_RETRY_INDEX_DDL = """
+CREATE UNIQUE INDEX source_history_heads_operation_retry_ref
+ON source_history_heads(run_id, operation_id, safe_retry_commit_ref)
+WHERE safe_retry_commit_ref IS NOT NULL
 """
 
 _TRIGGER_DDLS = (
@@ -973,12 +1310,28 @@ _TRIGGER_DDLS = (
     """,
 )
 
+V5_RESTORED_SCHEMA_STATEMENTS = (
+    _HEAD_RUN_IDEMPOTENCY_INDEX_DDL,
+    _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL,
+    _HEAD_OPERATION_RETRY_INDEX_DDL,
+    *_TRIGGER_DDLS,
+)
+
 SCHEMA_STATEMENTS = (
     _STATE_TABLE_DDL,
     "INSERT INTO source_history_state(singleton, last_journal_revision, last_sidecar_generation) VALUES (1, 0, 0)",
     _GENERATION_TABLE_DDL,
     _EVENT_TABLE_DDL,
     _HEAD_TABLE_DDL,
+    *V5_RESTORED_SCHEMA_STATEMENTS,
+)
+
+LEGACY_SCHEMA_STATEMENTS = (
+    _STATE_TABLE_DDL,
+    "INSERT INTO source_history_state(singleton, last_journal_revision, last_sidecar_generation) VALUES (1, 0, 0)",
+    _GENERATION_TABLE_DDL,
+    _LEGACY_EVENT_TABLE_DDL,
+    _LEGACY_HEAD_TABLE_DDL,
     _HEAD_RUN_IDEMPOTENCY_INDEX_DDL,
     _HEAD_OPERATION_IDEMPOTENCY_INDEX_DDL,
     *_TRIGGER_DDLS,

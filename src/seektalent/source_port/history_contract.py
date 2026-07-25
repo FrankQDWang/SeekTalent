@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import Field, model_validator
+from pydantic import AfterValidator, Field, model_validator
 
 from seektalent.source_port.wire_primitives import (
     ExactFalse,
-    ExactIntegerOne,
     ExactTrue,
     JSON_SAFE_INTEGER as JSON_SAFE_INTEGER,
     NonNegativeJsonInteger,
@@ -19,6 +18,20 @@ from seektalent.source_port.wire_primitives import (
     Sha256,
     StrictWireModel,
 )
+
+
+def _non_bearer_retry_ref(value: str) -> str:
+    lowered = value.casefold()
+    if (
+        value != value.strip()
+        or lowered.startswith(("bearer ", "basic ", "authorization:", "authorization="))
+        or "authorization=" in lowered
+    ):
+        raise ValueError("source_history_safe_retry_commit_ref_invalid")
+    return value
+
+
+SafeRetryCommitRef: TypeAlias = Annotated[Opaque256, AfterValidator(_non_bearer_retry_ref)]
 
 HistoryUnavailableReason: TypeAlias = Literal[
     "unknown_generation",
@@ -49,7 +62,7 @@ class _HistoryModel(StrictWireModel):
 
 class ExactAuthorizationSelector(_HistoryModel):
     kind: Literal["exact"]
-    ordinal: ExactIntegerOne
+    ordinal: PositiveJsonInteger
 
 
 class AllAuthorizationsSelector(_HistoryModel):
@@ -148,7 +161,10 @@ class _AcceptedFactBase(_HistoryModel):
     accepted_journal_revision: PositiveJsonInteger
     head_generation: PositiveJsonInteger
     head_journal_revision: PositiveJsonInteger
-    dispatch_authorization_ordinal: ExactIntegerOne
+    dispatch_authorization_ordinal: PositiveJsonInteger
+    safe_retry_commit_ref: SafeRetryCommitRef | None
+    expected_source_operation_ledger_revision: PositiveJsonInteger
+    expected_reconciliation_revision: NonNegativeJsonInteger
     authorized_dispatch_intent_id: Opaque96
     authorized_dispatch_intent_revision: PositiveJsonInteger
     authorized_dispatch_intent_digest: Sha256
@@ -163,6 +179,15 @@ class _AcceptedFactBase(_HistoryModel):
             or self.head_journal_revision < self.accepted_journal_revision
         ):
             raise ValueError("source_history_head_before_acceptance")
+        if self.dispatch_authorization_ordinal == 1:
+            if (
+                self.safe_retry_commit_ref is not None
+                or self.expected_source_operation_ledger_revision != 1
+                or self.expected_reconciliation_revision != 0
+            ):
+                raise ValueError("source_history_initial_authorization_epoch_invalid")
+        elif self.safe_retry_commit_ref is None or self.expected_reconciliation_revision == 0:
+            raise ValueError("source_history_safe_retry_authorization_epoch_invalid")
         return self
 
 
@@ -254,6 +279,11 @@ class SourceHistoryMatched(_CompleteCoverageResult):
             self.authorization_selector.ordinal,
         ):
             raise ValueError("source_history_exact_selector_mismatch")
+        if isinstance(self.authorization_selector, AllAuthorizationsSelector) and ordinals != tuple(
+            range(1, len(ordinals) + 1)
+        ):
+            raise ValueError("source_history_all_selector_ordinal_gap")
+        accepted_requirement_revision_id = self.facts[0].accepted_requirement_revision_id
         for fact in self.facts:
             if (
                 fact.run_id != self.run_id
@@ -262,13 +292,33 @@ class SourceHistoryMatched(_CompleteCoverageResult):
                 or fact.operation_kind != self.operation_kind
                 or fact.idempotency_key != self.idempotency_key
                 or fact.request_hash != self.request_hash
-                or fact.attempt_no != self.attempt_no
             ):
                 raise ValueError("source_history_matched_identity_mismatch")
+            if fact.accepted_requirement_revision_id != accepted_requirement_revision_id:
+                raise ValueError("source_history_matched_requirement_revision_mismatch")
             if not (self.searched_first_generation <= fact.accepted_generation <= self.searched_last_generation):
                 raise ValueError("source_history_fact_outside_searched_range")
             if fact.head_generation > self.newest_known_generation:
                 raise ValueError("source_history_fact_head_after_newest_generation")
+        if isinstance(self.authorization_selector, ExactAuthorizationSelector):
+            if self.facts[0].attempt_no != self.attempt_no:
+                raise ValueError("source_history_exact_attempt_mismatch")
+            return self
+        if self.facts[-1].attempt_no != self.attempt_no:
+            raise ValueError("source_history_all_latest_attempt_mismatch")
+        retry_refs = tuple(fact.safe_retry_commit_ref for fact in self.facts if fact.safe_retry_commit_ref is not None)
+        if len(set(retry_refs)) != len(retry_refs):
+            raise ValueError("source_history_safe_retry_commit_ref_reused")
+        monotonic_fields = (
+            "attempt_no",
+            "authorized_dispatch_intent_revision",
+            "expected_source_operation_ledger_revision",
+            "expected_reconciliation_revision",
+        )
+        for field in monotonic_fields:
+            values = tuple(getattr(fact, field) for fact in self.facts)
+            if any(current <= previous for previous, current in zip(values, values[1:], strict=False)):
+                raise ValueError(f"source_history_{field}_not_increasing")
         return self
 
 
