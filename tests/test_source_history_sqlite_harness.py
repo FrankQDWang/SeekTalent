@@ -158,7 +158,7 @@ def test_tests_only_harness_delegates_query_to_the_production_reader(
 def test_tests_only_harness_delegates_all_production_write_truth() -> None:
     source = inspect.getsource(SourceHistorySQLiteHarness)
 
-    assert history_sqlite_reader.SCHEMA_VERSION == 4
+    assert history_sqlite_reader.SCHEMA_VERSION == 5
     assert "create_command_journal" in source
     assert "record_accepted(accepted)" in source
     assert "source_history_sqlite_storage" not in source
@@ -291,9 +291,7 @@ def test_production_reader_interrupts_a_slow_scan_and_releases_its_snapshot(tmp_
             """,
             ((generation, f"{generation:064x}") for generation in range(1, 20_001)),
         )
-        connection.execute(
-            "UPDATE source_history_state SET last_sidecar_generation = 20000 WHERE singleton = 1"
-        )
+        connection.execute("UPDATE source_history_state SET last_sidecar_generation = 20000 WHERE singleton = 1")
         connection.commit()
     finally:
         connection.close()

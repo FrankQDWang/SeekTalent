@@ -10,6 +10,7 @@ import pytest
 
 from seektalent.source_port.history_contract import (
     AcceptedNoDispatchFact,
+    AllAuthorizationsSelector,
     DispatchNotObservedFact,
     ExactAuthorizationSelector,
     JSON_SAFE_INTEGER,
@@ -74,6 +75,9 @@ def _accepted_fact_values() -> dict[str, object]:
         "head_generation": 2,
         "head_journal_revision": 10,
         "dispatch_authorization_ordinal": 1,
+        "safe_retry_commit_ref": None,
+        "expected_source_operation_ledger_revision": 1,
+        "expected_reconciliation_revision": 0,
         "authorized_dispatch_intent_id": "intent-1",
         "authorized_dispatch_intent_revision": 1,
         "authorized_dispatch_intent_digest": HASH_C,
@@ -131,7 +135,6 @@ def test_history_wire_integer_domain_is_jcs_safe_without_narrowing_sqlite_storag
     [
         {"unknown": "field"},
         {"runtime_run_id": "legacy-alias"},
-        {"authorization_selector": {"kind": "exact", "ordinal": 2}},
         {"authorization_selector": {"kind": "anything"}},
         {"searched_first_generation": 4, "searched_last_generation": 3},
         {"accepted_generation_hint": 4},
@@ -154,8 +157,17 @@ def test_query_requires_wire_identity_literals(missing: str) -> None:
         SourceHistoryQueryV1(**payload)
 
 
-@pytest.mark.parametrize("ordinal", [True, 1.0, "1"])
-def test_exact_selector_rejects_non_integer_literal_one(ordinal: object) -> None:
+def test_exact_selector_accepts_any_positive_json_safe_ordinal() -> None:
+    payload = _query_values()
+    payload["authorization_selector"] = {"kind": "exact", "ordinal": 2}
+
+    query = SourceHistoryQueryV1(**payload)
+
+    assert query.authorization_selector == ExactAuthorizationSelector(kind="exact", ordinal=2)
+
+
+@pytest.mark.parametrize("ordinal", [True, 1.0, "1", 0, JSON_SAFE_INTEGER + 1])
+def test_exact_selector_rejects_non_positive_integer_ordinal(ordinal: object) -> None:
     payload = _query_values()
     payload["authorization_selector"] = {"kind": "exact", "ordinal": ordinal}
 
@@ -343,12 +355,204 @@ def test_matched_fact_union_has_phase_exact_nullability() -> None:
         )
 
 
-@pytest.mark.parametrize("ordinal", [True, 1.0, "1"])
-def test_fact_authorization_ordinal_rejects_non_integer_literal_one(ordinal: object) -> None:
+@pytest.mark.parametrize("ordinal", [True, 1.0, "1", 0, JSON_SAFE_INTEGER + 1])
+def test_fact_authorization_ordinal_rejects_non_positive_integer(ordinal: object) -> None:
     payload = {**_accepted_fact_values(), "dispatch_authorization_ordinal": ordinal}
 
     with pytest.raises(ValidationError):
         AcceptedNoDispatchFact(**payload, conclusion="accepted_no_dispatch")
+
+
+def test_authorization_epoch_matrix_and_multi_attempt_history_are_closed() -> None:
+    initial = AcceptedNoDispatchFact(**_accepted_fact_values(), conclusion="accepted_no_dispatch")
+    retry_values = {
+        **_accepted_fact_values(),
+        "attempt_no": 2,
+        "accepted_generation": 3,
+        "accepted_journal_revision": 11,
+        "head_generation": 3,
+        "head_journal_revision": 11,
+        "dispatch_authorization_ordinal": 2,
+        "safe_retry_commit_ref": "reconciliation-1",
+        "expected_source_operation_ledger_revision": 3,
+        "expected_reconciliation_revision": 1,
+        "runtime_attempt_fence_ref": HASH_C,
+        "authorized_dispatch_intent_id": "intent-2",
+        "authorized_dispatch_intent_revision": 2,
+        "authorized_dispatch_intent_digest": HASH_A,
+        "profile_binding_generation": 2,
+        "browser_control_scope_id": "browser-scope-2",
+        "controller_fence_ref": HASH_B,
+    }
+    retry = AcceptedNoDispatchFact(**retry_values, conclusion="accepted_no_dispatch")
+
+    exact = SourceHistoryMatched(
+        **{
+            **_result_values(),
+            "attempt_no": 2,
+            "authorization_selector": ExactAuthorizationSelector(kind="exact", ordinal=2),
+        },
+        outcome="matched",
+        oldest_retained_generation=1,
+        newest_known_generation=3,
+        history_complete=True,
+        history_truncated=False,
+        facts=(retry,),
+    )
+    all_epochs = SourceHistoryMatched(
+        **{
+            **_result_values(),
+            "attempt_no": 2,
+            "authorization_selector": AllAuthorizationsSelector(kind="all"),
+        },
+        outcome="matched",
+        oldest_retained_generation=1,
+        newest_known_generation=3,
+        history_complete=True,
+        history_truncated=False,
+        facts=(initial, retry),
+    )
+
+    assert exact.facts == (retry,)
+    assert tuple(fact.dispatch_authorization_ordinal for fact in all_epochs.facts) == (1, 2)
+    assert tuple(fact.attempt_no for fact in all_epochs.facts) == (1, 2)
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"safe_retry_commit_ref": None},
+        {"safe_retry_commit_ref": ""},
+        {"safe_retry_commit_ref": " Bearer secret"},
+        {"safe_retry_commit_ref": "Bearer secret"},
+        {"safe_retry_commit_ref": "x" * 257},
+        {"expected_source_operation_ledger_revision": 0},
+        {"expected_reconciliation_revision": 0},
+    ],
+)
+def test_retry_epoch_rejects_missing_bearer_or_invalid_revision_facts(updates: dict[str, object]) -> None:
+    payload = {
+        **_accepted_fact_values(),
+        "attempt_no": 2,
+        "dispatch_authorization_ordinal": 2,
+        "safe_retry_commit_ref": "reconciliation-1",
+        "expected_source_operation_ledger_revision": 3,
+        "expected_reconciliation_revision": 1,
+        **updates,
+    }
+
+    with pytest.raises(ValidationError):
+        AcceptedNoDispatchFact(**payload, conclusion="accepted_no_dispatch")
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"safe_retry_commit_ref": "unexpected"},
+        {"expected_source_operation_ledger_revision": 2},
+        {"expected_reconciliation_revision": 1},
+    ],
+)
+def test_initial_epoch_keeps_the_ordinal_one_matrix(updates: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        AcceptedNoDispatchFact(
+            **{**_accepted_fact_values(), **updates},
+            conclusion="accepted_no_dispatch",
+        )
+
+
+def test_all_authorizations_reject_gaps_reused_refs_and_non_monotonic_epochs() -> None:
+    initial = AcceptedNoDispatchFact(**_accepted_fact_values(), conclusion="accepted_no_dispatch")
+
+    def retry(
+        ordinal: int,
+        *,
+        attempt_no: int,
+        retry_ref: str,
+        ledger_revision: int,
+        reconciliation_revision: int,
+        accepted_requirement_revision_id: str = "requirement-1",
+    ) -> AcceptedNoDispatchFact:
+        return AcceptedNoDispatchFact(
+            **{
+                **_accepted_fact_values(),
+                "attempt_no": attempt_no,
+                "accepted_generation": 3,
+                "accepted_journal_revision": 10 + ordinal,
+                "head_generation": 3,
+                "head_journal_revision": 10 + ordinal,
+                "dispatch_authorization_ordinal": ordinal,
+                "safe_retry_commit_ref": retry_ref,
+                "expected_source_operation_ledger_revision": ledger_revision,
+                "expected_reconciliation_revision": reconciliation_revision,
+                "accepted_requirement_revision_id": accepted_requirement_revision_id,
+                "runtime_attempt_fence_ref": HASH_C,
+                "authorized_dispatch_intent_id": f"intent-{ordinal}",
+                "authorized_dispatch_intent_revision": ordinal,
+                "authorized_dispatch_intent_digest": HASH_A,
+                "profile_binding_generation": ordinal,
+            },
+            conclusion="accepted_no_dispatch",
+        )
+
+    second = retry(
+        2,
+        attempt_no=2,
+        retry_ref="reconciliation-1",
+        ledger_revision=3,
+        reconciliation_revision=1,
+    )
+    invalid_histories = (
+        (initial, second, second),
+        (initial, retry(3, attempt_no=3, retry_ref="reconciliation-2", ledger_revision=5, reconciliation_revision=2)),
+        (
+            initial,
+            second,
+            retry(3, attempt_no=3, retry_ref="reconciliation-1", ledger_revision=5, reconciliation_revision=2),
+        ),
+        (
+            initial,
+            second,
+            retry(3, attempt_no=2, retry_ref="reconciliation-2", ledger_revision=5, reconciliation_revision=2),
+        ),
+        (
+            initial,
+            second,
+            retry(3, attempt_no=3, retry_ref="reconciliation-2", ledger_revision=3, reconciliation_revision=2),
+        ),
+        (
+            initial,
+            second,
+            retry(3, attempt_no=3, retry_ref="reconciliation-2", ledger_revision=5, reconciliation_revision=1),
+        ),
+        (
+            initial,
+            retry(
+                2,
+                attempt_no=2,
+                retry_ref="reconciliation-1",
+                ledger_revision=3,
+                reconciliation_revision=1,
+                accepted_requirement_revision_id="requirement-2",
+            ),
+        ),
+    )
+
+    for facts in invalid_histories:
+        with pytest.raises(ValidationError):
+            SourceHistoryMatched(
+                **{
+                    **_result_values(),
+                    "attempt_no": facts[-1].attempt_no,
+                    "authorization_selector": AllAuthorizationsSelector(kind="all"),
+                },
+                outcome="matched",
+                oldest_retained_generation=1,
+                newest_known_generation=3,
+                history_complete=True,
+                history_truncated=False,
+                facts=facts,
+            )
 
 
 @pytest.mark.parametrize("missing", ["source", "dispatch_authorization_ordinal", "conclusion"])

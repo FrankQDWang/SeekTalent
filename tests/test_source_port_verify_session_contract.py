@@ -793,7 +793,7 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
     }
 
 
-def test_safe_retry_main_storage_widens_without_sidecar_or_production_routing() -> None:
+def test_sidecar_history_read_model_widens_without_writer_or_production_routing() -> None:
     ordinal_one_sources = {
         "runtime_control": (PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_epoch_schema.py"),
         "runtime_control_validation": (PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_operations.py"),
@@ -809,8 +809,8 @@ def test_safe_retry_main_storage_widens_without_sidecar_or_production_routing() 
     assert "dispatch.safe_retry_commit_ref is not None" in source["runtime_control_validation"]
     assert "dispatch_authorization_ordinal: Literal[1] = 1" in source["journal_types"]
     assert "dispatch_authorization_ordinal = 1" in source["journal_engine"]
-    assert "dispatch_authorization_ordinal: ExactIntegerOne" in source["history_contract"]
-    assert "CHECK(dispatch_authorization_ordinal = 1)" in source["history_reader"]
+    assert "dispatch_authorization_ordinal: PositiveJsonInteger" in source["history_contract"]
+    assert "dispatch_authorization_ordinal BETWEEN 1 AND" in source["history_reader"]
     assert "query.authorization_selector.ordinal == 1" in source["reconciliation"]
     assert "dispatch.dispatch_authorization_ordinal == 1" in source["reconciliation"]
 
@@ -822,7 +822,13 @@ def test_safe_retry_main_storage_widens_without_sidecar_or_production_routing() 
     assert production_callers == []
     safe_retry_callers = []
     for path in (PROJECT_ROOT / "src").rglob("*.py"):
-        if path in {CONTRACT_PATH, OPERATION_DISPATCH_PATH}:
+        if path in {
+            CONTRACT_PATH,
+            OPERATION_DISPATCH_PATH,
+            ordinal_one_sources["history_contract"],
+            ordinal_one_sources["history_reader"],
+            ordinal_one_sources["journal_engine"],
+        }:
             continue
         content = path.read_text(encoding="utf-8")
         if "create_safe_retry(" in content or "safe_retry_commit_ref" in content:
