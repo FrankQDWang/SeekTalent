@@ -229,7 +229,6 @@ def mint_safe_retry_dispatch_epoch(
         outbox_id=outbox_id,
         dispatch_intent_id=dispatch_intent_id,
     )
-    current_authority = issuer.require(authority)
     conn.execute("BEGIN IMMEDIATE")
     try:
         existing_row = _dispatch_row_for_safe_retry(
@@ -239,6 +238,7 @@ def mint_safe_retry_dispatch_epoch(
             reconciliation_id,
         )
         if existing_row is not None:
+            replay_authority = _require_replay_authority(authority)
             committed = _require_replay(
                 conn,
                 existing_row=existing_row,
@@ -249,33 +249,37 @@ def mint_safe_retry_dispatch_epoch(
                 expected_reconciliation_revision=(expected_reconciliation_revision),
                 outbox_id=outbox_id,
                 dispatch_intent_id=dispatch_intent_id,
-                authority=current_authority,
+                authority=replay_authority,
             )
             conn.commit()
             _inject_fault(fault_injector, "after_commit")
             return committed
 
-        if _run_row(conn, runtime_run_id) is None:
-            raise RuntimeControlLookupError("runtime_run_not_found")
         operation_row = _operation_row(
             conn,
             runtime_run_id,
             operation_id,
         )
-        if operation_row is None:
-            raise RuntimeControlLookupError("source_operation_not_found")
-        operation = source_operation_from_row(operation_row)
         latest_dispatch_row = latest_source_dispatch_row(
             conn,
             runtime_run_id,
             operation_id,
         )
-        if (
-            operation.retry_posture != "safe_retry"
-            and latest_dispatch_row is not None
-            and latest_dispatch_row["safe_retry_commit_ref"] is not None
-        ):
-            raise RuntimeControlError("source_safe_retry_idempotency_conflict")
+        if operation_row is not None:
+            operation = source_operation_from_row(operation_row)
+            if (
+                operation.retry_posture != "safe_retry"
+                and latest_dispatch_row is not None
+                and latest_dispatch_row["safe_retry_commit_ref"] is not None
+            ):
+                raise RuntimeControlError("source_safe_retry_idempotency_conflict")
+
+        current_authority = issuer.require(authority)
+        if _run_row(conn, runtime_run_id) is None:
+            raise RuntimeControlLookupError("runtime_run_not_found")
+        if operation_row is None:
+            raise RuntimeControlLookupError("source_operation_not_found")
+        operation = source_operation_from_row(operation_row)
         reconciliation_row = _reconciliation_row(
             conn,
             reconciliation_id,
@@ -750,11 +754,6 @@ def _require_replay(
     if expectation_row is None:
         raise RuntimeControlError("source_safe_retry_idempotency_conflict")
     expectation = _expectation_from_row(expectation_row)
-    _require_current_lease(
-        conn,
-        authority,
-        runtime_run_id=runtime_run_id,
-    )
     if (
         dispatch.outbox_id != outbox_id
         or dispatch.dispatch_intent_id != dispatch_intent_id
@@ -764,6 +763,7 @@ def _require_replay(
         or operation.ledger_revision != dispatch.expected_ledger_revision
         or operation.reconciliation_revision != dispatch.expected_reconciliation_revision
         or operation.retry_posture != "no_retry"
+        or authority.runtime_run_id != runtime_run_id
         or expectation.runtime_attempt_no != authority.attempt_no
         or expectation.runtime_attempt_authority_ref != authority.runtime_attempt_authority_ref
         or expectation.runtime_attempt_fence_ref != authority.runtime_attempt_fence_ref
@@ -785,6 +785,20 @@ def _require_replay(
         expectation=expectation,
         dispatch=dispatch,
     )
+
+
+def _require_replay_authority(
+    value: object,
+) -> _SafeRetryTurnoverAuthority:
+    if type(value) is not _SafeRetryTurnoverAuthority:
+        raise RuntimeControlError("source_safe_retry_idempotency_conflict")
+    try:
+        facts = value._facts
+    except AttributeError:
+        raise RuntimeControlError("source_safe_retry_idempotency_conflict") from None
+    if not isinstance(facts, tuple) or len(facts) != 10:
+        raise RuntimeControlError("source_safe_retry_idempotency_conflict")
+    return value
 
 
 def _committed_acceptance(

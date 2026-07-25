@@ -342,14 +342,24 @@ def test_safe_retry_turnover_changed_replay_conflicts_without_writes(
     tmp_path: Path,
     changes: dict[str, object],
 ) -> None:
+    from seektalent_runtime_control.store import RuntimeControlStore
+
     store, authority = _store_with_safe_retry_and_authority(tmp_path)
     store.mint_safe_retry_dispatch_epoch(
         **_turnover(authority=authority),
     )
+    store.release_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        attempt_no=2,
+        released_at="2026-07-19T00:00:09Z",
+    )
+    reopened = RuntimeControlStore(store.path)
+    reopened.initialize()
     before = _source_epoch_state(store.path)
 
     _assert_turnover_rejected(
-        store,
+        reopened,
         _turnover(authority=authority, **changes),
         "source_safe_retry_idempotency_conflict",
     )
@@ -360,6 +370,8 @@ def test_safe_retry_turnover_changed_replay_conflicts_without_writes(
 def test_safe_retry_turnover_changed_authority_replay_conflicts_without_writes(
     tmp_path: Path,
 ) -> None:
+    from seektalent_runtime_control.store import RuntimeControlStore
+
     store, authority = _store_with_safe_retry_and_authority(tmp_path)
     store.mint_safe_retry_dispatch_epoch(
         **_turnover(authority=authority),
@@ -375,10 +387,18 @@ def test_safe_retry_turnover_changed_authority_replay_conflicts_without_writes(
         browser_control_scope_id="browser_scope_changed",
         controller_fence_ref=None,
     )
+    store.release_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        attempt_no=2,
+        released_at="2026-07-19T00:00:10Z",
+    )
+    reopened = RuntimeControlStore(store.path)
+    reopened.initialize()
     before = _source_epoch_state(store.path)
 
     _assert_turnover_rejected(
-        store,
+        reopened,
         _turnover(authority=changed_authority),
         "source_safe_retry_idempotency_conflict",
     )
@@ -447,6 +467,8 @@ def test_safe_retry_turnover_statement_faults_roll_back_every_write(
 def test_safe_retry_turnover_ack_loss_after_commit_replays_exact_epoch(
     tmp_path: Path,
 ) -> None:
+    from seektalent_runtime_control.store import RuntimeControlStore
+
     store, authority = _store_with_safe_retry_and_authority(tmp_path)
 
     def lose_ack(point: str) -> None:
@@ -459,12 +481,64 @@ def test_safe_retry_turnover_ack_loss_after_commit_replays_exact_epoch(
         )
     committed_state = _source_epoch_state(store.path)
 
-    replayed = store.mint_safe_retry_dispatch_epoch(
+    reopened = RuntimeControlStore(store.path)
+    reopened.initialize()
+    replayed = reopened.mint_safe_retry_dispatch_epoch(
         **_turnover(authority=authority),
     )
 
     assert replayed.dispatch.dispatch_authorization_ordinal == 2
     assert _source_epoch_state(store.path) == committed_state
+
+
+@pytest.mark.parametrize(
+    "lease_change",
+    ("release", "expire", "newer_attempt"),
+)
+def test_safe_retry_turnover_committed_replay_ignores_later_lease_lifecycle(
+    tmp_path: Path,
+    lease_change: str,
+) -> None:
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store, authority = _store_with_safe_retry_and_authority(tmp_path)
+    committed = store.mint_safe_retry_dispatch_epoch(
+        **_turnover(authority=authority),
+    )
+
+    if lease_change == "expire":
+        with sqlite3.connect(store.path) as conn:
+            conn.execute(
+                """
+                UPDATE runtime_control_executor_leases
+                SET lease_expires_at = '2026-07-19T00:00:08Z'
+                WHERE runtime_run_id = 'runtime_run_1' AND status = 'active'
+                """
+            )
+    else:
+        store.release_executor_lease(
+            runtime_run_id="runtime_run_1",
+            executor_id="executor_1",
+            attempt_no=2,
+            released_at="2026-07-19T00:00:09Z",
+        )
+        if lease_change == "newer_attempt":
+            store.acquire_executor_lease(
+                runtime_run_id="runtime_run_1",
+                executor_id="executor_1",
+                acquired_at="2026-07-19T00:00:10Z",
+                lease_expires_at="2026-07-19T00:01:00Z",
+            )
+    before = _source_epoch_state(store.path)
+
+    reopened = RuntimeControlStore(store.path)
+    reopened.initialize()
+    replayed = reopened.mint_safe_retry_dispatch_epoch(
+        **_turnover(authority=authority),
+    )
+
+    assert replayed == committed
+    assert _source_epoch_state(store.path) == before
 
 
 def test_identical_concurrent_turnovers_return_the_same_single_epoch(
