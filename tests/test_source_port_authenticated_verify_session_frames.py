@@ -46,18 +46,18 @@ SIDECAR_TO_MAIN_KEY = bytes(range(32, 64))
 VERIFY_SESSION_FRAME_VECTORS = {
     "submit": {
         "length": 2097,
-        "auth_tag": "86114ea7037c7f9d6fdc673878d5027a29fa97398d5dd5ed04d37b5bcfbdab71",
-        "sha256": "2d11ddbf81590534a3911906bcc1f5d18423f90ee23749856195b077429f4a8d",
+        "auth_tag": "8ad23c680f5663a8af4dfdb7ab47826ae4d03098f73192fc6fe26068d0c8847b",
+        "sha256": "3a83835fc7efefe958bf7c1159f85ed12b1e2c71353b93b78925fc7178153171",
     },
     "accepted_ack": {
         "length": 1675,
-        "auth_tag": "44b59d8922f0ca68a5538cb24262668dd3b364559492db143095ef6535a8e1a9",
-        "sha256": "7cef081d1d8b3e02aab7d5431788d17dbb7ef2dc10aa8763f2831c429b7daeee",
+        "auth_tag": "767c255d52b4e7e4e40a4deef0f4a3c24d6917db10bf5faa5bd1a376a155a072",
+        "sha256": "b2a3482fbdf2eeb2786a436275f7a1c641e76276870b8857d4939c45f26ec047",
     },
     "result": {
         "length": 1543,
-        "auth_tag": "1d5469b50b34fc879b02625343f6267b613bb8113daf78d55fdba99abe13b83e",
-        "sha256": "6418e044c7d1c8ec4e43026a2821116e563821a4992f48f513493966fa5a99f3",
+        "auth_tag": "5d79fbd74504c93ee18faf2d0e2f316fa1b196a540d9ae2244b5035223aa89fb",
+        "sha256": "792591d876ba98101afa1b5e1645fb99d431e3a7b112d37c8f7ee0a2cab34eb9",
     },
 }
 
@@ -654,8 +654,10 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert set(callers) == {
         "src/seektalent/source_history_reconciliation.py",
+        "src/seektalent/source_port/_safe_retry_continuity_store.py",
         "src/seektalent/source_port/authenticated_source_port_session.py",
         "src/seektalent/source_port/sidecar_transport.py",
+        "src/seektalent/source_port/verify_session_continuity_admission.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
     }

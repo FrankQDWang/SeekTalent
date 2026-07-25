@@ -467,18 +467,18 @@ Readiness closed values：`ready|degraded|not_ready|draining`。缺 extension、
 
 - operation contract version、source、operation kind；
 - `run_id/operation_id/accepted_requirement_revision_id`；
-- `profile_binding_generation`，以及operation body中的opaque profile/account binding refs；binding变化不是同一idempotent intent；
+- operation body中的opaque profile/account binding refs；binding reference变化不是同一idempotent intent；
 - 完整 operation-specific body；
 - item-level idempotency data（若有）。
 
-明确排除：attempt number、raw runtime token/token ref、deadline、correlation ID、browser control scope ID、transport session/message/sequence、wall time、sidecar generation、main expected revisions 和 `DispatchIntentV1`。这样同一logical operation可在新runtime attempt中保持same hash，但不能跨profile/account binding generation透明续跑；业务 intent hash 与可重放的 main dispatch authorization digest 分离。每次dispatch仍需重新验证当前runtime/profile/browser authorities。
+明确排除：attempt number、raw runtime token/token ref、deadline、correlation ID、`profile_binding_generation`、browser control scope ID、transport session/message/sequence、wall time、sidecar generation、main expected revisions、dispatch authorization ordinal/digest 和 `safe_retry_commit_ref`。这样同一logical operation可在新runtime/profile/browser authority epoch中保持same hash；业务 intent hash 与可重放的 main dispatch authorization digest 分离。Opaque profile/account binding reference或真正的operation body变化仍必须改变hash。每次dispatch仍需重新验证当前runtime/profile/browser authorities。
 
 ### 8.2 Required behavior
 
 - same idempotency key + same request hash + same operation ID：返回同一 logical operation。`outbox_redelivery` 必须复用 exact dispatch intent digest；已 accepted/dispatch/observed/reconciled 时只 replay ack/status/result，不得再次产生 browser side effect。
 - same key + different hash，或 same key被另一operation ID使用：`idempotency_conflict`，在dispatch前拒绝。
 - same operation ID + different key/hash：identity conflict；不得猜测哪一份正确。
-- Same-key transport replay 可携带当前 raw token/ref 以通过 request authentication，但 new attempt/token/deadline 不授予 dispatch。已 accepted/in-flight record 的 deadline 不延长。只有 main 已按 #324 以 expected-revision CAS commit `safe_retry`，并发送 §5.5 exact `safe_retry` intent/ref/revisions，sidecar 才能在同 logical operation 下创建新 dispatch attempt 并接受新 deadline。Binding generation变化时main先reconcile旧operation，再创建新的operation/key；不得透明换profile/account。
+- Same-key transport replay 可携带当前 raw token/ref 以通过 request authentication，但 new attempt/token/deadline 不授予 dispatch。已 accepted/in-flight record 的 deadline 不延长。只有 main 已按 #324 以 expected-revision CAS commit `safe_retry`，并发送 §5.5 exact `safe_retry` intent/ref/revisions，sidecar 才能在同 logical operation 下创建新 authorization epoch 并接受新 deadline。Binding generation只是epoch authority，轮换本身不创建新的logical operation/key，也不改变request hash；sidecar仍须验证当前generation。Opaque profile/account binding reference变化则是新的logical intent，必须改变hash并按identity conflict规则fail closed。
 - `safe_retry` intent 只是载体；sidecar 验证 digest/ref/revision 和当前 authorities，不从 ref 计算 posture，不可修改 main decision。`reconcile_first`/missing/stale authorization 时任何 submit 都只能 query/replay 已有事实或拒绝。
 - Result business payload已从sidecar protected spool删除时，sidecar返回immutable result hash、`main_commit_ref`和`payload_released`；main从自己的durable truth读，不重新执行。
 
@@ -583,7 +583,7 @@ accepted -> dispatch_intent -> observed -> reconciled
 - `observed`：conclusive/unknown observation、result spool hash/ref/size、safe counts/reason durable；first sidecar observation 的 Failure Envelope/Operation Evidence/MainSemantic refs 为 null，receipt refs 只 exact echo main 已下发值；commit后才发Result/Failure。
 - `reconciled`：main expected ledger/reconciliation revision、main commit ref和main-authored semantic refs durable；commit后才可压缩result body/event detail。
 
-同一 authorization epoch 可有多个 browser command intent/observation event，但该 epoch 的 head phase 不倒退，command ordinal严格递增。只有 #324 main commit `safe_retry` 后才能创建下一 authorization ordinal；前一 epoch 必须已由完整 journal/reconcile 证明 no-dispatch 并关联 main reconciliation ref。新 epoch 重新从 durable `accepted` 开始，但 logical operation identity/key/hash 不变。Observation不一定conclusive；unknown仍是observed external fact，不能伪造result。
+同一 authorization epoch 可有多个 browser command intent/observation event，但该 epoch 的 head phase 不倒退，command ordinal严格递增。只有 #324 main commit exact `safe_retry` ref/revisions/digest 后才能创建下一 authorization ordinal。当前 no-dispatch continuity admission 还要求全部retained generation/history完整、ordinal连续，且前一epoch最终head仍是`accepted_no_dispatch`；任何`dispatch_intent`、observed、terminal或unknown/ambiguous history都fail closed。新 epoch 只重新固化为 durable `accepted_no_dispatch`，不创建dispatch intent或effect authority；logical operation identity/key/hash保持不变。Observation不一定conclusive；unknown仍是observed external fact，不能伪造result。
 
 ### 10.3 SQLite transaction 与 sync policy
 
@@ -596,6 +596,8 @@ accepted -> dispatch_intent -> observed -> reconciled
 5. 确认 database + active rollback-journal sync/commit 成功后才越过对应外部边界。
 
 `accepted/dispatch_intent/observed/reconciled/retention_release` 全部 FULL-sync。Progress不持久化。Protected result spool必须先atomic write、fsync file、fsync parent dir，再让`observed` transaction引用它。Drain 在 rollback mode 下等待 active transaction 结束，验证无未恢复 hot journal，执行 bounded integrity/flush check 并 fsync 需要的 DB/data-root metadata；不运行 WAL checkpoint，不以删除 `-journal` 文件伪造 drained success。
+
+Ordinal `N > 1` 的 no-dispatch continuity admission必须把v5 schema/history/generation coverage读取、continuity验证、revision分配、immutable event、head与canonical accepted-ack bytes固化放在同一个`BEGIN IMMEDIATE` transaction中。Ack hash/ref是该durable canonical bytes的SHA-256投影。Commit前任何异常全部rollback；commit后的delivery丢失由重启后的exact authenticated redelivery读取同一bytes并逐字节返回，且不新增row、dispatch intent、effect或authority。
 
 WAL 是 gated future migration，不是 v1 实现自由度。只有 product 固定 actual SQLite build、该 build 包含适用的 upstream WAL-reset 修复、Windows 11 x64/macOS arm64/macOS x86_64 全部通过真实文件+多连接+process-kill/power-loss+checkpoint/reset+upgrade/rollback matrix，且独立 ADR 明确批准迁移与回滚后，才能改变 journal mode。任一条不满足就继续 rollback journal。
 
