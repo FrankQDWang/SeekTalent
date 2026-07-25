@@ -294,6 +294,7 @@ def reconciliation_dispatch_ack_requires_update(
         or dispatch_ack.dispatch_intent_revision != dispatch.dispatch_intent_revision
         or dispatch_ack.dispatch_intent_digest != dispatch.dispatch_intent_digest
         or dispatch_ack.dispatch_authorization_ordinal != dispatch.dispatch_authorization_ordinal
+        or dispatch_ack.safe_retry_commit_ref != dispatch.safe_retry_commit_ref
         or dispatch_ack.source_operation_acceptance_ref != dispatch.source_operation_acceptance_ref
         or dispatch_ack.expected_ledger_revision != dispatch.expected_ledger_revision
         or dispatch_ack.expected_reconciliation_revision != dispatch.expected_reconciliation_revision
@@ -304,14 +305,17 @@ def reconciliation_dispatch_ack_requires_update(
     return True
 
 
-def source_dispatch_is_initially_deliverable(
+def source_dispatch_is_currently_deliverable(
     dispatch: SourceDispatchMetadata,
     operation: SourceOperationRecord,
+    *,
+    latest_dispatch_authorization_ordinal: int,
 ) -> bool:
     return (
         dispatch.status == "pending"
         and dispatch.outbox_revision == 1
-        and operation.operation_phase == "accepted"
+        and dispatch.dispatch_authorization_ordinal == latest_dispatch_authorization_ordinal
+        and operation.operation_phase in {"accepted", "reconciled"}
         and operation.dispatch_intent_ref is None
         and operation.conclusive_observation_ref is None
         and operation.source_operation_disposition is None

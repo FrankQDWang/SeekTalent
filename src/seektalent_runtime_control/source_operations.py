@@ -73,6 +73,9 @@ class SourceOperationRecord:
 class SourceOperationAdmissionExpectation:
     runtime_run_id: str
     operation_id: str
+    dispatch_authorization_ordinal: int
+    runtime_attempt_no: int
+    runtime_attempt_authority_ref: str
     runtime_attempt_fence_ref: str
     profile_binding_generation: int
     browser_control_scope_id: str | None
@@ -89,6 +92,7 @@ class SourceDispatchMetadata:
     dispatch_intent_revision: int
     dispatch_intent_digest: str
     dispatch_authorization_ordinal: int
+    safe_retry_commit_ref: str | None
     source_operation_acceptance_ref: str
     expected_ledger_revision: int
     expected_reconciliation_revision: int
@@ -142,9 +146,17 @@ def validate_source_operation_acceptance(
     _require_opaque(accepted_requirement_revision_id, "accepted_requirement_revision_id", max_bytes=96)
     _require_positive(runtime_attempt_no, "runtime_attempt_no")
     _require_opaque(runtime_attempt_authority_ref, "runtime_attempt_authority_ref", max_bytes=256)
+    _require_exact_int(
+        dispatch_authorization_ordinal,
+        expected=1,
+        reason_code="source_dispatch_authorization_ordinal_invalid",
+    )
     validate_source_operation_admission_expectation(
         runtime_run_id=runtime_run_id,
         operation_id=operation_id,
+        dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+        runtime_attempt_no=runtime_attempt_no,
+        runtime_attempt_authority_ref=runtime_attempt_authority_ref,
         runtime_attempt_fence_ref=runtime_attempt_fence_ref,
         profile_binding_generation=profile_binding_generation,
         browser_control_scope_id=browser_control_scope_id,
@@ -154,11 +166,6 @@ def validate_source_operation_acceptance(
     _require_opaque(dispatch_intent_id, "dispatch_intent_id", max_bytes=96)
     _require_positive(dispatch_intent_revision, "dispatch_intent_revision")
     _require_sha256(dispatch_intent_digest, "dispatch_intent_digest")
-    _require_exact_int(
-        dispatch_authorization_ordinal,
-        expected=1,
-        reason_code="source_dispatch_authorization_ordinal_invalid",
-    )
     _require_opaque(source_operation_acceptance_ref, "source_operation_acceptance_ref", max_bytes=256)
     _require_exact_int(
         expected_ledger_revision,
@@ -176,6 +183,9 @@ def validate_source_operation_admission_expectation(
     *,
     runtime_run_id: str,
     operation_id: str,
+    dispatch_authorization_ordinal: int,
+    runtime_attempt_no: int,
+    runtime_attempt_authority_ref: str,
     runtime_attempt_fence_ref: str,
     profile_binding_generation: int,
     browser_control_scope_id: str | None,
@@ -183,6 +193,19 @@ def validate_source_operation_admission_expectation(
 ) -> None:
     _require_opaque(runtime_run_id, "runtime_run_id", max_bytes=96)
     _require_opaque(operation_id, "operation_id", max_bytes=96)
+    _require_positive_json_safe(
+        dispatch_authorization_ordinal,
+        "dispatch_authorization_ordinal",
+    )
+    if dispatch_authorization_ordinal == 1:
+        _require_positive(runtime_attempt_no, "runtime_attempt_no")
+    else:
+        _require_positive_json_safe(runtime_attempt_no, "runtime_attempt_no")
+    _require_opaque(
+        runtime_attempt_authority_ref,
+        "runtime_attempt_authority_ref",
+        max_bytes=256,
+    )
     _require_sha256(runtime_attempt_fence_ref, "runtime_attempt_fence_ref")
     _require_positive_json_safe(profile_binding_generation, "profile_binding_generation")
     if browser_control_scope_id is not None:
@@ -261,6 +284,7 @@ def source_dispatch_from_row(row: sqlite3.Row) -> SourceDispatchMetadata:
         dispatch_intent_revision=int(row["dispatch_intent_revision"]),
         dispatch_intent_digest=row["dispatch_intent_digest"],
         dispatch_authorization_ordinal=int(row["dispatch_authorization_ordinal"]),
+        safe_retry_commit_ref=row["safe_retry_commit_ref"],
         source_operation_acceptance_ref=row["source_operation_acceptance_ref"],
         expected_ledger_revision=int(row["expected_ledger_revision"]),
         expected_reconciliation_revision=int(row["expected_reconciliation_revision"]),
@@ -280,6 +304,9 @@ def source_operation_admission_expectation_from_row(
     return SourceOperationAdmissionExpectation(
         runtime_run_id=row["runtime_run_id"],
         operation_id=row["operation_id"],
+        dispatch_authorization_ordinal=int(row["dispatch_authorization_ordinal"]),
+        runtime_attempt_no=int(row["runtime_attempt_no"]),
+        runtime_attempt_authority_ref=row["runtime_attempt_authority_ref"],
         runtime_attempt_fence_ref=row["runtime_attempt_fence_ref"],
         profile_binding_generation=row["profile_binding_generation"],
         browser_control_scope_id=row["browser_control_scope_id"],
@@ -321,13 +348,19 @@ def expectation_matches_operation(
 def expectation_matches_acceptance(
     expectation: SourceOperationAdmissionExpectation,
     *,
+    dispatch_authorization_ordinal: int,
+    runtime_attempt_no: int,
+    runtime_attempt_authority_ref: str,
     runtime_attempt_fence_ref: str,
     profile_binding_generation: int,
     browser_control_scope_id: str | None,
     controller_fence_ref: str | None,
 ) -> bool:
     return (
-        expectation.runtime_attempt_fence_ref == runtime_attempt_fence_ref
+        expectation.dispatch_authorization_ordinal == dispatch_authorization_ordinal
+        and expectation.runtime_attempt_no == runtime_attempt_no
+        and expectation.runtime_attempt_authority_ref == runtime_attempt_authority_ref
+        and expectation.runtime_attempt_fence_ref == runtime_attempt_fence_ref
         and expectation.profile_binding_generation == profile_binding_generation
         and expectation.browser_control_scope_id == browser_control_scope_id
         and expectation.controller_fence_ref == controller_fence_ref
@@ -342,9 +375,21 @@ def dispatch_matches_operation(
         dispatch.runtime_run_id == operation.runtime_run_id
         and dispatch.operation_id == operation.operation_id
         and dispatch.canonical_request_hash == operation.canonical_request_hash
-        and dispatch.dispatch_authorization_ordinal == 1
-        and dispatch.expected_ledger_revision == 1
-        and dispatch.expected_reconciliation_revision == 0
+        and (
+            (
+                dispatch.dispatch_authorization_ordinal == 1
+                and dispatch.safe_retry_commit_ref is None
+                and dispatch.expected_ledger_revision == 1
+                and dispatch.expected_reconciliation_revision == 0
+            )
+            or (
+                1 < dispatch.dispatch_authorization_ordinal <= _JSON_SAFE_INTEGER_MAX
+                and dispatch.safe_retry_commit_ref is not None
+                and 1 <= dispatch.dispatch_intent_revision <= _JSON_SAFE_INTEGER_MAX
+                and 1 <= dispatch.expected_ledger_revision <= _JSON_SAFE_INTEGER_MAX
+                and 1 <= dispatch.expected_reconciliation_revision <= _JSON_SAFE_INTEGER_MAX
+            )
+        )
     )
 
 
@@ -357,6 +402,7 @@ def dispatch_matches_acceptance(
     dispatch_intent_revision: int,
     dispatch_intent_digest: str,
     dispatch_authorization_ordinal: int,
+    safe_retry_commit_ref: str | None,
     source_operation_acceptance_ref: str,
     expected_ledger_revision: int,
     expected_reconciliation_revision: int,
@@ -368,6 +414,7 @@ def dispatch_matches_acceptance(
         and dispatch.dispatch_intent_revision == dispatch_intent_revision
         and dispatch.dispatch_intent_digest == dispatch_intent_digest
         and dispatch.dispatch_authorization_ordinal == dispatch_authorization_ordinal
+        and dispatch.safe_retry_commit_ref == safe_retry_commit_ref
         and dispatch.source_operation_acceptance_ref == source_operation_acceptance_ref
         and dispatch.expected_ledger_revision == expected_ledger_revision
         and dispatch.expected_reconciliation_revision == expected_reconciliation_revision
