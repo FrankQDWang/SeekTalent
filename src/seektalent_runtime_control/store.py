@@ -224,11 +224,12 @@ class RuntimeControlStore:
                     conn.rollback()
                     raise
             else:
+                _create_schema(conn)
+                _create_source_operation_schema(conn)
+                _create_source_reconciliation_schema(conn)
+                _create_source_operation_admission_expectation_schema(conn)
+                conn.execute("BEGIN IMMEDIATE")
                 with conn:
-                    _create_schema(conn)
-                    _create_source_operation_schema(conn)
-                    _create_source_reconciliation_schema(conn)
-                    _create_source_operation_admission_expectation_schema(conn)
                     create_failure_envelope_schema(conn)
                     conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
@@ -3214,7 +3215,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           reason_code TEXT,
           UNIQUE(runtime_run_id, attempt_no)
         );
-
         CREATE TABLE IF NOT EXISTS runtime_control_events (
           event_id TEXT PRIMARY KEY,
           runtime_run_id TEXT NOT NULL,

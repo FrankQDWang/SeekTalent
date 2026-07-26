@@ -81,6 +81,61 @@ def test_fresh_runtime_control_schema_v13_owns_failure_envelope_table(
     assert "idx_runtime_failure_envelopes_run" in indexes
 
 
+@pytest.mark.parametrize("completed_statements", (1, 2, 3))
+def test_fresh_failure_envelope_ddl_failure_rolls_back_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    completed_statements: int,
+) -> None:
+    import seektalent.diagnostics_storage as storage_module
+    from seektalent.diagnostics_storage import FailureEnvelopeStorageError
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = tmp_path / "runtime_control.sqlite3"
+    statements = storage_module._SCHEMA_STATEMENTS
+    monkeypatch.setattr(
+        storage_module,
+        "_SCHEMA_STATEMENTS",
+        (*statements[:completed_statements], "CREATE TABL injected_invalid_statement"),
+    )
+
+    with pytest.raises(FailureEnvelopeStorageError) as exc_info:
+        RuntimeControlStore(path).initialize()
+
+    assert exc_info.value.reason == "failure_envelope_schema_failed"
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
+        assert (
+            conn.execute(
+                """
+                SELECT type, name
+                FROM sqlite_master
+                WHERE name LIKE '%failure_envelope%'
+                  AND name NOT LIKE 'sqlite_autoindex%'
+                """
+            ).fetchall()
+            == []
+        )
+
+    monkeypatch.setattr(storage_module, "_SCHEMA_STATEMENTS", statements)
+    RuntimeControlStore(path).initialize()
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert (
+            conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM sqlite_master
+                WHERE name LIKE '%failure_envelope%'
+                  AND name NOT LIKE 'sqlite_autoindex%'
+                """
+            ).fetchone()[0]
+            == 6
+        )
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
 def test_real_v12_to_v13_migration_creates_backup_and_reopens(
     tmp_path: Path,
 ) -> None:
