@@ -866,13 +866,21 @@ def test_storage_abort_has_no_partial_row_and_database_integrity_is_ok(
 
 def test_sidecar_browser_source_and_wtscli_have_zero_writer_calls_or_table_access() -> None:
     root = Path(__file__).parents[1] / "src"
+    seektalent_root = root / "seektalent"
     forbidden_roots = (
-        root / "seektalent" / "opencli_browser",
-        root / "seektalent" / "source_adapters",
-        root / "seektalent" / "source_contracts",
-        root / "seektalent" / "source_port",
-        root / "seektalent" / "sources",
-        root / "seektalent" / "providers",
+        seektalent_root / "opencli_browser",
+        seektalent_root / "source_adapters",
+        seektalent_root / "source_contracts",
+        seektalent_root / "source_port",
+        seektalent_root / "sources",
+        seektalent_root / "providers",
+    )
+    root_module_patterns = (
+        "sidecar_*.py",
+        "wtscli_*.py",
+        "browser_bridge_*.py",
+        "owned_sidecar_process.py",
+        "windows_sidecar_process.py",
     )
     source_suffixes = {
         ".py",
@@ -892,15 +900,23 @@ def test_sidecar_browser_source_and_wtscli_have_zero_writer_calls_or_table_acces
         "runtime_control_db_path",
         "runtime_control.sqlite3",
     )
+    forbidden_files: set[Path] = set()
+    for pattern in root_module_patterns:
+        matches = set(seektalent_root.glob(pattern))
+        assert matches, f"missing source-boundary modules for pattern: {pattern}"
+        assert all(path.is_file() for path in matches)
+        forbidden_files.update(matches)
     violations: list[str] = []
     for package_root in forbidden_roots:
         assert package_root.is_dir(), f"missing source-boundary root: {package_root}"
         for path in package_root.rglob("*"):
-            if not path.is_file() or path.suffix not in source_suffixes:
-                continue
-            source = path.read_text(encoding="utf-8")
-            if any(token in source for token in forbidden_access):
-                violations.append(str(path.relative_to(root)))
+            if path.is_file() and path.suffix in source_suffixes:
+                forbidden_files.add(path)
+    assert forbidden_files
+    for path in sorted(forbidden_files):
+        source = path.read_text(encoding="utf-8")
+        if any(token in source for token in forbidden_access):
+            violations.append(str(path.relative_to(root)))
     assert violations == []
 
 
