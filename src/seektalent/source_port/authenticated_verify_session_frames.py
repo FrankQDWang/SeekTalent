@@ -127,6 +127,10 @@ class VerifySessionAcceptedAckV1(_VerifySessionFrameModel):
             validate_dispatch_authorization(self.identity, self.dispatch_authorization)
         except ValueError:
             raise ValueError("verify_session_frame_ack_authorization_invalid") from None
+        ordinal = self.dispatch_authorization.dispatch_authorization_ordinal
+        expected_fact = "dispatch_authorized" if ordinal == 1 else "accepted_no_dispatch"
+        if self.accepted_fact != expected_fact:
+            raise ValueError("verify_session_frame_ack_fact_invalid")
         return self
 
 

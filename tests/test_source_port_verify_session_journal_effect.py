@@ -758,6 +758,91 @@ def test_tampered_durable_ack_position_fails_closed_before_reply_or_effect(tmp_p
     assert effect.calls == 0
 
 
+def test_tampered_durable_ack_fact_fails_closed_before_reply_dispatch_or_effect(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    first_main, first = _composition(path, effect, session_id="session-1")
+    with patch.object(journal_effect, "_record_dispatch_intent", side_effect=SystemExit("crash")):
+        with pytest.raises(SystemExit, match="crash"):
+            _submit(first_main, first, _request())
+    assert _journal_phases(path) == [("accepted",)]
+
+    with sqlite3.connect(path) as connection:
+        current_ack = connection.execute(
+            """
+            SELECT accepted_ack_bytes FROM source_history_heads
+            WHERE dispatch_authorization_ordinal = 1
+            """
+        ).fetchone()[0]
+        parsed_ack = VerifySessionAcceptedAckV1.model_validate_json(current_ack, strict=True)
+        tampered_ack = canonical_json_bytes(
+            parsed_ack.model_copy(update={"accepted_fact": "accepted_no_dispatch"}).model_dump(mode="json")
+        )
+        event_trigger = connection.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'trigger' AND name = 'source_history_events_no_update'
+            """
+        ).fetchone()[0]
+        connection.execute("DROP TRIGGER source_history_events_no_update")
+        connection.execute(
+            """
+            UPDATE source_history_events SET accepted_ack_bytes = ?
+            WHERE dispatch_authorization_ordinal = 1
+            """,
+            (tampered_ack,),
+        )
+        connection.execute(
+            """
+            UPDATE source_history_heads SET accepted_ack_bytes = ?
+            WHERE dispatch_authorization_ordinal = 1
+            """,
+            (tampered_ack,),
+        )
+        connection.execute(event_trigger)
+        connection.commit()
+        before_rows = (
+            connection.execute("SELECT COUNT(*) FROM source_history_events").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_history_heads").fetchone()[0],
+            connection.execute("SELECT last_journal_revision FROM source_history_state WHERE singleton = 1").fetchone()[
+                0
+            ],
+        )
+
+    replay_main, replay = _composition(path, effect, session_id="session-2", reopen=True)
+    with (
+        patch.object(
+            PostHandshakeVerifySessionSession,
+            "encode_accepted_ack",
+            side_effect=AssertionError("reply emitted for an invalid durable ack"),
+        ) as reply,
+        patch.object(
+            journal_effect,
+            "_record_dispatch_intent",
+            side_effect=AssertionError("dispatch intent recorded for an invalid durable ack"),
+        ) as dispatch,
+    ):
+        with pytest.raises(journal_effect.VerifySessionJournalEffectError) as failure:
+            _submit(replay_main, replay, _request())
+
+    assert failure.value.reason is journal_effect.VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID
+    assert reply.call_count == 0
+    assert dispatch.call_count == 0
+    assert effect.calls == 0
+    assert _journal_phases(path) == [("accepted",)]
+    with sqlite3.connect(path) as connection:
+        after_rows = (
+            connection.execute("SELECT COUNT(*) FROM source_history_events").fetchone()[0],
+            connection.execute("SELECT COUNT(*) FROM source_history_heads").fetchone()[0],
+            connection.execute("SELECT last_journal_revision FROM source_history_state WHERE singleton = 1").fetchone()[
+                0
+            ],
+        )
+    assert after_rows == before_rows
+
+
 def test_terminal_reply_bytes_are_immutable_against_the_history_head(tmp_path: Path) -> None:
     path = tmp_path / "journal.sqlite3"
     main, composition = _composition(path, _Effect(), session_id="session-1")

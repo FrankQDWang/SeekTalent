@@ -259,7 +259,8 @@ def _validate_durable_accepted_ack(
     if not accepted_ack_matches_request:
         raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_CONFLICT)
     if (
-        accepted_ack.accepted_generation != receipt.accepted_generation
+        accepted_ack.accepted_fact != "dispatch_authorized"
+        or accepted_ack.accepted_generation != receipt.accepted_generation
         or accepted_ack.accepted_journal_revision != receipt.accepted_journal_revision
     ):
         raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)

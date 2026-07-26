@@ -608,6 +608,77 @@ def test_sqlite_commit_failure_with_active_transaction_rolls_back_without_a_repl
     assert _row_counts(path) == (1, 1, 1)
 
 
+def test_ordinal_two_dispatch_authorized_ack_is_journal_corrupt_without_mutation(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "journal.sqlite3"
+    _, retry_session = _seed_ordinal_one(path)
+    created = _submit(
+        _composition(retry_session, _sidecar()),
+        _main(),
+        _safe_retry_request(),
+    )
+    assert created.disposition == "created"
+
+    with sqlite3.connect(path) as connection:
+        current_ack = connection.execute(
+            """
+            SELECT accepted_ack_bytes FROM source_history_heads
+            WHERE dispatch_authorization_ordinal = 2
+            """
+        ).fetchone()[0]
+        parsed_ack = VerifySessionAcceptedAckV1.model_validate_json(current_ack, strict=True)
+        tampered_ack = canonical_json_bytes(
+            parsed_ack.model_copy(update={"accepted_fact": "dispatch_authorized"}).model_dump(mode="json")
+        )
+        event_trigger = connection.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'trigger' AND name = 'source_history_events_no_update'
+            """
+        ).fetchone()[0]
+        connection.execute("DROP TRIGGER source_history_events_no_update")
+        connection.execute(
+            """
+            UPDATE source_history_events SET accepted_ack_bytes = ?
+            WHERE dispatch_authorization_ordinal = 2
+            """,
+            (tampered_ack,),
+        )
+        connection.execute(
+            """
+            UPDATE source_history_heads SET accepted_ack_bytes = ?
+            WHERE dispatch_authorization_ordinal = 2
+            """,
+            (tampered_ack,),
+        )
+        connection.execute(event_trigger)
+        connection.commit()
+
+    replay_session = open_command_journal(path).start()
+    before = _database_snapshot(path)
+    replay_main = _main(session_id="continuity-fact-corruption-restart")
+    exchange = _submit(
+        _composition(
+            replay_session,
+            _sidecar(session_id="continuity-fact-corruption-restart"),
+        ),
+        replay_main,
+        _safe_retry_request(
+            delivery_mode="outbox_redelivery",
+            runtime_attempt_fence_token=RAW_FENCE_REPLAY,
+            browser_control_scope_id="browser-scope-replay",
+            correlation_id="correlation-replay",
+            deadline_value=30_000,
+        ),
+        message_id="submit-fact-corruption-replay",
+    )
+
+    _assert_rejected(exchange, replay_main, SafeRetryContinuityRejectReason.JOURNAL_CORRUPT)
+    assert _database_snapshot(path) == before
+    assert _row_counts(path) == (2, 2, 2)
+
+
 def test_exact_replay_fails_closed_if_an_earlier_epoch_later_dispatched(
     tmp_path: Path,
 ) -> None:

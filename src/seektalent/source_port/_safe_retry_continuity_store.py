@@ -413,7 +413,9 @@ def _validated_ack_for_row(row: sqlite3.Row) -> VerifySessionAcceptedAckV1:
         or ack.accepted_journal_revision != row["accepted_journal_revision"]
     ):
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.JOURNAL_CORRUPT)
-    if authorization.dispatch_authorization_ordinal > 1 and ack.accepted_fact != "accepted_no_dispatch":
+    ordinal = authorization.dispatch_authorization_ordinal
+    expected_fact = "dispatch_authorized" if ordinal == 1 else "accepted_no_dispatch"
+    if ack.accepted_fact != expected_fact:
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.JOURNAL_CORRUPT)
     return ack
 

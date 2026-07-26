@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from hashlib import sha256
+import hmac
 import json
 import logging
 from pathlib import Path
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 import pytest
 
 import seektalent.source_port.authenticated_verify_session_frames as frames
+from seektalent.source_port.authenticated_frame_core import SIDECAR_TO_MAIN, ZERO_AUTH_TAG, auth_input
 from seektalent.source_port.authenticated_verify_session_frames import (
     PostHandshakeVerifySessionSession,
     ReceivedVerifySessionAcceptedAck,
@@ -32,6 +34,7 @@ from seektalent.source_port.verify_session_contract import (
     validate_outbox_redelivery,
     verify_session_request_echo,
 )
+from seektalent.source_port.wire_primitives import canonical_json_bytes
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -125,6 +128,54 @@ def _accepted_ack(request: VerifySessionRequestV1, **updates: object) -> VerifyS
     }
     values.update(updates)
     return VerifySessionAcceptedAckV1.model_validate(values)
+
+
+def _request_for_authorization_ordinal(ordinal: int) -> VerifySessionRequestV1:
+    if ordinal == 1:
+        return _request()
+    return _request(
+        attempt_no=2,
+        runtime_attempt_fence_token=RAW_FENCE_TOKEN + "-retry",
+        profile_binding_generation=2,
+        browser_control_scope_id="browser-scope-2",
+        correlation_id="correlation-2",
+        expected_source_operation_ledger_revision=2,
+        expected_reconciliation_revision=1,
+        dispatch_intent_id="dispatch-intent-2",
+        dispatch_intent_revision=2,
+        dispatch_authorization_ordinal=2,
+        safe_retry_commit_ref="safe-retry-commit-2",
+    )
+
+
+def _authenticated_ack_frame_with_fact(frame: bytes, *, accepted_fact: str) -> bytes:
+    envelope = json.loads(frame[4:])
+    assert isinstance(envelope, dict)
+    payload = envelope.get("payload")
+    session_id = envelope.get("session_id")
+    sequence = envelope.get("direction_seq")
+    assert isinstance(payload, dict)
+    assert isinstance(session_id, str)
+    assert isinstance(sequence, int)
+    payload["accepted_fact"] = accepted_fact
+    unsigned = {key: value for key, value in envelope.items() if key != "auth_tag"}
+    unsigned_body = canonical_json_bytes(unsigned)
+    zero_tag_body = canonical_json_bytes({**unsigned, "auth_tag": ZERO_AUTH_TAG})
+    frame_length = len(zero_tag_body)
+    auth_tag = hmac.new(
+        SIDECAR_TO_MAIN_KEY,
+        auth_input(
+            session_id=session_id,
+            direction=SIDECAR_TO_MAIN,
+            sequence=sequence,
+            frame_length=frame_length,
+            unsigned_body=unsigned_body,
+        ),
+        sha256,
+    ).hexdigest()
+    body = canonical_json_bytes({**unsigned, "auth_tag": auth_tag})
+    assert len(body) == frame_length
+    return frame_length.to_bytes(4, "big") + body
 
 
 def _rejected(request: VerifySessionRequestV1, **updates: object) -> VerifySessionRejectedV1:
@@ -283,6 +334,63 @@ def test_accepted_ack_missing_durable_position_is_rejected_by_the_frame() -> Non
 
     assert invalid.value.reason_code == VerifySessionFrameReason.SCHEMA_VALIDATION.value
     assert sidecar.closed is True
+
+
+@pytest.mark.parametrize(
+    ("ordinal", "accepted_fact"),
+    ((1, "accepted_no_dispatch"), (2, "dispatch_authorized")),
+)
+def test_accepted_ack_fact_must_match_the_authorization_ordinal(
+    ordinal: int,
+    accepted_fact: str,
+) -> None:
+    request = _request_for_authorization_ordinal(ordinal)
+    values = {
+        **_accepted_ack(
+            request,
+            accepted_fact=("dispatch_authorized" if ordinal == 1 else "accepted_no_dispatch"),
+        ).model_dump(mode="python"),
+        "accepted_fact": accepted_fact,
+    }
+
+    with pytest.raises(ValidationError):
+        VerifySessionAcceptedAckV1.model_validate(values, strict=True)
+
+
+@pytest.mark.parametrize(
+    ("ordinal", "valid_fact", "invalid_fact"),
+    (
+        (1, "dispatch_authorized", "accepted_no_dispatch"),
+        (2, "accepted_no_dispatch", "dispatch_authorized"),
+    ),
+)
+def test_authenticated_accepted_ack_frame_rejects_an_ordinal_fact_mismatch(
+    ordinal: int,
+    valid_fact: str,
+    invalid_fact: str,
+) -> None:
+    request = _request_for_authorization_ordinal(ordinal)
+    main = _main()
+    sidecar = _sidecar()
+    sidecar.feed(
+        main.encode_submit(
+            message_id="submit-1",
+            correlation_id=request.identity.correlation_id,
+            payload=request,
+        )
+    )
+    valid_frame = sidecar.encode_accepted_ack(
+        message_id="ack-1",
+        reply_to="submit-1",
+        payload=_accepted_ack(request, accepted_fact=valid_fact),
+    )
+    invalid_frame = _authenticated_ack_frame_with_fact(valid_frame, accepted_fact=invalid_fact)
+
+    with pytest.raises(VerifySessionFrameError) as invalid:
+        main.feed(invalid_frame)
+
+    assert invalid.value.reason_code == VerifySessionFrameReason.SCHEMA_VALIDATION.value
+    assert main.closed is True
 
 
 def test_verify_session_authenticated_exchange_known_answer_is_byte_stable() -> None:
