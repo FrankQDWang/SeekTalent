@@ -18,7 +18,7 @@ FAILURE_ENVELOPE_TABLE = "runtime_control_failure_envelope_revisions"
 
 _SCHEMA_STATEMENTS = (
     f"""
-    CREATE TABLE IF NOT EXISTS {FAILURE_ENVELOPE_TABLE} (
+    CREATE TABLE {FAILURE_ENVELOPE_TABLE} (
       failure_id TEXT NOT NULL,
       revision INTEGER NOT NULL,
       canonical_bytes BLOB NOT NULL,
@@ -46,11 +46,11 @@ _SCHEMA_STATEMENTS = (
     )
     """,
     f"""
-    CREATE INDEX IF NOT EXISTS idx_runtime_failure_envelopes_run
+    CREATE INDEX idx_runtime_failure_envelopes_run
       ON {FAILURE_ENVELOPE_TABLE}(run_id, failure_id, revision)
     """,
     f"""
-    CREATE TRIGGER IF NOT EXISTS runtime_control_failure_envelopes_no_overwrite
+    CREATE TRIGGER runtime_control_failure_envelopes_no_overwrite
     BEFORE INSERT ON {FAILURE_ENVELOPE_TABLE}
     WHEN EXISTS (
       SELECT 1
@@ -62,7 +62,7 @@ _SCHEMA_STATEMENTS = (
     END
     """,
     f"""
-    CREATE TRIGGER IF NOT EXISTS runtime_control_failure_envelopes_contiguous
+    CREATE TRIGGER runtime_control_failure_envelopes_contiguous
     BEFORE INSERT ON {FAILURE_ENVELOPE_TABLE}
     WHEN NEW.revision != COALESCE(
       (
@@ -77,14 +77,14 @@ _SCHEMA_STATEMENTS = (
     END
     """,
     f"""
-    CREATE TRIGGER IF NOT EXISTS runtime_control_failure_envelopes_no_update
+    CREATE TRIGGER runtime_control_failure_envelopes_no_update
     BEFORE UPDATE ON {FAILURE_ENVELOPE_TABLE}
     BEGIN
       SELECT RAISE(ABORT, 'failure_envelope_immutable');
     END
     """,
     f"""
-    CREATE TRIGGER IF NOT EXISTS runtime_control_failure_envelopes_no_delete
+    CREATE TRIGGER runtime_control_failure_envelopes_no_delete
     BEFORE DELETE ON {FAILURE_ENVELOPE_TABLE}
     BEGIN
       SELECT RAISE(ABORT, 'failure_envelope_immutable');
@@ -150,8 +150,11 @@ class StoredFailureEnvelopeRevision:
 def create_failure_envelope_schema(conn: sqlite3.Connection) -> None:
     """Create the diagnostics-owned table inside the migration owner's transaction."""
 
-    for statement in _SCHEMA_STATEMENTS:
-        conn.execute(statement)
+    try:
+        for statement in _SCHEMA_STATEMENTS:
+            conn.execute(statement)
+    except sqlite3.Error:
+        raise FailureEnvelopeStorageError("failure_envelope_schema_failed") from None
 
 
 def store_failure_envelope_revision(
@@ -160,7 +163,15 @@ def store_failure_envelope_revision(
 ) -> StoredFailureEnvelopeRevision:
     """Persist one immutable revision without taking transaction ownership."""
 
-    if not isinstance(conn, sqlite3.Connection) or not conn.in_transaction:
+    if not isinstance(conn, sqlite3.Connection):
+        raise FailureEnvelopeStorageError("failure_envelope_transaction_required")
+    try:
+        in_transaction = conn.in_transaction
+    except sqlite3.Error:
+        raise FailureEnvelopeStorageError(
+            "failure_envelope_transaction_required"
+        ) from None
+    if not in_transaction:
         raise FailureEnvelopeStorageError("failure_envelope_transaction_required")
 
     admitted, canonical_bytes = _admit_envelope(envelope)
@@ -179,18 +190,19 @@ def store_failure_envelope_revision(
             """,
             (ref.failure_id, ref.revision),
         ).fetchone()
-        latest = conn.execute(
+        predecessor = conn.execute(
             f"""
-            SELECT MAX(revision)
+            SELECT *
             FROM {FAILURE_ENVELOPE_TABLE}
             WHERE failure_id = ?
+            ORDER BY revision DESC
+            LIMIT 1
             """,
             (ref.failure_id,),
         ).fetchone()
     except sqlite3.Error:
         raise FailureEnvelopeStorageError("failure_envelope_storage_failed") from None
 
-    latest_revision = None if latest is None else latest[0]
     if existing is not None:
         existing_envelope = _verified_envelope_from_row(existing)
         existing_bytes, existing_hash = _stored_identity(existing)
@@ -206,7 +218,21 @@ def store_failure_envelope_revision(
             )
         raise FailureEnvelopeStorageError("failure_envelope_revision_conflict")
 
-    expected_revision = 1 if latest_revision is None else int(latest_revision) + 1
+    expected_revision = 1
+    if predecessor is not None:
+        predecessor_envelope = _verified_envelope_from_row(predecessor)
+        expected_revision = predecessor_envelope.revision + 1
+        frozen_identity_fields = (
+            "correlation_id",
+            "run_id",
+            "operation_id",
+            "attempt_no",
+        )
+        if any(
+            getattr(admitted, field) != getattr(predecessor_envelope, field)
+            for field in frozen_identity_fields
+        ):
+            raise FailureEnvelopeStorageError("failure_envelope_identity_conflict")
     if ref.revision != expected_revision:
         raise FailureEnvelopeStorageError("failure_envelope_revision_sequence")
 

@@ -169,6 +169,157 @@ def test_v12_to_v13_failure_rolls_back_partial_schema_and_version(
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
+@pytest.mark.parametrize("poison_kind", ("table", "index", "trigger"))
+def test_v12_to_v13_rejects_poisoned_schema_objects_without_partial_ddl(
+    tmp_path: Path,
+    poison_kind: str,
+) -> None:
+    from seektalent.diagnostics_storage import FailureEnvelopeStorageError
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = _initialized_path(tmp_path)
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP TABLE runtime_control_failure_envelope_revisions")
+        if poison_kind == "table":
+            conn.executescript(
+                """
+                CREATE TABLE runtime_control_failure_envelope_revisions (
+                  failure_id TEXT,
+                  revision INTEGER,
+                  reason_code TEXT
+                );
+                CREATE TRIGGER runtime_control_failure_envelopes_no_update
+                BEFORE UPDATE ON runtime_control_failure_envelope_revisions
+                BEGIN
+                  SELECT 1;
+                END;
+                """
+            )
+        elif poison_kind == "index":
+            conn.executescript(
+                """
+                CREATE TABLE poisoned_failure_envelope_object (value INTEGER);
+                CREATE INDEX idx_runtime_failure_envelopes_run
+                  ON poisoned_failure_envelope_object(value);
+                """
+            )
+        else:
+            conn.executescript(
+                """
+                CREATE TABLE poisoned_failure_envelope_object (value INTEGER);
+                CREATE TRIGGER runtime_control_failure_envelopes_no_update
+                BEFORE UPDATE ON poisoned_failure_envelope_object
+                BEGIN
+                  SELECT 1;
+                END;
+                """
+            )
+        conn.execute("PRAGMA user_version = 12")
+        before = conn.execute(
+            """
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master
+            WHERE name LIKE '%failure_envelope%'
+            ORDER BY type, name
+            """
+        ).fetchall()
+
+    with pytest.raises(FailureEnvelopeStorageError) as exc_info:
+        RuntimeControlStore(path).initialize()
+
+    assert exc_info.value.reason == "failure_envelope_schema_failed"
+    with sqlite3.connect(path) as conn:
+        after = conn.execute(
+            """
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master
+            WHERE name LIKE '%failure_envelope%'
+            ORDER BY type, name
+            """
+        ).fetchall()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert after == before
+
+
+def test_v12_to_v13_rejects_exact_preexisting_schema_and_corrupt_row(
+    tmp_path: Path,
+) -> None:
+    from seektalent.diagnostics_storage import (
+        FailureEnvelopeStorageError,
+        store_failure_envelope_revision,
+    )
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = _initialized_path(tmp_path)
+    envelope = _envelope()
+    with sqlite3.connect(path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        store_failure_envelope_revision(conn, envelope)
+        conn.commit()
+        conn.execute("DROP TRIGGER runtime_control_failure_envelopes_no_update")
+        conn.execute(
+            """
+            UPDATE runtime_control_failure_envelope_revisions
+            SET canonical_sha256 = ?
+            WHERE failure_id = ? AND revision = 1
+            """,
+            ("0" * 64, envelope.failure_id),
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER runtime_control_failure_envelopes_no_update
+            BEFORE UPDATE ON runtime_control_failure_envelope_revisions
+            BEGIN
+              SELECT RAISE(ABORT, 'failure_envelope_immutable');
+            END
+            """
+        )
+        conn.execute("PRAGMA user_version = 12")
+        before = conn.execute(
+            """
+            SELECT canonical_sha256
+            FROM runtime_control_failure_envelope_revisions
+            WHERE failure_id = ? AND revision = 1
+            """,
+            (envelope.failure_id,),
+        ).fetchone()
+        before_objects = conn.execute(
+            """
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master
+            WHERE name LIKE '%failure_envelope%'
+            ORDER BY type, name
+            """
+        ).fetchall()
+
+    with pytest.raises(FailureEnvelopeStorageError) as exc_info:
+        RuntimeControlStore(path).initialize()
+
+    assert exc_info.value.reason == "failure_envelope_schema_failed"
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+        after = conn.execute(
+            """
+            SELECT canonical_sha256
+            FROM runtime_control_failure_envelope_revisions
+            WHERE failure_id = ? AND revision = 1
+            """,
+            (envelope.failure_id,),
+        ).fetchone()
+        after_objects = conn.execute(
+            """
+            SELECT type, name, tbl_name, sql
+            FROM sqlite_master
+            WHERE name LIKE '%failure_envelope%'
+            ORDER BY type, name
+            """
+        ).fetchall()
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    assert after == before == ("0" * 64,)
+    assert after_objects == before_objects
+
+
 def test_caller_transaction_controls_rollback_commit_and_restart_readback(
     tmp_path: Path,
 ) -> None:
@@ -267,6 +418,25 @@ def test_writer_uses_only_active_caller_connection_and_never_controls_it(
     finally:
         sqlite3.Connection.rollback(conn)
         sqlite3.Connection.close(conn)
+
+
+def test_closed_caller_connection_fails_closed_before_payload_admission() -> None:
+    from seektalent.diagnostics_storage import (
+        FailureEnvelopeStorageError,
+        store_failure_envelope_revision,
+    )
+
+    conn = sqlite3.connect(":memory:")
+    conn.close()
+
+    with pytest.raises(FailureEnvelopeStorageError) as exc_info:
+        store_failure_envelope_revision(conn, b'{"raw_secret":"must_not_be_parsed"}')
+
+    assert exc_info.value.reason == "failure_envelope_transaction_required"
+    assert str(exc_info.value) == "failure_envelope_transaction_required"
+    error_details = f"{exc_info.value!r} {exc_info.value.__dict__!r}"
+    assert "closed" not in error_details
+    assert "raw_secret" not in error_details
 
 
 def test_exact_replay_is_idempotent_and_keeps_exact_canonical_identity(
@@ -381,6 +551,117 @@ def test_exact_replay_of_older_revision_remains_idempotent(
             ).fetchone()[0]
             == 2
         )
+
+
+@pytest.mark.parametrize(
+    ("field", "changed_value"),
+    (
+        ("correlation_id", "a" * 32),
+        ("run_id", "a" * 32),
+        ("operation_id", "b" * 32),
+        ("attempt_no", 2),
+    ),
+)
+def test_new_revision_rejects_frozen_identity_drift_without_mutation(
+    tmp_path: Path,
+    field: str,
+    changed_value: object,
+) -> None:
+    from seektalent.diagnostics_storage import (
+        FailureEnvelopeStorageError,
+        store_failure_envelope_revision,
+    )
+
+    path = _initialized_path(tmp_path)
+    first_payload = _failure()
+    second_payload = _failure()
+    second_payload["revision"] = 2
+    second_payload[field] = changed_value
+    first = parse_failure_envelope(
+        json.dumps(first_payload, separators=(",", ":"), sort_keys=True).encode()
+    )
+    second = parse_failure_envelope(
+        json.dumps(second_payload, separators=(",", ":"), sort_keys=True).encode()
+    )
+
+    with sqlite3.connect(path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        store_failure_envelope_revision(conn, first)
+
+        with pytest.raises(FailureEnvelopeStorageError) as exc_info:
+            store_failure_envelope_revision(conn, second)
+
+        assert exc_info.value.reason == "failure_envelope_identity_conflict"
+        assert conn.in_transaction
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM runtime_control_failure_envelope_revisions"
+            ).fetchone()[0]
+            == 1
+        )
+        conn.rollback()
+
+
+@pytest.mark.parametrize("corruption", ("bytes", "hash", "projection"))
+def test_corrupt_predecessor_blocks_append_without_mutation(
+    tmp_path: Path,
+    corruption: str,
+) -> None:
+    from seektalent.diagnostics_storage import (
+        FailureEnvelopeStorageError,
+        store_failure_envelope_revision,
+    )
+
+    path = _initialized_path(tmp_path)
+    first = _envelope()
+    second = _envelope(revision=2)
+    with sqlite3.connect(path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        store_failure_envelope_revision(conn, first)
+        conn.commit()
+        conn.execute("DROP TRIGGER runtime_control_failure_envelopes_no_update")
+        if corruption == "bytes":
+            conn.execute(
+                """
+                UPDATE runtime_control_failure_envelope_revisions
+                SET canonical_bytes = ?
+                WHERE failure_id = ? AND revision = 1
+                """,
+                (b'{"poisoned":"predecessor"}', first.failure_id),
+            )
+        elif corruption == "hash":
+            conn.execute(
+                """
+                UPDATE runtime_control_failure_envelope_revisions
+                SET canonical_sha256 = ?
+                WHERE failure_id = ? AND revision = 1
+                """,
+                ("0" * 64, first.failure_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE runtime_control_failure_envelope_revisions
+                SET run_id = ?
+                WHERE failure_id = ? AND revision = 1
+                """,
+                ("a" * 32, first.failure_id),
+            )
+        conn.commit()
+        conn.execute("BEGIN IMMEDIATE")
+
+        with pytest.raises(FailureEnvelopeStorageError) as exc_info:
+            store_failure_envelope_revision(conn, second)
+
+        assert exc_info.value.reason == "failure_envelope_integrity_failed"
+        assert conn.in_transaction
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM runtime_control_failure_envelope_revisions"
+            ).fetchone()[0]
+            == 1
+        )
+        conn.rollback()
 
 
 @pytest.mark.parametrize(
@@ -531,22 +812,39 @@ def test_storage_abort_has_no_partial_row_and_database_integrity_is_ok(
 def test_sidecar_browser_source_and_wtscli_have_zero_writer_calls_or_table_access() -> None:
     root = Path(__file__).parents[1] / "src"
     forbidden_roots = (
-        root / "seektalent_sidecar",
-        root / "seektalent" / "browser",
+        root / "seektalent" / "opencli_browser",
+        root / "seektalent" / "source_adapters",
+        root / "seektalent" / "source_contracts",
         root / "seektalent" / "source_port",
+        root / "seektalent" / "sources",
         root / "seektalent" / "providers",
-        root / "seektalent" / "wtscli",
+    )
+    source_suffixes = {
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".mjs",
+        ".cjs",
+    }
+    forbidden_access = (
+        "store_failure_envelope_revision",
+        "runtime_control_failure_envelope_revisions",
+        "seektalent_runtime_control",
+        "RuntimeControlStore",
+        "runtime_control_path",
+        "runtime_control_db_path",
+        "runtime_control.sqlite3",
     )
     violations: list[str] = []
     for package_root in forbidden_roots:
-        if not package_root.exists():
-            continue
-        for path in package_root.rglob("*.py"):
+        assert package_root.is_dir(), f"missing source-boundary root: {package_root}"
+        for path in package_root.rglob("*"):
+            if not path.is_file() or path.suffix not in source_suffixes:
+                continue
             source = path.read_text(encoding="utf-8")
-            if (
-                "store_failure_envelope_revision" in source
-                or "runtime_control_failure_envelope_revisions" in source
-            ):
+            if any(token in source for token in forbidden_access):
                 violations.append(str(path.relative_to(root)))
     assert violations == []
 

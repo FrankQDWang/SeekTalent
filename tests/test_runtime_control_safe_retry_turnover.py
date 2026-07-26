@@ -1312,6 +1312,9 @@ def _source_epoch_rows(
 
 def _downgrade_source_epochs_to_v11(path: Path) -> None:
     with sqlite3.connect(path) as conn:
+        conn.execute(
+            "DROP TABLE IF EXISTS runtime_control_failure_envelope_revisions"
+        )
         columns = {row[1] for row in conn.execute("PRAGMA table_info(runtime_control_source_dispatch_outbox)")}
         if "safe_retry_commit_ref" not in columns:
             conn.execute("PRAGMA user_version = 11")

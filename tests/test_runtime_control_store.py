@@ -925,6 +925,7 @@ def _accept_run(store, run):
 
 def _downgrade_fixture_to_v7(db_path: Path) -> None:
     with sqlite3.connect(db_path) as conn:
+        conn.execute("DROP TABLE runtime_control_failure_envelope_revisions")
         conn.execute("DROP TABLE runtime_control_source_operation_admission_expectations")
         conn.execute("DROP TABLE runtime_control_source_reconciliations")
         conn.execute("DROP TABLE runtime_control_source_dispatch_outbox")
