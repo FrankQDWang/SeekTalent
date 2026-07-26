@@ -727,6 +727,7 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
     )
     loaded = set(completed.stdout.splitlines())
     assert loaded <= {
+        "seektalent.canonical_json",
         "seektalent.source_port",
         "seektalent.source_port.history_contract",
         "seektalent.source_port.wire_primitives",

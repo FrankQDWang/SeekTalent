@@ -33,6 +33,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONTRACT_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "verify_session_contract.py"
 OPERATION_DISPATCH_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "operation_dispatch.py"
 WIRE_PRIMITIVES_PATH = PROJECT_ROOT / "src" / "seektalent" / "source_port" / "wire_primitives.py"
+CANONICAL_JSON_PATH = PROJECT_ROOT / "src" / "seektalent" / "canonical_json.py"
 VERIFY_SESSION_FRAMES_PATH = (
     PROJECT_ROOT / "src" / "seektalent" / "source_port" / "authenticated_verify_session_frames.py"
 )
@@ -764,8 +765,10 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
     source = CONTRACT_PATH.read_text(encoding="utf-8")
     operation_dispatch = OPERATION_DISPATCH_PATH.read_text(encoding="utf-8")
     wire_primitives = WIRE_PRIMITIVES_PATH.read_text(encoding="utf-8")
+    canonical_json = CANONICAL_JSON_PATH.read_text(encoding="utf-8")
 
-    assert "rfc8785.dumps" in wire_primitives
+    assert "rfc8785.dumps" in canonical_json
+    assert "seektalent.canonical_json" in wire_primitives
     assert "json.loads" not in source
     assert "json.dumps" not in source
     imported_modules = {
@@ -809,7 +812,20 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
         }:
             continue
         content = path.read_text(encoding="utf-8")
-        if "verify_session_contract" in content or "operation_dispatch" in content:
+        imported_modules = {
+            node.module if isinstance(node, ast.ImportFrom) else alias.name
+            for node in ast.walk(ast.parse(content))
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+        }
+        if any(
+            module is not None
+            and (
+                module.endswith("verify_session_contract")
+                or module.endswith("operation_dispatch")
+            )
+            for module in imported_modules
+        ):
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert set(callers) == {
         "src/seektalent/source_history_reconciliation.py",
