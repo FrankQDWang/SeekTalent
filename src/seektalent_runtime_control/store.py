@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from seektalent.diagnostics_storage import create_failure_envelope_schema
 from seektalent.source_references import SourceReference
 from seektalent.sqlite_migrations import (
     SQLiteMigrationError,
@@ -117,7 +118,7 @@ from seektalent_runtime_control.source_reconciliation import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 12
+RUNTIME_CONTROL_SCHEMA_VERSION = 13
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -191,7 +192,7 @@ class RuntimeControlStore:
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                 conn.commit()
                 version = 7
-            if version in {7, 8, 9, 10, 11}:
+            if version in {7, 8, 9, 10, 11, 12}:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     if version == 7:
@@ -213,6 +214,10 @@ class RuntimeControlStore:
                     if version == 11:
                         _migrate_v11_to_v12(conn)
                         conn.execute("PRAGMA user_version = 12")
+                        version = 12
+                    if version == 12:
+                        create_failure_envelope_schema(conn)
+                        conn.execute("PRAGMA user_version = 13")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
                 except Exception:
@@ -224,6 +229,7 @@ class RuntimeControlStore:
                     _create_source_operation_schema(conn)
                     _create_source_reconciliation_schema(conn)
                     _create_source_operation_admission_expectation_schema(conn)
+                    create_failure_envelope_schema(conn)
                     conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
 
@@ -3115,7 +3121,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           completed_at TEXT,
           CHECK (run_kind IN ('primary', 'rerun', 'fork'))
         );
-
         CREATE TABLE IF NOT EXISTS runtime_requirement_drafts (
           draft_revision_id TEXT PRIMARY KEY,
           agent_conversation_id TEXT NOT NULL,
@@ -3127,7 +3132,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL,
           UNIQUE(agent_conversation_id, idempotency_key)
         );
-
         CREATE TABLE IF NOT EXISTS runtime_requirement_amendments (
           amendment_id TEXT PRIMARY KEY,
           agent_conversation_id TEXT NOT NULL,
@@ -3154,7 +3158,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           UNIQUE(agent_conversation_id, idempotency_key),
           UNIQUE(runtime_run_id, idempotency_key)
         );
-
         CREATE TABLE IF NOT EXISTS runtime_approved_requirements (
           approved_requirement_revision_id TEXT PRIMARY KEY,
           draft_revision_id TEXT,
@@ -3168,7 +3171,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL,
           UNIQUE(agent_conversation_id, idempotency_key)
         );
-
         CREATE TABLE IF NOT EXISTS runtime_control_commands (
           command_id TEXT PRIMARY KEY,
           runtime_run_id TEXT NOT NULL,
@@ -3186,7 +3188,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           rejected_reason_code TEXT,
           UNIQUE(runtime_run_id, idempotency_key)
         );
-
         CREATE TABLE IF NOT EXISTS runtime_control_checkpoints (
           checkpoint_id TEXT PRIMARY KEY,
           runtime_run_id TEXT NOT NULL,
@@ -3200,7 +3201,6 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           schema_version TEXT NOT NULL,
           created_at TEXT NOT NULL
         );
-
         CREATE TABLE IF NOT EXISTS runtime_control_executor_leases (
           lease_id TEXT PRIMARY KEY,
           runtime_run_id TEXT NOT NULL,
