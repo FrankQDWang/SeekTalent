@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from hashlib import sha256
-from typing import Literal
+from typing import Literal, Protocol
 
 from seektalent.source_history_reconciliation import (
     commit_admitted_source_history_reconciliation,
@@ -41,6 +41,19 @@ from seektalent_runtime_control.source_reconciliation import (
     SourceOperationReconciliationRecord,
 )
 from seektalent_runtime_control.store import RuntimeControlStore
+from seektalent.wtscli_connection_supervisor import (
+    WTSCLI_CONNECTION_READINESS_TIMEOUT_SECONDS,
+    WtsCliConnectionError,
+    WtsCliConnectionReceipt,
+)
+
+
+class VerifySessionConnectionSupervisor(Protocol):
+    def await_ready(
+        self,
+        *,
+        timeout_seconds: float,
+    ) -> WtsCliConnectionReceipt: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +81,7 @@ class VerifySessionMainLoopResult:
     dispatch: SourceDispatchMetadata
     exchange: VerifySessionExchangeResult
     reconciliation: SourceOperationReconciliationRecord | None
+    connection_receipt: WtsCliConnectionReceipt | None
 
 
 class VerifySessionMainLoopError(RuntimeError):
@@ -91,6 +105,7 @@ def deliver_verify_session_outbox(
     acknowledged_at: str,
     committed_at: str,
     timeout: float,
+    connection_supervisor: VerifySessionConnectionSupervisor | None = None,
 ) -> VerifySessionMainLoopResult:
     """Deliver one main-owned epoch and close terminal facts through admitted history."""
     if type(store) is not RuntimeControlStore:
@@ -108,6 +123,19 @@ def deliver_verify_session_outbox(
         correlation_id=correlation_id,
         deadline_milliseconds=deadline_milliseconds,
     )
+    connection_receipt: WtsCliConnectionReceipt | None = None
+    if delivery_mode == "initial" and connection_supervisor is not None:
+        try:
+            connection_receipt = connection_supervisor.await_ready(
+                timeout_seconds=min(
+                    WTSCLI_CONNECTION_READINESS_TIMEOUT_SECONDS,
+                    deadline_milliseconds / 1000,
+                ),
+            )
+        except WtsCliConnectionError as exc:
+            raise VerifySessionMainLoopError(
+                f"verify_session_{exc.safe_reason_code}"
+            ) from None
     committed_dispatch: SourceDispatchMetadata | None = None
 
     def record_authenticated_ack(received: ReceivedVerifySessionAcceptedAck) -> None:
@@ -133,6 +161,7 @@ def deliver_verify_session_outbox(
             dispatch=context.dispatch,
             exchange=exchange,
             reconciliation=None,
+            connection_receipt=connection_receipt,
         )
     if committed_dispatch is None or exchange.accepted_ack is None:
         raise VerifySessionMainLoopError("verify_session_authenticated_ack_missing")
@@ -171,6 +200,7 @@ def deliver_verify_session_outbox(
         dispatch=committed_dispatch,
         exchange=exchange,
         reconciliation=reconciliation,
+        connection_receipt=connection_receipt,
     )
 
 
@@ -306,6 +336,7 @@ def _history_query(
 
 __all__ = [
     "VerifySessionLiveAuthority",
+    "VerifySessionConnectionSupervisor",
     "VerifySessionMainLoopError",
     "VerifySessionMainLoopResult",
     "deliver_verify_session_outbox",

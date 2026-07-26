@@ -10,6 +10,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_BUILD_MISMATCH,
     OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_EXTENSION_DISCONNECTED,
+    OPENCLI_FOREIGN_OWNER,
     OPENCLI_STATUS_UNAVAILABLE,
 )
 from seektalent.opencli_launcher import OpenCliRuntime
@@ -23,6 +24,7 @@ class FakeDaemonClient:
     def __init__(self, outcomes: list[str | None]) -> None:
         self.outcomes = outcomes
         self.verify_calls: list[float] = []
+        self.closed = False
 
     def verify_bridge(self, *, timeout_seconds: float) -> dict[str, object]:
         self.verify_calls.append(timeout_seconds)
@@ -30,6 +32,9 @@ class FakeDaemonClient:
         if outcome is not None:
             raise OpenCliBrowserError(outcome)
         return {"ok": True}
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _runtime(tmp_path: Path) -> OpenCliRuntime:
@@ -85,11 +90,11 @@ def test_connect_reuses_ready_daemon_without_restart(
     assert len(client.verify_calls) == 1
 
 
-def test_connect_keeps_running_daemon_when_extension_is_disconnected(
+def test_connect_waits_for_running_exact_daemon_extension_before_returning(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    client = FakeDaemonClient([OPENCLI_EXTENSION_DISCONNECTED])
+    client = FakeDaemonClient([OPENCLI_EXTENSION_DISCONNECTED, OPENCLI_EXTENSION_DISCONNECTED, None])
     _install_fake_client(monkeypatch, client)
     monkeypatch.setattr(
         daemon_process,
@@ -97,9 +102,35 @@ def test_connect_keeps_running_daemon_when_extension_is_disconnected(
         lambda _runtime: pytest.fail("extension setup errors must not restart the daemon"),
     )
 
-    connected = daemon_process.connect_installed_opencli_daemon(_runtime(tmp_path))
+    connected = daemon_process.connect_installed_opencli_daemon(
+        _runtime(tmp_path),
+        verify_timeout_seconds=0.5,
+    )
 
     assert connected is client
+    assert len(client.verify_calls) == 3
+
+
+def test_connect_times_out_with_exact_extension_reason_without_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client = FakeDaemonClient([OPENCLI_EXTENSION_DISCONNECTED] * 20)
+    _install_fake_client(monkeypatch, client)
+    monkeypatch.setattr(
+        daemon_process,
+        "_restart_installed_daemon",
+        lambda _runtime: pytest.fail("extension recovery must not restart an exact running daemon"),
+    )
+
+    with pytest.raises(OpenCliBrowserError) as captured:
+        daemon_process.connect_installed_opencli_daemon(
+            _runtime(tmp_path),
+            verify_timeout_seconds=0.05,
+        )
+
+    assert captured.value.safe_reason_code == OPENCLI_EXTENSION_DISCONNECTED
+    assert client.closed is True
 
 
 @pytest.mark.parametrize("reason", [OPENCLI_DAEMON_NOT_RUNNING, OPENCLI_BRIDGE_BUILD_MISMATCH])
@@ -110,22 +141,30 @@ def test_connect_restarts_missing_or_stale_daemon_once(
 ) -> None:
     client = FakeDaemonClient([reason, None])
     _install_fake_client(monkeypatch, client)
-    restart_calls: list[OpenCliRuntime] = []
-    monkeypatch.setattr(daemon_process, "_restart_installed_daemon", restart_calls.append)
+    restart_calls: list[tuple[OpenCliRuntime, float]] = []
+
+    def restart(runtime: OpenCliRuntime, *, timeout_seconds: float) -> None:
+        restart_calls.append((runtime, timeout_seconds))
+
+    monkeypatch.setattr(daemon_process, "_restart_installed_daemon", restart)
     runtime = _runtime(tmp_path)
 
     connected = daemon_process.connect_installed_opencli_daemon(runtime)
 
     assert connected is client
-    assert restart_calls == [runtime]
+    assert len(restart_calls) == 1
+    assert restart_calls[0][0] is runtime
+    assert 0 < restart_calls[0][1] <= daemon_process.OPENCLI_DAEMON_RESTART_TIMEOUT_SECONDS
     assert len(client.verify_calls) == 2
 
 
-def test_connect_does_not_restart_unknown_status_failure(
+@pytest.mark.parametrize("reason", [OPENCLI_STATUS_UNAVAILABLE, OPENCLI_FOREIGN_OWNER])
+def test_connect_does_not_restart_unknown_or_foreign_status_failure(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    reason: str,
 ) -> None:
-    client = FakeDaemonClient([OPENCLI_STATUS_UNAVAILABLE])
+    client = FakeDaemonClient([reason])
     _install_fake_client(monkeypatch, client)
     monkeypatch.setattr(
         daemon_process,
@@ -136,7 +175,8 @@ def test_connect_does_not_restart_unknown_status_failure(
     with pytest.raises(OpenCliBrowserError) as captured:
         daemon_process.connect_installed_opencli_daemon(_runtime(tmp_path))
 
-    assert captured.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert captured.value.safe_reason_code == reason
+    assert client.closed is True
 
 
 def test_restart_uses_installed_runtime_with_sanitized_bounded_subprocess(

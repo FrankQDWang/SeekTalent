@@ -1,0 +1,43 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Close the issue #419 verify-session loop across the main durable outbox, authenticated sidecar, exact WTSCLI effect, history, and main reconciliation.",
+  "rationale": "The reliability contract is one indivisible vertical slice: main authorization and acknowledgement, sidecar effect journaling, authenticated delivery and history, exact WTSCLI bundle identity, pre-dispatch readiness, and native bundle workflows must agree on the same epoch and build. Splitting these changes would permit an accepted command, external effect, or terminal fact to lose its single durable owner.",
+  "touched_layers": [
+    "governance",
+    "other"
+  ],
+  "red_files": [
+    ".github/workflows/build-macos-intel-offline.yml",
+    ".github/workflows/native-launch-binding-probe.yml"
+  ],
+  "deletion_targets": [
+    "sidecar-owned workflow or retry truth",
+    "redelivery paths that create dispatch intent or call WTSCLI",
+    "unauthenticated acknowledgement or terminal interpretation",
+    "legacy OpenCLI identity, state, process, extension, or port reuse",
+    "immediate business failure while the exact WTSCLI extension is inside its bounded reconnect envelope"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run pytest -q tests/test_source_port*.py tests/test_*runtime_control*.py tests/test_*reconciliation*.py",
+    "uv run pytest -q tests/test_opencli_daemon_process.py tests/test_opencli_daemon_transport.py tests/test_wtscli_connection_supervisor.py tests/test_verify_session_closed_loop.py tests/test_wtscli_bundle_binding.py",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "scripts/verify-red-zone.sh",
+    "uv run pytest -q"
+  ],
+  "risks": [
+    "A response-loss or crash boundary must never increase one authorization epoch beyond one WTSCLI effect.",
+    "Transport failures remain unknown delivery state and must not become business failure or implicit retry authorization.",
+    "The exact WTSCLI daemon and extension may be started or awaited, but legacy OpenCLI and foreign listeners remain untouchable.",
+    "Unpacked Chrome extension loading remains an internal-test mechanism and cannot substantiate ordinary-user silent distribution."
+  ]
+}

@@ -37,6 +37,7 @@ from seektalent.verify_session_closed_loop import (
     _record_authenticated_ack,
     deliver_verify_session_outbox,
 )
+from seektalent.wtscli_connection_supervisor import WtsCliConnectionReceipt
 from tests.test_sidecar_readiness import _connected_process, _identity
 from tests.test_source_history_reconciliation import _store_with_operation
 from tests.test_source_port_transport import (
@@ -466,6 +467,19 @@ def test_main_outbox_authenticated_sidecar_history_and_reconciliation_close_once
     )
     journal_path = tmp_path / "sidecar-journal.sqlite3"
     effect = _EffectCounter()
+    readiness_calls: list[float] = []
+
+    class Supervisor:
+        def await_ready(self, *, timeout_seconds: float):
+            readiness_calls.append(timeout_seconds)
+            return WtsCliConnectionReceipt(
+                daemon_build_id="seektalent-wtscli-test",
+                extension_build_id="seektalent-wtscli-test",
+                endpoint="127.0.0.1:19826",
+                ownership_ref="sha256:" + "a" * 64,
+                last_connected_at=1,
+                elapsed_milliseconds=1,
+            )
 
     def serve(result: readiness.SidecarHandshakeResult) -> None:
         journal = create_command_journal(journal_path)
@@ -515,6 +529,7 @@ def test_main_outbox_authenticated_sidecar_history_and_reconciliation_close_once
         acknowledged_at="2026-07-26T00:00:00Z",
         committed_at="2026-07-26T00:00:01Z",
         timeout=1,
+        connection_supervisor=Supervisor(),
     )
 
     assert result.disposition == "reconciled"
@@ -522,6 +537,7 @@ def test_main_outbox_authenticated_sidecar_history_and_reconciliation_close_once
     assert result.reconciliation.history_conclusion == "observed_result"
     assert result.reconciliation.source_operation_disposition == "completed"
     assert effect.count == 1
+    assert readiness_calls == [40]
     context = store.get_accepted_source_operation_context(
         request.identity.run_id,
         request.identity.operation_id,
@@ -664,6 +680,12 @@ def test_accepted_no_dispatch_authorizes_one_next_epoch_effect(
         component_receipt_refs=first_request.component_receipt_refs,
     )
     first_endpoint, first_thread, first_errors = start_endpoint()
+
+    class RedeliverySupervisor:
+        def await_ready(self, *, timeout_seconds: float):
+            del timeout_seconds
+            pytest.fail("durable redelivery must not start or wait for WTSCLI")
+
     first = deliver_verify_session_outbox(
         store=store,
         endpoint=first_endpoint,
@@ -676,6 +698,7 @@ def test_accepted_no_dispatch_authorizes_one_next_epoch_effect(
         acknowledged_at="2026-07-26T00:00:00Z",
         committed_at="2026-07-26T00:00:01Z",
         timeout=1,
+        connection_supervisor=RedeliverySupervisor(),
     )
     assert first.reconciliation is not None
     assert first.reconciliation.history_conclusion == "accepted_no_dispatch"

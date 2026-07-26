@@ -65,7 +65,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: FrankQDWang/wtscli
-          ref: 709622fc3fb3463f15551467fdf0d28571dfd049
+          ref: b05374d5d1834cda297701f7dc7a8caf756cac3c
           path: wtscli-fork
 
       - uses: actions/setup-node@v6

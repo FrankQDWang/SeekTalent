@@ -37,6 +37,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_ERROR_CODE_TO_REASON,
     OPENCLI_EXTENSION_DISCONNECTED,
     OPENCLI_FORBIDDEN_COMMAND,
+    OPENCLI_FOREIGN_OWNER,
     OPENCLI_STATUS_UNAVAILABLE,
 )
 from seektalent.strict_json import StrictJsonError, strict_json_object_loads
@@ -231,7 +232,7 @@ class OpenCliDaemonClient:
                 or response.getheader(transport.owner_proof_header) != expected_owner_hash
             ):
                 self._drop_connection()
-                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+                raise OpenCliBrowserError(OPENCLI_FOREIGN_OWNER)
             raw = response.read(OPENCLI_DAEMON_MAX_RESPONSE_BYTES + 1)
             status = response.status
             if response.will_close:

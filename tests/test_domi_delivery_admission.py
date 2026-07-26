@@ -488,7 +488,7 @@ def _write_offline_resources(
         "browser_bridge_runtime": f"wtscli-runtime/{runtime_archive.name}",
         "browser_bridge_runtime_sha256": _sha256(runtime_archive),
         "browser_bridge_build_id": WTSCLI_BUILD_ID,
-        "browser_bridge_fork_commit": "709622fc3fb3463f15551467fdf0d28571dfd049",
+        "browser_bridge_fork_commit": "b05374d5d1834cda297701f7dc7a8caf756cac3c",
         "browser_bridge_extension_id": WTSCLI_EXTENSION_ID,
     }
     (bundle_root / "bundle-manifest.json").write_text(
