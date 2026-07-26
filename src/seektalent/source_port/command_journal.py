@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 import threading
@@ -86,6 +87,14 @@ class CommandJournalTransitionReceipt(int):
     @property
     def startup_generation(self) -> int:
         return _receipt_result(self).startup_generation
+
+    @property
+    def accepted_generation(self) -> int:
+        return _receipt_result(self).accepted_generation
+
+    @property
+    def accepted_journal_revision(self) -> int:
+        return _receipt_result(self).accepted_journal_revision
 
     @property
     def revision(self) -> int:
@@ -187,6 +196,7 @@ class CommandJournalSession:
         accepted: AcceptedCommand,
         *,
         accepted_ack_bytes: bytes | None = None,
+        accepted_ack_factory: Callable[[int, int], bytes] | None = None,
         allow_existing_phase_replay: bool = False,
         allow_transport_replay: bool = False,
         require_existing_replay: bool = False,
@@ -200,6 +210,7 @@ class CommandJournalSession:
                 instance_id=state.instance_id,
                 accepted=accepted,
                 accepted_ack_bytes=accepted_ack_bytes,
+                accepted_ack_factory=accepted_ack_factory,
                 allow_existing_phase_replay=allow_existing_phase_replay,
                 allow_transport_replay=allow_transport_replay,
                 require_existing_replay=require_existing_replay,

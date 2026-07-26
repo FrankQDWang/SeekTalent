@@ -59,13 +59,20 @@ class VerifySessionJournalEffectError(RuntimeError):
 _NO_EFFECT_REPLY = object()
 
 
-def _accepted_ack_for_request(request: VerifySessionRequestV1) -> VerifySessionAcceptedAckV1:
+def _accepted_ack_for_request(
+    request: VerifySessionRequestV1,
+    *,
+    accepted_generation: int,
+    accepted_journal_revision: int,
+) -> VerifySessionAcceptedAckV1:
     try:
         accepted_ack = VerifySessionAcceptedAckV1.model_validate(
             {
                 "contract_version": "seektalent.source.verify-session.accepted-ack/v1",
                 "identity": request.identity,
                 "dispatch_authorization": request.delivery.authorization,
+                "accepted_generation": accepted_generation,
+                "accepted_journal_revision": accepted_journal_revision,
                 "accepted_fact": "dispatch_authorized",
             },
             strict=True,
@@ -100,13 +107,22 @@ def _reconciliation_required_for_request(
 def _record_accepted(
     command_journal_session: CommandJournalSession,
     request: VerifySessionRequestV1,
-    accepted_ack: VerifySessionAcceptedAckV1,
 ) -> CommandJournalTransitionReceipt:
     delivery_mode = request.delivery.delivery_mode
+
+    def accepted_ack_factory(generation: int, revision: int) -> bytes:
+        return _canonical_reply_bytes(
+            _accepted_ack_for_request(
+                request,
+                accepted_generation=generation,
+                accepted_journal_revision=revision,
+            )
+        )
+
     try:
         return command_journal_session.record_accepted(
             _accepted_command(request),
-            accepted_ack_bytes=_canonical_reply_bytes(accepted_ack),
+            accepted_ack_factory=accepted_ack_factory,
             allow_existing_phase_replay=True,
             allow_transport_replay=delivery_mode == "outbox_redelivery",
             require_existing_replay=delivery_mode == "outbox_redelivery",
@@ -232,6 +248,7 @@ def _accepted_ack_from_receipt(receipt: CommandJournalTransitionReceipt) -> Veri
 def _validate_durable_accepted_ack(
     request: VerifySessionRequestV1,
     accepted_ack: VerifySessionAcceptedAckV1,
+    receipt: CommandJournalTransitionReceipt,
 ) -> None:
     try:
         validate_verify_session_durable_reply_identity(verify_session_request_echo(request), accepted_ack.identity)
@@ -241,6 +258,12 @@ def _validate_durable_accepted_ack(
         accepted_ack_matches_request = accepted_ack.dispatch_authorization == request.delivery.authorization
     if not accepted_ack_matches_request:
         raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_CONFLICT)
+    if (
+        accepted_ack.accepted_fact != "dispatch_authorized"
+        or accepted_ack.accepted_generation != receipt.accepted_generation
+        or accepted_ack.accepted_journal_revision != receipt.accepted_journal_revision
+    ):
+        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)
     if (
         request.delivery.delivery_mode == "outbox_redelivery"
         and request.identity.deadline.value > accepted_ack.identity.deadline.value

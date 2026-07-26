@@ -82,7 +82,12 @@ def _redact_runtime_attempt_fence_tokens(
             redacted: dict[object, object] = {}
             for key, item in value.items():
                 is_fence_token = type(key) is str and key == _RUNTIME_ATTEMPT_FENCE_TOKEN_FIELD
-                if is_fence_token and depth == 0 and allow_valid_top_level_fence_token and _raw_fence_token_is_valid(item):
+                if (
+                    is_fence_token
+                    and depth == 0
+                    and allow_valid_top_level_fence_token
+                    and _raw_fence_token_is_valid(item)
+                ):
                     redacted[key] = item
                 elif is_fence_token:
                     redacted[key] = _REDACTED_SENSITIVE_INPUT
@@ -724,7 +729,6 @@ def _request_intent_payload(
         "run_id": identity.run_id,
         "operation_id": identity.operation_id,
         "accepted_requirement_revision_id": identity.accepted_requirement_revision_id,
-        "profile_binding_generation": identity.profile_binding_generation,
         "profile_mode": body.profile_mode,
         "profile_binding_ref": body.profile_binding_ref,
         "provider_account_ref": body.provider_account_ref,

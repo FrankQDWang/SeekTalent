@@ -956,6 +956,7 @@ def test_command_journal_internal_modules_form_a_one_way_dag() -> None:
     facade_path = source_port / "command_journal.py"
     engine_path = source_port / "_command_journal_engine.py"
     types_path = source_port / "_command_journal_types.py"
+    continuity_store_path = source_port / "_safe_retry_continuity_store.py"
     obsolete_capability_path = source_port / "command_journal_capability.py"
 
     def imported_modules(path: Path) -> set[str]:
@@ -995,6 +996,7 @@ def test_command_journal_internal_modules_form_a_one_way_dag() -> None:
         facade_path: private_modules,
         engine_path: {"seektalent.source_port._command_journal_types"},
         types_path: set(),
+        continuity_store_path: private_modules,
     }
     for path in (project_root / "src").rglob("*.py"):
         private_imports = imported_modules(path) & private_modules
@@ -1032,6 +1034,8 @@ def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_col
             production_callers.append(path.relative_to(project_root).as_posix())
     assert set(production_callers) == {
         "src/seektalent/sidecar_bootstrap.py",
+        "src/seektalent/source_port/_safe_retry_continuity_store.py",
+        "src/seektalent/source_port/verify_session_continuity_admission.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
     }

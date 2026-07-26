@@ -164,7 +164,7 @@ _TRANSPORT_BRIDGE_REQUIREMENT = exact_browser_bridge_requirement()
 
 def _transport_profile_snapshot() -> WtsCliCurrentProfileSnapshot:
     return WtsCliCurrentProfileSnapshot(
-        runtime_attempt_fence_ref="bc755a043d939b683f58b27e72d7c9916ec21977f350959fd97e0b3623b7fd37",
+        runtime_attempt_fence_ref="78e1e30191d016c43e1e44bf3aeea85a82be0cd55ad1166db87dc97fa3f1fea8",
         profile_binding_ref="profile-binding-shared-1",
         profile_binding_generation=1,
         provider_account_ref="provider-account-shared-1",

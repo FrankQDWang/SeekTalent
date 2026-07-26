@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import contextmanager, suppress
 from hashlib import sha256
 import os
@@ -478,12 +479,17 @@ def _record_accepted(
     instance_id: str,
     accepted: AcceptedCommand,
     accepted_ack_bytes: bytes | None,
+    accepted_ack_factory: Callable[[int, int], bytes] | None,
     allow_existing_phase_replay: bool,
     allow_transport_replay: bool,
     require_existing_replay: bool,
 ) -> CommandJournalTransitionResult:
     if type(accepted) is not AcceptedCommand:
         raise TypeError("accepted command must be an AcceptedCommand")
+    if accepted_ack_bytes is not None and accepted_ack_factory is not None:
+        raise ValueError("accepted ack bytes and factory are mutually exclusive")
+    if accepted_ack_factory is not None and not callable(accepted_ack_factory):
+        raise TypeError("accepted ack factory must be callable")
     _validate_accepted_input(accepted, generation=generation)
     _validate_durable_reply_bytes(accepted_ack_bytes, "accepted_ack_bytes")
     with _write_transaction(path) as connection:
@@ -524,6 +530,9 @@ def _record_accepted(
             },
             strict=True,
         )
+        if accepted_ack_factory is not None:
+            accepted_ack_bytes = accepted_ack_factory(generation, revision)
+            _validate_durable_reply_bytes(accepted_ack_bytes, "accepted_ack_bytes")
         connection.execute(_EVENT_INSERT, _accepted_event_parameters(fact, accepted_ack_bytes=accepted_ack_bytes))
         _transition_checkpoint("after_event_insert")
         connection.execute(_HEAD_INSERT, _accepted_head_parameters(fact, accepted_ack_bytes=accepted_ack_bytes))
@@ -532,6 +541,8 @@ def _record_accepted(
     return CommandJournalTransitionResult(
         disposition=CommandJournalTransitionDisposition.CREATED,
         startup_generation=generation,
+        accepted_generation=generation,
+        accepted_journal_revision=revision,
         revision=revision,
         head_phase="accepted",
         accepted_ack_bytes=accepted_ack_bytes,
@@ -628,6 +639,8 @@ def _record_dispatch_intent(
     return CommandJournalTransitionResult(
         disposition=CommandJournalTransitionDisposition.CREATED,
         startup_generation=generation,
+        accepted_generation=int(head["accepted_generation"]),
+        accepted_journal_revision=int(head["accepted_journal_revision"]),
         revision=revision,
         head_phase="dispatch_intent",
         accepted_ack_bytes=_reply_bytes_from_row(head, "accepted_ack_bytes"),
@@ -761,6 +774,8 @@ def _record_observation(
     return CommandJournalTransitionResult(
         disposition=CommandJournalTransitionDisposition.CREATED,
         startup_generation=generation,
+        accepted_generation=int(head["accepted_generation"]),
+        accepted_journal_revision=int(head["accepted_journal_revision"]),
         revision=revision,
         head_phase=observation_kind,
         accepted_ack_bytes=_reply_bytes_from_row(head, "accepted_ack_bytes"),
@@ -975,6 +990,8 @@ def _transition_result_from_head(
     return CommandJournalTransitionResult(
         disposition=disposition,
         startup_generation=startup_generation,
+        accepted_generation=int(head["accepted_generation"]),
+        accepted_journal_revision=int(head["accepted_journal_revision"]),
         revision=revision,
         head_phase=head_phase,
         accepted_ack_bytes=_reply_bytes_from_row(head, "accepted_ack_bytes"),

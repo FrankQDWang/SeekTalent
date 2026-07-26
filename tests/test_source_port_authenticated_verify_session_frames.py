@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from hashlib import sha256
+import hmac
 import json
 import logging
 from pathlib import Path
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 import pytest
 
 import seektalent.source_port.authenticated_verify_session_frames as frames
+from seektalent.source_port.authenticated_frame_core import SIDECAR_TO_MAIN, ZERO_AUTH_TAG, auth_input
 from seektalent.source_port.authenticated_verify_session_frames import (
     PostHandshakeVerifySessionSession,
     ReceivedVerifySessionAcceptedAck,
@@ -32,6 +34,7 @@ from seektalent.source_port.verify_session_contract import (
     validate_outbox_redelivery,
     verify_session_request_echo,
 )
+from seektalent.source_port.wire_primitives import canonical_json_bytes
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -46,18 +49,18 @@ SIDECAR_TO_MAIN_KEY = bytes(range(32, 64))
 VERIFY_SESSION_FRAME_VECTORS = {
     "submit": {
         "length": 2097,
-        "auth_tag": "86114ea7037c7f9d6fdc673878d5027a29fa97398d5dd5ed04d37b5bcfbdab71",
-        "sha256": "2d11ddbf81590534a3911906bcc1f5d18423f90ee23749856195b077429f4a8d",
+        "auth_tag": "8ad23c680f5663a8af4dfdb7ab47826ae4d03098f73192fc6fe26068d0c8847b",
+        "sha256": "3a83835fc7efefe958bf7c1159f85ed12b1e2c71353b93b78925fc7178153171",
     },
     "accepted_ack": {
-        "length": 1675,
-        "auth_tag": "44b59d8922f0ca68a5538cb24262668dd3b364559492db143095ef6535a8e1a9",
-        "sha256": "7cef081d1d8b3e02aab7d5431788d17dbb7ef2dc10aa8763f2831c429b7daeee",
+        "length": 1729,
+        "auth_tag": "c7a57fb9aa45cd99e2a97253a51179b133fa9dab557331fa554a4f146a2cc2e6",
+        "sha256": "732e718284b2dde938a422ad164d64c50d733713b8b353b3fbb628b043cbede9",
     },
     "result": {
         "length": 1543,
-        "auth_tag": "1d5469b50b34fc879b02625343f6267b613bb8113daf78d55fdba99abe13b83e",
-        "sha256": "6418e044c7d1c8ec4e43026a2821116e563821a4992f48f513493966fa5a99f3",
+        "auth_tag": "5d79fbd74504c93ee18faf2d0e2f316fa1b196a540d9ae2244b5035223aa89fb",
+        "sha256": "792591d876ba98101afa1b5e1645fb99d431e3a7b112d37c8f7ee0a2cab34eb9",
     },
 }
 
@@ -119,10 +122,60 @@ def _accepted_ack(request: VerifySessionRequestV1, **updates: object) -> VerifyS
         "contract_version": "seektalent.source.verify-session.accepted-ack/v1",
         "identity": request.identity,
         "dispatch_authorization": request.delivery.authorization,
+        "accepted_generation": 1,
+        "accepted_journal_revision": 1,
         "accepted_fact": "dispatch_authorized",
     }
     values.update(updates)
     return VerifySessionAcceptedAckV1.model_validate(values)
+
+
+def _request_for_authorization_ordinal(ordinal: int) -> VerifySessionRequestV1:
+    if ordinal == 1:
+        return _request()
+    return _request(
+        attempt_no=2,
+        runtime_attempt_fence_token=RAW_FENCE_TOKEN + "-retry",
+        profile_binding_generation=2,
+        browser_control_scope_id="browser-scope-2",
+        correlation_id="correlation-2",
+        expected_source_operation_ledger_revision=2,
+        expected_reconciliation_revision=1,
+        dispatch_intent_id="dispatch-intent-2",
+        dispatch_intent_revision=2,
+        dispatch_authorization_ordinal=2,
+        safe_retry_commit_ref="safe-retry-commit-2",
+    )
+
+
+def _authenticated_ack_frame_with_fact(frame: bytes, *, accepted_fact: str) -> bytes:
+    envelope = json.loads(frame[4:])
+    assert isinstance(envelope, dict)
+    payload = envelope.get("payload")
+    session_id = envelope.get("session_id")
+    sequence = envelope.get("direction_seq")
+    assert isinstance(payload, dict)
+    assert isinstance(session_id, str)
+    assert isinstance(sequence, int)
+    payload["accepted_fact"] = accepted_fact
+    unsigned = {key: value for key, value in envelope.items() if key != "auth_tag"}
+    unsigned_body = canonical_json_bytes(unsigned)
+    zero_tag_body = canonical_json_bytes({**unsigned, "auth_tag": ZERO_AUTH_TAG})
+    frame_length = len(zero_tag_body)
+    auth_tag = hmac.new(
+        SIDECAR_TO_MAIN_KEY,
+        auth_input(
+            session_id=session_id,
+            direction=SIDECAR_TO_MAIN,
+            sequence=sequence,
+            frame_length=frame_length,
+            unsigned_body=unsigned_body,
+        ),
+        sha256,
+    ).hexdigest()
+    body = canonical_json_bytes({**unsigned, "auth_tag": auth_tag})
+    assert len(body) == frame_length
+    return frame_length.to_bytes(4, "big") + body
 
 
 def _rejected(request: VerifySessionRequestV1, **updates: object) -> VerifySessionRejectedV1:
@@ -219,13 +272,18 @@ def test_submit_ack_and_terminal_result_share_one_authenticated_session_core() -
         ),
     )
 
-    ack = _accepted_ack(request)
+    ack = _accepted_ack(
+        request,
+        accepted_generation=7,
+        accepted_journal_revision=19,
+    )
     ack_frame = sidecar.encode_accepted_ack(
         message_id="ack-1",
         reply_to="submit-1",
         payload=ack,
     )
-    assert main.feed(ack_frame) == (
+    received_ack = main.feed(ack_frame)
+    assert received_ack == (
         ReceivedVerifySessionAcceptedAck(
             message_id="ack-1",
             reply_to="submit-1",
@@ -233,6 +291,8 @@ def test_submit_ack_and_terminal_result_share_one_authenticated_session_core() -
             payload=ack,
         ),
     )
+    assert received_ack[0].payload.accepted_generation == 7
+    assert received_ack[0].payload.accepted_journal_revision == 19
 
     result = _result(request)
     result_frame = sidecar.encode_result(
@@ -251,6 +311,86 @@ def test_submit_ack_and_terminal_result_share_one_authenticated_session_core() -
         ),
     )
     assert RAW_FENCE_TOKEN not in repr(received)
+
+
+def test_accepted_ack_missing_durable_position_is_rejected_by_the_frame() -> None:
+    request = _request()
+    main = _main()
+    sidecar = _sidecar()
+    sidecar.feed(main.encode_submit(message_id="submit-1", correlation_id=None, payload=request))
+    missing_position = VerifySessionAcceptedAckV1.model_construct(
+        contract_version="seektalent.source.verify-session.accepted-ack/v1",
+        identity=request.identity,
+        dispatch_authorization=request.delivery.authorization,
+        accepted_fact="dispatch_authorized",
+    )
+
+    with pytest.raises(VerifySessionFrameError) as invalid:
+        sidecar.encode_accepted_ack(
+            message_id="ack-1",
+            reply_to="submit-1",
+            payload=missing_position,
+        )
+
+    assert invalid.value.reason_code == VerifySessionFrameReason.SCHEMA_VALIDATION.value
+    assert sidecar.closed is True
+
+
+@pytest.mark.parametrize(
+    ("ordinal", "accepted_fact"),
+    ((1, "accepted_no_dispatch"), (2, "dispatch_authorized")),
+)
+def test_accepted_ack_fact_must_match_the_authorization_ordinal(
+    ordinal: int,
+    accepted_fact: str,
+) -> None:
+    request = _request_for_authorization_ordinal(ordinal)
+    values = {
+        **_accepted_ack(
+            request,
+            accepted_fact=("dispatch_authorized" if ordinal == 1 else "accepted_no_dispatch"),
+        ).model_dump(mode="python"),
+        "accepted_fact": accepted_fact,
+    }
+
+    with pytest.raises(ValidationError):
+        VerifySessionAcceptedAckV1.model_validate(values, strict=True)
+
+
+@pytest.mark.parametrize(
+    ("ordinal", "valid_fact", "invalid_fact"),
+    (
+        (1, "dispatch_authorized", "accepted_no_dispatch"),
+        (2, "accepted_no_dispatch", "dispatch_authorized"),
+    ),
+)
+def test_authenticated_accepted_ack_frame_rejects_an_ordinal_fact_mismatch(
+    ordinal: int,
+    valid_fact: str,
+    invalid_fact: str,
+) -> None:
+    request = _request_for_authorization_ordinal(ordinal)
+    main = _main()
+    sidecar = _sidecar()
+    sidecar.feed(
+        main.encode_submit(
+            message_id="submit-1",
+            correlation_id=request.identity.correlation_id,
+            payload=request,
+        )
+    )
+    valid_frame = sidecar.encode_accepted_ack(
+        message_id="ack-1",
+        reply_to="submit-1",
+        payload=_accepted_ack(request, accepted_fact=valid_fact),
+    )
+    invalid_frame = _authenticated_ack_frame_with_fact(valid_frame, accepted_fact=invalid_fact)
+
+    with pytest.raises(VerifySessionFrameError) as invalid:
+        main.feed(invalid_frame)
+
+    assert invalid.value.reason_code == VerifySessionFrameReason.SCHEMA_VALIDATION.value
+    assert main.closed is True
 
 
 def test_verify_session_authenticated_exchange_known_answer_is_byte_stable() -> None:
@@ -654,8 +794,10 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert set(callers) == {
         "src/seektalent/source_history_reconciliation.py",
+        "src/seektalent/source_port/_safe_retry_continuity_store.py",
         "src/seektalent/source_port/authenticated_source_port_session.py",
         "src/seektalent/source_port/sidecar_transport.py",
+        "src/seektalent/source_port/verify_session_continuity_admission.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
     }

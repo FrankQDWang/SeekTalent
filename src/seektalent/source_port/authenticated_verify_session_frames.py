@@ -37,7 +37,7 @@ from seektalent.source_port.verify_session_contract import (
     validate_verify_session_result_echo_facts,
     verify_session_request_echo,
 )
-from seektalent.source_port.wire_primitives import Opaque96, StrictWireModel
+from seektalent.source_port.wire_primitives import Opaque96, PositiveJsonInteger, StrictWireModel
 
 
 MAX_FRAME_BYTES = DEFAULT_MAX_FRAME_BYTES
@@ -112,7 +112,9 @@ class VerifySessionAcceptedAckV1(_VerifySessionFrameModel):
     contract_version: Literal["seektalent.source.verify-session.accepted-ack/v1"]
     identity: OperationIdentityV1
     dispatch_authorization: DispatchAuthorizationV1
-    accepted_fact: Literal["dispatch_authorized"]
+    accepted_generation: PositiveJsonInteger
+    accepted_journal_revision: PositiveJsonInteger
+    accepted_fact: Literal["dispatch_authorized", "accepted_no_dispatch"]
 
     @field_validator("identity")
     @classmethod
@@ -125,6 +127,10 @@ class VerifySessionAcceptedAckV1(_VerifySessionFrameModel):
             validate_dispatch_authorization(self.identity, self.dispatch_authorization)
         except ValueError:
             raise ValueError("verify_session_frame_ack_authorization_invalid") from None
+        ordinal = self.dispatch_authorization.dispatch_authorization_ordinal
+        expected_fact = "dispatch_authorized" if ordinal == 1 else "accepted_no_dispatch"
+        if self.accepted_fact != expected_fact:
+            raise ValueError("verify_session_frame_ack_fact_invalid")
         return self
 
 
@@ -136,6 +142,19 @@ class VerifySessionRejectedV1(_VerifySessionFrameModel):
         "dispatch_authorization_invalid",
         "profile_binding_stale",
         "submit_not_admissible",
+        "continuity_ordinal_gap",
+        "continuity_identity_conflict",
+        "continuity_attempt_not_increasing",
+        "continuity_revision_not_increasing",
+        "continuity_authorization_conflict",
+        "continuity_safe_retry_ref_reused",
+        "continuity_prior_state_not_retryable",
+        "continuity_history_incomplete",
+        "continuity_replay_conflict",
+        "journal_busy",
+        "journal_corrupt",
+        "journal_schema_mismatch",
+        "journal_unavailable",
     ]
 
     @field_validator("identity")
@@ -810,9 +829,7 @@ def _new_authenticated_verify_session_arrival(
             owner=owner,
             request=pending.request,
             arrival=arrival,
-            arrival_monotonic=(
-                None if received.payload.delivery.delivery_mode == "outbox_redelivery" else clock()
-            ),
+            arrival_monotonic=(None if received.payload.delivery.delivery_mode == "outbox_redelivery" else clock()),
         )
         return arrival
 

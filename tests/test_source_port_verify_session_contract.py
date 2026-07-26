@@ -43,11 +43,11 @@ PLAN_PATH = PROJECT_ROOT / "docs" / "plans" / "external-execution-plane-v1-sourc
 RAW_FENCE_TOKEN = "raw-fence-token-canary-" + "x" * 64
 LEAK_CANARY = "RAW-FENCE-TOKEN-MUST-NOT-LEAK-" + "z" * 64
 SHORT_LEAK_CANARY = "short-raw-fence-canary"
-REQUEST_HASH_VECTOR = "cd00fccc50c288cc1d0045096d431bd52a81f94cc16c68379eda6ca691457969"
-FENCE_REF_VECTOR = "7147dbb8da083fe36c037acd98b6c82fe6db2b29a9c7b257ed8654def360f7d3"
-DISPATCH_DIGEST_VECTOR = "b50ef3cb4701b3f224fdf888090344bceb86466e7190ee960c9fd065a8444bd7"
-SAFE_RETRY_DISPATCH_DIGEST_VECTOR = "7d7ae2d058782cba8440a3efa264c2035efacc931f2e29a97dc81b26517f4924"
-RESULT_HASH_VECTOR = "bcc6f7c9cc5b4811e48f1bb7338897fd93a650d4c306416a163921a5214aedef"
+REQUEST_HASH_VECTOR = "67781fd05d58043915e2b1e6c82166ad6aafbe47cb9c2f32672d962db13493ff"
+FENCE_REF_VECTOR = "4203e2774f65d2556d34cd28c35154df755106f739e8d71abed936e07693fdb4"
+DISPATCH_DIGEST_VECTOR = "c8d31a012d53276db8ed65d84f8c973149f40730f85ea28e00ade60473a6affd"
+SAFE_RETRY_DISPATCH_DIGEST_VECTOR = "6bfebde2f3cac1eb8bfdc2efe868979a2a858ea98bbac0fe1c886e5afffe8c2f"
+RESULT_HASH_VECTOR = "734f5a4d1555adbe9350de9974d7e37099b1d08fe598ed1524208f9e54c6d9ce"
 
 
 def _request(**updates: object) -> VerifySessionRequestV1:
@@ -161,6 +161,8 @@ def test_request_is_strict_closed_frozen_and_only_serializes_the_raw_token_in_th
         (("identity", "request_hash"), "A" * 64),
         (("identity", "run_id"), "run\n1"),
         (("identity", "run_id"), "x" * 97),
+        (("identity", "source"), "linkedin"),
+        (("identity", "operation_kind"), "search"),
         (("profile_binding_ref",), "\ud800"),
         (("required_capabilities",), ["bridge"] * 17),
         (("verify_search_surface",), 1),
@@ -197,7 +199,6 @@ def test_canonical_request_hash_and_fence_ref_match_manual_rfc8785_and_length_pr
         "contract_version": "seektalent.source.verify-session.request/v1",
         "operation_id": "verify-session-1",
         "operation_kind": "verify_session",
-        "profile_binding_generation": 1,
         "profile_binding_ref": "profile-binding-1",
         "profile_mode": "existing_profile",
         "provider_account_ref": "provider-account-1",
@@ -266,10 +267,37 @@ def test_request_hash_has_the_frozen_inclusion_and_exclusion_matrix() -> None:
         _request(runtime_attempt_fence_token="raw-fence-token-rotated-" + "y" * 64),
         _request(deadline_value=60_001),
         _request(correlation_id="correlation-2"),
+        _request(profile_binding_generation=2),
         _request(browser_control_scope_id="browser-scope-2"),
         _request(delivery_mode="outbox_redelivery"),
     ):
         assert unchanged.identity.request_hash == baseline.identity.request_hash
+
+
+def test_main_style_safe_retry_rotates_epoch_authority_without_changing_logical_hash() -> None:
+    initial = _request()
+    safe_retry = _safe_retry_request(
+        runtime_attempt_fence_token="safe-retry-runtime-fence-" + "y" * 64,
+        profile_binding_generation=2,
+        browser_control_scope_id="browser-scope-2",
+        deadline_value=45_000,
+        correlation_id="safe-retry-correlation-2",
+        dispatch_intent_id="dispatch-intent-2",
+        source_operation_acceptance_ref="source-acceptance-1",
+    )
+
+    assert safe_retry.delivery.authorization.dispatch_authorization_ordinal == 2
+    assert safe_retry.identity.attempt_no == 2
+    assert safe_retry.identity.profile_binding_generation == 2
+    assert safe_retry.identity.runtime_attempt_fence_ref != initial.identity.runtime_attempt_fence_ref
+    assert safe_retry.identity.request_hash == initial.identity.request_hash
+
+    for changed_logical_binding in (
+        _safe_retry_request(profile_binding_ref="profile-binding-2"),
+        _safe_retry_request(provider_account_ref="provider-account-2"),
+        _safe_retry_request(required_capabilities=("bridge", "extension")),
+    ):
+        assert changed_logical_binding.identity.request_hash != initial.identity.request_hash
 
 
 def test_dispatch_authorization_digest_is_durable_only_and_redelivery_reuses_it_exactly() -> None:
@@ -786,6 +814,7 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
     assert set(callers) == {
         "src/seektalent/source_history_reconciliation.py",
         "src/seektalent/sidecar_bootstrap.py",
+        "src/seektalent/source_port/_safe_retry_continuity_store.py",
         "src/seektalent/source_port/sidecar_transport.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
@@ -793,7 +822,7 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
     }
 
 
-def test_sidecar_history_read_model_widens_without_writer_or_production_routing() -> None:
+def test_sidecar_history_writer_stays_ordinal_one_except_for_atomic_continuity_admission() -> None:
     ordinal_one_sources = {
         "runtime_control": (PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_epoch_schema.py"),
         "runtime_control_validation": (PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_operations.py"),
@@ -834,6 +863,7 @@ def test_sidecar_history_read_model_widens_without_writer_or_production_routing(
         if "create_safe_retry(" in content or "safe_retry_commit_ref" in content:
             safe_retry_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert set(safe_retry_callers) == {
+        "src/seektalent/source_port/_safe_retry_continuity_store.py",
         "src/seektalent_runtime_control/safe_retry_turnover.py",
         "src/seektalent_runtime_control/source_epoch_schema.py",
         "src/seektalent_runtime_control/source_operations.py",
