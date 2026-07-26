@@ -189,6 +189,7 @@ def test_candidate_evidence_source_references_round_trip_and_legacy_schema_defau
 
 
 def _drop_post_v7_source_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("DROP TABLE runtime_control_failure_envelope_revisions")
     conn.execute("DROP TABLE runtime_control_source_operation_admission_expectations")
     conn.execute("DROP TABLE runtime_control_source_reconciliations")
     conn.execute("DROP TABLE runtime_control_source_dispatch_outbox")

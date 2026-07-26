@@ -27,10 +27,10 @@ def test_v11_to_v12_preserves_ordinal_one_rows_and_reconciliation(tmp_path: Path
 
     store.initialize()
 
-    assert RUNTIME_CONTROL_SCHEMA_VERSION == 12
+    assert RUNTIME_CONTROL_SCHEMA_VERSION == 13
     with sqlite3.connect(store.path) as conn:
         conn.row_factory = sqlite3.Row
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
         expectation = conn.execute(
             """
             SELECT dispatch_authorization_ordinal, runtime_attempt_no,
@@ -105,7 +105,7 @@ def test_v11_to_v12_faults_roll_back_schema_and_rows(
         lambda _point: None,
     )
     store.initialize()
-    assert _source_epoch_version(store.path) == 12
+    assert _source_epoch_version(store.path) == 13
     assert _source_epoch_rows(store.path, legacy_columns=True) == before
 
 
@@ -1312,6 +1312,9 @@ def _source_epoch_rows(
 
 def _downgrade_source_epochs_to_v11(path: Path) -> None:
     with sqlite3.connect(path) as conn:
+        conn.execute(
+            "DROP TABLE IF EXISTS runtime_control_failure_envelope_revisions"
+        )
         columns = {row[1] for row in conn.execute("PRAGMA table_info(runtime_control_source_dispatch_outbox)")}
         if "safe_retry_commit_ref" not in columns:
             conn.execute("PRAGMA user_version = 11")
