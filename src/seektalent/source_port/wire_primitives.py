@@ -7,27 +7,14 @@ import unicodedata
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field
-import rfc8785
+
+from seektalent.canonical_json import CanonicalJsonError, canonical_json_bytes
+
+__all__ = ["CanonicalJsonError", "canonical_json_bytes"]
 
 
 JSON_SAFE_INTEGER = 2**53 - 1
 SQLITE_MAX_INTEGER = 2**63 - 1
-
-CanonicalJsonScalar: TypeAlias = bool | int | str | float | None
-CanonicalJsonValue: TypeAlias = (
-    CanonicalJsonScalar
-    | list["CanonicalJsonValue"]
-    | tuple["CanonicalJsonValue", ...]
-    | dict[str, "CanonicalJsonValue"]
-)
-
-
-class CanonicalJsonError(ValueError):
-    """A boundary-neutral RFC 8785 failure kind for callers that need a taxonomy."""
-
-    def __init__(self, kind: Literal["invalid", "recursion"]) -> None:
-        self.kind = kind
-        super().__init__("source_port_canonical_json_invalid")
 
 OperationKind: TypeAlias = Literal[
     "verify_session",
@@ -100,30 +87,3 @@ ExactFalse = Annotated[Literal[False], BeforeValidator(_literal_false)]
 
 class StrictWireModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, revalidate_instances="always", strict=True)
-
-
-def _canonical_json_value(value: object) -> CanonicalJsonValue:
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return value
-    if isinstance(value, list):
-        return [_canonical_json_value(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_canonical_json_value(item) for item in value)
-    if isinstance(value, dict):
-        normalized: dict[str, CanonicalJsonValue] = {}
-        for key, item in value.items():
-            if not isinstance(key, str):
-                raise ValueError("source_port_canonical_json_invalid")
-            normalized[key] = _canonical_json_value(item)
-        return normalized
-    raise ValueError("source_port_canonical_json_invalid")
-
-
-def canonical_json_bytes(payload: object) -> bytes:
-    """Return RFC 8785 bytes or a safe, boundary-neutral validation error."""
-    try:
-        return rfc8785.dumps(_canonical_json_value(payload))
-    except RecursionError:
-        raise CanonicalJsonError("recursion") from None
-    except (rfc8785.CanonicalizationError, ValueError):
-        raise CanonicalJsonError("invalid") from None

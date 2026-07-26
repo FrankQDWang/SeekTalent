@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from collections import Counter
 from collections.abc import Mapping
+from dataclasses import dataclass
 import re
 from typing import TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from seektalent.diagnostics_registry import REDACTION_RULES
+from seektalent.diagnostics_scalar import ScalarContract, validate_scalar
 
 
 Allowlist: TypeAlias = Mapping[str, object]
@@ -17,9 +19,10 @@ Allowlist: TypeAlias = Mapping[str, object]
 _MAX_DEPTH = 3
 _MAX_KEYS = 64
 _MAX_ARRAY_ITEMS = 32
-_MAX_STRING_LENGTH = 256
 _MAX_REPORT_ITEMS = 32
 _MAX_PATH_LENGTH = 128
+_MAX_TOTAL_NODES = 1024
+_MAX_TOTAL_KEYS = 512
 
 _CREDENTIAL_KEY = re.compile(
     r"(?:^|_)(?:authorization|auth|cookie|password|secret|token|api_?key|"
@@ -53,19 +56,6 @@ _RAW_DIAGNOSTIC_KEY = re.compile(
     r"exception_detail|exception_message|process_env|^env$|command_line)",
     re.IGNORECASE,
 )
-_URL = re.compile(r"(?:https?|file)://", re.IGNORECASE)
-_WINDOWS_ABSOLUTE_PATH = re.compile(r"^[A-Za-z]:[\\/]")
-_IP_ADDRESS = re.compile(
-    r"(?<![0-9])(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})"
-    r"(?:\.(?:25[0-5]|2[0-4][0-9]|1?[0-9]{1,2})){3}(?![0-9])"
-)
-_SENSITIVE_VALUE = re.compile(
-    r"(?:\bBearer\s+\S+|<\s*(?:html|body|script)\b|"
-    r"(?:password|api[_-]?key|authorization|token)\s*[=:]\s*\S+)",
-    re.IGNORECASE,
-)
-
-
 class DiagnosticsRedactionError(ValueError):
     def __init__(self, reason: str) -> None:
         self.reason = reason
@@ -93,6 +83,22 @@ class DiagnosticsProjection(BaseModel):
     report: tuple[RedactionReportItem, ...]
 
 
+@dataclass
+class _Budget:
+    nodes: int = 0
+    keys: int = 0
+
+    def add_node(self) -> None:
+        self.nodes += 1
+        if self.nodes > _MAX_TOTAL_NODES:
+            raise DiagnosticsRedactionError("diagnostics_redaction_budget_exceeded")
+
+    def add_keys(self, count: int) -> None:
+        self.keys += count
+        if self.keys > _MAX_TOTAL_KEYS:
+            raise DiagnosticsRedactionError("diagnostics_redaction_budget_exceeded")
+
+
 def project_diagnostics(payload: object, *, allowlist: Allowlist) -> DiagnosticsProjection:
     """Project one value through an explicit recursive allowlist.
 
@@ -102,8 +108,9 @@ def project_diagnostics(payload: object, *, allowlist: Allowlist) -> Diagnostics
     """
     if not isinstance(allowlist, Mapping):
         raise DiagnosticsRedactionError("diagnostics_redaction_invalid_allowlist")
+    _validate_allowlist(allowlist, depth=0, budget=_Budget())
     reports: Counter[tuple[str, str]] = Counter()
-    projected = _project(payload, allowlist, "$", 0, reports)
+    projected = _project(payload, allowlist, "root", 0, reports, _Budget())
     total = sum(reports.values())
     report = tuple(
         RedactionReportItem(rule=rule, path=path, count=count)
@@ -118,74 +125,82 @@ def _project(
     path: str,
     depth: int,
     reports: Counter[tuple[str, str]],
+    budget: _Budget,
 ) -> object:
+    budget.add_node()
     if depth > _MAX_DEPTH:
         raise DiagnosticsRedactionError("diagnostics_redaction_too_deep")
-    if allowlist is True:
-        return _safe_scalar(value)
+    if isinstance(allowlist, ScalarContract):
+        try:
+            return validate_scalar(value, allowlist)
+        except ValueError:
+            raise DiagnosticsRedactionError("diagnostics_redaction_scalar_contract_mismatch") from None
     if isinstance(allowlist, Mapping):
-        allowed_fields: dict[str, object] = {}
-        for allowed_key, allowed_value in allowlist.items():
-            if not isinstance(allowed_key, str):
-                raise DiagnosticsRedactionError("diagnostics_redaction_invalid_allowlist")
-            allowed_fields[allowed_key] = allowed_value
+        allowed_mapping = {
+            key: child
+            for key, child in allowlist.items()
+            if isinstance(key, str)
+        }
         if not isinstance(value, Mapping):
             raise DiagnosticsRedactionError("diagnostics_redaction_shape_mismatch")
         if len(value) > _MAX_KEYS:
             raise DiagnosticsRedactionError("diagnostics_redaction_object_too_large")
+        budget.add_keys(len(value))
         projected: dict[str, object] = {}
         for key, child in value.items():
             if not isinstance(key, str):
                 raise DiagnosticsRedactionError("diagnostics_redaction_invalid_key")
             rule = _sensitive_key_rule(key)
-            child_allowlist = allowed_fields.get(key)
+            child_allowlist = allowed_mapping.get(key)
             if rule is not None or child_allowlist is None:
                 reports[(rule or "field_not_allowlisted", _redacted_path(path))] += 1
                 continue
-            if not _valid_allowlist_value(child_allowlist):
-                raise DiagnosticsRedactionError("diagnostics_redaction_invalid_allowlist")
             projected[key] = _project(
                 child,
                 child_allowlist,
                 _safe_path(path, key),
                 depth + 1,
                 reports,
+                budget,
             )
         return projected
     if isinstance(allowlist, list):
-        if len(allowlist) != 1 or not _valid_allowlist_value(allowlist[0]):
-            raise DiagnosticsRedactionError("diagnostics_redaction_invalid_allowlist")
         if not isinstance(value, (list, tuple)):
             raise DiagnosticsRedactionError("diagnostics_redaction_shape_mismatch")
         if len(value) > _MAX_ARRAY_ITEMS:
             raise DiagnosticsRedactionError("diagnostics_redaction_array_too_large")
         return [
-            _project(child, allowlist[0], f"{path}[{index}]", depth + 1, reports)
-            for index, child in enumerate(value)
+            _project(child, allowlist[0], f"{path}.<item>", depth + 1, reports, budget)
+            for child in value
         ]
     raise DiagnosticsRedactionError("diagnostics_redaction_invalid_allowlist")
 
 
-def _safe_scalar(value: object) -> object:
-    if value is None or type(value) in {bool, int}:
-        return value
-    if not isinstance(value, str):
-        raise DiagnosticsRedactionError("diagnostics_redaction_scalar_required")
-    if len(value) > _MAX_STRING_LENGTH:
-        raise DiagnosticsRedactionError("diagnostics_redaction_string_too_large")
-    if _is_sensitive_value(value):
-        raise DiagnosticsRedactionError("diagnostics_redaction_sensitive_value")
-    return value
-
-
-def _is_sensitive_value(value: str) -> bool:
-    return bool(
-        _URL.search(value)
-        or value.startswith("/")
-        or _WINDOWS_ABSOLUTE_PATH.search(value)
-        or _IP_ADDRESS.search(value)
-        or _SENSITIVE_VALUE.search(value)
-    )
+def _validate_allowlist(value: object, *, depth: int, budget: _Budget) -> None:
+    budget.add_node()
+    if depth > _MAX_DEPTH:
+        raise DiagnosticsRedactionError("diagnostics_redaction_too_deep")
+    if isinstance(value, ScalarContract):
+        if value.kind == "enum" and not value.values:
+            raise DiagnosticsRedactionError("diagnostics_redaction_invalid_allowlist")
+        return
+    if isinstance(value, Mapping):
+        if len(value) > _MAX_KEYS:
+            raise DiagnosticsRedactionError("diagnostics_redaction_invalid_allowlist")
+        budget.add_keys(len(value))
+        for key, child in value.items():
+            if (
+                not isinstance(key, str)
+                or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) is None
+                or _sensitive_key_rule(key) is not None
+            ):
+                raise DiagnosticsRedactionError("diagnostics_redaction_invalid_allowlist")
+            _validate_allowlist(child, depth=depth + 1, budget=budget)
+        return
+    if isinstance(value, list) and len(value) == 1:
+        _validate_allowlist(value[0], depth=depth + 1, budget=budget)
+        return
+    raise DiagnosticsRedactionError("diagnostics_redaction_invalid_allowlist")
 
 
 def _sensitive_key_rule(key: str) -> str | None:
@@ -203,18 +218,13 @@ def _sensitive_key_rule(key: str) -> str | None:
     return None
 
 
-def _valid_allowlist_value(value: object) -> bool:
-    return value is True or isinstance(value, (Mapping, list))
-
-
 def _redacted_path(path: str) -> str:
     return f"{path}.<redacted-field>"[:_MAX_PATH_LENGTH]
 
 
 def _safe_path(path: str, key: str) -> str:
-    if re.fullmatch(r"[a-z][a-z0-9_]{0,63}", key) is None:
-        return _redacted_path(path)
-    return f"{path}.{key}"[:_MAX_PATH_LENGTH]
+    del key
+    return f"{path}.<field>"[:_MAX_PATH_LENGTH]
 
 
 assert REDACTION_RULES == frozenset(

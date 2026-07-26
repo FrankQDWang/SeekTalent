@@ -9,6 +9,7 @@ from seektalent.diagnostics_redaction import (
     project_diagnostics,
 )
 from seektalent.diagnostics_registry import REDACTION_RULES
+from seektalent.diagnostics_scalar import NON_NEGATIVE_INTEGER, enum_values
 
 
 CANARY = "forbidden-value-must-never-appear"
@@ -71,8 +72,8 @@ def test_recursive_projection_never_exposes_forbidden_corpus(key: str, value: st
     projected = project_diagnostics(
         payload,
         allowlist={
-            "safe_count": True,
-            "nested": [{"safe_status": True, "alias": {}}],
+            "safe_count": NON_NEGATIVE_INTEGER,
+            "nested": [{"safe_status": enum_values("ready"), "alias": {}}],
         },
     )
     serialized = json.dumps(projected.model_dump(mode="json"), sort_keys=True)
@@ -118,7 +119,7 @@ def test_projection_report_is_bounded_and_deterministic() -> None:
 def test_sensitive_values_under_allowlisted_keys_fail_closed_without_leak(payload) -> None:
     value = next(iter(payload.values()))
     with pytest.raises(DiagnosticsRedactionError) as exc_info:
-        project_diagnostics(payload, allowlist={next(iter(payload)): True})
+        project_diagnostics(payload, allowlist={next(iter(payload)): enum_values("ready")})
     assert value not in str(exc_info.value)
     assert value not in repr(exc_info.value)
 
@@ -127,4 +128,106 @@ def test_projection_rejects_unbounded_or_invalid_allowlist_without_input_repr() 
     with pytest.raises(DiagnosticsRedactionError, match="diagnostics_redaction_invalid_allowlist"):
         project_diagnostics({"safe": CANARY}, allowlist={"safe": object()})
     with pytest.raises(DiagnosticsRedactionError, match="diagnostics_redaction_too_deep"):
-        project_diagnostics({"a": {"b": {"c": {"d": 1}}}}, allowlist={"a": {"b": {"c": {"d": True}}}})
+        project_diagnostics(
+            {"a": {"b": {"c": {"d": 1}}}},
+            allowlist={"a": {"b": {"c": {"d": NON_NEGATIVE_INTEGER}}}},
+        )
+
+
+def test_safe_looking_alias_cannot_admit_business_content() -> None:
+    canary = "Private Candidate Jane Doe resume content"
+    with pytest.raises(DiagnosticsRedactionError) as exc_info:
+        project_diagnostics(
+            {"safe_status": canary},
+            allowlist={"safe_status": enum_values("ready", "not_ready")},
+        )
+    assert canary not in str(exc_info.value)
+    assert canary not in repr(exc_info.value)
+    assert canary not in repr(exc_info.value.__dict__)
+
+
+def test_invalid_allowlist_is_rejected_before_payload_walk() -> None:
+    with pytest.raises(DiagnosticsRedactionError, match="diagnostics_redaction_invalid_allowlist"):
+        project_diagnostics({}, allowlist={"missing": object()})
+
+
+@pytest.mark.parametrize("value", (-(2**53), 2**53))
+def test_projection_rejects_integers_outside_ijson_safe_range(value: int) -> None:
+    with pytest.raises(DiagnosticsRedactionError) as exc_info:
+        project_diagnostics(
+            {"safe_count": value},
+            allowlist={"safe_count": NON_NEGATIVE_INTEGER},
+        )
+    assert str(value) not in str(exc_info.value)
+    assert str(value) not in repr(exc_info.value)
+
+
+def test_projection_has_a_global_node_and_key_budget() -> None:
+    payload = {
+        "groups": [
+            {f"safe_{item}": item for item in range(64)}
+            for _ in range(32)
+        ]
+    }
+    allowlist = {
+        "groups": [
+            {f"safe_{item}": NON_NEGATIVE_INTEGER for item in range(64)}
+        ]
+    }
+    with pytest.raises(DiagnosticsRedactionError, match="diagnostics_redaction_budget_exceeded"):
+        project_diagnostics(payload, allowlist=allowlist)
+
+
+def test_projection_node_budget_has_an_exact_deterministic_boundary() -> None:
+    allowlist = {"groups": [[NON_NEGATIVE_INTEGER]]}
+    within_budget = {"groups": [[item] * 32 for item in range(30)]}
+    over_budget = {"groups": [[item] * 32 for item in range(31)]}
+
+    assert project_diagnostics(within_budget, allowlist=allowlist).value == within_budget
+    with pytest.raises(DiagnosticsRedactionError, match="diagnostics_redaction_budget_exceeded"):
+        project_diagnostics(over_budget, allowlist=allowlist)
+
+
+def test_projection_key_budget_has_an_exact_deterministic_boundary() -> None:
+    object_contract = {f"safe_{item}": NON_NEGATIVE_INTEGER for item in range(64)}
+    allowlist = {"groups": [object_contract]}
+    within_budget = {
+        "groups": [
+            {f"safe_{item}": item for item in range(64)}
+            for _ in range(7)
+        ] + [{f"safe_{item}": item for item in range(63)}]
+    }
+    over_budget = {
+        "groups": [
+            {f"safe_{item}": item for item in range(64)}
+            for _ in range(8)
+        ]
+    }
+
+    assert project_diagnostics(within_budget, allowlist=allowlist).value == within_budget
+    with pytest.raises(DiagnosticsRedactionError, match="diagnostics_redaction_budget_exceeded"):
+        project_diagnostics(over_budget, allowlist=allowlist)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        {"safe_status": "Private Candidate Jane Doe resume content"},
+        {"SAFE_STATUS": "Private Candidate Jane Doe resume content"},
+        {"nested": {"safe_status": "Private Candidate Jane Doe resume content"}},
+        {"items": [{"safe_status": "Private Candidate Jane Doe resume content"}]},
+    ),
+)
+def test_business_content_cannot_enter_through_alias_case_nesting_or_list(payload) -> None:
+    contracts = {
+        "safe_status": enum_values("ready", "not_ready"),
+        "nested": {"safe_status": enum_values("ready", "not_ready")},
+        "items": [{"safe_status": enum_values("ready", "not_ready")}],
+    }
+    try:
+        projection = project_diagnostics(payload, allowlist=contracts)
+    except DiagnosticsRedactionError as exc:
+        serialized = repr(exc.__dict__)
+    else:
+        serialized = json.dumps(projection.model_dump(mode="json"), sort_keys=True)
+    assert "Private Candidate Jane Doe" not in serialized

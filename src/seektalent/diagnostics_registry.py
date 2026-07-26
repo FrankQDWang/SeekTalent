@@ -4,6 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from seektalent.diagnostics_scalar import (
+    NON_NEGATIVE_INTEGER,
+    SHA256_REFERENCE,
+    ScalarContract,
+    enum_values,
+)
+
 
 COMPONENTS = frozenset(
     {
@@ -80,17 +87,39 @@ REDACTION_RULES = frozenset(
         "sensitive_value",
     }
 )
-
-
+AUTHORITY_REF_FIELDS = frozenset(
+    {"runtime_attempt_fence_ref", "profile_binding_generation", "browser_control_fence_ref"}
+)
+CAUSE_CODES = frozenset(
+    {
+        "sqlite_full",
+        "sqlite_corrupt",
+        "sqlite_readonly",
+        "sqlite_cantopen",
+        "sqlite_busy",
+        "os_access_denied",
+        "os_resource_exhausted",
+        "http_401",
+        "http_403",
+        "http_429",
+        "http_5xx",
+        "chrome_not_reachable",
+        "chrome_protocol_rejected",
+        "producer_contract_rejected",
+        "producer_process_exited",
+    }
+)
 @dataclass(frozen=True)
 class ReasonDefinition:
     reason_code: str
     domain: str
     failure_kind: str
+    artifacts: frozenset[str]
+    event_statuses: frozenset[str] = frozenset()
 
 
 def _reason(reason_code: str, domain: str, failure_kind: str) -> ReasonDefinition:
-    return ReasonDefinition(reason_code, domain, failure_kind)
+    return ReasonDefinition(reason_code, domain, failure_kind, frozenset({"event"}))
 
 
 REASON_DEFINITIONS = {
@@ -106,8 +135,8 @@ REASON_DEFINITIONS = {
         _reason("component_process_exited", "runtime", "process_exit"),
         _reason("component_protocol_rejected", "runtime", "protocol_violation"),
         _reason("operation_accepted", "source", "operation_failure"),
-        _reason("operation_" + "dispatch_started", "source", "operation_failure"),
-        _reason("operation_" + "dispatch_completed", "source", "operation_failure"),
+        _reason("operation_dispatch_started", "source", "operation_failure"),
+        _reason("operation_dispatch_completed", "source", "operation_failure"),
         _reason("operation_side_effect_observed", "source", "operation_failure"),
         _reason("operation_result_persisted", "source", "operation_failure"),
         _reason("operation_main_commit_completed", "source", "operation_failure"),
@@ -141,6 +170,106 @@ REASON_DEFINITIONS = {
     )
 }
 
+_REASON_EVENT_STATUSES = {
+    "machine_capability_supported": {"completed"},
+    "machine_capability_unsupported": {"partial", "failed"},
+    "machine_capability_indeterminate": {"partial", "unknown"},
+    "component_starting": {"started"},
+    "component_ready": {"completed"},
+    "component_startup_failed": {"failed"},
+    "component_readiness_observed": {"completed", "partial", "failed", "unknown"},
+    "component_process_exited": {"completed", "failed", "unknown"},
+    "component_protocol_rejected": {"rejected"},
+    "operation_accepted": {"completed"},
+    "operation_dispatch_started": {"started"},
+    "operation_dispatch_completed": {"completed", "partial", "unknown"},
+    "operation_side_effect_observed": {"completed", "partial", "unknown"},
+    "operation_result_persisted": {"completed"},
+    "operation_main_commit_completed": {"completed"},
+    "operation_cleanup_completed": {"completed"},
+    "operation_cleanup_failed": {"failed", "partial"},
+    "source_operation_failed": {"failed"},
+    "authority_write_rejected": {"rejected"},
+    "storage_transaction_failed": {"failed"},
+    "storage_integrity_observed": {"completed", "unknown"},
+    "support_bundle_export_started": {"started"},
+    "support_bundle_export_completed": {"completed"},
+    "support_bundle_export_failed": {"failed"},
+    "diagnostic_projection_oversize": {"failed"},
+    "diagnostic_event_id_conflict": {"rejected"},
+    "diagnostic_gap_detected": {"partial", "unknown"},
+    "external_trace_rejected": {"rejected"},
+    "sqlite_full": {"failed"},
+    "sqlite_corrupt": {"failed"},
+    "sqlite_readonly": {"failed"},
+    "sqlite_cantopen": {"failed"},
+    "sqlite_busy": {"failed"},
+    "browser_control_fence_rejected": {"rejected"},
+    "profile_binding_generation_rejected": {"rejected"},
+    "browser_scope_mismatch": {"rejected"},
+    "provider_auth_required": {"failed"},
+    "provider_risk_control": {"failed"},
+    "network_offline": {"failed"},
+    "policy_refused": {"rejected"},
+    "user_action_required": {"failed"},
+    "unknown_failure": {"unknown"},
+}
+if set(_REASON_EVENT_STATUSES) != set(REASON_DEFINITIONS):
+    raise RuntimeError("diagnostics_reason_status_registry_incomplete")
+REASON_DEFINITIONS = {
+    code: ReasonDefinition(
+        definition.reason_code,
+        definition.domain,
+        definition.failure_kind,
+        definition.artifacts,
+        frozenset(_REASON_EVENT_STATUSES[code]),
+    )
+    for code, definition in REASON_DEFINITIONS.items()
+}
+
+_FAILURE_REASONS = frozenset(
+    {
+        "machine_capability_unsupported",
+        "machine_capability_indeterminate",
+        "component_startup_failed",
+        "component_process_exited",
+        "component_protocol_rejected",
+        "operation_cleanup_failed",
+        "source_operation_failed",
+        "authority_write_rejected",
+        "storage_transaction_failed",
+        "support_bundle_export_failed",
+        "diagnostic_projection_oversize",
+        "diagnostic_event_id_conflict",
+        "diagnostic_gap_detected",
+        "external_trace_rejected",
+        "sqlite_full",
+        "sqlite_corrupt",
+        "sqlite_readonly",
+        "sqlite_cantopen",
+        "sqlite_busy",
+        "browser_control_fence_rejected",
+        "profile_binding_generation_rejected",
+        "browser_scope_mismatch",
+        "provider_auth_required",
+        "provider_risk_control",
+        "network_offline",
+        "policy_refused",
+        "user_action_required",
+        "unknown_failure",
+    }
+)
+REASON_DEFINITIONS = {
+    code: ReasonDefinition(
+        definition.reason_code,
+        definition.domain,
+        definition.failure_kind,
+        definition.artifacts | (frozenset({"failure"}) if code in _FAILURE_REASONS else frozenset()),
+        definition.event_statuses,
+    )
+    for code, definition in REASON_DEFINITIONS.items()
+}
+
 
 @dataclass(frozen=True)
 class EventDefinition:
@@ -150,7 +279,55 @@ class EventDefinition:
     statuses: frozenset[str]
     reason_codes: frozenset[str]
     requires_operation: bool
-    attribute_fields: frozenset[str]
+    attribute_contracts: dict[str, ScalarContract]
+    authority_ref_fields: frozenset[str]
+
+    @property
+    def attribute_fields(self) -> frozenset[str]:
+        return frozenset(self.attribute_contracts)
+
+
+_ATTRIBUTE_CONTRACTS = {
+    "operation_kind": enum_values(
+        "verify_session", "search", "cards", "details", "continuation", "cleanup"
+    ),
+    "source_id": enum_values("liepin"),
+    "safe_count": NON_NEGATIVE_INTEGER,
+    "coverage": enum_values("started", "completed", "partial", "unknown"),
+    "capability": enum_values(
+        "source_port",
+        "browser_bridge",
+        "endpoint_ownership",
+        "database_integrity",
+        "disk_access",
+        "network_posture",
+    ),
+    "result": enum_values(
+        "supported", "unsupported", "indeterminate", "ok", "failed", "unknown"
+    ),
+    "gap_code": enum_values(
+        "browser_bridge_unsupported",
+        "endpoint_owner_unknown",
+        "database_integrity_failed",
+        "disk_not_writable",
+        "disk_not_executable",
+    ),
+    "startup_kind": enum_values("fresh", "restart", "upgrade_rebind", "wake"),
+    "readiness": enum_values("ready", "not_ready"),
+    "exit_class": enum_values("clean", "failure", "signal", "unknown"),
+    "exit_code": NON_NEGATIVE_INTEGER,
+    "protocol_ref": SHA256_REFERENCE,
+    "code": enum_values(*CAUSE_CODES),
+    "authority_kind": enum_values(
+        "runtime_attempt_fence",
+        "profile_binding_generation",
+        "browser_control_fence",
+    ),
+    "database": enum_values("runtime_control", "source_port"),
+    "transaction_boundary": enum_values("begin", "write", "commit", "rollback"),
+    "projection_version": enum_values("seektalent.diagnostics-redaction/v1"),
+    "artifact_count": NON_NEGATIVE_INTEGER,
+}
 
 
 def _event(
@@ -170,7 +347,8 @@ def _event(
         statuses=frozenset(statuses),
         reason_codes=frozenset(reasons),
         requires_operation=requires_operation,
-        attribute_fields=frozenset(attributes),
+        attribute_contracts={name: _ATTRIBUTE_CONTRACTS[name] for name in attributes},
+        authority_ref_fields=AUTHORITY_REF_FIELDS if requires_operation else frozenset(),
     )
 
 
@@ -242,7 +420,7 @@ EVENT_DEFINITIONS = {
             components={"main", "controller", "sidecar"},
             phase="dispatch",
             statuses={"started"},
-            reasons={"operation_" + "dispatch_started"},
+            reasons={"operation_dispatch_started"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
         ),
@@ -251,7 +429,7 @@ EVENT_DEFINITIONS = {
             components={"main", "controller", "sidecar"},
             phase="dispatch",
             statuses={"completed", "partial", "unknown"},
-            reasons={"operation_" + "dispatch_completed"},
+            reasons={"operation_dispatch_completed"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
         ),
