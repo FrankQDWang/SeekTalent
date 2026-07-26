@@ -6,16 +6,22 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from seektalent.diagnostics_registry import (
+    CAUSE_CODES,
+    CAUSE_KIND_SHAPES,
     COMPONENTS,
+    DIAGNOSTIC_GAP_REASONS,
     DOMAINS,
     EVENT_DEFINITIONS,
+    EXTERNAL_CAUSE_REASONS,
     FAILURE_KINDS,
     PHASES,
     REASON_DEFINITIONS,
     REDACTION_RULES,
+    SUPPORT_ACTION_INSTRUCTIONS,
+    USER_ACTION_INSTRUCTIONS,
 )
 from seektalent.diagnostics_schema import (
     MAX_ARTIFACT_BYTES,
@@ -31,6 +37,7 @@ from seektalent.diagnostics_schema import (
     StartupReceiptV1,
     canonical_diagnostics_bytes,
     canonical_diagnostics_hash,
+    machine_capability_content_hash,
     parse_canonical_event,
     parse_diagnostics_artifact,
     parse_failure_envelope,
@@ -227,7 +234,14 @@ def _capability() -> dict[str, object]:
         "disk_free_size_bucket": "adequate",
         "disk_writable": True,
         "disk_executable": True,
-        "capabilities": {"source_port": "supported", "browser_bridge": "supported"},
+        "capabilities": {
+            "source_port": "supported",
+            "browser_bridge": "supported",
+            "endpoint_ownership": "supported",
+            "database_integrity": "supported",
+            "disk_access": "supported",
+            "network_posture": "supported",
+        },
         "network_posture": {
             "offline": False,
             "system_proxy_present": False,
@@ -293,17 +307,31 @@ def _operation_evidence() -> dict[str, object]:
         "attempt_no": 1,
         "diagnostic_trace_id": TRACE_ID,
         "authority_refs": _authority_refs(),
-        "capability_receipt_refs": [_id("a")],
-        "startup_receipt_refs": [_id("b")],
+        "capability_receipt_refs": [
+            {
+                "identity": _id("a"),
+                "revision": 1,
+                "canonical_hash": _capability()["canonical_hash"],
+            }
+        ],
+        "startup_receipt_refs": [
+            {
+                "identity": _id("b"),
+                "revision": 1,
+                "canonical_hash": _startup()["canonical_hash"],
+            }
+        ],
         "source_id": "liepin",
         "operation_kind": "verify_session",
         "first_event_ref": _id("1"),
         "last_event_ref": _id("e"),
-        "failure_envelope_ref": _id("7"),
+        "failure_envelope_ref": {"identity": _id("7"), "revision": 1},
         "checkpoint_ref": None,
         "boundary_facts": _failure()["boundary_facts"],
         "summary": {"result_count": 0, "coverage": "partial"},
+        "source_operation_disposition_ref": None,
         "source_operation_disposition": None,
+        "product_outcome_ref": None,
         "product_outcome": None,
         "missing_evidence_refs": [],
         "rejected_stale_write_count": 0,
@@ -488,6 +516,17 @@ def test_registry_is_bounded_and_exhaustive() -> None:
     assert REDACTION_RULES
     assert EVENT_DEFINITIONS
     assert REASON_DEFINITIONS
+    assert set(EXTERNAL_CAUSE_REASONS) == set(CAUSE_CODES)
+    assert set(CAUSE_KIND_SHAPES) == {
+        "event",
+        "failure",
+        "durable_fact",
+        "external_code",
+        "unknown",
+    }
+    assert DIAGNOSTIC_GAP_REASONS <= set(REASON_DEFINITIONS)
+    assert USER_ACTION_INSTRUCTIONS
+    assert SUPPORT_ACTION_INSTRUCTIONS
     assert {definition.reason_code for definition in REASON_DEFINITIONS.values()} == set(
         REASON_DEFINITIONS
     )
@@ -585,6 +624,63 @@ def test_valid_artifacts_are_frozen_and_safe_to_repr() -> None:
         with pytest.raises(ValidationError):
             artifact.schema_version = "changed"
         assert "Bearer " not in repr(artifact)
+
+
+def test_artifact_containers_are_deeply_frozen_after_bytes_admission() -> None:
+    event = parse_canonical_event(json.dumps(_event()).encode())
+    with pytest.raises(TypeError):
+        event.attributes["coverage"] = "completed"
+
+    capability = parse_machine_capability_receipt(json.dumps(_capability()).encode())
+    with pytest.raises(TypeError):
+        capability.capabilities["browser_bridge"] = "unsupported"
+    with pytest.raises(TypeError):
+        capability.runtime_versions["python"] = "3.13"
+
+
+def test_unvalidated_copy_and_construct_surfaces_are_closed() -> None:
+    event = parse_canonical_event(json.dumps(_event()).encode())
+    canary = "Private Candidate Jane Doe resume content"
+
+    with pytest.raises(ValueError, match="diagnostics_raw_input_required"):
+        event.model_copy(update={"component_instance_id": canary})
+    with pytest.raises(ValueError, match="diagnostics_raw_input_required"):
+        CanonicalEventV1.model_construct(**_event())
+
+
+def test_canonical_bytes_hash_and_repr_revalidate_corrupted_instances() -> None:
+    canary = "Private Candidate Jane Doe resume content"
+    event = parse_canonical_event(json.dumps(_event()).encode())
+    object.__setattr__(event, "attributes", {"coverage": canary})
+
+    assert canary not in repr(event)
+    for operation in (
+        lambda: canonical_diagnostics_bytes(event),
+        lambda: canonical_diagnostics_hash(event),
+    ):
+        with pytest.raises(ValueError) as exc_info:
+            operation()
+        assert canary not in str(exc_info.value)
+        assert canary not in repr(exc_info.value)
+        assert canary not in repr(exc_info.value.__dict__)
+
+    bypassed = BaseModel.model_construct.__func__(
+        CanonicalEventV1,
+        **{**_event(), "attributes": {"coverage": canary}},
+    )
+    with pytest.raises(ValueError) as exc_info:
+        canonical_diagnostics_bytes(bypassed)
+    assert canary not in repr(exc_info.value.__dict__)
+
+
+def test_embedded_content_hash_helper_revalidates_corrupted_instance() -> None:
+    canary = "Private Candidate Jane Doe resume content"
+    receipt = parse_machine_capability_receipt(json.dumps(_capability()).encode())
+    object.__setattr__(receipt, "runtime_versions", {"python": canary})
+
+    with pytest.raises(ValueError) as exc_info:
+        machine_capability_content_hash(receipt)
+    assert canary not in repr(exc_info.value.__dict__)
 
 
 def test_event_attributes_reject_business_content_under_safe_alias() -> None:
@@ -710,11 +806,333 @@ def test_machine_capability_aggregate_cannot_contradict_capabilities() -> None:
         parse_machine_capability_receipt(json.dumps(payload).encode())
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        {"database_integrity": "failed"},
+        {"disk_writable": False},
+        {"endpoint_ownership": "conflict"},
+        {
+            "bridge_implementation": "none",
+            "bridge_build_ref": None,
+            "bridge_protocol_ref": None,
+        },
+        {"profile_mode": "none"},
+    ),
+)
+def test_machine_capability_exact_facts_cannot_contradict_supported_result(
+    mutation: dict[str, object],
+) -> None:
+    payload = _capability()
+    payload.update(mutation)
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_machine_capability_receipt(json.dumps(payload).encode())
+
+
+def test_machine_capability_accepts_consistent_unsupported_and_indeterminate_facts() -> None:
+    unsupported = _capability()
+    unsupported["database_integrity"] = "failed"
+    unsupported["capabilities"]["database_integrity"] = "unsupported"
+    unsupported["result"] = "unsupported"
+    unsupported["gap_codes"] = ["database_integrity_failed"]
+    unsupported["canonical_hash"] = _embedded_hash(unsupported)
+    parse_machine_capability_receipt(json.dumps(unsupported).encode())
+
+    indeterminate = _capability()
+    indeterminate["endpoint_ownership"] = "unknown"
+    indeterminate["capabilities"]["endpoint_ownership"] = "indeterminate"
+    indeterminate["result"] = "indeterminate"
+    indeterminate["gap_codes"] = ["endpoint_owner_unknown"]
+    indeterminate["canonical_hash"] = _embedded_hash(indeterminate)
+    parse_machine_capability_receipt(json.dumps(indeterminate).encode())
+
+    bridge_absent = _capability()
+    bridge_absent.update(
+        bridge_implementation="none",
+        bridge_build_ref=None,
+        bridge_protocol_ref=None,
+        bridge_capabilities=[],
+        profile_mode="none",
+        profile_binding_hash=None,
+        profile_binding_generation=None,
+        extension_version=None,
+        extension_id_hash=None,
+        provider_account_hash=None,
+    )
+    bridge_absent["capabilities"]["source_port"] = "unsupported"
+    bridge_absent["capabilities"]["browser_bridge"] = "unsupported"
+    bridge_absent["result"] = "unsupported"
+    bridge_absent["gap_codes"] = [
+        "source_port_unsupported",
+        "browser_bridge_unsupported",
+    ]
+    bridge_absent["canonical_hash"] = _embedded_hash(bridge_absent)
+    parse_machine_capability_receipt(json.dumps(bridge_absent).encode())
+
+
+@pytest.mark.parametrize(
+    "cause",
+    (
+        {
+            "kind": "event",
+            "ref_id": None,
+            "code": "sqlite_full",
+            "certainty": "observed",
+            "derivation_rule_id": None,
+        },
+        {
+            "kind": "external_code",
+            "ref_id": None,
+            "code": None,
+            "certainty": "observed",
+            "derivation_rule_id": None,
+        },
+        {
+            "kind": "unknown",
+            "ref_id": None,
+            "code": "sqlite_full",
+            "certainty": "unknown",
+            "derivation_rule_id": None,
+        },
+    ),
+)
+def test_cause_kind_has_closed_cardinality(cause: dict[str, object]) -> None:
+    payload = _failure()
+    payload["cause_ref"] = cause
+    with pytest.raises(ValueError):
+        parse_failure_envelope(json.dumps(payload).encode())
+
+
+def test_external_cause_code_is_bound_to_failure_reason() -> None:
+    payload = _failure()
+    payload["cause_ref"] = {
+        "kind": "external_code",
+        "ref_id": None,
+        "code": "sqlite_full",
+        "certainty": "observed",
+        "derivation_rule_id": None,
+    }
+    with pytest.raises(ValueError):
+        parse_failure_envelope(json.dumps(payload).encode())
+
+    payload.update(
+        reason_code="sqlite_full",
+        domain="storage",
+        failure_kind="resource_exhausted",
+        detail={"database": "runtime_control", "code": "sqlite_full"},
+    )
+    parse_failure_envelope(json.dumps(payload).encode())
+
+
+def test_external_cause_mapping_rejects_every_unregistered_reason_pair() -> None:
+    failure_reasons = {
+        code
+        for code, definition in REASON_DEFINITIONS.items()
+        if "failure" in definition.artifacts
+    }
+    for cause_code, allowed_reasons in EXTERNAL_CAUSE_REASONS.items():
+        for reason_code in failure_reasons - set(allowed_reasons):
+            definition = REASON_DEFINITIONS[reason_code]
+            payload = _failure()
+            payload.update(
+                reason_code=reason_code,
+                domain=definition.domain,
+                failure_kind=definition.failure_kind,
+                detail={},
+                cause_ref={
+                    "kind": "external_code",
+                    "ref_id": None,
+                    "code": cause_code,
+                    "certainty": "observed",
+                    "derivation_rule_id": None,
+                },
+            )
+            with pytest.raises(ValueError):
+                parse_failure_envelope(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        (
+            "user_action",
+            {"code": "reauthenticate", "instruction_key": "component.restart"},
+        ),
+        (
+            "support_action",
+            {"code": "contact_support", "instruction_key": "support.collect_diagnostics"},
+        ),
+    ),
+)
+def test_action_code_has_one_instruction_key(field: str, value: dict[str, str]) -> None:
+    payload = _failure()
+    payload[field] = value
+    with pytest.raises(ValueError):
+        parse_failure_envelope(json.dumps(payload).encode())
+
+
+def test_action_instruction_registries_reject_every_cross_pair() -> None:
+    for field, mapping in (
+        ("user_action", USER_ACTION_INSTRUCTIONS),
+        ("support_action", SUPPORT_ACTION_INSTRUCTIONS),
+    ):
+        for code, expected_instruction in mapping.items():
+            for instruction in set(mapping.values()) - {expected_instruction}:
+                payload = _failure()
+                payload[field] = {"code": code, "instruction_key": instruction}
+                with pytest.raises(ValueError):
+                    parse_failure_envelope(json.dumps(payload).encode())
+
+
+def test_failure_detail_is_reason_specific_and_gap_reason_is_closed() -> None:
+    payload = _failure()
+    payload["reason_code"] = "sqlite_full"
+    payload["domain"] = "storage"
+    payload["failure_kind"] = "resource_exhausted"
+    payload["cause_ref"] = {
+        "kind": "external_code",
+        "ref_id": None,
+        "code": "sqlite_full",
+        "certainty": "observed",
+        "derivation_rule_id": None,
+    }
+    payload["detail"] = {"operation_kind": "verify_session"}
+    with pytest.raises(ValueError):
+        parse_failure_envelope(json.dumps(payload).encode())
+
+
+def test_diagnostic_gap_rejects_every_non_gap_reason() -> None:
+    for reason_code in set(REASON_DEFINITIONS) - set(DIAGNOSTIC_GAP_REASONS):
+        payload = _failure()
+        payload["first_failure_event_id"] = None
+        payload["diagnostic_gap"] = {"reason_code": reason_code, "counter": 1}
+        payload["observed_boundary_ref"] = _id("8")
+        with pytest.raises(ValueError):
+            parse_failure_envelope(json.dumps(payload).encode())
+
+    payload = _failure()
+    payload["first_failure_event_id"] = None
+    payload["diagnostic_gap"] = {"reason_code": "component_ready", "counter": 1}
+    payload["observed_boundary_ref"] = _id("8")
+    with pytest.raises(ValueError):
+        parse_failure_envelope(json.dumps(payload).encode())
+
+
 def test_startup_readiness_reason_and_time_order_are_consistent() -> None:
     payload = _startup()
     payload["reason_code"] = "component_startup_failed"
     with pytest.raises(ValueError):
         parse_startup_receipt(json.dumps(payload).encode())
+
+    payload = _startup()
+    payload["exited_at"] = "2026-07-26T12:00:05Z"
+    payload["readiness_observed_at"] = "2026-07-26T12:00:10Z"
+    payload["observed_at"] = payload["readiness_observed_at"]
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_startup_receipt(json.dumps(payload).encode())
+
+
+def test_startup_restart_evidence_is_all_or_none() -> None:
+    payload = _startup()
+    payload["restart_count"] = 1
+    payload["startup_kind"] = "restart"
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_startup_receipt(json.dumps(payload).encode())
+
+    payload["previous_instance_ref"] = _id("d")
+    payload["last_exit_cause_ref"] = _id("e")
+    payload["canonical_hash"] = _embedded_hash(payload)
+    parse_startup_receipt(json.dumps(payload).encode())
+
+
+def test_operation_evidence_frozen_contract_has_typed_revision_refs_and_value_refs() -> None:
+    expected_fields = {
+        "operation_evidence_id",
+        "revision",
+        "canonical_hash",
+        "release_manifest_ref",
+        "correlation_id",
+        "run_id",
+        "operation_id",
+        "attempt_no",
+        "diagnostic_trace_id",
+        "authority_refs",
+        "capability_receipt_refs",
+        "startup_receipt_refs",
+        "source_id",
+        "operation_kind",
+        "first_event_ref",
+        "last_event_ref",
+        "failure_envelope_ref",
+        "checkpoint_ref",
+        "boundary_facts",
+        "summary",
+        "source_operation_disposition_ref",
+        "source_operation_disposition",
+        "product_outcome_ref",
+        "product_outcome",
+        "missing_evidence_refs",
+        "rejected_stale_write_count",
+        "journal_truncation",
+        "created_at",
+        "observed_at",
+    }
+    assert set(OperationEvidenceV1.model_fields) - {"schema_version", "redaction"} == expected_fields
+
+
+def test_operation_evidence_value_and_durable_ref_are_paired() -> None:
+    payload = _operation_evidence()
+    payload["source_operation_disposition_ref"] = {
+        "identity": _id("8"),
+        "revision": 2,
+    }
+    payload["source_operation_disposition"] = None
+    payload["product_outcome_ref"] = None
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_operation_evidence(json.dumps(payload).encode())
+
+    payload = _operation_evidence()
+    payload["source_operation_disposition_ref"] = {
+        "identity": _id("8"),
+        "revision": 2,
+    }
+    payload["source_operation_disposition"] = "completed"
+    payload["product_outcome_ref"] = {"identity": _id("9"), "revision": 3}
+    payload["product_outcome"] = "succeeded"
+    payload["canonical_hash"] = _embedded_hash(payload)
+    parse_operation_evidence(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("capability_receipt_refs", "startup_receipt_refs"),
+)
+def test_operation_evidence_receipt_refs_require_revision_and_canonical_hash(
+    field: str,
+) -> None:
+    payload = _operation_evidence()
+    payload[field] = [_id("a")]
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_operation_evidence(json.dumps(payload).encode())
+
+    payload = _operation_evidence()
+    payload[field][0].pop("canonical_hash")
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_operation_evidence(json.dumps(payload).encode())
+
+
+def test_operation_evidence_failure_ref_requires_immutable_revision() -> None:
+    payload = _operation_evidence()
+    payload["failure_envelope_ref"] = _id("7")
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_operation_evidence(json.dumps(payload).encode())
 
 
 @pytest.mark.parametrize(

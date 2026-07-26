@@ -97,9 +97,12 @@ def parse_journal_append_ack(raw: bytes) -> JournalAppendAckV1:
 
 
 def canonical_diagnostics_bytes(artifact: DiagnosticsArtifactV1) -> bytes:
-    if not isinstance(artifact, tuple(MODELS_BY_SCHEMA.values())):
+    if type(artifact) not in MODELS_BY_SCHEMA.values():
         raise DiagnosticsSchemaError(DiagnosticsReason.SCHEMA_VALIDATION)
-    return canonical_json_bytes(artifact.model_dump(mode="json"))
+    from seektalent.diagnostics_bytes import revalidate_artifact_instance
+
+    validated = revalidate_artifact_instance(artifact)
+    return canonical_json_bytes(validated.model_dump(mode="json"))
 
 
 def canonical_diagnostics_hash(artifact: DiagnosticsArtifactV1) -> str:

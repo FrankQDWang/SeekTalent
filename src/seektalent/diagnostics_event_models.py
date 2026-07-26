@@ -33,6 +33,8 @@ from seektalent.diagnostics_registry import (
     COMPONENTS,
     DOMAINS,
     EVENT_DEFINITIONS,
+    EXTERNAL_CAUSE_REASONS,
+    FAILURE_DETAIL_CONTRACTS,
     FAILURE_KINDS,
     PHASES,
     REASON_DEFINITIONS,
@@ -224,11 +226,13 @@ class FailureEnvelopeV1(ArtifactModel):
     @field_validator("detail")
     @classmethod
     def validate_detail(cls, value: dict[str, object]) -> dict[str, object]:
-        contracts = EVENT_DEFINITIONS["operation.accepted"].attribute_contracts
-        if not set(value) <= set(contracts):
+        allowed = {
+            field
+            for contracts in FAILURE_DETAIL_CONTRACTS.values()
+            for field in contracts
+        }
+        if not set(value) <= allowed:
             raise ValueError("diagnostics_failure_detail_mismatch")
-        for key, item in value.items():
-            validate_scalar(item, contracts[key])
         return value
 
     @model_validator(mode="after")
@@ -238,6 +242,21 @@ class FailureEnvelopeV1(ArtifactModel):
             raise ValueError("diagnostics_reason_not_failure")
         if (self.domain, self.failure_kind) != (definition.domain, definition.failure_kind):
             raise ValueError("diagnostics_failure_mapping_mismatch")
+        contracts = FAILURE_DETAIL_CONTRACTS[self.reason_code]
+        if not set(self.detail) <= set(contracts):
+            raise ValueError("diagnostics_failure_detail_mismatch")
+        for key, item in self.detail.items():
+            try:
+                validate_scalar(item, contracts[key])
+            except ValueError:
+                raise ValueError("diagnostics_failure_detail_mismatch") from None
+        if self.cause_ref.kind == "external_code":
+            cause_code = self.cause_ref.code
+            if (
+                cause_code is None
+                or self.reason_code not in EXTERNAL_CAUSE_REASONS[cause_code]
+            ):
+                raise ValueError("diagnostics_external_cause_mismatch")
         if self.operation_id is not None and self.attempt_no is None:
             raise ValueError("diagnostics_failure_attempt_required")
         has_anchor = self.first_failure_event_id is not None

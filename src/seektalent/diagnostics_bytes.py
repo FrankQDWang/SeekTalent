@@ -87,3 +87,18 @@ def parse_artifact_bytes(
             DiagnosticsReason.SCHEMA_VALIDATION,
             _safe_location(tuple(first["loc"])),
         ) from None
+
+
+def revalidate_artifact_instance(artifact: ArtifactType) -> ArtifactType:
+    """Rebuild an artifact from its complete wire payload before serialization."""
+
+    try:
+        payload = BaseModel.model_dump(artifact, mode="json", warnings="none")
+        return BaseModel.model_validate.__func__(
+            type(artifact),
+            payload,
+            strict=True,
+            extra="forbid",
+        )
+    except (ValidationError, ValueError, TypeError):
+        raise DiagnosticsSchemaError(DiagnosticsReason.SCHEMA_VALIDATION) from None

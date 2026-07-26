@@ -109,6 +109,45 @@ CAUSE_CODES = frozenset(
         "producer_process_exited",
     }
 )
+EXTERNAL_CAUSE_REASONS = {
+    "sqlite_full": frozenset({"sqlite_full"}),
+    "sqlite_corrupt": frozenset({"sqlite_corrupt"}),
+    "sqlite_readonly": frozenset({"sqlite_readonly"}),
+    "sqlite_cantopen": frozenset({"sqlite_cantopen"}),
+    "sqlite_busy": frozenset({"sqlite_busy"}),
+    "os_access_denied": frozenset({"component_startup_failed"}),
+    "os_resource_exhausted": frozenset({"component_startup_failed"}),
+    "http_401": frozenset({"provider_auth_required"}),
+    "http_403": frozenset({"provider_risk_control"}),
+    "http_429": frozenset({"provider_risk_control"}),
+    "http_5xx": frozenset({"source_operation_failed"}),
+    "chrome_not_reachable": frozenset({"component_startup_failed"}),
+    "chrome_protocol_rejected": frozenset({"component_protocol_rejected"}),
+    "producer_contract_rejected": frozenset({"component_protocol_rejected"}),
+    "producer_process_exited": frozenset({"component_process_exited"}),
+}
+if set(EXTERNAL_CAUSE_REASONS) != set(CAUSE_CODES):
+    raise RuntimeError("diagnostics_external_cause_registry_incomplete")
+
+DIAGNOSTIC_GAP_REASONS = frozenset({"diagnostic_gap_detected", "external_trace_rejected"})
+USER_ACTION_INSTRUCTIONS = {
+    "reauthenticate": "provider.reauthenticate",
+    "restart_component": "component.restart",
+    "retry_later": "operation.retry_later",
+}
+SUPPORT_ACTION_INSTRUCTIONS = {
+    "contact_support": "support.contact",
+    "collect_diagnostics": "support.collect_diagnostics",
+}
+CAUSE_KIND_SHAPES = {
+    "event": (True, False, frozenset({"observed", "derived"})),
+    "failure": (True, False, frozenset({"observed", "derived"})),
+    "durable_fact": (True, False, frozenset({"observed", "derived"})),
+    "external_code": (False, True, frozenset({"observed", "derived"})),
+    "unknown": (False, False, frozenset({"unknown"})),
+}
+
+
 @dataclass(frozen=True)
 class ReasonDefinition:
     reason_code: str
@@ -307,10 +346,14 @@ _ATTRIBUTE_CONTRACTS = {
     ),
     "gap_code": enum_values(
         "browser_bridge_unsupported",
+        "source_port_unsupported",
+        "endpoint_owner_conflict",
         "endpoint_owner_unknown",
         "database_integrity_failed",
+        "database_integrity_unknown",
         "disk_not_writable",
         "disk_not_executable",
+        "network_offline",
     ),
     "startup_kind": enum_values("fresh", "restart", "upgrade_rebind", "wake"),
     "readiness": enum_values("ready", "not_ready"),
@@ -328,6 +371,37 @@ _ATTRIBUTE_CONTRACTS = {
     "projection_version": enum_values("seektalent.diagnostics-redaction/v1"),
     "artifact_count": NON_NEGATIVE_INTEGER,
 }
+
+FAILURE_DETAIL_CONTRACTS = {
+    reason_code: {}
+    for reason_code, definition in REASON_DEFINITIONS.items()
+    if "failure" in definition.artifacts
+}
+FAILURE_DETAIL_CONTRACTS.update(
+    {
+        "source_operation_failed": {
+            name: _ATTRIBUTE_CONTRACTS[name]
+            for name in {"operation_kind", "source_id", "safe_count", "coverage"}
+        },
+        **{
+            reason_code: {
+                "database": _ATTRIBUTE_CONTRACTS["database"],
+                "code": _ATTRIBUTE_CONTRACTS["code"],
+                "transaction_boundary": _ATTRIBUTE_CONTRACTS["transaction_boundary"],
+            }
+            for reason_code in {
+                "sqlite_full",
+                "sqlite_corrupt",
+                "sqlite_readonly",
+                "sqlite_cantopen",
+                "sqlite_busy",
+                "storage_transaction_failed",
+            }
+        },
+    }
+)
+if set(FAILURE_DETAIL_CONTRACTS) != _FAILURE_REASONS:
+    raise RuntimeError("diagnostics_failure_detail_registry_incomplete")
 
 
 def _event(

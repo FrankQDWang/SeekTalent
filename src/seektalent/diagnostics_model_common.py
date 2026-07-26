@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, ClassVar, Literal, Self
+from collections.abc import Iterable, Mapping
+from typing import Annotated, ClassVar, Literal, Never, Self, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -11,10 +12,20 @@ from seektalent.diagnostics_identity import (
     NonNegativeSafeInteger,
     PositiveSafeInteger,
     RandomIdentity,
+    Sha256,
     Sha256Ref,
 )
 from seektalent.diagnostics_errors import DiagnosticsReason, DiagnosticsSchemaError
-from seektalent.diagnostics_registry import CAUSE_CODES, REDACTION_RULES, require_reason_code, require_token
+from seektalent.diagnostics_registry import (
+    CAUSE_CODES,
+    CAUSE_KIND_SHAPES,
+    DIAGNOSTIC_GAP_REASONS,
+    REDACTION_RULES,
+    SUPPORT_ACTION_INSTRUCTIONS,
+    USER_ACTION_INSTRUCTIONS,
+    require_reason_code,
+    require_token,
+)
 
 
 CANONICAL_EVENT_V1 = "seektalent.canonical-event/v1"
@@ -29,6 +40,62 @@ MAX_ARTIFACT_BYTES = 32 * 1024
 _REDACTION_PATH_RE = re.compile(r"root(?:\.(?:<field>|<item>|<redacted-field>))*")
 
 
+class FrozenDict(dict[str, object]):
+    """JSON-object-shaped mapping that cannot be changed after admission."""
+
+    def __setitem__(self, key: str, value: object) -> Never:
+        del key, value
+        raise TypeError("diagnostics_frozen_mapping")
+
+    def __delitem__(self, key: str) -> Never:
+        del key
+        raise TypeError("diagnostics_frozen_mapping")
+
+    def clear(self) -> Never:
+        raise TypeError("diagnostics_frozen_mapping")
+
+    def pop(self, key: str, default: object = None) -> Never:
+        del key, default
+        raise TypeError("diagnostics_frozen_mapping")
+
+    def popitem(self) -> Never:
+        raise TypeError("diagnostics_frozen_mapping")
+
+    def setdefault(self, key: str, default: object = None) -> Never:
+        del key, default
+        raise TypeError("diagnostics_frozen_mapping")
+
+    def update(  # ty: ignore[invalid-method-override]
+        self,
+        other: Mapping[str, object] | Iterable[tuple[str, object]] = (),
+        /,
+        **kwargs: object,
+    ) -> Never:
+        del other, kwargs
+        raise TypeError("diagnostics_frozen_mapping")
+
+    def __ior__(  # ty: ignore[invalid-method-override]
+        self,
+        value: Mapping[str, object] | Iterable[tuple[str, object]],
+    ) -> Never:
+        del value
+        raise TypeError("diagnostics_frozen_mapping")
+
+
+def _is_plain_string_dict(value: object) -> TypeGuard[dict[str, object]]:
+    return type(value) is dict and all(type(key) is str for key in value)
+
+
+def _freeze(value: object) -> object:
+    if _is_plain_string_dict(value):
+        return FrozenDict({key: _freeze(item) for key, item in value.items()})
+    if type(value) is list:
+        return tuple(_freeze(item) for item in value)
+    if type(value) is tuple:
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
 class StrictDiagnosticsModel(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -37,6 +104,15 @@ class StrictDiagnosticsModel(BaseModel):
         revalidate_instances="always",
         hide_input_in_errors=True,
     )
+
+    @model_validator(mode="after")
+    def freeze_containers(self) -> Self:
+        for name in type(self).model_fields:
+            value = getattr(self, name)
+            frozen = _freeze(value)
+            if frozen is not value:
+                object.__setattr__(self, name, frozen)
+        return self
 
 
 class ArtifactModel(StrictDiagnosticsModel):
@@ -60,6 +136,29 @@ class ArtifactModel(StrictDiagnosticsModel):
     @classmethod
     def from_trusted_fields(cls, **values: object) -> Self:
         return BaseModel.model_validate.__func__(cls, values, strict=True, extra="forbid")
+
+    @classmethod
+    def model_construct(
+        cls,
+        _fields_set: set[str] | None = None,
+        **values: object,
+    ) -> Self:
+        del _fields_set, values
+        raise DiagnosticsSchemaError(DiagnosticsReason.RAW_INPUT_REQUIRED)
+
+    def model_copy(
+        self,
+        *,
+        update: Mapping[str, object] | None = None,
+        deep: bool = False,
+    ) -> Self:
+        del update, deep
+        raise DiagnosticsSchemaError(DiagnosticsReason.RAW_INPUT_REQUIRED)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(validated=True)"
+
+    __str__ = __repr__
 
     @classmethod
     def model_validate_json(
@@ -135,6 +234,15 @@ class CorrelationRefsV1(StrictDiagnosticsModel):
     sidecar_command_ref: RandomIdentity | None = None
 
 
+class VersionedIdentityRefV1(StrictDiagnosticsModel):
+    identity: RandomIdentity
+    revision: PositiveSafeInteger
+
+
+class HashedVersionedIdentityRefV1(VersionedIdentityRefV1):
+    canonical_hash: Sha256
+
+
 class CauseRefV1(StrictDiagnosticsModel):
     kind: Literal["event", "failure", "durable_fact", "external_code", "unknown"]
     ref_id: RandomIdentity | None
@@ -151,10 +259,13 @@ class CauseRefV1(StrictDiagnosticsModel):
 
     @model_validator(mode="after")
     def validate_shape(self) -> Self:
-        if self.kind == "unknown" and self.ref_id is not None:
-            raise ValueError("diagnostics_unknown_cause_has_ref")
-        if self.kind != "unknown" and self.ref_id is None and self.code is None:
-            raise ValueError("diagnostics_cause_ref_incomplete")
+        requires_ref, requires_code, certainties = CAUSE_KIND_SHAPES[self.kind]
+        if (
+            (self.ref_id is not None) != requires_ref
+            or (self.code is not None) != requires_code
+            or self.certainty not in certainties
+        ):
+            raise ValueError("diagnostics_cause_ref_shape_mismatch")
         if (self.certainty == "derived") != (self.derivation_rule_id is not None):
             raise ValueError("diagnostics_derivation_rule_mismatch")
         return self
@@ -189,7 +300,10 @@ class DiagnosticGapV1(StrictDiagnosticsModel):
     @field_validator("reason_code")
     @classmethod
     def validate_reason(cls, value: str) -> str:
-        return require_reason_code(value)
+        value = require_reason_code(value)
+        if value not in DIAGNOSTIC_GAP_REASONS:
+            raise ValueError("diagnostics_reason_not_gap")
+        return value
 
 
 class SourceCoverageV1(StrictDiagnosticsModel):
@@ -205,7 +319,19 @@ class UserActionV1(StrictDiagnosticsModel):
     ]
     affected_scope_ref: RandomIdentity | None = None
 
+    @model_validator(mode="after")
+    def validate_instruction(self) -> Self:
+        if USER_ACTION_INSTRUCTIONS[self.code] != self.instruction_key:
+            raise ValueError("diagnostics_user_action_mismatch")
+        return self
+
 
 class SupportActionV1(StrictDiagnosticsModel):
     code: Literal["contact_support", "collect_diagnostics"]
     instruction_key: Literal["support.contact", "support.collect_diagnostics"]
+
+    @model_validator(mode="after")
+    def validate_instruction(self) -> Self:
+        if SUPPORT_ACTION_INSTRUCTIONS[self.code] != self.instruction_key:
+            raise ValueError("diagnostics_support_action_mismatch")
+        return self

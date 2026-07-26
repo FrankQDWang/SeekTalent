@@ -7,9 +7,16 @@ from hashlib import sha256
 import re
 from typing import Annotated, Literal, Self
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from seektalent.canonical_json import canonical_json_bytes
+from seektalent.diagnostics_capability_contract import (
+    CAPABILITY_FIELDS,
+    aggregate_capability_result,
+    expected_capabilities,
+)
+from seektalent.diagnostics_bytes import revalidate_artifact_instance
+from seektalent.diagnostics_errors import DiagnosticsReason, DiagnosticsSchemaError
 from seektalent.diagnostics_identity import (
     NonNegativeSafeInteger,
     PositiveSafeInteger,
@@ -25,8 +32,10 @@ from seektalent.diagnostics_model_common import (
     ArtifactModel,
     AuthorityRefsV1,
     BoundaryFactsV1,
+    HashedVersionedIdentityRefV1,
     RedactionStateV1,
     StrictDiagnosticsModel,
+    VersionedIdentityRefV1,
 )
 from seektalent.diagnostics_registry import (
     COMPONENTS,
@@ -105,10 +114,14 @@ class MachineCapabilityReceiptV1(ArtifactModel):
         tuple[
             Literal[
                 "browser_bridge_unsupported",
+                "source_port_unsupported",
+                "endpoint_owner_conflict",
                 "endpoint_owner_unknown",
                 "database_integrity_failed",
+                "database_integrity_unknown",
                 "disk_not_writable",
                 "disk_not_executable",
+                "network_offline",
             ],
             ...,
         ],
@@ -120,6 +133,13 @@ class MachineCapabilityReceiptV1(ArtifactModel):
     @classmethod
     def decode_arrays(cls, value: object) -> object:
         return tuple(value) if type(value) is list else value
+
+    @field_validator("bridge_capabilities")
+    @classmethod
+    def validate_bridge_capabilities(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("diagnostics_duplicate_bridge_capability")
+        return value
 
     @field_validator("runtime_versions")
     @classmethod
@@ -140,15 +160,7 @@ class MachineCapabilityReceiptV1(ArtifactModel):
     @field_validator("capabilities")
     @classmethod
     def validate_capabilities(cls, value: dict[str, str]) -> dict[str, str]:
-        allowed = {
-            "source_port",
-            "browser_bridge",
-            "endpoint_ownership",
-            "database_integrity",
-            "disk_access",
-            "network_posture",
-        }
-        if not value or not set(value) <= allowed:
+        if set(value) != CAPABILITY_FIELDS:
             raise ValueError("diagnostics_invalid_capability")
         return value
 
@@ -156,28 +168,48 @@ class MachineCapabilityReceiptV1(ArtifactModel):
     def validate_facts(self) -> Self:
         if self.platform == "windows" and self.architecture != "x86_64":
             raise ValueError("diagnostics_platform_architecture_mismatch")
-        states = set(self.capabilities.values())
-        expected = (
-            "unsupported"
-            if "unsupported" in states
-            else "indeterminate"
-            if "indeterminate" in states
-            else "supported"
+        expected_states, expected_gaps = expected_capabilities(
+            bridge_implementation=self.bridge_implementation,
+            bridge_capabilities=self.bridge_capabilities,
+            endpoint_ownership=self.endpoint_ownership,
+            database_integrity=self.database_integrity,
+            disk_writable=self.disk_writable,
+            disk_executable=self.disk_executable,
+            network_offline=self.network_posture.offline,
         )
-        if self.result != expected:
+        if self.capabilities != expected_states:
+            raise ValueError("diagnostics_capability_fact_mismatch")
+        if self.result != aggregate_capability_result(expected_states):
             raise ValueError("diagnostics_capability_aggregate_mismatch")
-        if (self.result == "supported") != (not self.gap_codes):
+        if self.gap_codes != expected_gaps:
             raise ValueError("diagnostics_capability_gap_mismatch")
         if self.os_family != self.platform:
             raise ValueError("diagnostics_os_platform_mismatch")
         if self.created_at != self.generated_at or self.observed_at < self.created_at:
             raise ValueError("diagnostics_capability_time_mismatch")
         if self.bridge_implementation == "none":
-            if self.bridge_build_ref is not None or self.bridge_protocol_ref is not None:
+            if (
+                self.bridge_build_ref is not None
+                or self.bridge_protocol_ref is not None
+                or self.bridge_capabilities
+            ):
                 raise ValueError("diagnostics_bridge_fact_mismatch")
         elif self.bridge_build_ref is None or self.bridge_protocol_ref is None:
             raise ValueError("diagnostics_bridge_fact_mismatch")
-        if self.canonical_hash != machine_capability_content_hash(self):
+        profile_facts = (
+            self.profile_binding_hash,
+            self.profile_binding_generation,
+            self.extension_version,
+            self.extension_id_hash,
+            self.provider_account_hash,
+        )
+        if self.profile_mode == "none" and any(item is not None for item in profile_facts):
+            raise ValueError("diagnostics_profile_fact_mismatch")
+        if self.profile_mode != "none" and (
+            self.profile_binding_hash is None or self.profile_binding_generation is None
+        ):
+            raise ValueError("diagnostics_profile_fact_mismatch")
+        if self.canonical_hash != _content_hash_unchecked(self):
             raise ValueError("diagnostics_machine_capability_hash_mismatch")
         return self
 
@@ -239,14 +271,27 @@ class StartupReceiptV1(ArtifactModel):
             if self.exited_at is not None
             else None
         )
-        if readiness < started or (exited is not None and exited < started):
+        if (
+            readiness < started
+            or (exited is not None and exited < started)
+            or (self.readiness == "ready" and exited is not None and readiness > exited)
+        ):
             raise ValueError("diagnostics_startup_time_order_invalid")
         expected_reason = "component_ready" if self.readiness == "ready" else "component_startup_failed"
         if self.reason_code != expected_reason:
             raise ValueError("diagnostics_startup_reason_mismatch")
         if self.created_at != self.started_at or self.observed_at != self.readiness_observed_at:
             raise ValueError("diagnostics_startup_observation_mismatch")
-        if self.canonical_hash != startup_receipt_content_hash(self):
+        previous_exit = (self.previous_instance_ref, self.last_exit_cause_ref)
+        if self.restart_count == 0:
+            if any(item is not None for item in previous_exit) or self.startup_kind == "restart":
+                raise ValueError("diagnostics_startup_restart_mismatch")
+        elif (
+            self.startup_kind != "restart"
+            or any(item is None for item in previous_exit)
+        ):
+            raise ValueError("diagnostics_startup_restart_mismatch")
+        if self.canonical_hash != _content_hash_unchecked(self):
             raise ValueError("diagnostics_startup_hash_mismatch")
         return self
 
@@ -263,17 +308,23 @@ class OperationEvidenceV1(ArtifactModel):
     attempt_no: PositiveSafeInteger
     diagnostic_trace_id: TraceId
     authority_refs: AuthorityRefsV1
-    capability_receipt_refs: Annotated[tuple[RandomIdentity, ...], Field(max_length=32)]
-    startup_receipt_refs: Annotated[tuple[RandomIdentity, ...], Field(max_length=32)]
+    capability_receipt_refs: Annotated[
+        tuple[HashedVersionedIdentityRefV1, ...], Field(max_length=32)
+    ]
+    startup_receipt_refs: Annotated[
+        tuple[HashedVersionedIdentityRefV1, ...], Field(max_length=32)
+    ]
     source_id: Literal["liepin"]
     operation_kind: Literal["verify_session", "search", "cards", "details", "continuation", "cleanup"]
     first_event_ref: RandomIdentity | None
     last_event_ref: RandomIdentity | None
-    failure_envelope_ref: RandomIdentity | None
+    failure_envelope_ref: VersionedIdentityRefV1 | None
     checkpoint_ref: Sha256Ref | None
     boundary_facts: BoundaryFactsV1
     summary: dict[str, object]
+    source_operation_disposition_ref: VersionedIdentityRefV1 | None
     source_operation_disposition: Literal["completed", "failed", "unknown"] | None
+    product_outcome_ref: VersionedIdentityRefV1 | None
     product_outcome: Literal["succeeded", "failed", "partial", "unknown"] | None
     missing_evidence_refs: Annotated[tuple[RandomIdentity, ...], Field(max_length=32)]
     rejected_stale_write_count: NonNegativeSafeInteger
@@ -309,7 +360,13 @@ class OperationEvidenceV1(ArtifactModel):
     def validate_hash(self) -> Self:
         if self.observed_at < self.created_at:
             raise ValueError("diagnostics_operation_evidence_time_mismatch")
-        if self.canonical_hash != operation_evidence_content_hash(self):
+        if (self.source_operation_disposition_ref is None) != (
+            self.source_operation_disposition is None
+        ):
+            raise ValueError("diagnostics_source_disposition_ref_mismatch")
+        if (self.product_outcome_ref is None) != (self.product_outcome is None):
+            raise ValueError("diagnostics_product_outcome_ref_mismatch")
+        if self.canonical_hash != _content_hash_unchecked(self):
             raise ValueError("diagnostics_operation_evidence_hash_mismatch")
         return self
 
@@ -324,19 +381,25 @@ class JournalAppendAckV1(ArtifactModel):
     accepted_at: UtcTimestamp
 
 
-def _content_hash(artifact: ArtifactModel) -> str:
-    payload = artifact.model_dump(mode="json")
+def _content_hash_unchecked(artifact: ArtifactModel) -> str:
+    payload = BaseModel.model_dump(artifact, mode="json", warnings="none")
     del payload["canonical_hash"]
     return sha256(canonical_json_bytes(payload)).hexdigest()
 
 
 def operation_evidence_content_hash(evidence: OperationEvidenceV1) -> str:
-    return _content_hash(evidence)
+    if type(evidence) is not OperationEvidenceV1:
+        raise DiagnosticsSchemaError(DiagnosticsReason.SCHEMA_VALIDATION)
+    return _content_hash_unchecked(revalidate_artifact_instance(evidence))
 
 
 def machine_capability_content_hash(receipt: MachineCapabilityReceiptV1) -> str:
-    return _content_hash(receipt)
+    if type(receipt) is not MachineCapabilityReceiptV1:
+        raise DiagnosticsSchemaError(DiagnosticsReason.SCHEMA_VALIDATION)
+    return _content_hash_unchecked(revalidate_artifact_instance(receipt))
 
 
 def startup_receipt_content_hash(receipt: StartupReceiptV1) -> str:
-    return _content_hash(receipt)
+    if type(receipt) is not StartupReceiptV1:
+        raise DiagnosticsSchemaError(DiagnosticsReason.SCHEMA_VALIDATION)
+    return _content_hash_unchecked(revalidate_artifact_instance(receipt))
