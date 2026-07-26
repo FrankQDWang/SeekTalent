@@ -121,10 +121,14 @@ EXTERNAL_CAUSE_REASONS = {
     "http_403": frozenset({"provider_risk_control"}),
     "http_429": frozenset({"provider_risk_control"}),
     "http_5xx": frozenset({"provider_http_unavailable"}),
-    "chrome_not_reachable": frozenset({"browser_unreachable"}),
+    "chrome_not_reachable": frozenset(
+        {"browser_unreachable", "browser_connection_lost"}
+    ),
     "chrome_protocol_rejected": frozenset({"browser_protocol_rejected"}),
     "producer_contract_rejected": frozenset({"component_protocol_rejected"}),
-    "producer_process_exited": frozenset({"component_process_exited"}),
+    "producer_process_exited": frozenset(
+        {"component_process_exited", "browser_process_exited"}
+    ),
 }
 if set(EXTERNAL_CAUSE_REASONS) != set(CAUSE_CODES):
     raise RuntimeError("diagnostics_external_cause_registry_incomplete")
@@ -206,6 +210,8 @@ REASON_DEFINITIONS = {
         _reason("provider_risk_control", "provider", "operation_failure"),
         _reason("provider_http_unavailable", "provider", "operation_failure"),
         _reason("browser_unreachable", "browser", "startup_failure"),
+        _reason("browser_connection_lost", "browser", "operation_failure"),
+        _reason("browser_process_exited", "browser", "process_exit"),
         _reason("browser_protocol_rejected", "browser", "protocol_violation"),
         _reason("network_offline", "network", "operation_failure"),
         _reason("policy_refused", "policy", "operation_failure"),
@@ -214,6 +220,23 @@ REASON_DEFINITIONS = {
     )
 }
 
+_FAILURE_ONLY_REASONS = frozenset(
+    {
+        "browser_scope_mismatch",
+        "diagnostic_event_id_conflict",
+        "diagnostic_gap_detected",
+        "diagnostic_projection_oversize",
+        "external_trace_rejected",
+        "network_offline",
+        "policy_refused",
+        "provider_auth_required",
+        "provider_http_unavailable",
+        "provider_risk_control",
+        "source_operation_failed",
+        "unknown_failure",
+        "user_action_required",
+    }
+)
 _REASON_EVENT_STATUSES = {
     "machine_capability_supported": {"completed"},
     "machine_capability_unsupported": {"partial", "failed"},
@@ -232,17 +255,17 @@ _REASON_EVENT_STATUSES = {
     "operation_main_commit_completed": {"completed"},
     "operation_cleanup_completed": {"completed"},
     "operation_cleanup_failed": {"failed", "partial"},
-    "source_operation_failed": {"failed"},
+    "source_operation_failed": set(),
     "authority_write_rejected": {"rejected"},
     "storage_transaction_failed": {"failed"},
     "storage_integrity_observed": {"completed", "unknown"},
     "support_bundle_export_started": {"started"},
     "support_bundle_export_completed": {"completed"},
     "support_bundle_export_failed": {"failed"},
-    "diagnostic_projection_oversize": {"failed"},
-    "diagnostic_event_id_conflict": {"rejected"},
-    "diagnostic_gap_detected": {"partial", "unknown"},
-    "external_trace_rejected": {"rejected"},
+    "diagnostic_projection_oversize": set(),
+    "diagnostic_event_id_conflict": set(),
+    "diagnostic_gap_detected": set(),
+    "external_trace_rejected": set(),
     "sqlite_full": {"failed"},
     "sqlite_corrupt": {"failed"},
     "sqlite_readonly": {"failed"},
@@ -250,16 +273,18 @@ _REASON_EVENT_STATUSES = {
     "sqlite_busy": {"failed"},
     "browser_control_fence_rejected": {"rejected"},
     "profile_binding_generation_rejected": {"rejected"},
-    "browser_scope_mismatch": {"rejected"},
-    "provider_auth_required": {"failed"},
-    "provider_risk_control": {"failed"},
-    "provider_http_unavailable": {"failed"},
+    "browser_scope_mismatch": set(),
+    "provider_auth_required": set(),
+    "provider_risk_control": set(),
+    "provider_http_unavailable": set(),
     "browser_unreachable": {"failed"},
+    "browser_connection_lost": {"failed", "unknown"},
+    "browser_process_exited": {"failed", "unknown"},
     "browser_protocol_rejected": {"rejected"},
-    "network_offline": {"failed"},
-    "policy_refused": {"rejected"},
-    "user_action_required": {"failed"},
-    "unknown_failure": {"unknown"},
+    "network_offline": set(),
+    "policy_refused": set(),
+    "user_action_required": set(),
+    "unknown_failure": set(),
 }
 if set(_REASON_EVENT_STATUSES) != set(REASON_DEFINITIONS):
     raise RuntimeError("diagnostics_reason_status_registry_incomplete")
@@ -268,7 +293,11 @@ REASON_DEFINITIONS = {
         definition.reason_code,
         definition.domain,
         definition.failure_kind,
-        definition.artifacts,
+        (
+            definition.artifacts
+            if code not in _FAILURE_ONLY_REASONS
+            else definition.artifacts - {"event"}
+        ),
         frozenset(_REASON_EVENT_STATUSES[code]),
     )
     for code, definition in REASON_DEFINITIONS.items()
@@ -302,6 +331,8 @@ _FAILURE_REASONS = frozenset(
         "provider_risk_control",
         "provider_http_unavailable",
         "browser_unreachable",
+        "browser_connection_lost",
+        "browser_process_exited",
         "browser_protocol_rejected",
         "network_offline",
         "policy_refused",
@@ -312,6 +343,7 @@ _FAILURE_REASONS = frozenset(
 _RUNTIME_COMPONENTS = frozenset(
     {"main", "controller", "sidecar", "worker", "wtscli", "extension"}
 )
+_BROWSER_COMPONENTS = frozenset({"wtscli", "extension", "chrome"})
 _FAILURE_CONTEXTS = {
     "machine_capability_unsupported": (
         frozenset({"main", "installer"}),
@@ -323,13 +355,21 @@ _FAILURE_CONTEXTS = {
     ),
     "component_startup_failed": (_RUNTIME_COMPONENTS, frozenset({"startup"})),
     "browser_unreachable": (
-        frozenset({"wtscli", "extension", "chrome"}),
+        _BROWSER_COMPONENTS,
         frozenset({"startup"}),
+    ),
+    "browser_connection_lost": (
+        _BROWSER_COMPONENTS,
+        frozenset({"execute", "observe"}),
+    ),
+    "browser_process_exited": (
+        _BROWSER_COMPONENTS,
+        frozenset({"shutdown"}),
     ),
     "component_process_exited": (_RUNTIME_COMPONENTS, frozenset({"shutdown"})),
     "component_protocol_rejected": (_RUNTIME_COMPONENTS, frozenset({"execute"})),
     "browser_protocol_rejected": (
-        frozenset({"wtscli", "extension", "chrome"}),
+        _BROWSER_COMPONENTS,
         frozenset({"execute"}),
     ),
     "operation_cleanup_failed": (
@@ -627,7 +667,7 @@ EVENT_DEFINITIONS = {
         ),
         _event(
             "component.startup.failed",
-            components=_ALL_COMPONENTS,
+            components=set(_RUNTIME_COMPONENTS | _BROWSER_COMPONENTS),
             phase="startup",
             statuses={"failed"},
             reasons={"component_startup_failed", "browser_unreachable"},
@@ -717,7 +757,17 @@ EVENT_DEFINITIONS = {
         ),
         _event(
             "operation.cleanup.failed",
-            components=_ALL_COMPONENTS,
+            components={
+                "main",
+                "controller",
+                "sidecar",
+                "worker",
+                "wtscli",
+                "extension",
+                "chrome",
+                "provider",
+                "sqlite",
+            },
             phase="cleanup",
             statuses={"failed", "partial"},
             reasons={"operation_cleanup_failed"},
@@ -727,23 +777,33 @@ EVENT_DEFINITIONS = {
         ),
         _event(
             "component.process.exited",
-            components=_ALL_COMPONENTS,
+            components=set(_RUNTIME_COMPONENTS | _BROWSER_COMPONENTS),
             phase="shutdown",
             statuses={"completed", "failed", "unknown"},
-            reasons={"component_process_exited"},
+            reasons={"component_process_exited", "browser_process_exited"},
             requires_operation=False,
             attributes={"exit_class", "exit_code"},
             required_attributes={"exit_class"},
         ),
         _event(
             "component.protocol.rejected",
-            components=_ALL_COMPONENTS,
+            components=set(_RUNTIME_COMPONENTS | _BROWSER_COMPONENTS),
             phase="execute",
             statuses={"rejected"},
             reasons={"component_protocol_rejected", "browser_protocol_rejected"},
             requires_operation=False,
             attributes={"protocol_ref", "code"},
             required_attributes={"protocol_ref", "code"},
+        ),
+        _event(
+            "browser.connection.lost",
+            components=set(_BROWSER_COMPONENTS),
+            phase="observe",
+            statuses={"failed", "unknown"},
+            reasons={"browser_connection_lost"},
+            requires_operation=True,
+            attributes=_OPERATION_ATTRIBUTES,
+            required_attributes={"operation_kind", "source_id"},
         ),
         _event(
             "authority.write.rejected",
@@ -818,6 +878,42 @@ EVENT_DEFINITIONS = {
         ),
     )
 }
+
+_CONSUMED_EVENT_REASONS = frozenset(
+    reason_code
+    for definition in EVENT_DEFINITIONS.values()
+    for reason_code in definition.reason_codes
+)
+_REGISTERED_EVENT_REASONS = frozenset(
+    reason_code
+    for reason_code, definition in REASON_DEFINITIONS.items()
+    if "event" in definition.artifacts
+)
+if _CONSUMED_EVENT_REASONS != _REGISTERED_EVENT_REASONS:
+    raise RuntimeError("diagnostics_event_reason_registry_incomplete")
+
+for event_definition in EVENT_DEFINITIONS.values():
+    if any(
+        "event" not in REASON_DEFINITIONS[reason_code].artifacts
+        for reason_code in event_definition.reason_codes
+    ):
+        raise RuntimeError("diagnostics_event_reason_artifact_mismatch")
+    for component in event_definition.components:
+        for phase in event_definition.phases:
+            for status in event_definition.statuses & {"failed", "rejected", "unknown"}:
+                if not any(
+                    status in REASON_DEFINITIONS[reason_code].event_statuses
+                    and (
+                        "failure" not in REASON_DEFINITIONS[reason_code].artifacts
+                        or (
+                            component
+                            in REASON_DEFINITIONS[reason_code].failure_components
+                            and phase in REASON_DEFINITIONS[reason_code].failure_phases
+                        )
+                    )
+                    for reason_code in event_definition.reason_codes
+                ):
+                    raise RuntimeError("diagnostics_event_context_registry_incomplete")
 
 
 def require_token(value: str, registry: frozenset[str], kind: str) -> str:

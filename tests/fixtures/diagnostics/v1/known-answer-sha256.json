@@ -2,7 +2,7 @@
   "canonical-event.json": "607b94316fa4b2e6e68da3a4712a33910c761588915b4917fa62202a660ea68c",
   "failure-envelope.json": "29894339e9a4311ad55e6b2bdcd93966a12e9f7bde26cb0b891b018f8382aff1",
   "journal-append-ack.json": "7f27545fec1b71fd88613acc3977afffd92e45e2940b089ff90e69b4f500a2bb",
-  "machine-capability-receipt.json": "60d966fa5b95c36bb9b5de5b4b4dfd628706495a7a788f73e04329c2853b24f7",
-  "operation-evidence.json": "de2472d13c3a8825210baf2c249ab655a740683b7a8669e7e7b8fe2b47d6a534",
-  "startup-receipt.json": "fd7f51571f8b047a31b3877731af8dfaddd4755e0548f1a80571988240e82282"
+  "machine-capability-receipt.json": "57524cdcd2bbf878d186d890b93b8b646861da39cf08ab6a443201e03bfb59f4",
+  "operation-evidence.json": "fb0f280aea269b7f757408cb89d5415e5e5645b9298ef422cfa54002a42ebfd6",
+  "startup-receipt.json": "5034c6dad13ffd98c6b328012156ef13f8f3461a3c3a693214dd0b288d8d1461"
 }

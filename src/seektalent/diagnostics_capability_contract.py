@@ -76,14 +76,16 @@ def expected_capabilities(
     if network_offline:
         gaps.append("network_offline")
 
-    signature_statuses = (manifest_signature_status, artifact_signature_status)
-    if "failed" in signature_statuses:
+    if (
+        manifest_signature_status == "failed"
+        or artifact_signature_status == "failed"
+    ):
         capabilities["release_integrity"] = "unsupported"
         if manifest_signature_status == "failed":
             gaps.append("manifest_signature_failed")
         if artifact_signature_status == "failed":
             gaps.append("artifact_signature_failed")
-    elif all(status == "verified" for status in signature_statuses):
+    elif manifest_signature_status == "verified":
         capabilities["release_integrity"] = "supported"
     else:
         capabilities["release_integrity"] = "indeterminate"

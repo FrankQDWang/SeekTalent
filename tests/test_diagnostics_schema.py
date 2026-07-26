@@ -216,7 +216,7 @@ def _capability() -> dict[str, object]:
         "manifest_hash": "9" * 64,
         "artifact_hash": "a" * 64,
         "manifest_signature_status": "verified",
-        "artifact_signature_status": "verified",
+        "artifact_signature_status": "not_present",
         "component_build_refs": {"main": _sha("d"), "sidecar": _sha("f")},
         "bridge_implementation": "wtscli",
         "bridge_build_ref": _sha("b"),
@@ -550,12 +550,47 @@ def test_registry_is_bounded_and_exhaustive() -> None:
         assert definition.domain in DOMAINS
         assert definition.failure_kind in FAILURE_KINDS
         assert definition.artifacts <= {"event", "failure"}
-        assert definition.event_statuses
+        assert bool(definition.event_statuses) == ("event" in definition.artifacts)
         if "failure" in definition.artifacts:
             assert definition.failure_components <= COMPONENTS
             assert definition.failure_phases <= PHASES
             assert definition.failure_components
             assert definition.failure_phases
+
+
+def test_event_reason_registry_is_bidirectionally_exhaustive() -> None:
+    consumed_reasons = {
+        reason_code
+        for definition in EVENT_DEFINITIONS.values()
+        for reason_code in definition.reason_codes
+    }
+    event_reasons = {
+        reason_code
+        for reason_code, definition in REASON_DEFINITIONS.items()
+        if "event" in definition.artifacts
+    }
+    assert consumed_reasons == event_reasons
+
+    failure_statuses = {"failed", "rejected", "unknown"}
+    for event in EVENT_DEFINITIONS.values():
+        for reason_code in event.reason_codes:
+            assert "event" in REASON_DEFINITIONS[reason_code].artifacts
+        for component in event.components:
+            for phase in event.phases:
+                for status in event.statuses & failure_statuses:
+                    assert any(
+                        status in REASON_DEFINITIONS[reason_code].event_statuses
+                        and (
+                            "failure" not in REASON_DEFINITIONS[reason_code].artifacts
+                            or (
+                                component
+                                in REASON_DEFINITIONS[reason_code].failure_components
+                                and phase
+                                in REASON_DEFINITIONS[reason_code].failure_phases
+                            )
+                        )
+                        for reason_code in event.reason_codes
+                    )
 
 
 def test_unknown_registry_tokens_fail_closed() -> None:
@@ -1074,7 +1109,6 @@ def test_failure_reason_component_phase_registry_rejects_all_invalid_pairs() -> 
 def test_external_browser_and_provider_codes_have_domain_correct_reasons() -> None:
     expected = {
         "http_5xx": "provider_http_unavailable",
-        "chrome_not_reachable": "browser_unreachable",
         "chrome_protocol_rejected": "browser_protocol_rejected",
     }
     for cause_code, reason_code in expected.items():
@@ -1098,6 +1132,106 @@ def test_external_browser_and_provider_codes_have_domain_correct_reasons() -> No
             detail={},
         )
         parse_failure_envelope(json.dumps(payload).encode())
+
+
+def test_chrome_not_reachable_distinguishes_startup_from_connection_loss() -> None:
+    assert EXTERNAL_CAUSE_REASONS["chrome_not_reachable"] == frozenset(
+        {"browser_unreachable", "browser_connection_lost"}
+    )
+    contexts = (
+        ("browser_unreachable", "startup", "startup_failure"),
+        ("browser_connection_lost", "execute", "operation_failure"),
+        ("browser_connection_lost", "observe", "operation_failure"),
+    )
+    for reason_code, phase, failure_kind in contexts:
+        payload = _failure()
+        payload.update(
+            reason_code=reason_code,
+            domain="browser",
+            failure_kind=failure_kind,
+            component="chrome",
+            phase=phase,
+            cause_ref={
+                "kind": "external_code",
+                "ref_id": None,
+                "code": "chrome_not_reachable",
+                "certainty": "observed",
+                "derivation_rule_id": None,
+            },
+            detail={},
+        )
+        parse_failure_envelope(json.dumps(payload).encode())
+
+    for reason_code, phase, failure_kind in (
+        ("browser_unreachable", "observe", "startup_failure"),
+        ("browser_connection_lost", "startup", "operation_failure"),
+    ):
+        payload = _failure()
+        payload.update(
+            reason_code=reason_code,
+            domain="browser",
+            failure_kind=failure_kind,
+            component="chrome",
+            phase=phase,
+            detail={},
+        )
+        with pytest.raises(ValueError):
+            parse_failure_envelope(json.dumps(payload).encode())
+
+    payload = _event()
+    payload.update(
+        event_name="browser.connection.lost",
+        component="extension",
+        phase="observe",
+        status="failed",
+        reason_code="browser_connection_lost",
+        attributes={"operation_kind": "verify_session", "source_id": "liepin"},
+    )
+    parse_canonical_event(json.dumps(payload).encode())
+
+
+def test_browser_process_exit_has_browser_owned_reason_and_context() -> None:
+    assert "browser_process_exited" in EXTERNAL_CAUSE_REASONS["producer_process_exited"]
+    payload = _failure()
+    payload.update(
+        reason_code="browser_process_exited",
+        domain="browser",
+        failure_kind="process_exit",
+        component="chrome",
+        phase="shutdown",
+        cause_ref={
+            "kind": "external_code",
+            "ref_id": None,
+            "code": "producer_process_exited",
+            "certainty": "observed",
+            "derivation_rule_id": None,
+        },
+        detail={},
+    )
+    parse_failure_envelope(json.dumps(payload).encode())
+
+    payload = _event()
+    payload.update(
+        event_name="component.process.exited",
+        component="chrome",
+        phase="shutdown",
+        status="failed",
+        reason_code="browser_process_exited",
+        correlation_id=None,
+        run_id=None,
+        operation_id=None,
+        attempt_no=None,
+        authority_refs={
+            "runtime_attempt_fence_ref": None,
+            "profile_binding_generation": None,
+            "browser_control_fence_ref": None,
+        },
+        attributes={"exit_class": "failure", "exit_code": 1},
+    )
+    parse_canonical_event(json.dumps(payload).encode())
+    payload["reason_code"] = "component_process_exited"
+    with pytest.raises(ValueError):
+        parse_canonical_event(json.dumps(payload).encode())
 
 
 def test_failure_event_reason_uses_the_same_component_phase_contract() -> None:
@@ -1357,7 +1491,7 @@ def test_required_event_failure_and_summary_facts_cannot_be_empty() -> None:
         ("artifact_signature_status", "failed"),
     ),
 )
-def test_supported_machine_receipt_requires_exact_build_and_verified_artifact_facts(
+def test_supported_machine_receipt_rejects_missing_build_or_failed_verification(
     field: str,
     value: object,
 ) -> None:
@@ -1374,6 +1508,36 @@ def test_failed_signature_has_closed_unsupported_capability_and_gap() -> None:
     payload["capabilities"]["release_integrity"] = "unsupported"
     payload["result"] = "unsupported"
     payload["gap_codes"] = ["manifest_signature_failed"]
+    payload["canonical_hash"] = _embedded_hash(payload)
+    parse_machine_capability_receipt(json.dumps(payload).encode())
+
+
+def test_unrequired_artifact_signature_does_not_reduce_release_integrity() -> None:
+    payload = _capability()
+    payload["artifact_signature_status"] = "not_present"
+    payload["canonical_hash"] = _embedded_hash(payload)
+    parsed = parse_machine_capability_receipt(json.dumps(payload).encode())
+    assert parsed.capabilities["release_integrity"] == "supported"
+    assert "signature_verification_missing" not in parsed.gap_codes
+
+
+def test_missing_manifest_signature_remains_an_indeterminate_gap() -> None:
+    payload = _capability()
+    payload["manifest_signature_status"] = "not_present"
+    payload["artifact_signature_status"] = "not_present"
+    payload["capabilities"]["release_integrity"] = "indeterminate"
+    payload["result"] = "indeterminate"
+    payload["gap_codes"] = ["signature_verification_missing"]
+    payload["canonical_hash"] = _embedded_hash(payload)
+    parse_machine_capability_receipt(json.dumps(payload).encode())
+
+
+def test_failed_artifact_signature_remains_an_explicit_failure_fact() -> None:
+    payload = _capability()
+    payload["artifact_signature_status"] = "failed"
+    payload["capabilities"]["release_integrity"] = "unsupported"
+    payload["result"] = "unsupported"
+    payload["gap_codes"] = ["artifact_signature_failed"]
     payload["canonical_hash"] = _embedded_hash(payload)
     parse_machine_capability_receipt(json.dumps(payload).encode())
 
