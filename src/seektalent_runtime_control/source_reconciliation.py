@@ -334,7 +334,12 @@ def _validate_reconciliation_dispatch_ack(dispatch: SourceDispatchMetadata) -> N
         or ack_ref is None
         or not ack_ref.startswith("sha256:")
         or _LOWERCASE_SHA256.fullmatch(ack_ref.removeprefix("sha256:")) is None
-        or dispatch.ack_kind != "new_logical_operation"
+        or dispatch.ack_kind
+        != (
+            "new_logical_operation"
+            if dispatch.dispatch_authorization_ordinal == 1
+            else "new_dispatch_authorization"
+        )
         or dispatch.acknowledged_at is None
     ):
         raise RuntimeControlError("source_reconciliation_dispatch_ack_invalid")

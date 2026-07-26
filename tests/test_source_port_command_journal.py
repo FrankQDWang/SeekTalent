@@ -1038,6 +1038,7 @@ def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_col
         "src/seektalent/source_port/verify_session_continuity_admission.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
+        "src/seektalent/wtscli_verify_session_composition.py",
     }
 
     connection_path = tmp_path / "journal.sqlite3"

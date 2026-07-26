@@ -8,7 +8,10 @@ from pathlib import Path
 
 from seektalent.sidecar_child_session import serve_sidecar_handshake
 from seektalent.sidecar_handshake_protocol import SidecarHandshakeIdentity
-from seektalent.source_port.command_journal import create_command_journal
+from seektalent.source_port.command_journal import (
+    create_command_journal,
+    open_command_journal,
+)
 from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
 from seektalent.source_port.sidecar_transport import (
     serve_test_source_history_database,
@@ -30,7 +33,11 @@ def main() -> int:
         session = serve_sidecar_handshake(sys.stdin.buffer, sys.stdout.buffer, identity)
         try:
             if history_database is not None and journal_database is not None:
-                journal = create_command_journal(journal_database)
+                journal = (
+                    open_command_journal(journal_database)
+                    if journal_database.exists()
+                    else create_command_journal(journal_database)
+                )
                 composition = create_verify_session_journal_effect_composition(
                     command_journal_session=journal.start(),
                     frame_session=session.source_port_session(),

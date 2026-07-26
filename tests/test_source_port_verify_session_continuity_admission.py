@@ -1300,7 +1300,9 @@ def test_continuity_api_has_zero_production_callers_and_no_dispatch_or_effect_au
     ]
 
     assert factory_callers == []
-    assert request_factory_callers == []
+    assert request_factory_callers == [
+        "src/seektalent/verify_session_closed_loop.py",
+    ]
     assert "record_dispatch_intent" not in continuity_source
     assert "record_dispatch_intent" not in store_source
     assert "VerifySessionPendingEffectAuthority" not in continuity_source

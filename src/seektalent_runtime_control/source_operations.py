@@ -238,16 +238,24 @@ def validate_source_dispatch_ack(
     _require_opaque(dispatch_intent_id, "dispatch_intent_id", max_bytes=96)
     _require_positive(dispatch_intent_revision, "dispatch_intent_revision")
     _require_sha256(dispatch_intent_digest, "dispatch_intent_digest")
-    _require_exact_int(
-        dispatch_authorization_ordinal,
-        expected=1,
-        reason_code="source_dispatch_authorization_ordinal_invalid",
-    )
+    if (
+        isinstance(dispatch_authorization_ordinal, bool)
+        or not isinstance(dispatch_authorization_ordinal, int)
+        or not 1 <= dispatch_authorization_ordinal <= _JSON_SAFE_INTEGER_MAX
+    ):
+        raise RuntimeControlError("source_dispatch_authorization_ordinal_invalid")
     _require_positive(expected_outbox_revision, "expected_outbox_revision")
     _require_positive(accepted_sidecar_generation, "accepted_sidecar_generation")
     _require_positive(accepted_sidecar_journal_revision, "accepted_sidecar_journal_revision")
     _require_opaque(ack_ref, "ack_ref", max_bytes=256)
     if not isinstance(ack_kind, str) or ack_kind not in SOURCE_DISPATCH_ACK_KINDS:
+        raise RuntimeControlError("source_dispatch_ack_kind_invalid")
+    expected_ack_kind = (
+        "new_logical_operation"
+        if dispatch_authorization_ordinal == 1
+        else "new_dispatch_authorization"
+    )
+    if ack_kind != expected_ack_kind:
         raise RuntimeControlError("source_dispatch_ack_kind_invalid")
     _require_opaque(acknowledged_at, "acknowledged_at", max_bytes=64)
 

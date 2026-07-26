@@ -35,6 +35,11 @@ from tools.build_packaged_sidecar import (
 )
 from tests.support.source_history_sqlite_harness import SourceHistorySQLiteHarness
 from tests.test_source_history_sqlite_harness import _accepted, _query
+from tests.test_source_port_verify_session_continuity_admission import (
+    RAW_FENCE_REPLAY,
+    _safe_retry_request,
+    _seed_ordinal_one,
+)
 
 
 pytestmark = pytest.mark.skipif(
@@ -50,9 +55,7 @@ def _install_active_artifact(tmp_path: Path) -> Path:
     slot_root.parent.mkdir(parents=True)
     built_slot.rename(slot_root)
 
-    manifest = parse_release_manifest(
-        (slot_root / installed_release.INSTALLED_MANIFEST_RELATIVE_PATH).read_bytes()
-    )
+    manifest = parse_release_manifest((slot_root / installed_release.INSTALLED_MANIFEST_RELATIVE_PATH).read_bytes())
     control = root / "control"
     control.mkdir()
     control.joinpath("installation-id").write_text("packaged-artifact-test", encoding="ascii")
@@ -77,9 +80,7 @@ def _acquire(root: Path):
 
 
 def _sidecar_files(slot_root: Path) -> tuple[tuple[Path, ...], Path]:
-    manifest = parse_release_manifest(
-        (slot_root / installed_release.INSTALLED_MANIFEST_RELATIVE_PATH).read_bytes()
-    )
+    manifest = parse_release_manifest((slot_root / installed_release.INSTALLED_MANIFEST_RELATIVE_PATH).read_bytes())
     sidecar = next(item for item in manifest.components if item.component_id == "liepin_execution_sidecar")
     root = slot_root / manifest.payload_root / sidecar.root_path
     return (
@@ -298,6 +299,64 @@ def test_packaged_artifact_runs_history_verify_history_over_one_authenticated_pi
     with sqlite3.connect(journal_path) as connection:
         phases = connection.execute("SELECT phase FROM source_history_heads").fetchall()
     assert phases == [("observed_result",)]
+    retry = _acquire(root)
+    retry.close()
+
+
+def test_packaged_artifact_runs_one_safe_retry_effect_and_only_replays_redelivery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal_path = tmp_path / "verify-session-journal.sqlite3"
+    _seed_ordinal_one(journal_path)
+    root = _install_active_artifact(tmp_path)
+    monkeypatch.setattr(
+        readiness,
+        "spawn_owned_sidecar",
+        lambda lease: _spawn_test_source_port_sidecar(
+            lease,
+            "--test-only-source-history-database",
+            str(journal_path),
+            "--test-only-verify-session-journal",
+            str(journal_path),
+        ),
+    )
+
+    session = spawn_ready_sidecar(_acquire(root), timeout=30)
+    try:
+        initial = exchange_verify_session(session, _safe_retry_request(), timeout=30)
+        redelivery = exchange_verify_session(
+            session,
+            _safe_retry_request(
+                delivery_mode="outbox_redelivery",
+                runtime_attempt_fence_token=RAW_FENCE_REPLAY,
+                deadline_value=30_000,
+            ),
+            timeout=30,
+        )
+        assert initial.accepted_ack is not None
+        assert initial.accepted_ack.payload.accepted_fact == "accepted_no_dispatch"
+        assert initial.terminal.payload.session_readiness == "ready"
+        assert redelivery.accepted_ack is not None
+        assert redelivery.accepted_ack.payload == initial.accepted_ack.payload
+        assert redelivery.terminal.payload == initial.terminal.payload
+    finally:
+        session.close(30)
+
+    with sqlite3.connect(journal_path) as connection:
+        ordinal_two_phases = connection.execute(
+            """
+            SELECT phase
+            FROM source_history_events
+            WHERE dispatch_authorization_ordinal = 2
+            ORDER BY journal_revision
+            """
+        ).fetchall()
+    assert ordinal_two_phases == [
+        ("accepted",),
+        ("dispatch_intent",),
+        ("observed_result",),
+    ]
     retry = _acquire(root)
     retry.close()
 

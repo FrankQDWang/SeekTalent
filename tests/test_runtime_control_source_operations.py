@@ -65,9 +65,7 @@ def test_acceptance_statement_fault_rolls_back_all_three_rows(
     with sqlite3.connect(store.path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 0
         assert (
-            conn.execute(
-                "SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations"
-            ).fetchone()[0]
+            conn.execute("SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations").fetchone()[0]
             == 0
         )
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 0
@@ -96,9 +94,7 @@ def test_commit_ack_loss_exact_replay_returns_same_rows(tmp_path: Path) -> None:
     with sqlite3.connect(store.path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
         assert (
-            conn.execute(
-                "SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations"
-            ).fetchone()[0]
+            conn.execute("SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations").fetchone()[0]
             == 1
         )
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 1
@@ -155,9 +151,7 @@ def test_exact_replay_and_identity_conflict_matrix(
     with sqlite3.connect(store.path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
         assert (
-            conn.execute(
-                "SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations"
-            ).fetchone()[0]
+            conn.execute("SELECT COUNT(*) FROM runtime_control_source_operation_admission_expectations").fetchone()[0]
             == 1
         )
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 1
@@ -380,9 +374,9 @@ def test_admission_expectation_rows_are_immutable(tmp_path: Path) -> None:
                 ("d" * 64,),
             )
 
-    assert store.get_source_operation_admission_expectation(
-        "runtime_run_1", "source_operation_1"
-    ) == accepted.expectation
+    assert (
+        store.get_source_operation_admission_expectation("runtime_run_1", "source_operation_1") == accepted.expectation
+    )
 
 
 def test_expectation_getter_distinguishes_missing_operation_from_incomplete_acceptance(tmp_path: Path) -> None:
@@ -655,7 +649,13 @@ def test_concurrent_conflicting_acks_have_one_cas_winner(tmp_path: Path) -> None
         ({"dispatch_intent_id": "dispatch_intent_other"}, "source_dispatch_identity_conflict"),
         ({"dispatch_intent_revision": 2}, "source_dispatch_identity_conflict"),
         ({"dispatch_intent_digest": "c" * 64}, "source_dispatch_identity_conflict"),
-        ({"dispatch_authorization_ordinal": 2}, "source_dispatch_authorization_ordinal_invalid"),
+        (
+            {
+                "dispatch_authorization_ordinal": 2,
+                "ack_kind": "new_dispatch_authorization",
+            },
+            "source_dispatch_identity_conflict",
+        ),
         ({"dispatch_authorization_ordinal": True}, "source_dispatch_authorization_ordinal_invalid"),
         ({"dispatch_authorization_ordinal": 1.0}, "source_dispatch_authorization_ordinal_invalid"),
         ({"expected_outbox_revision": SQLITE_INTEGER_MAX + 1}, "source_operation_expected_outbox_revision_invalid"),

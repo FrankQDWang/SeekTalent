@@ -1173,6 +1173,7 @@ def test_only_bootstrap_and_transport_are_the_only_composition_callers_without_w
     ]
     assert callers == [
         "src/seektalent/sidecar_bootstrap.py",
+        "src/seektalent/wtscli_verify_session_composition.py",
         "src/seektalent/source_port/sidecar_transport.py",
     ]
     bootstrap = (project_root / "src" / "seektalent" / "sidecar_bootstrap.py").read_text(encoding="utf-8")

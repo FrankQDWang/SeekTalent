@@ -557,13 +557,23 @@ def _record_dispatch_intent(
     instance_id: str,
     run_id: str,
     operation_id: str,
+    dispatch_authorization_ordinal: int,
     expected_head_journal_revision: int,
     durable_dispatch_intent_ref: str,
 ) -> CommandJournalTransitionResult:
     _require_positive_integer(expected_head_journal_revision, "expected_head_journal_revision")
+    _require_positive_integer(
+        dispatch_authorization_ordinal,
+        "dispatch_authorization_ordinal",
+    )
     with _write_transaction(path) as connection:
         _require_session_generation(connection, generation=generation, instance_id=instance_id)
-        head = _require_head(connection, run_id=run_id, operation_id=operation_id)
+        head = _require_head(
+            connection,
+            run_id=run_id,
+            operation_id=operation_id,
+            ordinal=dispatch_authorization_ordinal,
+        )
         phase = str(head["phase"])
         if phase == "dispatch_intent":
             if (
@@ -618,7 +628,7 @@ def _record_dispatch_intent(
                 dispatch_intent_generation = ?,
                 dispatch_intent_journal_revision = ?
             WHERE run_id = ? AND operation_id = ?
-              AND dispatch_authorization_ordinal = 1
+              AND dispatch_authorization_ordinal = ?
               AND head_journal_revision = ? AND phase = 'accepted'
             """,
             (
@@ -629,6 +639,7 @@ def _record_dispatch_intent(
                 revision,
                 run_id,
                 operation_id,
+                dispatch_authorization_ordinal,
                 expected_head_journal_revision,
             ),
         )
@@ -655,6 +666,7 @@ def _record_observation(
     instance_id: str,
     run_id: str,
     operation_id: str,
+    dispatch_authorization_ordinal: int,
     expected_head_journal_revision: int,
     observation_kind: Literal["observed_result", "observed_failure"],
     observation_ref: str,
@@ -662,6 +674,10 @@ def _record_observation(
     terminal_reply_bytes: bytes | None,
 ) -> CommandJournalTransitionResult:
     _require_positive_integer(expected_head_journal_revision, "expected_head_journal_revision")
+    _require_positive_integer(
+        dispatch_authorization_ordinal,
+        "dispatch_authorization_ordinal",
+    )
     _validate_durable_reply_bytes(terminal_reply_bytes, "terminal_reply_bytes")
     with _write_transaction(path) as connection:
         _require_session_generation(connection, generation=generation, instance_id=instance_id)
@@ -670,7 +686,12 @@ def _record_observation(
             observation_hash=observation_hash,
             terminal_reply_bytes=terminal_reply_bytes,
         )
-        head = _require_head(connection, run_id=run_id, operation_id=operation_id)
+        head = _require_head(
+            connection,
+            run_id=run_id,
+            operation_id=operation_id,
+            ordinal=dispatch_authorization_ordinal,
+        )
         phase = str(head["phase"])
         if phase in {"observed_result", "observed_failure"}:
             if phase != observation_kind:
@@ -750,7 +771,7 @@ def _record_observation(
                 observation_hash = ?,
                 terminal_reply_bytes = ?
             WHERE run_id = ? AND operation_id = ?
-              AND dispatch_authorization_ordinal = 1
+              AND dispatch_authorization_ordinal = ?
               AND head_journal_revision = ? AND phase = 'dispatch_intent'
             """,
             (
@@ -764,6 +785,7 @@ def _record_observation(
                 terminal_reply_bytes,
                 run_id,
                 operation_id,
+                dispatch_authorization_ordinal,
                 expected_head_journal_revision,
             ),
         )
@@ -910,8 +932,19 @@ def _find_operation_head(
     ).fetchone()
 
 
-def _require_head(connection: sqlite3.Connection, *, run_id: str, operation_id: str) -> sqlite3.Row:
-    row = _find_operation_head(connection, run_id=run_id, operation_id=operation_id, ordinal=1)
+def _require_head(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str,
+    operation_id: str,
+    ordinal: int,
+) -> sqlite3.Row:
+    row = _find_operation_head(
+        connection,
+        run_id=run_id,
+        operation_id=operation_id,
+        ordinal=ordinal,
+    )
     if row is None:
         raise CommandJournalConflict(CommandJournalConflictReason.HEAD_MISSING)
     return row

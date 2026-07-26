@@ -44,6 +44,9 @@ from seektalent_runtime_control.source_operations import (
     validate_source_operation_acceptance,
 )
 from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.safe_retry_turnover import (
+    require_safe_retry_dispatch_authorization,
+)
 from seektalent_runtime_control.source_reconciliation import (
     SourceOperationHistoryConclusion,
     SourceOperationHistoryOutcome,
@@ -167,29 +170,36 @@ def _context_is_valid(context: AcceptedSourceOperation) -> bool:
     expectation = context.expectation
     dispatch = context.dispatch
     try:
-        validate_source_operation_acceptance(
-            runtime_run_id=operation.runtime_run_id,
-            operation_id=operation.operation_id,
-            source_id=operation.source_id,
-            operation_kind=operation.operation_kind,
-            canonical_request_hash=operation.canonical_request_hash,
-            idempotency_key=operation.idempotency_key,
-            accepted_requirement_revision_id=operation.accepted_requirement_revision_id,
-            runtime_attempt_no=operation.runtime_attempt_no,
-            runtime_attempt_authority_ref=operation.runtime_attempt_authority_ref,
-            runtime_attempt_fence_ref=expectation.runtime_attempt_fence_ref,
-            profile_binding_generation=expectation.profile_binding_generation,
-            browser_control_scope_id=expectation.browser_control_scope_id,
-            controller_fence_ref=expectation.controller_fence_ref,
-            outbox_id=dispatch.outbox_id,
-            dispatch_intent_id=dispatch.dispatch_intent_id,
-            dispatch_intent_revision=dispatch.dispatch_intent_revision,
-            dispatch_intent_digest=dispatch.dispatch_intent_digest,
-            dispatch_authorization_ordinal=dispatch.dispatch_authorization_ordinal,
-            source_operation_acceptance_ref=dispatch.source_operation_acceptance_ref,
-            expected_ledger_revision=dispatch.expected_ledger_revision,
-            expected_reconciliation_revision=dispatch.expected_reconciliation_revision,
-        )
+        if dispatch.dispatch_authorization_ordinal == 1:
+            validate_source_operation_acceptance(
+                runtime_run_id=operation.runtime_run_id,
+                operation_id=operation.operation_id,
+                source_id=operation.source_id,
+                operation_kind=operation.operation_kind,
+                canonical_request_hash=operation.canonical_request_hash,
+                idempotency_key=operation.idempotency_key,
+                accepted_requirement_revision_id=operation.accepted_requirement_revision_id,
+                runtime_attempt_no=operation.runtime_attempt_no,
+                runtime_attempt_authority_ref=operation.runtime_attempt_authority_ref,
+                runtime_attempt_fence_ref=expectation.runtime_attempt_fence_ref,
+                profile_binding_generation=expectation.profile_binding_generation,
+                browser_control_scope_id=expectation.browser_control_scope_id,
+                controller_fence_ref=expectation.controller_fence_ref,
+                outbox_id=dispatch.outbox_id,
+                dispatch_intent_id=dispatch.dispatch_intent_id,
+                dispatch_intent_revision=dispatch.dispatch_intent_revision,
+                dispatch_intent_digest=dispatch.dispatch_intent_digest,
+                dispatch_authorization_ordinal=dispatch.dispatch_authorization_ordinal,
+                source_operation_acceptance_ref=dispatch.source_operation_acceptance_ref,
+                expected_ledger_revision=dispatch.expected_ledger_revision,
+                expected_reconciliation_revision=dispatch.expected_reconciliation_revision,
+            )
+        else:
+            require_safe_retry_dispatch_authorization(
+                operation=operation,
+                expectation=expectation,
+                dispatch=dispatch,
+            )
         if dispatch.status == "acknowledged":
             accepted_generation = dispatch.accepted_sidecar_generation
             accepted_journal_revision = dispatch.accepted_sidecar_journal_revision
@@ -231,27 +241,27 @@ def _query_and_result_match_context(
     context: AcceptedSourceOperation,
 ) -> bool:
     operation = context.operation
+    expectation = context.expectation
     dispatch = context.dispatch
     echoed = result.model_dump(mode="json", include=set(SourceHistoryQueryV1.model_fields) - {"contract_version"})
     requested = query.model_dump(mode="json", exclude={"contract_version"})
     return (
         echoed == requested
         and isinstance(query.authorization_selector, ExactAuthorizationSelector)
-        and query.authorization_selector.ordinal == 1
+        and query.authorization_selector.ordinal == dispatch.dispatch_authorization_ordinal
         and query.run_id == operation.runtime_run_id
         and query.operation_id == operation.operation_id
         and query.source == operation.source_id
         and query.operation_kind == operation.operation_kind
         and query.idempotency_key == operation.idempotency_key
         and query.request_hash == operation.canonical_request_hash
-        and query.attempt_no == operation.runtime_attempt_no
+        and query.attempt_no == expectation.runtime_attempt_no
         and query.expected_source_operation_ledger_revision == dispatch.expected_ledger_revision
         and query.expected_reconciliation_revision == dispatch.expected_reconciliation_revision
         and _accepted_generation_hint_matches_context(query, result, dispatch)
         and dispatch.runtime_run_id == operation.runtime_run_id
         and dispatch.operation_id == operation.operation_id
         and dispatch.canonical_request_hash == operation.canonical_request_hash
-        and dispatch.dispatch_authorization_ordinal == 1
         and _dispatch_state_is_complete(dispatch)
     )
 
@@ -304,13 +314,13 @@ def _fact_matches_context(fact: MatchedHistoryFact, context: AcceptedSourceOpera
         and fact.operation_kind == operation.operation_kind
         and fact.idempotency_key == operation.idempotency_key
         and fact.request_hash == operation.canonical_request_hash
-        and fact.attempt_no == operation.runtime_attempt_no
+        and fact.attempt_no == expectation.runtime_attempt_no
         and fact.accepted_requirement_revision_id == operation.accepted_requirement_revision_id
         and fact.runtime_attempt_fence_ref == expectation.runtime_attempt_fence_ref
         and fact.profile_binding_generation == expectation.profile_binding_generation
         and fact.browser_control_scope_id == expectation.browser_control_scope_id
         and fact.controller_fence_ref == expectation.controller_fence_ref
-        and fact.dispatch_authorization_ordinal == 1
+        and fact.dispatch_authorization_ordinal == dispatch.dispatch_authorization_ordinal
         and fact.authorized_dispatch_intent_id == dispatch.dispatch_intent_id
         and fact.authorized_dispatch_intent_revision == dispatch.dispatch_intent_revision
         and fact.authorized_dispatch_intent_digest == dispatch.dispatch_intent_digest
@@ -482,7 +492,7 @@ def _terminal_identity_matches_context(
         and identity.request_hash == operation.canonical_request_hash
         and identity.idempotency_key == operation.idempotency_key
         and identity.accepted_requirement_revision_id == operation.accepted_requirement_revision_id
-        and identity.attempt_no == operation.runtime_attempt_no
+        and identity.attempt_no == expectation.runtime_attempt_no
         and identity.runtime_attempt_fence_ref == expectation.runtime_attempt_fence_ref
         and identity.profile_binding_generation == expectation.profile_binding_generation
         and identity.browser_control_scope_id == expectation.browser_control_scope_id
@@ -503,6 +513,11 @@ def _dispatch_ack_from_fact(
     if dispatch.status == "acknowledged":
         return dispatch
     ack_ref = _accepted_history_ack_ref(fact)
+    ack_kind = (
+        "new_logical_operation"
+        if dispatch.dispatch_authorization_ordinal == 1
+        else "new_dispatch_authorization"
+    )
     acknowledged = replace(
         dispatch,
         status="acknowledged",
@@ -510,7 +525,7 @@ def _dispatch_ack_from_fact(
         accepted_sidecar_generation=fact.accepted_generation,
         accepted_sidecar_journal_revision=fact.accepted_journal_revision,
         ack_ref=ack_ref,
-        ack_kind="new_logical_operation",
+        ack_kind=ack_kind,
         acknowledged_at=committed_at,
     )
     try:
@@ -527,7 +542,7 @@ def _dispatch_ack_from_fact(
             accepted_sidecar_generation=fact.accepted_generation,
             accepted_sidecar_journal_revision=fact.accepted_journal_revision,
             ack_ref=ack_ref,
-            ack_kind="new_logical_operation",
+            ack_kind=ack_kind,
             acknowledged_at=committed_at,
         )
     except RuntimeControlError:

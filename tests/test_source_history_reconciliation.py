@@ -753,7 +753,14 @@ def test_new_composition_has_no_production_caller() -> None:
             continue
         if "commit_admitted_source_history_reconciliation(" in path.read_text(encoding="utf-8"):
             callers.append(path)
-    assert callers == []
+    assert callers == [Path("src/seektalent/verify_session_closed_loop.py")]
+    closed_loop_callers = []
+    for path in Path("src").rglob("*.py"):
+        if path.name == "verify_session_closed_loop.py":
+            continue
+        if "deliver_verify_session_outbox(" in path.read_text(encoding="utf-8"):
+            closed_loop_callers.append(path)
+    assert closed_loop_callers == []
 
 
 def _history_case(

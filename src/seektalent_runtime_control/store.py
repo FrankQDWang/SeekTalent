@@ -4348,7 +4348,7 @@ def _source_operation_pair(
     conn: sqlite3.Connection, operation_row: sqlite3.Row
 ) -> tuple[SourceOperationRecord, SourceDispatchMetadata]:
     operation = source_operation_from_row(operation_row)
-    dispatch_row = _source_dispatch_row_for_operation(conn, operation.runtime_run_id, operation.operation_id)
+    dispatch_row = _latest_source_dispatch_row(conn, operation.runtime_run_id, operation.operation_id)
     if dispatch_row is None or _run_row(conn, operation.runtime_run_id) is None:
         raise RuntimeControlError("source_operation_acceptance_incomplete")
     dispatch = source_dispatch_from_row(dispatch_row)
@@ -4358,26 +4358,25 @@ def _source_operation_pair(
 
 
 def _source_operation_acceptance(conn: sqlite3.Connection, operation_row: sqlite3.Row) -> AcceptedSourceOperation:
-    operation = source_operation_from_row(operation_row)
+    operation, dispatch = _source_operation_pair(conn, operation_row)
     expectation_row = _source_operation_admission_expectation_row(
-        conn,
-        operation.runtime_run_id,
-        operation.operation_id,
+        conn, operation.runtime_run_id, operation.operation_id, dispatch.dispatch_authorization_ordinal
     )
-    dispatch_row = _source_dispatch_row_for_operation(conn, operation.runtime_run_id, operation.operation_id)
-    if expectation_row is None or dispatch_row is None or _run_row(conn, operation.runtime_run_id) is None:
+    if expectation_row is None:
         raise RuntimeControlError("source_operation_acceptance_incomplete")
     expectation = _source_operation_admission_expectation_from_row(expectation_row)
-    dispatch = source_dispatch_from_row(dispatch_row)
     if (
         not expectation_matches_operation(expectation, operation)
-        or expectation.dispatch_authorization_ordinal != 1
-        or expectation.runtime_attempt_no != operation.runtime_attempt_no
-        or expectation.runtime_attempt_authority_ref != operation.runtime_attempt_authority_ref
+        or expectation.dispatch_authorization_ordinal != dispatch.dispatch_authorization_ordinal
     ):
         raise RuntimeControlError("source_operation_acceptance_incomplete")
-    if not dispatch_matches_operation(dispatch, operation):
-        raise RuntimeControlError("source_operation_acceptance_incomplete")
+    if dispatch.dispatch_authorization_ordinal == 1:
+        if expectation.runtime_attempt_no != operation.runtime_attempt_no or (
+            expectation.runtime_attempt_authority_ref != operation.runtime_attempt_authority_ref
+        ):
+            raise RuntimeControlError("source_operation_acceptance_incomplete")
+    else:
+        _require_safe_retry_dispatch_authorization(operation=operation, expectation=expectation, dispatch=dispatch)
     return AcceptedSourceOperation(operation=operation, expectation=expectation, dispatch=dispatch)
 
 

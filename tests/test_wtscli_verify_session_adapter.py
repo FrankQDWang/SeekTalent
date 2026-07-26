@@ -1049,14 +1049,20 @@ def test_adapter_module_has_zero_production_callers_and_does_not_import_worker_o
     factory_callers = [
         path.relative_to(project_root).as_posix()
         for path in (project_root / "src").rglob("*.py")
-        if path != adapter_path
-        and "create_wtscli_verify_session_effect(" in path.read_text(encoding="utf-8")
+        if path != adapter_path and "create_wtscli_verify_session_effect(" in path.read_text(encoding="utf-8")
     ]
     packaged_builder = (project_root / "tools" / "build_packaged_sidecar.py").read_text(encoding="utf-8")
     packaged_bootstrap = (project_root / "src" / "seektalent" / "sidecar_bootstrap.py").read_text(encoding="utf-8")
 
-    assert callers == []
-    assert factory_callers == []
+    assert callers == ["src/seektalent/wtscli_verify_session_composition.py"]
+    assert factory_callers == ["src/seektalent/wtscli_verify_session_composition.py"]
+    composition_callers = [
+        path.relative_to(project_root).as_posix()
+        for path in (project_root / "src").rglob("*.py")
+        if path.name != "wtscli_verify_session_composition.py"
+        and "create_wtscli_verify_session_composition(" in path.read_text(encoding="utf-8")
+    ]
+    assert composition_callers == []
     assert "LiepinOpenCliWorkerClient" not in source
     assert "OpenCliRetriever" not in source
     assert "LiepinSiteAdapter" not in source

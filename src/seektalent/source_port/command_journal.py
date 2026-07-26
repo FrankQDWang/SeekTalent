@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 import threading
-from typing import Never
+from typing import Literal, Never
 import weakref
 
 from seektalent.source_port import _command_journal_engine as _engine
@@ -234,6 +234,7 @@ class CommandJournalSession:
                 instance_id=state.instance_id,
                 run_id=run_id,
                 operation_id=operation_id,
+                dispatch_authorization_ordinal=1,
                 expected_head_journal_revision=expected_head_journal_revision,
                 durable_dispatch_intent_ref=durable_dispatch_intent_ref,
             )
@@ -258,6 +259,7 @@ class CommandJournalSession:
                 instance_id=state.instance_id,
                 run_id=run_id,
                 operation_id=operation_id,
+                dispatch_authorization_ordinal=1,
                 expected_head_journal_revision=expected_head_journal_revision,
                 observation_kind="observed_result",
                 observation_ref=result_ref,
@@ -285,6 +287,7 @@ class CommandJournalSession:
                 instance_id=state.instance_id,
                 run_id=run_id,
                 operation_id=operation_id,
+                dispatch_authorization_ordinal=1,
                 expected_head_journal_revision=expected_head_journal_revision,
                 observation_kind="observed_failure",
                 observation_ref=failure_ref,
@@ -344,6 +347,92 @@ def _new_session(path: Path, *, generation: int, instance_id: str) -> CommandJou
 
 def _new_transition_receipt(result: CommandJournalTransitionResult) -> CommandJournalTransitionReceipt:
     return CommandJournalTransitionReceipt(result.revision, result=result, token=_RECEIPT_TOKEN)
+
+
+def _new_transition_receipt_from_values(
+    *,
+    disposition: CommandJournalTransitionDisposition,
+    startup_generation: int,
+    accepted_generation: int,
+    accepted_journal_revision: int,
+    revision: int,
+    head_phase: Literal[
+        "accepted",
+        "dispatch_intent",
+        "observed_result",
+        "observed_failure",
+    ],
+    accepted_ack_bytes: bytes | None,
+    terminal_reply_bytes: bytes | None,
+) -> CommandJournalTransitionReceipt:
+    return _new_transition_receipt(
+        CommandJournalTransitionResult(
+            disposition=disposition,
+            startup_generation=startup_generation,
+            accepted_generation=accepted_generation,
+            accepted_journal_revision=accepted_journal_revision,
+            revision=revision,
+            head_phase=head_phase,
+            accepted_ack_bytes=accepted_ack_bytes,
+            terminal_reply_bytes=terminal_reply_bytes,
+        )
+    )
+
+
+def _record_dispatch_intent_for_authorization(
+    session: CommandJournalSession,
+    *,
+    run_id: str,
+    operation_id: str,
+    dispatch_authorization_ordinal: int,
+    expected_head_journal_revision: int,
+    durable_dispatch_intent_ref: str,
+) -> CommandJournalTransitionReceipt:
+    state = _session_state(session)
+    return _new_transition_receipt(
+        _engine._record_dispatch_intent(
+            path=state.path,
+            generation=state.generation,
+            instance_id=state.instance_id,
+            run_id=run_id,
+            operation_id=operation_id,
+            dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+            expected_head_journal_revision=expected_head_journal_revision,
+            durable_dispatch_intent_ref=durable_dispatch_intent_ref,
+        )
+    )
+
+
+def _record_observation_for_authorization(
+    session: CommandJournalSession,
+    *,
+    run_id: str,
+    operation_id: str,
+    dispatch_authorization_ordinal: int,
+    expected_head_journal_revision: int,
+    observation_kind: Literal["observed_result", "observed_failure"],
+    observation_ref: str,
+    observation_hash: str,
+    terminal_reply_bytes: bytes,
+) -> CommandJournalTransitionReceipt:
+    if observation_kind not in {"observed_result", "observed_failure"}:
+        raise ValueError("command journal observation kind is invalid")
+    state = _session_state(session)
+    return _new_transition_receipt(
+        _engine._record_observation(
+            path=state.path,
+            generation=state.generation,
+            instance_id=state.instance_id,
+            run_id=run_id,
+            operation_id=operation_id,
+            dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+            expected_head_journal_revision=expected_head_journal_revision,
+            observation_kind=observation_kind,
+            observation_ref=observation_ref,
+            observation_hash=observation_hash,
+            terminal_reply_bytes=terminal_reply_bytes,
+        )
+    )
 
 
 def _receipt_result(receipt: CommandJournalTransitionReceipt) -> CommandJournalTransitionResult:
