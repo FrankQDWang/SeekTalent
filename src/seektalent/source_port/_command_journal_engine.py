@@ -557,18 +557,27 @@ def _record_dispatch_intent(
     instance_id: str,
     run_id: str,
     operation_id: str,
+    dispatch_authorization_ordinal: int,
     expected_head_journal_revision: int,
     durable_dispatch_intent_ref: str,
 ) -> CommandJournalTransitionResult:
     _require_positive_integer(expected_head_journal_revision, "expected_head_journal_revision")
+    _require_positive_integer(
+        dispatch_authorization_ordinal,
+        "dispatch_authorization_ordinal",
+    )
     with _write_transaction(path) as connection:
         _require_session_generation(connection, generation=generation, instance_id=instance_id)
-        head = _require_head(connection, run_id=run_id, operation_id=operation_id)
+        head = _require_head(
+            connection,
+            run_id=run_id,
+            operation_id=operation_id,
+            ordinal=dispatch_authorization_ordinal,
+        )
         phase = str(head["phase"])
         if phase == "dispatch_intent":
             if (
                 int(head["accepted_journal_revision"]) != expected_head_journal_revision
-                or int(head["dispatch_intent_generation"]) != generation
                 or head["durable_dispatch_intent_ref"] != durable_dispatch_intent_ref
             ):
                 raise CommandJournalConflict(CommandJournalConflictReason.DISPATCH_REPLAY_CONFLICT)
@@ -582,6 +591,8 @@ def _record_dispatch_intent(
             raise CommandJournalConflict(CommandJournalConflictReason.PHASE_ROLLBACK)
         if phase != "accepted":
             raise CommandJournalConflict(CommandJournalConflictReason.PHASE_ROLLBACK)
+        if int(head["head_generation"]) != generation:
+            raise CommandJournalConflict(CommandJournalConflictReason.SESSION_GENERATION_INVALID)
         if int(head["head_journal_revision"]) != expected_head_journal_revision:
             raise CommandJournalConflict(CommandJournalConflictReason.STALE_HEAD_REVISION)
 
@@ -618,7 +629,7 @@ def _record_dispatch_intent(
                 dispatch_intent_generation = ?,
                 dispatch_intent_journal_revision = ?
             WHERE run_id = ? AND operation_id = ?
-              AND dispatch_authorization_ordinal = 1
+              AND dispatch_authorization_ordinal = ?
               AND head_journal_revision = ? AND phase = 'accepted'
             """,
             (
@@ -629,6 +640,7 @@ def _record_dispatch_intent(
                 revision,
                 run_id,
                 operation_id,
+                dispatch_authorization_ordinal,
                 expected_head_journal_revision,
             ),
         )
@@ -655,6 +667,7 @@ def _record_observation(
     instance_id: str,
     run_id: str,
     operation_id: str,
+    dispatch_authorization_ordinal: int,
     expected_head_journal_revision: int,
     observation_kind: Literal["observed_result", "observed_failure"],
     observation_ref: str,
@@ -662,6 +675,10 @@ def _record_observation(
     terminal_reply_bytes: bytes | None,
 ) -> CommandJournalTransitionResult:
     _require_positive_integer(expected_head_journal_revision, "expected_head_journal_revision")
+    _require_positive_integer(
+        dispatch_authorization_ordinal,
+        "dispatch_authorization_ordinal",
+    )
     _validate_durable_reply_bytes(terminal_reply_bytes, "terminal_reply_bytes")
     with _write_transaction(path) as connection:
         _require_session_generation(connection, generation=generation, instance_id=instance_id)
@@ -670,14 +687,18 @@ def _record_observation(
             observation_hash=observation_hash,
             terminal_reply_bytes=terminal_reply_bytes,
         )
-        head = _require_head(connection, run_id=run_id, operation_id=operation_id)
+        head = _require_head(
+            connection,
+            run_id=run_id,
+            operation_id=operation_id,
+            ordinal=dispatch_authorization_ordinal,
+        )
         phase = str(head["phase"])
         if phase in {"observed_result", "observed_failure"}:
             if phase != observation_kind:
                 raise CommandJournalConflict(CommandJournalConflictReason.PHASE_ROLLBACK)
             if (
                 int(head["dispatch_intent_journal_revision"]) != expected_head_journal_revision
-                or int(head["observation_generation"]) != generation
                 or head["observation_ref"] != observation_ref
                 or head["observation_hash"] != observation_hash
                 or (
@@ -694,6 +715,8 @@ def _record_observation(
             )
         if phase != "dispatch_intent":
             raise CommandJournalConflict(CommandJournalConflictReason.OBSERVATION_WITHOUT_DISPATCH)
+        if int(head["head_generation"]) != generation:
+            raise CommandJournalConflict(CommandJournalConflictReason.SESSION_GENERATION_INVALID)
         if int(head["head_journal_revision"]) != expected_head_journal_revision:
             raise CommandJournalConflict(CommandJournalConflictReason.STALE_HEAD_REVISION)
 
@@ -750,7 +773,7 @@ def _record_observation(
                 observation_hash = ?,
                 terminal_reply_bytes = ?
             WHERE run_id = ? AND operation_id = ?
-              AND dispatch_authorization_ordinal = 1
+              AND dispatch_authorization_ordinal = ?
               AND head_journal_revision = ? AND phase = 'dispatch_intent'
             """,
             (
@@ -764,6 +787,7 @@ def _record_observation(
                 terminal_reply_bytes,
                 run_id,
                 operation_id,
+                dispatch_authorization_ordinal,
                 expected_head_journal_revision,
             ),
         )
@@ -884,13 +908,22 @@ def _require_session_generation(
 ) -> None:
     row = connection.execute(
         """
-        SELECT sidecar_instance_id, retained, complete
-        FROM source_history_generations
-        WHERE generation = ?
+        SELECT generations.sidecar_instance_id,
+               generations.retained,
+               generations.complete,
+               state.last_sidecar_generation
+        FROM source_history_generations AS generations
+        CROSS JOIN source_history_state AS state
+        WHERE generations.generation = ? AND state.singleton = 1
         """,
         (generation,),
     ).fetchone()
-    if row is None or row["sidecar_instance_id"] != instance_id or tuple(row[1:]) != (1, 1):
+    if (
+        row is None
+        or row["sidecar_instance_id"] != instance_id
+        or tuple(row[1:3]) != (1, 1)
+        or int(row["last_sidecar_generation"]) != generation
+    ):
         raise CommandJournalConflict(CommandJournalConflictReason.SESSION_GENERATION_INVALID)
 
 
@@ -910,8 +943,19 @@ def _find_operation_head(
     ).fetchone()
 
 
-def _require_head(connection: sqlite3.Connection, *, run_id: str, operation_id: str) -> sqlite3.Row:
-    row = _find_operation_head(connection, run_id=run_id, operation_id=operation_id, ordinal=1)
+def _require_head(
+    connection: sqlite3.Connection,
+    *,
+    run_id: str,
+    operation_id: str,
+    ordinal: int,
+) -> sqlite3.Row:
+    row = _find_operation_head(
+        connection,
+        run_id=run_id,
+        operation_id=operation_id,
+        ordinal=ordinal,
+    )
     if row is None:
         raise CommandJournalConflict(CommandJournalConflictReason.HEAD_MISSING)
     return row

@@ -830,44 +830,44 @@ def test_writer_output_is_readable_across_generations_without_any_runtime_route(
     path = tmp_path / "journal.sqlite3"
     journal = create_command_journal(path)
     first = journal.start()
-    second = journal.start()
 
     accepted_only = first.record_accepted(_accepted("accepted"))
     dispatched_accepted = first.record_accepted(_accepted("dispatched"))
-    dispatched = second.record_dispatch_intent(
+    result_accepted = first.record_accepted(_accepted("result"))
+    failure_accepted = first.record_accepted(_accepted("failure"))
+    dispatched = first.record_dispatch_intent(
         run_id="run-1",
         operation_id="dispatched",
         expected_head_journal_revision=dispatched_accepted,
         durable_dispatch_intent_ref="dispatch-ref",
     )
-    result_accepted = first.record_accepted(_accepted("result"))
-    result_dispatched = second.record_dispatch_intent(
+    result_dispatched = first.record_dispatch_intent(
         run_id="run-1",
         operation_id="result",
         expected_head_journal_revision=result_accepted,
         durable_dispatch_intent_ref="result-dispatch-ref",
     )
-    result = second.record_observed_result(
+    result = first.record_observed_result(
         run_id="run-1",
         operation_id="result",
         expected_head_journal_revision=result_dispatched,
         result_ref="result-ref",
         result_hash=HASH_D,
     )
-    failure_accepted = first.record_accepted(_accepted("failure"))
-    failure_dispatched = second.record_dispatch_intent(
+    failure_dispatched = first.record_dispatch_intent(
         run_id="run-1",
         operation_id="failure",
         expected_head_journal_revision=failure_accepted,
         durable_dispatch_intent_ref="failure-dispatch-ref",
     )
-    failure = second.record_observed_failure(
+    failure = first.record_observed_failure(
         run_id="run-1",
         operation_id="failure",
         expected_head_journal_revision=failure_dispatched,
         failure_ref="failure-ref",
         failure_hash=HASH_D,
     )
+    journal.start()
 
     reader = SourceHistorySQLiteReader(path)
     facts = {
@@ -886,6 +886,57 @@ def test_writer_output_is_readable_across_generations_without_any_runtime_route(
         "result": "observed_result",
         "failure": "observed_failure",
     }
+
+
+def test_new_generation_cannot_create_dispatch_for_older_accepted_head(
+    tmp_path: Path,
+) -> None:
+    journal = create_command_journal(tmp_path / "journal.sqlite3")
+    first = journal.start()
+    accepted = first.record_accepted(_accepted())
+    second = journal.start()
+
+    with pytest.raises(CommandJournalConflict) as exc_info:
+        second.record_dispatch_intent(
+            run_id="run-1",
+            operation_id="operation-1",
+            expected_head_journal_revision=accepted,
+            durable_dispatch_intent_ref="dispatch-ref",
+        )
+
+    assert exc_info.value.reason is CommandJournalConflictReason.SESSION_GENERATION_INVALID
+    result = SourceHistorySQLiteReader(journal.path).query(_query("operation-1", first_generation=1, last_generation=2))
+    assert isinstance(result, SourceHistoryMatched)
+    assert result.facts[0].conclusion == "accepted_no_dispatch"
+
+
+def test_new_generation_cannot_create_observation_for_older_dispatch_head(
+    tmp_path: Path,
+) -> None:
+    journal = create_command_journal(tmp_path / "journal.sqlite3")
+    first = journal.start()
+    accepted = first.record_accepted(_accepted())
+    dispatched = first.record_dispatch_intent(
+        run_id="run-1",
+        operation_id="operation-1",
+        expected_head_journal_revision=accepted,
+        durable_dispatch_intent_ref="dispatch-ref",
+    )
+    second = journal.start()
+
+    with pytest.raises(CommandJournalConflict) as exc_info:
+        second.record_observed_result(
+            run_id="run-1",
+            operation_id="operation-1",
+            expected_head_journal_revision=dispatched,
+            result_ref="result-ref",
+            result_hash=HASH_D,
+        )
+
+    assert exc_info.value.reason is CommandJournalConflictReason.SESSION_GENERATION_INVALID
+    result = SourceHistorySQLiteReader(journal.path).query(_query("operation-1", first_generation=1, last_generation=2))
+    assert isinstance(result, SourceHistoryMatched)
+    assert result.facts[0].conclusion == "dispatch_not_observed"
 
 
 def test_open_failures_are_closed_and_do_not_repair_existing_files(tmp_path: Path) -> None:
@@ -1038,6 +1089,7 @@ def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_col
         "src/seektalent/source_port/verify_session_continuity_admission.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
+        "src/seektalent/wtscli_verify_session_composition.py",
     }
 
     connection_path = tmp_path / "journal.sqlite3"

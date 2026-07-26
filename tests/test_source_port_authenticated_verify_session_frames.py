@@ -800,4 +800,6 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
         "src/seektalent/source_port/verify_session_continuity_admission.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
+        "src/seektalent/verify_session_closed_loop.py",
+        "src/seektalent/wtscli_verify_session_composition.py",
     }

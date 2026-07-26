@@ -74,6 +74,14 @@ class SafeRetryContinuityStoreResult:
     accepted_ack_bytes: bytes
     accepted_ack_hash: str
     accepted_ack_ref: str
+    head_phase: Literal[
+        "accepted",
+        "dispatch_intent",
+        "observed_result",
+        "observed_failure",
+    ]
+    head_journal_revision: int
+    terminal_reply_bytes: bytes | None
 
 
 MonotonicClock = Callable[[], float]
@@ -178,7 +186,10 @@ def _admit_in_transaction(
         row for row in rows if row["run_id"] == identity.run_id and row["operation_id"] == identity.operation_id
     ]
     if existing is not None:
-        _latest_retryable_epoch(operation_rows)
+        _require_replayable_history(
+            operation_rows,
+            ordinal=authorization.dispatch_authorization_ordinal,
+        )
         return _exact_replay(existing, request)
     if request.delivery.delivery_mode == "outbox_redelivery":
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.REPLAY_CONFLICT)
@@ -190,7 +201,7 @@ def _admit_in_transaction(
     ):
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.IDENTITY_CONFLICT)
 
-    latest = _latest_retryable_epoch(operation_rows)
+    latest = _latest_retryable_epoch(operation_rows, generation=generation)
     if authorization.dispatch_authorization_ordinal != int(latest["dispatch_authorization_ordinal"]) + 1:
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.ORDINAL_GAP)
     if identity.attempt_no <= int(latest["attempt_no"]):
@@ -243,10 +254,17 @@ def _admit_in_transaction(
         generation=generation,
         revision=revision,
         ack_bytes=ack_bytes,
+        head_phase="accepted",
+        head_revision=revision,
+        terminal_reply_bytes=None,
     )
 
 
-def _latest_retryable_epoch(operation_rows: list[sqlite3.Row]) -> sqlite3.Row:
+def _latest_retryable_epoch(
+    operation_rows: list[sqlite3.Row],
+    *,
+    generation: int,
+) -> sqlite3.Row:
     if not operation_rows:
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.HISTORY_INCOMPLETE)
     operation_rows.sort(key=lambda row: int(row["dispatch_authorization_ordinal"]))
@@ -257,15 +275,34 @@ def _latest_retryable_epoch(operation_rows: list[sqlite3.Row]) -> sqlite3.Row:
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.PRIOR_STATE_NOT_RETRYABLE)
     for row in operation_rows:
         _validated_ack_for_row(row)
-    return operation_rows[-1]
+    latest = operation_rows[-1]
+    if int(latest["head_generation"]) >= generation:
+        raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.HISTORY_INCOMPLETE)
+    return latest
+
+
+def _require_replayable_history(
+    operation_rows: list[sqlite3.Row],
+    *,
+    ordinal: int,
+) -> None:
+    if not operation_rows:
+        raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.HISTORY_INCOMPLETE)
+    operation_rows.sort(key=lambda row: int(row["dispatch_authorization_ordinal"]))
+    ordinals = tuple(int(row["dispatch_authorization_ordinal"]) for row in operation_rows)
+    if ordinals != tuple(range(1, len(operation_rows) + 1)) or ordinal != ordinals[-1]:
+        raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.HISTORY_INCOMPLETE)
+    if any(row["phase"] != "accepted" for row in operation_rows[:-1]):
+        raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.PRIOR_STATE_NOT_RETRYABLE)
+    for row in operation_rows:
+        _validated_ack_for_row(row)
 
 
 def _exact_replay(
     row: sqlite3.Row,
     request: VerifySessionRequestV1,
 ) -> SafeRetryContinuityStoreResult:
-    if row["phase"] != "accepted":
-        raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.PRIOR_STATE_NOT_RETRYABLE)
+    phase = _head_phase(row["phase"])
     expected = _accepted_values(request)
     ignored = (
         {"runtime_attempt_fence_ref", "browser_control_scope_id", "controller_fence_ref"}
@@ -297,7 +334,24 @@ def _exact_replay(
         generation=int(row["accepted_generation"]),
         revision=int(row["accepted_journal_revision"]),
         ack_bytes=ack_bytes,
+        head_phase=phase,
+        head_revision=int(row["head_journal_revision"]),
+        terminal_reply_bytes=row["terminal_reply_bytes"],
     )
+
+
+def _head_phase(
+    value: object,
+) -> Literal["accepted", "dispatch_intent", "observed_result", "observed_failure"]:
+    if value == "accepted":
+        return "accepted"
+    if value == "dispatch_intent":
+        return "dispatch_intent"
+    if value == "observed_result":
+        return "observed_result"
+    if value == "observed_failure":
+        return "observed_failure"
+    raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.JOURNAL_CORRUPT)
 
 
 def _accepted_fact(
@@ -504,6 +558,14 @@ def _result(
     generation: int,
     revision: int,
     ack_bytes: bytes,
+    head_phase: Literal[
+        "accepted",
+        "dispatch_intent",
+        "observed_result",
+        "observed_failure",
+    ],
+    head_revision: int,
+    terminal_reply_bytes: bytes | None,
 ) -> SafeRetryContinuityStoreResult:
     digest = sha256(ack_bytes).hexdigest()
     return SafeRetryContinuityStoreResult(
@@ -513,6 +575,9 @@ def _result(
         accepted_ack_bytes=ack_bytes,
         accepted_ack_hash=digest,
         accepted_ack_ref=f"sha256:{digest}",
+        head_phase=head_phase,
+        head_journal_revision=head_revision,
+        terminal_reply_bytes=terminal_reply_bytes,
     )
 
 

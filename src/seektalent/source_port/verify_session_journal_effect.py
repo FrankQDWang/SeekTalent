@@ -10,10 +10,19 @@ import time
 from typing import Literal, Never, TypeAlias
 import weakref
 
+from pydantic import ValidationError
+
+from seektalent.source_port import command_journal
+from seektalent.source_port._safe_retry_continuity_store import (
+    SafeRetryContinuityRejected,
+    _SafeRetryContinuityStoreError,
+    _admit_safe_retry_continuity,
+)
 from seektalent.source_port.authenticated_verify_session_frames import (
     PostHandshakeVerifySessionSession,
     ReceivedVerifySessionSubmit,
     VerifySessionFailureV1,
+    VerifySessionRejectedV1,
     VerifySessionResultV1,
     _AuthenticatedVerifySessionArrival,
     _bind_authenticated_verify_session_arrivals,
@@ -59,6 +68,7 @@ class VerifySessionJournalEffectExchange:
         "observed_failure",
         "terminal_replay",
         "reconcile_first",
+        "rejected",
     ]
     outbound_frames: tuple[bytes, ...]
     receipts: tuple[CommandJournalTransitionReceipt, ...]
@@ -206,7 +216,10 @@ def _handle_submit(
         if request.delivery.delivery_mode == "outbox_redelivery"
         else _anchor_local_deadline(state, request, arrival_monotonic=arrival_monotonic)
     )
-    accepted_receipt = _record_accepted(state, request)
+    try:
+        accepted_receipt = _record_accepted(state, request, deadline_at)
+    except SafeRetryContinuityRejected as rejected:
+        return _rejected_exchange(state, received, rejected)
     durable_ack = _accepted_ack_from_receipt(accepted_receipt)
     _validate_durable_accepted_ack(request, durable_ack, accepted_receipt)
     ack_frame = state.frame_session.encode_accepted_ack(
@@ -402,8 +415,61 @@ def _validated_monotonic_value(value: object) -> float:
 def _record_accepted(
     state: _CompositionState,
     request: VerifySessionRequestV1,
+    arrival_deadline_at: float | None,
 ) -> CommandJournalTransitionReceipt:
-    return _durable_record_accepted(state.command_journal_session, request)
+    if request.delivery.authorization.dispatch_authorization_ordinal == 1:
+        return _durable_record_accepted(state.command_journal_session, request)
+    try:
+        session = command_journal._session_state(state.command_journal_session)
+        result = _admit_safe_retry_continuity(
+            path=session.path,
+            generation=session.generation,
+            instance_id=session.instance_id,
+            request=request,
+            arrival_deadline_at=arrival_deadline_at,
+            monotonic_clock=state.monotonic_clock,
+        )
+    except _SafeRetryContinuityStoreError:
+        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR) from None
+    return command_journal._new_transition_receipt_from_values(
+        disposition=CommandJournalTransitionDisposition(result.disposition),
+        startup_generation=session.generation,
+        accepted_generation=result.accepted_generation,
+        accepted_journal_revision=result.accepted_journal_revision,
+        revision=result.head_journal_revision,
+        head_phase=result.head_phase,
+        accepted_ack_bytes=result.accepted_ack_bytes,
+        terminal_reply_bytes=result.terminal_reply_bytes,
+    )
+
+
+def _rejected_exchange(
+    state: _CompositionState,
+    received: ReceivedVerifySessionSubmit,
+    rejected: SafeRetryContinuityRejected,
+) -> VerifySessionJournalEffectExchange:
+    try:
+        payload = VerifySessionRejectedV1.model_validate(
+            {
+                "contract_version": "seektalent.source.verify-session.rejected/v1",
+                "identity": received.payload.identity,
+                "rejection_reason": rejected.reason.value,
+            },
+            strict=True,
+        )
+    except (TypeError, ValueError, ValidationError):
+        raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_ERROR) from None
+    return VerifySessionJournalEffectExchange(
+        disposition="rejected",
+        outbound_frames=(
+            state.frame_session.encode_rejected(
+                message_id=_next_reply_message_id(state, "rejected"),
+                reply_to=received.message_id,
+                payload=payload,
+            ),
+        ),
+        receipts=(),
+    )
 
 
 def _record_dispatch_intent(
@@ -436,7 +502,10 @@ def _encode_terminal(
     raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID)
 
 
-def _next_reply_message_id(state: _CompositionState, kind: Literal["ack", "reconcile", "terminal"]) -> str:
+def _next_reply_message_id(
+    state: _CompositionState,
+    kind: Literal["ack", "reconcile", "rejected", "terminal"],
+) -> str:
     with state.reply_lock:
         number = state.next_reply_number
         state.next_reply_number += 1

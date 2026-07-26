@@ -21,6 +21,8 @@ from seektalent.source_port.command_journal import (
     CommandJournalConflict,
     CommandJournalSession,
     CommandJournalTransitionReceipt,
+    _record_dispatch_intent_for_authorization,
+    _record_observation_for_authorization,
 )
 from seektalent.source_port.verify_session_contract import (
     VerifySessionRequestV1,
@@ -140,9 +142,11 @@ def _record_dispatch_intent(
     accepted_receipt: CommandJournalTransitionReceipt,
 ) -> CommandJournalTransitionReceipt:
     try:
-        return command_journal_session.record_dispatch_intent(
+        return _record_dispatch_intent_for_authorization(
+            command_journal_session,
             run_id=request.identity.run_id,
             operation_id=request.identity.operation_id,
+            dispatch_authorization_ordinal=(request.delivery.authorization.dispatch_authorization_ordinal),
             expected_head_journal_revision=accepted_receipt.revision,
             durable_dispatch_intent_ref=request.delivery.authorization.dispatch_intent_id,
         )
@@ -163,20 +167,26 @@ def _record_observation(
     reply_hash = sha256(reply_bytes).hexdigest()
     try:
         if type(effect_reply) is VerifySessionResultV1:
-            return command_journal_session.record_observed_result(
+            return _record_observation_for_authorization(
+                command_journal_session,
                 run_id=request.identity.run_id,
                 operation_id=request.identity.operation_id,
+                dispatch_authorization_ordinal=(request.delivery.authorization.dispatch_authorization_ordinal),
                 expected_head_journal_revision=dispatch_receipt.revision,
-                result_ref=reply_hash,
-                result_hash=reply_hash,
+                observation_kind="observed_result",
+                observation_ref=reply_hash,
+                observation_hash=reply_hash,
                 terminal_reply_bytes=reply_bytes,
             )
-        return command_journal_session.record_observed_failure(
+        return _record_observation_for_authorization(
+            command_journal_session,
             run_id=request.identity.run_id,
             operation_id=request.identity.operation_id,
+            dispatch_authorization_ordinal=(request.delivery.authorization.dispatch_authorization_ordinal),
             expected_head_journal_revision=dispatch_receipt.revision,
-            failure_ref=reply_hash,
-            failure_hash=reply_hash,
+            observation_kind="observed_failure",
+            observation_ref=reply_hash,
+            observation_hash=reply_hash,
             terminal_reply_bytes=reply_bytes,
         )
     except CommandJournalConflict:
@@ -258,8 +268,13 @@ def _validate_durable_accepted_ack(
         accepted_ack_matches_request = accepted_ack.dispatch_authorization == request.delivery.authorization
     if not accepted_ack_matches_request:
         raise VerifySessionJournalEffectError(VerifySessionJournalEffectReason.JOURNAL_CONFLICT)
+    expected_fact = (
+        "dispatch_authorized"
+        if request.delivery.authorization.dispatch_authorization_ordinal == 1
+        else "accepted_no_dispatch"
+    )
     if (
-        accepted_ack.accepted_fact != "dispatch_authorized"
+        accepted_ack.accepted_fact != expected_fact
         or accepted_ack.accepted_generation != receipt.accepted_generation
         or accepted_ack.accepted_journal_revision != receipt.accepted_journal_revision
     ):

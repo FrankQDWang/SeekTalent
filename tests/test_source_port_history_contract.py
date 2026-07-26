@@ -704,6 +704,8 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
         "src/seektalent/wtscli_verify_session_classification.py",
         "src/seektalent/sidecar_child_session.py",
         "src/seektalent/sidecar_bootstrap.py",
+        "src/seektalent/verify_session_closed_loop.py",
+        "src/seektalent/wtscli_verify_session_composition.py",
     ]
     bootstrap = PROJECT_ROOT / "src" / "seektalent" / "sidecar_bootstrap.py"
     assert "--test-only-verify-session-journal" in bootstrap.read_text(encoding="utf-8")

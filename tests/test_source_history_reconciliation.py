@@ -64,6 +64,34 @@ def test_same_snapshot_accepted_operation_context_returns_all_three_facts(tmp_pa
     assert context.dispatch.accepted_sidecar_journal_revision == 1
 
 
+def test_current_generation_not_found_cannot_mint_retry_while_writer_can_accept(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    ready_lease_factory: Callable[[], InstalledSidecarLaunchLease],
+) -> None:
+    harness = _history_harness(tmp_path, 1)
+    query = _query()
+    store = _store_with_operation(tmp_path, query, acknowledge=False)
+    admitted, session, child_thread, errors = _exchange(
+        SourceHistorySQLiteReader(harness.path),
+        query,
+        ready_lease_factory,
+        monkeypatch,
+    )
+
+    with pytest.raises(SourceHistoryReconciliationError) as exc_info:
+        commit_admitted_source_history_reconciliation(
+            admitted,
+            store,
+            committed_at=COMMITTED_AT,
+        )
+
+    assert exc_info.value.reason is SourceHistoryReconciliationReason.HISTORY_NOT_STABLE
+    _assert_no_reconciliation_write(store)
+    assert harness.record_accepted(_accepted(), generation=1) == 1
+    _close_exchange(session, child_thread, errors, ready_lease_factory)
+
+
 @pytest.mark.parametrize(
     ("history_kind", "expected_kind", "expected_outcome", "expected_conclusion", "expected_retry"),
     [
@@ -208,13 +236,13 @@ def test_observed_history_requires_operation_specific_interpreter_and_writes_not
     ready_lease_factory: Callable[[], InstalledSidecarLaunchLease],
     conclusion: str,
 ) -> None:
-    harness = _history_harness(tmp_path, 1, 2, 3)
+    harness = _history_harness(tmp_path, 1)
     accepted_revision = harness.record_accepted(_accepted(), generation=1)
     dispatch_revision = harness.record_dispatch_intent(
         run_id="runtime-run-1",
         operation_id="source-operation-1",
         expected_head_journal_revision=accepted_revision,
-        generation=2,
+        generation=1,
         durable_dispatch_intent_ref="durable-dispatch-ref",
     )
     if conclusion == "observed_result":
@@ -222,7 +250,7 @@ def test_observed_history_requires_operation_specific_interpreter_and_writes_not
             run_id="runtime-run-1",
             operation_id="source-operation-1",
             expected_head_journal_revision=dispatch_revision,
-            generation=3,
+            generation=1,
             result_ref="result-ref",
             result_hash="e" * 64,
         )
@@ -231,10 +259,12 @@ def test_observed_history_requires_operation_specific_interpreter_and_writes_not
             run_id="runtime-run-1",
             operation_id="source-operation-1",
             expected_head_journal_revision=dispatch_revision,
-            generation=3,
+            generation=1,
             failure_ref="failure-ref",
             failure_hash="f" * 64,
         )
+    harness.register_generation(2)
+    harness.register_generation(3)
     query = _query(first_generation=1, last_generation=3, accepted_generation_hint=1)
     store = _store_with_operation(
         tmp_path,
@@ -753,7 +783,14 @@ def test_new_composition_has_no_production_caller() -> None:
             continue
         if "commit_admitted_source_history_reconciliation(" in path.read_text(encoding="utf-8"):
             callers.append(path)
-    assert callers == []
+    assert callers == [Path("src/seektalent/verify_session_closed_loop.py")]
+    closed_loop_callers = []
+    for path in Path("src").rglob("*.py"):
+        if path.name == "verify_session_closed_loop.py":
+            continue
+        if "deliver_verify_session_outbox(" in path.read_text(encoding="utf-8"):
+            closed_loop_callers.append(path)
+    assert closed_loop_callers == []
 
 
 def _history_case(
@@ -763,8 +800,9 @@ def _history_case(
     if history_kind == "history_unavailable":
         harness = _history_harness(root, 1)
         return harness, _query(first_generation=1, last_generation=2), False, 1
-    harness = _history_harness(root, 1, *((2,) if history_kind == "dispatch_not_observed" else ()))
+    harness = _history_harness(root, 1)
     if history_kind == "not_found":
+        harness.register_generation(2)
         return harness, _query(), False, 1
     accepted_revision = harness.record_accepted(_accepted(), generation=1)
     if history_kind == "dispatch_not_observed":
@@ -772,9 +810,10 @@ def _history_case(
             run_id="runtime-run-1",
             operation_id="source-operation-1",
             expected_head_journal_revision=accepted_revision,
-            generation=2,
+            generation=1,
             durable_dispatch_intent_ref="durable-dispatch-ref",
         )
+        harness.register_generation(2)
         return (
             harness,
             _query(first_generation=1, last_generation=2, accepted_generation_hint=1),
@@ -782,7 +821,17 @@ def _history_case(
             accepted_revision,
         )
     if history_kind == "accepted_no_dispatch":
-        return harness, _query(accepted_generation_hint=1), True, accepted_revision
+        harness.register_generation(2)
+        return (
+            harness,
+            _query(
+                first_generation=1,
+                last_generation=2,
+                accepted_generation_hint=1,
+            ),
+            True,
+            accepted_revision,
+        )
     raise AssertionError(f"unknown history kind: {history_kind}")
 
 

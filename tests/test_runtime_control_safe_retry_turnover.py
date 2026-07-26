@@ -936,36 +936,34 @@ def test_safe_retry_turnover_rejects_json_safe_counter_overflow_without_writes(
     assert _source_epoch_state(store.path) == before
 
 
-def test_safe_retry_epoch_cannot_use_legacy_direct_ack_path(tmp_path: Path) -> None:
+def test_safe_retry_epoch_accepts_exact_durable_ack_facts(tmp_path: Path) -> None:
     store, authority = _store_with_safe_retry_and_authority(tmp_path)
     committed = store.mint_safe_retry_dispatch_epoch(
         **_turnover(authority=authority),
     )
     before = _source_epoch_state(store.path)
 
-    _assert_turnover_rejected(
-        store,
-        {
-            "runtime_run_id": committed.dispatch.runtime_run_id,
-            "operation_id": committed.dispatch.operation_id,
-            "outbox_id": committed.dispatch.outbox_id,
-            "canonical_request_hash": (committed.dispatch.canonical_request_hash),
-            "dispatch_intent_id": committed.dispatch.dispatch_intent_id,
-            "dispatch_intent_revision": (committed.dispatch.dispatch_intent_revision),
-            "dispatch_intent_digest": (committed.dispatch.dispatch_intent_digest),
-            "dispatch_authorization_ordinal": 2,
-            "expected_outbox_revision": 1,
-            "accepted_sidecar_generation": 2,
-            "accepted_sidecar_journal_revision": 2,
-            "ack_ref": "source_ack_ref_2",
-            "ack_kind": "new_dispatch_authorization",
-            "acknowledged_at": "2026-07-19T00:00:09Z",
-        },
-        "source_dispatch_authorization_ordinal_invalid",
-        method="record_source_dispatch_ack",
+    acknowledged = store.record_source_dispatch_ack(
+        runtime_run_id=committed.dispatch.runtime_run_id,
+        operation_id=committed.dispatch.operation_id,
+        outbox_id=committed.dispatch.outbox_id,
+        canonical_request_hash=committed.dispatch.canonical_request_hash,
+        dispatch_intent_id=committed.dispatch.dispatch_intent_id,
+        dispatch_intent_revision=committed.dispatch.dispatch_intent_revision,
+        dispatch_intent_digest=committed.dispatch.dispatch_intent_digest,
+        dispatch_authorization_ordinal=2,
+        expected_outbox_revision=1,
+        accepted_sidecar_generation=2,
+        accepted_sidecar_journal_revision=2,
+        ack_ref="source_ack_ref_2",
+        ack_kind="new_dispatch_authorization",
+        acknowledged_at="2026-07-19T00:00:09Z",
     )
 
-    assert _source_epoch_state(store.path) == before
+    assert acknowledged.status == "acknowledged"
+    assert acknowledged.outbox_revision == 2
+    assert acknowledged.ack_kind == "new_dispatch_authorization"
+    assert _source_epoch_state(store.path) != before
 
 
 @pytest.mark.parametrize(

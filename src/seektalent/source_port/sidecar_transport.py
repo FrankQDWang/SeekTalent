@@ -8,6 +8,7 @@ import threading
 import time
 import weakref
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Literal, Never, SupportsIndex, TypeAlias
 
 from seektalent.sidecar_handshake_protocol import (
@@ -33,9 +34,7 @@ from seektalent.source_port.history_contract import (
 from seektalent.source_port.verify_session_contract import VerifySessionRequestV1
 
 
-_HistoryResult = (
-    SourceHistoryMatched | SourceHistoryNotFound | SourceHistoryIdentityConflict | SourceHistoryUnavailable
-)
+_HistoryResult = SourceHistoryMatched | SourceHistoryNotFound | SourceHistoryIdentityConflict | SourceHistoryUnavailable
 ReceivedVerifySessionTerminal: TypeAlias = (
     verify_frames.ReceivedVerifySessionRejected
     | verify_frames.ReceivedVerifySessionResult
@@ -191,7 +190,9 @@ def exchange_source_history(
         endpoint._send_source_port_frame(frame, deadline)
         received = _receive_one_history_result(endpoint, deadline)
         if received.reply_to != message_id:
-            raise history_frames.SourceHistoryAdmissionError(history_frames.SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE)
+            raise history_frames.SourceHistoryAdmissionError(
+                history_frames.SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE
+            )
         succeeded = True
         return _new_admitted_result(endpoint, query=query, query_message_id=message_id, received=received)
     finally:
@@ -203,12 +204,19 @@ def exchange_verify_session(
     request: VerifySessionRequestV1,
     *,
     timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
+    accepted_ack_handler: Callable[
+        [verify_frames.ReceivedVerifySessionAcceptedAck],
+        None,
+    ]
+    | None = None,
 ) -> VerifySessionExchangeResult:
     """Submit verify-session: a fresh rejection is terminal; durable terminals require ack."""
     normalized_timeout = _validated_timeout(timeout)
     source_port = _require_endpoint(endpoint)
     if type(request) is not VerifySessionRequestV1:
         raise TypeError("request must be a VerifySessionRequestV1")
+    if accepted_ack_handler is not None and not callable(accepted_ack_handler):
+        raise TypeError("accepted_ack_handler must be callable")
     _begin_verify_exchange(endpoint)
     succeeded = False
     try:
@@ -232,6 +240,8 @@ def exchange_verify_session(
                     if ack is not None:
                         raise SourcePortTransportFrameError("source_port_verify_session_response_state_mismatch")
                     ack = message
+                    if accepted_ack_handler is not None:
+                        accepted_ack_handler(message)
                     continue
                 if isinstance(
                     message,
@@ -341,7 +351,9 @@ def _serve_received_history_query(
         result,
         (SourceHistoryMatched, SourceHistoryNotFound, SourceHistoryIdentityConflict, SourceHistoryUnavailable),
     ):
-        raise history_frames.SourceHistoryAdmissionError(history_frames.SourceHistoryAdmissionReason.READER_RESULT_INVALID)
+        raise history_frames.SourceHistoryAdmissionError(
+            history_frames.SourceHistoryAdmissionReason.READER_RESULT_INVALID
+        )
     frame = source_port.encode_history_result(
         message_id=secrets.token_hex(16),
         reply_to=received.message_id,
@@ -351,14 +363,14 @@ def _serve_received_history_query(
     return result
 
 
-def serve_test_source_port(
+def serve_source_port(
     endpoint: SourcePortEndpoint,
     history_reader: object,
     verify_composition: object,
     *,
     timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
 ) -> None:
-    """Serve the explicit native-test history and deterministic verify fake over one pipe."""
+    """Serve authenticated history and verify-session commands over one pipe."""
     normalized_timeout = _validated_timeout(timeout)
     _require_endpoint(endpoint)
     from seektalent.source_port.verify_session_journal_effect import VerifySessionJournalEffectComposition
@@ -393,6 +405,22 @@ def serve_test_source_port(
                 succeeded = True
             finally:
                 endpoint._finish_source_port_exchange(succeeded=succeeded)
+
+
+def serve_test_source_port(
+    endpoint: SourcePortEndpoint,
+    history_reader: object,
+    verify_composition: object,
+    *,
+    timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
+) -> None:
+    """Compatibility name for deterministic native packaged-sidecar tests."""
+    serve_source_port(
+        endpoint,
+        history_reader,
+        verify_composition,
+        timeout=timeout,
+    )
 
 
 def serve_test_source_history_database(
@@ -533,11 +561,15 @@ def _receive_one_history_result(
         if not messages:
             continue
         if len(messages) != 1:
-            raise history_frames.SourceHistoryAdmissionError(history_frames.SourceHistoryAdmissionReason.MULTIPLE_MESSAGES)
+            raise history_frames.SourceHistoryAdmissionError(
+                history_frames.SourceHistoryAdmissionReason.MULTIPLE_MESSAGES
+            )
         source_port.require_frame_boundary()
         message = messages[0]
         if not isinstance(message, history_frames.ReceivedHistoryResult):
-            raise history_frames.SourceHistoryAdmissionError(history_frames.SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE)
+            raise history_frames.SourceHistoryAdmissionError(
+                history_frames.SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE
+            )
         return message
 
 
@@ -551,18 +583,24 @@ def _receive_one_history_query(
         if not messages:
             continue
         if len(messages) != 1:
-            raise history_frames.SourceHistoryAdmissionError(history_frames.SourceHistoryAdmissionReason.MULTIPLE_MESSAGES)
+            raise history_frames.SourceHistoryAdmissionError(
+                history_frames.SourceHistoryAdmissionReason.MULTIPLE_MESSAGES
+            )
         source_port.require_frame_boundary()
         message = messages[0]
         if not isinstance(message, history_frames.ReceivedHistoryQuery):
-            raise history_frames.SourceHistoryAdmissionError(history_frames.SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE)
+            raise history_frames.SourceHistoryAdmissionError(
+                history_frames.SourceHistoryAdmissionReason.UNEXPECTED_MESSAGE
+            )
         return message
 
 
 def _reader_query(reader: object, request: SourceHistoryQueryV1, deadline: float):
     query = getattr(reader, "query", None)
     if not callable(query):
-        raise history_frames.SourceHistoryAdmissionError(history_frames.SourceHistoryAdmissionReason.READER_RESULT_INVALID)
+        raise history_frames.SourceHistoryAdmissionError(
+            history_frames.SourceHistoryAdmissionReason.READER_RESULT_INVALID
+        )
     try:
         inspect.signature(query).bind(request, deadline=deadline)
     except (TypeError, ValueError):
@@ -585,6 +623,7 @@ __all__ = [
     "require_live_admitted_source_history_result",
     "send_source_port_frame",
     "serve_source_history_query",
+    "serve_source_port",
     "serve_test_source_history_database",
     "serve_test_source_port",
     "wait_for_parent_eof",

@@ -15,7 +15,7 @@ import pytest
 from seektalent import browser_bridge_manifest, opencli_launcher
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.opencli_browser.daemon_transport import OpenCliDaemonClient
-from seektalent.opencli_browser.reason_codes import OPENCLI_STATUS_UNAVAILABLE
+from seektalent.opencli_browser.reason_codes import OPENCLI_FOREIGN_OWNER
 from tests.browser_bridge_bundle_fixtures import (
     WTSCLI_BUILD_ID,
     WTSCLI_CAPABILITIES,
@@ -682,7 +682,7 @@ def test_daemon_client_rejects_legacy_or_foreign_response_marker_without_reuse(
     with pytest.raises(OpenCliBrowserError) as captured:
         client.verify_bridge()
 
-    assert captured.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert captured.value.safe_reason_code == OPENCLI_FOREIGN_OWNER
     assert connection.closed is True
     assert len(connection.requests) == 1
 

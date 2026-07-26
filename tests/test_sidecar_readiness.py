@@ -1184,9 +1184,10 @@ def _history_query() -> SourceHistoryQueryV1:
 
 def _history_reader(tmp_path: Path) -> tuple[SourceHistorySQLiteReader, SourceHistoryQueryV1]:
     harness = SourceHistorySQLiteHarness.create(tmp_path / "history.sqlite3")
-    for generation in (1, 2, 3):
-        harness.register_generation(generation)
+    harness.register_generation(1)
     harness.record_accepted(_accepted(), generation=1)
+    harness.register_generation(2)
+    harness.register_generation(3)
     return SourceHistorySQLiteReader(harness.path), _sqlite_query(first_generation=1, last_generation=3)
 
 
@@ -1393,7 +1394,19 @@ def test_authenticated_history_exchange_preserves_all_four_results_and_query_ech
     )
     assert tuple(item.query for item in admitted) == queries
     assert all(
-        item.payload.model_dump(exclude={"contract_version", "outcome", "facts", "conflict_reasons", "reason", "oldest_retained_generation", "newest_known_generation", "history_complete", "history_truncated"})
+        item.payload.model_dump(
+            exclude={
+                "contract_version",
+                "outcome",
+                "facts",
+                "conflict_reasons",
+                "reason",
+                "oldest_retained_generation",
+                "newest_known_generation",
+                "history_complete",
+                "history_truncated",
+            }
+        )
         == item.query.model_dump(exclude={"contract_version"})
         for item in admitted
     )

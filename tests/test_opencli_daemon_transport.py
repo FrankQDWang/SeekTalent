@@ -25,6 +25,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
     OPENCLI_COMMAND_RESULT_UNKNOWN,
     OPENCLI_FORBIDDEN_COMMAND,
+    OPENCLI_FOREIGN_OWNER,
     OPENCLI_SELECTOR_NOT_FOUND,
     OPENCLI_STALE_CONTROL_FENCE,
     OPENCLI_STATUS_UNAVAILABLE,
@@ -158,6 +159,26 @@ def test_load_bridge_requirement_validates_manifest_identity_and_minimum_capabil
 
     assert requirement.bridge_build_id == BUILD_ID
     assert requirement.capabilities == REQUIRED_OPENCLI_BRIDGE_CAPABILITIES
+
+
+def test_status_response_without_local_exact_ownership_is_foreign_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    empty_home = tmp_path / "unowned-home"
+    empty_home.mkdir()
+    monkeypatch.setenv("HOME", str(empty_home))
+    monkeypatch.setenv("USERPROFILE", str(empty_home))
+    connection = _Connection(status_payload=_status())
+    client = OpenCliDaemonClient(
+        requirement=_requirement(),
+        connection_factory=lambda *_args: connection,
+    )
+
+    with pytest.raises(OpenCliBrowserError) as captured:
+        client.verify_bridge()
+
+    assert captured.value.safe_reason_code == OPENCLI_FOREIGN_OWNER
 
 
 @pytest.mark.parametrize(

@@ -561,7 +561,7 @@ def _observed_case(
     history_kind = fact_kind or ("observed_result" if type(terminal) is VerifySessionResultV1 else "observed_failure")
     reference = observation_ref if observation_ref is not None else digest
     fact_hash = observation_hash if observation_hash is not None else digest
-    harness = _history_harness(root, 1, 2, 3)
+    harness = _history_harness(root, 1)
     accepted_revision = harness.record_accepted(
         _accepted(operation_kind="verify_session"),
         generation=1,
@@ -570,7 +570,7 @@ def _observed_case(
         run_id="runtime-run-1",
         operation_id="source-operation-1",
         expected_head_journal_revision=accepted_revision,
-        generation=2,
+        generation=1,
         durable_dispatch_intent_ref="durable-dispatch-ref",
     )
     if history_kind == "observed_result":
@@ -578,7 +578,7 @@ def _observed_case(
             run_id="runtime-run-1",
             operation_id="source-operation-1",
             expected_head_journal_revision=dispatch_revision,
-            generation=3,
+            generation=1,
             result_ref=reference,
             result_hash=fact_hash,
         )
@@ -587,10 +587,12 @@ def _observed_case(
             run_id="runtime-run-1",
             operation_id="source-operation-1",
             expected_head_journal_revision=dispatch_revision,
-            generation=3,
+            generation=1,
             failure_ref=reference,
             failure_hash=fact_hash,
         )
+    harness.register_generation(2)
+    harness.register_generation(3)
     query = _query(
         operation_kind="verify_session",
         first_generation=1,
@@ -622,8 +624,7 @@ def _nonterminal_case(
     lease_factory: Callable[[], InstalledSidecarLaunchLease],
     history_kind: str,
 ) -> Iterator[tuple[RuntimeControlStore, sidecar_transport.AdmittedSourceHistoryResult]]:
-    generations = (1, 2) if history_kind == "dispatch_not_observed" else (1,)
-    harness = _history_harness(root, *generations)
+    harness = _history_harness(root, 1)
     accepted_revision = 1
     accepted_generation_hint = None
     last_generation = 2 if history_kind in {"dispatch_not_observed", "history_unavailable"} else 1
@@ -638,9 +639,11 @@ def _nonterminal_case(
             run_id="runtime-run-1",
             operation_id="source-operation-1",
             expected_head_journal_revision=accepted_revision,
-            generation=2,
+            generation=1,
             durable_dispatch_intent_ref="durable-dispatch-ref",
         )
+    if history_kind != "history_unavailable":
+        harness.register_generation(2)
     query = _query(
         operation_kind="verify_session",
         first_generation=1,
