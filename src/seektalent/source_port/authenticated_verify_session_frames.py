@@ -37,7 +37,7 @@ from seektalent.source_port.verify_session_contract import (
     validate_verify_session_result_echo_facts,
     verify_session_request_echo,
 )
-from seektalent.source_port.wire_primitives import Opaque96, StrictWireModel
+from seektalent.source_port.wire_primitives import Opaque96, PositiveJsonInteger, StrictWireModel
 
 
 MAX_FRAME_BYTES = DEFAULT_MAX_FRAME_BYTES
@@ -112,6 +112,8 @@ class VerifySessionAcceptedAckV1(_VerifySessionFrameModel):
     contract_version: Literal["seektalent.source.verify-session.accepted-ack/v1"]
     identity: OperationIdentityV1
     dispatch_authorization: DispatchAuthorizationV1
+    accepted_generation: PositiveJsonInteger
+    accepted_journal_revision: PositiveJsonInteger
     accepted_fact: Literal["dispatch_authorized", "accepted_no_dispatch"]
 
     @field_validator("identity")

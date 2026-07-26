@@ -50,9 +50,9 @@ VERIFY_SESSION_FRAME_VECTORS = {
         "sha256": "3a83835fc7efefe958bf7c1159f85ed12b1e2c71353b93b78925fc7178153171",
     },
     "accepted_ack": {
-        "length": 1675,
-        "auth_tag": "767c255d52b4e7e4e40a4deef0f4a3c24d6917db10bf5faa5bd1a376a155a072",
-        "sha256": "b2a3482fbdf2eeb2786a436275f7a1c641e76276870b8857d4939c45f26ec047",
+        "length": 1729,
+        "auth_tag": "c7a57fb9aa45cd99e2a97253a51179b133fa9dab557331fa554a4f146a2cc2e6",
+        "sha256": "732e718284b2dde938a422ad164d64c50d733713b8b353b3fbb628b043cbede9",
     },
     "result": {
         "length": 1543,
@@ -119,6 +119,8 @@ def _accepted_ack(request: VerifySessionRequestV1, **updates: object) -> VerifyS
         "contract_version": "seektalent.source.verify-session.accepted-ack/v1",
         "identity": request.identity,
         "dispatch_authorization": request.delivery.authorization,
+        "accepted_generation": 1,
+        "accepted_journal_revision": 1,
         "accepted_fact": "dispatch_authorized",
     }
     values.update(updates)
@@ -219,13 +221,18 @@ def test_submit_ack_and_terminal_result_share_one_authenticated_session_core() -
         ),
     )
 
-    ack = _accepted_ack(request)
+    ack = _accepted_ack(
+        request,
+        accepted_generation=7,
+        accepted_journal_revision=19,
+    )
     ack_frame = sidecar.encode_accepted_ack(
         message_id="ack-1",
         reply_to="submit-1",
         payload=ack,
     )
-    assert main.feed(ack_frame) == (
+    received_ack = main.feed(ack_frame)
+    assert received_ack == (
         ReceivedVerifySessionAcceptedAck(
             message_id="ack-1",
             reply_to="submit-1",
@@ -233,6 +240,8 @@ def test_submit_ack_and_terminal_result_share_one_authenticated_session_core() -
             payload=ack,
         ),
     )
+    assert received_ack[0].payload.accepted_generation == 7
+    assert received_ack[0].payload.accepted_journal_revision == 19
 
     result = _result(request)
     result_frame = sidecar.encode_result(
@@ -251,6 +260,29 @@ def test_submit_ack_and_terminal_result_share_one_authenticated_session_core() -
         ),
     )
     assert RAW_FENCE_TOKEN not in repr(received)
+
+
+def test_accepted_ack_missing_durable_position_is_rejected_by_the_frame() -> None:
+    request = _request()
+    main = _main()
+    sidecar = _sidecar()
+    sidecar.feed(main.encode_submit(message_id="submit-1", correlation_id=None, payload=request))
+    missing_position = VerifySessionAcceptedAckV1.model_construct(
+        contract_version="seektalent.source.verify-session.accepted-ack/v1",
+        identity=request.identity,
+        dispatch_authorization=request.delivery.authorization,
+        accepted_fact="dispatch_authorized",
+    )
+
+    with pytest.raises(VerifySessionFrameError) as invalid:
+        sidecar.encode_accepted_ack(
+            message_id="ack-1",
+            reply_to="submit-1",
+            payload=missing_position,
+        )
+
+    assert invalid.value.reason_code == VerifySessionFrameReason.SCHEMA_VALIDATION.value
+    assert sidecar.closed is True
 
 
 def test_verify_session_authenticated_exchange_known_answer_is_byte_stable() -> None:

@@ -114,7 +114,6 @@ def _admit_safe_retry_continuity(
             monotonic_clock=monotonic_clock,
         )
         created = result.disposition == "created"
-        connection.commit()
     except SafeRetryContinuityRejected:
         _rollback(connection)
         raise
@@ -131,6 +130,8 @@ def _admit_safe_retry_continuity(
     except RuntimeError:
         _rollback(connection)
         raise _SafeRetryContinuityStoreError from None
+    else:
+        _commit_continuity_transaction(connection)
     finally:
         if connection is not None:
             connection.close()
@@ -214,7 +215,11 @@ def _admit_in_transaction(
         generation=generation,
         revision=revision,
     )
-    ack_bytes = _canonical_accepted_ack_bytes(request)
+    ack_bytes = _canonical_accepted_ack_bytes(
+        request,
+        generation=generation,
+        revision=revision,
+    )
     connection.execute(
         journal_engine._EVENT_INSERT,
         journal_engine._accepted_event_parameters(
@@ -340,12 +345,19 @@ def _accepted_values(request: VerifySessionRequestV1) -> dict[str, object]:
     }
 
 
-def _canonical_accepted_ack_bytes(request: VerifySessionRequestV1) -> bytes:
+def _canonical_accepted_ack_bytes(
+    request: VerifySessionRequestV1,
+    *,
+    generation: int,
+    revision: int,
+) -> bytes:
     ack = VerifySessionAcceptedAckV1.model_validate(
         {
             "contract_version": "seektalent.source.verify-session.accepted-ack/v1",
             "identity": request.identity,
             "dispatch_authorization": request.delivery.authorization,
+            "accepted_generation": generation,
+            "accepted_journal_revision": revision,
             "accepted_fact": "accepted_no_dispatch",
         },
         strict=True,
@@ -394,8 +406,11 @@ def _validated_ack_for_row(row: sqlite3.Row) -> VerifySessionAcceptedAckV1:
         "authorized_dispatch_intent_revision": authorization.dispatch_intent_revision,
         "authorized_dispatch_intent_digest": authorization.dispatch_intent_digest,
     }
-    if any(row[name] != value for name, value in identity_values.items()) or any(
-        row[name] != value for name, value in authorization_values.items()
+    if (
+        any(row[name] != value for name, value in identity_values.items())
+        or any(row[name] != value for name, value in authorization_values.items())
+        or ack.accepted_generation != row["accepted_generation"]
+        or ack.accepted_journal_revision != row["accepted_journal_revision"]
     ):
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.JOURNAL_CORRUPT)
     if authorization.dispatch_authorization_ordinal > 1 and ack.accepted_fact != "accepted_no_dispatch":
@@ -535,6 +550,14 @@ def _rollback(connection: sqlite3.Connection | None) -> None:
     try:
         connection.rollback()
     except sqlite3.Error:
+        raise _SafeRetryContinuityStoreError from None
+
+
+def _commit_continuity_transaction(connection: sqlite3.Connection) -> None:
+    try:
+        connection.commit()
+    except sqlite3.Error:
+        _rollback(connection)
         raise _SafeRetryContinuityStoreError from None
 
 

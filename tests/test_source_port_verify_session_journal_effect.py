@@ -19,6 +19,7 @@ import seektalent.source_port.verify_session_journal_effect as journal_effect
 from seektalent.source_port.authenticated_verify_session_frames import (
     PostHandshakeVerifySessionSession,
     ReceivedVerifySessionSubmit,
+    VerifySessionAcceptedAckV1,
     VerifySessionFailureV1,
     VerifySessionFrameError,
     VerifySessionFrameReason,
@@ -39,6 +40,7 @@ from seektalent.source_port.history_contract import (
 )
 from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
 from seektalent.source_port.verify_session_contract import VerifySessionRequestV1
+from seektalent.source_port.wire_primitives import canonical_json_bytes
 
 
 RAW_FENCE_TOKEN = "verify-session-journal-effect-fence-canary-" + "x" * 64
@@ -636,7 +638,8 @@ def test_reconcile_first_status_retires_each_replayed_request_without_pending_gr
 
 def test_first_submit_returns_sealed_created_receipts_and_durable_ack_then_terminal(tmp_path: Path) -> None:
     effect = _Effect()
-    main, composition = _composition(tmp_path / "journal.sqlite3", effect, session_id="session-1")
+    path = tmp_path / "journal.sqlite3"
+    main, composition = _composition(path, effect, session_id="session-1")
 
     accepted = _submit(main, composition, _request())
 
@@ -651,7 +654,18 @@ def test_first_submit_returns_sealed_created_receipts_and_durable_ack_then_termi
     assert [receipt.revision for receipt in accepted.receipts] == [1, 2]
     assert [receipt.startup_generation for receipt in accepted.receipts] == [1, 1]
     assert RAW_FENCE_TOKEN not in repr(accepted.receipts[0])
-    assert main.feed(accepted.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
+    received_ack = main.feed(accepted.outbound_frames[0])[0].payload
+    assert received_ack.accepted_fact == "dispatch_authorized"
+    assert received_ack.accepted_generation == accepted.receipts[0].startup_generation == 1
+    assert received_ack.accepted_journal_revision == accepted.receipts[0].revision == 1
+    with sqlite3.connect(path) as connection:
+        durable_ack = connection.execute(
+            """
+            SELECT accepted_ack_bytes FROM source_history_heads
+            WHERE dispatch_authorization_ordinal = 1
+            """
+        ).fetchone()[0]
+    assert canonical_json_bytes(received_ack.model_dump(mode="json")) == durable_ack
 
     terminal = _consume_pending_effect(accepted)
 
@@ -693,6 +707,55 @@ def test_durable_reply_bytes_never_contain_the_raw_fence_bearer(tmp_path: Path) 
         connection.close()
 
     assert RAW_FENCE_TOKEN.encode() not in b"".join(value for row in rows for value in row if value is not None)
+
+
+def test_tampered_durable_ack_position_fails_closed_before_reply_or_effect(tmp_path: Path) -> None:
+    path = tmp_path / "journal.sqlite3"
+    effect = _Effect()
+    first_main, first = _composition(path, effect, session_id="session-1")
+    _submit(first_main, first, _request())
+
+    with sqlite3.connect(path) as connection:
+        current_ack = connection.execute(
+            """
+            SELECT accepted_ack_bytes FROM source_history_heads
+            WHERE dispatch_authorization_ordinal = 1
+            """
+        ).fetchone()[0]
+        parsed_ack = VerifySessionAcceptedAckV1.model_validate_json(current_ack, strict=True)
+        tampered_ack = canonical_json_bytes(
+            parsed_ack.model_copy(update={"accepted_generation": 2}).model_dump(mode="json")
+        )
+        event_trigger = connection.execute(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'trigger' AND name = 'source_history_events_no_update'
+            """
+        ).fetchone()[0]
+        connection.execute("DROP TRIGGER source_history_events_no_update")
+        connection.execute(
+            """
+            UPDATE source_history_events SET accepted_ack_bytes = ?
+            WHERE dispatch_authorization_ordinal = 1
+            """,
+            (tampered_ack,),
+        )
+        connection.execute(
+            """
+            UPDATE source_history_heads SET accepted_ack_bytes = ?
+            WHERE dispatch_authorization_ordinal = 1
+            """,
+            (tampered_ack,),
+        )
+        connection.execute(event_trigger)
+        connection.commit()
+
+    replay_main, replay = _composition(path, effect, session_id="session-2", reopen=True)
+    with pytest.raises(journal_effect.VerifySessionJournalEffectError) as failure:
+        _submit(replay_main, replay, _request())
+
+    assert failure.value.reason is journal_effect.VerifySessionJournalEffectReason.DURABLE_REPLY_INVALID
+    assert effect.calls == 0
 
 
 def test_terminal_reply_bytes_are_immutable_against_the_history_head(tmp_path: Path) -> None:
@@ -742,7 +805,10 @@ def test_exact_replay_replays_durable_ack_and_terminal_without_effect(tmp_path: 
     assert len(exchange.outbound_frames) == 2
     assert exchange.receipts[0].disposition is CommandJournalTransitionDisposition.EXACT_REPLAY
     assert (exchange.receipts[0].startup_generation, exchange.receipts[0].revision) == (2, 1)
-    assert replay_main.feed(exchange.outbound_frames[0])[0].payload.accepted_fact == "dispatch_authorized"
+    replay_ack = replay_main.feed(exchange.outbound_frames[0])[0].payload
+    assert replay_ack.accepted_fact == "dispatch_authorized"
+    assert replay_ack.accepted_generation == 1
+    assert replay_ack.accepted_journal_revision == 1
     assert replay_main.feed(exchange.outbound_frames[1])[0].payload.identity == _request().identity
 
 

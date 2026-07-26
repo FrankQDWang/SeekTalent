@@ -68,6 +68,27 @@ class CommitAcknowledgementLost(RuntimeError):
     pass
 
 
+class _DelegatingConnection:
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._connection, name)
+
+
+class _CommittedThenRaiseConnection(_DelegatingConnection):
+    def commit(self) -> None:
+        self._connection.commit()
+        assert self._connection.in_transaction is False
+        raise sqlite3.OperationalError("injected commit acknowledgement loss")
+
+
+class _ActiveTransactionCommitFailureConnection(_DelegatingConnection):
+    def commit(self) -> None:
+        assert self._connection.in_transaction is True
+        raise sqlite3.OperationalError("injected commit failure")
+
+
 def _request(**updates: object) -> VerifySessionRequestV1:
     values: dict[str, object] = {
         "run_id": "run-1",
@@ -143,6 +164,8 @@ def _accepted_ack_bytes(request: VerifySessionRequestV1) -> bytes:
             "contract_version": "seektalent.source.verify-session.accepted-ack/v1",
             "identity": request.identity,
             "dispatch_authorization": request.delivery.authorization,
+            "accepted_generation": 1,
+            "accepted_journal_revision": 1,
             "accepted_fact": "dispatch_authorized",
         },
         strict=True,
@@ -333,6 +356,9 @@ def test_authenticated_ordinal_two_admission_atomically_persists_a_canonical_no_
     assert isinstance(received[0], ReceivedVerifySessionAcceptedAck)
     assert received[0].payload.accepted_fact == "accepted_no_dispatch"
     assert received[0].payload.dispatch_authorization == request.delivery.authorization
+    assert received[0].payload.accepted_generation == retry_session.generation
+    assert received[0].payload.accepted_journal_revision == 2
+    assert canonical_json_bytes(received[0].payload.model_dump(mode="json")) == exchange.accepted_ack_bytes
 
     with sqlite3.connect(path) as connection:
         connection.row_factory = sqlite3.Row
@@ -490,7 +516,96 @@ def test_commit_ack_loss_then_restart_exact_replay_returns_the_original_durable_
     assert len(received) == 1
     assert isinstance(received[0], ReceivedVerifySessionAcceptedAck)
     assert received[0].payload.accepted_fact == "accepted_no_dispatch"
+    assert received[0].payload.accepted_generation == 2
+    assert received[0].payload.accepted_journal_revision == 2
+    assert canonical_json_bytes(received[0].payload.model_dump(mode="json")) == durable_ack
     assert received[0].payload.identity.runtime_attempt_fence_ref != replay_request.identity.runtime_attempt_fence_ref
+
+
+def test_sqlite_commit_ack_loss_never_emits_rejection_and_replays_the_original_ack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "journal.sqlite3"
+    _, retry_session = _seed_ordinal_one(path)
+    real_open = continuity_store._open_connection
+
+    def committed_then_raise(candidate: Path) -> _CommittedThenRaiseConnection:
+        return _CommittedThenRaiseConnection(real_open(candidate))
+
+    monkeypatch.setattr(continuity_store, "_open_connection", committed_then_raise)
+    initial_composition = _composition(retry_session, _sidecar())
+
+    with pytest.raises(VerifySessionContinuityAdmissionError) as lost:
+        _submit(initial_composition, _main(), _safe_retry_request())
+
+    assert lost.value.reason is VerifySessionContinuityAdmissionReason.JOURNAL_ERROR
+    assert _row_counts(path) == (2, 2, 2)
+    with sqlite3.connect(path) as connection:
+        durable = connection.execute(
+            """
+            SELECT accepted_ack_bytes, durable_dispatch_intent_ref,
+                   observation_ref, terminal_reply_bytes
+            FROM source_history_heads
+            WHERE dispatch_authorization_ordinal = 2
+            """
+        ).fetchone()
+    assert durable is not None
+    durable_ack = durable[0]
+    assert durable[1:] == (None, None, None)
+    initial_composition.close()
+
+    monkeypatch.setattr(continuity_store, "_open_connection", real_open)
+    replay_session = open_command_journal(path).start()
+    before_replay = _database_snapshot(path)
+    replay_main = _main(session_id="continuity-sqlite-commit-restart")
+    replay = _submit(
+        _composition(
+            replay_session,
+            _sidecar(session_id="continuity-sqlite-commit-restart"),
+        ),
+        replay_main,
+        _safe_retry_request(
+            delivery_mode="outbox_redelivery",
+            runtime_attempt_fence_token=RAW_FENCE_REPLAY,
+            browser_control_scope_id="browser-scope-replay",
+            correlation_id="correlation-replay",
+            deadline_value=30_000,
+        ),
+        message_id="submit-sqlite-commit-replay",
+    )
+
+    assert replay.disposition == "exact_replay"
+    assert replay.accepted_ack_bytes == durable_ack
+    assert replay.accepted_ack_hash == sha256(durable_ack).hexdigest()
+    assert _database_snapshot(path) == before_replay
+    assert _row_counts(path) == (2, 2, 2)
+    received = replay_main.feed(replay.outbound_frames[0])
+    assert len(received) == 1
+    assert isinstance(received[0], ReceivedVerifySessionAcceptedAck)
+    assert received[0].payload.accepted_fact == "accepted_no_dispatch"
+
+
+def test_sqlite_commit_failure_with_active_transaction_rolls_back_without_a_reply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "journal.sqlite3"
+    _, retry_session = _seed_ordinal_one(path)
+    before = _database_snapshot(path)
+    real_open = continuity_store._open_connection
+
+    def fail_active_commit(candidate: Path) -> _ActiveTransactionCommitFailureConnection:
+        return _ActiveTransactionCommitFailureConnection(real_open(candidate))
+
+    monkeypatch.setattr(continuity_store, "_open_connection", fail_active_commit)
+
+    with pytest.raises(VerifySessionContinuityAdmissionError) as failure:
+        _submit(_composition(retry_session, _sidecar()), _main(), _safe_retry_request())
+
+    assert failure.value.reason is VerifySessionContinuityAdmissionReason.JOURNAL_ERROR
+    assert _database_snapshot(path) == before
+    assert _row_counts(path) == (1, 1, 1)
 
 
 def test_exact_replay_fails_closed_if_an_earlier_epoch_later_dispatched(
@@ -696,7 +811,13 @@ def test_retention_and_generation_coverage_gaps_reject_without_mutation(
 
 @pytest.mark.parametrize(
     "corruption",
-    ("revision_tail", "event_head_divergence", "accepted_ack", "unknown_phase"),
+    (
+        "revision_tail",
+        "event_head_divergence",
+        "accepted_ack",
+        "accepted_ack_position",
+        "unknown_phase",
+    ),
 )
 def test_partial_or_ambiguous_history_is_a_typed_corrupt_reject(
     tmp_path: Path,
@@ -725,8 +846,20 @@ def test_partial_or_ambiguous_history_is_a_typed_corrupt_reject(
                     """,
                     ("f" * 64,),
                 )
-            elif corruption == "accepted_ack":
-                invalid_ack = b'{"not":"a-verify-session-accepted-ack"}'
+            elif corruption in {"accepted_ack", "accepted_ack_position"}:
+                if corruption == "accepted_ack":
+                    invalid_ack = b'{"not":"a-verify-session-accepted-ack"}'
+                else:
+                    current_ack = connection.execute(
+                        """
+                        SELECT accepted_ack_bytes FROM source_history_heads
+                        WHERE dispatch_authorization_ordinal = 1
+                        """
+                    ).fetchone()[0]
+                    parsed_ack = VerifySessionAcceptedAckV1.model_validate_json(current_ack, strict=True)
+                    invalid_ack = canonical_json_bytes(
+                        parsed_ack.model_copy(update={"accepted_generation": 2}).model_dump(mode="json")
+                    )
                 connection.execute(
                     """
                     UPDATE source_history_events SET accepted_ack_bytes = ?

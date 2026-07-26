@@ -64,6 +64,8 @@ class CommandJournalTransitionResult:
 
     disposition: CommandJournalTransitionDisposition
     startup_generation: int
+    accepted_generation: int
+    accepted_journal_revision: int
     revision: int
     head_phase: Literal["accepted", "dispatch_intent", "observed_result", "observed_failure"]
     accepted_ack_bytes: bytes | None

@@ -13,7 +13,6 @@ import weakref
 from seektalent.source_port.authenticated_verify_session_frames import (
     PostHandshakeVerifySessionSession,
     ReceivedVerifySessionSubmit,
-    VerifySessionAcceptedAckV1,
     VerifySessionFailureV1,
     VerifySessionResultV1,
     _AuthenticatedVerifySessionArrival,
@@ -32,7 +31,6 @@ from seektalent.source_port.verify_session_journal_effect_durable import (
     VerifySessionEffectResult,
     VerifySessionJournalEffectError,
     VerifySessionJournalEffectReason,
-    _accepted_ack_for_request,
     _accepted_ack_from_receipt,
     _invoke_effect,
     _record_accepted as _durable_record_accepted,
@@ -208,10 +206,9 @@ def _handle_submit(
         if request.delivery.delivery_mode == "outbox_redelivery"
         else _anchor_local_deadline(state, request, arrival_monotonic=arrival_monotonic)
     )
-    accepted_ack = _accepted_ack_for_request(request)
-    accepted_receipt = _record_accepted(state, request, accepted_ack)
+    accepted_receipt = _record_accepted(state, request)
     durable_ack = _accepted_ack_from_receipt(accepted_receipt)
-    _validate_durable_accepted_ack(request, durable_ack)
+    _validate_durable_accepted_ack(request, durable_ack, accepted_receipt)
     ack_frame = state.frame_session.encode_accepted_ack(
         message_id=_next_reply_message_id(state, "ack"),
         reply_to=received.message_id,
@@ -405,9 +402,8 @@ def _validated_monotonic_value(value: object) -> float:
 def _record_accepted(
     state: _CompositionState,
     request: VerifySessionRequestV1,
-    accepted_ack: VerifySessionAcceptedAckV1,
 ) -> CommandJournalTransitionReceipt:
-    return _durable_record_accepted(state.command_journal_session, request, accepted_ack)
+    return _durable_record_accepted(state.command_journal_session, request)
 
 
 def _record_dispatch_intent(
