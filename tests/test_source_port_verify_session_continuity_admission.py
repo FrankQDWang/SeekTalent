@@ -23,6 +23,8 @@ from seektalent.source_port.authenticated_verify_session_frames import (
 )
 from seektalent.source_port.command_journal import (
     AcceptedCommand,
+    CommandJournalConflict,
+    CommandJournalConflictReason,
     CommandJournalSession,
     create_command_journal,
     open_command_journal,
@@ -181,20 +183,20 @@ def _seed_ordinal_one(
 ) -> tuple[VerifySessionRequestV1, CommandJournalSession]:
     request = _request()
     journal = create_command_journal(path)
-    sessions = tuple(journal.start() for _ in range(generation_count))
-    accepted = sessions[0].record_accepted(
+    initial_session = journal.start()
+    accepted = initial_session.record_accepted(
         _accepted_command(request),
         accepted_ack_bytes=_accepted_ack_bytes(request),
     )
     if phase != "accepted":
-        dispatch = sessions[0].record_dispatch_intent(
+        dispatch = initial_session.record_dispatch_intent(
             run_id=request.identity.run_id,
             operation_id=request.identity.operation_id,
             expected_head_journal_revision=accepted.revision,
             durable_dispatch_intent_ref="ordinal-1-dispatch",
         )
         if phase == "observed_result":
-            sessions[0].record_observed_result(
+            initial_session.record_observed_result(
                 run_id=request.identity.run_id,
                 operation_id=request.identity.operation_id,
                 expected_head_journal_revision=dispatch.revision,
@@ -202,14 +204,17 @@ def _seed_ordinal_one(
                 result_hash="a" * 64,
             )
         elif phase == "observed_failure":
-            sessions[0].record_observed_failure(
+            initial_session.record_observed_failure(
                 run_id=request.identity.run_id,
                 operation_id=request.identity.operation_id,
                 expected_head_journal_revision=dispatch.revision,
                 failure_ref="failure-ref",
                 failure_hash="b" * 64,
             )
-    return request, sessions[-1]
+    current_session = initial_session
+    for _ in range(1, generation_count):
+        current_session = journal.start()
+    return request, current_session
 
 
 def _main(
@@ -401,6 +406,28 @@ def test_authenticated_ordinal_two_admission_atomically_persists_a_canonical_no_
         "accepted_no_dispatch",
         "accepted_no_dispatch",
     )
+
+
+def test_ordinal_two_rejects_current_generation_accepted_head_without_writes(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "journal.sqlite3"
+    _, current_session = _seed_ordinal_one(path, generation_count=1)
+    main = _main(session_id="continuity-current-generation")
+    before = _database_snapshot(path)
+
+    exchange = _submit(
+        _composition(
+            current_session,
+            _sidecar(session_id="continuity-current-generation"),
+        ),
+        main,
+        _safe_retry_request(),
+    )
+
+    _assert_rejected(exchange, main, SafeRetryContinuityRejectReason.HISTORY_INCOMPLETE)
+    assert _database_snapshot(path) == before
+    assert _row_counts(path) == (1, 1, 1)
 
 
 def test_all_continuity_reads_validation_and_mutations_share_one_immediate_transaction(
@@ -679,19 +706,21 @@ def test_ordinal_two_dispatch_authorized_ack_is_journal_corrupt_without_mutation
     assert _row_counts(path) == (2, 2, 2)
 
 
-def test_exact_replay_fails_closed_if_an_earlier_epoch_later_dispatched(
+def test_earlier_epoch_cannot_later_dispatch_after_retry_admission(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "journal.sqlite3"
     initial, retry_session = _seed_ordinal_one(path)
     created = _submit(_composition(retry_session, _sidecar()), _main(), _safe_retry_request())
     assert created.disposition == "created"
-    retry_session.record_dispatch_intent(
-        run_id=initial.identity.run_id,
-        operation_id=initial.identity.operation_id,
-        expected_head_journal_revision=1,
-        durable_dispatch_intent_ref="late-ordinal-one-dispatch",
-    )
+    with pytest.raises(CommandJournalConflict) as exc_info:
+        retry_session.record_dispatch_intent(
+            run_id=initial.identity.run_id,
+            operation_id=initial.identity.operation_id,
+            expected_head_journal_revision=1,
+            durable_dispatch_intent_ref="late-ordinal-one-dispatch",
+        )
+    assert exc_info.value.reason is CommandJournalConflictReason.SESSION_GENERATION_INVALID
 
     replay_session = open_command_journal(path).start()
     before = _database_snapshot(path)
@@ -710,7 +739,7 @@ def test_exact_replay_fails_closed_if_an_earlier_epoch_later_dispatched(
         message_id="submit-prior-dispatch-replay",
     )
 
-    _assert_rejected(exchange, main, SafeRetryContinuityRejectReason.PRIOR_STATE_NOT_RETRYABLE)
+    assert exchange.disposition == "exact_replay"
     assert _database_snapshot(path) == before
 
 
@@ -1213,7 +1242,8 @@ def test_two_writers_create_at_most_one_epoch_and_return_one_identical_durable_a
     path = tmp_path / "journal.sqlite3"
     _seed_ordinal_one(path)
     journal = open_command_journal(path)
-    sessions = (journal.start(), journal.start())
+    session = journal.start()
+    sessions = (session, session)
     barrier = threading.Barrier(2)
 
     def submit(index: int):

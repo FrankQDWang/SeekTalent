@@ -45,13 +45,26 @@ class _Client:
         self.closed = False
 
     def verify_bridge(self, *, timeout_seconds: float) -> dict[str, object]:
-        assert 0 < timeout_seconds <= 0.3
+        assert 0 < timeout_seconds <= 40
         if isinstance(self.status, str):
             raise OpenCliBrowserError(self.status)
         return self.status
 
     def close(self) -> None:
         self.closed = True
+
+
+class _SlowReceiptClient(_Client):
+    def __init__(self, status: dict[str, object]) -> None:
+        super().__init__(status)
+        self.timeouts: list[float] = []
+
+    def verify_bridge(self, *, timeout_seconds: float) -> dict[str, object]:
+        self.timeouts.append(timeout_seconds)
+        if timeout_seconds < 0.35:
+            raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED)
+        assert isinstance(self.status, dict)
+        return self.status
 
 
 def _status() -> dict[str, object]:
@@ -67,10 +80,7 @@ def _status() -> dict[str, object]:
 
 def test_readiness_deadline_matches_the_reconnect_envelope() -> None:
     assert supervisor.WTSCLI_CONNECTION_READINESS_TIMEOUT_SECONDS == 40
-    assert (
-        supervisor.WTSCLI_CONNECTION_READINESS_TIMEOUT_SECONDS
-        == OPENCLI_DAEMON_VERIFY_TIMEOUT_SECONDS
-    )
+    assert supervisor.WTSCLI_CONNECTION_READINESS_TIMEOUT_SECONDS == OPENCLI_DAEMON_VERIFY_TIMEOUT_SECONDS
 
 
 def test_supervisor_returns_only_privacy_safe_exact_connection_receipt(
@@ -99,6 +109,28 @@ def test_supervisor_returns_only_privacy_safe_exact_connection_receipt(
     assert not hasattr(receipt, "url")
     assert not hasattr(receipt, "token")
     assert not hasattr(receipt, "account")
+
+
+def test_supervisor_receipt_probe_can_use_more_than_300ms_within_remaining_budget(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    client = _SlowReceiptClient(_status())
+    monkeypatch.setattr(
+        supervisor,
+        "connect_installed_opencli_daemon",
+        lambda *_args, **_kwargs: client,
+    )
+    clock = iter((10.0, 10.1, 10.45))
+
+    receipt = supervisor.InstalledWtsCliConnectionSupervisor(
+        _runtime(tmp_path),
+        monotonic_clock=lambda: next(clock),
+    ).await_ready(timeout_seconds=1)
+
+    assert client.timeouts == [pytest.approx(0.9)]
+    assert receipt.elapsed_milliseconds == 450
+    assert client.closed is True
 
 
 @pytest.mark.parametrize(

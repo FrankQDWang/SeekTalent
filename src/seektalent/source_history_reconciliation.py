@@ -62,6 +62,7 @@ class SourceHistoryReconciliationReason(StrEnum):
     CONTEXT_MISMATCH = "source_history_reconciliation_context_mismatch"
     IDENTITY_CONFLICT = "source_history_reconciliation_identity_conflict"
     FACT_COUNT_INVALID = "source_history_reconciliation_fact_count_invalid"
+    HISTORY_NOT_STABLE = "source_history_reconciliation_history_not_stable"
     OPERATION_INTERPRETATION_REQUIRED = "source_history_reconciliation_operation_interpretation_required"
     TERMINAL_PAYLOAD_REQUIRED = "source_history_reconciliation_terminal_payload_required"
     TERMINAL_PAYLOAD_UNEXPECTED = "source_history_reconciliation_terminal_payload_unexpected"
@@ -110,9 +111,7 @@ def commit_admitted_source_history_reconciliation(
     query = admitted.query
     result = admitted.payload
     if not isinstance(query.authorization_selector, ExactAuthorizationSelector):
-        raise SourceHistoryReconciliationError(
-            SourceHistoryReconciliationReason.AUTHORIZATION_SELECTOR_INVALID
-        )
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.AUTHORIZATION_SELECTOR_INVALID)
 
     context = store.get_accepted_source_operation_context(query.run_id, query.operation_id)
     if not _context_is_valid(context) or not _query_and_result_match_context(query, result, context):
@@ -132,6 +131,10 @@ def commit_admitted_source_history_reconciliation(
         context,
         terminal_payload=terminal_payload,
     )
+    if interpretation.decision_kind == "unresolved" and (
+        interpretation.history_outcome == "not_found" or interpretation.history_conclusion == "accepted_no_dispatch"
+    ):
+        raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.HISTORY_NOT_STABLE)
     dispatch_ack = _dispatch_ack_from_fact(fact, context, committed_at=committed_at)
     decision = SourceOperationReconciliationDecision(
         reconciliation_id=f"source-history-{history_digest}",
@@ -349,6 +352,16 @@ def _closed_interpretation(
     if isinstance(result, SourceHistoryNotFound):
         if context.dispatch.status != "pending":
             raise SourceHistoryReconciliationError(SourceHistoryReconciliationReason.CONTEXT_MISMATCH)
+        if result.searched_last_generation >= result.newest_known_generation:
+            return _ClosedInterpretation(
+                decision_kind="unresolved",
+                history_outcome="not_found",
+                history_conclusion=None,
+                dispatch_intent_ref=None,
+                conclusive_observation_ref=None,
+                source_operation_disposition="reconciliation_unknown",
+                retry_posture="reconcile_first",
+            )
         return _ClosedInterpretation(
             decision_kind="no_dispatch_proved",
             history_outcome="not_found",
@@ -369,6 +382,16 @@ def _closed_interpretation(
             retry_posture="reconcile_first",
         )
     if isinstance(fact, AcceptedNoDispatchFact):
+        if not isinstance(result, SourceHistoryMatched) or fact.head_generation >= result.newest_known_generation:
+            return _ClosedInterpretation(
+                decision_kind="unresolved",
+                history_outcome="matched",
+                history_conclusion="accepted_no_dispatch",
+                dispatch_intent_ref=None,
+                conclusive_observation_ref=None,
+                source_operation_disposition="reconciliation_unknown",
+                retry_posture="reconcile_first",
+            )
         return _ClosedInterpretation(
             decision_kind="no_dispatch_proved",
             history_outcome="matched",
@@ -513,11 +536,7 @@ def _dispatch_ack_from_fact(
     if dispatch.status == "acknowledged":
         return dispatch
     ack_ref = _accepted_history_ack_ref(fact)
-    ack_kind = (
-        "new_logical_operation"
-        if dispatch.dispatch_authorization_ordinal == 1
-        else "new_dispatch_authorization"
-    )
+    ack_kind = "new_logical_operation" if dispatch.dispatch_authorization_ordinal == 1 else "new_dispatch_authorization"
     acknowledged = replace(
         dispatch,
         status="acknowledged",

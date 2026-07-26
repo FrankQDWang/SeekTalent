@@ -105,13 +105,15 @@ def deliver_verify_session_outbox(
     acknowledged_at: str,
     committed_at: str,
     timeout: float,
-    connection_supervisor: VerifySessionConnectionSupervisor | None = None,
+    connection_supervisor: VerifySessionConnectionSupervisor | None,
 ) -> VerifySessionMainLoopResult:
     """Deliver one main-owned epoch and close terminal facts through admitted history."""
     if type(store) is not RuntimeControlStore:
         raise TypeError("store must be a real RuntimeControlStore")
     if type(live_authority) is not VerifySessionLiveAuthority:
         raise TypeError("live_authority must be a VerifySessionLiveAuthority")
+    if delivery_mode == "initial" and connection_supervisor is None:
+        raise VerifySessionMainLoopError("verify_session_connection_supervisor_missing")
     context = store.get_accepted_source_operation_context(
         runtime_run_id,
         operation_id,
@@ -124,7 +126,8 @@ def deliver_verify_session_outbox(
         deadline_milliseconds=deadline_milliseconds,
     )
     connection_receipt: WtsCliConnectionReceipt | None = None
-    if delivery_mode == "initial" and connection_supervisor is not None:
+    if delivery_mode == "initial":
+        assert connection_supervisor is not None
         try:
             connection_receipt = connection_supervisor.await_ready(
                 timeout_seconds=min(
@@ -133,9 +136,7 @@ def deliver_verify_session_outbox(
                 ),
             )
         except WtsCliConnectionError as exc:
-            raise VerifySessionMainLoopError(
-                f"verify_session_{exc.safe_reason_code}"
-            ) from None
+            raise VerifySessionMainLoopError(f"verify_session_{exc.safe_reason_code}") from None
     committed_dispatch: SourceDispatchMetadata | None = None
 
     def record_authenticated_ack(received: ReceivedVerifySessionAcceptedAck) -> None:

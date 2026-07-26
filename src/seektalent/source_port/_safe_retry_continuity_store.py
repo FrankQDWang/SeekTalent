@@ -201,7 +201,7 @@ def _admit_in_transaction(
     ):
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.IDENTITY_CONFLICT)
 
-    latest = _latest_retryable_epoch(operation_rows)
+    latest = _latest_retryable_epoch(operation_rows, generation=generation)
     if authorization.dispatch_authorization_ordinal != int(latest["dispatch_authorization_ordinal"]) + 1:
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.ORDINAL_GAP)
     if identity.attempt_no <= int(latest["attempt_no"]):
@@ -260,7 +260,11 @@ def _admit_in_transaction(
     )
 
 
-def _latest_retryable_epoch(operation_rows: list[sqlite3.Row]) -> sqlite3.Row:
+def _latest_retryable_epoch(
+    operation_rows: list[sqlite3.Row],
+    *,
+    generation: int,
+) -> sqlite3.Row:
     if not operation_rows:
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.HISTORY_INCOMPLETE)
     operation_rows.sort(key=lambda row: int(row["dispatch_authorization_ordinal"]))
@@ -271,7 +275,10 @@ def _latest_retryable_epoch(operation_rows: list[sqlite3.Row]) -> sqlite3.Row:
         raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.PRIOR_STATE_NOT_RETRYABLE)
     for row in operation_rows:
         _validated_ack_for_row(row)
-    return operation_rows[-1]
+    latest = operation_rows[-1]
+    if int(latest["head_generation"]) >= generation:
+        raise SafeRetryContinuityRejected(SafeRetryContinuityRejectReason.HISTORY_INCOMPLETE)
+    return latest
 
 
 def _require_replayable_history(

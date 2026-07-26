@@ -26,6 +26,7 @@ from seektalent.source_port.authenticated_verify_session_frames import (
     VerifySessionResultV1,
 )
 from seektalent.source_port.command_journal import (
+    CommandJournalSession,
     CommandJournalError,
     CommandJournalErrorReason,
     CommandJournalTransitionDisposition,
@@ -202,14 +203,18 @@ def _composition(
     session_id: str,
     reopen: bool = False,
     monotonic_clock: Callable[[], float] | None = None,
+    command_journal_session: CommandJournalSession | None = None,
 ) -> tuple[
     PostHandshakeVerifySessionSession,
     journal_effect.VerifySessionJournalEffectComposition,
 ]:
-    journal = open_command_journal(path) if reopen else create_command_journal(path)
     main, sidecar = _sessions(session_id)
     values: dict[str, object] = {
-        "command_journal_session": journal.start(),
+        "command_journal_session": (
+            command_journal_session
+            if command_journal_session is not None
+            else (open_command_journal(path) if reopen else create_command_journal(path)).start()
+        ),
         "frame_session": sidecar,
         "effect": effect,
     }
@@ -981,8 +986,20 @@ def test_concurrent_same_submit_invokes_the_effect_at_most_once(tmp_path: Path) 
             return _result(request)
 
     effect = BlockingEffect()
-    first_main, first = _composition(path, effect, session_id="session-1")
-    second_main, second = _composition(path, effect, session_id="session-2", reopen=True)
+    journal = create_command_journal(path)
+    shared_session = journal.start()
+    first_main, first = _composition(
+        path,
+        effect,
+        session_id="session-1",
+        command_journal_session=shared_session,
+    )
+    second_main, second = _composition(
+        path,
+        effect,
+        session_id="session-2",
+        command_journal_session=shared_session,
+    )
     accepted = _submit(first_main, first, _request())
     assert accepted.pending_effect is not None
 

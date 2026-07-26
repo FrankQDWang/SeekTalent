@@ -353,7 +353,7 @@ def test_real_file_pragmas_and_complete_empty_range(tmp_path: Path) -> None:
 
 
 def test_all_four_query_conclusions_are_deterministic_after_restart(tmp_path: Path) -> None:
-    harness = _harness(tmp_path, 1, 2)
+    harness = _harness(tmp_path, 1)
 
     accepted_revision = harness.record_accepted(_accepted("accepted"), generation=1)
     dispatch_accepted = harness.record_accepted(_accepted("dispatch"), generation=1)
@@ -361,7 +361,7 @@ def test_all_four_query_conclusions_are_deterministic_after_restart(tmp_path: Pa
         run_id="run-1",
         operation_id="dispatch",
         expected_head_journal_revision=dispatch_accepted,
-        generation=2,
+        generation=1,
         durable_dispatch_intent_ref="dispatch-ref",
     )
     result_accepted = harness.record_accepted(_accepted("result"), generation=1)
@@ -369,14 +369,14 @@ def test_all_four_query_conclusions_are_deterministic_after_restart(tmp_path: Pa
         run_id="run-1",
         operation_id="result",
         expected_head_journal_revision=result_accepted,
-        generation=2,
+        generation=1,
         durable_dispatch_intent_ref="result-dispatch-ref",
     )
     result_revision = harness.record_observed_result(
         run_id="run-1",
         operation_id="result",
         expected_head_journal_revision=result_dispatch,
-        generation=2,
+        generation=1,
         result_ref="result-ref",
         result_hash=HASH_D,
     )
@@ -385,17 +385,18 @@ def test_all_four_query_conclusions_are_deterministic_after_restart(tmp_path: Pa
         run_id="run-1",
         operation_id="failure",
         expected_head_journal_revision=failure_accepted,
-        generation=2,
+        generation=1,
         durable_dispatch_intent_ref="failure-dispatch-ref",
     )
     failure_revision = harness.record_observed_failure(
         run_id="run-1",
         operation_id="failure",
         expected_head_journal_revision=failure_dispatch,
-        generation=2,
+        generation=1,
         failure_ref="failure-ref",
         failure_hash=HASH_D,
     )
+    harness.register_generation(2)
 
     restarted = SourceHistorySQLiteHarness(harness.path)
     expected = {
@@ -412,8 +413,10 @@ def test_all_four_query_conclusions_are_deterministic_after_restart(tmp_path: Pa
 
 
 def test_generation_hint_and_main_revisions_are_correlation_only(tmp_path: Path) -> None:
-    harness = _harness(tmp_path, 1, 2, 3)
+    harness = _harness(tmp_path, 1)
     harness.record_accepted(_accepted(), generation=1)
+    harness.register_generation(2)
+    harness.register_generation(3)
 
     first = harness.query(
         _query(
@@ -836,15 +839,10 @@ def test_malformed_typed_head_state_fails_closed_as_corrupt(tmp_path: Path) -> N
 
 
 def test_dangling_generation_foreign_keys_fail_closed_as_corrupt(tmp_path: Path) -> None:
-    harness = _harness(tmp_path, 1, 2)
-    accepted_revision = harness.record_accepted(_accepted(), generation=1)
-    harness.record_dispatch_intent(
-        run_id="run-1",
-        operation_id="operation-1",
-        expected_head_journal_revision=accepted_revision,
-        generation=2,
-        durable_dispatch_intent_ref="dispatch-ref",
-    )
+    harness = _harness(tmp_path, 1)
+    harness.record_accepted(_accepted(), generation=1)
+    harness.register_generation(2)
+    harness.record_accepted(_accepted("operation-2"), generation=2)
     connection = sqlite3.connect(harness.path)
     try:
         connection.execute("DELETE FROM source_history_generations WHERE generation = 2")
@@ -871,16 +869,18 @@ def test_partial_transition_event_payload_fails_closed_as_corrupt(
     tmp_path: Path,
     phase: str,
 ) -> None:
-    harness = _harness(tmp_path, 1, 2, 3)
+    harness = _harness(tmp_path, 1)
     accepted_revision = harness.record_accepted(_accepted(), generation=1)
     if phase == "observed_result":
         harness.record_dispatch_intent(
             run_id="run-1",
             operation_id="operation-1",
             expected_head_journal_revision=accepted_revision,
-            generation=2,
+            generation=1,
             durable_dispatch_intent_ref="dispatch-ref",
         )
+    harness.register_generation(2)
+    harness.register_generation(3)
 
     connection = sqlite3.connect(harness.path)
     connection.row_factory = sqlite3.Row
@@ -1018,7 +1018,7 @@ def test_invalid_persisted_fact_fails_closed_before_identity_result(
 
 
 def test_phase_replays_require_the_current_phase_and_reject_rollbacks(tmp_path: Path) -> None:
-    harness = _harness(tmp_path, 1, 2)
+    harness = _harness(tmp_path, 1)
     accepted = _accepted()
     accepted_revision = harness.record_accepted(accepted, generation=1)
     dispatch_revision = harness.record_dispatch_intent(
@@ -1036,11 +1036,8 @@ def test_phase_replays_require_the_current_phase_and_reject_rollbacks(tmp_path: 
         result_ref="result-ref",
         result_hash=HASH_D,
     )
-
     with pytest.raises(JournalWriteConflict, match="phase_rollback"):
         harness.record_accepted(accepted, generation=1)
-    with pytest.raises(JournalWriteConflict, match="phase_rollback"):
-        harness.record_accepted(accepted, generation=2)
     with pytest.raises(JournalWriteConflict, match="phase_rollback"):
         harness.record_dispatch_intent(
             run_id="run-1",
@@ -1077,15 +1074,6 @@ def test_phase_replays_require_the_current_phase_and_reject_rollbacks(tmp_path: 
             result_ref="result-ref",
             result_hash=HASH_D,
         )
-    with pytest.raises(JournalWriteConflict, match="observation_replay_conflict"):
-        harness.record_observed_result(
-            run_id="run-1",
-            operation_id="operation-1",
-            expected_head_journal_revision=dispatch_revision,
-            generation=2,
-            result_ref="result-ref",
-            result_hash=HASH_D,
-        )
     with pytest.raises(JournalWriteConflict, match="phase_rollback"):
         harness.record_observed_failure(
             run_id="run-1",
@@ -1095,6 +1083,20 @@ def test_phase_replays_require_the_current_phase_and_reject_rollbacks(tmp_path: 
             failure_ref="failure-ref",
             failure_hash=HASH_D,
         )
+    harness.register_generation(2)
+    with pytest.raises(JournalWriteConflict, match="phase_rollback"):
+        harness.record_accepted(accepted, generation=2)
+    assert (
+        harness.record_observed_result(
+            run_id="run-1",
+            operation_id="operation-1",
+            expected_head_journal_revision=dispatch_revision,
+            generation=2,
+            result_ref="result-ref",
+            result_hash=HASH_D,
+        )
+        == observation_revision
+    )
 
 
 def test_sparse_maximum_generation_range_fails_without_materializing_the_span(tmp_path: Path) -> None:

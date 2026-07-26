@@ -549,9 +549,11 @@ def test_read_only_history_query_does_not_migrate_v4(tmp_path: Path) -> None:
 def _synthetic_history(tmp_path: Path, *, generations: int = 3) -> tuple[Path, CommandJournalSession]:
     path = tmp_path / "history.sqlite3"
     journal = create_command_journal(path)
-    sessions = tuple(journal.start() for _ in range(generations))
-    sessions[0].record_accepted(_accepted(), accepted_ack_bytes=b"ordinal-1-ack")
-    return path, sessions[-1]
+    current = journal.start()
+    current.record_accepted(_accepted(), accepted_ack_bytes=b"ordinal-1-ack")
+    for _ in range(1, generations):
+        current = journal.start()
+    return path, current
 
 
 def _insert_synthetic_accepted_epoch(

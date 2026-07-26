@@ -70,7 +70,7 @@ class InstalledWtsCliConnectionSupervisor:
                 raise WtsCliConnectionError("wtscli_readiness_deadline_exceeded")
             try:
                 status = client.verify_bridge(
-                    timeout_seconds=min(0.3, remaining),
+                    timeout_seconds=remaining,
                 )
             except OpenCliBrowserError as exc:
                 raise WtsCliConnectionError(exc.safe_reason_code) from None
@@ -86,10 +86,7 @@ class InstalledWtsCliConnectionSupervisor:
             or type(extension_build) is not str
             or type(ownership_hash) is not str
             or _SHA256.fullmatch(ownership_hash) is None
-            or (
-                last_connected is not None
-                and (type(last_connected) is not int or last_connected < 0)
-            )
+            or (last_connected is not None and (type(last_connected) is not int or last_connected < 0))
         ):
             raise WtsCliConnectionError("wtscli_connection_receipt_invalid")
         endpoint = requirement.runtime_identity.endpoint
@@ -99,9 +96,7 @@ class InstalledWtsCliConnectionSupervisor:
             endpoint=f"{endpoint.host}:{endpoint.port}",
             ownership_ref=f"sha256:{ownership_hash}",
             last_connected_at=last_connected,
-            elapsed_milliseconds=round(
-                max(0.0, self._monotonic_clock() - started) * 1000
-            ),
+            elapsed_milliseconds=round(max(0.0, self._monotonic_clock() - started) * 1000),
         )
 
 
