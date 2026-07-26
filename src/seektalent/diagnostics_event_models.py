@@ -129,6 +129,7 @@ class CanonicalEventV1(ArtifactModel):
             or self.phase not in definition.phases
             or self.status not in definition.statuses
             or (self.reason_code is not None and self.reason_code not in definition.reason_codes)
+            or not definition.required_attribute_fields <= set(self.attributes)
             or not set(self.attributes) <= definition.attribute_fields
         ):
             raise ValueError("diagnostics_event_registry_mismatch")
@@ -151,6 +152,13 @@ class CanonicalEventV1(ArtifactModel):
             and self.status not in REASON_DEFINITIONS[self.reason_code].event_statuses
         ):
             raise ValueError("diagnostics_event_reason_status_mismatch")
+        if self.reason_code is not None:
+            reason_definition = REASON_DEFINITIONS[self.reason_code]
+            if "failure" in reason_definition.artifacts and (
+                self.component not in reason_definition.failure_components
+                or self.phase not in reason_definition.failure_phases
+            ):
+                raise ValueError("diagnostics_event_reason_context_mismatch")
         operation_identity = (
             self.correlation_id,
             self.run_id,
@@ -228,8 +236,8 @@ class FailureEnvelopeV1(ArtifactModel):
     def validate_detail(cls, value: dict[str, object]) -> dict[str, object]:
         allowed = {
             field
-            for contracts in FAILURE_DETAIL_CONTRACTS.values()
-            for field in contracts
+            for detail_definition in FAILURE_DETAIL_CONTRACTS.values()
+            for field in detail_definition.contracts
         }
         if not set(value) <= allowed:
             raise ValueError("diagnostics_failure_detail_mismatch")
@@ -242,12 +250,20 @@ class FailureEnvelopeV1(ArtifactModel):
             raise ValueError("diagnostics_reason_not_failure")
         if (self.domain, self.failure_kind) != (definition.domain, definition.failure_kind):
             raise ValueError("diagnostics_failure_mapping_mismatch")
-        contracts = FAILURE_DETAIL_CONTRACTS[self.reason_code]
-        if not set(self.detail) <= set(contracts):
+        if (
+            self.component not in definition.failure_components
+            or self.phase not in definition.failure_phases
+        ):
+            raise ValueError("diagnostics_failure_context_mismatch")
+        detail_definition = FAILURE_DETAIL_CONTRACTS[self.reason_code]
+        if (
+            not detail_definition.required_fields <= set(self.detail)
+            or not set(self.detail) <= set(detail_definition.contracts)
+        ):
             raise ValueError("diagnostics_failure_detail_mismatch")
         for key, item in self.detail.items():
             try:
-                validate_scalar(item, contracts[key])
+                validate_scalar(item, detail_definition.contracts[key])
             except ValueError:
                 raise ValueError("diagnostics_failure_detail_mismatch") from None
         if self.cause_ref.kind == "external_code":

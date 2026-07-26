@@ -120,9 +120,9 @@ EXTERNAL_CAUSE_REASONS = {
     "http_401": frozenset({"provider_auth_required"}),
     "http_403": frozenset({"provider_risk_control"}),
     "http_429": frozenset({"provider_risk_control"}),
-    "http_5xx": frozenset({"source_operation_failed"}),
-    "chrome_not_reachable": frozenset({"component_startup_failed"}),
-    "chrome_protocol_rejected": frozenset({"component_protocol_rejected"}),
+    "http_5xx": frozenset({"provider_http_unavailable"}),
+    "chrome_not_reachable": frozenset({"browser_unreachable"}),
+    "chrome_protocol_rejected": frozenset({"browser_protocol_rejected"}),
     "producer_contract_rejected": frozenset({"component_protocol_rejected"}),
     "producer_process_exited": frozenset({"component_process_exited"}),
 }
@@ -155,6 +155,8 @@ class ReasonDefinition:
     failure_kind: str
     artifacts: frozenset[str]
     event_statuses: frozenset[str] = frozenset()
+    failure_components: frozenset[str] = frozenset()
+    failure_phases: frozenset[str] = frozenset()
 
 
 def _reason(reason_code: str, domain: str, failure_kind: str) -> ReasonDefinition:
@@ -202,6 +204,9 @@ REASON_DEFINITIONS = {
         _reason("browser_scope_mismatch", "browser", "protocol_violation"),
         _reason("provider_auth_required", "provider", "operation_failure"),
         _reason("provider_risk_control", "provider", "operation_failure"),
+        _reason("provider_http_unavailable", "provider", "operation_failure"),
+        _reason("browser_unreachable", "browser", "startup_failure"),
+        _reason("browser_protocol_rejected", "browser", "protocol_violation"),
         _reason("network_offline", "network", "operation_failure"),
         _reason("policy_refused", "policy", "operation_failure"),
         _reason("user_action_required", "user_action", "operation_failure"),
@@ -248,6 +253,9 @@ _REASON_EVENT_STATUSES = {
     "browser_scope_mismatch": {"rejected"},
     "provider_auth_required": {"failed"},
     "provider_risk_control": {"failed"},
+    "provider_http_unavailable": {"failed"},
+    "browser_unreachable": {"failed"},
+    "browser_protocol_rejected": {"rejected"},
     "network_offline": {"failed"},
     "policy_refused": {"rejected"},
     "user_action_required": {"failed"},
@@ -292,12 +300,144 @@ _FAILURE_REASONS = frozenset(
         "browser_scope_mismatch",
         "provider_auth_required",
         "provider_risk_control",
+        "provider_http_unavailable",
+        "browser_unreachable",
+        "browser_protocol_rejected",
         "network_offline",
         "policy_refused",
         "user_action_required",
         "unknown_failure",
     }
 )
+_RUNTIME_COMPONENTS = frozenset(
+    {"main", "controller", "sidecar", "worker", "wtscli", "extension"}
+)
+_FAILURE_CONTEXTS = {
+    "machine_capability_unsupported": (
+        frozenset({"main", "installer"}),
+        frozenset({"capability"}),
+    ),
+    "machine_capability_indeterminate": (
+        frozenset({"main", "installer"}),
+        frozenset({"capability"}),
+    ),
+    "component_startup_failed": (_RUNTIME_COMPONENTS, frozenset({"startup"})),
+    "browser_unreachable": (
+        frozenset({"wtscli", "extension", "chrome"}),
+        frozenset({"startup"}),
+    ),
+    "component_process_exited": (_RUNTIME_COMPONENTS, frozenset({"shutdown"})),
+    "component_protocol_rejected": (_RUNTIME_COMPONENTS, frozenset({"execute"})),
+    "browser_protocol_rejected": (
+        frozenset({"wtscli", "extension", "chrome"}),
+        frozenset({"execute"}),
+    ),
+    "operation_cleanup_failed": (
+        frozenset(
+            {
+                "main",
+                "controller",
+                "sidecar",
+                "worker",
+                "wtscli",
+                "extension",
+                "chrome",
+                "provider",
+                "sqlite",
+            }
+        ),
+        frozenset({"cleanup"}),
+    ),
+    "source_operation_failed": (
+        frozenset({"main", "controller", "sidecar", "worker", "wtscli", "provider"}),
+        frozenset({"execute", "observe", "commit"}),
+    ),
+    "authority_write_rejected": (
+        frozenset({"main", "controller", "sidecar"}),
+        frozenset({"commit"}),
+    ),
+    "storage_transaction_failed": (
+        frozenset({"main", "sidecar", "sqlite"}),
+        frozenset({"commit"}),
+    ),
+    "support_bundle_export_failed": (
+        frozenset({"main", "exporter"}),
+        frozenset({"export"}),
+    ),
+    "diagnostic_projection_oversize": (
+        frozenset(COMPONENTS),
+        frozenset({"observe", "export"}),
+    ),
+    "diagnostic_event_id_conflict": (
+        frozenset({"main"}),
+        frozenset({"commit"}),
+    ),
+    "diagnostic_gap_detected": (
+        frozenset({"main"}),
+        frozenset({"observe"}),
+    ),
+    "external_trace_rejected": (
+        frozenset({"main", "controller", "sidecar"}),
+        frozenset({"accept"}),
+    ),
+    **{
+        reason_code: (
+            frozenset({"main", "sidecar", "sqlite"}),
+            frozenset({"commit"}),
+        )
+        for reason_code in {
+            "sqlite_full",
+            "sqlite_corrupt",
+            "sqlite_readonly",
+            "sqlite_cantopen",
+            "sqlite_busy",
+        }
+    },
+    "sqlite_corrupt": (
+        frozenset({"main", "sidecar", "sqlite"}),
+        frozenset({"commit", "observe"}),
+    ),
+    "browser_control_fence_rejected": (
+        frozenset({"main", "controller", "sidecar", "wtscli", "extension", "chrome"}),
+        frozenset({"execute", "commit"}),
+    ),
+    "profile_binding_generation_rejected": (
+        frozenset({"main", "controller", "sidecar", "wtscli", "extension", "chrome"}),
+        frozenset({"execute", "commit"}),
+    ),
+    "browser_scope_mismatch": (
+        frozenset({"wtscli", "extension", "chrome"}),
+        frozenset({"execute"}),
+    ),
+    "provider_auth_required": (
+        frozenset({"sidecar", "wtscli", "provider"}),
+        frozenset({"execute", "observe"}),
+    ),
+    "provider_risk_control": (
+        frozenset({"sidecar", "wtscli", "provider"}),
+        frozenset({"execute", "observe"}),
+    ),
+    "provider_http_unavailable": (
+        frozenset({"sidecar", "wtscli", "provider"}),
+        frozenset({"execute", "observe"}),
+    ),
+    "network_offline": (
+        frozenset({"main", "sidecar", "provider"}),
+        frozenset({"capability", "execute"}),
+    ),
+    "policy_refused": (
+        frozenset({"main", "controller"}),
+        frozenset({"accept"}),
+    ),
+    "user_action_required": (
+        frozenset({"main", "provider"}),
+        frozenset({"observe"}),
+    ),
+    "unknown_failure": (frozenset(COMPONENTS), frozenset(PHASES)),
+}
+if set(_FAILURE_CONTEXTS) != _FAILURE_REASONS:
+    raise RuntimeError("diagnostics_failure_context_registry_incomplete")
+
 REASON_DEFINITIONS = {
     code: ReasonDefinition(
         definition.reason_code,
@@ -305,6 +445,7 @@ REASON_DEFINITIONS = {
         definition.failure_kind,
         definition.artifacts | (frozenset({"failure"}) if code in _FAILURE_REASONS else frozenset()),
         definition.event_statuses,
+        *(_FAILURE_CONTEXTS[code] if code in _FAILURE_REASONS else (frozenset(), frozenset())),
     )
     for code, definition in REASON_DEFINITIONS.items()
 }
@@ -319,6 +460,7 @@ class EventDefinition:
     reason_codes: frozenset[str]
     requires_operation: bool
     attribute_contracts: dict[str, ScalarContract]
+    required_attribute_fields: frozenset[str]
     authority_ref_fields: frozenset[str]
 
     @property
@@ -340,6 +482,7 @@ _ATTRIBUTE_CONTRACTS = {
         "database_integrity",
         "disk_access",
         "network_posture",
+        "release_integrity",
     ),
     "result": enum_values(
         "supported", "unsupported", "indeterminate", "ok", "failed", "unknown"
@@ -354,6 +497,9 @@ _ATTRIBUTE_CONTRACTS = {
         "disk_not_writable",
         "disk_not_executable",
         "network_offline",
+        "manifest_signature_failed",
+        "artifact_signature_failed",
+        "signature_verification_missing",
     ),
     "startup_kind": enum_values("fresh", "restart", "upgrade_rebind", "wake"),
     "readiness": enum_values("ready", "not_ready"),
@@ -372,23 +518,35 @@ _ATTRIBUTE_CONTRACTS = {
     "artifact_count": NON_NEGATIVE_INTEGER,
 }
 
+@dataclass(frozen=True)
+class FailureDetailDefinition:
+    contracts: dict[str, ScalarContract]
+    required_fields: frozenset[str]
+
+
 FAILURE_DETAIL_CONTRACTS = {
-    reason_code: {}
+    reason_code: FailureDetailDefinition({}, frozenset())
     for reason_code, definition in REASON_DEFINITIONS.items()
     if "failure" in definition.artifacts
 }
 FAILURE_DETAIL_CONTRACTS.update(
     {
-        "source_operation_failed": {
-            name: _ATTRIBUTE_CONTRACTS[name]
-            for name in {"operation_kind", "source_id", "safe_count", "coverage"}
-        },
+        "source_operation_failed": FailureDetailDefinition(
+            {
+                name: _ATTRIBUTE_CONTRACTS[name]
+                for name in {"operation_kind", "source_id", "safe_count", "coverage"}
+            },
+            frozenset({"operation_kind", "source_id"}),
+        ),
         **{
-            reason_code: {
-                "database": _ATTRIBUTE_CONTRACTS["database"],
-                "code": _ATTRIBUTE_CONTRACTS["code"],
-                "transaction_boundary": _ATTRIBUTE_CONTRACTS["transaction_boundary"],
-            }
+            reason_code: FailureDetailDefinition(
+                {
+                    "database": _ATTRIBUTE_CONTRACTS["database"],
+                    "code": _ATTRIBUTE_CONTRACTS["code"],
+                    "transaction_boundary": _ATTRIBUTE_CONTRACTS["transaction_boundary"],
+                },
+                frozenset({"database", "code", "transaction_boundary"}),
+            )
             for reason_code in {
                 "sqlite_full",
                 "sqlite_corrupt",
@@ -413,6 +571,7 @@ def _event(
     reasons: set[str],
     requires_operation: bool,
     attributes: set[str],
+    required_attributes: set[str],
 ) -> EventDefinition:
     return EventDefinition(
         event_name=event_name,
@@ -422,6 +581,7 @@ def _event(
         reason_codes=frozenset(reasons),
         requires_operation=requires_operation,
         attribute_contracts={name: _ATTRIBUTE_CONTRACTS[name] for name in attributes},
+        required_attribute_fields=frozenset(required_attributes),
         authority_ref_fields=AUTHORITY_REF_FIELDS if requires_operation else frozenset(),
     )
 
@@ -443,6 +603,7 @@ EVENT_DEFINITIONS = {
             },
             requires_operation=False,
             attributes={"capability", "result", "gap_code"},
+            required_attributes={"capability", "result"},
         ),
         _event(
             "component.startup.started",
@@ -452,6 +613,7 @@ EVENT_DEFINITIONS = {
             reasons={"component_starting"},
             requires_operation=False,
             attributes={"startup_kind"},
+            required_attributes={"startup_kind"},
         ),
         _event(
             "component.startup.completed",
@@ -461,15 +623,17 @@ EVENT_DEFINITIONS = {
             reasons={"component_ready"},
             requires_operation=False,
             attributes={"startup_kind", "readiness"},
+            required_attributes={"startup_kind", "readiness"},
         ),
         _event(
             "component.startup.failed",
             components=_ALL_COMPONENTS,
             phase="startup",
             statuses={"failed"},
-            reasons={"component_startup_failed"},
+            reasons={"component_startup_failed", "browser_unreachable"},
             requires_operation=False,
             attributes={"startup_kind", "readiness"},
+            required_attributes={"startup_kind", "readiness"},
         ),
         _event(
             "component.readiness.observed",
@@ -479,6 +643,7 @@ EVENT_DEFINITIONS = {
             reasons={"component_readiness_observed"},
             requires_operation=False,
             attributes={"readiness", "capability"},
+            required_attributes={"readiness", "capability"},
         ),
         _event(
             "operation.accepted",
@@ -488,6 +653,7 @@ EVENT_DEFINITIONS = {
             reasons={"operation_accepted"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
+            required_attributes={"operation_kind", "source_id"},
         ),
         _event(
             "operation.dispatch.started",
@@ -497,6 +663,7 @@ EVENT_DEFINITIONS = {
             reasons={"operation_dispatch_started"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
+            required_attributes={"operation_kind", "source_id"},
         ),
         _event(
             "operation.dispatch.completed",
@@ -506,6 +673,7 @@ EVENT_DEFINITIONS = {
             reasons={"operation_dispatch_completed"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
+            required_attributes={"operation_kind", "source_id"},
         ),
         _event(
             "operation.side_effect.observed",
@@ -515,6 +683,7 @@ EVENT_DEFINITIONS = {
             reasons={"operation_side_effect_observed"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
+            required_attributes={"operation_kind", "source_id"},
         ),
         _event(
             "operation.result.persisted",
@@ -524,6 +693,7 @@ EVENT_DEFINITIONS = {
             reasons={"operation_result_persisted", "storage_transaction_failed"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
+            required_attributes={"operation_kind", "source_id"},
         ),
         _event(
             "operation.main_commit.completed",
@@ -533,6 +703,7 @@ EVENT_DEFINITIONS = {
             reasons={"operation_main_commit_completed"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
+            required_attributes={"operation_kind", "source_id"},
         ),
         _event(
             "operation.cleanup.completed",
@@ -542,6 +713,7 @@ EVENT_DEFINITIONS = {
             reasons={"operation_cleanup_completed"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
+            required_attributes={"operation_kind", "source_id"},
         ),
         _event(
             "operation.cleanup.failed",
@@ -551,6 +723,7 @@ EVENT_DEFINITIONS = {
             reasons={"operation_cleanup_failed"},
             requires_operation=True,
             attributes=_OPERATION_ATTRIBUTES,
+            required_attributes={"operation_kind", "source_id"},
         ),
         _event(
             "component.process.exited",
@@ -560,15 +733,17 @@ EVENT_DEFINITIONS = {
             reasons={"component_process_exited"},
             requires_operation=False,
             attributes={"exit_class", "exit_code"},
+            required_attributes={"exit_class"},
         ),
         _event(
             "component.protocol.rejected",
             components=_ALL_COMPONENTS,
             phase="execute",
             statuses={"rejected"},
-            reasons={"component_protocol_rejected"},
+            reasons={"component_protocol_rejected", "browser_protocol_rejected"},
             requires_operation=False,
             attributes={"protocol_ref", "code"},
+            required_attributes={"protocol_ref", "code"},
         ),
         _event(
             "authority.write.rejected",
@@ -582,6 +757,7 @@ EVENT_DEFINITIONS = {
             },
             requires_operation=True,
             attributes={"authority_kind"},
+            required_attributes={"authority_kind"},
         ),
         _event(
             "storage.transaction.failed",
@@ -598,6 +774,7 @@ EVENT_DEFINITIONS = {
             },
             requires_operation=False,
             attributes={"database", "code", "transaction_boundary"},
+            required_attributes={"database", "code", "transaction_boundary"},
         ),
         _event(
             "storage.integrity.observed",
@@ -607,6 +784,7 @@ EVENT_DEFINITIONS = {
             reasons={"storage_integrity_observed", "sqlite_corrupt"},
             requires_operation=False,
             attributes={"database", "result"},
+            required_attributes={"database", "result"},
         ),
         _event(
             "support_bundle.export.started",
@@ -616,6 +794,7 @@ EVENT_DEFINITIONS = {
             reasons={"support_bundle_export_started"},
             requires_operation=False,
             attributes={"projection_version"},
+            required_attributes={"projection_version"},
         ),
         _event(
             "support_bundle.export.completed",
@@ -625,6 +804,7 @@ EVENT_DEFINITIONS = {
             reasons={"support_bundle_export_completed"},
             requires_operation=False,
             attributes={"projection_version", "artifact_count"},
+            required_attributes={"projection_version", "artifact_count"},
         ),
         _event(
             "support_bundle.export.failed",
@@ -634,6 +814,7 @@ EVENT_DEFINITIONS = {
             reasons={"support_bundle_export_failed"},
             requires_operation=False,
             attributes={"projection_version"},
+            required_attributes={"projection_version"},
         ),
     )
 }

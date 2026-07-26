@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from typing import Annotated, ClassVar, Literal, Never, Self, TypeGuard
+from typing import Annotated, Callable, ClassVar, Literal, Never, Self, TypeGuard
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic.main import IncEx
 
 from seektalent.diagnostics_identity import (
     NonNegativeSafeInteger,
@@ -159,6 +160,90 @@ class ArtifactModel(StrictDiagnosticsModel):
         return f"{type(self).__name__}(validated=True)"
 
     __str__ = __repr__
+
+    def _validated_for_serialization(self) -> Self:
+        try:
+            payload = BaseModel.model_dump(self, mode="json", warnings="none")
+            return BaseModel.model_validate.__func__(
+                type(self),
+                payload,
+                strict=True,
+                extra="forbid",
+            )
+        except (ValueError, TypeError):
+            raise DiagnosticsSchemaError(DiagnosticsReason.SCHEMA_VALIDATION) from None
+
+    def model_dump(
+        self,
+        *,
+        mode: Literal["json", "python"] | str = "python",
+        include: IncEx | None = None,
+        exclude: IncEx | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        exclude_none: bool = False,
+        exclude_computed_fields: bool = False,
+        round_trip: bool = False,
+        warnings: bool | Literal["none", "warn", "error"] = True,
+        fallback: Callable[[object], object] | None = None,
+        serialize_as_any: bool = False,
+    ) -> dict[str, object]:
+        validated = self._validated_for_serialization()
+        return BaseModel.model_dump(
+            validated,
+            mode=mode,
+            include=include,
+            exclude=exclude,
+            context=context,
+            by_alias=by_alias,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            exclude_none=exclude_none,
+            exclude_computed_fields=exclude_computed_fields,
+            round_trip=round_trip,
+            warnings=warnings,
+            fallback=fallback,
+            serialize_as_any=serialize_as_any,
+        )
+
+    def model_dump_json(
+        self,
+        *,
+        indent: int | None = None,
+        ensure_ascii: bool = False,
+        include: IncEx | None = None,
+        exclude: IncEx | None = None,
+        context: object | None = None,
+        by_alias: bool | None = None,
+        exclude_unset: bool = False,
+        exclude_defaults: bool = False,
+        exclude_none: bool = False,
+        exclude_computed_fields: bool = False,
+        round_trip: bool = False,
+        warnings: bool | Literal["none", "warn", "error"] = True,
+        fallback: Callable[[object], object] | None = None,
+        serialize_as_any: bool = False,
+    ) -> str:
+        validated = self._validated_for_serialization()
+        return BaseModel.model_dump_json(
+            validated,
+            indent=indent,
+            ensure_ascii=ensure_ascii,
+            include=include,
+            exclude=exclude,
+            context=context,
+            by_alias=by_alias,
+            exclude_unset=exclude_unset,
+            exclude_defaults=exclude_defaults,
+            exclude_none=exclude_none,
+            exclude_computed_fields=exclude_computed_fields,
+            round_trip=round_trip,
+            warnings=warnings,
+            fallback=fallback,
+            serialize_as_any=serialize_as_any,
+        )
 
     @classmethod
     def model_validate_json(

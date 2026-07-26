@@ -122,6 +122,9 @@ class MachineCapabilityReceiptV1(ArtifactModel):
                 "disk_not_writable",
                 "disk_not_executable",
                 "network_offline",
+                "manifest_signature_failed",
+                "artifact_signature_failed",
+                "signature_verification_missing",
             ],
             ...,
         ],
@@ -137,14 +140,14 @@ class MachineCapabilityReceiptV1(ArtifactModel):
     @field_validator("bridge_capabilities")
     @classmethod
     def validate_bridge_capabilities(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        if len(value) != len(set(value)):
-            raise ValueError("diagnostics_duplicate_bridge_capability")
+        if len(value) != len(set(value)) or value != tuple(sorted(value)):
+            raise ValueError("diagnostics_noncanonical_bridge_capabilities")
         return value
 
     @field_validator("runtime_versions")
     @classmethod
     def validate_runtime_versions(cls, value: dict[str, str]) -> dict[str, str]:
-        if not set(value) <= {"python", "node", "sqlite", "chrome"}:
+        if set(value) != {"python", "node", "sqlite", "chrome"}:
             raise ValueError("diagnostics_unknown_runtime_version")
         if any(re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,3}", item) is None for item in value.values()):
             raise ValueError("diagnostics_invalid_version")
@@ -153,7 +156,7 @@ class MachineCapabilityReceiptV1(ArtifactModel):
     @field_validator("component_build_refs")
     @classmethod
     def validate_component_build_refs(cls, value: dict[str, str]) -> dict[str, str]:
-        if not set(value) <= COMPONENTS:
+        if not value or not set(value) <= COMPONENTS:
             raise ValueError("diagnostics_unknown_component_build_ref")
         return value
 
@@ -176,6 +179,8 @@ class MachineCapabilityReceiptV1(ArtifactModel):
             disk_writable=self.disk_writable,
             disk_executable=self.disk_executable,
             network_offline=self.network_posture.offline,
+            manifest_signature_status=self.manifest_signature_status,
+            artifact_signature_status=self.artifact_signature_status,
         )
         if self.capabilities != expected_states:
             raise ValueError("diagnostics_capability_fact_mismatch")
@@ -224,7 +229,7 @@ class StartupReceiptV1(ArtifactModel):
     component: str
     component_instance_id: RandomIdentity
     parent_instance_id: RandomIdentity | None
-    capability_receipt_ref: RandomIdentity
+    capability_receipt_ref: HashedVersionedIdentityRefV1
     release_manifest_ref: Sha256Ref
     component_build_ref: Sha256Ref
     protocol_refs: Annotated[tuple[Sha256Ref, ...], Field(max_length=32)]
@@ -350,10 +355,24 @@ class OperationEvidenceV1(ArtifactModel):
             "result_count": EVENT_DEFINITIONS["operation.accepted"].attribute_contracts["safe_count"],
             "coverage": EVENT_DEFINITIONS["operation.accepted"].attribute_contracts["coverage"],
         }
-        if not set(value) <= set(contracts):
+        if set(value) != set(contracts):
             raise ValueError("diagnostics_operation_summary_mismatch")
         for key, item in value.items():
             validate_scalar(item, contracts[key])
+        return value
+
+    @field_validator("capability_receipt_refs", "startup_receipt_refs")
+    @classmethod
+    def validate_receipt_refs(
+        cls,
+        value: tuple[HashedVersionedIdentityRefV1, ...],
+    ) -> tuple[HashedVersionedIdentityRefV1, ...]:
+        keys = tuple(
+            (item.identity, item.revision, item.canonical_hash)
+            for item in value
+        )
+        if len(keys) != len(set(keys)) or keys != tuple(sorted(keys)):
+            raise ValueError("diagnostics_noncanonical_receipt_refs")
         return value
 
     @model_validator(mode="after")

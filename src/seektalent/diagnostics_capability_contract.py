@@ -11,6 +11,7 @@ CAPABILITY_FIELDS = frozenset(
         "database_integrity",
         "disk_access",
         "network_posture",
+        "release_integrity",
     }
 )
 
@@ -35,6 +36,8 @@ def expected_capabilities(
     disk_writable: bool,
     disk_executable: bool,
     network_offline: bool,
+    manifest_signature_status: str,
+    artifact_signature_status: str,
 ) -> tuple[dict[str, str], tuple[str, ...]]:
     capabilities: dict[str, str] = {}
     gaps: list[str] = []
@@ -72,6 +75,19 @@ def expected_capabilities(
     capabilities["network_posture"] = "unsupported" if network_offline else "supported"
     if network_offline:
         gaps.append("network_offline")
+
+    signature_statuses = (manifest_signature_status, artifact_signature_status)
+    if "failed" in signature_statuses:
+        capabilities["release_integrity"] = "unsupported"
+        if manifest_signature_status == "failed":
+            gaps.append("manifest_signature_failed")
+        if artifact_signature_status == "failed":
+            gaps.append("artifact_signature_failed")
+    elif all(status == "verified" for status in signature_statuses):
+        capabilities["release_integrity"] = "supported"
+    else:
+        capabilities["release_integrity"] = "indeterminate"
+        gaps.append("signature_verification_missing")
 
     return capabilities, tuple(gaps)
 

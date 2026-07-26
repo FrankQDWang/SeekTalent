@@ -151,7 +151,7 @@ def _failure() -> dict[str, object]:
             "certainty": "observed",
             "derivation_rule_id": None,
         },
-        "detail": {"operation_kind": "verify_session"},
+        "detail": {"operation_kind": "verify_session", "source_id": "liepin"},
         "boundary_facts": {
             "acceptance": {"state": "observed", "ref": _id("8")},
             "dispatch": {"state": "observed", "ref": _id("9")},
@@ -202,7 +202,12 @@ def _capability() -> dict[str, object]:
         "os_family": "macos",
         "os_build": "24.5.0",
         "os_version_bucket": "15.0",
-        "runtime_versions": {"python": "3.12", "sqlite": "3.49", "chrome": "126.0"},
+        "runtime_versions": {
+            "python": "3.12",
+            "node": "24.0",
+            "sqlite": "3.49",
+            "chrome": "126.0",
+        },
         "chrome_channel": "stable",
         "active_slot_ref": _sha("7"),
         "previous_slot_ref": _sha("8"),
@@ -216,7 +221,7 @@ def _capability() -> dict[str, object]:
         "bridge_implementation": "wtscli",
         "bridge_build_ref": _sha("b"),
         "bridge_protocol_ref": _sha("c"),
-        "bridge_capabilities": ["authenticated_framing", "source_port_v1", "browser_control"],
+        "bridge_capabilities": ["authenticated_framing", "browser_control", "source_port_v1"],
         "profile_mode": "isolated",
         "profile_binding_hash": "d" * 64,
         "profile_binding_generation": 1,
@@ -241,6 +246,7 @@ def _capability() -> dict[str, object]:
             "database_integrity": "supported",
             "disk_access": "supported",
             "network_posture": "supported",
+            "release_integrity": "supported",
         },
         "network_posture": {
             "offline": False,
@@ -267,7 +273,11 @@ def _startup() -> dict[str, object]:
         "component": "sidecar",
         "component_instance_id": _id("c"),
         "parent_instance_id": _id("5"),
-        "capability_receipt_ref": _id("a"),
+        "capability_receipt_ref": {
+            "identity": _id("a"),
+            "revision": 1,
+            "canonical_hash": _capability()["canonical_hash"],
+        },
         "release_manifest_ref": _sha("c"),
         "component_build_ref": _sha("f"),
         "protocol_refs": [_sha("1")],
@@ -535,11 +545,17 @@ def test_registry_is_bounded_and_exhaustive() -> None:
         assert definition.components <= COMPONENTS
         assert definition.phases <= PHASES
         assert definition.reason_codes <= set(REASON_DEFINITIONS)
+        assert definition.required_attribute_fields <= definition.attribute_fields
     for definition in REASON_DEFINITIONS.values():
         assert definition.domain in DOMAINS
         assert definition.failure_kind in FAILURE_KINDS
         assert definition.artifacts <= {"event", "failure"}
         assert definition.event_statuses
+        if "failure" in definition.artifacts:
+            assert definition.failure_components <= COMPONENTS
+            assert definition.failure_phases <= PHASES
+            assert definition.failure_components
+            assert definition.failure_phases
 
 
 def test_unknown_registry_tokens_fail_closed() -> None:
@@ -657,6 +673,8 @@ def test_canonical_bytes_hash_and_repr_revalidate_corrupted_instances() -> None:
     for operation in (
         lambda: canonical_diagnostics_bytes(event),
         lambda: canonical_diagnostics_hash(event),
+        lambda: event.model_dump(mode="json"),
+        event.model_dump_json,
     ):
         with pytest.raises(ValueError) as exc_info:
             operation()
@@ -668,9 +686,14 @@ def test_canonical_bytes_hash_and_repr_revalidate_corrupted_instances() -> None:
         CanonicalEventV1,
         **{**_event(), "attributes": {"coverage": canary}},
     )
-    with pytest.raises(ValueError) as exc_info:
-        canonical_diagnostics_bytes(bypassed)
-    assert canary not in repr(exc_info.value.__dict__)
+    for operation in (
+        lambda: canonical_diagnostics_bytes(bypassed),
+        lambda: bypassed.model_dump(mode="json"),
+        bypassed.model_dump_json,
+    ):
+        with pytest.raises(ValueError) as exc_info:
+            operation()
+        assert canary not in repr(exc_info.value.__dict__)
 
 
 def test_embedded_content_hash_helper_revalidates_corrupted_instance() -> None:
@@ -920,7 +943,13 @@ def test_external_cause_code_is_bound_to_failure_reason() -> None:
         reason_code="sqlite_full",
         domain="storage",
         failure_kind="resource_exhausted",
-        detail={"database": "runtime_control", "code": "sqlite_full"},
+        component="sqlite",
+        phase="commit",
+        detail={
+            "database": "runtime_control",
+            "code": "sqlite_full",
+            "transaction_boundary": "write",
+        },
     )
     parse_failure_envelope(json.dumps(payload).encode())
 
@@ -950,6 +979,151 @@ def test_external_cause_mapping_rejects_every_unregistered_reason_pair() -> None
             )
             with pytest.raises(ValueError):
                 parse_failure_envelope(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "domain", "failure_kind", "component", "phase"),
+    (
+        (
+            "source_operation_failed",
+            "source",
+            "operation_failure",
+            "sqlite",
+            "startup",
+        ),
+        (
+            "provider_auth_required",
+            "provider",
+            "operation_failure",
+            "sqlite",
+            "cleanup",
+        ),
+    ),
+)
+def test_failure_reason_rejects_wrong_component_and_phase(
+    reason_code: str,
+    domain: str,
+    failure_kind: str,
+    component: str,
+    phase: str,
+) -> None:
+    payload = _failure()
+    payload.update(
+        reason_code=reason_code,
+        domain=domain,
+        failure_kind=failure_kind,
+        component=component,
+        phase=phase,
+        detail={},
+    )
+    with pytest.raises(ValueError):
+        parse_failure_envelope(json.dumps(payload).encode())
+
+
+def test_failure_reason_component_phase_registry_rejects_all_invalid_pairs() -> None:
+    storage_reasons = {
+        "storage_transaction_failed",
+        "sqlite_full",
+        "sqlite_corrupt",
+        "sqlite_readonly",
+        "sqlite_cantopen",
+        "sqlite_busy",
+    }
+    for reason_code, definition in REASON_DEFINITIONS.items():
+        if "failure" not in definition.artifacts:
+            continue
+        detail: dict[str, object] = {}
+        if reason_code == "source_operation_failed":
+            detail = {"operation_kind": "verify_session", "source_id": "liepin"}
+        elif reason_code in storage_reasons:
+            detail = {
+                "database": "runtime_control",
+                "code": reason_code if reason_code != "storage_transaction_failed" else "sqlite_busy",
+                "transaction_boundary": "write",
+            }
+        valid_payload = _failure()
+        valid_payload.update(
+            reason_code=reason_code,
+            domain=definition.domain,
+            failure_kind=definition.failure_kind,
+            component=next(iter(definition.failure_components)),
+            phase=next(iter(definition.failure_phases)),
+            detail=detail,
+        )
+        parse_failure_envelope(json.dumps(valid_payload).encode())
+        for component in COMPONENTS:
+            for phase in PHASES:
+                if (
+                    component in definition.failure_components
+                    and phase in definition.failure_phases
+                ):
+                    continue
+                payload = _failure()
+                payload.update(
+                    reason_code=reason_code,
+                    domain=definition.domain,
+                    failure_kind=definition.failure_kind,
+                    component=component,
+                    phase=phase,
+                    detail=detail,
+                )
+                with pytest.raises(ValueError):
+                    parse_failure_envelope(json.dumps(payload).encode())
+
+
+def test_external_browser_and_provider_codes_have_domain_correct_reasons() -> None:
+    expected = {
+        "http_5xx": "provider_http_unavailable",
+        "chrome_not_reachable": "browser_unreachable",
+        "chrome_protocol_rejected": "browser_protocol_rejected",
+    }
+    for cause_code, reason_code in expected.items():
+        assert EXTERNAL_CAUSE_REASONS[cause_code] == frozenset({reason_code})
+        definition = REASON_DEFINITIONS[reason_code]
+        assert definition.domain in {"browser", "provider"}
+        payload = _failure()
+        payload.update(
+            reason_code=reason_code,
+            domain=definition.domain,
+            failure_kind=definition.failure_kind,
+            component=next(iter(definition.failure_components)),
+            phase=next(iter(definition.failure_phases)),
+            cause_ref={
+                "kind": "external_code",
+                "ref_id": None,
+                "code": cause_code,
+                "certainty": "observed",
+                "derivation_rule_id": None,
+            },
+            detail={},
+        )
+        parse_failure_envelope(json.dumps(payload).encode())
+
+
+def test_failure_event_reason_uses_the_same_component_phase_contract() -> None:
+    payload = _event()
+    payload.update(
+        event_name="component.startup.failed",
+        component="chrome",
+        phase="startup",
+        status="failed",
+        reason_code="component_startup_failed",
+        correlation_id=None,
+        run_id=None,
+        operation_id=None,
+        attempt_no=None,
+        authority_refs={
+            "runtime_attempt_fence_ref": None,
+            "profile_binding_generation": None,
+            "browser_control_fence_ref": None,
+        },
+        attributes={"startup_kind": "fresh", "readiness": "not_ready"},
+    )
+    with pytest.raises(ValueError):
+        parse_canonical_event(json.dumps(payload).encode())
+
+    payload["reason_code"] = "browser_unreachable"
+    parse_canonical_event(json.dumps(payload).encode())
 
 
 @pytest.mark.parametrize(
@@ -1130,6 +1304,121 @@ def test_operation_evidence_receipt_refs_require_revision_and_canonical_hash(
 def test_operation_evidence_failure_ref_requires_immutable_revision() -> None:
     payload = _operation_evidence()
     payload["failure_envelope_ref"] = _id("7")
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_operation_evidence(json.dumps(payload).encode())
+
+
+def test_required_event_failure_and_summary_facts_cannot_be_empty() -> None:
+    payload = _event()
+    payload["attributes"] = {}
+    with pytest.raises(ValueError):
+        parse_canonical_event(json.dumps(payload).encode())
+
+    payload = _failure()
+    payload["detail"] = {"operation_kind": "verify_session"}
+    with pytest.raises(ValueError):
+        parse_failure_envelope(json.dumps(payload).encode())
+
+    payload = _event()
+    payload.update(
+        event_name="storage.transaction.failed",
+        component="sqlite",
+        phase="commit",
+        status="failed",
+        reason_code="sqlite_full",
+        correlation_id=None,
+        run_id=None,
+        operation_id=None,
+        attempt_no=None,
+        authority_refs={
+            "runtime_attempt_fence_ref": None,
+            "profile_binding_generation": None,
+            "browser_control_fence_ref": None,
+        },
+        attributes={"database": "runtime_control", "code": "sqlite_full"},
+    )
+    with pytest.raises(ValueError):
+        parse_canonical_event(json.dumps(payload).encode())
+
+    payload = _operation_evidence()
+    payload["summary"] = {}
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_operation_evidence(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("runtime_versions", {}),
+        ("component_build_refs", {}),
+        ("manifest_signature_status", "failed"),
+        ("artifact_signature_status", "failed"),
+    ),
+)
+def test_supported_machine_receipt_requires_exact_build_and_verified_artifact_facts(
+    field: str,
+    value: object,
+) -> None:
+    payload = _capability()
+    payload[field] = value
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_machine_capability_receipt(json.dumps(payload).encode())
+
+
+def test_failed_signature_has_closed_unsupported_capability_and_gap() -> None:
+    payload = _capability()
+    payload["manifest_signature_status"] = "failed"
+    payload["capabilities"]["release_integrity"] = "unsupported"
+    payload["result"] = "unsupported"
+    payload["gap_codes"] = ["manifest_signature_failed"]
+    payload["canonical_hash"] = _embedded_hash(payload)
+    parse_machine_capability_receipt(json.dumps(payload).encode())
+
+
+def test_startup_capability_receipt_ref_binds_revision_and_hash() -> None:
+    payload = _startup()
+    payload["capability_receipt_ref"] = {
+        "identity": _id("a"),
+        "revision": 1,
+        "canonical_hash": _capability()["canonical_hash"],
+    }
+    payload["canonical_hash"] = _embedded_hash(payload)
+    parse_startup_receipt(json.dumps(payload).encode())
+
+    payload = _startup()
+    payload["capability_receipt_ref"] = _id("a")
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_startup_receipt(json.dumps(payload).encode())
+
+
+def test_set_like_receipt_collections_reject_duplicates_and_noncanonical_order() -> None:
+    payload = _capability()
+    payload["bridge_capabilities"] = list(reversed(payload["bridge_capabilities"]))
+    payload["canonical_hash"] = _embedded_hash(payload)
+    with pytest.raises(ValueError):
+        parse_machine_capability_receipt(json.dumps(payload).encode())
+
+    for field in ("capability_receipt_refs", "startup_receipt_refs"):
+        payload = _operation_evidence()
+        payload[field] = [payload[field][0], payload[field][0]]
+        payload["canonical_hash"] = _embedded_hash(payload)
+        with pytest.raises(ValueError):
+            parse_operation_evidence(json.dumps(payload).encode())
+
+    payload = _operation_evidence()
+    second_ref = {
+        "identity": _id("f"),
+        "revision": 1,
+        "canonical_hash": "f" * 64,
+    }
+    payload["capability_receipt_refs"] = [
+        second_ref,
+        payload["capability_receipt_refs"][0],
+    ]
     payload["canonical_hash"] = _embedded_hash(payload)
     with pytest.raises(ValueError):
         parse_operation_evidence(json.dumps(payload).encode())
