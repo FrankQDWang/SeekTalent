@@ -1,4 +1,4 @@
-"""Production-unreachable strict wire contract for ``verify_session``."""
+"""Strict production wire contract for ``verify_session``."""
 
 from __future__ import annotations
 
@@ -532,7 +532,6 @@ class VerifySessionResultV1(_VerifySessionModel):
                 or self.search_surface_readiness != "ready"
                 or self.risk_state != "clear"
                 or self.actual_profile_binding_ref is None
-                or self.actual_provider_account_ref is None
                 or self.safe_reason_code is not None
                 or self.user_action is not None
             ):
@@ -674,7 +673,8 @@ def validate_verify_session_result_echo_facts(
     if validated_result.actual_profile_binding_ref != validated_request.profile_binding_ref:
         raise ValueError("verify_session_result_profile_binding_mismatch")
     if (
-        validated_request.provider_account_ref is not None
+        validated_result.actual_provider_account_ref is not None
+        and validated_request.provider_account_ref is not None
         and validated_result.actual_provider_account_ref != validated_request.provider_account_ref
     ):
         raise ValueError("verify_session_result_account_binding_mismatch")

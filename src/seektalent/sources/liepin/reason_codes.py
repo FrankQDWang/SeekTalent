@@ -3,6 +3,13 @@ from __future__ import annotations
 from seektalent.source_contracts.liepin_reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
 
 LIEPIN_PUBLIC_EVENT_REASON_MAP = {
+    "liepin_host_tab_missing": "source_browser_backend_unavailable",
+    "liepin_host_window_ambiguous": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_build_mismatch": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_capability_missing": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_integrity_failed": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_protocol_mismatch": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_wrong_implementation": "source_browser_backend_unavailable",
     "liepin_connection_not_connected": "source_login_required",
     "liepin_browser_login_required": "source_login_required",
     "liepin_browser_probe_unavailable": "source_browser_backend_unavailable",
@@ -43,12 +50,20 @@ LIEPIN_PUBLIC_EVENT_REASON_MAP = {
     "liepin_opencli_search_not_ready": "source_browser_backend_unavailable",
     "liepin_opencli_results_not_ready": "source_browser_backend_unavailable",
     "liepin_opencli_stale_ref": "source_browser_reference_stale",
+    "liepin_opencli_stale_control_fence": "source_browser_reference_stale",
     "liepin_opencli_selector_not_found": "source_browser_backend_unavailable",
     "liepin_opencli_selector_ambiguous": "source_browser_backend_unavailable",
     "liepin_opencli_target_not_found": "source_browser_backend_unavailable",
 }
 
 LIEPIN_SOURCE_LANE_REASON_CODE_MAP = {
+    "liepin_host_tab_missing": "source_browser_backend_unavailable",
+    "liepin_host_window_ambiguous": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_build_mismatch": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_capability_missing": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_integrity_failed": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_protocol_mismatch": "source_browser_backend_unavailable",
+    "liepin_opencli_bridge_wrong_implementation": "source_browser_backend_unavailable",
     "liepin_opencli_backend_disabled": "source_browser_backend_unavailable",
     "liepin_opencli_command_missing": "source_browser_backend_unavailable",
     "liepin_opencli_extension_disconnected": "source_browser_backend_unavailable",
@@ -85,6 +100,7 @@ LIEPIN_SOURCE_LANE_REASON_CODE_MAP = {
     "liepin_opencli_search_not_ready": "source_browser_backend_unavailable",
     "liepin_opencli_results_not_ready": "source_browser_backend_unavailable",
     "liepin_opencli_stale_ref": "source_browser_reference_stale",
+    "liepin_opencli_stale_control_fence": "source_browser_reference_stale",
     "liepin_opencli_selector_not_found": "source_browser_backend_unavailable",
     "liepin_opencli_selector_ambiguous": "source_browser_backend_unavailable",
     "liepin_opencli_target_not_found": "source_browser_backend_unavailable",

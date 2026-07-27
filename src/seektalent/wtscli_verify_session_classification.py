@@ -1,4 +1,4 @@
-"""Closed readiness classification for the production-unreachable WTSCLI probe."""
+"""Closed readiness classification for the WTSCLI production probe."""
 
 from __future__ import annotations
 
@@ -109,7 +109,6 @@ class WtsCliCurrentProfileSnapshot:
     profile_binding_ref: str
     profile_binding_generation: int
     provider_account_ref: str | None
-    provider_account_subject: str
     browser_control_scope_id: str
 
 
@@ -276,7 +275,7 @@ def result_reply(
             "risk_state": probe.risk_state,
             "session_readiness": "ready" if ready else "not_ready",
             "actual_profile_binding_ref": probe.binding.profile_binding_ref,
-            "actual_provider_account_ref": probe.binding.provider_account_ref,
+            "actual_provider_account_ref": None,
             "actual_profile_binding_generation": probe.binding.profile_binding_generation,
             "safe_reason_code": None if ready else reason,
             "user_action": user_action,

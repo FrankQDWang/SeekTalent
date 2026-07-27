@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, NoReturn, Protocol, cast
+from typing import NoReturn, Protocol, cast
 
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.provider_contract import ProviderCapabilities, ProviderFirstPageExpansionError, ProviderFirstPageExpansionResult, ProviderSearchContinuation, ProviderSearchError
@@ -28,7 +28,6 @@ from seektalent.providers.liepin.policy import LiepinCardCandidate
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.store import has_unsafe_payload
 from seektalent.providers.liepin.verified_loop import execute_liepin_detail_open_plan
-from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.storage.json import sha256_json
 
 
@@ -62,6 +61,15 @@ class ProviderConnectionSafetyResolver(Protocol):
         requested_transport: TransportMode,
         now: datetime,
     ) -> ProviderConnectionSafetyRecord | None: ...
+
+
+class LiepinVerifySessionGate(Protocol):
+    async def verify(
+        self,
+        *,
+        runtime_run_id: str,
+        source_lane_run_id: str,
+    ) -> None: ...
 
 
 class LiepinStoreConnectionSafetyResolver:
@@ -151,12 +159,14 @@ class LiepinProviderAdapter:
         worker_search_started_callback: Callable[[], None] | None = None,
         store: LiepinStore | None = None,
         connection_safety_resolver: ProviderConnectionSafetyResolver | None = None,
+        verify_session_gate: LiepinVerifySessionGate | None = None,
     ) -> None:
         self.settings = settings
         self.worker_client = worker_client
         self.worker_event_callback = worker_event_callback
         self.worker_search_started_callback = worker_search_started_callback
         self.store = store
+        self.verify_session_gate = verify_session_gate
         self.connection_safety_resolver = connection_safety_resolver or (
             LiepinStoreConnectionSafetyResolver(store) if store is not None else None
         )
@@ -210,7 +220,8 @@ class LiepinProviderAdapter:
 
     async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action: str,
             continuation: ProviderSearchContinuation, detail_open_claim_ledger: DetailOpenClaimLedger,
-            logical_round_no: int, query_instance_id: str) -> ProviderFirstPageExpansionResult:
+            logical_round_no: int, query_instance_id: str, runtime_run_id: str,
+            source_lane_run_id: str) -> ProviderFirstPageExpansionResult:
         worker = self.worker_client
         handler = getattr(worker, "handle_first_page_continuation_with_detail_open_claim_ledger", None)
         if not callable(handler):
@@ -219,6 +230,16 @@ class LiepinProviderAdapter:
             return await handler(action=action, continuation=continuation,
                 detail_open_claim_ledger=detail_open_claim_ledger,
                 logical_round_no=logical_round_no, query_instance_id=query_instance_id)
+        if is_live_liepin_worker_mode(self.settings.liepin_worker_mode):
+            if self.verify_session_gate is None:
+                raise LiepinWorkerModeError(
+                    "猎聘会话校验未接通，请重新启动 SeekTalent 后重试。",
+                    code="liepin_verify_session_gate_missing",
+                )
+            await self.verify_session_gate.verify(
+                runtime_run_id=runtime_run_id,
+                source_lane_run_id=source_lane_run_id,
+            )
         result: ProviderFirstPageExpansionResult | None = None
         primary_error: ProviderSearchError | LiepinWorkerModeError | None = None
         deleted: ProviderFirstPageExpansionResult | None = None
@@ -268,10 +289,14 @@ class LiepinProviderAdapter:
         if is_live_liepin_worker_mode(self.settings.liepin_worker_mode):
             scope = _live_scope_from_request(request)
             connection = self._enforce_live_compliance(scope)
-            await self.worker_client.ensure_ready(on_event=self.worker_event_callback)
-            await self._require_ready_session(
-                scope=scope,
-                provider_account_hash=connection.provider_account_hash,
+            if self.verify_session_gate is None:
+                raise LiepinWorkerModeError(
+                    "猎聘会话校验未接通，请重新启动 SeekTalent 后重试。",
+                    code="liepin_verify_session_gate_missing",
+                )
+            await self.verify_session_gate.verify(
+                runtime_run_id=_required_string_context(request, "runtime_run_id"),
+                source_lane_run_id=_required_string_context(request, "source_lane_run_id"),
             )
             self._enforce_connection_safety(
                 scope=scope,
@@ -348,24 +373,6 @@ class LiepinProviderAdapter:
         if denial_reason is not None:
             raise LiepinWorkerModeError(f"Liepin compliance gate denied live search: {denial_reason}.")
         return connection
-
-    async def _require_ready_session(self, *, scope: _LiepinLiveScope, provider_account_hash: str | None) -> None:
-        session_status = await cast(Any, self.worker_client).session_status(
-            connection_id=scope.connection_id,
-            tenant=scope.tenant_id,
-            workspace=scope.workspace_id,
-            provider_account_hash=provider_account_hash,
-        )
-        if session_status.status != "ready":
-            raise LiepinWorkerModeError(f"Liepin worker session is not ready: {session_status.status}.")
-        if session_status.fixture_only:
-            raise LiepinWorkerModeError("Liepin live provider search cannot use a fixture-only session.")
-        if not _session_provider_account_matches(
-            session_provider_account_hash=session_status.provider_account_hash,
-            connection_provider_account_hash=provider_account_hash,
-            accept_opencli_local_profile=_accepts_opencli_local_profile_subject(self.settings),
-        ):
-            raise LiepinWorkerModeError("Liepin worker session provider account hash does not match the connection.")
 
     def _enforce_connection_safety(
         self,
@@ -500,21 +507,6 @@ def _required_provider_account_hash(provider_account_hash: str | None) -> str:
     if provider_account_hash is None:
         _raise_liepin_connection_safety_error("connection_safety_provider_account_mismatch")
     return provider_account_hash
-
-
-def _accepts_opencli_local_profile_subject(settings: AppSettings) -> bool:
-    return settings.liepin_worker_mode == "opencli"
-
-
-def _session_provider_account_matches(
-    *,
-    session_provider_account_hash: str | None,
-    connection_provider_account_hash: str | None,
-    accept_opencli_local_profile: bool,
-) -> bool:
-    if session_provider_account_hash == connection_provider_account_hash:
-        return True
-    return accept_opencli_local_profile and session_provider_account_hash == OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 
 
 def _raise_liepin_connection_safety_error(code: str) -> NoReturn:

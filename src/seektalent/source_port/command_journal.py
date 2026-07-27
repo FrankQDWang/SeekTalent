@@ -1,4 +1,4 @@
-"""Public factory capabilities for the production-unreachable command journal."""
+"""Public factory capabilities for the verify-session command journal."""
 
 from __future__ import annotations
 

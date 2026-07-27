@@ -1,4 +1,4 @@
-"""Production-unreachable real WTSCLI verify-session sidecar composition."""
+"""Production WTSCLI verify-session composition."""
 
 from __future__ import annotations
 

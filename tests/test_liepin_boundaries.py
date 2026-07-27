@@ -44,6 +44,67 @@ from tests.settings_factory import make_settings
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_live_first_page_expansion_passes_verify_session_before_browser_effect() -> None:
+    events: list[str] = []
+    continuation = ProviderSearchContinuation(
+        kind="first_page_detail_expansion",
+        continuation_id="continuation",
+        opaque_ref="artifact://protected/continuation",
+        source_kind="liepin",
+        round_no=1,
+        query_instance_id="query",
+        visible_candidate_count=1,
+        eligible_candidate_count=1,
+        initial_opened_count=0,
+    )
+
+    class Gate:
+        async def verify(self, *, runtime_run_id: str, source_lane_run_id: str) -> None:
+            assert (runtime_run_id, source_lane_run_id) == ("runtime-live", "lane-expansion")
+            events.append("verify_session")
+
+    class Worker:
+        async def handle_first_page_continuation_with_detail_open_claim_ledger(
+            self,
+            *,
+            action,
+            **kwargs,
+        ):
+            del kwargs
+            events.append(action)
+            return ProviderFirstPageExpansionResult(
+                search_result=SearchResult(),
+                first_page_visible_count=1,
+                first_page_eligible_count=1,
+                initial_opened_count=0,
+                expansion_opened_count=0,
+                expansion_skipped_seen_count=0,
+                expansion_terminal_failure_count=0,
+                status="completed",
+                continuation_deleted=action == "discard",
+            )
+
+    adapter = LiepinProviderAdapter(
+        make_settings(liepin_worker_mode="opencli"),
+        worker_client=Worker(),
+        verify_session_gate=Gate(),
+    )
+    result = asyncio.run(
+        adapter.handle_first_page_continuation_with_detail_open_claim_ledger(
+            action="expand",
+            continuation=continuation,
+            detail_open_claim_ledger=DetailOpenClaimLedger({}),
+            logical_round_no=1,
+            query_instance_id="query",
+            runtime_run_id="runtime-live",
+            source_lane_run_id="lane-expansion",
+        )
+    )
+
+    assert result.continuation_deleted is True
+    assert events == ["verify_session", "expand", "discard"]
+
+
 def test_provider_preserves_terminal_result_when_cleanup_fails() -> None:
     continuation = ProviderSearchContinuation(kind="first_page_detail_expansion",
         continuation_id="c", opaque_ref="artifact://protected/c", source_kind="liepin", round_no=1,
@@ -61,7 +122,7 @@ def test_provider_preserves_terminal_result_when_cleanup_fails() -> None:
                 safe_reason_code="original_partial")
     result = asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
         action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-        logical_round_no=1, query_instance_id="q"))
+        logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
     assert result.status == "partial"
     assert result.continuation_deleted is False
     assert result.safe_reason_code == "liepin_first_page_continuation_cleanup_failed"
@@ -84,7 +145,7 @@ def test_provider_does_not_swallow_programmer_runtime_error_from_cleanup() -> No
     with pytest.raises(RuntimeError, match="cleanup invariant violated"):
         asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
             action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-            logical_round_no=1, query_instance_id="q"))
+            logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
 
 
 def test_provider_preserves_expected_error_and_attaches_cleanup_ack() -> None:
@@ -104,7 +165,7 @@ def test_provider_preserves_expected_error_and_attaches_cleanup_ack() -> None:
     with pytest.raises(ProviderFirstPageExpansionError) as captured:
         asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
             action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-            logical_round_no=1, query_instance_id="q"))
+            logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
     assert captured.value.safe_reason_code == "original_blocked"
     assert captured.value.continuation_deleted is True
 
@@ -126,7 +187,7 @@ def test_provider_preserves_primary_error_when_expected_cleanup_boundary_fails()
     with pytest.raises(ProviderFirstPageExpansionError) as captured:
         asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
             action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-            logical_round_no=1, query_instance_id="q"))
+            logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
 
     assert captured.value.safe_reason_code == "primary_failed"
     assert captured.value.continuation_deleted is False
@@ -151,7 +212,7 @@ def test_provider_deletes_every_terminal_expansion_result(status: str) -> None:
     worker = Worker()
     result = asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=worker).handle_first_page_continuation_with_detail_open_claim_ledger(
         action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-        logical_round_no=1, query_instance_id="q"))
+        logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
     assert worker.actions == ["expand", "discard"]
     assert result.status == status
     assert result.continuation_deleted is True
@@ -177,6 +238,7 @@ OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/wtscli_verify_session_classification.py",
     "src/seektalent/wtscli_verify_session_composition.py",
     "src/seektalent/wtscli_connection_supervisor.py",
+    "src/seektalent/liepin_verify_session_gate.py",
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
     "src/seektalent/providers/liepin/liepin_site_parsing.py",
     "src/seektalent/providers/liepin/liepin_site_payloads.py",

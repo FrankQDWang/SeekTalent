@@ -696,8 +696,8 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
             source_port_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     # Runtime control consumes the shared authorization contract plus the
     # verify-session action vocabulary needed by the #427 lifecycle boundary.
-    # The WTSCLI entry is the explicit production-unreachable typed composition leaf.
-    # The bootstrap path is test-only; the remaining entries are the #379 main-side composition.
+    # The WTSCLI entry and Liepin gate form the typed production composition.
+    # The bootstrap path remains test-only.
     assert source_port_callers == [
         "src/seektalent_runtime_control/needs_attention_admission.py",
         "src/seektalent_runtime_control/user_action_mapping.py",
@@ -705,6 +705,7 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
         "src/seektalent_runtime_control/needs_attention_store.py",
         "src/seektalent/sidecar_readiness.py",
         "src/seektalent/source_history_reconciliation.py",
+        "src/seektalent/liepin_verify_session_gate.py",
         "src/seektalent/wtscli_verify_session_classification.py",
         "src/seektalent/sidecar_child_session.py",
         "src/seektalent/sidecar_bootstrap.py",

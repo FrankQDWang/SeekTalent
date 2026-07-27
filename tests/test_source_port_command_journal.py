@@ -1068,7 +1068,7 @@ def test_command_journal_internal_modules_form_a_one_way_dag() -> None:
     }
 
 
-def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_columns(tmp_path: Path) -> None:
+def test_journal_has_one_production_root_and_excludes_sensitive_payload_columns(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[1]
     source_port = project_root / "src" / "seektalent" / "source_port"
     journal_modules = {
@@ -1084,6 +1084,7 @@ def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_col
         if "command_journal" in path.read_text(encoding="utf-8"):
             production_callers.append(path.relative_to(project_root).as_posix())
     assert set(production_callers) == {
+        "src/seektalent/liepin_verify_session_gate.py",
         "src/seektalent/sidecar_bootstrap.py",
         "src/seektalent/source_port/_safe_retry_continuity_store.py",
         "src/seektalent/source_port/verify_session_continuity_admission.py",

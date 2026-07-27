@@ -1,4 +1,4 @@
-"""Production-unreachable sidecar WTSCLI readiness probe for one Liepin profile."""
+"""WTSCLI readiness probe for one production Liepin profile."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import uuid
 from seektalent.browser_bridge_manifest import BrowserBridgeRequirement
 from seektalent.opencli_browser.contracts import BrowserHostTab, OpenCliBrowserError
 from seektalent.opencli_browser.daemon_transport import OpenCliDaemonAction, OpenCliDaemonResult
+from seektalent.opencli_browser.lifecycle import OPENCLI_OWNED_TAB_IDLE_SECONDS
 from seektalent.opencli_browser.reason_codes import OPENCLI_STATUS_UNAVAILABLE
 from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
 from seektalent.wtscli_verify_session_classification import (
@@ -198,7 +199,7 @@ class _WtsCliVerifySessionEffect:
                 "hostPage": host.page_id,
                 "url": LIEPIN_RECRUITER_SEARCH_URL,
                 "active": False,
-                "idleTimeout": command_timeout,
+                "idleTimeout": OPENCLI_OWNED_TAB_IDLE_SECONDS,
             },
             timeout_seconds=command_timeout,
         )
@@ -363,7 +364,7 @@ def create_wtscli_verify_session_effect(
     monotonic_clock: Callable[[], float] = time.monotonic,
     poll_wait: Callable[[float], None] = time.sleep,
 ) -> Callable[[VerifySessionRequestV1, float], VerifySessionEffectReply]:
-    """Create an explicit test/manual-only effect; no production route calls this factory."""
+    """Create the WTSCLI verification effect used by the durable composition."""
     if type(bridge_requirement) is not BrowserBridgeRequirement:
         raise TypeError("bridge_requirement must be a BrowserBridgeRequirement")
     if (
@@ -397,10 +398,7 @@ def _binding_matches_request(
         and snapshot.profile_binding_ref == request.profile_binding_ref
         and type(snapshot.profile_binding_generation) is int
         and snapshot.profile_binding_generation == request.profile_binding_generation
-        and type(snapshot.provider_account_ref) is str
         and snapshot.provider_account_ref == request.provider_account_ref
-        and type(snapshot.provider_account_subject) is str
-        and bool(snapshot.provider_account_subject.strip())
         and type(snapshot.browser_control_scope_id) is str
         and snapshot.browser_control_scope_id == request.browser_control_scope_id
     )

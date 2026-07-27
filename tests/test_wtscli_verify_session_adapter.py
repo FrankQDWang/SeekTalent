@@ -65,7 +65,7 @@ def _request(**updates: object) -> VerifySessionRequestV1:
         "dispatch_intent_revision": 1,
         "source_operation_acceptance_ref": "source-acceptance-wtscli-1",
         "profile_binding_ref": "profile-binding-wtscli-1",
-        "provider_account_ref": "provider-account-wtscli-1",
+        "provider_account_ref": None,
         "required_capabilities": (
             "account",
             "bridge",
@@ -90,7 +90,6 @@ def _snapshot(request: VerifySessionRequestV1 | None = None, **updates: object) 
         "profile_binding_ref": request.profile_binding_ref,
         "profile_binding_generation": request.identity.profile_binding_generation,
         "provider_account_ref": request.provider_account_ref,
-        "provider_account_subject": "liepin-opencli-local-browser-profile",
         "browser_control_scope_id": request.identity.browser_control_scope_id,
     }
     values.update(updates)
@@ -517,9 +516,6 @@ def test_search_url_without_positive_account_and_search_surface_evidence_never_b
         ({"profile_binding_generation": 8}, {}),
         ({"provider_account_ref": "different-provider-account"}, {}),
         ({"browser_control_scope_id": "different-browser-scope"}, {}),
-        ({"provider_account_subject": ""}, {}),
-        ({"provider_account_ref": None}, {}),
-        ({}, {"provider_account_ref": None}),
     ],
 )
 def test_stale_binding_or_scope_mismatch_is_closed_before_wtscli(
@@ -537,33 +533,6 @@ def test_stale_binding_or_scope_mismatch_is_closed_before_wtscli(
     assert result.failure_fact == "no_effect_performed"
     assert result.failure_reason == "sidecar_not_ready"
     assert daemon.calls == []
-
-
-def test_provider_account_subject_is_revalidated_before_every_subsequent_command() -> None:
-    request = _request()
-    clock = _Clock()
-    daemon = _FakeDaemon(clock)
-    snapshots = _SnapshotSource(_snapshot(request), clock=clock)
-
-    def change_subject_after_status(
-        *,
-        timeout_seconds: float,
-        validate: bool = True,
-    ) -> dict[str, object]:
-        result = _FakeDaemon.verify_bridge(
-            daemon,
-            timeout_seconds=timeout_seconds,
-            validate=validate,
-        )
-        snapshots.value = replace(snapshots.value, provider_account_subject="different-current-subject")
-        return result
-
-    daemon.verify_bridge = change_subject_after_status  # type: ignore[method-assign]
-    result = _effect(daemon, snapshots, clock)(request, clock() + 10)
-
-    assert isinstance(result, VerifySessionFailureV1)
-    assert result.failure_reason == "sidecar_not_ready"
-    assert [call[0] for call in daemon.calls] == ["status"]
 
 
 @pytest.mark.parametrize(
@@ -859,11 +828,11 @@ def test_closed_component_mapping(
     ) == (safe_reason, process, bridge, extension, profile_lock, account, search_surface, risk_state, session)
     assert result.actual_profile_binding_ref == "profile-binding-wtscli-1"
     assert result.actual_profile_binding_generation == 7
-    assert result.actual_provider_account_ref == "provider-account-wtscli-1"
+    assert result.actual_provider_account_ref is None
     assert result.component_receipt_refs == ("component-receipt-wtscli-1",)
     assert daemon.user_tabs == before_user_tabs
     assert "tabs.close" not in [call[0] for call in daemon.calls]
-    clock.advance(10)
+    clock.advance(60)
     daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
 
@@ -882,6 +851,74 @@ def test_a_host_tab_without_account_search_and_risk_proof_is_never_ready() -> No
     assert result.search_surface_readiness == "not_observed"
     assert result.risk_state == "not_observed"
     assert result.safe_reason_code == "liepin_opencli_target_not_found"
+
+
+@pytest.mark.parametrize(
+    "host_url",
+    [
+        "https://h.liepin.com/",
+        "https://h.liepin.com/resume/search",
+        "https://h.liepin.com/resume/detail/12345",
+        "https://h.liepin.com/any/recruiter/page?from=saved#candidate",
+    ],
+)
+def test_any_exact_https_recruiter_host_subpage_only_selects_the_borrowed_window(
+    host_url: str,
+) -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    daemon.host_tabs[0]["url"] = host_url
+    snapshots = _SnapshotSource(_snapshot(), clock=clock)
+    before_user_tabs = set(daemon.user_tabs)
+
+    result = _effect(daemon, snapshots, clock)(_request(), clock() + 10)
+
+    assert isinstance(result, VerifySessionResultV1)
+    assert result.session_readiness == "ready"
+    new_tab_call = next(call for call in daemon.calls if call[0] == "tabs.new")
+    assert new_tab_call[1]["hostPage"] == "user-host-page"
+    assert new_tab_call[1]["url"] == SEARCH_URL
+    assert new_tab_call[1]["active"] is False
+    assert new_tab_call[1]["idleTimeout"] == 60
+    assert daemon.user_tabs == before_user_tabs
+    browser_calls = [call for call in daemon.calls if call[0].startswith("browser.")]
+    assert browser_calls
+    assert all(call[1].get("page") == "owned-search-page" for call in browser_calls)
+    assert "tabs.close" not in [call[0] for call in daemon.calls]
+
+
+@pytest.mark.parametrize(
+    "host_url",
+    [
+        "http://h.liepin.com/",
+        "https://h.liepin.com.evil.example/",
+        "https://liepin.com/",
+        "https://user@h.liepin.com/",
+        "https://user:secret@h.liepin.com/",
+        "https://www.liepin.com/resume/search",
+    ],
+)
+def test_non_exact_or_credential_bearing_host_tab_is_rejected_without_mutation(
+    host_url: str,
+) -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    daemon.host_tabs[0]["url"] = host_url
+    snapshots = _SnapshotSource(_snapshot(), clock=clock)
+    before_user_tabs = set(daemon.user_tabs)
+
+    result = _effect(daemon, snapshots, clock)(_request(), clock() + 10)
+
+    assert isinstance(result, VerifySessionResultV1)
+    assert result.safe_reason_code == "liepin_host_tab_missing"
+    assert [call[0] for call in daemon.calls] == [
+        "status",
+        "status.validate",
+        "control.activate",
+        "tabs.find",
+    ]
+    assert daemon.user_tabs == before_user_tabs
+    assert daemon.owned_tabs == set()
 
 
 def test_foreign_legacy_daemon_identity_fails_closed_before_any_browser_command() -> None:
@@ -931,7 +968,7 @@ def test_binding_change_after_state_prevents_cleanup_command_and_leaves_idle_rec
     assert result.failure_reason == "sidecar_not_ready"
     assert "tabs.close" not in [call[0] for call in daemon.calls]
     assert daemon.owned_tabs == {"owned-search-page"}
-    clock.advance(10)
+    clock.advance(60)
     daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
 
@@ -960,7 +997,7 @@ def test_owned_tab_is_left_to_idle_expiry_after_typed_failure_exception_eof_or_p
     assert result.session_readiness == "not_ready"
     assert "tabs.close" not in [call[0] for call in daemon.calls]
     assert daemon.owned_tabs == {"owned-search-page"}
-    clock.advance(10)
+    clock.advance(60)
     daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
     assert daemon.user_tabs == before_user_tabs
@@ -980,7 +1017,7 @@ def test_lost_tabs_new_response_leaves_only_the_deadline_bounded_idle_reclaim() 
     assert result.safe_reason_code == "liepin_opencli_status_unavailable"
     assert daemon.owned_tabs == {"owned-search-page"}
     assert "tabs.close" not in [call[0] for call in daemon.calls]
-    clock.advance(10)
+    clock.advance(60)
     daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
     assert daemon.user_tabs == before_user_tabs
@@ -1005,7 +1042,7 @@ def test_close_outcome_cannot_change_verify_result_when_completion_does_not_clos
     assert result.safe_reason_code is None
     assert "tabs.close" not in [call[0] for call in daemon.calls]
     assert daemon.owned_tabs == {"owned-search-page"}
-    clock.advance(10)
+    clock.advance(60)
     daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
     assert daemon.user_tabs == before_user_tabs
@@ -1040,7 +1077,7 @@ def test_control_bearers_url_dom_and_stderr_never_escape_results_errors_repr_or_
         assert secret not in surfaces
 
 
-def test_adapter_module_has_zero_production_callers_and_does_not_import_worker_or_provider_composition() -> None:
+def test_adapter_module_has_one_production_composition_caller_without_old_readiness_seam() -> None:
     project_root = Path(__file__).parents[1]
     adapter_path = project_root / "src" / "seektalent" / "wtscli_verify_session_adapter.py"
     source = adapter_path.read_text(encoding="utf-8")
@@ -1056,6 +1093,13 @@ def test_adapter_module_has_zero_production_callers_and_does_not_import_worker_o
     ]
     packaged_builder = (project_root / "tools" / "build_packaged_sidecar.py").read_text(encoding="utf-8")
     packaged_bootstrap = (project_root / "src" / "seektalent" / "sidecar_bootstrap.py").read_text(encoding="utf-8")
+    provider_adapter = (
+        project_root / "src" / "seektalent" / "providers" / "liepin" / "adapter.py"
+    ).read_text(encoding="utf-8")
+    live_search_branch = provider_adapter.split(
+        "if is_live_liepin_worker_mode(self.settings.liepin_worker_mode):",
+        1,
+    )[1].split("        else:", 1)[0]
 
     assert callers == ["src/seektalent/wtscli_verify_session_composition.py"]
     assert factory_callers == ["src/seektalent/wtscli_verify_session_composition.py"]
@@ -1065,7 +1109,12 @@ def test_adapter_module_has_zero_production_callers_and_does_not_import_worker_o
         if path.name != "wtscli_verify_session_composition.py"
         and "create_wtscli_verify_session_composition(" in path.read_text(encoding="utf-8")
     ]
-    assert composition_callers == []
+    assert composition_callers == [
+        "src/seektalent/liepin_verify_session_gate.py",
+    ]
+    assert "ensure_ready" not in live_search_branch
+    assert "session_status" not in provider_adapter
+    assert "_require_ready_session" not in provider_adapter
     assert "LiepinOpenCliWorkerClient" not in source
     assert "OpenCliRetriever" not in source
     assert "LiepinSiteAdapter" not in source
@@ -1093,6 +1142,6 @@ def test_adapter_result_is_strictly_closed_data_without_raw_daemon_payload() -> 
     assert SEARCH_URL not in serialized
     assert daemon.owned_tabs == {"owned-search-page"}
     assert "tabs.close" not in [call[0] for call in daemon.calls]
-    clock.advance(10)
+    clock.advance(60)
     daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
