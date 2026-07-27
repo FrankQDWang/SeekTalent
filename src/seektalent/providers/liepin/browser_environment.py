@@ -153,8 +153,8 @@ def check_browser_bridge_environment(
             return _client_error(exc.safe_reason_code, extension_dir)
         if not has_host:
             return _failure(
-                "liepin_login_or_host_tab_missing",
-                "WTSCLI 已就绪，但没有可用的已登录猎聘 host tab。",
+                "liepin_host_tab_missing",
+                "WTSCLI 已就绪，但没有可用的猎聘 host tab。",
                 "请在 Chrome 中登录猎聘并保留一个 h.liepin.com 页面，然后重新运行环境检查。",
                 extension_dir,
                 bridge_build_id=requirement.bridge_build_id,
@@ -175,8 +175,8 @@ def check_browser_bridge_environment(
             ok=True,
             liepin_enabled=True,
             reason_code="wtscli_ready",
-            message="WTSCLI runtime、Chrome 扩展和猎聘 host tab 已就绪。",
-            action="无需操作。",
+            message="WTSCLI runtime、Chrome 扩展和猎聘 host tab 已就绪；尚未验证猎聘登录状态。",
+            action="请继续运行 SeekTalent；启动前会话检查将验证登录、身份选择和风控状态。",
             extension_dir=extension_dir,
             bridge_build_id=requirement.bridge_build_id,
         )

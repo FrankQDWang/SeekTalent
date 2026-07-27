@@ -174,7 +174,7 @@ def test_environment_check_preserves_causal_daemon_and_extension_classification(
     assert client.closed is True
 
 
-def test_environment_check_requires_a_usable_logged_in_liepin_host_tab(
+def test_environment_check_requires_a_liepin_host_tab(
     tmp_path: Path,
 ) -> None:
     install_root, _bundle = _installed_pair(tmp_path)
@@ -190,7 +190,7 @@ def test_environment_check_requires_a_usable_logged_in_liepin_host_tab(
         host_tabs=False,
     )
 
-    assert result.reason_code == "liepin_login_or_host_tab_missing"
+    assert result.reason_code == "liepin_host_tab_missing"
     assert "登录猎聘" in result.action
     assert result.liepin_enabled is False
 
@@ -215,6 +215,9 @@ def test_environment_check_ready_receipt_contains_only_safe_pair_identity(
     assert result.reason_code == "wtscli_ready"
     assert result.bridge_build_id == WTSCLI_BUILD_ID
     assert result.extension_dir == install_root / "chrome-extension" / "wtscli"
+    assert "尚未验证猎聘登录状态" in result.message
+    assert "启动前会话检查" in result.action
+    assert "已登录" not in result.message
 
 
 def test_browser_check_cli_emits_stable_json_classification(

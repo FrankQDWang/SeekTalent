@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import sys
 import zipfile
 from pathlib import Path
+
+import pytest
 
 from scripts.build_domi_delivery_bundle import build_delivery_bundle
 from tests.browser_bridge_bundle_fixtures import (
@@ -41,6 +45,42 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
         assert manifest["bridge_build_id"] == WTSCLI_BUILD_ID
         assert manifest["platform"] == "windows-x64"
         assert manifest["extension_directory"] == "~/.seektalent/chrome-extension/wtscli"
+
+
+def test_exact_head_native_delivery_archive_contains_the_bound_pair() -> None:
+    raw_archive = os.environ.get("SEEKTALENT_NATIVE_DELIVERY_ARCHIVE")
+    expected_platform = os.environ.get("SEEKTALENT_NATIVE_DELIVERY_PLATFORM")
+    if not raw_archive or not expected_platform:
+        pytest.skip("exact-head native delivery artifact is only available in native CI")
+
+    archive = Path(raw_archive)
+    assert archive.is_file()
+    with zipfile.ZipFile(archive) as delivery:
+        assert delivery.testzip() is None
+        names = set(delivery.namelist())
+        root = archive.stem
+        manifest_path = f"{root}/delivery-manifest.json"
+        manifest = json.loads(delivery.read(manifest_path))
+        assert manifest["platform"] == expected_platform
+        assert manifest["bridge_build_id"] == WTSCLI_BUILD_ID
+        assert manifest["extension_directory"] == "~/.seektalent/chrome-extension/wtscli"
+        assert f"{root}/wtscli-browser-bridge/extension/manifest.json" in names
+        installer = (
+            "install-seektalent-domi.ps1"
+            if expected_platform == "windows-x64"
+            else "install-seektalent-domi.sh"
+        )
+        assert f"{root}/{installer}" in names
+        for path_key, hash_key in (
+            ("browser_bridge_bundle", "browser_bridge_manifest_sha256"),
+            ("prepared_runtime", "prepared_runtime_sha256"),
+            ("seektalent_wheel", "seektalent_wheel_sha256"),
+        ):
+            relative = str(manifest[path_key])
+            if path_key == "browser_bridge_bundle":
+                relative += "/bridge-manifest.json"
+            payload = delivery.read(f"{root}/{relative}")
+            assert hashlib.sha256(payload).hexdigest() == manifest[hash_key]
 
 
 def test_delivery_installers_default_to_the_adjacent_exact_product_bundle() -> None:

@@ -226,6 +226,9 @@ jobs:
           )
 
       - name: Verify native product package contents
+        env:
+          SEEKTALENT_NATIVE_DELIVERY_ARCHIVE: dist/delivery/seektalent-domi-${{ matrix.delivery_platform }}.zip
+          SEEKTALENT_NATIVE_DELIVERY_PLATFORM: ${{ matrix.delivery_platform }}
         run: uv run --group dev python -m pytest tests/test_build_domi_delivery_bundle.py -q
 
       - name: Assert Windows command-journal directory publication durability
